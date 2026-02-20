@@ -172,6 +172,142 @@ and replace them (or inject at deploy time via Netlify env substitution).
 
 ---
 
+---
+
+## Payment & Onboarding Flow
+
+### Full Flow
+
+```
+Landing page (getsprintai.com)
+  │
+  ▼
+/checkout  ─── Client picks Founder ($997/mo) or Growth ($1,500/mo)
+  │             POST /create-checkout-session → stripe_webhook.py
+  │             → Stripe Checkout hosted page (card entry)
+  ▼
+Stripe processes payment
+  │
+  ├── Success → redirects to /welcome?session_id=...
+  │
+  └── Stripe fires webhook → POST /webhook → stripe_webhook.py
+        ├── checkout.session.completed:
+        │     1. Create/update client in sprintai_clients (status = active)
+        │     2. Fire send_onboarding_email.py → email with /connect link
+        │
+        └── customer.subscription.deleted:
+              → Update client status to 'cancelled'
+```
+
+```
+/welcome  →  Client sees "You're in" page with CTA to /connect
+  │
+  ▼
+/connect?client_id=UUID  →  OAuth flow for Facebook + Google Business
+  │
+  ├── Meta OAuth  →  /oauth/callback/facebook  →  token stored in sprintai_social_connections
+  └── Google OAuth →  /oauth/callback/google   →  token stored in sprintai_social_connections
+         │
+         ▼
+  content_generator.py  →  generates 1 month of HVAC posts
+         │
+         ▼
+  post_scheduler.py (cron, every 15 min)  →  publishes Mon/Wed/Fri at 10 AM
+```
+
+### Files Involved
+
+| File | Purpose |
+|------|---------|
+| `../checkout/index.html` | Plan selection UI — calls `/create-checkout-session` |
+| `../welcome/index.html`  | Post-payment confirmation page — links to `/connect` |
+| `stripe_webhook.py`      | Flask server: checkout session creator + webhook handler |
+| `send_onboarding_email.py` | Sends welcome email with connect link |
+
+### Running Locally with Stripe CLI
+
+1. **Install Stripe CLI**
+   ```bash
+   brew install stripe/stripe-cli/stripe
+   stripe login
+   ```
+
+2. **Set environment variables**
+   ```bash
+   cp .env.example .env
+   # Fill in STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+   # STRIPE_PRICE_FOUNDER, STRIPE_PRICE_GROWTH, SMTP_USER, SMTP_PASS
+   ```
+
+3. **Install Python dependencies**
+   ```bash
+   pip install flask stripe supabase python-dotenv
+   ```
+
+4. **Start the Flask server**
+   ```bash
+   export FLASK_APP=stripe_webhook.py
+   flask run --port 4242
+   # or: python stripe_webhook.py
+   ```
+
+5. **Forward Stripe events to your local server** (new terminal)
+   ```bash
+   stripe listen --forward-to localhost:4242/webhook
+   # Copy the webhook signing secret printed here → set STRIPE_WEBHOOK_SECRET in .env
+   ```
+
+6. **Trigger a test event**
+   ```bash
+   stripe trigger checkout.session.completed
+   stripe trigger customer.subscription.deleted
+   ```
+
+7. **Open the checkout page locally**
+   - Serve `checkout/index.html` from a local HTTP server
+   - Update `BACKEND_URL` in the checkout page to `http://localhost:4242`
+
+### Required Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `STRIPE_SECRET_KEY`      | Stripe secret key (`sk_live_...` or `sk_test_...`) |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key (used in checkout frontend) |
+| `STRIPE_WEBHOOK_SECRET`  | Webhook signing secret from `stripe listen` or Stripe dashboard |
+| `STRIPE_PRICE_FOUNDER`   | Stripe Price ID for the Founder plan (`price_...`) |
+| `STRIPE_PRICE_GROWTH`    | Stripe Price ID for the Growth plan (`price_...`) |
+| `SUPABASE_URL`           | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (bypasses RLS) |
+| `SMTP_USER`              | Gmail address to send from |
+| `SMTP_PASS`              | Gmail App Password (not your account password) |
+| `CHECKOUT_SUCCESS_URL`   | Redirect URL after payment (default: `https://getsprintai.com/welcome?session_id={CHECKOUT_SESSION_ID}`) |
+| `CHECKOUT_CANCEL_URL`    | Redirect URL on cancel (default: `https://getsprintai.com/checkout`) |
+
+### Sending the Onboarding Email Manually
+
+```bash
+python send_onboarding_email.py \
+    --client_email "owner@acmeair.com" \
+    --client_name  "Bob Smith" \
+    --client_id    "your-client-uuid-here"
+```
+
+### Deploying the Webhook Server
+
+The Flask app can run on any VPS, Railway, Render, or Fly.io instance.
+
+```bash
+# Example: Gunicorn in production
+pip install gunicorn
+gunicorn --bind 0.0.0.0:4242 stripe_webhook:app
+```
+
+Register your live endpoint in the Stripe dashboard:
+`https://dashboard.stripe.com/webhooks` → Add endpoint → `https://api.getsprintai.com/webhook`
+Select events: `checkout.session.completed`, `customer.subscription.deleted`
+
+---
+
 ## Security Notes
 
 - **Never commit `.env`** — add it to `.gitignore`

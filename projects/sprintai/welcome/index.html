@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to SprintAI 🎉</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy:  '#0f172a',
+            brand: '#3b82f6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0f172a; }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+      50%       { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
+    }
+    .cta-pulse { animation: pulse-glow 2.5s infinite; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center px-4 py-12 font-sans">
+
+  <div class="w-full max-w-lg">
+
+    <!-- Success icon -->
+    <div class="flex justify-center mb-6">
+      <div class="w-20 h-20 rounded-full bg-green-500 flex items-center justify-center shadow-lg">
+        <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor"
+             stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Headline -->
+    <div class="text-center mb-8">
+      <div class="flex items-center justify-center gap-2 mb-3">
+        <svg class="w-6 h-6 text-brand" fill="none" stroke="#3b82f6" stroke-width="2"
+             viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span class="text-slate-400 text-sm font-semibold uppercase tracking-widest">SprintAI</span>
+      </div>
+      <h1 class="text-white text-3xl font-bold mb-3">
+        You're in.<br/>Let's get you set up.
+      </h1>
+      <p class="text-slate-400 text-base leading-relaxed max-w-sm mx-auto">
+        Your subscription is confirmed. There's just one quick thing to do
+        before your posts start going out.
+      </p>
+    </div>
+
+    <!-- Main CTA card -->
+    <div class="bg-slate-800 rounded-2xl p-8 mb-6 text-center">
+      <div class="w-14 h-14 rounded-full bg-brand mx-auto mb-5 flex items-center justify-center">
+        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor"
+             stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0
+                   105.656 5.656l1.102-1.101m-.758-4.899a4 4 0
+                   005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1
+                   1.1"/>
+        </svg>
+      </div>
+      <h2 class="text-white text-xl font-semibold mb-3">
+        Connect your social accounts
+      </h2>
+      <p class="text-slate-400 text-sm mb-6 leading-relaxed">
+        We need access to post on your behalf. It takes 2 minutes and you
+        only need to do this once. We never see your password.
+      </p>
+      <a id="connect-btn"
+         href="/connect"
+         class="cta-pulse inline-block bg-brand hover:bg-blue-500 text-white
+                font-bold py-4 px-10 rounded-xl transition-colors text-base">
+        Connect My Accounts →
+      </a>
+    </div>
+
+    <!-- What happens next -->
+    <div class="bg-slate-800 rounded-2xl p-8">
+      <h3 class="text-white font-semibold mb-5 text-sm uppercase tracking-wider">
+        What happens next
+      </h3>
+      <ol class="space-y-5">
+
+        <li class="flex items-start gap-4">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-brand
+                      flex items-center justify-center text-white text-sm font-bold">
+            1
+          </div>
+          <div>
+            <p class="text-white text-sm font-medium">Connect your accounts (now)</p>
+            <p class="text-slate-400 text-xs mt-0.5 leading-relaxed">
+              Click the button above to authorize Facebook, Instagram,
+              and Google Business Profile.
+            </p>
+          </div>
+        </li>
+
+        <li class="flex items-start gap-4">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700
+                      flex items-center justify-center text-slate-400 text-sm font-bold">
+            2
+          </div>
+          <div>
+            <p class="text-white text-sm font-medium">We generate your first month of content</p>
+            <p class="text-slate-400 text-xs mt-0.5 leading-relaxed">
+              Our AI writes HVAC-specific posts tailored to your business.
+              Done within <strong class="text-slate-300">24 hours</strong>.
+            </p>
+          </div>
+        </li>
+
+        <li class="flex items-start gap-4">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700
+                      flex items-center justify-center text-slate-400 text-sm font-bold">
+            3
+          </div>
+          <div>
+            <p class="text-white text-sm font-medium">Posts go live — automatically</p>
+            <p class="text-slate-400 text-xs mt-0.5 leading-relaxed">
+              Every <strong class="text-slate-300">Monday, Wednesday, and Friday</strong>
+              at 10 AM your posts publish to all connected platforms. No work required.
+            </p>
+          </div>
+        </li>
+
+        <li class="flex items-start gap-4">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700
+                      flex items-center justify-center text-slate-400 text-sm font-bold">
+            4
+          </div>
+          <div>
+            <p class="text-white text-sm font-medium">You focus on running your business</p>
+            <p class="text-slate-400 text-xs mt-0.5 leading-relaxed">
+              SprintAI handles social media from here on out. You'll
+              hear from us if anything ever needs your attention.
+            </p>
+          </div>
+        </li>
+
+      </ol>
+    </div>
+
+    <!-- Support note -->
+    <p class="text-center text-slate-500 text-xs mt-8">
+      Questions?
+      <a href="mailto:jason@getsprintai.com"
+         class="text-brand hover:underline">jason@getsprintai.com</a>
+      — we reply within a few hours.
+    </p>
+
+  </div>
+
+  <script>
+    // Pass session_id + client_id to the /connect page if present in URL
+    const params    = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    const clientId  = params.get('client_id');
+
+    const connectBtn = document.getElementById('connect-btn');
+    const connectParams = new URLSearchParams();
+    if (clientId)  connectParams.set('client_id',  clientId);
+    if (sessionId) connectParams.set('session_id', sessionId);
+
+    const qs = connectParams.toString();
+    if (qs) connectBtn.href = '/connect?' + qs;
+  </script>
+
+</body>
+</html>

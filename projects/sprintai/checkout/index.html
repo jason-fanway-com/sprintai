@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Choose Your Plan — SprintAI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy:  '#0f172a',
+            brand: '#3b82f6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0f172a; }
+    .plan-card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .plan-card:hover { transform: translateY(-2px); box-shadow: 0 0 0 2px #3b82f6; }
+    .spinner { display: none; }
+    .loading .spinner { display: inline-block; }
+    .loading .btn-text { display: none; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center px-4 py-12 font-sans">
+
+  <!-- ============================================================
+       CONFIGURATION
+       Replace STRIPE_PUBLISHABLE_KEY with your real key from:
+       https://dashboard.stripe.com/apikeys
+
+       Replace PRICE_FOUNDER and PRICE_GROWTH with your real
+       Stripe Price IDs from:
+       https://dashboard.stripe.com/products
+       ============================================================ -->
+  <script>
+    const STRIPE_PUBLISHABLE_KEY = 'STRIPE_PUBLISHABLE_KEY'; // pk_live_...
+    const PRICE_FOUNDER          = 'PRICE_FOUNDER';          // price_...
+    const PRICE_GROWTH           = 'PRICE_GROWTH';           // price_...
+
+    // Backend endpoint (same server running stripe_webhook.py)
+    const BACKEND_URL = 'https://api.getsprintai.com';
+  </script>
+  <!-- ============================================================ -->
+
+  <!-- Header -->
+  <div class="flex flex-col items-center mb-10">
+    <div class="flex items-center gap-3 mb-3">
+      <svg class="w-8 h-8 text-brand" fill="none" stroke="#3b82f6" stroke-width="2"
+           viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+      <span class="text-white text-3xl font-bold tracking-tight">SprintAI</span>
+    </div>
+    <h1 class="text-white text-2xl font-semibold text-center">Pick your plan</h1>
+    <p class="text-slate-400 text-sm mt-2 text-center max-w-sm">
+      AI-generated social media content, posted for you automatically.
+      Cancel anytime.
+    </p>
+  </div>
+
+  <!-- Plan Cards -->
+  <div class="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-6">
+
+    <!-- Founder Plan -->
+    <div class="plan-card bg-slate-800 rounded-2xl p-8 flex flex-col cursor-pointer"
+         onclick="startCheckout('founder')">
+      <div class="mb-6">
+        <span class="inline-block bg-blue-900 text-blue-300 text-xs font-semibold
+                     px-3 py-1 rounded-full uppercase tracking-wider mb-4">
+          Founder
+        </span>
+        <div class="flex items-end gap-1">
+          <span class="text-white text-5xl font-bold">$997</span>
+          <span class="text-slate-400 text-lg mb-1">/mo</span>
+        </div>
+        <p class="text-slate-400 text-sm mt-2">Perfect for solo operators getting started</p>
+      </div>
+
+      <ul class="space-y-3 mb-8 flex-1">
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          12 posts/month (Mon, Wed, Fri)
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Facebook, Instagram & Google Business
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          HVAC-specific AI copywriting
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Email support
+        </li>
+      </ul>
+
+      <button id="btn-founder"
+              class="w-full bg-brand hover:bg-blue-500 text-white font-semibold
+                     py-3 rounded-xl transition-colors text-sm">
+        <span class="btn-text">Get Started →</span>
+        <span class="spinner">
+          <svg class="inline w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          Processing…
+        </span>
+      </button>
+    </div>
+
+    <!-- Growth Plan -->
+    <div class="plan-card bg-slate-800 rounded-2xl p-8 flex flex-col cursor-pointer
+                ring-2 ring-brand relative" onclick="startCheckout('growth')">
+      <!-- Popular badge -->
+      <div class="absolute -top-3 left-1/2 -translate-x-1/2">
+        <span class="bg-brand text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider">
+          Most Popular
+        </span>
+      </div>
+
+      <div class="mb-6">
+        <span class="inline-block bg-blue-900 text-blue-300 text-xs font-semibold
+                     px-3 py-1 rounded-full uppercase tracking-wider mb-4">
+          Growth
+        </span>
+        <div class="flex items-end gap-1">
+          <span class="text-white text-5xl font-bold">$1,500</span>
+          <span class="text-slate-400 text-lg mb-1">/mo</span>
+        </div>
+        <p class="text-slate-400 text-sm mt-2">For contractors ready to scale fast</p>
+      </div>
+
+      <ul class="space-y-3 mb-8 flex-1">
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Everything in Founder
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          20 posts/month + seasonal campaigns
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Monthly performance reports
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Priority support + onboarding call
+        </li>
+      </ul>
+
+      <button id="btn-growth"
+              class="w-full bg-brand hover:bg-blue-500 text-white font-semibold
+                     py-3 rounded-xl transition-colors text-sm">
+        <span class="btn-text">Get Started →</span>
+        <span class="spinner">
+          <svg class="inline w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          Processing…
+        </span>
+      </button>
+    </div>
+
+  </div><!-- /Plan Cards -->
+
+  <!-- Trust signals -->
+  <div class="mt-10 flex flex-wrap items-center justify-center gap-6 text-slate-500 text-xs">
+    <span class="flex items-center gap-1.5">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0
+                 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+      Secured by Stripe
+    </span>
+    <span class="flex items-center gap-1.5">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42
+                 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0
+                 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010
+                 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138
+                 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0
+                 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138
+                 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42
+                 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/>
+      </svg>
+      Cancel anytime
+    </span>
+    <span class="flex items-center gap-1.5">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9
+                 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512
+                 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      Questions? <a href="mailto:jason@getsprintai.com" class="text-brand hover:underline ml-1">
+        jason@getsprintai.com
+      </a>
+    </span>
+  </div>
+
+  <!-- Error banner (hidden by default) -->
+  <div id="error-banner"
+       class="hidden mt-6 w-full max-w-3xl bg-red-900 border border-red-700 text-red-300
+              text-sm rounded-xl px-5 py-4 text-center">
+    Something went wrong starting checkout. Please try again or email
+    <a href="mailto:jason@getsprintai.com" class="underline">jason@getsprintai.com</a>.
+  </div>
+
+  <script>
+    let checkoutInProgress = false;
+
+    async function startCheckout(plan) {
+      if (checkoutInProgress) return;
+      checkoutInProgress = true;
+
+      const btn = document.getElementById('btn-' + plan);
+      btn.classList.add('loading');
+      document.getElementById('error-banner').classList.add('hidden');
+
+      const priceId = plan === 'founder' ? PRICE_FOUNDER : PRICE_GROWTH;
+
+      try {
+        const resp = await fetch(BACKEND_URL + '/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan, price_id: priceId }),
+        });
+
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+
+        const data = await resp.json();
+
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error('No redirect URL returned');
+        }
+      } catch (err) {
+        console.error('Checkout error:', err);
+        document.getElementById('error-banner').classList.remove('hidden');
+        btn.classList.remove('loading');
+        checkoutInProgress = false;
+      }
+    }
+  </script>
+
+</body>
+</html>
