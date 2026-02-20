@@ -3,13 +3,18 @@
 content_generator.py — SprintAI HVAC Content Generator
 
 Generates a full month of social media posts for a client using Claude,
-then schedules them in `sprintai_content_calendar`.
+then saves them as drafts in `sprintai_content_calendar` for QA review.
 
 Usage:
     python content_generator.py --client_id UUID --month 2026-03
 
 Posts are scheduled Mon/Wed/Fri at 10:00 AM (local time based on client
 timezone, defaulting to US/Eastern).  12 posts per platform per month.
+
+Content pipeline (two-step):
+    1. content_generator.py — generates drafts (status: draft)
+    2. content_qa.py        — reviews, scores, rewrites if needed → (status: pending)
+    3. post_scheduler.py    — publishes pending posts where scheduled_at <= now()
 
 Required env vars (see .env.example):
     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
@@ -232,7 +237,7 @@ def main():
                 "post_text":    text,
                 "image_url":    None,
                 "scheduled_at": slot.isoformat(),
-                "status":       "pending",
+                "status":       "draft",   # Promoted to 'pending' by content_qa.py
             }
             all_rows.append(row)
 

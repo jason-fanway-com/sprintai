@@ -14,10 +14,25 @@ content engine generates posts and publishes them on a schedule.
 3. Meta / Google OAuth redirect → callback exchanges code for tokens
 4. Tokens stored in `sprintai_social_connections` (Supabase)
 5. content_generator.py generates a month of HVAC posts via Claude
-6. Posts saved to `sprintai_content_calendar` (status = pending)
-7. post_scheduler.py runs every 15 min (cron), publishes due posts via API
-8. Delivery logged in `sprintai_posts` (status = posted | failed)
+6. Posts saved to `sprintai_content_calendar` (status = draft)
+7. content_qa.py scores every draft post — weak posts are auto-rewritten
+8. Approved / rewritten posts promoted to (status = pending)
+9. post_scheduler.py runs every 15 min (cron), publishes due posts via API
+10. Delivery logged in `sprintai_posts` (status = posted | failed)
 ```
+
+### Content Status Flow
+
+```
+draft  →  [content_qa.py]  →  pending  →  [post_scheduler.py]  →  posted | failed
+```
+
+| Status    | Set by                | Meaning                                      |
+|-----------|-----------------------|----------------------------------------------|
+| `draft`   | content_generator.py  | Generated, awaiting QA review                |
+| `pending` | content_qa.py         | QA passed (or rewritten), ready to publish   |
+| `posted`  | post_scheduler.py     | Successfully published to the platform       |
+| `failed`  | post_scheduler.py     | Publish attempt failed (see sprintai_posts)  |
 
 ---
 
@@ -27,8 +42,9 @@ content engine generates posts and publishes them on a schedule.
 |------|---------|
 | `schema.sql` | Supabase table definitions — run once to initialize |
 | `oauth_callback.py` | Exchanges OAuth codes for tokens, stores in Supabase |
+| `content_generator.py` | Generates a month of HVAC posts via Claude API (status: draft) |
+| `content_qa.py` | QA agent — scores & rewrites drafts, promotes to pending |
 | `post_scheduler.py` | Publishes pending calendar posts to social platforms |
-| `content_generator.py` | Generates a month of HVAC posts via Claude API |
 | `.env.example` | Template for required environment variables |
 | `../connect/index.html` | Client-facing OAuth connection page |
 
@@ -111,6 +127,7 @@ python oauth_callback.py \
 ### content_generator.py
 
 Generates 12 posts per platform (36 total) for the specified month.
+Posts are saved as **drafts** (status = `draft`) — run `content_qa.py` next.
 Posts are scheduled Mon/Wed/Fri at 10 AM in the given timezone.
 
 ```bash
@@ -124,6 +141,62 @@ python content_generator.py --client_id UUID --month 2026-03 --dry-run
 python content_generator.py --client_id UUID --month 2026-03 \
     --timezone America/Chicago
 ```
+
+### content_qa.py
+
+QA agent that reviews every draft post with Claude. Posts are scored on 6
+dimensions (Hook Strength, Local Specificity, Value Delivery, CTA Clarity,
+Platform Fit, Authenticity). Posts scoring avg ≥ 7.0 are approved; below 7.0
+are auto-rewritten by Claude and replaced. All posts are promoted to `pending`
+after the QA pass, ready for `post_scheduler.py`.
+
+Run this **after** `content_generator.py` and **before** posts go live.
+
+```bash
+# QA all draft posts for March 2026
+python content_qa.py --client_id UUID --month 2026-03
+
+# Preview scores without updating Supabase
+python content_qa.py --client_id UUID --month 2026-03 --dry-run
+```
+
+**Sample output:**
+```
+🔍 SprintAI Content QA — Acme HVAC | 2026-03
+
+📬 Found 36 draft posts to review
+
+  [01/36] Facebook                     Is your AC ready for summer?…
+           ✅ APPROVED  avg=7.8  |  Strong hook, good CTA
+  [02/36] Instagram                    At Acme HVAC, we pride oursel…
+           ✏️  REWRITE   avg=5.9  |  Generic opener; sounds corporate
+           → New: Summer in Phoenix hits different. Your AC shouldn't…
+  ...
+
+=======================================================
+  QA Complete — Acme HVAC | 2026-03
+=======================================================
+  Posts reviewed : 36
+  Approved       : 22 (61%)
+  Rewritten      : 14 (39%)
+  Average score  : 7.4
+  Lowest post    : At Acme HVAC, we take pride in… — 5.2 avg
+=======================================================
+```
+
+**Scoring rubric** (6 dimensions, each 1–10):
+
+| Dimension | What's graded |
+|-----------|---------------|
+| Hook Strength | Does the opener stop the scroll? |
+| Local Specificity | Does it feel written for THIS city/company? |
+| Value Delivery | Is there something useful for the reader? |
+| CTA Clarity | Is the call-to-action clear and specific? |
+| Platform Fit | Does it match the platform's format and norms? |
+| Authenticity | Does it sound like a real local business owner? |
+
+A custom rubric can be placed at `content/qa-scoring-rubric.md` to override
+the built-in rubric (useful for client-specific voice guidelines).
 
 ### post_scheduler.py
 
@@ -209,7 +282,10 @@ Stripe processes payment
   └── Google OAuth →  /oauth/callback/google   →  token stored in sprintai_social_connections
          │
          ▼
-  content_generator.py  →  generates 1 month of HVAC posts
+  content_generator.py  →  generates 1 month of HVAC posts (status: draft)
+         │
+         ▼
+  content_qa.py  →  scores + rewrites weak posts, promotes to pending
          │
          ▼
   post_scheduler.py (cron, every 15 min)  →  publishes Mon/Wed/Fri at 10 AM
