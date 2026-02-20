@@ -7,6 +7,8 @@ headers = []
 [build]
 publish = "/Users/joestrazza/.openclaw/workspace/sprintai-build"
 publishOrigin = "ui"
+commandOrigin = "config"
+command = "npm install"
 functions = "/Users/joestrazza/.openclaw/workspace/sprintai-build/netlify/functions"
 
 [build.environment]
