@@ -1,0 +1,16 @@
+[build]
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Redirect /webhook → Netlify function (cleaner URL for Stripe dashboard)
+[[redirects]]
+  from = "/webhook"
+  to   = "/.netlify/functions/stripe-webhook"
+  status = 200
+
+[[redirects]]
+  from = "/create-checkout-session"
+  to   = "/.netlify/functions/create-checkout-session"
+  status = 200
