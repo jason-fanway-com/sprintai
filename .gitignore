@@ -1,0 +1,4 @@
+node_modules/
+.netlify/functions/*.zip
+.netlify/functions/manifest.json
+package-lock.json
