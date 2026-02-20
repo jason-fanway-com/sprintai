@@ -67,3 +67,36 @@ CREATE TABLE IF NOT EXISTS sprintai_posts (
 
 CREATE INDEX IF NOT EXISTS idx_posts_client
     ON sprintai_posts (client_id);
+
+-- ============================================================
+-- Row Level Security — Client Portal
+-- Clients authenticated via Supabase Auth can only see their
+-- own data. The admin dashboard bypasses RLS via service role key.
+-- ============================================================
+
+-- Enable RLS on client-facing tables
+ALTER TABLE sprintai_clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sprintai_content_calendar ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sprintai_posts ENABLE ROW LEVEL SECURITY;
+
+-- Clients can only read their own record (matched by auth email)
+CREATE POLICY "Clients see own record"
+  ON sprintai_clients
+  FOR SELECT
+  USING (email = auth.jwt()->>'email');
+
+-- Clients can only read their own calendar entries
+CREATE POLICY "Clients see own calendar"
+  ON sprintai_content_calendar
+  FOR SELECT
+  USING (client_id IN (
+    SELECT id FROM sprintai_clients WHERE email = auth.jwt()->>'email'
+  ));
+
+-- Clients can only read their own posts
+CREATE POLICY "Clients see own posts"
+  ON sprintai_posts
+  FOR SELECT
+  USING (client_id IN (
+    SELECT id FROM sprintai_clients WHERE email = auth.jwt()->>'email'
+  ));

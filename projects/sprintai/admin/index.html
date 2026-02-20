@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SprintAI — Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .badge-active   { background: #166534; color: #bbf7d0; }
+    .badge-paused   { background: #713f12; color: #fef08a; }
+    .badge-cancelled{ background: #7f1d1d; color: #fecaca; }
+    .badge-pending  { background: #713f12; color: #fef08a; }
+    .badge-posted   { background: #166534; color: #bbf7d0; }
+    .badge-failed   { background: #7f1d1d; color: #fecaca; }
+    .card { background: #1e293b; border: 1px solid #334155; }
+    .row-hover:hover { background: #1e293b; cursor: pointer; }
+    .expiry-warn  { color: #facc15; }
+    .expiry-error { color: #f87171; }
+    input, select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; }
+    input:focus { outline: none; border-color: #3b82f6; }
+    .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+    .tab { border-bottom: 2px solid transparent; }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+
+  <!-- ── LOGIN SCREEN ────────────────────────────────────────── -->
+  <div id="loginScreen" class="flex items-center justify-center min-h-screen">
+    <div class="card rounded-2xl p-10 w-full max-w-sm text-center space-y-6">
+      <div>
+        <div class="text-3xl font-black text-blue-400 mb-1">SprintAI</div>
+        <div class="text-slate-400 text-sm">Admin Dashboard</div>
+      </div>
+      <div class="space-y-3">
+        <input id="pwInput" type="password" placeholder="Admin password"
+               class="w-full rounded-lg px-4 py-3 text-sm"
+               onkeydown="if(event.key==='Enter')doLogin()" />
+        <button onclick="doLogin()"
+                class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-lg transition text-sm">
+          Sign In
+        </button>
+        <div id="loginError" class="text-red-400 text-xs hidden">Incorrect password.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MAIN APP ─────────────────────────────────────────────── -->
+  <div id="app" class="hidden">
+
+    <!-- Header -->
+    <header class="bg-slate-900 border-b border-slate-700 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-3">
+        <span class="text-xl font-black text-blue-400">SprintAI</span>
+        <span class="text-slate-500 text-sm">Admin</span>
+      </div>
+      <nav class="flex gap-1">
+        <button onclick="showView('clients')" id="tab-clients"
+                class="tab px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition">
+          Clients
+        </button>
+        <button onclick="showView('queue')" id="tab-queue"
+                class="tab px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition">
+          Content Queue
+        </button>
+      </nav>
+      <button onclick="doLogout()" class="text-slate-400 hover:text-white text-sm transition">Sign out</button>
+    </header>
+
+    <!-- ── VIEW: CLIENT LIST ──────────────────────────────────── -->
+    <div id="view-clients" class="p-6 max-w-7xl mx-auto space-y-4">
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-bold text-white">Clients</h1>
+        <div id="clientCount" class="text-slate-400 text-sm"></div>
+      </div>
+      <div class="card rounded-xl overflow-hidden">
+        <div id="clientsLoading" class="p-8 text-center text-slate-400 text-sm">Loading clients…</div>
+        <table id="clientsTable" class="w-full text-sm hidden">
+          <thead class="text-xs uppercase text-slate-400 border-b border-slate-700">
+            <tr>
+              <th class="px-4 py-3 text-left">Client</th>
+              <th class="px-4 py-3 text-left">Plan</th>
+              <th class="px-4 py-3 text-left">Status</th>
+              <th class="px-4 py-3 text-center">FB</th>
+              <th class="px-4 py-3 text-center">IG</th>
+              <th class="px-4 py-3 text-center">GBP</th>
+              <th class="px-4 py-3 text-right">Posts / Mo</th>
+              <th class="px-4 py-3 text-left">Joined</th>
+            </tr>
+          </thead>
+          <tbody id="clientsBody" class="divide-y divide-slate-800"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── VIEW: CLIENT DETAIL ────────────────────────────────── -->
+    <div id="view-detail" class="p-6 max-w-5xl mx-auto space-y-6 hidden">
+      <button onclick="showView('clients')"
+              class="flex items-center gap-2 text-slate-400 hover:text-white text-sm transition">
+        ← Back to Clients
+      </button>
+      <div id="detailContent" class="space-y-6"></div>
+    </div>
+
+    <!-- ── VIEW: CONTENT QUEUE ───────────────────────────────── -->
+    <div id="view-queue" class="p-6 max-w-6xl mx-auto space-y-4 hidden">
+      <h1 class="text-xl font-bold text-white">Content Queue — All Pending Posts</h1>
+      <div class="card rounded-xl overflow-hidden">
+        <div id="queueLoading" class="p-8 text-center text-slate-400 text-sm">Loading queue…</div>
+        <table id="queueTable" class="w-full text-sm hidden">
+          <thead class="text-xs uppercase text-slate-400 border-b border-slate-700">
+            <tr>
+              <th class="px-4 py-3 text-left">Client</th>
+              <th class="px-4 py-3 text-left">Platform</th>
+              <th class="px-4 py-3 text-left">Scheduled</th>
+              <th class="px-4 py-3 text-left">Preview</th>
+              <th class="px-4 py-3 text-left">Status</th>
+            </tr>
+          </thead>
+          <tbody id="queueBody" class="divide-y divide-slate-800"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /app -->
+
+<script>
+// ── SUPABASE SETUP ─────────────────────────────────────────────
+// Admin dashboard uses the SERVICE ROLE KEY (internal tool only — never expose to clients)
+// For the client portal, use SUPABASE_ANON_KEY instead.
+const SUPABASE_URL = 'https://fdxvflryvctvstxdbdtm.supabase.co';
+const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkeHZmbHJ5dmN0dnN0eGRiZHRtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTEyNDcyMSwiZXhwIjoyMDg2NzAwNzIxfQ.wHeUtOUz28kL1pLafERmuByxqYTtK0H9jDE3t0GDclI';
+
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+// ── AUTH ───────────────────────────────────────────────────────
+// ADMIN_PASSWORD placeholder — replace 'sprintai-admin-2026' with env var at deploy time
+const ADMIN_PASSWORD = 'sprintai-admin-2026';
+
+function doLogin() {
+  const pw = document.getElementById('pwInput').value;
+  if (pw === ADMIN_PASSWORD) {
+    sessionStorage.setItem('admin_authed', '1');
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    loadClients();
+  } else {
+    document.getElementById('loginError').classList.remove('hidden');
+  }
+}
+
+function doLogout() {
+  sessionStorage.removeItem('admin_authed');
+  location.reload();
+}
+
+// ── INIT ────────────────────────────────────────────────────────
+if (sessionStorage.getItem('admin_authed') === '1') {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  loadClients();
+}
+
+// ── VIEW ROUTER ─────────────────────────────────────────────────
+function showView(name) {
+  ['clients','detail','queue'].forEach(v => {
+    document.getElementById('view-'+v).classList.add('hidden');
+  });
+  document.getElementById('view-'+name).classList.remove('hidden');
+
+  // Tab highlights
+  ['clients','queue'].forEach(t => {
+    const btn = document.getElementById('tab-'+t);
+    if (btn) { btn.classList.remove('tab-active'); btn.classList.add('tab'); }
+  });
+  const active = document.getElementById('tab-'+name);
+  if (active) { active.classList.add('tab-active'); }
+
+  if (name === 'queue') loadQueue();
+}
+
+// ── HELPERS ─────────────────────────────────────────────────────
+function platformIcon(p) {
+  const icons = { facebook: 'FB', instagram: 'IG', google_business: 'GBP' };
+  return icons[p] || p;
+}
+
+function statusBadge(s) {
+  const cls = { active:'badge-active', paused:'badge-paused', cancelled:'badge-cancelled',
+                pending:'badge-pending', posted:'badge-posted', failed:'badge-failed' };
+  return `<span class="px-2 py-0.5 rounded-full text-xs font-semibold ${cls[s]||'bg-slate-700 text-slate-300'}">${s}</span>`;
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
+}
+
+function fmtDatetime(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleString('en-US', {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+
+function checkmark(ok) {
+  return ok ? '<span class="text-green-400 font-bold">✓</span>' : '<span class="text-slate-600">✗</span>';
+}
+
+function expiryClass(dateStr) {
+  if (!dateStr) return '';
+  const diff = (new Date(dateStr) - Date.now()) / 86400000;
+  if (diff < 0)  return 'expiry-error';
+  if (diff < 7)  return 'expiry-warn';
+  return '';
+}
+
+function expiryLabel(dateStr) {
+  if (!dateStr) return 'No expiry';
+  const diff = Math.ceil((new Date(dateStr) - Date.now()) / 86400000);
+  if (diff < 0)  return `Expired ${Math.abs(diff)}d ago ⚠`;
+  if (diff < 7)  return `Expires in ${diff}d ⚠`;
+  return fmtDate(dateStr);
+}
+
+// ── CLIENT LIST ─────────────────────────────────────────────────
+let allClients = [];
+let connectionsByClient = {};
+let postsThisMonth = {};
+
+async function loadClients() {
+  try {
+    // Fetch clients
+    const { data: clients, error: cErr } = await db.from('sprintai_clients').select('*').order('created_at', { ascending: false });
+    if (cErr) throw cErr;
+    allClients = clients || [];
+
+    // Fetch all social connections
+    const { data: conns } = await db.from('sprintai_social_connections').select('*');
+    connectionsByClient = {};
+    (conns || []).forEach(c => {
+      if (!connectionsByClient[c.client_id]) connectionsByClient[c.client_id] = [];
+      connectionsByClient[c.client_id].push(c);
+    });
+
+    // Posts this month
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const monthEnd   = new Date(now.getFullYear(), now.getMonth()+1, 1).toISOString();
+    const { data: posts } = await db.from('sprintai_posts')
+      .select('client_id')
+      .gte('posted_at', monthStart)
+      .lt('posted_at', monthEnd);
+    postsThisMonth = {};
+    (posts || []).forEach(p => { postsThisMonth[p.client_id] = (postsThisMonth[p.client_id]||0)+1; });
+
+    renderClientTable();
+  } catch(e) {
+    document.getElementById('clientsLoading').textContent = 'Error loading clients: ' + e.message;
+  }
+}
+
+function renderClientTable() {
+  const tbody = document.getElementById('clientsBody');
+  tbody.innerHTML = '';
+  document.getElementById('clientCount').textContent = `${allClients.length} client${allClients.length!==1?'s':''}`;
+
+  allClients.forEach(client => {
+    const conns = connectionsByClient[client.id] || [];
+    const hasFB  = conns.some(c => c.platform === 'facebook');
+    const hasIG  = conns.some(c => c.platform === 'instagram');
+    const hasGBP = conns.some(c => c.platform === 'google_business');
+    const postCount = postsThisMonth[client.id] || 0;
+
+    const tr = document.createElement('tr');
+    tr.className = 'row-hover transition';
+    tr.innerHTML = `
+      <td class="px-4 py-3">
+        <div class="font-medium text-white">${client.name}</div>
+        <div class="text-xs text-slate-400">${client.email}</div>
+      </td>
+      <td class="px-4 py-3 capitalize text-slate-300">${client.plan}</td>
+      <td class="px-4 py-3">${statusBadge(client.status)}</td>
+      <td class="px-4 py-3 text-center">${checkmark(hasFB)}</td>
+      <td class="px-4 py-3 text-center">${checkmark(hasIG)}</td>
+      <td class="px-4 py-3 text-center">${checkmark(hasGBP)}</td>
+      <td class="px-4 py-3 text-right text-slate-300">${postCount}</td>
+      <td class="px-4 py-3 text-slate-400 text-xs">${fmtDate(client.created_at)}</td>
+    `;
+    tr.onclick = () => openClientDetail(client.id);
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('clientsLoading').classList.add('hidden');
+  document.getElementById('clientsTable').classList.remove('hidden');
+}
+
+// ── CLIENT DETAIL ───────────────────────────────────────────────
+async function openClientDetail(clientId) {
+  showView('detail');
+  document.getElementById('detailContent').innerHTML = '<div class="text-slate-400 text-sm">Loading…</div>';
+
+  const client  = allClients.find(c => c.id === clientId);
+  const conns   = connectionsByClient[clientId] || [];
+
+  // Fetch upcoming calendar entries
+  const { data: calendar } = await db.from('sprintai_content_calendar')
+    .select('*')
+    .eq('client_id', clientId)
+    .gte('scheduled_at', new Date().toISOString())
+    .order('scheduled_at', { ascending: true })
+    .limit(20);
+
+  const detail = document.getElementById('detailContent');
+  detail.innerHTML = `
+    <!-- Client Info Card -->
+    <div class="card rounded-xl p-6 flex flex-col md:flex-row md:items-center gap-4">
+      <div class="flex-1">
+        <h2 class="text-2xl font-bold text-white">${client.name}</h2>
+        <div class="text-slate-400 text-sm mt-1">${client.email}</div>
+      </div>
+      <div class="flex gap-3">
+        <div class="text-center">
+          <div class="text-xs text-slate-400 mb-1">Plan</div>
+          <span class="bg-blue-900 text-blue-300 px-3 py-1 rounded-full text-sm font-semibold capitalize">${client.plan}</span>
+        </div>
+        <div class="text-center">
+          <div class="text-xs text-slate-400 mb-1">Status</div>
+          ${statusBadge(client.status)}
+        </div>
+        <div class="text-center">
+          <div class="text-xs text-slate-400 mb-1">Joined</div>
+          <div class="text-sm text-slate-300">${fmtDate(client.created_at)}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Social Connections -->
+    <div class="card rounded-xl p-6 space-y-4">
+      <h3 class="font-semibold text-white">Social Connections</h3>
+      ${conns.length === 0
+        ? '<p class="text-slate-400 text-sm">No platforms connected yet.</p>'
+        : `<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            ${['facebook','instagram','google_business'].map(platform => {
+              const conn = conns.find(c => c.platform === platform);
+              const label = {facebook:'Facebook',instagram:'Instagram',google_business:'Google Business'}[platform];
+              if (!conn) return `
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <div class="text-slate-400 text-sm font-medium">${label}</div>
+                  <div class="text-slate-600 text-xs mt-1">Not connected</div>
+                </div>`;
+              const expCls = expiryClass(conn.token_expires_at);
+              return `
+                <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <div class="flex items-center justify-between">
+                    <div class="text-white text-sm font-medium">${label}</div>
+                    <span class="text-green-400 text-xs font-bold">✓ Connected</span>
+                  </div>
+                  <div class="text-xs text-slate-400 mt-1">${conn.page_name || conn.page_id}</div>
+                  <div class="text-xs ${expCls||'text-slate-500'} mt-1">Token: ${expiryLabel(conn.token_expires_at)}</div>
+                </div>`;
+            }).join('')}
+           </div>`
+      }
+    </div>
+
+    <!-- Upcoming Content Calendar -->
+    <div class="card rounded-xl p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold text-white">Upcoming Content</h3>
+        <div class="flex gap-2">
+          <button onclick="generateContent('${clientId}')"
+                  class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
+            Generate Next Month Content
+          </button>
+          <button onclick="viewAllPosts('${clientId}')"
+                  class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
+            View All Posts
+          </button>
+        </div>
+      </div>
+      ${(!calendar || calendar.length === 0)
+        ? '<p class="text-slate-400 text-sm">No upcoming posts scheduled.</p>'
+        : `<div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs uppercase text-slate-400 border-b border-slate-700">
+                <tr>
+                  <th class="pb-2 text-left">Date</th>
+                  <th class="pb-2 text-left">Platform</th>
+                  <th class="pb-2 text-left">Preview</th>
+                  <th class="pb-2 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800">
+                ${calendar.map(p => `
+                  <tr>
+                    <td class="py-2 text-slate-300 whitespace-nowrap">${fmtDatetime(p.scheduled_at)}</td>
+                    <td class="py-2 text-slate-400 capitalize">${platformIcon(p.platform)}</td>
+                    <td class="py-2 text-slate-300 max-w-sm truncate">${p.post_text.slice(0,100)}${p.post_text.length>100?'…':''}</td>
+                    <td class="py-2">${statusBadge(p.status)}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+           </div>`
+      }
+    </div>
+  `;
+}
+
+function generateContent(clientId) {
+  alert(`Run content_generator.py --client_id ${clientId} on the server to generate next month's posts.`);
+}
+
+function viewAllPosts(clientId) {
+  // Filter queue view to this client (future enhancement — for now show queue)
+  showView('queue');
+}
+
+// ── CONTENT QUEUE ───────────────────────────────────────────────
+async function loadQueue() {
+  document.getElementById('queueLoading').classList.remove('hidden');
+  document.getElementById('queueTable').classList.add('hidden');
+
+  try {
+    const { data: posts, error } = await db
+      .from('sprintai_content_calendar')
+      .select('*, sprintai_clients(name)')
+      .order('scheduled_at', { ascending: true })
+      .limit(200);
+
+    if (error) throw error;
+
+    const tbody = document.getElementById('queueBody');
+    tbody.innerHTML = '';
+
+    (posts || []).forEach(p => {
+      const tr = document.createElement('tr');
+      tr.className = 'hover:bg-slate-800 transition';
+      tr.innerHTML = `
+        <td class="px-4 py-3 text-white font-medium">${p.sprintai_clients?.name || '—'}</td>
+        <td class="px-4 py-3 text-slate-400 capitalize">${platformIcon(p.platform)}</td>
+        <td class="px-4 py-3 text-slate-300 whitespace-nowrap text-xs">${fmtDatetime(p.scheduled_at)}</td>
+        <td class="px-4 py-3 text-slate-300 max-w-xs truncate text-xs">${p.post_text.slice(0,120)}${p.post_text.length>120?'…':''}</td>
+        <td class="px-4 py-3">${statusBadge(p.status)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById('queueLoading').classList.add('hidden');
+    document.getElementById('queueTable').classList.remove('hidden');
+  } catch(e) {
+    document.getElementById('queueLoading').textContent = 'Error: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>

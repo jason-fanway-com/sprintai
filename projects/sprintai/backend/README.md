@@ -327,3 +327,102 @@ Select events: `checkout.session.completed`, `customer.subscription.deleted`
 - As volume grows, migrate to a proper job queue (e.g. Celery + Redis or Inngest).
 - Image generation (for `image_url`) is not included here — add a separate step
   using DALL-E or Stable Diffusion before `content_generator.py` runs.
+
+---
+
+## Admin Dashboard (`/admin`)
+
+`admin/index.html` is an internal management tool for Jason and Joe. It talks directly to Supabase using the **service role key** (bypasses RLS — internal use only, never expose to clients).
+
+### Features
+
+- **Client List** — table of all clients with plan, status, social connection indicators (FB / IG / GBP), posts this month, and joined date. Click any row to drill in.
+- **Client Detail** — full profile, social connection health (token expiry warnings in yellow/red), upcoming content calendar, and action buttons.
+- **Content Queue** — all pending/posted/failed posts across every client, sorted by scheduled date.
+
+### Access
+
+Open `admin/index.html` directly in a browser (or deploy to a private URL). Default password: `sprintai-admin-2026`.
+
+To change the password, edit the `ADMIN_PASSWORD` constant in `admin/index.html`.
+
+> ⚠️ The service role key is embedded in this file intentionally — it's an internal tool. Do **not** deploy it to a public URL. Protect with HTTP Basic Auth or VPN access in production.
+
+---
+
+## Client Portal (`/portal`)
+
+A client-facing dashboard with Supabase magic link authentication (no passwords required).
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `portal/index.html` | Login page — client enters email, receives a magic link |
+| `portal/dashboard.html` | Client dashboard — shows connections, posts, stats, CTA |
+
+### Flow
+
+1. Client visits `portal/index.html`
+2. Enters email → clicks "Send Login Link"
+3. Supabase sends a magic link to their inbox
+4. Client clicks the link → lands on `portal/dashboard.html` authenticated
+5. Dashboard shows: company name + plan, connected platforms, this week's posts, 30-day stats
+
+### Deploy
+
+1. Replace `SUPABASE_ANON_KEY` placeholder in both portal files with your actual Supabase **anon** (public) key — **never** the service role key.
+2. Set the magic link redirect URL in Supabase Auth → URL Configuration → `Site URL` and `Redirect URLs` to your deployed portal URL.
+3. Apply the RLS policies from `schema.sql` so clients can only see their own data.
+
+### Row Level Security
+
+The portal uses the **anon key** + **RLS policies** (defined in `schema.sql`). Clients are matched by their authenticated email address to their record in `sprintai_clients`.
+
+---
+
+## Monthly Report Generator (`backend/monthly_report.py`)
+
+Generates and emails an HTML performance report to each active client for a given month.
+
+### Usage
+
+```bash
+# Generate + send reports for February 2026
+python monthly_report.py --month 2026-02
+
+# Preview without sending (dry run)
+python monthly_report.py --month 2026-02 --dry-run
+
+# Test with a single client
+python monthly_report.py --month 2026-02 --client-id UUID --dry-run
+```
+
+### What Each Report Contains
+
+- **Stats banner** — posts published + platforms active
+- **Posts by platform** — list of every published post with date and preview
+- **Next month preview** — 3 upcoming scheduled posts
+- **CTA button** — links to the client portal dashboard
+
+### SMTP Configuration
+
+Uses the same SMTP credentials as other outgoing emails:
+
+```env
+SMTP_HOST=smtp.mail.me.com
+SMTP_PORT=587
+SMTP_USER=your@email.com
+SMTP_PASS=your-app-password
+PORTAL_URL=https://getsprintai.com/portal/
+FROM_NAME=Jason @ SprintAI
+```
+
+### Scheduling (cron)
+
+```bash
+# Send reports on the 1st of each month at 9 AM
+0 9 1 * * cd /path/to/backend && python monthly_report.py --month $(date -d "last month" +%Y-%m) >> /var/log/sprintai-reports.log 2>&1
+```
+
+---

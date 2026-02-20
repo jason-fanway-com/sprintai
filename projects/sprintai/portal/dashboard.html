@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SprintAI — My Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border: 1px solid #334155; }
+    .badge-starter { background:#1e3a5f; color:#93c5fd; }
+    .badge-growth  { background:#1e4d3b; color:#6ee7b7; }
+    .badge-pro     { background:#4a1d4a; color:#e9d5ff; }
+    .platform-pill { display:inline-flex; align-items:center; gap:0.375rem;
+                     background:#1e293b; border:1px solid #334155;
+                     border-radius:9999px; padding:0.25rem 0.75rem;
+                     font-size:0.75rem; font-weight:600; }
+    .post-card { background:#1e293b; border:1px solid #334155; border-radius:1rem; padding:1.25rem; }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+
+  <!-- Loading screen -->
+  <div id="loadingScreen" class="flex items-center justify-center min-h-screen">
+    <div class="text-center space-y-3">
+      <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-blue-600">
+        <svg class="animate-spin w-6 h-6 text-white" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+      </div>
+      <div class="text-slate-400 text-sm">Loading your dashboard…</div>
+    </div>
+  </div>
+
+  <!-- Main Dashboard (hidden until loaded) -->
+  <div id="dashboard" class="hidden">
+
+    <!-- Header -->
+    <header class="bg-slate-900 border-b border-slate-700 px-6 py-4">
+      <div class="max-w-5xl mx-auto flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center justify-center w-9 h-9 rounded-xl bg-blue-600">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <span class="font-black text-white text-lg">SprintAI</span>
+        </div>
+        <div class="flex items-center gap-4">
+          <span id="headerEmail" class="text-slate-400 text-sm hidden md:block"></span>
+          <button onclick="signOut()"
+                  class="text-slate-400 hover:text-white text-sm transition">
+            Sign out
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Content -->
+    <main class="max-w-5xl mx-auto px-6 py-8 space-y-8">
+
+      <!-- Welcome header -->
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div class="flex-1">
+          <h1 class="text-2xl font-bold text-white" id="welcomeTitle">Welcome back!</h1>
+          <p class="text-slate-400 text-sm mt-1">Here's your SprintAI content overview.</p>
+        </div>
+        <span id="planBadge" class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-sm font-semibold capitalize"></span>
+      </div>
+
+      <!-- Social connections -->
+      <section>
+        <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Connected Platforms</h2>
+        <div id="connectionsGrid" class="flex flex-wrap gap-3">
+          <div class="text-slate-500 text-sm">Loading…</div>
+        </div>
+      </section>
+
+      <!-- This Week's Posts -->
+      <section>
+        <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">This Week's Posts</h2>
+        <div id="weeklyPosts" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="text-slate-500 text-sm col-span-3">Loading…</div>
+        </div>
+      </section>
+
+      <!-- Last 30 Days stats -->
+      <section>
+        <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Last 30 Days</h2>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div class="card rounded-xl p-5 text-center">
+            <div id="statPublished" class="text-3xl font-black text-blue-400">—</div>
+            <div class="text-slate-400 text-xs mt-1">Posts Published</div>
+          </div>
+          <div class="card rounded-xl p-5 text-center">
+            <div id="statPlatforms" class="text-3xl font-black text-blue-400">—</div>
+            <div class="text-slate-400 text-xs mt-1">Platforms Active</div>
+          </div>
+          <div class="card rounded-xl p-5 text-center col-span-2 md:col-span-1">
+            <div id="statPending" class="text-3xl font-black text-blue-400">—</div>
+            <div class="text-slate-400 text-xs mt-1">Posts Scheduled</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="card rounded-2xl p-6 flex flex-col sm:flex-row items-center gap-4">
+        <div class="flex-1">
+          <h3 class="font-semibold text-white">Need a change?</h3>
+          <p class="text-slate-400 text-sm mt-1">Want to update your content, pause a post, or adjust your strategy? We've got you.</p>
+        </div>
+        <a id="requestChangeBtn" href="#"
+           class="shrink-0 bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-3 rounded-xl text-sm transition">
+          Request a Change
+        </a>
+      </section>
+
+    </main>
+  </div>
+
+<script>
+// ── SUPABASE SETUP ───────────────────────────────────────────
+// Replace SUPABASE_ANON_KEY with your actual Supabase anon/public key
+// (never use the service role key here — this is client-facing)
+const SUPABASE_URL = 'https://fdxvflryvctvstxdbdtm.supabase.co';
+const SUPABASE_ANON_KEY = 'SUPABASE_ANON_KEY'; // ← replace at deploy time
+
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Platform display config
+const PLATFORMS = {
+  facebook:        { label: 'Facebook',        icon: '📘', color: 'text-blue-400' },
+  instagram:       { label: 'Instagram',        icon: '📸', color: 'text-pink-400' },
+  google_business: { label: 'Google Business',  icon: '🔍', color: 'text-yellow-400' },
+};
+
+function planBadgeClass(plan) {
+  return { starter: 'badge-starter', growth: 'badge-growth', pro: 'badge-pro' }[plan] || 'badge-starter';
+}
+
+function fmtDateShort(d) {
+  return new Date(d).toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+}
+
+// ── INIT ────────────────────────────────────────────────────
+(async () => {
+  // Get session — auth returns here after magic link click
+  const { data: { session } } = await sb.auth.getSession();
+
+  if (!session) {
+    // Not authenticated → redirect to login
+    window.location.href = 'index.html';
+    return;
+  }
+
+  const userEmail = session.user.email;
+  document.getElementById('headerEmail').textContent = userEmail;
+  document.getElementById('headerEmail').classList.remove('hidden');
+
+  try {
+    // Look up client record by email (RLS ensures they only see their own)
+    const { data: clientArr, error: cErr } = await sb
+      .from('sprintai_clients')
+      .select('*')
+      .eq('email', userEmail)
+      .limit(1);
+
+    if (cErr) throw cErr;
+
+    const client = clientArr && clientArr[0];
+    if (!client) {
+      // Email not in client table
+      document.getElementById('loadingScreen').innerHTML = `
+        <div class="text-center space-y-4 max-w-sm mx-auto px-6">
+          <div class="text-4xl">🤔</div>
+          <h2 class="text-white font-semibold text-lg">No account found</h2>
+          <p class="text-slate-400 text-sm">We couldn't find a SprintAI account for <strong>${userEmail}</strong>. If you believe this is an error, reach out to us.</p>
+          <a href="mailto:jason@getsprintai.com" class="inline-block bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl text-sm font-semibold transition">Contact Support</a>
+        </div>`;
+      return;
+    }
+
+    // Populate header
+    document.getElementById('welcomeTitle').textContent = `Welcome back, ${client.name}!`;
+    const badge = document.getElementById('planBadge');
+    badge.textContent = client.plan + ' plan';
+    badge.className = `self-start sm:self-auto inline-block px-3 py-1 rounded-full text-sm font-semibold capitalize ${planBadgeClass(client.plan)}`;
+
+    // Set CTA mailto
+    document.getElementById('requestChangeBtn').href =
+      `mailto:jason@getsprintai.com?subject=Content Change Request — ${encodeURIComponent(client.name)}`;
+
+    // Load connections
+    const { data: conns } = await sb
+      .from('sprintai_social_connections')
+      .select('platform, page_name')
+      .eq('client_id', client.id);
+
+    renderConnections(conns || []);
+
+    // Load upcoming posts (this week — up to 3)
+    const weekEnd = new Date(Date.now() + 7 * 86400000).toISOString();
+    const { data: upcoming } = await sb
+      .from('sprintai_content_calendar')
+      .select('*')
+      .eq('client_id', client.id)
+      .gte('scheduled_at', new Date().toISOString())
+      .lte('scheduled_at', weekEnd)
+      .order('scheduled_at', { ascending: true })
+      .limit(3);
+
+    renderWeeklyPosts(upcoming || []);
+
+    // Last 30 days stats
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+
+    const { data: published } = await sb
+      .from('sprintai_posts')
+      .select('platform')
+      .eq('client_id', client.id)
+      .gte('posted_at', since);
+
+    const { data: pending } = await sb
+      .from('sprintai_content_calendar')
+      .select('id')
+      .eq('client_id', client.id)
+      .eq('status', 'pending')
+      .gte('scheduled_at', new Date().toISOString());
+
+    const pubArr = published || [];
+    const activePlatforms = [...new Set(pubArr.map(p => p.platform))].length;
+
+    document.getElementById('statPublished').textContent = pubArr.length;
+    document.getElementById('statPlatforms').textContent = activePlatforms || (conns||[]).length;
+    document.getElementById('statPending').textContent = (pending||[]).length;
+
+    // Show dashboard
+    document.getElementById('loadingScreen').classList.add('hidden');
+    document.getElementById('dashboard').classList.remove('hidden');
+
+  } catch(err) {
+    document.getElementById('loadingScreen').innerHTML = `
+      <div class="text-center space-y-3 max-w-sm mx-auto px-6">
+        <div class="text-red-400 font-semibold">Something went wrong</div>
+        <div class="text-slate-400 text-sm">${err.message}</div>
+        <button onclick="location.reload()" class="text-blue-400 text-sm hover:underline">Try again</button>
+      </div>`;
+  }
+})();
+
+// ── RENDER HELPERS ──────────────────────────────────────────
+function renderConnections(conns) {
+  const el = document.getElementById('connectionsGrid');
+  if (conns.length === 0) {
+    el.innerHTML = '<span class="text-slate-500 text-sm">No platforms connected yet.</span>';
+    return;
+  }
+  el.innerHTML = conns.map(c => {
+    const p = PLATFORMS[c.platform] || { label: c.platform, icon: '📡', color: 'text-slate-400' };
+    return `<div class="platform-pill ${p.color}">
+      <span>${p.icon}</span>
+      <span class="text-slate-300">${p.label}</span>
+      <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+      </svg>
+    </div>`;
+  }).join('');
+}
+
+function renderWeeklyPosts(posts) {
+  const el = document.getElementById('weeklyPosts');
+  if (posts.length === 0) {
+    el.innerHTML = `
+      <div class="col-span-3 card rounded-xl p-6 text-center">
+        <div class="text-slate-400 text-sm">No posts scheduled for this week.</div>
+      </div>`;
+    return;
+  }
+  el.innerHTML = posts.map(p => {
+    const platform = PLATFORMS[p.platform] || { label: p.platform, icon: '📡', color: 'text-slate-400' };
+    const preview = p.post_text.length > 140 ? p.post_text.slice(0, 140) + '…' : p.post_text;
+    return `<div class="post-card space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 ${platform.color} text-sm font-semibold">
+          <span>${platform.icon}</span>
+          <span>${platform.label}</span>
+        </div>
+        <span class="text-slate-500 text-xs">${fmtDateShort(p.scheduled_at)}</span>
+      </div>
+      <p class="text-slate-300 text-sm leading-relaxed">${preview}</p>
+    </div>`;
+  }).join('');
+}
+
+// ── SIGN OUT ────────────────────────────────────────────────
+async function signOut() {
+  await sb.auth.signOut();
+  window.location.href = 'index.html';
+}
+</script>
+</body>
+</html>
