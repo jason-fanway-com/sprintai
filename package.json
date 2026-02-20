@@ -1,6 +1,7 @@
 {
-  "name": "sprintai-functions",
+  "name": "sprintai",
   "version": "1.0.0",
+  "description": "SprintAI — AI marketing automation for HVAC contractors",
   "dependencies": {
     "stripe": "^14.0.0",
     "@supabase/supabase-js": "^2.0.0"

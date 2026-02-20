@@ -1,0 +1,53 @@
+functionsDirectory = "/Users/joestrazza/.openclaw/workspace/sprintai-build/netlify/functions"
+functionsDirectoryOrigin = "config-v1"
+redirectsOrigin = "config"
+plugins = []
+headers = []
+
+[build]
+publish = "/Users/joestrazza/.openclaw/workspace/sprintai-build"
+publishOrigin = "ui"
+functions = "/Users/joestrazza/.openclaw/workspace/sprintai-build/netlify/functions"
+
+[build.environment]
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[functions]
+
+[functions."*"]
+node_bundler = "esbuild"
+
+[[redirects]]
+from = "/webhook"
+to = "/.netlify/functions/stripe-webhook"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/create-checkout-session"
+to = "/.netlify/functions/create-checkout-session"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
