@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Our Process — SprintAI | How Every Post Gets Scored Before It Touches Your Brand</title>
+  <meta name="description" content="SprintAI's content QA process: every post is scored on 6 dimensions by a dedicated review agent. Anything below 7.0 gets rewritten. Never published. Here's exactly how it works." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy: {
+              900: '#0f172a',
+              800: '#1e293b',
+              700: '#334155',
+              600: '#475569',
+            },
+            brand: {
+              500: '#3b82f6',
+              600: '#2563eb',
+              400: '#60a5fa',
+              300: '#93c5fd',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body { background-color: #0f172a; color: #e2e8f0; }
+
+    .hero-glow {
+      background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(59,130,246,0.18) 0%, transparent 70%);
+    }
+    .section-divider {
+      border-color: rgba(59,130,246,0.15);
+    }
+    .dim-card {
+      background: #1e293b;
+      border: 1px solid rgba(59,130,246,0.15);
+      border-radius: 16px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .dim-card:hover {
+      border-color: rgba(59,130,246,0.4);
+      box-shadow: 0 0 32px rgba(59,130,246,0.1);
+    }
+    .post-card {
+      border-radius: 12px;
+      font-size: 0.875rem;
+      line-height: 1.6;
+    }
+    .post-card-bad {
+      background: rgba(239,68,68,0.07);
+      border: 1px solid rgba(239,68,68,0.25);
+    }
+    .post-card-good {
+      background: rgba(34,197,94,0.07);
+      border: 1px solid rgba(34,197,94,0.25);
+    }
+    .badge-fail {
+      background: rgba(239,68,68,0.2);
+      color: #fca5a5;
+      border: 1px solid rgba(239,68,68,0.35);
+    }
+    .badge-pass {
+      background: rgba(34,197,94,0.2);
+      color: #86efac;
+      border: 1px solid rgba(34,197,94,0.35);
+    }
+    .score-bar-bg {
+      background: rgba(255,255,255,0.06);
+      border-radius: 999px;
+    }
+    .score-bar-fill {
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      border-radius: 999px;
+      height: 6px;
+    }
+    .step-connector {
+      background: linear-gradient(180deg, #3b82f6 0%, rgba(59,130,246,0.1) 100%);
+      width: 2px;
+    }
+    .glow-btn {
+      background: #3b82f6;
+      box-shadow: 0 0 24px rgba(59,130,246,0.4);
+      transition: box-shadow 0.2s, background 0.2s;
+    }
+    .glow-btn:hover {
+      background: #2563eb;
+      box-shadow: 0 0 36px rgba(59,130,246,0.6);
+    }
+    .stat-card {
+      background: #1e293b;
+      border: 1px solid rgba(59,130,246,0.2);
+      border-radius: 12px;
+    }
+    .benefit-item {
+      border-left: 2px solid #3b82f6;
+    }
+    .nav-link {
+      color: #94a3b8;
+      transition: color 0.15s;
+    }
+    .nav-link:hover { color: #e2e8f0; }
+    .problem-arrow {
+      color: #3b82f6;
+      font-size: 1.5rem;
+      line-height: 1;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .fade-up {
+        animation: fadeUp 0.6s ease both;
+      }
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+    }
+  </style>
+</head>
+<body class="font-sans antialiased">
+
+  <!-- ============ NAV ============ -->
+  <nav style="background: rgba(15,23,42,0.92); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(59,130,246,0.12);" class="sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2 no-underline">
+        <span class="text-2xl">❄️</span>
+        <span class="font-bold text-xl text-blue-400">SprintAI</span>
+        <span class="hidden sm:inline text-xs bg-blue-900 text-blue-300 font-semibold px-2 py-0.5 rounded-full ml-1">HVAC</span>
+      </a>
+      <div class="flex items-center gap-4 sm:gap-6">
+        <a href="/" class="nav-link text-sm font-medium hidden sm:inline">Home</a>
+        <a href="/#pricing" class="nav-link text-sm font-medium hidden sm:inline">Pricing</a>
+        <a href="mailto:jason@getsprintai.com?subject=Free Sample Request" class="glow-btn text-white text-sm font-semibold px-4 py-2 rounded-lg">
+          Get a Free Sample
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero-glow relative overflow-hidden">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 pt-20 pb-24 sm:pt-28 sm:pb-32 text-center">
+
+      <div class="inline-flex items-center gap-2 mb-6 px-4 py-1.5 rounded-full text-sm font-medium text-blue-300"
+           style="background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25);">
+        <span style="width:8px;height:8px;background:#3b82f6;border-radius:50%;display:inline-block;"></span>
+        Our Quality Guarantee
+      </div>
+
+      <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight mb-6 text-white">
+        Content That Actually Works.<br/>
+        <span class="text-blue-400">Guaranteed.</span>
+      </h1>
+
+      <p class="text-lg sm:text-xl max-w-3xl mx-auto leading-relaxed" style="color: #94a3b8;">
+        Every post we publish has been scored, reviewed, and — if it doesn't meet our standard —
+        <strong class="text-slate-200">rewritten</strong> before it touches your brand.
+        Not sometimes. Every single time.
+      </p>
+
+      <!-- Stats row -->
+      <div class="flex flex-col sm:flex-row gap-4 sm:gap-6 justify-center mt-14">
+        <div class="stat-card px-6 py-4 text-center">
+          <div class="text-3xl font-extrabold text-blue-400">7.0</div>
+          <div class="text-sm mt-1" style="color:#64748b;">Minimum passing score</div>
+        </div>
+        <div class="stat-card px-6 py-4 text-center">
+          <div class="text-3xl font-extrabold text-blue-400">6</div>
+          <div class="text-sm mt-1" style="color:#64748b;">Dimensions scored per post</div>
+        </div>
+        <div class="stat-card px-6 py-4 text-center">
+          <div class="text-3xl font-extrabold text-blue-400">30–40%</div>
+          <div class="text-sm mt-1" style="color:#64748b;">First drafts rewritten</div>
+        </div>
+        <div class="stat-card px-6 py-4 text-center">
+          <div class="text-3xl font-extrabold text-blue-400">0</div>
+          <div class="text-sm mt-1" style="color:#64748b;">Sub-standard posts published</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THE PROBLEM ============ -->
+  <section style="background: #0f172a;" class="py-20 sm:py-28">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">
+          What Most AI Agencies Actually Do
+        </h2>
+        <p class="text-base sm:text-lg max-w-2xl mx-auto" style="color:#64748b;">
+          The dirty secret of the "AI social media" industry: generate and publish.
+          No review. No standards. No accountability.
+        </p>
+      </div>
+
+      <!-- The bad pipeline -->
+      <div class="flex flex-wrap items-center justify-center gap-3 mb-16 text-sm font-medium">
+        <div class="px-4 py-2 rounded-lg" style="background:#1e293b; color:#cbd5e1;">🤖 AI Generates Post</div>
+        <div class="problem-arrow">→</div>
+        <div class="px-4 py-2 rounded-lg" style="background:#1e293b; color:#cbd5e1;">📤 Immediately Published</div>
+        <div class="problem-arrow">→</div>
+        <div class="px-4 py-2 rounded-lg" style="background:rgba(239,68,68,0.1); color:#fca5a5; border: 1px solid rgba(239,68,68,0.3);">📉 Generic Content</div>
+        <div class="problem-arrow">→</div>
+        <div class="px-4 py-2 rounded-lg" style="background:rgba(239,68,68,0.1); color:#fca5a5; border: 1px solid rgba(239,68,68,0.3);">😶 Zero Engagement</div>
+        <div class="problem-arrow">→</div>
+        <div class="px-4 py-2 rounded-lg" style="background:rgba(239,68,68,0.12); color:#f87171; border: 1px solid rgba(239,68,68,0.4);">❌ Client Cancels</div>
+      </div>
+
+      <!-- Side by side example -->
+      <div class="text-center mb-8">
+        <h3 class="text-xl font-bold text-white">The Difference Is Obvious — Once You See It</h3>
+        <p class="text-sm mt-2" style="color:#64748b;">
+          Same company. Same topic. Completely different result.
+        </p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-6">
+
+        <!-- BAD -->
+        <div class="post-card post-card-bad p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div style="width:32px;height:32px;border-radius:50%;background:rgba(239,68,68,0.2);display:flex;align-items:center;justify-content:center;font-size:1rem;">🏢</div>
+              <div>
+                <div class="text-xs font-bold" style="color:#e2e8f0;">ABC Heating &amp; Cooling</div>
+                <div class="text-xs" style="color:#64748b;">Facebook Post</div>
+              </div>
+            </div>
+            <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS QA</span>
+          </div>
+          <p class="text-sm leading-relaxed" style="color:#94a3b8;">
+            At ABC Heating &amp; Cooling, we pride ourselves on providing excellent HVAC services
+            to homeowners in the area. Contact us today for all your heating and cooling needs!
+            #HVAC #Heating #Cooling
+          </p>
+          <div class="mt-4 pt-4" style="border-top:1px solid rgba(239,68,68,0.15);">
+            <div class="text-xs font-semibold mb-2" style="color:#f87171;">Why it fails:</div>
+            <ul class="text-xs space-y-1" style="color:#94a3b8;">
+              <li>• No hook — first line doesn't stop anyone</li>
+              <li>• "In the area" — could be any company, any city</li>
+              <li>• No value delivered to the reader</li>
+              <li>• Vague CTA — "contact us" for what?</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- GOOD -->
+        <div class="post-card post-card-good p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div style="width:32px;height:32px;border-radius:50%;background:rgba(34,197,94,0.15);display:flex;align-items:center;justify-content:center;font-size:1rem;">🏠</div>
+              <div>
+                <div class="text-xs font-bold" style="color:#e2e8f0;">Precision Air &amp; Heat — Scottsdale</div>
+                <div class="text-xs" style="color:#64748b;">Facebook Post</div>
+              </div>
+            </div>
+            <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES QA</span>
+          </div>
+          <p class="text-sm leading-relaxed" style="color:#94a3b8;">
+            Scottsdale hit 109° yesterday. If your AC is running but your home isn't cooling
+            below 80, the problem is almost never the refrigerant — it's a clogged filter
+            or a failing capacitor. Both are $99 fixes if you catch them early.<br/><br/>
+            We're booking same-day appointments in Scottsdale and North Phoenix all week.
+            Call (480) 555-0192 or tap the link to schedule — before the weekend rush fills up.
+            <span style="color:#60a5fa;">#ScottsdaleHVAC #ArizonaHeat #PrecisionAir</span>
+          </p>
+          <div class="mt-4 pt-4" style="border-top:1px solid rgba(34,197,94,0.15);">
+            <div class="text-xs font-semibold mb-2" style="color:#86efac;">Why it passes:</div>
+            <ul class="text-xs space-y-1" style="color:#94a3b8;">
+              <li>• Hook uses local temp data — Scottsdale stops scrolling</li>
+              <li>• Specific city + company name throughout</li>
+              <li>• Real diagnostic tip the reader can use immediately</li>
+              <li>• Clear CTA with phone number, link, and urgency</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <p class="text-center text-sm mt-6" style="color:#475569;">
+        The good version took a QA agent 4 seconds to score. It scored 8.4/10. The bad version scored 3.1/10 and was rewritten.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ OUR PROCESS — 3 STEPS ============ -->
+  <section style="background: #1e293b;" class="py-20 sm:py-28">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-16">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">
+          The Pipeline Behind Every Post
+        </h2>
+        <p class="text-base sm:text-lg max-w-2xl mx-auto" style="color:#64748b;">
+          Three stages. No shortcuts. Every piece of content — every single one — goes through all three.
+        </p>
+      </div>
+
+      <div class="flex flex-col gap-0 max-w-3xl mx-auto">
+
+        <!-- Step 1 -->
+        <div class="flex gap-6">
+          <div class="flex flex-col items-center">
+            <div class="flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center font-extrabold text-white text-lg" style="background: #3b82f6;">1</div>
+            <div class="step-connector flex-1 mt-2 mb-2"></div>
+          </div>
+          <div class="pb-10 pt-1">
+            <div class="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Step One</div>
+            <h3 class="text-xl font-bold text-white mb-3">AI Generates — Specifically</h3>
+            <p style="color:#94a3b8;" class="leading-relaxed">
+              Our content AI doesn't write generic HVAC posts. It knows your company name, your city,
+              your services, and the current season. It knows that a Facebook post for a company in
+              Phoenix in August has a completely different tone than a Google Business update for a
+              Boston company in January.
+            </p>
+            <p style="color:#94a3b8;" class="leading-relaxed mt-3">
+              Platform context is baked in from the start — Facebook posts are conversational and
+              scroll-stopping. Google Business updates are informational and locally optimized.
+              Instagram captions are punchy with relevant hashtags. Every platform gets content
+              written specifically for that platform.
+            </p>
+            <div class="flex flex-wrap gap-2 mt-4">
+              <span class="text-xs px-3 py-1 rounded-full" style="background:rgba(59,130,246,0.1);color:#93c5fd;border:1px solid rgba(59,130,246,0.2);">📘 Facebook</span>
+              <span class="text-xs px-3 py-1 rounded-full" style="background:rgba(59,130,246,0.1);color:#93c5fd;border:1px solid rgba(59,130,246,0.2);">🏢 Google Business</span>
+              <span class="text-xs px-3 py-1 rounded-full" style="background:rgba(59,130,246,0.1);color:#93c5fd;border:1px solid rgba(59,130,246,0.2);">📸 Instagram</span>
+              <span class="text-xs px-3 py-1 rounded-full" style="background:rgba(59,130,246,0.1);color:#93c5fd;border:1px solid rgba(59,130,246,0.2);">🔗 LinkedIn</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="flex gap-6">
+          <div class="flex flex-col items-center">
+            <div class="flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center font-extrabold text-white text-lg" style="background: #3b82f6;">2</div>
+            <div class="step-connector flex-1 mt-2 mb-2"></div>
+          </div>
+          <div class="pb-10 pt-1">
+            <div class="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">Step Two</div>
+            <h3 class="text-xl font-bold text-white mb-3">QA Agent Reviews — Ruthlessly</h3>
+            <p style="color:#94a3b8;" class="leading-relaxed">
+              A second AI — with a completely different job description — reads every post looking
+              for weaknesses. Its only goal is to find problems. It scores each post on 6 dimensions
+              (detailed below), assigning a score from 1 to 10 on each.
+            </p>
+            <p style="color:#94a3b8;" class="leading-relaxed mt-3">
+              This isn't the same model being asked to review its own work. It's a separate agent
+              with adversarial instructions: assume the post could be better. Find the hook that
+              doesn't hook. Find the CTA that's too vague. Find the moment it stops sounding like
+              a real local business and starts sounding like a template.
+            </p>
+            <div class="mt-4 p-4 rounded-lg" style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);">
+              <div class="text-xs font-semibold text-blue-400 mb-1">QA Agent Instructions (excerpt):</div>
+              <p class="text-xs font-mono" style="color:#64748b; line-height:1.7;">
+                "Your job is not to approve posts. Your job is to find every reason this post
+                might fail in the real world. Score each dimension honestly. If the hook doesn't
+                make you stop reading, score it low. Be the reader who's never heard of this company."
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="flex gap-6">
+          <div class="flex flex-col items-center">
+            <div class="flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center font-extrabold text-white text-lg" style="background:#22c55e;">3</div>
+          </div>
+          <div class="pt-1">
+            <div class="text-xs font-semibold uppercase tracking-widest text-green-400 mb-2">Step Three</div>
+            <h3 class="text-xl font-bold text-white mb-3">Only the Best Ship</h3>
+            <p style="color:#94a3b8;" class="leading-relaxed">
+              Posts averaging 7.0 or above across all 6 dimensions are approved and enter the
+              publishing schedule. Anything below that threshold is flagged and sent back for a rewrite.
+              The rewrite process repeats until the post passes.
+            </p>
+            <p style="color:#94a3b8;" class="leading-relaxed mt-3">
+              You never see the ones that didn't make it. By the time content reaches your brand,
+              it's already been through a quality filter that most agencies don't have at all. The
+              30–40% of posts that get rewritten? Those are invisible to you. What you see is the
+              output — content that earned its way onto your profile.
+            </p>
+            <div class="mt-4 flex items-center gap-3 p-3 rounded-lg" style="background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.2);">
+              <span class="text-2xl">✅</span>
+              <div class="text-sm" style="color:#86efac;">Score ≥ 7.0 → Approved → Scheduled → Published</div>
+            </div>
+            <div class="mt-2 flex items-center gap-3 p-3 rounded-lg" style="background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);">
+              <span class="text-2xl">🔄</span>
+              <div class="text-sm" style="color:#fca5a5;">Score &lt; 7.0 → Flagged → Rewritten → Re-scored → Repeat</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THE 6 DIMENSIONS ============ -->
+  <section style="background: #0f172a;" class="py-20 sm:py-28">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-16">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">
+          The 6 Dimensions We Score
+        </h2>
+        <p class="text-base sm:text-lg max-w-2xl mx-auto" style="color:#64748b;">
+          Every post is scored 1–10 on each dimension. The average must hit 7.0.
+          No single dimension can fall below 4.
+          Here's exactly what we're looking for.
+        </p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+
+        <!-- 1. Hook Strength -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">🎣</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">Hook Strength</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Does the first line stop the scroll? We look for a specific question, a surprising fact,
+            or a local signal that makes <em>this</em> reader in <em>this</em> moment want to keep reading.
+            A weak hook means the rest of the post goes unread — no matter how good it is.
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 2/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"At Sunrise HVAC, we offer quality heating and cooling services for your home."</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 9/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Your AC capacitor costs $12. The labor to replace it when it fails mid-July? $350. Here's how to know if yours is about to go."</p>
+          </div>
+        </div>
+
+        <!-- 2. Local Specificity -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">📍</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">Local Specificity</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Does this post feel like <em>this company</em> in <em>this city</em> — or could it be
+            any HVAC company anywhere? We look for your business name, your market, local
+            landmarks, local weather patterns, and context that only applies to your customers.
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 2/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Hot weather is tough on your AC. Make sure to schedule a tune-up before the summer rush!"</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 9/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Tampa Bay homeowners: the humidity this week is hitting your air handler harder than the heat. Mesa Air is booking tune-ups in Hillsborough and Pinellas — slots are filling fast."</p>
+          </div>
+        </div>
+
+        <!-- 3. Value Delivery -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">💡</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">Value Delivery</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Does the reader get something useful from this post — a tip, an insight, a fact they
+            didn't know — or does it just sell at them? Value-first content builds trust. Pure
+            promotional content gets ignored. We score hard on this dimension because it's the
+            most commonly skipped step.
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 1/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"We've been serving the community for over 20 years! Call us for all your HVAC needs. We're the best in the business."</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 8/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Quick tip before it gets cold: set your thermostat to 'auto' not 'on.' Running your fan constantly in Atlanta's humidity pulls moisture back off the coil and back into your air. Auto mode saves energy and keeps humidity lower."</p>
+          </div>
+        </div>
+
+        <!-- 4. CTA Clarity -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">🎯</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">CTA Clarity</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Does the post tell the reader exactly what to do next — and why right now?
+            A weak CTA loses the conversion every time. We require a specific action,
+            a specific channel (call, text, link, DM), and ideally a reason to act today
+            rather than "someday."
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 2/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Contact us today to learn more about our services and how we can help you stay comfortable year-round."</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 9/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Grab one of our last 3 open slots this week — text COOL to (602) 555-0147 or click the link below. We'll confirm your appointment in under 2 hours."</p>
+          </div>
+        </div>
+
+        <!-- 5. Platform Fit -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">📱</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">Platform Fit</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Is this the right length, format, hashtag set, and tone for the platform it's
+            going on? A Facebook post that reads like a LinkedIn article fails. An Instagram
+            caption without proper hashtag context fails. A Google Business update that's
+            too casual fails. Platform context is non-negotiable.
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 3/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;"><em>[For Facebook, 900 words of corporate copy]</em> "As a leading provider of HVAC solutions in the greater metropolitan area, we are pleased to announce that our highly trained team of certified technicians..."</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 9/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;"><em>[Facebook, conversational, right length]</em> "Your furnace is about to work the hardest it has all year. One thing most Denver homeowners skip: checking the flame color. Blue = good. Yellow = call someone. Drop a ❄️ if you're ready for winter."</p>
+          </div>
+        </div>
+
+        <!-- 6. Authenticity -->
+        <div class="dim-card p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-3xl">🗣️</span>
+            <div>
+              <div class="font-extrabold text-white text-lg">Authenticity</div>
+              <div class="text-xs text-blue-400 font-semibold mt-0.5">Scored 1–10</div>
+            </div>
+          </div>
+          <p class="text-sm mb-5" style="color:#64748b;line-height:1.7;">
+            Does this sound like a real local business run by real people — or does it sound
+            like it came out of a content machine? We scan for AI-slop phrases, overly formal
+            language, generic phrasing that no actual HVAC owner would use, and a lack of
+            personality. Your customers can tell. So can we.
+          </p>
+
+          <div class="post-card post-card-bad p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#f87171;">Score: 2/10</span>
+              <span class="badge-fail text-xs font-bold px-2 py-0.5 rounded">FAILS</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"As a trusted provider committed to excellence in all facets of HVAC service delivery, our dedicated team remains steadfast in our mission to ensure optimal comfort solutions for every valued customer."</p>
+          </div>
+
+          <div class="post-card post-card-good p-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold" style="color:#86efac;">Score: 9/10</span>
+              <span class="badge-pass text-xs font-bold px-2 py-0.5 rounded">PASSES</span>
+            </div>
+            <p class="text-xs" style="color:#94a3b8;">"Had a call yesterday — homeowner in Chandler said her AC 'smells like burning.' We got there in two hours. Bad capacitor, caught before it took the compressor with it. That's a $150 fix vs. a $2,800 fix. This is why tune-ups aren't optional."</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THE STANDARD ============ -->
+  <section style="background: #1e293b;" class="py-20 sm:py-28">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">The Standard</h2>
+        <p class="text-base sm:text-lg max-w-2xl mx-auto" style="color:#64748b;">
+          We don't have "good enough." We have a number. And we enforce it.
+        </p>
+      </div>
+
+      <!-- The score visual -->
+      <div class="max-w-xl mx-auto mb-14">
+        <div class="p-8 rounded-2xl text-center" style="background:#0f172a;border:1px solid rgba(59,130,246,0.25);">
+          <div class="text-7xl font-extrabold text-blue-400 mb-2">7.0</div>
+          <div class="text-white font-bold text-xl mb-1">Minimum Passing Score</div>
+          <div class="text-sm" style="color:#64748b;">Averaged across all 6 dimensions</div>
+          <div class="mt-4 pt-4" style="border-top:1px solid rgba(59,130,246,0.1);">
+            <div class="text-sm" style="color:#94a3b8;">
+              <strong class="text-slate-200">Hard floor rule:</strong> No single dimension can score below <span class="text-blue-400 font-bold">4 out of 10</span>.
+              A post with a 9.2 average but a 3 on Authenticity still fails.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Score bars -->
+      <div class="max-w-xl mx-auto space-y-4 mb-14">
+        <div class="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-6 text-center">What a passing score looks like across dimensions</div>
+        <div class="space-y-3">
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>🎣 Hook Strength</span><span class="text-white font-bold">8.2</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:82%;"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>📍 Local Specificity</span><span class="text-white font-bold">8.7</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:87%;"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>💡 Value Delivery</span><span class="text-white font-bold">7.5</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:75%;"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>🎯 CTA Clarity</span><span class="text-white font-bold">8.0</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:80%;"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>📱 Platform Fit</span><span class="text-white font-bold">9.1</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:91%;"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1" style="color:#94a3b8;"><span>🗣️ Authenticity</span><span class="text-white font-bold">7.8</span></div>
+            <div class="score-bar-bg h-1.5"><div class="score-bar-fill" style="width:78%;"></div></div>
+          </div>
+          <div class="mt-4 pt-4" style="border-top:1px solid rgba(59,130,246,0.1);">
+            <div class="flex justify-between text-sm" style="color:#94a3b8;"><span class="font-semibold text-white">Average Score</span><span class="text-blue-400 font-extrabold text-base">8.2 / 10 ✓</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Why it matters -->
+      <div class="grid sm:grid-cols-2 gap-6">
+        <div class="p-6 rounded-xl" style="background:#0f172a;border:1px solid rgba(239,68,68,0.15);">
+          <div class="text-2xl mb-3">⚠️</div>
+          <h3 class="font-bold text-white mb-2">One bad post undoes ten good ones</h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            Trust is asymmetric. A potential customer who sees a generic, clearly-AI, embarrassing
+            post from your company will not forget it. They won't give you a second look. In local
+            markets where reputation is everything, we treat every post like it's the one that
+            determines whether someone calls you or your competitor.
+          </p>
+        </div>
+        <div class="p-6 rounded-xl" style="background:#0f172a;border:1px solid rgba(59,130,246,0.15);">
+          <div class="text-2xl mb-3">📊</div>
+          <h3 class="font-bold text-white mb-2">30–40% of first drafts get rewritten</h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            That number is intentional. We'd rather have a QA process that catches a lot
+            than one that approves everything. The rewrites happen automatically — no human
+            intervention, no delay. You just get better content.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ WHAT THIS MEANS FOR YOU ============ -->
+  <section style="background: #0f172a;" class="py-20 sm:py-28">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-white mb-4">
+          What This Means for Your Business
+        </h2>
+        <p class="text-base sm:text-lg max-w-2xl mx-auto" style="color:#64748b;">
+          The process exists to protect you. Here's exactly what you get because of it.
+        </p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-6">
+
+        <div class="benefit-item pl-5 py-2">
+          <h3 class="font-bold text-white mb-2 flex items-center gap-2">
+            <span class="text-blue-400">🛡️</span> Your Brand Is Protected
+          </h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            We never publish something that hasn't met the standard. There's no "eh, it's close enough"
+            in this system. The QA agent doesn't have a quota to hit and no pressure to approve borderline
+            posts. It just scores. The math decides.
+          </p>
+        </div>
+
+        <div class="benefit-item pl-5 py-2">
+          <h3 class="font-bold text-white mb-2 flex items-center gap-2">
+            <span class="text-blue-400">📋</span> Monthly Quality Report
+          </h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            Every month you get a report: how many posts went out, average QA scores by dimension,
+            how many were rewritten, and what platform they went to. You can see exactly where your
+            content stands and track improvement over time.
+          </p>
+        </div>
+
+        <div class="benefit-item pl-5 py-2">
+          <h3 class="font-bold text-white mb-2 flex items-center gap-2">
+            <span class="text-blue-400">📈</span> The Standard Rises Over Time
+          </h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            Our QA rubric is continuously updated as platform algorithms change and as we
+            learn what's actually performing in your specific market. What scored a 7.5 today
+            might need to be an 8.5 to be effective six months from now. We keep up so you don't have to.
+          </p>
+        </div>
+
+        <div class="benefit-item pl-5 py-2">
+          <h3 class="font-bold text-white mb-2 flex items-center gap-2">
+            <span class="text-blue-400">👁️</span> Full Transparency — You Can See the Scores
+          </h3>
+          <p class="text-sm leading-relaxed" style="color:#64748b;">
+            Clients have dashboard access to their full post history and QA scores. You can
+            see every post, every dimension score, and every rewrite note. We're not hiding
+            anything. This is the standard — you can audit it anytime.
+          </p>
+        </div>
+
+      </div>
+
+      <!-- Testimonial-style block -->
+      <div class="mt-14 p-8 rounded-2xl text-center max-w-3xl mx-auto" style="background:#1e293b;border:1px solid rgba(59,130,246,0.15);">
+        <div class="text-4xl mb-4">🔒</div>
+        <p class="text-base sm:text-lg font-medium text-white leading-relaxed">
+          "We built this process because we wanted to be able to look a client in the eye and say:
+          <em>nothing goes out unless it's earned it.</em> Not 'we try our best.' Not 'we think it's good.'
+          It scored 7.0 or above. Full stop."
+        </p>
+        <div class="mt-4 text-sm font-semibold text-blue-400">— Jason, SprintAI</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ CTA ============ -->
+  <section style="background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #0f172a 100%);" class="py-24 sm:py-32">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
+
+      <h2 class="text-3xl sm:text-5xl font-extrabold text-white mb-6 leading-tight">
+        Ready to see what this looks like<br/>
+        <span class="text-blue-400">for your company?</span>
+      </h2>
+
+      <p class="text-base sm:text-lg mb-10 max-w-xl mx-auto leading-relaxed" style="color:#94a3b8;">
+        We'll generate a sample post package for your specific company — name, city, services —
+        scored and reviewed through our QA pipeline. You'll see the scores. No commitment.
+      </p>
+
+      <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
+        <a href="mailto:jason@getsprintai.com?subject=Free Sample Request"
+           class="glow-btn text-white font-bold text-lg px-10 py-5 rounded-xl no-underline w-full sm:w-auto">
+          Get a Free Sample →
+        </a>
+        <a href="/" class="font-semibold text-sm px-6 py-5 rounded-xl w-full sm:w-auto text-center"
+           style="color:#94a3b8;border:1px solid rgba(255,255,255,0.1);">
+          ← Back to Home
+        </a>
+      </div>
+
+      <p class="mt-6 text-xs" style="color:#475569;">
+        Usually responds same day · No sales call required · We just send you the content
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer style="background:#0f172a;border-top:1px solid rgba(59,130,246,0.1);" class="py-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <span class="text-xl">❄️</span>
+        <span class="font-bold text-blue-400">SprintAI</span>
+        <span class="text-xs ml-1" style="color:#334155;">AI Marketing for HVAC Contractors</span>
+      </div>
+      <div class="flex items-center gap-6 text-sm" style="color:#475569;">
+        <a href="/" class="nav-link">Home</a>
+        <a href="/process/" class="nav-link" style="color:#3b82f6;">Our Process</a>
+        <a href="mailto:jason@getsprintai.com" class="nav-link">jason@getsprintai.com</a>
+      </div>
+      <div class="text-xs" style="color:#334155;">© 2025 SprintAI. All rights reserved.</div>
+    </div>
+  </footer>
+
+</body>
+</html>
