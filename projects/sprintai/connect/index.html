@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connect Your Accounts — SprintAI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy:  '#0f172a',
+            brand: '#3b82f6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #0f172a; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center px-4 py-12 font-sans">
+
+  <!-- ======================================================
+       CONFIGURATION — replace placeholders before going live
+       ====================================================== -->
+  <script>
+    // ⚠️  Replace these with real values from your Meta & Google app dashboards.
+    // Meta App ID: https://developers.facebook.com/apps/
+    const FACEBOOK_APP_ID   = '{APP_ID}';
+    // Google OAuth Client ID: https://console.cloud.google.com/apis/credentials
+    const GOOGLE_CLIENT_ID  = '{CLIENT_ID}';
+
+    // OAuth callback endpoint (your server or Netlify Function)
+    const REDIRECT_BASE = 'https://getsprintai.com/oauth/callback';
+
+    // client_id is passed via query param when SprintAI redirects here after signup
+    const params    = new URLSearchParams(window.location.search);
+    const clientId  = params.get('client_id') || '';
+
+    function connectFacebook() {
+      const redirectUri = encodeURIComponent(REDIRECT_BASE + '/facebook');
+      const scope = 'pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish';
+      const state = encodeURIComponent(JSON.stringify({ client_id: clientId }));
+      const url = `https://www.facebook.com/v19.0/dialog/oauth` +
+                  `?client_id=${FACEBOOK_APP_ID}` +
+                  `&redirect_uri=${redirectUri}` +
+                  `&scope=${scope}` +
+                  `&state=${state}` +
+                  `&response_type=code`;
+      window.location.href = url;
+    }
+
+    function connectGoogle() {
+      const redirectUri = encodeURIComponent(REDIRECT_BASE + '/google');
+      const scope = encodeURIComponent('https://www.googleapis.com/auth/business.manage');
+      const state = encodeURIComponent(JSON.stringify({ client_id: clientId }));
+      const url = `https://accounts.google.com/o/oauth2/v2/auth` +
+                  `?client_id=${GOOGLE_CLIENT_ID}` +
+                  `&redirect_uri=${redirectUri}` +
+                  `&scope=${scope}` +
+                  `&response_type=code` +
+                  `&access_type=offline` +
+                  `&prompt=consent` +
+                  `&state=${state}`;
+      window.location.href = url;
+    }
+
+    // Read connection status from URL (set by the callback endpoint after a successful OAuth)
+    const fbConnected  = params.get('fb')  === 'connected';
+    const gmbConnected = params.get('gmb') === 'connected';
+  </script>
+  <!-- ======================================================
+       END CONFIGURATION
+       ====================================================== -->
+
+  <!-- Card -->
+  <div class="w-full max-w-lg bg-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+
+    <!-- Header -->
+    <div class="bg-brand px-8 py-7 flex flex-col items-center">
+      <svg class="w-10 h-10 text-white mb-2" fill="none" stroke="currentColor" stroke-width="2"
+           viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+      <span class="text-white text-2xl font-bold tracking-tight">SprintAI</span>
+      <span class="text-blue-100 text-sm mt-1">AI Marketing for HVAC Contractors</span>
+    </div>
+
+    <!-- Body -->
+    <div class="px-8 py-8">
+      <h1 class="text-white text-2xl font-semibold text-center mb-2">Connect Your Accounts</h1>
+      <p class="text-slate-400 text-sm text-center mb-8">
+        This gives us permission to post on your behalf.
+        <span class="text-slate-300 font-medium">We never see your password.</span>
+      </p>
+
+      <!-- Steps -->
+      <div class="space-y-4">
+
+        <!-- Step 1 — Facebook & Instagram -->
+        <div class="bg-slate-700 rounded-xl p-5 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-4">
+            <div class="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center">
+              <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657
+                         9.128 8.438 9.878v-6.987H7.898V12h2.54V9.797c0-2.506
+                         1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46
+                         h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443
+                         2.89h-2.33v6.988C18.343 21.128 22 16.991 22 12z"/>
+              </svg>
+            </div>
+            <div>
+              <p class="text-white font-medium text-sm">Facebook &amp; Instagram</p>
+              <p class="text-slate-400 text-xs">Manage pages &amp; schedule posts</p>
+            </div>
+          </div>
+          <div id="fb-status">
+            <button onclick="connectFacebook()"
+                    class="bg-brand hover:bg-blue-500 text-white text-sm font-semibold
+                           px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+              Connect
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2 — Google Business -->
+        <div class="bg-slate-700 rounded-xl p-5 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-4">
+            <div class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500 flex items-center justify-center">
+              <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787
+                         4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827
+                         0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0
+                         4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44
+                         16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56
+                         12 12.173 12c3.573 0 6.267-1.173 8.373-3.36
+                         2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>
+              </svg>
+            </div>
+            <div>
+              <p class="text-white font-medium text-sm">Google Business Profile</p>
+              <p class="text-slate-400 text-xs">Post updates &amp; offers to your listing</p>
+            </div>
+          </div>
+          <div id="gmb-status">
+            <button onclick="connectGoogle()"
+                    class="bg-brand hover:bg-blue-500 text-white text-sm font-semibold
+                           px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+              Connect
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /Steps -->
+
+      <!-- Trust note -->
+      <div class="mt-8 flex items-start gap-3 bg-slate-900 rounded-xl px-5 py-4">
+        <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor"
+             stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0
+                   0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02
+                   12.02 0 003 9c0 5.591 3.824 10.29 9 11.622
+                   5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+        </svg>
+        <p class="text-slate-400 text-xs leading-relaxed">
+          SprintAI uses official OAuth — the same secure standard used by apps like Hootsuite
+          and Buffer. We can only post content; we cannot read your private messages or
+          access financial information.
+        </p>
+      </div>
+
+      <!-- Support -->
+      <p class="text-center text-slate-500 text-xs mt-6">
+        Need help?
+        <a href="mailto:support@getsprintai.com"
+           class="text-brand hover:underline">support@getsprintai.com</a>
+      </p>
+
+    </div><!-- /Body -->
+  </div><!-- /Card -->
+
+  <!-- Update button states based on URL params -->
+  <script>
+    function renderConnected(elementId, label) {
+      document.getElementById(elementId).innerHTML =
+        `<span class="inline-flex items-center gap-1.5 text-green-400 text-sm font-semibold">
+           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+           </svg>
+           Connected
+         </span>`;
+    }
+
+    if (fbConnected)  renderConnected('fb-status',  'Facebook');
+    if (gmbConnected) renderConnected('gmb-status', 'Google');
+  </script>
+
+</body>
+</html>
