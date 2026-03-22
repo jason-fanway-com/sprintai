@@ -11,6 +11,7 @@
 <body class="bg-gray-50">
   <script src="/admin/lib.js"></script>
   <script src="/admin/nav.js"></script>
+  <script src="/admin/analyze.js"></script>
   <div class="crm-main">
     <div class="p-6 lg:p-8 max-w-7xl mx-auto">
 
@@ -349,6 +350,14 @@ async function showDetail(id) {
       </div>
 
       <div class="lg:col-span-2 space-y-6">
+        <!-- Site Analysis / Sales Intel -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold">🔍 Site Analysis & Sales Intel</h3>
+            <button onclick="runAnalysis('${c.id}', '${escapeHtml(c.website || '')}')" class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700">${c.site_analysis ? '🔄 Re-Analyze' : '▶ Analyze Site'}</button>
+          </div>
+          <div id="analysis-container">${renderSiteAnalysis(c.site_analysis)}</div>
+        </div>
         <!-- Contacts -->
         <div class="bg-white rounded-lg shadow-sm p-6">
           <div class="flex justify-between items-center mb-4">
@@ -406,6 +415,12 @@ async function showDetail(id) {
       </div>
     </div>
   `;
+}
+
+async function runAnalysis(companyId, website) {
+  document.getElementById('analysis-container').innerHTML = '<div class="flex items-center gap-2 text-sm text-gray-500"><svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Analyzing site...</div>';
+  const analysis = await analyzeSite(companyId, website);
+  document.getElementById('analysis-container').innerHTML = renderSiteAnalysis(analysis);
 }
 
 async function exportCompanies() {
