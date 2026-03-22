@@ -17,7 +17,11 @@
       <div id="list-view">
         <div class="flex items-center justify-between mb-6">
           <h1 class="text-2xl font-bold text-gray-900">Contacts</h1>
-          <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Contact</button>
+          <div class="flex gap-2">
+            <button onclick="exportContacts()" class="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">📤 Export CSV</button>
+            <button onclick="exportCallSheet()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700">📞 Call Sheet</button>
+            <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Contact</button>
+          </div>
         </div>
 
         <div class="bg-white rounded-lg shadow-sm">
@@ -399,6 +403,42 @@ document.getElementById('activity-form').addEventListener('submit', async (e) =>
     showDetail(row.contact_id);
   }
 });
+
+async function exportContacts() {
+  const { data } = await supabase.from('crm_contacts').select('*, crm_companies(name)').order('is_owner', { ascending: false }).order('full_name');
+  if (!data || data.length === 0) { showToast('No contacts to export', 'error'); return; }
+  exportToCSV(data.map(c => ({
+    name: c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim(),
+    email: c.email || '',
+    phone: c.phone || '',
+    company: c.crm_companies?.name || '',
+    title: c.title || '',
+    is_owner: c.is_owner ? 'Yes' : 'No',
+    status: c.status || '',
+    email_verified: c.email_verified ? 'Yes' : 'No',
+    linkedin: c.linkedin_url || '',
+    source: c.source || '',
+    last_contacted: c.last_contacted_at || '',
+  })), 'sprintai-contacts.csv');
+}
+
+async function exportCallSheet() {
+  const { data } = await supabase.from('crm_contacts').select('*, crm_companies(name, website, city, state)').not('phone', 'is', null).order('is_owner', { ascending: false }).order('full_name');
+  if (!data || data.length === 0) { showToast('No contacts with phone numbers', 'error'); return; }
+  exportToCSV(data.map((c, i) => ({
+    '#': i + 1,
+    name: c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim(),
+    business: c.crm_companies?.name || '',
+    phone: c.phone,
+    email: c.email || '',
+    city: c.crm_companies?.city || '',
+    state: c.crm_companies?.state || '',
+    website: c.crm_companies?.website || '',
+    owner: c.is_owner ? 'Yes' : 'No',
+    title: c.title || '',
+    talking_points: 'Modern HVAC digital presence: website, chat, social, blog, Google. Start at $99/mo.',
+  })), 'sprintai-call-sheet.csv');
+}
 
 loadContacts();
 </script>

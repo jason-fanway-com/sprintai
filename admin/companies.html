@@ -18,7 +18,10 @@
       <div id="list-view">
         <div class="flex items-center justify-between mb-6">
           <h1 class="text-2xl font-bold text-gray-900">Companies</h1>
-          <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Company</button>
+          <div class="flex gap-2">
+            <button onclick="exportCompanies()" class="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">📤 Export CSV</button>
+            <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Company</button>
+          </div>
         </div>
 
         <div class="bg-white rounded-lg shadow-sm">
@@ -403,6 +406,19 @@ async function showDetail(id) {
       </div>
     </div>
   `;
+}
+
+async function exportCompanies() {
+  const { data } = await supabase.from('crm_companies').select('*').order('name');
+  if (!data || data.length === 0) { showToast('No companies to export', 'error'); return; }
+  exportToCSV(data.map(c => ({
+    name: c.name, phone: c.phone || '', website: c.website || '',
+    city: c.city || '', state: c.state || '', zip: c.zip || '',
+    status: c.status, industry: c.industry || '',
+    google_rating: c.google_rating || '', google_reviews: c.google_reviews || '',
+    employee_count: c.employee_count || '', annual_revenue: c.annual_revenue || '',
+    source: c.source || '',
+  })), 'sprintai-companies.csv');
 }
 
 loadCompanies();

@@ -112,3 +112,28 @@ function escapeHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// Export to CSV
+function exportToCSV(data, filename) {
+  if (!data || data.length === 0) { showToast('No data to export', 'error'); return; }
+  const headers = Object.keys(data[0]);
+  const rows = data.map(row => headers.map(h => {
+    let val = String(row[h] || '');
+    if (val.includes(',') || val.includes('"') || val.includes('\n')) val = '"' + val.replace(/"/g, '""') + '"';
+    return val;
+  }).join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename || 'export.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+  showToast(`Exported ${data.length} rows`);
+}
+
+// Format currency
+function formatMoney(val) {
+  const n = parseFloat(val || 0);
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}

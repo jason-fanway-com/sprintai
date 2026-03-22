@@ -101,18 +101,27 @@ CREATE POLICY "service_role_all" ON crm_deals FOR ALL USING (true);
       </div>
 
       <!-- Stats cards -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div class="bg-white rounded-lg shadow-sm p-6">
-          <div class="text-sm text-gray-500">Total Companies</div>
-          <div id="stat-companies" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+        <div class="bg-white rounded-lg shadow-sm p-5">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Companies</div>
+          <div id="stat-companies" class="text-2xl font-bold text-gray-900 mt-1">—</div>
         </div>
-        <div class="bg-white rounded-lg shadow-sm p-6">
-          <div class="text-sm text-gray-500">Total Contacts</div>
-          <div id="stat-contacts" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+        <div class="bg-white rounded-lg shadow-sm p-5">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Contacts</div>
+          <div id="stat-contacts" class="text-2xl font-bold text-gray-900 mt-1">—</div>
+          <div id="stat-owners" class="text-xs text-yellow-600 mt-1"></div>
         </div>
-        <div class="bg-white rounded-lg shadow-sm p-6">
-          <div class="text-sm text-gray-500">Total Deals</div>
-          <div id="stat-deals" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+        <div class="bg-white rounded-lg shadow-sm p-5">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Verified Emails</div>
+          <div id="stat-verified" class="text-2xl font-bold text-green-600 mt-1">—</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-5">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Active Deals</div>
+          <div id="stat-deals" class="text-2xl font-bold text-gray-900 mt-1">—</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-5">
+          <div class="text-xs text-gray-500 uppercase tracking-wide">Pipeline MRR</div>
+          <div id="stat-mrr" class="text-2xl font-bold text-indigo-600 mt-1">—</div>
         </div>
       </div>
 
@@ -169,14 +178,21 @@ async function initDashboard() {
   if (typeof supabase === 'undefined') { setTimeout(initDashboard, 200); return; }
 
   // Counts
-  const [compRes, contRes, dealRes] = await Promise.all([
+  const [compRes, contRes, dealRes, ownerRes, verifiedRes] = await Promise.all([
     supabase.from('crm_companies').select('id', { count: 'exact', head: true }),
     supabase.from('crm_contacts').select('id', { count: 'exact', head: true }),
-    supabase.from('crm_deals').select('id', { count: 'exact', head: true }),
+    supabase.from('crm_deals').select('id, monthly_value, stage'),
+    supabase.from('crm_contacts').select('id', { count: 'exact', head: true }).eq('is_owner', true),
+    supabase.from('crm_contacts').select('id', { count: 'exact', head: true }).eq('email_verified', true),
   ]);
   document.getElementById('stat-companies').textContent = compRes.count ?? 0;
   document.getElementById('stat-contacts').textContent = contRes.count ?? 0;
-  document.getElementById('stat-deals').textContent = dealRes.count ?? 0;
+  const activeDeals = (dealRes.data || []).filter(d => !['closed_won','closed_lost'].includes(d.stage));
+  document.getElementById('stat-deals').textContent = activeDeals.length;
+  document.getElementById('stat-owners').textContent = `${ownerRes.count ?? 0} owners`;
+  document.getElementById('stat-verified').textContent = verifiedRes.count ?? 0;
+  const mrr = (dealRes.data || []).filter(d => d.stage === 'closed_won').reduce((s, d) => s + parseFloat(d.monthly_value || 0), 0);
+  document.getElementById('stat-mrr').textContent = formatMoney(mrr) + '/mo';
 
   // Contacts by status chart
   const { data: contacts } = await supabase.from('crm_contacts').select('status');
