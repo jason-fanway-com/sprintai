@@ -184,7 +184,7 @@ let debounceTimer;
 function debouncedLoad() { clearTimeout(debounceTimer); debounceTimer = setTimeout(()=> { currentPage = 1; loadContacts(); }, 300); }
 
 async function loadCompanies() {
-  const { data } = await supabase.from('crm_companies').select('id, name').order('name');
+  const { data } = await db.from('crm_companies').select('id, name').order('name');
   companiesCache = data || [];
   const sel = document.getElementById('form-company_id');
   sel.innerHTML = '<option value="">— None —</option>' + companiesCache.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
@@ -197,7 +197,7 @@ async function loadContacts() {
   const verifiedOnly = document.getElementById('filter-verified').checked;
   const ownersFirst = document.getElementById('owners-first').checked;
 
-  let query = supabase.from('crm_contacts').select('*, crm_companies(name)', { count: 'exact' });
+  let query = db.from('crm_contacts').select('*, crm_companies(name)', { count: 'exact' });
   if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
   if (status) query = query.eq('status', status);
   if (ownerOnly) query = query.eq('is_owner', true);
@@ -246,7 +246,7 @@ function toggleSelectAll(checked) { document.querySelectorAll('#contacts-body in
 
 async function bulkChangeStatus(status) {
   if (!status || selectedIds.size === 0) return;
-  const { error } = await supabase.from('crm_contacts').update({ status, updated_at: new Date().toISOString() }).in('id', Array.from(selectedIds));
+  const { error } = await db.from('crm_contacts').update({ status, updated_at: new Date().toISOString() }).in('id', Array.from(selectedIds));
   if (error) { showToast(error.message, 'error'); return; }
   showToast(`Updated ${selectedIds.size} contacts`); selectedIds.clear();
   document.getElementById('bulk-btn').classList.add('hidden'); document.getElementById('bulk-status').classList.add('hidden');
@@ -263,7 +263,7 @@ async function openAddModal() {
 
 async function openEditModal(id) {
   await loadCompanies();
-  const { data } = await supabase.from('crm_contacts').select('*').eq('id', id).single();
+  const { data } = await db.from('crm_contacts').select('*').eq('id', id).single();
   if (!data) return;
   document.getElementById('modal-title').textContent = 'Edit Contact';
   document.getElementById('form-id').value = data.id;
@@ -289,8 +289,8 @@ document.getElementById('contact-form').addEventListener('submit', async (e) => 
   row.updated_at = new Date().toISOString();
 
   let error;
-  if (id) { ({ error } = await supabase.from('crm_contacts').update(row).eq('id', id)); }
-  else { ({ error } = await supabase.from('crm_contacts').insert(row)); }
+  if (id) { ({ error } = await db.from('crm_contacts').update(row).eq('id', id)); }
+  else { ({ error } = await db.from('crm_contacts').insert(row)); }
   if (error) { showToast(error.message, 'error'); return; }
   showToast(id ? 'Contact updated' : 'Contact created');
   closeModal('contact-modal');
@@ -299,7 +299,7 @@ document.getElementById('contact-form').addEventListener('submit', async (e) => 
 
 async function deleteContact(id) {
   if (!confirm('Delete this contact?')) return;
-  const { error } = await supabase.from('crm_contacts').delete().eq('id', id);
+  const { error } = await db.from('crm_contacts').delete().eq('id', id);
   if (error) { showToast(error.message, 'error'); return; }
   showToast('Contact deleted'); loadContacts();
 }
@@ -311,8 +311,8 @@ async function showDetail(id) {
   document.getElementById('detail-view').classList.remove('hidden');
 
   const [contRes, actRes] = await Promise.all([
-    supabase.from('crm_contacts').select('*, crm_companies(id, name)').eq('id', id).single(),
-    supabase.from('crm_activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }).limit(50),
+    db.from('crm_contacts').select('*, crm_companies(id, name)').eq('id', id).single(),
+    db.from('crm_activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }).limit(50),
   ]);
   const c = contRes.data;
   if (!c) { showList(); return; }
@@ -390,11 +390,11 @@ document.getElementById('activity-form').addEventListener('submit', async (e) =>
     body: document.getElementById('act-body').value || null,
     outcome: document.getElementById('act-outcome').value || null,
   };
-  const { error } = await supabase.from('crm_activities').insert(row);
+  const { error } = await db.from('crm_activities').insert(row);
   if (error) { showToast(error.message, 'error'); return; }
   // Update last_contacted_at
   if (row.contact_id) {
-    await supabase.from('crm_contacts').update({ last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', row.contact_id);
+    await db.from('crm_contacts').update({ last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', row.contact_id);
   }
   showToast('Activity logged');
   closeModal('activity-modal');
@@ -405,7 +405,7 @@ document.getElementById('activity-form').addEventListener('submit', async (e) =>
 });
 
 async function exportContacts() {
-  const { data } = await supabase.from('crm_contacts').select('*, crm_companies(name)').order('is_owner', { ascending: false }).order('full_name');
+  const { data } = await db.from('crm_contacts').select('*, crm_companies(name)').order('is_owner', { ascending: false }).order('full_name');
   if (!data || data.length === 0) { showToast('No contacts to export', 'error'); return; }
   exportToCSV(data.map(c => ({
     name: c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim(),
@@ -423,7 +423,7 @@ async function exportContacts() {
 }
 
 async function exportCallSheet() {
-  const { data } = await supabase.from('crm_contacts').select('*, crm_companies(name, website, city, state)').not('phone', 'is', null).order('is_owner', { ascending: false }).order('full_name');
+  const { data } = await db.from('crm_contacts').select('*, crm_companies(name, website, city, state)').not('phone', 'is', null).order('is_owner', { ascending: false }).order('full_name');
   if (!data || data.length === 0) { showToast('No contacts with phone numbers', 'error'); return; }
   exportToCSV(data.map((c, i) => ({
     '#': i + 1,

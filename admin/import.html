@@ -215,14 +215,14 @@ async function runImport() {
 
       // Dedup check on company name
       if (companyName) {
-        const { data: existing } = await supabase.from('crm_companies').select('id').ilike('name', companyName).limit(1);
+        const { data: existing } = await db.from('crm_companies').select('id').ilike('name', companyName).limit(1);
         if (existing && existing.length > 0) {
           companyId = existing[0].id;
         } else {
           const companyRow = {};
           COMPANY_FIELDS.forEach(f => { if (row[f]) companyRow[f] = row[f]; });
           if (companyRow.name) {
-            const { data: newComp, error } = await supabase.from('crm_companies').insert(companyRow).select('id').single();
+            const { data: newComp, error } = await db.from('crm_companies').insert(companyRow).select('id').single();
             if (error) { results.errors.push(`Company "${companyName}": ${error.message}`); continue; }
             companyId = newComp.id;
           }
@@ -233,7 +233,7 @@ async function runImport() {
       const email = row.email;
       if (email) {
         // Dedup check on email
-        const { data: existingContact } = await supabase.from('crm_contacts').select('id').ilike('email', email).limit(1);
+        const { data: existingContact } = await db.from('crm_contacts').select('id').ilike('email', email).limit(1);
         if (existingContact && existingContact.length > 0) {
           results.skipped++;
           continue;
@@ -246,7 +246,7 @@ async function runImport() {
         if (!contactRow.full_name && (contactRow.first_name || contactRow.last_name)) {
           contactRow.full_name = `${contactRow.first_name || ''} ${contactRow.last_name || ''}`.trim();
         }
-        const { error } = await supabase.from('crm_contacts').insert(contactRow);
+        const { error } = await db.from('crm_contacts').insert(contactRow);
         if (error) { results.errors.push(`Contact "${email}": ${error.message}`); continue; }
       } else if (!companyName) {
         results.errors.push('Row skipped: no company name or email');

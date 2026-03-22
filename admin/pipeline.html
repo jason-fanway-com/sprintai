@@ -74,9 +74,9 @@ let deals = [], companies = [], contacts = [];
 
 async function loadData() {
   const [d, c, ct] = await Promise.all([
-    supabase.from('crm_deals').select('*, crm_companies(name), crm_contacts(full_name, first_name, last_name)').order('created_at'),
-    supabase.from('crm_companies').select('id, name').order('name'),
-    supabase.from('crm_contacts').select('id, full_name, first_name, last_name').order('full_name'),
+    db.from('crm_deals').select('*, crm_companies(name), crm_contacts(full_name, first_name, last_name)').order('created_at'),
+    db.from('crm_companies').select('id, name').order('name'),
+    db.from('crm_contacts').select('id, full_name, first_name, last_name').order('full_name'),
   ]);
   deals = d.data || [];
   companies = c.data || [];
@@ -123,7 +123,7 @@ function renderKanban() {
       onEnd: async (evt) => {
         const dealId = evt.item.dataset.id;
         const newStage = evt.to.dataset.stage;
-        const { error } = await supabase.from('crm_deals').update({ stage: newStage, updated_at: new Date().toISOString() }).eq('id', dealId);
+        const { error } = await db.from('crm_deals').update({ stage: newStage, updated_at: new Date().toISOString() }).eq('id', dealId);
         if (error) { showToast(error.message, 'error'); loadData(); return; }
         // Update local
         const deal = deals.find(d => d.id === dealId);
@@ -194,8 +194,8 @@ document.getElementById('deal-form').addEventListener('submit', async (e) => {
   };
 
   let error;
-  if (id) { ({ error } = await supabase.from('crm_deals').update(row).eq('id', id)); }
-  else { ({ error } = await supabase.from('crm_deals').insert(row)); }
+  if (id) { ({ error } = await db.from('crm_deals').update(row).eq('id', id)); }
+  else { ({ error } = await db.from('crm_deals').insert(row)); }
   if (error) { showToast(error.message, 'error'); return; }
   showToast(id ? 'Deal updated' : 'Deal created');
   closeModal('deal-modal');
@@ -205,7 +205,7 @@ document.getElementById('deal-form').addEventListener('submit', async (e) => {
 async function deleteDeal() {
   const id = document.getElementById('deal-id').value;
   if (!id || !confirm('Delete this deal?')) return;
-  const { error } = await supabase.from('crm_deals').delete().eq('id', id);
+  const { error } = await db.from('crm_deals').delete().eq('id', id);
   if (error) { showToast(error.message, 'error'); return; }
   showToast('Deal deleted');
   closeModal('deal-modal');

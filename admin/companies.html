@@ -192,7 +192,7 @@ async function loadCompanies() {
   const search = document.getElementById('search').value.trim();
   const status = document.getElementById('filter-status').value;
 
-  let query = supabase.from('crm_companies').select('*, crm_contacts(id), crm_deals(id)', { count: 'exact' });
+  let query = db.from('crm_companies').select('*, crm_contacts(id), crm_deals(id)', { count: 'exact' });
 
   if (search) query = query.or(`name.ilike.%${search}%,city.ilike.%${search}%`);
   if (status) query = query.eq('status', status);
@@ -246,7 +246,7 @@ function showBulkMenu() { document.getElementById('bulk-status').classList.toggl
 async function bulkChangeStatus(status) {
   if (!status || selectedIds.size === 0) return;
   const ids = Array.from(selectedIds);
-  const { error } = await supabase.from('crm_companies').update({ status, updated_at: new Date().toISOString() }).in('id', ids);
+  const { error } = await db.from('crm_companies').update({ status, updated_at: new Date().toISOString() }).in('id', ids);
   if (error) { showToast(error.message, 'error'); return; }
   showToast(`Updated ${ids.length} companies`);
   selectedIds.clear();
@@ -264,7 +264,7 @@ function openAddModal() {
 }
 
 async function openEditModal(id) {
-  const { data } = await supabase.from('crm_companies').select('*').eq('id', id).single();
+  const { data } = await db.from('crm_companies').select('*').eq('id', id).single();
   if (!data) return;
   document.getElementById('modal-title').textContent = 'Edit Company';
   document.getElementById('form-id').value = data.id;
@@ -287,9 +287,9 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
 
   let error;
   if (id) {
-    ({ error } = await supabase.from('crm_companies').update(row).eq('id', id));
+    ({ error } = await db.from('crm_companies').update(row).eq('id', id));
   } else {
-    ({ error } = await supabase.from('crm_companies').insert(row));
+    ({ error } = await db.from('crm_companies').insert(row));
   }
   if (error) { showToast(error.message, 'error'); return; }
   showToast(id ? 'Company updated' : 'Company created');
@@ -299,7 +299,7 @@ document.getElementById('company-form').addEventListener('submit', async (e) => 
 
 async function deleteCompany(id) {
   if (!confirm('Delete this company? This will also affect linked contacts and deals.')) return;
-  const { error } = await supabase.from('crm_companies').delete().eq('id', id);
+  const { error } = await db.from('crm_companies').delete().eq('id', id);
   if (error) { showToast(error.message, 'error'); return; }
   showToast('Company deleted');
   loadCompanies();
@@ -316,10 +316,10 @@ async function showDetail(id) {
   document.getElementById('detail-view').classList.remove('hidden');
 
   const [compRes, contRes, dealRes, actRes] = await Promise.all([
-    supabase.from('crm_companies').select('*').eq('id', id).single(),
-    supabase.from('crm_contacts').select('*').eq('company_id', id).order('is_owner', { ascending: false }),
-    supabase.from('crm_deals').select('*').eq('company_id', id).order('created_at', { ascending: false }),
-    supabase.from('crm_activities').select('*, crm_contacts(full_name, first_name, last_name)').eq('company_id', id).order('created_at', { ascending: false }).limit(50),
+    db.from('crm_companies').select('*').eq('id', id).single(),
+    db.from('crm_contacts').select('*').eq('company_id', id).order('is_owner', { ascending: false }),
+    db.from('crm_deals').select('*').eq('company_id', id).order('created_at', { ascending: false }),
+    db.from('crm_activities').select('*, crm_contacts(full_name, first_name, last_name)').eq('company_id', id).order('created_at', { ascending: false }).limit(50),
   ]);
 
   const c = compRes.data;
@@ -409,7 +409,7 @@ async function showDetail(id) {
 }
 
 async function exportCompanies() {
-  const { data } = await supabase.from('crm_companies').select('*').order('name');
+  const { data } = await db.from('crm_companies').select('*').order('name');
   if (!data || data.length === 0) { showToast('No companies to export', 'error'); return; }
   exportToCSV(data.map(c => ({
     name: c.name, phone: c.phone || '', website: c.website || '',

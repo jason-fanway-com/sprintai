@@ -2,7 +2,10 @@
 const SUPABASE_URL = 'https://fdxvflryvctvstxdbdtm.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkeHZmbHJ5dmN0dnN0eGRiZHRtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTEyNDcyMSwiZXhwIjoyMDg2NzAwNzIxfQ.wHeUtOUz28kL1pLafERmuByxqYTtK0H9jDE3t0GDclI';
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Use window.db to avoid shadowing the Supabase CDN global (window.supabase)
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Also expose as window.db for cross-script access
+window.db = db;
 
 const CRM_PASSWORD = 'sprint2026!';
 
