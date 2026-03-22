@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contacts — SprintAI CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="bg-gray-50">
+  <script src="/admin/lib.js"></script>
+  <script src="/admin/nav.js"></script>
+  <div class="crm-main">
+    <div class="p-6 lg:p-8 max-w-7xl mx-auto">
+
+      <div id="list-view">
+        <div class="flex items-center justify-between mb-6">
+          <h1 class="text-2xl font-bold text-gray-900">Contacts</h1>
+          <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Contact</button>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm">
+          <div class="p-4 border-b flex flex-wrap gap-3 items-center">
+            <input id="search" type="text" placeholder="Search name, email, company..." class="px-3 py-2 border rounded-lg text-sm w-64 outline-none focus:ring-2 focus:ring-indigo-500" oninput="debouncedLoad()">
+            <select id="filter-status" class="px-3 py-2 border rounded-lg text-sm" onchange="loadContacts()">
+              <option value="">All Statuses</option>
+              <option value="new">New</option>
+              <option value="contacted">Contacted</option>
+              <option value="replied">Replied</option>
+              <option value="qualified">Qualified</option>
+              <option value="customer">Customer</option>
+              <option value="unsubscribed">Unsubscribed</option>
+              <option value="bounced">Bounced</option>
+            </select>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="filter-owner" onchange="loadContacts()"> Owners Only
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="filter-verified" onchange="loadContacts()"> Verified Only
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="owners-first" onchange="loadContacts()"> Owners First
+            </label>
+            <button id="bulk-btn" class="hidden bg-yellow-500 text-white px-3 py-2 rounded-lg text-sm" onclick="document.getElementById('bulk-status').classList.toggle('hidden')">Bulk Actions</button>
+            <select id="bulk-status" class="hidden px-3 py-2 border rounded-lg text-sm" onchange="bulkChangeStatus(this.value)">
+              <option value="">Change status to...</option>
+              <option value="new">New</option>
+              <option value="contacted">Contacted</option>
+              <option value="replied">Replied</option>
+              <option value="qualified">Qualified</option>
+              <option value="customer">Customer</option>
+              <option value="unsubscribed">Unsubscribed</option>
+              <option value="bounced">Bounced</option>
+            </select>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 text-left">
+                <tr>
+                  <th class="p-3 w-8"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)"></th>
+                  <th class="p-3 cursor-pointer hover:text-indigo-600" onclick="setSort('full_name')">Name</th>
+                  <th class="p-3">Email</th>
+                  <th class="p-3">Phone</th>
+                  <th class="p-3">Company</th>
+                  <th class="p-3">Title</th>
+                  <th class="p-3">Owner</th>
+                  <th class="p-3 cursor-pointer hover:text-indigo-600" onclick="setSort('status')">Status</th>
+                  <th class="p-3">Verified</th>
+                  <th class="p-3">Last Contact</th>
+                  <th class="p-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="contacts-body"></tbody>
+            </table>
+          </div>
+          <div class="p-4 flex justify-between items-center border-t">
+            <span id="total-count" class="text-sm text-gray-500"></span>
+            <div id="pagination"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detail View -->
+      <div id="detail-view" class="hidden">
+        <button onclick="showList()" class="text-indigo-600 text-sm mb-4 hover:underline">← Back to Contacts</button>
+        <div id="detail-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div id="contact-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div class="p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 id="modal-title" class="text-lg font-bold">Add Contact</h2>
+          <button onclick="closeModal('contact-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <form id="contact-form" class="space-y-4">
+          <input type="hidden" id="form-id">
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">First Name</label><input id="form-first_name" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Last Name</label><input id="form-last_name" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          </div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label><input id="form-full_name" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label><input id="form-email" type="email" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Phone</label><input id="form-phone" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Company</label><select id="form-company_id" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="">— None —</option></select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Title</label><input id="form-title" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select id="form-status" class="w-full px-3 py-2 border rounded-lg text-sm">
+                <option value="new">New</option><option value="contacted">Contacted</option><option value="replied">Replied</option><option value="qualified">Qualified</option><option value="customer">Customer</option><option value="unsubscribed">Unsubscribed</option><option value="bounced">Bounced</option>
+              </select>
+            </div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Email Type</label>
+              <select id="form-email_type" class="w-full px-3 py-2 border rounded-lg text-sm">
+                <option value="">—</option><option value="personal">Personal</option><option value="role_based">Role Based</option><option value="unknown">Unknown</option>
+              </select>
+            </div>
+            <div class="flex items-end gap-4">
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="form-is_owner"> Owner</label>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="form-email_verified"> Verified</label>
+            </div>
+          </div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">LinkedIn URL</label><input id="form-linkedin_url" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Source</label><input id="form-source" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Notes</label><textarea id="form-notes" rows="3" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></textarea></div>
+          <div class="flex justify-end gap-3">
+            <button type="button" onclick="closeModal('contact-modal')" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+            <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Activity Modal -->
+  <div id="activity-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+      <div class="p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 id="activity-modal-title" class="text-lg font-bold">Log Activity</h2>
+          <button onclick="closeModal('activity-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <form id="activity-form" class="space-y-4">
+          <input type="hidden" id="act-contact-id">
+          <input type="hidden" id="act-company-id">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Type</label>
+            <select id="act-type" class="w-full px-3 py-2 border rounded-lg text-sm">
+              <option value="call_made">Call Made</option><option value="call_received">Call Received</option>
+              <option value="email_sent">Email Sent</option><option value="email_received">Email Received</option>
+              <option value="sms_sent">SMS Sent</option><option value="sms_received">SMS Received</option>
+              <option value="note">Note</option><option value="meeting">Meeting</option>
+            </select>
+          </div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Subject</label><input id="act-subject" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Body</label><textarea id="act-body" rows="3" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></textarea></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Outcome</label><input id="act-outcome" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div class="flex justify-end gap-3">
+            <button type="button" onclick="closeModal('activity-modal')" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+            <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+checkAuth();
+
+let currentPage = 1, sortCol = 'full_name', sortDir = 'asc', selectedIds = new Set(), companiesCache = [];
+const PER_PAGE = 25;
+let debounceTimer;
+function debouncedLoad() { clearTimeout(debounceTimer); debounceTimer = setTimeout(()=> { currentPage = 1; loadContacts(); }, 300); }
+
+async function loadCompanies() {
+  const { data } = await supabase.from('crm_companies').select('id, name').order('name');
+  companiesCache = data || [];
+  const sel = document.getElementById('form-company_id');
+  sel.innerHTML = '<option value="">— None —</option>' + companiesCache.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+}
+
+async function loadContacts() {
+  const search = document.getElementById('search').value.trim();
+  const status = document.getElementById('filter-status').value;
+  const ownerOnly = document.getElementById('filter-owner').checked;
+  const verifiedOnly = document.getElementById('filter-verified').checked;
+  const ownersFirst = document.getElementById('owners-first').checked;
+
+  let query = supabase.from('crm_contacts').select('*, crm_companies(name)', { count: 'exact' });
+  if (search) query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
+  if (status) query = query.eq('status', status);
+  if (ownerOnly) query = query.eq('is_owner', true);
+  if (verifiedOnly) query = query.eq('email_verified', true);
+
+  if (ownersFirst) {
+    query = query.order('is_owner', { ascending: false }).order(sortCol || 'full_name', { ascending: sortDir === 'asc' });
+  } else {
+    query = query.order(sortCol || 'full_name', { ascending: sortDir === 'asc' });
+  }
+  query = query.range((currentPage - 1) * PER_PAGE, currentPage * PER_PAGE - 1);
+
+  const { data, count, error } = await query;
+  if (error) { showToast(error.message, 'error'); return; }
+
+  document.getElementById('total-count').textContent = `${count || 0} contacts`;
+  const totalPages = Math.ceil((count || 0) / PER_PAGE);
+
+  document.getElementById('contacts-body').innerHTML = (data || []).map(c => {
+    const name = c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim() || '—';
+    return `<tr class="border-b cursor-pointer" onclick="showDetail('${c.id}')">
+      <td class="p-3" onclick="event.stopPropagation()"><input type="checkbox" value="${c.id}" onchange="toggleSelect('${c.id}', this.checked)"></td>
+      <td class="p-3 font-medium text-gray-900">${escapeHtml(name)}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.email || '—')}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.phone || '—')}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.crm_companies?.name || '—')}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.title || '—')}</td>
+      <td class="p-3">${c.is_owner ? '✅' : ''}</td>
+      <td class="p-3">${statusBadge(c.status)}</td>
+      <td class="p-3">${c.email_verified ? '✅' : ''}</td>
+      <td class="p-3 text-gray-600 text-xs">${formatDate(c.last_contacted_at)}</td>
+      <td class="p-3" onclick="event.stopPropagation()">
+        <button onclick="openEditModal('${c.id}')" class="text-indigo-600 hover:underline text-sm mr-2">Edit</button>
+        <button onclick="deleteContact('${c.id}')" class="text-red-500 hover:underline text-sm">Del</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  renderPagination('pagination', currentPage, totalPages, 'goToPage');
+}
+
+function goToPage(p) { currentPage = p; loadContacts(); }
+function setSort(col) { if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc'; else { sortCol = col; sortDir = 'asc'; } loadContacts(); }
+function toggleSelect(id, checked) { checked ? selectedIds.add(id) : selectedIds.delete(id); document.getElementById('bulk-btn').classList.toggle('hidden', selectedIds.size === 0); }
+function toggleSelectAll(checked) { document.querySelectorAll('#contacts-body input[type=checkbox]').forEach(cb => { cb.checked = checked; toggleSelect(cb.value, checked); }); }
+
+async function bulkChangeStatus(status) {
+  if (!status || selectedIds.size === 0) return;
+  const { error } = await supabase.from('crm_contacts').update({ status, updated_at: new Date().toISOString() }).in('id', Array.from(selectedIds));
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast(`Updated ${selectedIds.size} contacts`); selectedIds.clear();
+  document.getElementById('bulk-btn').classList.add('hidden'); document.getElementById('bulk-status').classList.add('hidden');
+  loadContacts();
+}
+
+async function openAddModal() {
+  await loadCompanies();
+  document.getElementById('modal-title').textContent = 'Add Contact';
+  document.getElementById('contact-form').reset();
+  document.getElementById('form-id').value = '';
+  openModal('contact-modal');
+}
+
+async function openEditModal(id) {
+  await loadCompanies();
+  const { data } = await supabase.from('crm_contacts').select('*').eq('id', id).single();
+  if (!data) return;
+  document.getElementById('modal-title').textContent = 'Edit Contact';
+  document.getElementById('form-id').value = data.id;
+  ['first_name','last_name','full_name','email','phone','company_id','title','status','email_type','linkedin_url','source','notes'].forEach(f => {
+    const el = document.getElementById('form-' + f);
+    if (el) el.value = data[f] || '';
+  });
+  document.getElementById('form-is_owner').checked = data.is_owner || false;
+  document.getElementById('form-email_verified').checked = data.email_verified || false;
+  openModal('contact-modal');
+}
+
+document.getElementById('contact-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('form-id').value;
+  const row = {};
+  ['first_name','last_name','full_name','email','phone','company_id','title','status','email_type','linkedin_url','source','notes'].forEach(f => {
+    const val = document.getElementById('form-' + f).value;
+    row[f] = val || null;
+  });
+  row.is_owner = document.getElementById('form-is_owner').checked;
+  row.email_verified = document.getElementById('form-email_verified').checked;
+  row.updated_at = new Date().toISOString();
+
+  let error;
+  if (id) { ({ error } = await supabase.from('crm_contacts').update(row).eq('id', id)); }
+  else { ({ error } = await supabase.from('crm_contacts').insert(row)); }
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast(id ? 'Contact updated' : 'Contact created');
+  closeModal('contact-modal');
+  loadContacts();
+});
+
+async function deleteContact(id) {
+  if (!confirm('Delete this contact?')) return;
+  const { error } = await supabase.from('crm_contacts').delete().eq('id', id);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Contact deleted'); loadContacts();
+}
+
+function showList() { document.getElementById('list-view').classList.remove('hidden'); document.getElementById('detail-view').classList.add('hidden'); }
+
+async function showDetail(id) {
+  document.getElementById('list-view').classList.add('hidden');
+  document.getElementById('detail-view').classList.remove('hidden');
+
+  const [contRes, actRes] = await Promise.all([
+    supabase.from('crm_contacts').select('*, crm_companies(id, name)').eq('id', id).single(),
+    supabase.from('crm_activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }).limit(50),
+  ]);
+  const c = contRes.data;
+  if (!c) { showList(); return; }
+  const activities = actRes.data || [];
+  const name = c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim();
+
+  document.getElementById('detail-content').innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="bg-white rounded-lg shadow-sm p-6">
+        <h2 class="text-xl font-bold text-gray-900 mb-2">${escapeHtml(name)}</h2>
+        ${statusBadge(c.status)} ${c.is_owner ? '<span class="ml-2 text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Owner</span>' : ''}
+        <div class="mt-4 space-y-2 text-sm text-gray-600">
+          ${c.email ? `<div class="flex items-center gap-2">📧 ${escapeHtml(c.email)} <button onclick="navigator.clipboard.writeText('${escapeHtml(c.email)}');showToast('Copied!')" class="text-indigo-600 text-xs hover:underline">Copy</button> ${c.email_verified ? '✅' : ''}</div>` : ''}
+          ${c.phone ? `<div>📞 ${escapeHtml(c.phone)}</div>` : ''}
+          ${c.title ? `<div>💼 ${escapeHtml(c.title)}</div>` : ''}
+          ${c.crm_companies ? `<div>🏢 <a href="/admin/companies.html" class="text-indigo-600 hover:underline">${escapeHtml(c.crm_companies.name)}</a></div>` : ''}
+          ${c.linkedin_url ? `<div>🔗 <a href="${escapeHtml(c.linkedin_url)}" target="_blank" class="text-indigo-600 hover:underline">LinkedIn Profile</a></div>` : ''}
+          ${c.source ? `<div>📌 Source: ${escapeHtml(c.source)}</div>` : ''}
+          ${c.last_contacted_at ? `<div>📅 Last contacted: ${formatDate(c.last_contacted_at)}</div>` : ''}
+        </div>
+        ${c.notes ? `<div class="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">${escapeHtml(c.notes)}</div>` : ''}
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button onclick="openEditModal('${c.id}')" class="text-indigo-600 text-sm hover:underline">Edit</button>
+        </div>
+      </div>
+      <div class="lg:col-span-2 space-y-6">
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold">Quick Actions</h3>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="logActivity('${c.id}','${c.company_id||''}','call_made')" class="bg-green-50 text-green-700 px-3 py-2 rounded-lg text-sm hover:bg-green-100">📞 Log Call</button>
+            <button onclick="logActivity('${c.id}','${c.company_id||''}','email_sent')" class="bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm hover:bg-blue-100">📧 Log Email</button>
+            <button onclick="logActivity('${c.id}','${c.company_id||''}','note')" class="bg-yellow-50 text-yellow-700 px-3 py-2 rounded-lg text-sm hover:bg-yellow-100">📝 Add Note</button>
+          </div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold mb-4">Activity Timeline</h3>
+          ${activities.length === 0 ? '<p class="text-sm text-gray-400">No activities yet.</p>' : `
+          <div class="space-y-3">${activities.map(a => `
+            <div class="flex items-start gap-3 py-2 border-b border-gray-100">
+              <div class="flex-1">
+                <span class="text-sm font-medium">${a.type.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase())}</span>
+                ${a.subject ? `<p class="text-sm text-gray-600">${escapeHtml(a.subject)}</p>` : ''}
+                ${a.body ? `<p class="text-xs text-gray-400 mt-1">${escapeHtml(a.body).substring(0,200)}</p>` : ''}
+                ${a.outcome ? `<p class="text-xs text-green-600 mt-1">Outcome: ${escapeHtml(a.outcome)}</p>` : ''}
+              </div>
+              <span class="text-xs text-gray-400 whitespace-nowrap">${timeAgo(a.created_at)}</span>
+            </div>
+          `).join('')}</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function logActivity(contactId, companyId, type) {
+  document.getElementById('act-contact-id').value = contactId;
+  document.getElementById('act-company-id').value = companyId;
+  document.getElementById('act-type').value = type;
+  document.getElementById('activity-modal-title').textContent = 'Log ' + type.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase());
+  document.getElementById('act-subject').value = '';
+  document.getElementById('act-body').value = '';
+  document.getElementById('act-outcome').value = '';
+  openModal('activity-modal');
+}
+
+document.getElementById('activity-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const row = {
+    contact_id: document.getElementById('act-contact-id').value || null,
+    company_id: document.getElementById('act-company-id').value || null,
+    type: document.getElementById('act-type').value,
+    subject: document.getElementById('act-subject').value || null,
+    body: document.getElementById('act-body').value || null,
+    outcome: document.getElementById('act-outcome').value || null,
+  };
+  const { error } = await supabase.from('crm_activities').insert(row);
+  if (error) { showToast(error.message, 'error'); return; }
+  // Update last_contacted_at
+  if (row.contact_id) {
+    await supabase.from('crm_contacts').update({ last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', row.contact_id);
+  }
+  showToast('Activity logged');
+  closeModal('activity-modal');
+  // Refresh detail if showing
+  if (!document.getElementById('detail-view').classList.contains('hidden')) {
+    showDetail(row.contact_id);
+  }
+});
+
+loadContacts();
+</script>
+</body>
+</html>

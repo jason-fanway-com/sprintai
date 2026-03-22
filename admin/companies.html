@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Companies — SprintAI CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="bg-gray-50">
+  <script src="/admin/lib.js"></script>
+  <script src="/admin/nav.js"></script>
+  <div class="crm-main">
+    <div class="p-6 lg:p-8 max-w-7xl mx-auto">
+
+      <!-- List View -->
+      <div id="list-view">
+        <div class="flex items-center justify-between mb-6">
+          <h1 class="text-2xl font-bold text-gray-900">Companies</h1>
+          <button onclick="openAddModal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Company</button>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm">
+          <div class="p-4 border-b flex flex-wrap gap-3 items-center">
+            <input id="search" type="text" placeholder="Search name, city..." class="px-3 py-2 border rounded-lg text-sm w-64 focus:ring-2 focus:ring-indigo-500 outline-none" oninput="debouncedLoad()">
+            <select id="filter-status" class="px-3 py-2 border rounded-lg text-sm" onchange="loadCompanies()">
+              <option value="">All Statuses</option>
+              <option value="prospect">Prospect</option>
+              <option value="contacted">Contacted</option>
+              <option value="qualified">Qualified</option>
+              <option value="customer">Customer</option>
+              <option value="churned">Churned</option>
+              <option value="dead">Dead</option>
+            </select>
+            <button id="bulk-btn" class="hidden bg-yellow-500 text-white px-3 py-2 rounded-lg text-sm" onclick="showBulkMenu()">Bulk Actions</button>
+            <select id="bulk-status" class="hidden px-3 py-2 border rounded-lg text-sm" onchange="bulkChangeStatus(this.value)">
+              <option value="">Change status to...</option>
+              <option value="prospect">Prospect</option>
+              <option value="contacted">Contacted</option>
+              <option value="qualified">Qualified</option>
+              <option value="customer">Customer</option>
+              <option value="churned">Churned</option>
+              <option value="dead">Dead</option>
+            </select>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 text-left">
+                <tr>
+                  <th class="p-3 w-8"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)"></th>
+                  <th class="p-3 cursor-pointer hover:text-indigo-600" onclick="setSort('name')">Name <span id="sort-name"></span></th>
+                  <th class="p-3 cursor-pointer hover:text-indigo-600" onclick="setSort('city')">City/State</th>
+                  <th class="p-3">Phone</th>
+                  <th class="p-3 cursor-pointer hover:text-indigo-600" onclick="setSort('status')">Status</th>
+                  <th class="p-3">Contacts</th>
+                  <th class="p-3">Deals</th>
+                  <th class="p-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="companies-body"></tbody>
+            </table>
+          </div>
+          <div class="p-4 flex justify-between items-center border-t">
+            <span id="total-count" class="text-sm text-gray-500"></span>
+            <div id="pagination"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Company Detail View -->
+      <div id="detail-view" class="hidden">
+        <button onclick="showList()" class="text-indigo-600 text-sm mb-4 hover:underline">← Back to Companies</button>
+        <div id="detail-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div id="company-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div class="p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 id="modal-title" class="text-lg font-bold">Add Company</h2>
+          <button onclick="closeModal('company-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <form id="company-form" class="space-y-4">
+          <input type="hidden" id="form-id">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+            <input id="form-name" required class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+              <input id="form-phone" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Website</label>
+              <input id="form-website" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">City</label>
+              <input id="form-city" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">State</label>
+              <input id="form-state" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">ZIP</label>
+              <input id="form-zip" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Industry</label>
+              <input id="form-industry" value="HVAC" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select id="form-status" class="w-full px-3 py-2 border rounded-lg text-sm">
+                <option value="prospect">Prospect</option>
+                <option value="contacted">Contacted</option>
+                <option value="qualified">Qualified</option>
+                <option value="customer">Customer</option>
+                <option value="churned">Churned</option>
+                <option value="dead">Dead</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Employee Count</label>
+              <input id="form-employee_count" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Annual Revenue</label>
+              <input id="form-annual_revenue" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Google Rating</label>
+              <input id="form-google_rating" type="number" step="0.1" min="0" max="5" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Google Reviews</label>
+              <input id="form-google_reviews" type="number" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Google Maps URL</label>
+            <input id="form-google_maps_url" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Source</label>
+            <input id="form-source" class="w-full px-3 py-2 border rounded-lg text-sm outline-none">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea id="form-notes" rows="3" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></textarea>
+          </div>
+          <div class="flex justify-end gap-3">
+            <button type="button" onclick="closeModal('company-modal')" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+            <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+checkAuth();
+
+let currentPage = 1;
+let sortCol = 'name';
+let sortDir = 'asc';
+let selectedIds = new Set();
+const PER_PAGE = 25;
+let debounceTimer;
+
+function debouncedLoad() { clearTimeout(debounceTimer); debounceTimer = setTimeout(()=> { currentPage = 1; loadCompanies(); }, 300); }
+
+async function loadCompanies() {
+  const search = document.getElementById('search').value.trim();
+  const status = document.getElementById('filter-status').value;
+
+  let query = supabase.from('crm_companies').select('*, crm_contacts(id), crm_deals(id)', { count: 'exact' });
+
+  if (search) query = query.or(`name.ilike.%${search}%,city.ilike.%${search}%`);
+  if (status) query = query.eq('status', status);
+  query = query.order(sortCol, { ascending: sortDir === 'asc' });
+  query = query.range((currentPage - 1) * PER_PAGE, currentPage * PER_PAGE - 1);
+
+  const { data, count, error } = await query;
+  if (error) { showToast(error.message, 'error'); return; }
+
+  const totalPages = Math.ceil((count || 0) / PER_PAGE);
+  document.getElementById('total-count').textContent = `${count || 0} companies`;
+
+  const tbody = document.getElementById('companies-body');
+  tbody.innerHTML = (data || []).map(c => `
+    <tr class="border-b cursor-pointer" onclick="showDetail('${c.id}')">
+      <td class="p-3" onclick="event.stopPropagation()"><input type="checkbox" value="${c.id}" onchange="toggleSelect('${c.id}', this.checked)"></td>
+      <td class="p-3 font-medium text-gray-900">${escapeHtml(c.name)}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.city || '')}${c.state ? ', ' + escapeHtml(c.state) : ''}</td>
+      <td class="p-3 text-gray-600">${escapeHtml(c.phone || '—')}</td>
+      <td class="p-3">${statusBadge(c.status)}</td>
+      <td class="p-3 text-gray-600">${c.crm_contacts?.length || 0}</td>
+      <td class="p-3 text-gray-600">${c.crm_deals?.length || 0}</td>
+      <td class="p-3" onclick="event.stopPropagation()">
+        <button onclick="openEditModal('${c.id}')" class="text-indigo-600 hover:underline text-sm mr-2">Edit</button>
+        <button onclick="deleteCompany('${c.id}')" class="text-red-500 hover:underline text-sm">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+
+  renderPagination('pagination', currentPage, totalPages, 'goToPage');
+}
+
+function goToPage(p) { currentPage = p; loadCompanies(); }
+function setSort(col) {
+  if (sortCol === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  else { sortCol = col; sortDir = 'asc'; }
+  loadCompanies();
+}
+
+function toggleSelect(id, checked) {
+  checked ? selectedIds.add(id) : selectedIds.delete(id);
+  document.getElementById('bulk-btn').classList.toggle('hidden', selectedIds.size === 0);
+}
+function toggleSelectAll(checked) {
+  document.querySelectorAll('#companies-body input[type=checkbox]').forEach(cb => {
+    cb.checked = checked;
+    toggleSelect(cb.value, checked);
+  });
+}
+function showBulkMenu() { document.getElementById('bulk-status').classList.toggle('hidden'); }
+async function bulkChangeStatus(status) {
+  if (!status || selectedIds.size === 0) return;
+  const ids = Array.from(selectedIds);
+  const { error } = await supabase.from('crm_companies').update({ status, updated_at: new Date().toISOString() }).in('id', ids);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast(`Updated ${ids.length} companies`);
+  selectedIds.clear();
+  document.getElementById('bulk-btn').classList.add('hidden');
+  document.getElementById('bulk-status').classList.add('hidden');
+  loadCompanies();
+}
+
+function openAddModal() {
+  document.getElementById('modal-title').textContent = 'Add Company';
+  document.getElementById('company-form').reset();
+  document.getElementById('form-id').value = '';
+  document.getElementById('form-industry').value = 'HVAC';
+  openModal('company-modal');
+}
+
+async function openEditModal(id) {
+  const { data } = await supabase.from('crm_companies').select('*').eq('id', id).single();
+  if (!data) return;
+  document.getElementById('modal-title').textContent = 'Edit Company';
+  document.getElementById('form-id').value = data.id;
+  ['name','phone','website','city','state','zip','industry','status','employee_count','annual_revenue','google_rating','google_reviews','google_maps_url','source','notes'].forEach(f => {
+    const el = document.getElementById('form-' + f);
+    if (el) el.value = data[f] || '';
+  });
+  openModal('company-modal');
+}
+
+document.getElementById('company-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('form-id').value;
+  const row = {};
+  ['name','phone','website','city','state','zip','industry','status','employee_count','annual_revenue','google_rating','google_reviews','google_maps_url','source','notes'].forEach(f => {
+    const val = document.getElementById('form-' + f).value;
+    row[f] = val || null;
+  });
+  row.updated_at = new Date().toISOString();
+
+  let error;
+  if (id) {
+    ({ error } = await supabase.from('crm_companies').update(row).eq('id', id));
+  } else {
+    ({ error } = await supabase.from('crm_companies').insert(row));
+  }
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast(id ? 'Company updated' : 'Company created');
+  closeModal('company-modal');
+  loadCompanies();
+});
+
+async function deleteCompany(id) {
+  if (!confirm('Delete this company? This will also affect linked contacts and deals.')) return;
+  const { error } = await supabase.from('crm_companies').delete().eq('id', id);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Company deleted');
+  loadCompanies();
+}
+
+// Detail view
+function showList() {
+  document.getElementById('list-view').classList.remove('hidden');
+  document.getElementById('detail-view').classList.add('hidden');
+}
+
+async function showDetail(id) {
+  document.getElementById('list-view').classList.add('hidden');
+  document.getElementById('detail-view').classList.remove('hidden');
+
+  const [compRes, contRes, dealRes, actRes] = await Promise.all([
+    supabase.from('crm_companies').select('*').eq('id', id).single(),
+    supabase.from('crm_contacts').select('*').eq('company_id', id).order('is_owner', { ascending: false }),
+    supabase.from('crm_deals').select('*').eq('company_id', id).order('created_at', { ascending: false }),
+    supabase.from('crm_activities').select('*, crm_contacts(full_name, first_name, last_name)').eq('company_id', id).order('created_at', { ascending: false }).limit(50),
+  ]);
+
+  const c = compRes.data;
+  if (!c) { showList(); return; }
+  const contacts = contRes.data || [];
+  const deals = dealRes.data || [];
+  const activities = actRes.data || [];
+
+  document.getElementById('detail-content').innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Info card -->
+      <div class="bg-white rounded-lg shadow-sm p-6 lg:col-span-1">
+        <h2 class="text-xl font-bold text-gray-900 mb-4">${escapeHtml(c.name)}</h2>
+        ${statusBadge(c.status)}
+        <div class="mt-4 space-y-2 text-sm text-gray-600">
+          ${c.phone ? `<div>📞 ${escapeHtml(c.phone)}</div>` : ''}
+          ${c.website ? `<div>🌐 <a href="${escapeHtml(c.website)}" target="_blank" class="text-indigo-600 hover:underline">${escapeHtml(c.website)}</a></div>` : ''}
+          ${c.city ? `<div>📍 ${escapeHtml(c.city)}${c.state ? ', ' + escapeHtml(c.state) : ''} ${escapeHtml(c.zip || '')}</div>` : ''}
+          ${c.industry ? `<div>🏭 ${escapeHtml(c.industry)}</div>` : ''}
+          ${c.google_rating ? `<div>⭐ ${c.google_rating} (${c.google_reviews || 0} reviews)</div>` : ''}
+          ${c.employee_count ? `<div>👥 ${escapeHtml(c.employee_count)} employees</div>` : ''}
+          ${c.annual_revenue ? `<div>💵 ${escapeHtml(c.annual_revenue)}</div>` : ''}
+          ${c.source ? `<div>📌 Source: ${escapeHtml(c.source)}</div>` : ''}
+        </div>
+        ${c.notes ? `<div class="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">${escapeHtml(c.notes)}</div>` : ''}
+        <button onclick="openEditModal('${c.id}')" class="mt-4 text-indigo-600 text-sm hover:underline">Edit Company</button>
+      </div>
+
+      <div class="lg:col-span-2 space-y-6">
+        <!-- Contacts -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold">Contacts (${contacts.length})</h3>
+            <a href="/admin/contacts.html" class="text-indigo-600 text-sm hover:underline">Manage Contacts</a>
+          </div>
+          ${contacts.length === 0 ? '<p class="text-sm text-gray-400">No contacts yet.</p>' : `
+          <table class="w-full text-sm">
+            <thead class="text-left text-gray-500"><tr><th class="pb-2">Name</th><th class="pb-2">Email</th><th class="pb-2">Phone</th><th class="pb-2">Owner</th><th class="pb-2">Status</th></tr></thead>
+            <tbody>${contacts.map(ct => `
+              <tr class="border-t"><td class="py-2 font-medium">${escapeHtml(ct.full_name || (ct.first_name||'') + ' ' + (ct.last_name||''))}</td>
+              <td class="py-2 text-gray-600">${escapeHtml(ct.email || '—')}</td>
+              <td class="py-2 text-gray-600">${escapeHtml(ct.phone || '—')}</td>
+              <td class="py-2">${ct.is_owner ? '✅' : ''}</td>
+              <td class="py-2">${statusBadge(ct.status)}</td></tr>
+            `).join('')}</tbody>
+          </table>`}
+        </div>
+
+        <!-- Deals -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-semibold">Deals (${deals.length})</h3>
+            <a href="/admin/pipeline.html" class="text-indigo-600 text-sm hover:underline">Pipeline View</a>
+          </div>
+          ${deals.length === 0 ? '<p class="text-sm text-gray-400">No deals yet.</p>' : `
+          <table class="w-full text-sm">
+            <thead class="text-left text-gray-500"><tr><th class="pb-2">Name</th><th class="pb-2">Value</th><th class="pb-2">Stage</th><th class="pb-2">Close Date</th></tr></thead>
+            <tbody>${deals.map(d => `
+              <tr class="border-t"><td class="py-2 font-medium">${escapeHtml(d.name)}</td>
+              <td class="py-2">$${parseFloat(d.value||0).toLocaleString()}</td>
+              <td class="py-2">${statusBadge(d.stage)}</td>
+              <td class="py-2 text-gray-600">${formatDate(d.close_date)}</td></tr>
+            `).join('')}</tbody>
+          </table>`}
+        </div>
+
+        <!-- Activity Timeline -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold mb-4">Activity Timeline</h3>
+          ${activities.length === 0 ? '<p class="text-sm text-gray-400">No activities yet.</p>' : `
+          <div class="space-y-3">${activities.map(a => {
+            const who = a.crm_contacts ? (a.crm_contacts.full_name || `${a.crm_contacts.first_name||''} ${a.crm_contacts.last_name||''}`.trim()) : '';
+            return `<div class="flex items-start gap-3 py-2 border-b border-gray-100">
+              <div class="flex-1">
+                <span class="text-sm font-medium">${a.type.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase())}</span>
+                ${who ? `<span class="text-sm text-gray-500"> — ${escapeHtml(who)}</span>` : ''}
+                ${a.subject ? `<p class="text-sm text-gray-600">${escapeHtml(a.subject)}</p>` : ''}
+                ${a.body ? `<p class="text-xs text-gray-400 mt-1">${escapeHtml(a.body).substring(0,200)}</p>` : ''}
+              </div>
+              <span class="text-xs text-gray-400 whitespace-nowrap">${timeAgo(a.created_at)}</span>
+            </div>`;
+          }).join('')}</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+loadCompanies();
+</script>
+</body>
+</html>

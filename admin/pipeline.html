@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline — SprintAI CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="bg-gray-50">
+  <script src="/admin/lib.js"></script>
+  <script src="/admin/nav.js"></script>
+  <div class="crm-main">
+    <div class="p-6 lg:p-8">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-900">Deal Pipeline</h1>
+        <button onclick="openAddDeal()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Deal</button>
+      </div>
+      <div id="kanban" class="flex gap-4 overflow-x-auto pb-4"></div>
+    </div>
+  </div>
+
+  <!-- Deal Modal -->
+  <div id="deal-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div class="p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 id="deal-modal-title" class="text-lg font-bold">Add Deal</h2>
+          <button onclick="closeModal('deal-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <form id="deal-form" class="space-y-4">
+          <input type="hidden" id="deal-id">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Deal Name *</label><input id="deal-name" required class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Company</label><select id="deal-company" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="">— None —</option></select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Contact</label><select id="deal-contact" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="">— None —</option></select></div>
+          </div>
+          <div class="grid grid-cols-3 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Value ($)</label><input id="deal-value" type="number" step="0.01" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Monthly ($)</label><input id="deal-monthly" type="number" step="0.01" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Tier</label><input id="deal-tier" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Stage</label>
+              <select id="deal-stage" class="w-full px-3 py-2 border rounded-lg text-sm">
+                <option value="lead">Lead</option><option value="contacted">Contacted</option><option value="demo_scheduled">Demo Scheduled</option><option value="proposal_sent">Proposal Sent</option><option value="negotiation">Negotiation</option><option value="closed_won">Closed Won</option><option value="closed_lost">Closed Lost</option>
+              </select>
+            </div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Close Date</label><input id="deal-close-date" type="date" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></div>
+          </div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Notes</label><textarea id="deal-notes" rows="3" class="w-full px-3 py-2 border rounded-lg text-sm outline-none"></textarea></div>
+          <div class="flex justify-between">
+            <button type="button" id="deal-delete-btn" class="hidden text-red-500 text-sm hover:underline" onclick="deleteDeal()">Delete Deal</button>
+            <div class="flex gap-3 ml-auto">
+              <button type="button" onclick="closeModal('deal-modal')" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+              <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Save</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+checkAuth();
+
+const STAGES = ['lead','contacted','demo_scheduled','proposal_sent','negotiation','closed_won','closed_lost'];
+const STAGE_LABELS = { lead:'Lead', contacted:'Contacted', demo_scheduled:'Demo Scheduled', proposal_sent:'Proposal Sent', negotiation:'Negotiation', closed_won:'Closed Won', closed_lost:'Closed Lost' };
+const STAGE_COLORS = { lead:'border-gray-300', contacted:'border-blue-300', demo_scheduled:'border-purple-300', proposal_sent:'border-indigo-300', negotiation:'border-orange-300', closed_won:'border-green-300', closed_lost:'border-red-300' };
+
+let deals = [], companies = [], contacts = [];
+
+async function loadData() {
+  const [d, c, ct] = await Promise.all([
+    supabase.from('crm_deals').select('*, crm_companies(name), crm_contacts(full_name, first_name, last_name)').order('created_at'),
+    supabase.from('crm_companies').select('id, name').order('name'),
+    supabase.from('crm_contacts').select('id, full_name, first_name, last_name').order('full_name'),
+  ]);
+  deals = d.data || [];
+  companies = c.data || [];
+  contacts = ct.data || [];
+  renderKanban();
+  populateDropdowns();
+}
+
+function populateDropdowns() {
+  document.getElementById('deal-company').innerHTML = '<option value="">— None —</option>' + companies.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  document.getElementById('deal-contact').innerHTML = '<option value="">— None —</option>' + contacts.map(c => {
+    const name = c.full_name || `${c.first_name||''} ${c.last_name||''}`.trim();
+    return `<option value="${c.id}">${escapeHtml(name)}</option>`;
+  }).join('');
+}
+
+function renderKanban() {
+  const kanban = document.getElementById('kanban');
+  kanban.innerHTML = STAGES.map(stage => {
+    const stageDeals = deals.filter(d => d.stage === stage);
+    const totalValue = stageDeals.reduce((s, d) => s + parseFloat(d.value || 0), 0);
+    return `
+      <div class="flex-shrink-0 w-72">
+        <div class="bg-gray-100 rounded-lg p-3">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-sm font-semibold text-gray-700">${STAGE_LABELS[stage]}</h3>
+            <span class="text-xs text-gray-500">${stageDeals.length} · $${totalValue.toLocaleString()}</span>
+          </div>
+          <div id="stage-${stage}" class="kanban-col space-y-2" data-stage="${stage}">
+            ${stageDeals.map(d => dealCard(d)).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Init sortable on each column
+  STAGES.forEach(stage => {
+    new Sortable(document.getElementById('stage-' + stage), {
+      group: 'deals',
+      animation: 150,
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      onEnd: async (evt) => {
+        const dealId = evt.item.dataset.id;
+        const newStage = evt.to.dataset.stage;
+        const { error } = await supabase.from('crm_deals').update({ stage: newStage, updated_at: new Date().toISOString() }).eq('id', dealId);
+        if (error) { showToast(error.message, 'error'); loadData(); return; }
+        // Update local
+        const deal = deals.find(d => d.id === dealId);
+        if (deal) deal.stage = newStage;
+        showToast(`Moved to ${STAGE_LABELS[newStage]}`);
+      }
+    });
+  });
+}
+
+function dealCard(d) {
+  const company = d.crm_companies?.name || '';
+  const contact = d.crm_contacts ? (d.crm_contacts.full_name || `${d.crm_contacts.first_name||''} ${d.crm_contacts.last_name||''}`.trim()) : '';
+  return `
+    <div class="bg-white rounded-lg p-3 shadow-sm border-l-4 ${STAGE_COLORS[d.stage] || 'border-gray-300'} cursor-pointer hover:shadow-md transition" data-id="${d.id}" onclick="openEditDeal('${d.id}')">
+      <div class="font-medium text-sm text-gray-900">${escapeHtml(d.name)}</div>
+      ${company ? `<div class="text-xs text-gray-500 mt-1">🏢 ${escapeHtml(company)}</div>` : ''}
+      ${contact ? `<div class="text-xs text-gray-500">👤 ${escapeHtml(contact)}</div>` : ''}
+      <div class="text-sm font-semibold text-indigo-600 mt-2">$${parseFloat(d.value || 0).toLocaleString()}</div>
+    </div>
+  `;
+}
+
+function openAddDeal() {
+  document.getElementById('deal-modal-title').textContent = 'Add Deal';
+  document.getElementById('deal-form').reset();
+  document.getElementById('deal-id').value = '';
+  document.getElementById('deal-delete-btn').classList.add('hidden');
+  populateDropdowns();
+  openModal('deal-modal');
+}
+
+function openEditDeal(id) {
+  const d = deals.find(x => x.id === id);
+  if (!d) return;
+  document.getElementById('deal-modal-title').textContent = 'Edit Deal';
+  document.getElementById('deal-id').value = d.id;
+  document.getElementById('deal-name').value = d.name || '';
+  document.getElementById('deal-company').value = d.company_id || '';
+  document.getElementById('deal-contact').value = d.contact_id || '';
+  document.getElementById('deal-value').value = d.value || '';
+  document.getElementById('deal-monthly').value = d.monthly_value || '';
+  document.getElementById('deal-tier').value = d.tier || '';
+  document.getElementById('deal-stage').value = d.stage || 'lead';
+  document.getElementById('deal-close-date').value = d.close_date || '';
+  document.getElementById('deal-notes').value = d.notes || '';
+  document.getElementById('deal-delete-btn').classList.remove('hidden');
+  populateDropdowns();
+  document.getElementById('deal-company').value = d.company_id || '';
+  document.getElementById('deal-contact').value = d.contact_id || '';
+  openModal('deal-modal');
+}
+
+document.getElementById('deal-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('deal-id').value;
+  const row = {
+    name: document.getElementById('deal-name').value,
+    company_id: document.getElementById('deal-company').value || null,
+    contact_id: document.getElementById('deal-contact').value || null,
+    value: document.getElementById('deal-value').value || null,
+    monthly_value: document.getElementById('deal-monthly').value || null,
+    tier: document.getElementById('deal-tier').value || null,
+    stage: document.getElementById('deal-stage').value,
+    close_date: document.getElementById('deal-close-date').value || null,
+    notes: document.getElementById('deal-notes').value || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  let error;
+  if (id) { ({ error } = await supabase.from('crm_deals').update(row).eq('id', id)); }
+  else { ({ error } = await supabase.from('crm_deals').insert(row)); }
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast(id ? 'Deal updated' : 'Deal created');
+  closeModal('deal-modal');
+  loadData();
+});
+
+async function deleteDeal() {
+  const id = document.getElementById('deal-id').value;
+  if (!id || !confirm('Delete this deal?')) return;
+  const { error } = await supabase.from('crm_deals').delete().eq('id', id);
+  if (error) { showToast(error.message, 'error'); return; }
+  showToast('Deal deleted');
+  closeModal('deal-modal');
+  loadData();
+}
+
+loadData();
+</script>
+</body>
+</html>

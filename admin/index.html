@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SprintAI CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="bg-gray-50">
+
+<!--
+=== DATABASE SETUP SQL ===
+CREATE TABLE IF NOT EXISTS crm_companies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL, website TEXT, phone TEXT, city TEXT, state TEXT, zip TEXT,
+  google_rating NUMERIC(2,1), google_reviews INTEGER, google_maps_url TEXT,
+  industry TEXT DEFAULT 'HVAC', employee_count TEXT, annual_revenue TEXT,
+  notes TEXT, tags TEXT[] DEFAULT '{}',
+  status TEXT DEFAULT 'prospect' CHECK (status IN ('prospect','contacted','qualified','customer','churned','dead')),
+  source TEXT, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS crm_contacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES crm_companies(id) ON DELETE SET NULL,
+  first_name TEXT, last_name TEXT, full_name TEXT, email TEXT,
+  email_type TEXT CHECK (email_type IN ('personal','role_based','unknown')),
+  email_verified BOOLEAN DEFAULT false, zerobounce_status TEXT,
+  phone TEXT, phone_source TEXT, title TEXT, is_owner BOOLEAN DEFAULT false,
+  linkedin_url TEXT, notes TEXT, tags TEXT[] DEFAULT '{}',
+  status TEXT DEFAULT 'new' CHECK (status IN ('new','contacted','replied','qualified','customer','unsubscribed','bounced')),
+  last_contacted_at TIMESTAMPTZ, outreach_channel TEXT, campaign_id TEXT, source TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS crm_activities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  contact_id UUID REFERENCES crm_contacts(id) ON DELETE CASCADE,
+  company_id UUID REFERENCES crm_companies(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('email_sent','email_received','call_made','call_received','sms_sent','sms_received','note','meeting','status_change')),
+  subject TEXT, body TEXT, outcome TEXT, created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS crm_deals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES crm_companies(id) ON DELETE SET NULL,
+  contact_id UUID REFERENCES crm_contacts(id) ON DELETE SET NULL,
+  name TEXT NOT NULL, value NUMERIC(10,2), monthly_value NUMERIC(10,2),
+  stage TEXT DEFAULT 'lead' CHECK (stage IN ('lead','contacted','demo_scheduled','proposal_sent','negotiation','closed_won','closed_lost')),
+  tier TEXT, close_date DATE, notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_company ON crm_contacts(company_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_email ON crm_contacts(email);
+CREATE INDEX IF NOT EXISTS idx_contacts_status ON crm_contacts(status);
+CREATE INDEX IF NOT EXISTS idx_contacts_is_owner ON crm_contacts(is_owner);
+CREATE INDEX IF NOT EXISTS idx_companies_status ON crm_companies(status);
+CREATE INDEX IF NOT EXISTS idx_activities_contact ON crm_activities(contact_id);
+CREATE INDEX IF NOT EXISTS idx_activities_company ON crm_activities(company_id);
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON crm_deals(stage);
+CREATE INDEX IF NOT EXISTS idx_deals_company ON crm_deals(company_id);
+ALTER TABLE crm_companies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm_contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm_activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crm_deals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all" ON crm_companies FOR ALL USING (true);
+CREATE POLICY "service_role_all" ON crm_contacts FOR ALL USING (true);
+CREATE POLICY "service_role_all" ON crm_activities FOR ALL USING (true);
+CREATE POLICY "service_role_all" ON crm_deals FOR ALL USING (true);
+-->
+
+<!-- Login Screen -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center">
+  <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm">
+    <div class="text-center mb-6">
+      <span class="text-4xl">❄️</span>
+      <h1 class="text-2xl font-bold text-gray-900 mt-2">SprintAI CRM</h1>
+      <p class="text-gray-500 text-sm mt-1">Enter password to continue</p>
+    </div>
+    <form id="login-form">
+      <input type="password" id="login-password" placeholder="Password" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none" autofocus>
+      <p id="login-error" class="text-red-500 text-sm mt-2 hidden">Incorrect password</p>
+      <button type="submit" class="w-full mt-4 bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 transition">Login</button>
+    </form>
+  </div>
+</div>
+
+<!-- Dashboard (hidden until auth) -->
+<div id="dashboard-screen" class="hidden">
+  <script src="/admin/lib.js"></script>
+  <script src="/admin/nav.js"></script>
+  <div class="crm-main">
+    <div class="p-6 lg:p-8 max-w-7xl mx-auto">
+      <div class="flex items-center justify-between mb-8">
+        <h1 class="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <div class="flex gap-3">
+          <a href="/admin/companies.html" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">+ Add Company</a>
+          <a href="/admin/contacts.html" class="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">+ Add Contact</a>
+          <a href="/admin/import.html" class="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">📥 Import</a>
+        </div>
+      </div>
+
+      <!-- Stats cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="text-sm text-gray-500">Total Companies</div>
+          <div id="stat-companies" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="text-sm text-gray-500">Total Contacts</div>
+          <div id="stat-contacts" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <div class="text-sm text-gray-500">Total Deals</div>
+          <div id="stat-deals" class="text-3xl font-bold text-gray-900 mt-1">—</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <!-- Contact status chart -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <h2 class="text-lg font-semibold text-gray-900 mb-4">Contacts by Status</h2>
+          <canvas id="contacts-chart" height="250"></canvas>
+        </div>
+        <!-- Pipeline summary -->
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <h2 class="text-lg font-semibold text-gray-900 mb-4">Deal Pipeline</h2>
+          <div id="pipeline-summary"></div>
+        </div>
+      </div>
+
+      <!-- Recent activity -->
+      <div class="bg-white rounded-lg shadow-sm p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
+        <div id="activity-feed" class="space-y-3"></div>
+        <p id="activity-empty" class="hidden text-gray-400 text-sm">No activities yet.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Login logic (runs before lib.js loads for unauthenticated users)
+const loginScreen = document.getElementById('login-screen');
+const dashScreen = document.getElementById('dashboard-screen');
+
+if (localStorage.getItem('crm_auth') === 'true') {
+  loginScreen.classList.add('hidden');
+  dashScreen.classList.remove('hidden');
+  // Wait for lib.js to load then init
+  window.addEventListener('DOMContentLoaded', () => setTimeout(initDashboard, 100));
+  setTimeout(initDashboard, 300);
+}
+
+document.getElementById('login-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const pw = document.getElementById('login-password').value;
+  if (pw === 'sprint2026!') {
+    localStorage.setItem('crm_auth', 'true');
+    loginScreen.classList.add('hidden');
+    dashScreen.classList.remove('hidden');
+    setTimeout(initDashboard, 300);
+  } else {
+    document.getElementById('login-error').classList.remove('hidden');
+  }
+});
+
+async function initDashboard() {
+  if (typeof supabase === 'undefined') { setTimeout(initDashboard, 200); return; }
+
+  // Counts
+  const [compRes, contRes, dealRes] = await Promise.all([
+    supabase.from('crm_companies').select('id', { count: 'exact', head: true }),
+    supabase.from('crm_contacts').select('id', { count: 'exact', head: true }),
+    supabase.from('crm_deals').select('id', { count: 'exact', head: true }),
+  ]);
+  document.getElementById('stat-companies').textContent = compRes.count ?? 0;
+  document.getElementById('stat-contacts').textContent = contRes.count ?? 0;
+  document.getElementById('stat-deals').textContent = dealRes.count ?? 0;
+
+  // Contacts by status chart
+  const { data: contacts } = await supabase.from('crm_contacts').select('status');
+  const statusCounts = {};
+  (contacts || []).forEach(c => { statusCounts[c.status] = (statusCounts[c.status] || 0) + 1; });
+  const labels = Object.keys(statusCounts);
+  const values = Object.values(statusCounts);
+  const chartColors = ['#6b7280','#3b82f6','#eab308','#22c55e','#ef4444','#8b5cf6','#f97316'];
+  if (labels.length > 0) {
+    new Chart(document.getElementById('contacts-chart'), {
+      type: 'doughnut',
+      data: { labels: labels.map(l => l.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())), datasets: [{ data: values, backgroundColor: chartColors.slice(0, labels.length) }] },
+      options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+    });
+  }
+
+  // Pipeline summary
+  const { data: deals } = await supabase.from('crm_deals').select('stage, value');
+  const stages = ['lead','contacted','demo_scheduled','proposal_sent','negotiation','closed_won','closed_lost'];
+  const stageData = {};
+  stages.forEach(s => stageData[s] = { count: 0, value: 0 });
+  (deals || []).forEach(d => {
+    if (stageData[d.stage]) { stageData[d.stage].count++; stageData[d.stage].value += parseFloat(d.value || 0); }
+  });
+  let pipeHtml = '<div class="space-y-3">';
+  stages.forEach(s => {
+    const d = stageData[s];
+    const label = s.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+    pipeHtml += `<div class="flex items-center justify-between py-2 border-b border-gray-100">
+      <div class="flex items-center gap-2">${statusBadge(s)} <span class="text-sm text-gray-500">${d.count} deals</span></div>
+      <span class="text-sm font-medium text-gray-900">$${d.value.toLocaleString()}</span>
+    </div>`;
+  });
+  pipeHtml += '</div>';
+  document.getElementById('pipeline-summary').innerHTML = pipeHtml;
+
+  // Recent activity
+  const { data: activities } = await supabase.from('crm_activities').select('*, crm_contacts(full_name, first_name, last_name), crm_companies(name)').order('created_at', { ascending: false }).limit(20);
+  const feed = document.getElementById('activity-feed');
+  if (!activities || activities.length === 0) {
+    document.getElementById('activity-empty').classList.remove('hidden');
+  } else {
+    feed.innerHTML = activities.map(a => {
+      const who = a.crm_contacts ? (a.crm_contacts.full_name || `${a.crm_contacts.first_name || ''} ${a.crm_contacts.last_name || ''}`.trim()) : (a.crm_companies?.name || 'Unknown');
+      const typeLabel = a.type.replace(/_/g, ' ').replace(/\b\w/g,c=>c.toUpperCase());
+      return `<div class="flex items-start gap-3 py-2 border-b border-gray-100">
+        <div class="flex-1">
+          <span class="text-sm font-medium text-gray-900">${typeLabel}</span>
+          <span class="text-sm text-gray-500"> — ${escapeHtml(who)}</span>
+          ${a.subject ? `<p class="text-sm text-gray-600 mt-0.5">${escapeHtml(a.subject)}</p>` : ''}
+        </div>
+        <span class="text-xs text-gray-400 whitespace-nowrap">${timeAgo(a.created_at)}</span>
+      </div>`;
+    }).join('');
+  }
+}
+</script>
+</body>
+</html>

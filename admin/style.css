@@ -1,0 +1,15 @@
+/* SprintAI CRM — Admin Styles */
+body { font-family: 'Inter', system-ui, sans-serif; }
+.crm-main { margin-left: 16rem; min-height: 100vh; }
+@media (max-width: 1023px) { .crm-main { margin-left: 0; } }
+
+/* Table striping */
+table tbody tr:nth-child(even) { background-color: #f9fafb; }
+table tbody tr:hover { background-color: #f3f4f6; }
+
+/* Sortable ghost */
+.sortable-ghost { opacity: 0.4; }
+.sortable-chosen { box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
+
+/* Kanban column */
+.kanban-col { min-height: 200px; }

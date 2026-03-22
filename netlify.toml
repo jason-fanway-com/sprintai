@@ -15,3 +15,9 @@
   from = "/create-checkout-session"
   to   = "/.netlify/functions/create-checkout-session"
   status = 200
+
+# Admin CRM
+[[redirects]]
+  from = "/admin"
+  to = "/admin/index.html"
+  status = 200

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Import — SprintAI CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="bg-gray-50">
+  <script src="/admin/lib.js"></script>
+  <script src="/admin/nav.js"></script>
+  <div class="crm-main">
+    <div class="p-6 lg:p-8 max-w-5xl mx-auto">
+      <h1 class="text-2xl font-bold text-gray-900 mb-6">Import Leads</h1>
+
+      <!-- Tabs -->
+      <div class="flex gap-4 mb-6 border-b">
+        <button id="tab-csv" onclick="switchTab('csv')" class="pb-3 px-1 text-sm font-medium border-b-2 border-indigo-600 text-indigo-600">CSV Upload</button>
+        <button id="tab-json" onclick="switchTab('json')" class="pb-3 px-1 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">Paste JSON</button>
+      </div>
+
+      <!-- CSV Tab -->
+      <div id="panel-csv">
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <h2 class="text-lg font-semibold mb-4">Upload CSV File</h2>
+          <p class="text-sm text-gray-500 mb-4">CSV should have headers. Supported fields: name (company), website, phone, city, state, zip, industry, first_name, last_name, full_name, email, title, is_owner, linkedin_url, source</p>
+          <input type="file" id="csv-file" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" onchange="handleCSV(this.files[0])">
+        </div>
+
+        <!-- Field Mapping -->
+        <div id="csv-mapping" class="hidden bg-white rounded-lg shadow-sm p-6 mb-6">
+          <h2 class="text-lg font-semibold mb-4">Map Fields</h2>
+          <div id="mapping-fields" class="grid grid-cols-2 gap-4"></div>
+          <button onclick="applyMapping()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Apply Mapping</button>
+        </div>
+      </div>
+
+      <!-- JSON Tab -->
+      <div id="panel-json" class="hidden">
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <h2 class="text-lg font-semibold mb-4">Paste JSON</h2>
+          <p class="text-sm text-gray-500 mb-4">Paste an array of objects. Each object can have company fields (name, website, phone, city, state) and contact fields (first_name, last_name, email, title, etc).</p>
+          <textarea id="json-input" rows="10" placeholder='[{"name": "Acme HVAC", "email": "john@acme.com", "first_name": "John", "city": "Dallas"}]' class="w-full px-3 py-2 border rounded-lg text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+          <button onclick="parseJSON()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Parse JSON</button>
+        </div>
+      </div>
+
+      <!-- Preview Table -->
+      <div id="preview-section" class="hidden">
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-semibold">Preview (<span id="preview-count">0</span> records)</h2>
+            <button onclick="runImport()" class="bg-green-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-700">Import All</button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead id="preview-head" class="bg-gray-50 text-left"></thead>
+              <tbody id="preview-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="results-section" class="hidden">
+        <div class="bg-white rounded-lg shadow-sm p-6">
+          <h2 class="text-lg font-semibold mb-4">Import Results</h2>
+          <div id="results-content" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+checkAuth();
+
+const COMPANY_FIELDS = ['name','website','phone','city','state','zip','industry','google_rating','google_reviews','google_maps_url','employee_count','annual_revenue','source'];
+const CONTACT_FIELDS = ['first_name','last_name','full_name','email','email_type','phone','title','is_owner','linkedin_url','source'];
+const ALL_FIELDS = [...new Set([...COMPANY_FIELDS, ...CONTACT_FIELDS])];
+
+let parsedData = [];
+let csvHeaders = [];
+let fieldMapping = {};
+
+function switchTab(tab) {
+  document.getElementById('panel-csv').classList.toggle('hidden', tab !== 'csv');
+  document.getElementById('panel-json').classList.toggle('hidden', tab !== 'json');
+  document.getElementById('tab-csv').classList.toggle('border-indigo-600', tab === 'csv');
+  document.getElementById('tab-csv').classList.toggle('text-indigo-600', tab === 'csv');
+  document.getElementById('tab-csv').classList.toggle('border-transparent', tab !== 'csv');
+  document.getElementById('tab-csv').classList.toggle('text-gray-500', tab !== 'csv');
+  document.getElementById('tab-json').classList.toggle('border-indigo-600', tab === 'json');
+  document.getElementById('tab-json').classList.toggle('text-indigo-600', tab === 'json');
+  document.getElementById('tab-json').classList.toggle('border-transparent', tab !== 'json');
+  document.getElementById('tab-json').classList.toggle('text-gray-500', tab !== 'json');
+}
+
+function handleCSV(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) { showToast('CSV must have header + data rows', 'error'); return; }
+
+    csvHeaders = parseCSVLine(lines[0]);
+    const rows = lines.slice(1).map(l => {
+      const vals = parseCSVLine(l);
+      const obj = {};
+      csvHeaders.forEach((h, i) => obj[h] = vals[i] || '');
+      return obj;
+    });
+
+    // Auto-map matching headers
+    fieldMapping = {};
+    csvHeaders.forEach(h => {
+      const normalized = h.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      if (ALL_FIELDS.includes(normalized)) fieldMapping[h] = normalized;
+      else if (normalized === 'company' || normalized === 'company_name') fieldMapping[h] = 'name';
+      else if (normalized === 'email_address') fieldMapping[h] = 'email';
+      else if (normalized === 'phone_number') fieldMapping[h] = 'phone';
+    });
+
+    // Show mapping UI
+    const mappingDiv = document.getElementById('mapping-fields');
+    mappingDiv.innerHTML = csvHeaders.map(h => `
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-medium text-gray-700 w-32 truncate">${escapeHtml(h)}</span>
+        <select data-csv="${escapeHtml(h)}" class="flex-1 px-2 py-1 border rounded text-sm mapping-select">
+          <option value="">— Skip —</option>
+          ${ALL_FIELDS.map(f => `<option value="${f}" ${fieldMapping[h] === f ? 'selected' : ''}>${f}</option>`).join('')}
+        </select>
+      </div>
+    `).join('');
+    document.getElementById('csv-mapping').classList.remove('hidden');
+
+    // Store raw rows for later
+    window._csvRows = rows;
+  };
+  reader.readAsText(file);
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i+1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { result.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function applyMapping() {
+  fieldMapping = {};
+  document.querySelectorAll('.mapping-select').forEach(sel => {
+    if (sel.value) fieldMapping[sel.dataset.csv] = sel.value;
+  });
+
+  parsedData = (window._csvRows || []).map(row => {
+    const mapped = {};
+    Object.entries(fieldMapping).forEach(([csvCol, field]) => {
+      mapped[field] = row[csvCol] || '';
+    });
+    return mapped;
+  });
+
+  showPreview();
+}
+
+function parseJSON() {
+  const text = document.getElementById('json-input').value.trim();
+  try {
+    const data = JSON.parse(text);
+    if (!Array.isArray(data)) { showToast('JSON must be an array', 'error'); return; }
+    parsedData = data;
+    showPreview();
+  } catch (e) {
+    showToast('Invalid JSON: ' + e.message, 'error');
+  }
+}
+
+function showPreview() {
+  if (parsedData.length === 0) { showToast('No data to preview', 'error'); return; }
+  document.getElementById('preview-section').classList.remove('hidden');
+  document.getElementById('preview-count').textContent = parsedData.length;
+
+  const cols = [...new Set(parsedData.flatMap(Object.keys))];
+  document.getElementById('preview-head').innerHTML = '<tr>' + cols.map(c => `<th class="p-2 text-xs">${escapeHtml(c)}</th>`).join('') + '</tr>';
+  document.getElementById('preview-body').innerHTML = parsedData.slice(0, 50).map(row =>
+    '<tr class="border-t">' + cols.map(c => `<td class="p-2 text-xs text-gray-600">${escapeHtml(String(row[c] || ''))}</td>`).join('') + '</tr>'
+  ).join('') + (parsedData.length > 50 ? `<tr><td colspan="${cols.length}" class="p-2 text-xs text-gray-400 text-center">...and ${parsedData.length - 50} more rows</td></tr>` : '');
+}
+
+async function runImport() {
+  const results = { created: 0, skipped: 0, errors: [] };
+  document.getElementById('results-section').classList.remove('hidden');
+  document.getElementById('results-content').innerHTML = '<p class="text-sm text-gray-500">Importing...</p>';
+
+  for (const row of parsedData) {
+    try {
+      let companyId = null;
+      const companyName = row.name;
+
+      // Dedup check on company name
+      if (companyName) {
+        const { data: existing } = await supabase.from('crm_companies').select('id').ilike('name', companyName).limit(1);
+        if (existing && existing.length > 0) {
+          companyId = existing[0].id;
+        } else {
+          const companyRow = {};
+          COMPANY_FIELDS.forEach(f => { if (row[f]) companyRow[f] = row[f]; });
+          if (companyRow.name) {
+            const { data: newComp, error } = await supabase.from('crm_companies').insert(companyRow).select('id').single();
+            if (error) { results.errors.push(`Company "${companyName}": ${error.message}`); continue; }
+            companyId = newComp.id;
+          }
+        }
+      }
+
+      // Create contact if email exists
+      const email = row.email;
+      if (email) {
+        // Dedup check on email
+        const { data: existingContact } = await supabase.from('crm_contacts').select('id').ilike('email', email).limit(1);
+        if (existingContact && existingContact.length > 0) {
+          results.skipped++;
+          continue;
+        }
+        const contactRow = { company_id: companyId };
+        CONTACT_FIELDS.forEach(f => { if (row[f]) contactRow[f] = row[f]; });
+        if (contactRow.is_owner === 'true' || contactRow.is_owner === true) contactRow.is_owner = true;
+        else contactRow.is_owner = false;
+        // Auto-generate full_name
+        if (!contactRow.full_name && (contactRow.first_name || contactRow.last_name)) {
+          contactRow.full_name = `${contactRow.first_name || ''} ${contactRow.last_name || ''}`.trim();
+        }
+        const { error } = await supabase.from('crm_contacts').insert(contactRow);
+        if (error) { results.errors.push(`Contact "${email}": ${error.message}`); continue; }
+      } else if (!companyName) {
+        results.errors.push('Row skipped: no company name or email');
+        continue;
+      }
+
+      results.created++;
+    } catch (e) {
+      results.errors.push(e.message);
+    }
+  }
+
+  document.getElementById('results-content').innerHTML = `
+    <div class="flex gap-6">
+      <div class="bg-green-50 rounded-lg p-4 flex-1">
+        <div class="text-2xl font-bold text-green-700">${results.created}</div>
+        <div class="text-sm text-green-600">Created</div>
+      </div>
+      <div class="bg-yellow-50 rounded-lg p-4 flex-1">
+        <div class="text-2xl font-bold text-yellow-700">${results.skipped}</div>
+        <div class="text-sm text-yellow-600">Skipped (duplicate)</div>
+      </div>
+      <div class="bg-red-50 rounded-lg p-4 flex-1">
+        <div class="text-2xl font-bold text-red-700">${results.errors.length}</div>
+        <div class="text-sm text-red-600">Errors</div>
+      </div>
+    </div>
+    ${results.errors.length > 0 ? `<div class="mt-4 p-3 bg-red-50 rounded-lg text-sm text-red-600 max-h-40 overflow-y-auto">${results.errors.map(e => `<div>${escapeHtml(e)}</div>`).join('')}</div>` : ''}
+  `;
+  showToast(`Import complete: ${results.created} created, ${results.skipped} skipped`);
+}
+</script>
+</body>
+</html>
