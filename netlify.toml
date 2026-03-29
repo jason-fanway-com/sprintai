@@ -16,6 +16,11 @@
   to   = "/.netlify/functions/create-checkout-session"
   status = 200
 
+[[redirects]]
+  from = "/sms-webhook"
+  to   = "/.netlify/functions/sms-webhook"
+  status = 200
+
 # Admin CRM
 [[redirects]]
   from = "/admin"
