@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your Trial is Active | SprintAI</title>
+  <meta name="description" content="Welcome to SprintAI. Your 30-day free trial is active. Set up your AI now." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(150deg, #4f46e5 0%, #7c3aed 100%);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    /* Card */
+    .card {
+      background: white;
+      border-radius: 1.5rem;
+      padding: 3rem 2.5rem;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.25);
+    }
+
+    /* Success icon */
+    .icon-wrap {
+      width: 76px;
+      height: 76px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.5rem;
+      box-shadow: 0 8px 24px rgba(16,185,129,0.35);
+    }
+
+    .icon-wrap svg {
+      width: 36px;
+      height: 36px;
+      stroke: white;
+      stroke-width: 2.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Headline */
+    h1 {
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: #1e293b;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.03em;
+    }
+
+    .tagline {
+      color: #64748b;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      margin: 0 0 1.25rem;
+    }
+
+    /* Trial date callout */
+    .trial-box {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 0.9rem;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.75rem;
+      text-align: left;
+    }
+
+    .trial-box .trial-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #16a34a;
+      margin-bottom: 0.35rem;
+    }
+
+    .trial-box .trial-date {
+      font-size: 0.9rem;
+      color: #15803d;
+      font-weight: 600;
+    }
+
+    .trial-box .trial-note {
+      font-size: 0.8rem;
+      color: #4ade80;
+      margin-top: 0.2rem;
+      color: #166534;
+      opacity: 0.8;
+    }
+
+    /* Big CTA button */
+    .btn-setup {
+      display: block;
+      width: 100%;
+      background: linear-gradient(135deg, #4f46e5, #6d28d9);
+      color: white;
+      text-decoration: none;
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 1rem 1.5rem;
+      border-radius: 0.9rem;
+      margin-bottom: 1rem;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: -0.01em;
+    }
+
+    .btn-setup:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+
+    .btn-setup-sub {
+      font-size: 0.78rem;
+      color: #64748b;
+      margin-bottom: 1.75rem;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #fef3c7;
+      border: 1px solid #fde68a;
+      color: #b45309;
+      border-radius: 9999px;
+      padding: 0.45rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      background: #f59e0b;
+      border-radius: 50%;
+      animation: pulse 1.4s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    /* Info blocks */
+    .info-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.9rem;
+      padding: 1.25rem 1.5rem;
+      text-align: left;
+      margin-bottom: 1rem;
+    }
+
+    .info-block-icon {
+      font-size: 1.3rem;
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+
+    .info-block p {
+      margin: 0;
+      font-size: 0.875rem;
+      color: #475569;
+      line-height: 1.6;
+    }
+
+    .info-block strong {
+      color: #1e293b;
+    }
+
+    /* Contact */
+    .contact-section {
+      margin-top: 2rem;
+      padding-top: 1.75rem;
+      border-top: 1px solid #f1f5f9;
+    }
+
+    .contact-section p {
+      font-size: 0.875rem;
+      color: #64748b;
+      margin: 0 0 0.75rem;
+    }
+
+    .contact-links {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .contact-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.55rem 1.1rem;
+      border-radius: 0.6rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    .contact-link:hover {
+      opacity: 0.85;
+      transform: translateY(-1px);
+    }
+
+    .contact-link.text {
+      background: #eef2ff;
+      color: #4f46e5;
+    }
+
+    .contact-link.email {
+      background: #f0fdf4;
+      color: #15803d;
+    }
+
+    /* Footer */
+    .footer-note {
+      margin-top: 1.75rem;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    /* Mobile */
+    @media (max-width: 480px) {
+      .card { padding: 2rem 1.5rem; }
+      h1 { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+
+    <!-- Success icon -->
+    <div class="icon-wrap">
+      <svg viewBox="0 0 24 24">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+
+    <h1>Your 30-Day Free Trial is Active!</h1>
+    <p class="tagline">
+      Welcome to SprintAI. Your account is set up and your AI is ready to train.
+    </p>
+
+    <!-- Trial date -->
+    <div class="trial-box">
+      <div class="trial-label">Free trial period</div>
+      <div class="trial-date" id="trialDateLine">Loading...</div>
+      <div class="trial-note">Cancel anytime before then and you won't be charged a thing.</div>
+    </div>
+
+    <!-- Primary CTA -->
+    <a href="dashboard.html" class="btn-setup" id="dashboardLink">
+      Set Up Your AI &rarr;
+    </a>
+    <p class="btn-setup-sub">Train your AI on your business content and test it live.</p>
+
+    <div class="status-badge">
+      <div class="pulse"></div>
+      Training your AI assistant now...
+    </div>
+
+    <!-- Info blocks -->
+    <div class="info-block">
+      <span class="info-block-icon">&#129302;</span>
+      <p>
+        <strong>Your AI is being trained on your website right now.</strong>
+        We scan your content, pull out key info about your business, and build a knowledge base so it can answer your customers' questions accurately. Head to your dashboard to add more training data.
+      </p>
+    </div>
+
+    <div class="info-block">
+      <span class="info-block-icon">&#128235;</span>
+      <p>
+        <strong>You'll get your chat widget embed code via email within the hour.</strong>
+        Just paste one line of code on your website and the chat bubble goes live. No developer needed.
+      </p>
+    </div>
+
+    <!-- Contact section -->
+    <div class="contact-section">
+      <p>Questions? We're here to help.</p>
+      <div class="contact-links">
+        <a href="sms:+16103792553" class="contact-link text">
+          &#128172; Text (610) 379-2553
+        </a>
+        <a href="mailto:hello@getsprintai.com" class="contact-link email">
+          &#9993; hello@getsprintai.com
+        </a>
+      </div>
+    </div>
+
+    <p class="footer-note">
+      SprintAI &nbsp;&middot;&nbsp; AI Chat &amp; Text for local businesses<br/>
+      We typically complete setup within 30 to 60 minutes.
+    </p>
+
+  </div>
+
+  <script>
+    // Calculate trial end date (today + 30 days)
+    function getTrialEndDate() {
+      const now = new Date();
+      now.setDate(now.getDate() + 30);
+      return now.toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    }
+
+    document.getElementById('trialDateLine').textContent =
+      "You won't be charged until " + getTrialEndDate() + ".";
+
+    // Pass tenant_id to dashboard if we have it from the session
+    // The success_url includes ?session_id={CHECKOUT_SESSION_ID} from Stripe
+    // We'll pass session_id to the dashboard so it can look up the tenant
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    const tenantId = params.get('tenant_id');
+
+    const dashLink = document.getElementById('dashboardLink');
+    if (tenantId) {
+      dashLink.href = 'dashboard.html?tenant_id=' + encodeURIComponent(tenantId);
+    } else if (sessionId) {
+      dashLink.href = 'dashboard.html?session_id=' + encodeURIComponent(sessionId);
+    }
+  </script>
+</body>
+</html>

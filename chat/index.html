@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SprintAI Chat &amp; Text: AI That Talks to Your Customers 24/7</title>
+  <meta name="description" content="One AI brain trained on your business. Available on your website and via SMS. $99/mo. No contracts." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            indigo: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              200: '#c7d2fe',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    html { scroll-behavior: smooth; }
+    .gradient-hero {
+      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
+    }
+    .card-glow {
+      box-shadow: 0 0 0 1px rgba(99,102,241,0.2), 0 4px 24px rgba(99,102,241,0.15);
+    }
+    .pulse-badge {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .6; }
+    }
+
+    /* Chat widget mockup */
+    .chat-widget {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+      width: 300px;
+      overflow: hidden;
+    }
+    .chat-header {
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .chat-avatar {
+      width: 36px; height: 36px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .chat-bubble-bot {
+      background: #f0f1fe;
+      color: #1e1b4b;
+      border-radius: 12px 12px 12px 2px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 210px;
+    }
+    .chat-bubble-user {
+      background: #4f46e5;
+      color: white;
+      border-radius: 12px 12px 2px 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 210px;
+      align-self: flex-end;
+    }
+    .chat-input-bar {
+      border-top: 1px solid #f0f0f0;
+      padding: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .chat-input-fake {
+      flex: 1;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 20px;
+      padding: 8px 14px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    /* Phone SMS mockup */
+    .phone-frame {
+      background: #1a1a2e;
+      border-radius: 40px;
+      padding: 12px;
+      width: 260px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.4);
+    }
+    .phone-screen {
+      background: white;
+      border-radius: 30px;
+      overflow: hidden;
+    }
+    .sms-header {
+      background: #f2f2f7;
+      padding: 12px 16px;
+      text-align: center;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .sms-bubble-received {
+      background: #e5e5ea;
+      color: #1c1c1e;
+      border-radius: 18px 18px 18px 4px;
+      padding: 9px 13px;
+      font-size: 12px;
+      line-height: 1.5;
+      max-width: 180px;
+      margin: 4px 0;
+    }
+    .sms-bubble-sent {
+      background: #007aff;
+      color: white;
+      border-radius: 18px 18px 4px 18px;
+      padding: 9px 13px;
+      font-size: 12px;
+      line-height: 1.5;
+      max-width: 180px;
+      margin: 4px 0;
+      align-self: flex-end;
+    }
+
+    /* Stat number animation */
+    .stat-number {
+      font-size: 3.5rem;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    /* Details open/close */
+    details[open] summary .plus-icon { transform: rotate(45deg); }
+    .plus-icon { transition: transform 0.2s; display: inline-block; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans antialiased">
+
+  <!-- ============ NAV ============ -->
+  <nav class="bg-white border-b border-gray-100 sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <a href="/" class="flex items-center gap-2">
+          <span class="text-2xl">❄️</span>
+          <span class="font-bold text-xl text-indigo-600">SprintAI</span>
+        </a>
+        <span class="hidden sm:inline text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full ml-1">Chat &amp; Text</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="#how-it-works" class="hidden sm:inline text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">How It Works</a>
+        <a href="#pricing" class="hidden sm:inline text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">Pricing</a>
+        <a href="/signup/" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">Start Free Trial</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ============ HERO ============ -->
+  <section class="gradient-hero text-white">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-20 sm:py-28">
+      <div class="text-center mb-12">
+        <div class="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 mb-6 text-sm font-medium">
+          <span class="pulse-badge w-2 h-2 bg-green-400 rounded-full inline-block"></span>
+          One AI. Your website. Your phone number. 24/7.
+        </div>
+
+        <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight mb-6">
+          Your customers want answers<br/>
+          <span class="text-indigo-300">right now.</span>
+        </h1>
+
+        <p class="text-lg sm:text-xl text-indigo-100 max-w-2xl mx-auto mb-4 leading-relaxed">
+          SprintAI Chat &amp; Text puts an AI on your website and in your customers' text messages. Same AI brain. Trained on your business. Answering questions at 3am if it has to.
+        </p>
+        <p class="text-indigo-200 text-base max-w-xl mx-auto mb-10">
+          98% of texts get opened. 62% of customers prefer chatbots over waiting. You've got 5 minutes before they call your competitor.
+        </p>
+
+        <div class="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
+          <a href="/signup/" class="bg-white text-indigo-700 font-bold text-lg px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors w-full sm:w-auto shadow-lg">
+            Try Free for 30 Days →
+          </a>
+          <a href="#how-it-works" class="bg-transparent border-2 border-white/40 text-white font-semibold text-lg px-8 py-4 rounded-xl hover:bg-white/10 transition-colors w-full sm:w-auto">
+            See How It Works
+          </a>
+        </div>
+        <p class="text-indigo-200 text-sm">No contracts. Cancel anytime. Setup takes minutes.</p>
+      </div>
+
+      <!-- Hero Mockups -->
+      <div class="flex flex-col sm:flex-row gap-8 justify-center items-end mt-8">
+
+        <!-- Chat Widget Mockup -->
+        <div class="flex flex-col items-center">
+          <p class="text-indigo-200 text-xs font-semibold uppercase tracking-widest mb-3">Website Chat Widget</p>
+          <div class="chat-widget">
+            <div class="chat-header">
+              <div class="chat-avatar">🤖</div>
+              <div>
+                <p class="text-white font-bold text-sm">Tony's Pizzeria AI</p>
+                <div class="flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 bg-green-400 rounded-full inline-block pulse-badge"></span>
+                  <span class="text-indigo-200 text-xs">Online now</span>
+                </div>
+              </div>
+            </div>
+            <div class="p-4 flex flex-col gap-3 bg-white" style="min-height: 200px;">
+              <div class="chat-bubble-bot">
+                Hi! I'm Tony's AI assistant. What can I help you with today? 🍕
+              </div>
+              <div class="chat-bubble-user">
+                Do you guys do gluten-free crust?
+              </div>
+              <div class="chat-bubble-bot">
+                Yes! We have gluten-free crusts on all 12" pizzas. Add $2.50. Any toppings in mind?
+              </div>
+              <div class="flex items-center gap-1 mt-1">
+                <span class="w-2 h-2 bg-indigo-400 rounded-full inline-block" style="animation: pulse 1s infinite 0s"></span>
+                <span class="w-2 h-2 bg-indigo-400 rounded-full inline-block" style="animation: pulse 1s infinite 0.2s"></span>
+                <span class="w-2 h-2 bg-indigo-400 rounded-full inline-block" style="animation: pulse 1s infinite 0.4s"></span>
+              </div>
+            </div>
+            <div class="chat-input-bar">
+              <div class="chat-input-fake">Ask anything...</div>
+              <button class="bg-indigo-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm">↑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="hidden sm:flex flex-col items-center gap-3 pb-16">
+          <div class="text-white/30 text-xs font-bold uppercase tracking-widest">+</div>
+          <div class="w-px h-20 bg-white/20"></div>
+          <div class="text-white/60 text-sm font-semibold">Same AI</div>
+          <div class="w-px h-20 bg-white/20"></div>
+          <div class="text-white/30 text-xs font-bold uppercase tracking-widest">+</div>
+        </div>
+
+        <!-- Phone SMS Mockup -->
+        <div class="flex flex-col items-center">
+          <p class="text-indigo-200 text-xs font-semibold uppercase tracking-widest mb-3">SMS Text Messages</p>
+          <div class="phone-frame">
+            <div class="phone-screen">
+              <div class="sms-header">
+                <p class="text-xs text-gray-500">Today 11:42 AM</p>
+                <p class="text-sm font-bold text-gray-900">Tony's Pizzeria</p>
+                <p class="text-xs text-gray-400">(610) 555-0192</p>
+              </div>
+              <div class="p-3 flex flex-col gap-2 bg-white" style="min-height: 230px;">
+                <div class="sms-bubble-received">
+                  Hey, what time do you close tonight?
+                </div>
+                <div class="sms-bubble-sent">
+                  We close at 10pm tonight. Kitchen closes at 9:30. Want to place an order?
+                </div>
+                <div class="sms-bubble-received">
+                  Yeah, can I get a pepperoni large for pickup around 8?
+                </div>
+                <div class="sms-bubble-sent">
+                  Done! Large pepperoni for pickup at 8pm. Your total is $18.99. See you then!
+                </div>
+              </div>
+              <div style="background: #f2f2f7; padding: 8px 12px; display: flex; gap: 8px; align-items: center;">
+                <div style="flex:1; background: white; border-radius: 16px; padding: 6px 12px; font-size: 11px; color: #9ca3af; border: 1px solid #e5e7eb;">Text Message</div>
+                <div style="background: #007aff; color: white; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; font-size: 11px;">↑</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SOCIAL PROOF BAR ============ -->
+  <section class="bg-white border-b border-gray-100 py-6">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+      <div class="flex flex-wrap justify-center gap-8 sm:gap-16 text-center">
+        <div>
+          <p class="text-2xl font-extrabold text-indigo-600">98%</p>
+          <p class="text-xs text-gray-500 mt-0.5">SMS open rate</p>
+        </div>
+        <div>
+          <p class="text-2xl font-extrabold text-indigo-600">45%</p>
+          <p class="text-xs text-gray-500 mt-0.5">text response rate</p>
+        </div>
+        <div>
+          <p class="text-2xl font-extrabold text-indigo-600">90 sec</p>
+          <p class="text-xs text-gray-500 mt-0.5">avg text read time</p>
+        </div>
+        <div>
+          <p class="text-2xl font-extrabold text-indigo-600">80%</p>
+          <p class="text-xs text-gray-500 mt-0.5">of routine questions handled by AI</p>
+        </div>
+        <div>
+          <p class="text-2xl font-extrabold text-indigo-600">78%</p>
+          <p class="text-xs text-gray-500 mt-0.5">of customers buy from first to respond</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section id="how-it-works" class="py-20 bg-gray-50">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6">
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">One AI. Two channels. Zero extra work.</h2>
+        <p class="text-lg text-gray-500 max-w-xl mx-auto">You set it up once. It learns your business. Then it talks to customers on your website and via text, automatically.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-3 gap-8">
+        <div class="text-center">
+          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <span class="text-3xl">📋</span>
+          </div>
+          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 1</div>
+          <h3 class="font-bold text-xl text-gray-900 mb-2">Train the AI on your business</h3>
+          <p class="text-gray-500 text-sm leading-relaxed">Tell us your menu, services, hours, pricing, FAQs. One form. 10 minutes. Your AI knows your business cold.</p>
+        </div>
+
+        <div class="text-center">
+          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <span class="text-3xl">🔌</span>
+          </div>
+          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 2</div>
+          <h3 class="font-bold text-xl text-gray-900 mb-2">Drop the chat widget on your site</h3>
+          <p class="text-gray-500 text-sm leading-relaxed">One line of code. Paste it into your site. Done. Works on any website, Squarespace, WordPress, Wix, whatever.</p>
+        </div>
+
+        <div class="text-center">
+          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <span class="text-3xl">📱</span>
+          </div>
+          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 3</div>
+          <h3 class="font-bold text-xl text-gray-900 mb-2">Your SMS number is live</h3>
+          <p class="text-gray-500 text-sm leading-relaxed">You get a business text number. Customers text it and get instant AI responses. You keep your existing number.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TEXTING RELATIONSHIP SECTION ============ -->
+  <section class="py-20 bg-white">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <div class="inline-block text-4xl mb-4">💬</div>
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">A text thread is a relationship.</h2>
+        <p class="text-lg text-gray-500 max-w-2xl mx-auto">Think about your own phone. Your text threads are your mom, your best friend, your partner. When a customer texts your business, they put you in that same space. That's not marketing. That's trust.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-8 mb-16">
+
+        <div class="bg-indigo-50 rounded-2xl p-8 border border-indigo-100">
+          <div class="text-3xl mb-4">🧠</div>
+          <h3 class="text-xl font-bold text-gray-900 mb-3">It's wired into our brains</h3>
+          <p class="text-gray-600 leading-relaxed">Research from the University of California found that text messages activate the same neural pathways as face-to-face conversation. Not email pathways. Not social media pathways. The same ones that fire when you're talking to someone you trust.</p>
+          <p class="text-gray-600 leading-relaxed mt-3">That's why texts feel urgent. Why people respond to texts in 90 seconds but take 90 minutes to reply to email. Your brain treats a text like a real conversation.</p>
+        </div>
+
+        <div class="bg-indigo-50 rounded-2xl p-8 border border-indigo-100">
+          <div class="text-3xl mb-4">📲</div>
+          <h3 class="text-xl font-bold text-gray-900 mb-3">The thread builds over time</h3>
+          <p class="text-gray-600 leading-relaxed">Every time a customer texts your business, that conversation lives in their phone. They can scroll back and see the whole history. "Oh right, they confirmed my appointment." "They sent me that deal last month." "They answered me at midnight when my AC broke."</p>
+          <p class="text-gray-600 leading-relaxed mt-3">That's a relationship. Not a transaction. Customers who have a text thread with your business don't go looking for your competitor.</p>
+        </div>
+
+      </div>
+
+      <!-- Stats row -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-6">
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-6 text-center">
+          <p class="stat-number text-indigo-600">98%</p>
+          <p class="text-sm font-semibold text-gray-700 mt-2">SMS open rate</p>
+          <p class="text-xs text-gray-400 mt-1">vs. 20% for email</p>
+          <p class="text-xs text-gray-300 mt-2" data-source="Gartner">Source: Gartner</p>
+        </div>
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-6 text-center">
+          <p class="stat-number text-indigo-600">90%</p>
+          <p class="text-sm font-semibold text-gray-700 mt-2">of texts read within 3 min</p>
+          <p class="text-xs text-gray-400 mt-1">emails take 90 minutes</p>
+          <p class="text-xs text-gray-300 mt-2" data-source="SimpleTexting 2025">Source: SimpleTexting 2025</p>
+        </div>
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-6 text-center">
+          <p class="stat-number text-indigo-600">45%</p>
+          <p class="text-sm font-semibold text-gray-700 mt-2">SMS response rate</p>
+          <p class="text-xs text-gray-400 mt-1">vs. 6% for email</p>
+          <p class="text-xs text-gray-300 mt-2" data-source="Gartner, Notifyre">Source: Gartner</p>
+        </div>
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-6 text-center">
+          <p class="stat-number text-indigo-600">84%</p>
+          <p class="text-sm font-semibold text-gray-700 mt-2">of consumers opted in to business SMS</p>
+          <p class="text-xs text-gray-400 mt-1">35% more than 2021</p>
+          <p class="text-xs text-gray-300 mt-2" data-source="SimpleTexting 2025">Source: SimpleTexting 2025</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ CHAT WIDGET SECTION ============ -->
+  <section class="py-20 bg-gray-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <div class="inline-block text-4xl mb-4">🤖</div>
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Your website never sleeps.</h2>
+        <p class="text-lg text-gray-500 max-w-2xl mx-auto">Someone visits your site at 11pm with a question. Without a chat widget, they leave. With SprintAI Chat, they get an answer in seconds and you wake up to a new customer.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-12 items-center">
+
+        <div class="space-y-6">
+          <div class="flex gap-4 items-start">
+            <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0 text-2xl">⏰</div>
+            <div>
+              <h3 class="font-bold text-gray-900 text-lg">24/7. No exceptions.</h3>
+              <p class="text-gray-500 text-sm mt-1 leading-relaxed">Your AI answers questions every hour of every day. Holidays, weekends, 3am. It never calls in sick.</p>
+            </div>
+          </div>
+
+          <div class="flex gap-4 items-start">
+            <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0 text-2xl">🎯</div>
+            <div>
+              <h3 class="font-bold text-gray-900 text-lg">Trained on YOUR business.</h3>
+              <p class="text-gray-500 text-sm mt-1 leading-relaxed">It doesn't give generic answers. It knows your menu, your services, your hours, your pricing. Customers get real answers, not "please call us."</p>
+            </div>
+          </div>
+
+          <div class="flex gap-4 items-start">
+            <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0 text-2xl">💰</div>
+            <div>
+              <h3 class="font-bold text-gray-900 text-lg">Converts browsers into buyers.</h3>
+              <p class="text-gray-500 text-sm mt-1 leading-relaxed">Chatbot-powered sites see a 23% boost in conversion rate. That's not a minor improvement. That's nearly a quarter more customers from the same traffic.</p>
+            </div>
+          </div>
+
+          <div class="flex gap-4 items-start">
+            <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0 text-2xl">🛡️</div>
+            <div>
+              <h3 class="font-bold text-gray-900 text-lg">Handles the boring stuff automatically.</h3>
+              <p class="text-gray-500 text-sm mt-1 leading-relaxed">80% of routine questions answered without human intervention. "What are your hours?" "Do you have parking?" "How much does X cost?" The AI handles all of it.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-white rounded-2xl p-6 border border-gray-100 card-glow text-center">
+            <p class="text-4xl font-extrabold text-indigo-600">62%</p>
+            <p class="text-sm text-gray-600 mt-2 font-medium">of customers prefer chatbots over waiting for a human</p>
+            <p class="text-xs text-gray-300 mt-2" data-source="Fullview.io">Source: Fullview.io</p>
+          </div>
+          <div class="bg-white rounded-2xl p-6 border border-gray-100 card-glow text-center">
+            <p class="text-4xl font-extrabold text-indigo-600">23%</p>
+            <p class="text-sm text-gray-600 mt-2 font-medium">boost in website conversion rate with chat</p>
+            <p class="text-xs text-gray-300 mt-2" data-source="Experro">Source: Experro</p>
+          </div>
+          <div class="bg-white rounded-2xl p-6 border border-gray-100 card-glow text-center">
+            <p class="text-4xl font-extrabold text-indigo-600">80%</p>
+            <p class="text-sm text-gray-600 mt-2 font-medium">of routine questions handled without human help</p>
+            <p class="text-xs text-gray-300 mt-2" data-source="IBM">Source: IBM</p>
+          </div>
+          <div class="bg-white rounded-2xl p-6 border border-gray-100 card-glow text-center">
+            <p class="text-4xl font-extrabold text-indigo-600">80%</p>
+            <p class="text-sm text-gray-600 mt-2 font-medium">of customers report positive AI chat experiences</p>
+            <p class="text-xs text-gray-300 mt-2" data-source="Fullview.io">Source: Fullview.io</p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ SPEED TO LEAD ============ -->
+  <section class="py-20 bg-indigo-900 text-white">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 text-center">
+      <div class="text-5xl mb-6">⚡</div>
+      <h2 class="text-3xl sm:text-5xl font-extrabold mb-6 leading-tight">
+        78% of customers buy from whoever responds first.
+      </h2>
+      <p class="text-indigo-200 text-lg max-w-2xl mx-auto mb-12">
+        Not the cheapest. Not the one with the most reviews. The first one to respond. That's the game. And right now, your competitor might be winning it while you sleep.
+      </p>
+
+      <div class="grid sm:grid-cols-3 gap-6 mb-12">
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-8">
+          <p class="text-5xl font-extrabold text-yellow-300 mb-3">21x</p>
+          <p class="text-indigo-100 font-semibold">more likely to convert if you respond within 5 minutes</p>
+          <p class="text-indigo-300 text-xs mt-3" data-source="Lead Response Management study, Verse.ai">Source: Lead Response Management Study</p>
+        </div>
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-8">
+          <p class="text-5xl font-extrabold text-yellow-300 mb-3">100x</p>
+          <p class="text-indigo-100 font-semibold">better conversion: 5-minute response vs. 30-minute response</p>
+          <p class="text-indigo-300 text-xs mt-3" data-source="Scorpion/Convoso">Source: Scorpion / Convoso</p>
+        </div>
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-8">
+          <p class="text-5xl font-extrabold text-green-400 mb-3">Seconds</p>
+          <p class="text-indigo-100 font-semibold">that's how fast your SprintAI responds. Every time. No exceptions.</p>
+          <p class="text-indigo-300 text-xs mt-3">Not minutes. Not hours. Seconds.</p>
+        </div>
+      </div>
+
+      <a href="/signup/" class="inline-block bg-white text-indigo-700 font-bold text-xl px-10 py-5 rounded-2xl hover:bg-indigo-50 transition-colors shadow-xl">
+        Start Free Trial →
+      </a>
+    </div>
+  </section>
+
+  <!-- ============ INDUSTRY USE CASES ============ -->
+  <section class="py-20 bg-white">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Works for any local business.</h2>
+        <p class="text-lg text-gray-500 max-w-xl mx-auto">If customers ask you questions, your AI can answer them. Here's what that looks like in the real world.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-6">
+
+        <!-- Restaurants -->
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-8">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-4xl">🍕</span>
+            <div>
+              <h3 class="font-bold text-xl text-gray-900">Restaurants</h3>
+              <span class="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">27% lift in repeat orders</span>
+            </div>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+            <p class="text-sm text-gray-600 italic">"Do you have tables for 4 on Saturday night?"</p>
+            <p class="text-sm text-gray-600 italic">"What's the daily special today?"</p>
+            <p class="text-sm text-gray-600 italic">"Can I order pickup via text?"</p>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">Restaurants with SMS see 90%+ open rates vs. 18-22% for email. One restaurant ran a birthday SMS campaign and brought back 6,830 customers, generating $85,000 in sales from a single message.</p>
+        </div>
+
+        <!-- Salons -->
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-8">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-4xl">💇</span>
+            <div>
+              <h3 class="font-bold text-xl text-gray-900">Salons &amp; Barbershops</h3>
+              <span class="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">40% reduction in no-shows</span>
+            </div>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+            <p class="text-sm text-gray-600 italic">"Book my usual haircut for Saturday."</p>
+            <p class="text-sm text-gray-600 italic">"Is Kayla available tomorrow at 2?"</p>
+            <p class="text-sm text-gray-600 italic">"Can I reschedule my appointment?"</p>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">No-shows cost salons $100-$150 per missed slot. Text reminders reduce no-shows by almost 40%, confirmed by multiple randomized controlled trials including Imperial College London research. SMS basically pays for itself.</p>
+        </div>
+
+        <!-- HVAC / Home Services -->
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-8">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-4xl">🔧</span>
+            <div>
+              <h3 class="font-bold text-xl text-gray-900">HVAC &amp; Home Services</h3>
+              <span class="text-xs bg-orange-100 text-orange-700 font-semibold px-2 py-0.5 rounded-full">First to respond wins 78% of jobs</span>
+            </div>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+            <p class="text-sm text-gray-600 italic">"My AC is making a weird noise. Can someone come today?"</p>
+            <p class="text-sm text-gray-600 italic">"How much does a furnace tune-up run?"</p>
+            <p class="text-sm text-gray-600 italic">"Do you do emergency service calls on weekends?"</p>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">Emergency HVAC calls average $300-$800. Missing one after-hours lead per week is $15,000-$41,000 a year. Your AI responds in seconds at 11pm when a customer's heat goes out. Your competitor who doesn't have AI goes to voicemail.</p>
+        </div>
+
+        <!-- Any Local Business -->
+        <div class="bg-white rounded-2xl border border-gray-100 card-glow p-8">
+          <div class="flex items-center gap-3 mb-4">
+            <span class="text-4xl">🏪</span>
+            <div>
+              <h3 class="font-bold text-xl text-gray-900">Any Local Business</h3>
+              <span class="text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">5.89x more likely to report marketing success</span>
+            </div>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+            <p class="text-sm text-gray-600 italic">"What are your hours on Sunday?"</p>
+            <p class="text-sm text-gray-600 italic">"Do you have [product] in stock?"</p>
+            <p class="text-sm text-gray-600 italic">"Can I schedule a pickup for this afternoon?"</p>
+          </div>
+          <p class="text-sm text-gray-500 leading-relaxed">Businesses that text customers are 5.89x more likely to report digital marketing success than those that don't. That's not a small edge. That's a different game entirely.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATS WALL ============ -->
+  <section class="py-20 bg-gray-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">The numbers are not subtle.</h2>
+        <p class="text-lg text-gray-500">These aren't cherry-picked stats. This is just what happens when you actually talk to your customers.</p>
+      </div>
+
+      <div class="grid sm:grid-cols-3 gap-6">
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">112.6%</p>
+          <p class="text-gray-700 font-semibold mb-2">conversion rate uplift</p>
+          <p class="text-gray-500 text-sm">When companies followed up via text after initial contact on another channel, conversions jumped 112.6%. More than doubled.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="Avochato">Source: Avochato</p>
+        </div>
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">5.89x</p>
+          <p class="text-gray-700 font-semibold mb-2">more likely to report digital marketing success</p>
+          <p class="text-gray-500 text-sm">Businesses that text customers are 5.89x more likely to say their digital marketing is working. Not tweaking-the-margins more likely. Almost 6x more likely.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="SimpleTexting 2025">Source: SimpleTexting 2025</p>
+        </div>
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">83%</p>
+          <p class="text-gray-700 font-semibold mb-2">business growth with AI-driven customer experience</p>
+          <p class="text-gray-500 text-sm">Companies using AI-driven customer experience see 83% business growth, compared to 66% for those that don't. The gap is widening every year.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="Fullview.io">Source: Fullview.io</p>
+        </div>
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">81%</p>
+          <p class="text-gray-700 font-semibold mb-2">of businesses say AI improved their SMS results</p>
+          <p class="text-gray-500 text-sm">81% of businesses report that AI has improved their SMS marketing success. The same survey found AI SMS users save 4-6 hours per week on average.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="SimpleTexting 2025">Source: SimpleTexting 2025</p>
+        </div>
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">30-50%</p>
+          <p class="text-gray-700 font-semibold mb-2">reduction in customer support costs</p>
+          <p class="text-gray-500 text-sm">AI handles 80% of routine questions. That's 80% fewer interruptions to your day. Businesses report 30-50% reduction in overall support costs.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="IBM, FastBots">Source: IBM</p>
+        </div>
+
+        <div class="bg-white rounded-2xl p-8 border border-gray-100 card-glow text-center">
+          <p class="text-6xl font-extrabold text-indigo-600 mb-3">209%</p>
+          <p class="text-gray-700 font-semibold mb-2">higher response rate vs. phone, email, and Facebook</p>
+          <p class="text-gray-500 text-sm">Text messages beat phone calls, emails, AND Facebook messages in response rate by 209%. All three combined don't come close.</p>
+          <p class="text-xs text-gray-300 mt-4" data-source="TextMagic">Source: TextMagic</p>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ COMPETITOR COMPARISON ============ -->
+  <section class="py-20 bg-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-12">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Why not just use Podium or Birdeye?</h2>
+        <p class="text-lg text-gray-500">You can. But you'll pay a lot more for a lot more complexity you probably don't need.</p>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b-2 border-gray-100">
+              <th class="text-left py-4 px-4 text-gray-500 font-semibold text-sm">Platform</th>
+              <th class="text-center py-4 px-4 text-gray-500 font-semibold text-sm">Price</th>
+              <th class="text-center py-4 px-4 text-gray-500 font-semibold text-sm">AI Chat + SMS</th>
+              <th class="text-center py-4 px-4 text-gray-500 font-semibold text-sm">Contracts</th>
+              <th class="text-center py-4 px-4 text-gray-500 font-semibold text-sm">Transparent Pricing</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-50">
+            <tr class="bg-indigo-50 rounded-xl">
+              <td class="py-5 px-4">
+                <div class="flex items-center gap-2">
+                  <span class="text-xl">❄️</span>
+                  <span class="font-bold text-indigo-700">SprintAI</span>
+                  <span class="text-xs bg-indigo-100 text-indigo-600 font-bold px-2 py-0.5 rounded-full">YOU ARE HERE</span>
+                </div>
+              </td>
+              <td class="py-5 px-4 text-center">
+                <span class="font-extrabold text-indigo-600 text-lg">from $99/mo</span>
+              </td>
+              <td class="py-5 px-4 text-center text-green-500 font-bold text-xl">✓</td>
+              <td class="py-5 px-4 text-center text-green-500 font-bold text-xl">None</td>
+              <td class="py-5 px-4 text-center text-green-500 font-bold text-xl">✓</td>
+            </tr>
+            <tr>
+              <td class="py-5 px-4">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-gray-700">Podium</span>
+                </div>
+              </td>
+              <td class="py-5 px-4 text-center">
+                <span class="font-semibold text-gray-500">~$399/mo</span>
+              </td>
+              <td class="py-5 px-4 text-center text-yellow-500 font-bold text-xl">~</td>
+              <td class="py-5 px-4 text-center text-red-400 font-bold">Required</td>
+              <td class="py-5 px-4 text-center text-red-400 font-bold text-xl">✗</td>
+            </tr>
+            <tr>
+              <td class="py-5 px-4">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-gray-700">Birdeye</span>
+                </div>
+              </td>
+              <td class="py-5 px-4 text-center">
+                <span class="font-semibold text-gray-500">~$299/mo</span>
+                <p class="text-xs text-gray-400">SMS = add-on</p>
+              </td>
+              <td class="py-5 px-4 text-center text-yellow-500 font-bold text-xl">~</td>
+              <td class="py-5 px-4 text-center text-red-400 font-bold">Yes</td>
+              <td class="py-5 px-4 text-center text-red-400 font-bold text-xl">✗</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="text-center text-gray-400 text-xs mt-4">Competitor pricing based on publicly available information and third-party reviews. Prices may vary.</p>
+
+    </div>
+  </section>
+
+  <!-- ============ PRICING ============ -->
+  <section id="pricing" class="py-20 bg-gray-50">
+    <div class="max-w-lg mx-auto px-4 sm:px-6">
+
+      <div class="text-center mb-10">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Simple pricing. No surprises.</h2>
+        <p class="text-lg text-gray-500">Two plans. Both simple. Pick what you need.</p>
+      </div>
+
+      <!-- Two Pricing Cards -->
+      <div class="grid sm:grid-cols-2 gap-6 max-w-2xl mx-auto">
+
+        <!-- AI Chat -->
+        <div class="bg-indigo-600 rounded-3xl p-8 text-center shadow-2xl relative overflow-hidden">
+          <div class="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -translate-y-16 translate-x-16"></div>
+          <div class="relative">
+            <div class="inline-block bg-yellow-400 text-gray-900 text-xs font-extrabold px-4 py-1.5 rounded-full uppercase tracking-widest mb-4">AI Chat</div>
+            <div class="inline-block bg-green-400 text-gray-900 text-xs font-extrabold px-3 py-1 rounded-full uppercase tracking-widest mb-6 ml-1 text-[10px]">30-day free trial</div>
+
+            <div class="mb-5">
+              <span class="text-6xl font-extrabold text-white">$99</span>
+              <span class="text-indigo-200 text-lg">/mo</span>
+            </div>
+
+            <ul class="text-left space-y-3 mb-7 text-sm">
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>Website AI chat widget</span>
+              </li>
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>AI trained on your business</span>
+              </li>
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>24/7 availability</span>
+              </li>
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>Unlimited conversations</span>
+              </li>
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>Conversation dashboard</span>
+              </li>
+              <li class="flex items-center gap-3 text-indigo-100">
+                <span class="text-yellow-300 font-bold">✓</span>
+                <span>No contracts. Cancel anytime.</span>
+              </li>
+            </ul>
+
+            <a href="/signup/" class="block w-full bg-white text-indigo-700 font-extrabold text-lg py-4 rounded-2xl hover:bg-indigo-50 transition-colors shadow-lg mb-3">
+              Start Free Trial →
+            </a>
+            <p class="text-indigo-200 text-xs">No charge for 30 days.</p>
+          </div>
+        </div>
+
+        <!-- Add Text/SMS -->
+        <div class="bg-white rounded-3xl p-8 text-center shadow-xl border-2 border-indigo-200 relative overflow-hidden">
+          <div class="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -translate-y-16 translate-x-16"></div>
+          <div class="relative">
+            <div class="inline-block bg-indigo-100 text-indigo-700 text-xs font-extrabold px-4 py-1.5 rounded-full uppercase tracking-widest mb-4">Add Text/SMS</div>
+
+            <div class="mb-5">
+              <span class="text-xl text-gray-400">+</span>
+              <span class="text-6xl font-extrabold text-gray-900">$49</span>
+              <span class="text-gray-400 text-lg">/mo</span>
+            </div>
+
+            <ul class="text-left space-y-3 mb-7 text-sm">
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>Everything in AI Chat</span>
+              </li>
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>SMS business text number</span>
+              </li>
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>Customers text, AI responds</span>
+              </li>
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>Text thread builds over time</span>
+              </li>
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>98% open rate vs 20% email</span>
+              </li>
+              <li class="flex items-center gap-3 text-gray-600">
+                <span class="text-indigo-500 font-bold">✓</span>
+                <span>Same AI brain, new channel</span>
+              </li>
+            </ul>
+
+            <a href="/signup/" class="block w-full bg-indigo-600 text-white font-extrabold text-lg py-4 rounded-2xl hover:bg-indigo-700 transition-colors shadow-lg mb-3">
+              Start Free Trial →
+            </a>
+            <p class="text-gray-400 text-xs">$148/mo total for Chat + Text.</p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ FAQ ============ -->
+  <section class="py-20 bg-white">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6">
+      <div class="text-center mb-14">
+        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Questions people actually ask</h2>
+      </div>
+
+      <div class="space-y-4">
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            How does the AI learn about my business?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">You fill out an onboarding form. Tell us your business name, what you do, your hours, your services, pricing, FAQs, whatever you want it to know. We load that into your AI's knowledge base. The more detail you give, the better the answers. Most people are up and running in under 30 minutes.</p>
+        </details>
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            Do I need to change my phone number?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">No. You keep your existing number for calls. We give you a separate dedicated business text number that your AI handles. You can put it on your website, your Google Business Profile, your social media. "Text us at (xxx) xxx-xxxx." That goes straight to your AI.</p>
+        </details>
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            Can I see what the AI is saying to my customers?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">Yes. You get a dashboard with every conversation. Every chat, every text thread, everything the AI said and everything the customer asked. You can jump in and take over any conversation at any time if you want to handle it personally.</p>
+        </details>
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            What if the AI can't answer something?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">It's honest about it. If a question is outside what it knows, it tells the customer something like "I don't have that info handy, but you can call us at [your number] or I can have someone follow up with you." It never makes things up. It escalates cleanly when needed.</p>
+        </details>
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            How fast can I get set up?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">Fast. Fill out the onboarding form, we train your AI, you get the chat widget code and your SMS number. Most businesses are live within 24-48 hours of signing up. Some the same day. There's no technical skill required on your end.</p>
+        </details>
+
+        <details class="bg-gray-50 rounded-2xl border border-gray-100 p-6 group cursor-pointer">
+          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+            Can I cancel anytime?
+            <span class="text-indigo-400 plus-icon text-2xl leading-none">+</span>
+          </summary>
+          <p class="mt-3 text-gray-500 leading-relaxed">Yes. Month-to-month. No contracts, no cancellation fees, no "please speak to our retention team." If it's not working for you, you cancel. That's it. We think you'll stay because the results speak for themselves, not because we made it hard to leave.</p>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FINAL CTA ============ -->
+  <section class="gradient-hero text-white py-20">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
+      <div class="text-5xl mb-6">🚀</div>
+      <h2 class="text-3xl sm:text-5xl font-extrabold mb-6 leading-tight">
+        Your customers are texting.<br/>
+        <span class="text-indigo-300">Is your business answering?</span>
+      </h2>
+      <p class="text-indigo-200 text-lg mb-8 max-w-xl mx-auto">
+        AI Chat starts at $99/mo. Add SMS texting for $49/mo more. One AI that knows your business, answering customers everywhere. 24/7.
+      </p>
+      <p class="text-indigo-100 text-base mb-10 max-w-lg mx-auto">
+        While you're reading this, 78% of customers who just reached out to a competitor and got an instant response are making a decision. Don't be the business they leave for.
+      </p>
+      <a href="/signup/" class="inline-block bg-white text-indigo-700 font-bold text-xl px-10 py-5 rounded-2xl hover:bg-indigo-50 transition-colors shadow-xl mb-6">
+        Try Free for 30 Days →
+      </a>
+      <p class="text-indigo-300 text-sm">No charge for 30 days. No contracts. Cancel anytime.</p>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="bg-gray-900 text-gray-400 py-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 text-center">
+      <div class="flex items-center justify-center gap-2 mb-3">
+        <span class="text-xl">❄️</span>
+        <span class="text-white font-bold text-lg">SprintAI</span>
+      </div>
+      <div class="flex justify-center gap-6 mb-4 text-sm">
+        <a href="/" class="text-gray-400 hover:text-indigo-400 transition-colors">Home</a>
+        <a href="/chat/" class="text-indigo-400 font-semibold">Chat &amp; Text</a>
+        <a href="mailto:hello@getsprintai.com" class="text-gray-400 hover:text-indigo-400 transition-colors">hello@getsprintai.com</a>
+      </div>
+      <p class="text-sm">SprintAI &copy; 2026 &middot; Built for local businesses that move fast</p>
+    </div>
+  </footer>
+
+</body>
+</html>

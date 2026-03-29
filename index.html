@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SprintAI — AI Marketing for HVAC Contractors</title>
-  <meta name="description" content="SprintAI handles your social media, SEO content, and Google review responses — automatically. Built for HVAC contractors who are too busy fixing systems to market them." />
+  <title>SprintAI | Digital Experiences for Local Businesses</title>
+  <meta name="description" content="SprintAI handles your digital presence so you can focus on your business. AI chat, social media, blogging, and marketing automations. All done for you." />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -35,12 +35,6 @@
     .card-glow {
       box-shadow: 0 0 0 1px rgba(99,102,241,0.2), 0 4px 24px rgba(99,102,241,0.15);
     }
-    .social-card {
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.1);
-      overflow: hidden;
-    }
     .pulse-badge {
       animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
     }
@@ -48,352 +42,275 @@
       0%, 100% { opacity: 1; }
       50% { opacity: .6; }
     }
+    .step-line::after {
+      content: '';
+      position: absolute;
+      top: 2rem;
+      left: calc(50% + 2rem);
+      right: calc(-50% + 2rem);
+      height: 2px;
+      background: linear-gradient(90deg, #6366f1, #c7d2fe);
+    }
+    @media (max-width: 768px) {
+      .step-line::after { display: none; }
+    }
+    .faq-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+    .faq-content.open {
+      max-height: 200px;
+    }
   </style>
 </head>
-<body class="bg-gray-50 text-gray-800 font-sans antialiased">
+<body class="bg-white text-gray-900 font-sans antialiased">
 
-  <!-- ============ NAV ============ -->
-  <nav class="bg-white border-b border-gray-100 sticky top-0 z-50">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <span class="text-2xl">❄️</span>
-        <span class="font-bold text-xl text-indigo-600">SprintAI</span>
-        <span class="hidden sm:inline text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full ml-1">HVAC</span>
+  <!-- NAV -->
+  <nav class="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-sm border-b border-gray-100">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2 font-bold text-xl text-indigo-600">
+        <span>⚡</span>
+        <span>SprintAI</span>
+      </a>
+      <div class="hidden md:flex items-center gap-8 text-sm font-medium text-gray-600">
+        <a href="/chat/" class="hover:text-indigo-600 transition-colors">Chat &amp; Text</a>
+        <a href="#services" class="hover:text-indigo-600 transition-colors">Services</a>
+        <a href="#pricing" class="hover:text-indigo-600 transition-colors">Pricing</a>
       </div>
-      <div class="flex items-center gap-3">
-        <a href="#pricing" class="hidden sm:inline text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">Pricing</a>
-        <a href="#demo" class="hidden sm:inline text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">See a Sample</a>
-        <a href="#pricing" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">Start Free Trial</a>
-      </div>
+      <a href="#pricing" class="bg-indigo-600 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
+        Start Free Trial
+      </a>
     </div>
   </nav>
 
-  <!-- ============ HERO ============ -->
-  <section class="gradient-hero text-white">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-20 sm:py-28 text-center">
-      <div class="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 mb-6 text-sm font-medium">
-        <span class="pulse-badge w-2 h-2 bg-green-400 rounded-full inline-block"></span>
-        The only AI marketing system built specifically for HVAC contractors
+  <!-- HERO -->
+  <section class="gradient-hero pt-32 pb-24 px-6 text-center text-white">
+    <div class="max-w-4xl mx-auto">
+      <div class="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 text-sm font-medium mb-8">
+        <span class="pulse-badge w-2 h-2 rounded-full bg-green-400 inline-block"></span>
+        Digital presence, handled.
       </div>
-
-      <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight mb-6">
-        More HVAC Calls.<br/>
-        <span class="text-indigo-300">Less Posting.</span>
+      <h1 class="text-5xl md:text-6xl font-extrabold leading-tight mb-6">
+        Closer to your customers.<br />
+        <span class="text-indigo-300">Every single day.</span>
       </h1>
-
-      <p class="text-lg sm:text-xl text-indigo-100 max-w-2xl mx-auto mb-10 leading-relaxed">
-        SprintAI handles your social media, SEO content, and Google review responses — automatically.
-        Built for HVAC contractors who are too busy fixing systems to market them.
+      <p class="text-xl text-indigo-100 max-w-2xl mx-auto mb-10">
+        AI-powered chat, social media, blogging, and marketing automations. All done for you, so you can focus on running your business.
       </p>
-
-      <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
-        <a href="#pricing" class="bg-white text-indigo-700 font-bold text-lg px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors w-full sm:w-auto shadow-lg">
-          Start Free Trial →
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="#pricing" class="bg-white text-indigo-700 font-bold px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors text-lg">
+          Start Your Free Trial
         </a>
-        <a href="#demo" class="bg-transparent border-2 border-white/40 text-white font-semibold text-lg px-8 py-4 rounded-xl hover:bg-white/10 transition-colors w-full sm:w-auto">
-          See a Sample
+        <a href="#services" class="border border-white/40 text-white font-semibold px-8 py-4 rounded-xl hover:bg-white/10 transition-colors text-lg">
+          See What We Can Do
         </a>
       </div>
+    </div>
+  </section>
 
-      <p class="mt-6 text-indigo-200 text-sm">No contracts · Month-to-month · First content in 5 days</p>
-
-      <!-- Floating emoji icons -->
-      <div class="mt-16 flex justify-center gap-8 sm:gap-12 text-4xl sm:text-5xl opacity-70">
-        <span title="Heating">🌡️</span>
-        <span title="Cooling">❄️</span>
-        <span title="Plumbing">🔧</span>
-        <span title="Electrical">⚡</span>
-        <span title="Home">🏠</span>
+  <!-- STATS BAR -->
+  <section class="bg-indigo-900 py-12 px-6">
+    <div class="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center text-white">
+      <div>
+        <div class="text-4xl font-extrabold text-indigo-300 mb-1">98%</div>
+        <div class="text-sm text-indigo-200">SMS open rate</div>
+      </div>
+      <div>
+        <div class="text-4xl font-extrabold text-indigo-300 mb-1">+23%</div>
+        <div class="text-sm text-indigo-200">conversion boost from chat</div>
+      </div>
+      <div>
+        <div class="text-4xl font-extrabold text-indigo-300 mb-1">78%</div>
+        <div class="text-sm text-indigo-200">of customers buy from the first to respond</div>
+      </div>
+      <div>
+        <div class="text-4xl font-extrabold text-indigo-300 mb-1">5.89x</div>
+        <div class="text-sm text-indigo-200">more likely to hit marketing goals with SMS</div>
       </div>
     </div>
   </section>
 
-  <!-- ============ SOCIAL PROOF BAR ============ -->
-  <section class="bg-white border-b border-gray-100">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-      <p class="text-center text-gray-500 text-sm font-medium mb-4">Trusted by HVAC contractors across heating, cooling, plumbing &amp; electrical</p>
-      <div class="flex flex-wrap justify-center gap-6 sm:gap-12 text-gray-700 font-semibold text-sm sm:text-base">
-        <div class="flex items-center gap-2"><span class="text-xl">🌡️</span> Heating</div>
-        <div class="flex items-center gap-2"><span class="text-xl">❄️</span> Cooling</div>
-        <div class="flex items-center gap-2"><span class="text-xl">🔧</span> Plumbing</div>
-        <div class="flex items-center gap-2"><span class="text-xl">⚡</span> Electrical</div>
+  <!-- SERVICES -->
+  <section id="services" class="py-24 px-6 bg-gray-50">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Everything your digital presence needs.</h2>
+        <p class="text-xl text-gray-500 max-w-2xl mx-auto">Four services. One platform. Zero stress.</p>
+      </div>
+      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+        <!-- AI Chat & Text -->
+        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
+          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">💬</div>
+          <h3 class="text-xl font-bold mb-3">AI Chat &amp; Text</h3>
+          <p class="text-gray-500 text-sm leading-relaxed flex-1">A chatbot on your website and AI-powered SMS, both trained on your business. Available 24/7. Answers questions, captures leads, and follows up automatically.</p>
+          <a href="/chat/" class="mt-6 text-indigo-600 font-semibold text-sm hover:underline">Learn more →</a>
+        </div>
+
+        <!-- Social Media -->
+        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
+          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">📱</div>
+          <h3 class="text-xl font-bold mb-3">Social Media</h3>
+          <p class="text-gray-500 text-sm leading-relaxed flex-1">Done-for-you posting across Facebook, Instagram, Google Business, and LinkedIn. Content calendar, scheduling, and reporting. You don't write a word.</p>
+        </div>
+
+        <!-- Blogging & SEO -->
+        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
+          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">✍️</div>
+          <h3 class="text-xl font-bold mb-3">Blogging &amp; SEO</h3>
+          <p class="text-gray-500 text-sm leading-relaxed flex-1">SEO-optimized articles that bring customers to you from Google. Keyword research, content creation, and publishing. Organic traffic that compounds over time.</p>
+        </div>
+
+        <!-- Marketing Automations -->
+        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
+          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">⚙️</div>
+          <h3 class="text-xl font-bold mb-3">Marketing Automations</h3>
+          <p class="text-gray-500 text-sm leading-relaxed flex-1">Review responses, email sequences, follow-up campaigns, lead nurturing. Set it up once and it runs. Your best customers will feel like you never forget them.</p>
+        </div>
+
       </div>
     </div>
   </section>
 
-  <!-- ============ PROBLEM SECTION ============ -->
-  <section class="py-20 bg-gray-50">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6">
-      <div class="text-center mb-14">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Sound familiar?</h2>
-        <p class="text-lg text-gray-500">Every HVAC contractor we talk to says the same thing.</p>
-      </div>
-
-      <div class="grid sm:grid-cols-2 gap-6">
-        <div class="bg-white rounded-2xl p-6 border border-red-100 card-glow flex gap-4 items-start">
-          <div class="text-3xl flex-shrink-0">📉</div>
-          <div>
-            <p class="font-bold text-gray-900 text-lg">"You're getting crushed in July and dead in March."</p>
-            <p class="text-gray-500 mt-1 text-sm">Seasonal swings kill cash flow. Your marketing should work year-round — even when you're buried in calls.</p>
-          </div>
+  <!-- WHO WE WORK WITH -->
+  <section class="py-24 px-6 bg-white">
+    <div class="max-w-5xl mx-auto text-center">
+      <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Built for businesses like yours.</h2>
+      <p class="text-xl text-gray-500 mb-16">If you have customers, we can help you reach them.</p>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-6">
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">🍽️</div>
+          <div class="font-semibold text-gray-900">Restaurants</div>
+          <div class="text-sm text-gray-500 mt-1">Cafes, bars, bakeries</div>
         </div>
-
-        <div class="bg-white rounded-2xl p-6 border border-red-100 card-glow flex gap-4 items-start">
-          <div class="text-3xl flex-shrink-0">⭐</div>
-          <div>
-            <p class="font-bold text-gray-900 text-lg">"Your competitor has 200 Google reviews. You have 14."</p>
-            <p class="text-gray-500 mt-1 text-sm">Reviews win jobs. Homeowners pick the contractor with the most — and the best responses. You need a system.</p>
-          </div>
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">💇</div>
+          <div class="font-semibold text-gray-900">Salons &amp; Spas</div>
+          <div class="text-sm text-gray-500 mt-1">Hair, nails, massage, esthetics</div>
         </div>
-
-        <div class="bg-white rounded-2xl p-6 border border-red-100 card-glow flex gap-4 items-start">
-          <div class="text-3xl flex-shrink-0">📱</div>
-          <div>
-            <p class="font-bold text-gray-900 text-lg">"You haven't posted on Facebook since 2022."</p>
-            <p class="text-gray-500 mt-1 text-sm">A dead social presence tells homeowners you're out of business. Regular posts signal trust and keep you top of mind.</p>
-          </div>
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">🔧</div>
+          <div class="font-semibold text-gray-900">Home Services</div>
+          <div class="text-sm text-gray-500 mt-1">Plumbers, electricians, cleaners</div>
         </div>
-
-        <div class="bg-white rounded-2xl p-6 border border-red-100 card-glow flex gap-4 items-start">
-          <div class="text-3xl flex-shrink-0">⏱️</div>
-          <div>
-            <p class="font-bold text-gray-900 text-lg">"You're too busy running calls to run your marketing."</p>
-            <p class="text-gray-500 mt-1 text-sm">You're great at HVAC. Marketing shouldn't eat your nights and weekends. That's what we're here for.</p>
-          </div>
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">🛍️</div>
+          <div class="font-semibold text-gray-900">Retail</div>
+          <div class="text-sm text-gray-500 mt-1">Boutiques, specialty shops</div>
+        </div>
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">💼</div>
+          <div class="font-semibold text-gray-900">Professional Services</div>
+          <div class="text-sm text-gray-500 mt-1">Lawyers, accountants, consultants</div>
+        </div>
+        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
+          <div class="text-4xl mb-3">🏃</div>
+          <div class="font-semibold text-gray-900">Health &amp; Wellness</div>
+          <div class="text-sm text-gray-500 mt-1">Gyms, trainers, chiropractors</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ============ HOW IT WORKS ============ -->
-  <section class="py-20 bg-white">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6">
-      <div class="text-center mb-14">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">How It Works</h2>
-        <p class="text-lg text-gray-500">Up and running in under 10 minutes. Seriously.</p>
+  <!-- HOW IT WORKS -->
+  <section class="py-24 px-6 bg-indigo-50">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Up and running in days, not months.</h2>
+        <p class="text-xl text-gray-500">Three steps. That's it.</p>
       </div>
+      <div class="grid md:grid-cols-3 gap-10 relative">
 
-      <div class="grid sm:grid-cols-3 gap-8">
+        <div class="relative step-line text-center">
+          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">1</div>
+          <h3 class="text-xl font-bold mb-3">Tell us about your business</h3>
+          <p class="text-gray-500 text-sm">10-minute onboarding call. You tell us what you do, who your customers are, and what matters most to you.</p>
+        </div>
+
+        <div class="relative step-line text-center">
+          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">2</div>
+          <h3 class="text-xl font-bold mb-3">We build your digital presence</h3>
+          <p class="text-gray-500 text-sm">We set up your chat, social accounts, blog, and automations. Trained on your business, matched to your voice.</p>
+        </div>
+
         <div class="text-center">
-          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <span class="text-3xl">📋</span>
-          </div>
-          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 1</div>
-          <h3 class="font-bold text-xl text-gray-900 mb-2">Quick Onboarding</h3>
-          <p class="text-gray-500 text-sm leading-relaxed">Tell us about your business, service area, and target customer. One form, 10 minutes. Done.</p>
+          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">3</div>
+          <h3 class="text-xl font-bold mb-3">We bring customers to you</h3>
+          <p class="text-gray-500 text-sm">Sit back while your digital presence works. Leads come in. Customers get answers. You stay busy doing what you're good at.</p>
         </div>
 
-        <div class="text-center">
-          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <span class="text-3xl">✍️</span>
-          </div>
-          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 2</div>
-          <h3 class="font-bold text-xl text-gray-900 mb-2">We Create Your Content</h3>
-          <p class="text-gray-500 text-sm leading-relaxed">Seasonal social posts, SEO blog articles, and review reply templates — all written for HVAC, branded for you.</p>
-        </div>
-
-        <div class="text-center">
-          <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <span class="text-3xl">🚀</span>
-          </div>
-          <div class="text-indigo-600 font-bold text-sm mb-2 uppercase tracking-wide">Step 3</div>
-          <h3 class="font-bold text-xl text-gray-900 mb-2">It Posts Automatically</h3>
-          <p class="text-gray-500 text-sm leading-relaxed">You approve once a month (or set auto-publish). We handle the scheduling, posting, and reporting.</p>
-        </div>
       </div>
     </div>
   </section>
 
-  <!-- ============ DEMO SECTION ============ -->
-  <section id="demo" class="py-20 bg-gray-50">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6">
-      <div class="text-center mb-14">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">See What We Create for HVAC Contractors</h2>
-        <p class="text-lg text-gray-500">Real posts. Real reviews. All handled automatically.</p>
-        <span class="inline-block mt-3 bg-indigo-100 text-indigo-700 text-sm font-bold px-4 py-1.5 rounded-full">✨ Infinitely customizable!</span>
+  <!-- PRICING -->
+  <section id="pricing" class="py-24 px-6 bg-white">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Simple, honest pricing.</h2>
+        <p class="text-xl text-gray-500">Start small, scale when you're ready.</p>
       </div>
+      <div class="grid md:grid-cols-3 gap-8 items-stretch">
 
-      <div class="grid sm:grid-cols-3 gap-6 mb-10">
-
-        <!-- Social Post 1 -->
-        <div class="social-card">
-          <div class="bg-indigo-600 p-3 flex items-center gap-2">
-            <div class="w-8 h-8 bg-white rounded-full flex items-center justify-center text-indigo-600 font-bold text-xs">AC</div>
-            <div>
-              <p class="text-white text-xs font-bold">Your HVAC Co.</p>
-              <p class="text-indigo-200 text-xs">Facebook · Sponsored</p>
+        <!-- Starter -->
+        <div class="border border-gray-200 rounded-2xl p-8 flex flex-col">
+          <div class="mb-6">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide">Starter</div>
+              <span class="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">30-day free trial</span>
             </div>
+            <div class="text-4xl font-extrabold text-gray-900 mb-1">$99<span class="text-lg font-normal text-gray-400">/mo</span></div>
+            <div class="text-sm text-gray-500">No charge for 30 days. Cancel anytime.</div>
           </div>
-          <div class="p-4">
-            <p class="text-sm text-gray-800 leading-relaxed">
-              🌸 Spring is here — is your AC ready?<br/><br/>
-              Schedule your tune-up before the rush hits. First 20 customers get <strong>$25 off</strong>. Call <span class="text-indigo-600">[Your Company]</span> today!<br/><br/>
-              ❄️ [YourCity] | ☎️ [YourPhone]
-            </p>
-            <div class="mt-3 pt-3 border-t border-gray-100 flex gap-4 text-xs text-gray-400">
-              <span>👍 Like</span>
-              <span>💬 Comment</span>
-              <span>↗️ Share</span>
-            </div>
-          </div>
-          <div class="px-4 pb-3">
-            <span class="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded-full">🌸 Spring Campaign</span>
-          </div>
-        </div>
-
-        <!-- Social Post 2 -->
-        <div class="social-card">
-          <div class="bg-red-600 p-3 flex items-center gap-2">
-            <div class="w-8 h-8 bg-white rounded-full flex items-center justify-center text-red-600 font-bold text-xs">AC</div>
-            <div>
-              <p class="text-white text-xs font-bold">Your HVAC Co.</p>
-              <p class="text-red-200 text-xs">Facebook · Emergency Post</p>
-            </div>
-          </div>
-          <div class="p-4">
-            <p class="text-sm text-gray-800 leading-relaxed">
-              🚨 AC down in the heat?<br/><br/>
-              We offer <strong>same-day emergency service</strong> across [YourCity]. Don't sweat it — call us now.<br/><br/>
-              Average response time: <strong>2 hours.</strong><br/>
-              ☎️ [YourPhone]
-            </p>
-            <div class="mt-3 pt-3 border-t border-gray-100 flex gap-4 text-xs text-gray-400">
-              <span>👍 Like</span>
-              <span>💬 Comment</span>
-              <span>↗️ Share</span>
-            </div>
-          </div>
-          <div class="px-4 pb-3">
-            <span class="text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full">🚨 Emergency Service</span>
-          </div>
-        </div>
-
-        <!-- Review Response -->
-        <div class="social-card">
-          <div class="bg-gray-800 p-3 flex items-center gap-2">
-            <div class="w-8 h-8 bg-white rounded-full flex items-center justify-center">
-              <span class="text-lg">G</span>
-            </div>
-            <div>
-              <p class="text-white text-xs font-bold">Google Review Response</p>
-              <p class="text-gray-400 text-xs">AI-generated &amp; posted for you</p>
-            </div>
-          </div>
-          <div class="p-4">
-            <!-- Review -->
-            <div class="bg-gray-50 rounded-lg p-3 mb-3">
-              <div class="flex items-center gap-2 mb-1">
-                <div class="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center text-white text-xs font-bold">M</div>
-                <span class="text-xs font-semibold text-gray-700">Mike R.</span>
-                <span class="text-yellow-400 text-xs">★★★★★</span>
-              </div>
-              <p class="text-xs text-gray-600 italic">"They fixed my furnace same day before a snowstorm. Incredible service!"</p>
-            </div>
-            <!-- Response -->
-            <div class="border-l-2 border-indigo-400 pl-3">
-              <p class="text-xs font-semibold text-indigo-700 mb-1">Owner response:</p>
-              <p class="text-xs text-gray-600 leading-relaxed">Thank you so much, Mike! We know how critical heating is before a storm, so we always prioritize same-day calls. We're thrilled we could get your furnace running before the weather hit. Stay warm — and don't hesitate to call us anytime! 🏠❄️</p>
-            </div>
-          </div>
-          <div class="px-4 pb-3">
-            <span class="text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">⭐ Review Response</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- SEO Blog Card -->
-      <div class="bg-white rounded-2xl p-6 sm:p-8 border border-indigo-100 card-glow max-w-2xl mx-auto text-center">
-        <div class="text-4xl mb-3">📝</div>
-        <div class="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-2">This Month's SEO Blog</div>
-        <h3 class="text-xl font-bold text-gray-900 mb-2">"5 Signs Your AC Needs a Tune-Up Before Summer"</h3>
-        <p class="text-gray-500 text-sm mb-4">Drives organic traffic from homeowners searching <span class="font-semibold text-gray-700">"AC maintenance [city]"</span> — before they call anyone.</p>
-        <div class="flex flex-wrap justify-center gap-2 text-xs">
-          <span class="bg-green-100 text-green-700 font-semibold px-3 py-1 rounded-full">🔍 SEO Optimized</span>
-          <span class="bg-indigo-100 text-indigo-700 font-semibold px-3 py-1 rounded-full">✍️ HVAC-Specific</span>
-          <span class="bg-yellow-100 text-yellow-700 font-semibold px-3 py-1 rounded-full">📈 Traffic Driver</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ PRICING ============ -->
-  <section id="pricing" class="py-20 bg-white">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6">
-      <div class="text-center mb-14">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Simple, Flat Pricing</h2>
-        <p class="text-lg text-gray-500">No setup fees. No surprise charges. Cancel anytime.</p>
-      </div>
-
-      <div class="grid sm:grid-cols-3 gap-8 items-stretch">
-
-        <!-- Founder Tier -->
-        <div class="bg-white rounded-2xl border-2 border-gray-200 p-8 flex flex-col relative">
-          <div class="absolute -top-3 left-6">
-            <span class="bg-orange-500 text-white text-xs font-bold px-3 py-1 rounded-full pulse-badge">🔥 3 spots left</span>
-          </div>
-          <div>
-            <h3 class="font-bold text-xl text-gray-900 mb-1">Founder</h3>
-            <p class="text-gray-500 text-sm mb-4">Lock in your rate forever</p>
-            <div class="flex items-end gap-1 mb-6">
-              <span class="text-4xl font-extrabold text-gray-900">$997</span>
-              <span class="text-gray-500 mb-1">/mo</span>
-            </div>
-            <ul class="space-y-3 text-sm text-gray-600 mb-8">
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> 3 social posts/week (Facebook + Google Business)</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> 2 SEO blog articles/mo</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Review response templates</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Monthly seasonal campaign</li>
-            </ul>
-          </div>
-          <a href="#" class="mt-auto block text-center bg-gray-900 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-xl transition-colors">
-            Claim Founder Spot
-          </a>
-        </div>
-
-        <!-- Growth Tier -->
-        <div class="bg-indigo-600 rounded-2xl border-2 border-indigo-600 p-8 flex flex-col relative shadow-xl scale-105">
-          <div class="absolute -top-3 left-1/2 -translate-x-1/2">
-            <span class="bg-yellow-400 text-gray-900 text-xs font-bold px-3 py-1 rounded-full">⭐ Most Popular</span>
-          </div>
-          <div>
-            <h3 class="font-bold text-xl text-white mb-1">Growth</h3>
-            <p class="text-indigo-200 text-sm mb-4">For contractors ready to scale</p>
-            <div class="flex items-end gap-1 mb-6">
-              <span class="text-4xl font-extrabold text-white">$1,500</span>
-              <span class="text-indigo-200 mb-1">/mo</span>
-            </div>
-            <ul class="space-y-3 text-sm text-indigo-100 mb-8">
-              <li class="flex items-start gap-2"><span class="text-yellow-300 mt-0.5 flex-shrink-0">✓</span> 5 social posts/week (Facebook + Instagram + Google Business)</li>
-              <li class="flex items-start gap-2"><span class="text-yellow-300 mt-0.5 flex-shrink-0">✓</span> 4 SEO blog articles/mo</li>
-              <li class="flex items-start gap-2"><span class="text-yellow-300 mt-0.5 flex-shrink-0">✓</span> AI review responses (up to 50/mo, posted for you)</li>
-              <li class="flex items-start gap-2"><span class="text-yellow-300 mt-0.5 flex-shrink-0">✓</span> Seasonal email campaigns</li>
-              <li class="flex items-start gap-2"><span class="text-yellow-300 mt-0.5 flex-shrink-0">✓</span> Monthly performance report</li>
-            </ul>
-          </div>
-          <a href="#" class="mt-auto block text-center bg-white hover:bg-indigo-50 text-indigo-700 font-bold py-3 px-6 rounded-xl transition-colors">
+          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> AI website chatbot</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> AI-powered SMS</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Trained on your business</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> 24/7 availability</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Lead capture and follow-up</li>
+          </ul>
+          <a href="/signup/" target="_blank" class="block text-center bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-colors">
             Start Free Trial
           </a>
         </div>
 
-        <!-- Full Suite Tier -->
-        <div class="bg-white rounded-2xl border-2 border-gray-200 p-8 flex flex-col relative">
-          <div>
-            <h3 class="font-bold text-xl text-gray-900 mb-1">Full Suite</h3>
-            <p class="text-gray-500 text-sm mb-4">Total market domination</p>
-            <div class="flex items-end gap-1 mb-6">
-              <span class="text-4xl font-extrabold text-gray-900">$2,000</span>
-              <span class="text-gray-500 mb-1">/mo</span>
-            </div>
-            <ul class="space-y-3 text-sm text-gray-600 mb-8">
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Everything in Growth</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Google Business Profile optimization</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Directory listings (Yelp, Angi, HomeAdvisor)</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Competitor review monitoring</li>
-              <li class="flex items-start gap-2"><span class="text-green-500 mt-0.5 flex-shrink-0">✓</span> Dedicated strategist (monthly 30-min call)</li>
-            </ul>
+        <!-- Growth -->
+        <div class="border-2 border-indigo-600 rounded-2xl p-8 flex flex-col relative shadow-lg">
+          <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wide">Most Popular</div>
+          <div class="mb-6">
+            <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide mb-2">Growth</div>
+            <div class="text-4xl font-extrabold text-gray-900 mb-1">Let's talk</div>
+            <div class="text-sm text-gray-500">Custom quote for your business.</div>
           </div>
-          <a href="#" class="mt-auto block text-center bg-gray-900 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-xl transition-colors">
-            Get Full Suite
+          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Everything in Starter</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Social media management</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Blogging &amp; SEO</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Content calendar</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Monthly performance reports</li>
+          </ul>
+          <a href="mailto:hello@getsprintai.com" class="block text-center bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-colors">
+            Book a Call
+          </a>
+        </div>
+
+        <!-- Enterprise -->
+        <div class="border border-gray-200 rounded-2xl p-8 flex flex-col">
+          <div class="mb-6">
+            <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide mb-2">Enterprise</div>
+            <div class="text-4xl font-extrabold text-gray-900 mb-1">Let's talk</div>
+            <div class="text-sm text-gray-500">For growing businesses that want it all.</div>
+          </div>
+          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Everything in Growth</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Marketing automations</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Review management</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Dedicated strategist</li>
+            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Priority support</li>
+          </ul>
+          <a href="mailto:hello@getsprintai.com" class="block text-center border-2 border-indigo-600 text-indigo-600 font-bold py-3 rounded-xl hover:bg-indigo-50 transition-colors">
+            Contact Us
           </a>
         </div>
 
@@ -401,99 +318,135 @@
     </div>
   </section>
 
-  <!-- ============ FAQ ============ -->
-  <section class="py-20 bg-gray-50">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6">
-      <div class="text-center mb-14">
-        <h2 class="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Frequently Asked Questions</h2>
+  <!-- FAQ -->
+  <section class="py-24 px-6 bg-gray-50">
+    <div class="max-w-3xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Common questions.</h2>
+        <p class="text-xl text-gray-500">Straight answers, no fluff.</p>
       </div>
 
-      <div class="space-y-4">
+      <div class="space-y-4" id="faq">
 
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
-            Do I have to write anything?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">Nope. You fill out a 10-minute onboarding form once — tell us your business name, services, cities you serve, and a bit about your ideal customer. After that, we handle everything.</p>
-        </details>
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
+            What kind of businesses do you work with?
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">Any local business with customers. Restaurants, salons, contractors, retailers, law firms, gyms, dental offices. If your customers search for you online, we can help you get found and stay in touch.</p>
+          </div>
+        </div>
 
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
-            What platforms do you post to?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">Facebook, Instagram, and Google Business Profile. We can add others on request. All platforms where your customers are looking for HVAC help.</p>
-        </details>
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
+            How does the AI learn about my business?
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">During onboarding we walk you through a short questionnaire about your services, pricing, hours, and common customer questions. We use that to train your AI. You can update it anytime.</p>
+          </div>
+        </div>
 
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
+            Do I need to write any content?
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">Nope. We handle all of it. Blog posts, social captions, email copy. You give us the info about your business, and we take it from there. Your voice, our execution.</p>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
             Can I review posts before they go live?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">Yes — you get a monthly approval window where you can review and approve all content. Or, set auto-publish and we handle the rest with zero effort from you.</p>
-        </details>
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">Yes. You get a shared content calendar and can approve, edit, or reject anything before it publishes. You stay in control without having to do the work.</p>
+          </div>
+        </div>
 
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
-            How fast do we get started?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">Fast. Your first content package is delivered within 5 business days of completing onboarding. Most contractors see their first posts go live within the first week.</p>
-        </details>
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
+            How fast can I get started?
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">The Starter plan is instant. Sign up, complete a short setup, and your chat is live within the hour. For Growth and Enterprise, we get you set up within a few business days after your onboarding call.</p>
+          </div>
+        </div>
 
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
-            Do you know the HVAC industry?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">We built SprintAI specifically for HVAC — not general SMBs, not restaurants, not salons. Our content library is tuned to seasonal campaigns, emergency services, maintenance plans, and home comfort topics. We speak your language.</p>
-        </details>
-
-        <details class="bg-white rounded-2xl border border-gray-100 p-6 group cursor-pointer">
-          <summary class="font-bold text-gray-900 text-lg flex items-center justify-between list-none">
-            Can I cancel?
-            <span class="text-indigo-400 group-open:rotate-45 transition-transform text-2xl leading-none">+</span>
-          </summary>
-          <p class="mt-3 text-gray-500 leading-relaxed">Yes, anytime. Month-to-month, no contracts, no cancellation fees. We think you'll stay because of results — not because we locked you in.</p>
-        </details>
+        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
+          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
+            Can I cancel anytime?
+            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
+          </button>
+          <div class="faq-content px-6">
+            <p class="pb-5 text-gray-500 text-sm">Yes. No long-term contracts, no cancellation fees. Cancel whenever you want. We're confident you'll stick around once you see results, but we're not going to trap you.</p>
+          </div>
+        </div>
 
       </div>
     </div>
   </section>
 
-  <!-- ============ FINAL CTA ============ -->
-  <section class="gradient-hero text-white py-20">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
-      <div class="text-5xl mb-6">🏆</div>
-      <h2 class="text-3xl sm:text-5xl font-extrabold mb-6 leading-tight">
-        Ready to stop losing calls to the competitor with 300 Google reviews?
+  <!-- FINAL CTA -->
+  <section class="gradient-hero py-24 px-6 text-center text-white">
+    <div class="max-w-3xl mx-auto">
+      <h2 class="text-4xl md:text-5xl font-extrabold mb-6 leading-tight">
+        Your customers are looking for you online right now.<br />
+        <span class="text-indigo-300">Let's make sure they find you.</span>
       </h2>
-      <p class="text-indigo-200 text-lg mb-10">
-        SprintAI gives you a complete, done-for-you marketing system built for HVAC contractors. No writing. No posting. No headaches.
+      <p class="text-xl text-indigo-100 mb-10">
+        Pick a plan and get started today. Or just send us a note and we'll figure out what fits.
       </p>
-      <a href="#pricing" class="inline-block bg-white text-indigo-700 font-bold text-xl px-10 py-5 rounded-2xl hover:bg-indigo-50 transition-colors shadow-xl">
-        Claim Your Founder Spot →
-      </a>
-      <p class="mt-5 text-indigo-300 text-sm">Only 3 spots remaining at the $997/mo founder rate</p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="/signup/" class="bg-white text-indigo-700 font-bold px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors text-lg">
+          Start Free Trial
+        </a>
+        <a href="mailto:hello@getsprintai.com" class="border border-white/40 text-white font-semibold px-8 py-4 rounded-xl hover:bg-white/10 transition-colors text-lg">
+          Send Us a Note
+        </a>
+      </div>
     </div>
   </section>
 
-  <!-- ============ FOOTER ============ -->
-  <footer class="bg-gray-900 text-gray-400 py-10">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 text-center">
-      <div class="flex items-center justify-center gap-2 mb-3">
-        <span class="text-xl">❄️</span>
-        <span class="text-white font-bold text-lg">SprintAI</span>
+  <!-- FOOTER -->
+  <footer class="bg-gray-900 text-gray-400 py-12 px-6">
+    <div class="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-2 text-white font-bold text-lg">
+        <span>⚡</span>
+        <span>SprintAI</span>
       </div>
-      <p class="text-sm mb-2">SprintAI © 2026 · Built for HVAC · <a href="mailto:jason@getsprintai.com" class="text-indigo-400 hover:text-indigo-300 transition-colors">jason@getsprintai.com</a></p>
-      <div class="flex justify-center gap-4 text-sm">
-        <a href="/privacy" class="text-indigo-400 hover:text-indigo-300 transition-colors">Privacy Policy</a>
-        <span class="text-gray-600">·</span>
-        <a href="/terms" class="text-indigo-400 hover:text-indigo-300 transition-colors">Terms & Conditions</a>
+      <div class="flex flex-col md:flex-row items-center gap-4 text-sm">
+        <a href="/chat/" class="hover:text-white transition-colors">Chat &amp; Text</a>
+        <a href="#services" class="hover:text-white transition-colors">Services</a>
+        <a href="#pricing" class="hover:text-white transition-colors">Pricing</a>
+        <a href="mailto:hello@getsprintai.com" class="hover:text-white transition-colors">hello@getsprintai.com</a>
       </div>
+      <div class="text-sm">&copy; 2026 SprintAI</div>
     </div>
   </footer>
+
+  <script>
+    function toggleFaq(btn) {
+      const content = btn.nextElementSibling;
+      const icon = btn.querySelector('.faq-icon');
+      const isOpen = content.classList.contains('open');
+
+      // Close all
+      document.querySelectorAll('.faq-content').forEach(el => el.classList.remove('open'));
+      document.querySelectorAll('.faq-icon').forEach(el => el.textContent = '+');
+
+      // Toggle current
+      if (!isOpen) {
+        content.classList.add('open');
+        icon.textContent = '−';
+      }
+    }
+  </script>
 
 </body>
 </html>
