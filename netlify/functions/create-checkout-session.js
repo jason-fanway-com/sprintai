@@ -5,7 +5,7 @@
  * Creates a Stripe Checkout session for the selected plan and returns the
  * hosted checkout URL. Called by checkout/index.html.
  *
- * Body: { plan: "founder" | "growth", price_id: "price_..." }
+ * Body: { plan: "starter" | "pro" | "enterprise", price_id: "price_..." }
  * Response: { url: "https://checkout.stripe.com/..." }
  */
 
@@ -40,10 +40,10 @@ exports.handler = async (event) => {
 
   const SUCCESS_URL =
     process.env.CHECKOUT_SUCCESS_URL ||
-    "https://getsprintai.com/projects/sprintai/welcome/?session_id={CHECKOUT_SESSION_ID}";
+    "https://getsprintai.com/welcome/?session_id={CHECKOUT_SESSION_ID}";
   const CANCEL_URL =
     process.env.CHECKOUT_CANCEL_URL ||
-    "https://getsprintai.com/projects/sprintai/checkout/";
+    "https://getsprintai.com/checkout/";
 
   try {
     const session = await stripe.checkout.sessions.create({
