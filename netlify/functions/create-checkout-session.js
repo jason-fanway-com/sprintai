@@ -54,7 +54,6 @@ exports.handler = async (event) => {
       cancel_url: CANCEL_URL,
       metadata: { plan: plan || "unknown" },
       billing_address_collection: "auto",
-      customer_creation: "always",
     });
 
     return {
