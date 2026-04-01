@@ -30,11 +30,13 @@
 
   <script>
     const STRIPE_PUBLISHABLE_KEY = 'pk_live_IloURZl5UMHZ1l8IrKgLDP3B';
-    const PRICE_STARTER    = 'price_1TG8GsFPm1l8Fm1TSaLhOIaL';
-    const PRICE_PRO        = 'price_1TG8GsFPm1l8Fm1T2oFHMeij';
-    const PRICE_ENTERPRISE = 'price_1TG8GtFPm1l8Fm1T1erCd7MB';
 
-    // Backend endpoint — use relative path so it routes via Netlify functions
+    // Live Stripe Price IDs (confirmed 2026-03-31)
+    const PRICE_STARTER    = 'price_1TG8GsFPm1l8Fm1TSaLhOIaL';  // $99/mo
+    const PRICE_PRO        = 'price_1TG8GsFPm1l8Fm1T2oFHMeij';  // $247/mo
+    const PRICE_ENTERPRISE = 'price_1TG8GtFPm1l8Fm1T1erCd7MB';  // $497/mo
+
+    // Backend endpoint — relative path routes via Netlify functions
     const BACKEND_URL = '';
   </script>
 
@@ -70,7 +72,7 @@
           <span class="text-white text-5xl font-bold">$99</span>
           <span class="text-slate-400 text-lg mb-1">/mo</span>
         </div>
-        <p class="text-slate-400 text-sm mt-2">Perfect for solo operators getting started</p>
+        <p class="text-slate-400 text-sm mt-2">Get in the game with consistent social presence</p>
       </div>
 
       <ul class="space-y-3 mb-8 flex-1">
@@ -86,7 +88,7 @@
                stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
           </svg>
-          Facebook, Instagram &amp; Google Business
+          Facebook &amp; Instagram
         </li>
         <li class="flex items-start gap-3 text-slate-300 text-sm">
           <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
@@ -105,25 +107,31 @@
       </ul>
 
       <button id="btn-starter"
-              class="w-full bg-brand hover:bg-blue-500 text-white font-semibold
-                     py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-        <svg class="spinner w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-        </svg>
-        <span class="btn-text">Get Started</span>
+              class="w-full bg-slate-600 hover:bg-slate-500 text-white font-semibold
+                     py-3 rounded-xl transition-colors text-sm">
+        <span class="btn-text">Get Started →</span>
+        <span class="spinner">
+          <svg class="inline w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          Processing…
+        </span>
       </button>
     </div>
 
     <!-- Pro Plan (Most Popular) -->
-    <div class="plan-card bg-slate-800 rounded-2xl p-8 flex flex-col cursor-pointer ring-2 ring-brand relative"
-         onclick="startCheckout('pro')">
-      <div class="absolute -top-4 left-1/2 -translate-x-1/2">
-        <span class="bg-brand text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wider shadow-lg">
+    <div class="plan-card bg-slate-800 rounded-2xl p-8 flex flex-col cursor-pointer
+                ring-2 ring-brand relative" onclick="startCheckout('pro')">
+      <!-- Popular badge -->
+      <div class="absolute -top-3 left-1/2 -translate-x-1/2">
+        <span class="bg-brand text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider">
           Most Popular
         </span>
       </div>
-      <div class="mb-6 mt-2">
+
+      <div class="mb-6">
         <span class="inline-block bg-blue-900 text-blue-300 text-xs font-semibold
                      px-3 py-1 rounded-full uppercase tracking-wider mb-4">
           Pro
@@ -132,7 +140,7 @@
           <span class="text-white text-5xl font-bold">$247</span>
           <span class="text-slate-400 text-lg mb-1">/mo</span>
         </div>
-        <p class="text-slate-400 text-sm mt-2">For growing contractors</p>
+        <p class="text-slate-400 text-sm mt-2">For contractors ready to dominate local search</p>
       </div>
 
       <ul class="space-y-3 mb-8 flex-1">
@@ -155,6 +163,13 @@
                stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
           </svg>
+          Google Business Profile posts
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
           Monthly performance reports
         </li>
         <li class="flex items-start gap-3 text-slate-300 text-sm">
@@ -162,18 +177,22 @@
                stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
           </svg>
-          Priority support + onboarding call
+          Priority support
         </li>
       </ul>
 
       <button id="btn-pro"
               class="w-full bg-brand hover:bg-blue-500 text-white font-semibold
-                     py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-        <svg class="spinner w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-        </svg>
-        <span class="btn-text">Get Started</span>
+                     py-3 rounded-xl transition-colors text-sm">
+        <span class="btn-text">Get Started →</span>
+        <span class="spinner">
+          <svg class="inline w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          Processing…
+        </span>
       </button>
     </div>
 
@@ -181,7 +200,7 @@
     <div class="plan-card bg-slate-800 rounded-2xl p-8 flex flex-col cursor-pointer"
          onclick="startCheckout('enterprise')">
       <div class="mb-6">
-        <span class="inline-block bg-blue-900 text-blue-300 text-xs font-semibold
+        <span class="inline-block bg-purple-900 text-purple-300 text-xs font-semibold
                      px-3 py-1 rounded-full uppercase tracking-wider mb-4">
           Enterprise
         </span>
@@ -189,7 +208,7 @@
           <span class="text-white text-5xl font-bold">$497</span>
           <span class="text-slate-400 text-lg mb-1">/mo</span>
         </div>
-        <p class="text-slate-400 text-sm mt-2">For multi-location operations</p>
+        <p class="text-slate-400 text-sm mt-2">Multi-location or agency-level coverage</p>
       </div>
 
       <ul class="space-y-3 mb-8 flex-1">
@@ -205,7 +224,14 @@
                stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
           </svg>
-          Unlimited posts
+          Unlimited posts + daily cadence
+        </li>
+        <li class="flex items-start gap-3 text-slate-300 text-sm">
+          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
+               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+          Up to 3 locations
         </li>
         <li class="flex items-start gap-3 text-slate-300 text-sm">
           <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
@@ -219,25 +245,22 @@
                stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
           </svg>
-          Custom branding &amp; strategy
-        </li>
-        <li class="flex items-start gap-3 text-slate-300 text-sm">
-          <svg class="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" fill="none"
-               stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
-          </svg>
-          Phone support
+          Onboarding call + custom strategy
         </li>
       </ul>
 
       <button id="btn-enterprise"
-              class="w-full bg-brand hover:bg-blue-500 text-white font-semibold
-                     py-3 rounded-xl transition-colors flex items-center justify-center gap-2">
-        <svg class="spinner w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-        </svg>
-        <span class="btn-text">Get Started</span>
+              class="w-full bg-purple-600 hover:bg-purple-500 text-white font-semibold
+                     py-3 rounded-xl transition-colors text-sm">
+        <span class="btn-text">Get Started →</span>
+        <span class="spinner">
+          <svg class="inline w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+          Processing…
+        </span>
       </button>
     </div>
 
@@ -248,61 +271,93 @@
     <span class="flex items-center gap-1.5">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round"
-              d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0
+                 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
       </svg>
       Secured by Stripe
     </span>
     <span class="flex items-center gap-1.5">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round"
-              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42
+                 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0
+                 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010
+                 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138
+                 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0
+                 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138
+                 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42
+                 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/>
       </svg>
       Cancel anytime
     </span>
     <span class="flex items-center gap-1.5">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round"
-              d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9
+                 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512
+                 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
       </svg>
-      No contracts
+      Questions? <a href="mailto:jason@getsprintai.com" class="text-brand hover:underline ml-1">
+        jason@getsprintai.com
+      </a>
     </span>
   </div>
 
+  <!-- Error banner (hidden by default) -->
+  <div id="error-banner"
+       class="hidden mt-6 w-full max-w-5xl bg-red-900 border border-red-700 text-red-300
+              text-sm rounded-xl px-5 py-4 text-center">
+    Something went wrong starting checkout. Please try again or email
+    <a href="mailto:jason@getsprintai.com" class="underline">jason@getsprintai.com</a>.
+  </div>
+
   <script>
+    let checkoutInProgress = false;
+
+    function getPriceId(plan) {
+      if (plan === 'starter')    return PRICE_STARTER;
+      if (plan === 'pro')        return PRICE_PRO;
+      if (plan === 'enterprise') return PRICE_ENTERPRISE;
+      return null;
+    }
+
     async function startCheckout(plan) {
-      const priceMap = {
-        starter:    PRICE_STARTER,
-        pro:        PRICE_PRO,
-        enterprise: PRICE_ENTERPRISE
-      };
-      const priceId = priceMap[plan];
-      if (!priceId) { alert('Unknown plan'); return; }
+      if (checkoutInProgress) return;
+      checkoutInProgress = true;
 
       const btn = document.getElementById('btn-' + plan);
       btn.classList.add('loading');
-      btn.disabled = true;
+      document.getElementById('error-banner').classList.add('hidden');
+
+      const priceId = getPriceId(plan);
+      if (!priceId) {
+        document.getElementById('error-banner').classList.remove('hidden');
+        btn.classList.remove('loading');
+        checkoutInProgress = false;
+        return;
+      }
 
       try {
-        const res = await fetch(
-          (BACKEND_URL || '') + '/.netlify/functions/create-checkout-session',
-          {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ plan, price_id: priceId }),
-          }
-        );
+        const resp = await fetch(BACKEND_URL + '/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan, price_id: priceId }),
+        });
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || 'Server error ' + res.status);
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+
+        const data = await resp.json();
+
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error('No redirect URL returned');
         }
-
-        const { url } = await res.json();
-        window.location.href = url;
       } catch (err) {
-        alert('Checkout error: ' + err.message);
+        console.error('Checkout error:', err);
+        document.getElementById('error-banner').classList.remove('hidden');
         btn.classList.remove('loading');
-        btn.disabled = false;
+        checkoutInProgress = false;
       }
     }
   </script>
