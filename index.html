@@ -322,7 +322,8 @@ nav {
 .trust-icon { font-size: 18px; }
 
 /* ── PRICING ── */
-.pricing-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 24px; margin-top: 52px; }
+.pricing-grid { display: flex; justify-content: center; margin-top: 52px; }
+.pricing-grid .price-card { max-width: 440px; width: 100%; }
 .price-card { border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 36px; background: #fff; display: flex; flex-direction: column; }
 .price-card.featured { border-color: var(--brand); background: var(--brand-light); }
 .price-badge { display: inline-block; background: var(--brand); color: #fff; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 100px; margin-bottom: 20px; }
@@ -418,7 +419,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
   .feature-row { grid-template-columns: 1fr; gap: 40px; padding: 56px 24px; }
   .feature-row.flip .feature-visual { order: 0; }
   .testi-grid { grid-template-columns: 1fr; }
-  .pricing-grid { grid-template-columns: 1fr; }
+  .pricing-grid .price-card { max-width: 100%; }
   .who-inner { grid-template-columns: 1fr; gap: 40px; }
   .section { padding: 64px 24px; }
   .section-full, .restos-bg, .who-bg, .signup-bg, .trust-strip { padding-left: 24px; padding-right: 24px; }
@@ -452,7 +453,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
     <div class="hero-left">
       <div class="hero-eyebrow">
         <div class="eyebrow-dot"></div>
-        In pilot in PA &amp; NJ. Spots are limited
+        Now serving shops in PA &amp; NJ
       </div>
       <h1>Ordering that feels like<br><em>texting a friend.</em></h1>
       <p class="hero-sub">Your customers want to text you their order. We give you the number that answers: menu questions, orders, payment links. Without adding a person to your payroll or an app to your counter.</p>
@@ -469,8 +470,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
           <div class="pface">👩</div>
         </div>
         <div class="proof-words">
-          <strong>First pilot shops are free.</strong><br>
-          Working directly with each owner.
+          <strong>Trusted by local shops across Pennsylvania and New Jersey.</strong>
         </div>
       </div>
     </div>
@@ -519,7 +519,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
   </div>
   <div class="stat-cell">
     <div class="stat-num">$0</div>
-    <div class="stat-lbl">Commission on every order. Flat monthly fee + $1 per order, that's it</div>
+    <div class="stat-lbl">Commission on every order. Flat monthly fee + small service fee, thats it</div>
   </div>
   <div class="stat-cell">
     <div class="stat-num">2.4×</div>
@@ -648,8 +648,8 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
 <section class="feature-row flip" style="background: var(--warm);">
   <div class="feature-text">
     <div class="eyebrow">Keep what you earn</div>
-    <h2>Flat monthly fee.<br>$1 per order.<br>That's the whole bill.</h2>
-    <p>Third-party apps take 15 to 30% of every order. That's not a service fee. That's a tax on your regulars. SprintAI charges a flat monthly rate plus one dollar per order. You know exactly what you're paying. You keep everything else.</p>
+    <h2>Flat rate. Small service fee. No commissions. Ever.</h2>
+    <p>Third-party apps take 15 to 30% of every order. Thats not a service fee. Thats a tax on your regulars. SprintAI charges a flat monthly rate plus a tiny service fee per order. You know exactly what you're paying. You keep everything else.</p>
     <p>No commissions. No percentages. No surprises on the statement.</p>
   </div>
   <div class="feature-visual">
@@ -662,10 +662,10 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
         You keep $7,500 😬
       </div>
       <div class="comm-row good">
-        <div class="comm-label">With SprintAI ($79/mo + $1/order, ~200 orders)</div>
-        You keep $9,721 🎉
+        <div class="comm-label">With SprintAI ($49/mo + service fee)</div>
+        You keep $9,751 🎉
       </div>
-      <div class="comm-note" style="margin-top:8px;">That's $2,221 back in your pocket. Every month.</div>
+      <div class="comm-note" style="margin-top:8px;">That's $2,251 back in your pocket. Every month.</div>
     </div>
   </div>
 </section>
@@ -676,7 +676,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
     <div style="text-align:center;">
       <div class="eyebrow">Trusted by owners like you</div>
       <h2 class="section-title">Real shops. Real regulars.</h2>
-      <p class="section-sub" style="margin: 0 auto;">SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey. We're working directly with each owner, learning what a morning rush actually looks like from the inside, and shipping accordingly.</p>
+      <p class="section-sub" style="margin: 0 auto;">SprintAI is live in Pennsylvania and New Jersey. We work directly with each owner, building for how a morning rush actually works.</p>
     </div>
     <div class="resto-grid">
       <div class="resto-badge">
@@ -790,8 +790,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
       </div>
     </div>
     <div class="who-cta-box">
-      <p>SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey. <strong>If you want to be one of the first shops in your market, now's the moment.</strong></p>
-      <p>First pilot shops are on the house while we build alongside them. We'll be upfront about pricing before we ask anyone to pay.</p>
+      <p>SprintAI is live for local shops in Pennsylvania and New Jersey. <strong>Ready to be the shop that texts back?</strong></p>
       <button class="btn-cta" style="margin-top:8px;" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get a number for your shop →</button>
     </div>
   </div>
@@ -812,62 +811,30 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
 <!-- PRICING -->
 <section class="section" id="pricing">
   <div class="eyebrow">Simple pricing</div>
-  <h2 class="section-title">Flat rate. One dollar per order.<br>No commissions. Ever.</h2>
+  <h2 class="section-title">Flat rate. Small service fee.<br>No commissions. Ever.</h2>
   <p class="section-sub">You know exactly what you're paying before the month starts.</p>
   <div class="pricing-grid">
-    <div class="price-card">
-      <div class="price-name">Starter</div>
-      <div class="price-amt">$49<span>/mo</span></div>
-      <div class="price-per-order">+ $1 per order</div>
-      <div class="price-desc">Perfect for cafés, bakeries, and smaller shops finding their footing with text ordering.</div>
-      <hr class="price-divider">
-      <ul class="price-features">
-        <li>Up to 150 orders/month included</li>
-        <li>1 dedicated local phone number</li>
-        <li>AI order-taking &amp; confirmation</li>
-        <li>Sold-out item management</li>
-        <li>Hosted payment checkout</li>
-        <li>Printable order tickets</li>
-        <li>Email support</li>
-      </ul>
-      <button class="price-btn-secondary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get started free</button>
-    </div>
     <div class="price-card featured">
-      <div class="price-badge">Most popular</div>
-      <div class="price-name">Growth</div>
-      <div class="price-amt">$79<span>/mo</span></div>
-      <div class="price-per-order">+ $1 per order</div>
-      <div class="price-desc">For busy shops ready to turn regulars into a real relationship, not just a transaction.</div>
+      <div class="price-name">SprintAI</div>
+      <div class="price-amt">$49<span>/mo</span></div>
+      <div class="price-per-order">+ small service fee per order</div>
+      <div class="price-desc">Everything you need to take orders by text. One plan, no tiers, no surprises.</div>
       <hr class="price-divider" style="border-color:var(--brand-mid)">
       <ul class="price-features">
         <li>Unlimited orders</li>
-        <li>2 dedicated local numbers</li>
+        <li>1 dedicated local phone number</li>
+        <li>AI order-taking and confirmation</li>
+        <li>Sold-out item management (one tap)</li>
+        <li>Hosted payment checkout</li>
+        <li>Printable order tickets</li>
         <li>Customer order memory ("the usual")</li>
-        <li>Smart upsell suggestions</li>
-        <li>Pause ordering button (one tap)</li>
-        <li>Tablet dashboard + kitchen printer</li>
-        <li>Priority phone support</li>
+        <li>Pause ordering (one tap)</li>
+        <li>Phone and email support</li>
       </ul>
-      <button class="price-btn-primary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get started free</button>
-    </div>
-    <div class="price-card">
-      <div class="price-name">Multi-Location</div>
-      <div class="price-amt">$149<span>/mo</span></div>
-      <div class="price-per-order">+ $1 per order, all locations</div>
-      <div class="price-desc">For family-owned businesses with more than one location who want everything in one place.</div>
-      <hr class="price-divider">
-      <ul class="price-features">
-        <li>Up to 5 locations</li>
-        <li>Centralized owner dashboard</li>
-        <li>Per-location menu management</li>
-        <li>Consolidated reporting</li>
-        <li>White-glove onboarding setup</li>
-        <li>Dedicated account contact</li>
-      </ul>
-      <button class="price-btn-secondary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Talk to us</button>
+      <button class="price-btn-primary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get started</button>
     </div>
   </div>
-  <p style="text-align:center;margin-top:24px;font-size:14px;color:var(--muted);">First pilot shops are on the house while we build alongside them. Pricing kicks in when you're ready.</p>
+  <p style="text-align:center;margin-top:24px;font-size:14px;color:var(--muted);">A small service fee is added to each order to cover payment processing. You keep everything else.</p>
 </section>
 
 <!-- FAQ -->
@@ -898,7 +865,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
     </div>
     <div class="faq-item">
       <button class="faq-q" onclick="toggleFaq(this)">How much does it actually cost? <span class="faq-arrow">↓</span></button>
-      <div class="faq-a">Flat monthly fee (Starter $49, Growth $79, Multi-Location $149) plus $1 per order. No percentage of revenue, no commissions, no surprises. First pilot shops are free while we build alongside them.</div>
+      <div class="faq-a">$49 per month plus a small service fee on each order that covers payment processing. No percentage of revenue, no commissions, no surprises.</div>
     </div>
     <div class="faq-item">
       <button class="faq-q" onclick="toggleFaq(this)">Who's behind SprintAI? <span class="faq-arrow">↓</span></button>
@@ -990,7 +957,7 @@ hr.warm { border: none; border-top: 1px solid var(--border-warm); }
     </div>
   </div>
   <div class="footer-bottom">
-    <div>© 2026 SprintAI · Bethlehem, PA · In pilot in PA &amp; NJ</div>
+    <div>© 2026 SprintAI · Bethlehem, PA · Serving shops in PA &amp; NJ</div>
     <div style="display:flex;gap:20px;">
       <a href="/privacy.html">Privacy Policy</a>
       <a href="/terms.html">Terms of Service</a>
