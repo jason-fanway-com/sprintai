@@ -3,449 +3,768 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SprintAI | Digital Experiences for Local Businesses</title>
-  <meta name="description" content="SprintAI handles your digital presence so you can focus on your business. AI chat, social media, blogging, and marketing automations. All done for you." />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            indigo: {
-              50: '#eef2ff',
-              100: '#e0e7ff',
-              200: '#c7d2fe',
-              400: '#818cf8',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca',
-              800: '#3730a3',
-              900: '#312e81',
-            }
-          }
-        }
-      }
-    }
-  </script>
+  <title>SprintAI - Ordering that feels like texting a friend</title>
+  <meta name="description" content="SprintAI gives small shops a dedicated text-ordering number their customers will actually use. Ordering that feels like texting a friend." />
+  <meta property="og:title" content="SprintAI - Ordering that feels like texting a friend" />
+  <meta property="og:description" content="A text-ordering line for small shops. Your customers want to text you their order." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://getsprintai.com" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SprintAI - Ordering that feels like texting a friend" />
+  <meta name="twitter:description" content="A text-ordering line for small shops. Your customers want to text you their order." />
+
   <style>
-    html { scroll-behavior: smooth; }
-    .gradient-hero {
-      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
     }
-    .card-glow {
-      box-shadow: 0 0 0 1px rgba(99,102,241,0.2), 0 4px 24px rgba(99,102,241,0.15);
+
+    html {
+      scroll-behavior: smooth;
     }
-    .pulse-badge {
-      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      background-color: #0a0a0f;
+      color: #ffffff;
+      line-height: 1.6;
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: .6; }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 20px;
     }
-    .step-line::after {
-      content: '';
+
+    /* Header / Nav */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background-color: rgba(10, 10, 15, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 16px 0;
+    }
+
+    header .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-weight: 700;
+      font-size: 20px;
+      color: #ffffff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    nav {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    nav a {
+      color: rgba(255, 255, 255, 0.7);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    nav a:hover {
+      color: #ff6b35;
+    }
+
+    .cta-primary {
+      background-color: #ff6b35;
+      color: #ffffff;
+      padding: 10px 24px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: background-color 0.2s;
+      border: none;
+      cursor: pointer;
+      display: inline-block;
+    }
+
+    .cta-primary:hover {
+      background-color: #ff5a1f;
+    }
+
+    .cta-secondary {
+      background-color: transparent;
+      color: #ffffff;
+      padding: 10px 24px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      transition: all 0.2s;
+      cursor: pointer;
+      display: inline-block;
+    }
+
+    .cta-secondary:hover {
+      border-color: #ff6b35;
+      color: #ff6b35;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 80px 20px;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: 52px;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 24px;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero p {
+      font-size: 18px;
+      color: rgba(255, 255, 255, 0.85);
+      max-width: 600px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* Sub-hero / Three-line pitch */
+    .subhero {
+      padding: 60px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      background-color: rgba(255, 107, 53, 0.02);
+    }
+
+    .subhero .container {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 40px;
+    }
+
+    .pitch-item h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #ff6b35;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .pitch-item p {
+      font-size: 15px;
+      line-height: 1.7;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Section */
+    section {
+      padding: 60px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    section h2 {
+      font-size: 36px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    /* How it works */
+    .how-it-works {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 32px;
+    }
+
+    .step {
+      position: relative;
+    }
+
+    .step-number {
+      font-size: 48px;
+      font-weight: 700;
+      color: #ff6b35;
+      margin-bottom: 16px;
+    }
+
+    .step h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .step p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.75);
+      line-height: 1.6;
+    }
+
+    /* What makes this different */
+    .differences {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 32px;
+    }
+
+    .diff-card {
+      padding: 32px 24px;
+      border: 1px solid rgba(255, 107, 53, 0.3);
+      border-radius: 8px;
+      background-color: rgba(255, 107, 53, 0.05);
+      transition: all 0.2s;
+    }
+
+    .diff-card:hover {
+      border-color: #ff6b35;
+      background-color: rgba(255, 107, 53, 0.1);
+    }
+
+    .diff-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #ffffff;
+    }
+
+    .diff-card p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.75);
+      line-height: 1.6;
+    }
+
+    /* Who this is for */
+    .who-section {
+      max-width: 700px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .who-list {
+      text-align: left;
+      display: grid;
+      gap: 20px;
+      margin: 32px 0;
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .who-list li {
+      list-style: none;
+      padding-left: 32px;
+      position: relative;
+      line-height: 1.6;
+    }
+
+    .who-list li:before {
+      content: '✓';
       position: absolute;
-      top: 2rem;
-      left: calc(50% + 2rem);
-      right: calc(-50% + 2rem);
-      height: 2px;
-      background: linear-gradient(90deg, #6366f1, #c7d2fe);
+      left: 0;
+      color: #ff6b35;
+      font-weight: 700;
+      font-size: 18px;
     }
-    @media (max-width: 768px) {
-      .step-line::after { display: none; }
+
+    .who-closing {
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 40px;
+      color: rgba(255, 255, 255, 0.9);
     }
-    .faq-content {
+
+    /* Shops section */
+    .shops-section {
+      max-width: 700px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .shops-section h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: #ffffff;
+    }
+
+    .shops-section p {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.8);
+      line-height: 1.7;
+      margin-bottom: 24px;
+    }
+
+    /* FAQ */
+    .faq-list {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .faq-item {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 24px 0;
+    }
+
+    .faq-question {
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #ffffff;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: color 0.2s;
+    }
+
+    .faq-question:hover {
+      color: #ff6b35;
+    }
+
+    .faq-toggle {
+      font-size: 20px;
+      color: #ff6b35;
+      transition: transform 0.2s;
+    }
+
+    .faq-toggle.open {
+      transform: rotate(180deg);
+    }
+
+    .faq-answer {
       max-height: 0;
       overflow: hidden;
       transition: max-height 0.3s ease;
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 14px;
+      line-height: 1.7;
+      margin-top: 0;
     }
-    .faq-content.open {
-      max-height: 200px;
+
+    .faq-answer.open {
+      max-height: 500px;
+      margin-top: 16px;
+    }
+
+    /* Closing CTA */
+    .closing-cta {
+      text-align: center;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .closing-cta h2 {
+      margin-bottom: 24px;
+    }
+
+    .closing-cta p {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.8);
+      margin-bottom: 32px;
+      line-height: 1.7;
+    }
+
+    .closing-ctas {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 40px 20px;
+      background-color: rgba(255, 107, 53, 0.01);
+    }
+
+    footer .container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 40px;
+      text-align: center;
+    }
+
+    footer h4 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    footer a {
+      display: block;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.6);
+      text-decoration: none;
+      margin-bottom: 8px;
+      transition: color 0.2s;
+    }
+
+    footer a:hover {
+      color: #ff6b35;
+    }
+
+    .footer-bottom {
+      text-align: center;
+      padding-top: 32px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: 32px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      nav {
+        gap: 16px;
+      }
+
+      .hero h1 {
+        font-size: 36px;
+      }
+
+      .hero p {
+        font-size: 16px;
+      }
+
+      section h2 {
+        font-size: 28px;
+        margin-bottom: 32px;
+      }
+
+      .subhero .container {
+        grid-template-columns: 1fr;
+        gap: 32px;
+      }
+
+      .how-it-works {
+        grid-template-columns: 1fr;
+      }
+
+      .differences {
+        grid-template-columns: 1fr;
+      }
+
+      .step-number {
+        font-size: 36px;
+      }
+
+      footer .container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      header .container {
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      nav {
+        width: 100%;
+        justify-content: space-between;
+        font-size: 12px;
+      }
+
+      .hero {
+        padding: 60px 20px;
+      }
+
+      .hero h1 {
+        font-size: 28px;
+        margin-bottom: 16px;
+      }
+
+      .hero p {
+        font-size: 15px;
+        margin-bottom: 24px;
+      }
+
+      .hero-ctas {
+        gap: 12px;
+      }
+
+      .cta-primary,
+      .cta-secondary {
+        padding: 12px 20px;
+        font-size: 13px;
+        width: 100%;
+      }
     }
   </style>
 </head>
-<body class="bg-white text-gray-900 font-sans antialiased">
+<body>
 
-  <!-- NAV -->
-  <nav class="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-sm border-b border-gray-100">
-    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-      <a href="/" class="flex items-center gap-2 font-bold text-xl text-indigo-600">
-        <span>⚡</span>
-        <span>SprintAI</span>
-      </a>
-      <div class="hidden md:flex items-center gap-8 text-sm font-medium text-gray-600">
-        <a href="/chat/" class="hover:text-indigo-600 transition-colors">Chat &amp; Text</a>
-        <a href="#services" class="hover:text-indigo-600 transition-colors">Services</a>
-        <a href="#pricing" class="hover:text-indigo-600 transition-colors">Pricing</a>
-      </div>
-      <a href="#pricing" class="bg-indigo-600 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
-        Start Free Trial
-      </a>
+  <!-- Header -->
+  <header>
+    <div class="container">
+      <a href="/" class="logo">SprintAI</a>
+      <nav>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
+        <a href="/signup/" class="cta-primary">Get started</a>
+      </nav>
     </div>
-  </nav>
+  </header>
 
-  <!-- HERO -->
-  <section class="gradient-hero pt-32 pb-24 px-6 text-center text-white">
-    <div class="max-w-4xl mx-auto">
-      <div class="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 text-sm font-medium mb-8">
-        <span class="pulse-badge w-2 h-2 rounded-full bg-green-400 inline-block"></span>
-        Digital presence, handled.
-      </div>
-      <h1 class="text-5xl md:text-6xl font-extrabold leading-tight mb-6">
-        Closer to your customers.<br />
-        <span class="text-indigo-300">Every single day.</span>
-      </h1>
-      <p class="text-xl text-indigo-100 max-w-2xl mx-auto mb-10">
-        AI-powered chat, social media, blogging, and marketing automations. All done for you, so you can focus on running your business.
-      </p>
-      <div class="flex flex-col sm:flex-row gap-4 justify-center">
-        <a href="#pricing" class="bg-white text-indigo-700 font-bold px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors text-lg">
-          Start Your Free Trial
-        </a>
-        <a href="#services" class="border border-white/40 text-white font-semibold px-8 py-4 rounded-xl hover:bg-white/10 transition-colors text-lg">
-          See What We Can Do
-        </a>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <h1>Ordering that feels like texting a friend.</h1>
+      <p>Your customers want to text you their order. We give you the number that answers — menu questions, orders, payment links — without adding a person to your payroll or an app to your counter.</p>
+      <div class="hero-ctas">
+        <a href="/signup/" class="cta-primary">Get a number for your shop</a>
+        <a href="#how" class="cta-secondary">See how it works</a>
       </div>
     </div>
   </section>
 
-  <!-- STATS BAR -->
-  <section class="bg-indigo-900 py-12 px-6">
-    <div class="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center text-white">
-      <div>
-        <div class="text-4xl font-extrabold text-indigo-300 mb-1">98%</div>
-        <div class="text-sm text-indigo-200">SMS open rate</div>
+  <!-- Sub-hero: Three-line pitch -->
+  <section class="subhero">
+    <div class="container">
+      <div class="pitch-item">
+        <h3>Your customers already text everyone else.</h3>
+        <p>Their kids, their doctor, their dog walker. Calling a shop during a rush is the last thing they want to do. Give them a number they'd rather use, and they'll use it every week.</p>
       </div>
-      <div>
-        <div class="text-4xl font-extrabold text-indigo-300 mb-1">+23%</div>
-        <div class="text-sm text-indigo-200">conversion boost from chat</div>
+      <div class="pitch-item">
+        <h3>You own the relationship, not a middleman.</h3>
+        <p>The number is yours. The phone list is yours. When you want to let regulars know you just pulled pumpkin cream cheese out of the case, it's a text — not a $1.40-per-click ad.</p>
       </div>
-      <div>
-        <div class="text-4xl font-extrabold text-indigo-300 mb-1">78%</div>
-        <div class="text-sm text-indigo-200">of customers buy from the first to respond</div>
-      </div>
-      <div>
-        <div class="text-4xl font-extrabold text-indigo-300 mb-1">5.89x</div>
-        <div class="text-sm text-indigo-200">more likely to hit marketing goals with SMS</div>
+      <div class="pitch-item">
+        <h3>Orders come in the way you can actually handle them.</h3>
+        <p>A clean printable ticket. A running list on a tablet. The morning rush doesn't stop for the phone ringing.</p>
       </div>
     </div>
   </section>
 
-  <!-- SERVICES -->
-  <section id="services" class="py-24 px-6 bg-gray-50">
-    <div class="max-w-6xl mx-auto">
-      <div class="text-center mb-16">
-        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Everything your digital presence needs.</h2>
-        <p class="text-xl text-gray-500 max-w-2xl mx-auto">Four services. One platform. Zero stress.</p>
-      </div>
-      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-
-        <!-- AI Chat & Text -->
-        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
-          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">💬</div>
-          <h3 class="text-xl font-bold mb-3">AI Chat &amp; Text</h3>
-          <p class="text-gray-500 text-sm leading-relaxed flex-1">A chatbot on your website and AI-powered SMS, both trained on your business. Available 24/7. Answers questions, captures leads, and follows up automatically.</p>
-          <a href="/chat/" class="mt-6 text-indigo-600 font-semibold text-sm hover:underline">Learn more →</a>
+  <!-- How it works -->
+  <section id="how">
+    <div class="container">
+      <h2>How it works</h2>
+      <div class="how-it-works">
+        <div class="step">
+          <div class="step-number">1</div>
+          <h3>We set up a new number for your shop.</h3>
+          <p>You keep your existing business line for whatever you use it for today. SprintAI adds a dedicated text-ordering number that goes on your receipts, your window, your Instagram bio, your website.</p>
         </div>
-
-        <!-- Social Media -->
-        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
-          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">📱</div>
-          <h3 class="text-xl font-bold mb-3">Social Media</h3>
-          <p class="text-gray-500 text-sm leading-relaxed flex-1">Done-for-you posting across Facebook, Instagram, Google Business, and LinkedIn. Content calendar, scheduling, and reporting. You don't write a word.</p>
+        <div class="step">
+          <div class="step-number">2</div>
+          <h3>Your customers text it like they'd text anyone.</h3>
+          <p><em>"Hey can I get a dozen mixed bagels and 2 plain cream cheeses, ready in 20?"</em> The system understands it, confirms the order, sends a payment link.</p>
         </div>
-
-        <!-- Blogging & SEO -->
-        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
-          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">✍️</div>
-          <h3 class="text-xl font-bold mb-3">Blogging &amp; SEO</h3>
-          <p class="text-gray-500 text-sm leading-relaxed flex-1">SEO-optimized articles that bring customers to you from Google. Keyword research, content creation, and publishing. Organic traffic that compounds over time.</p>
+        <div class="step">
+          <div class="step-number">3</div>
+          <h3>You get the ticket. They pick up.</h3>
+          <p>Orders arrive as structured tickets you can print or read off a tablet. Payment's already handled. Your staff makes the order, the customer walks in, done.</p>
         </div>
-
-        <!-- Marketing Automations -->
-        <div class="bg-white rounded-2xl p-8 card-glow flex flex-col">
-          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl mb-6">⚙️</div>
-          <h3 class="text-xl font-bold mb-3">Marketing Automations</h3>
-          <p class="text-gray-500 text-sm leading-relaxed flex-1">Review responses, email sequences, follow-up campaigns, lead nurturing. Set it up once and it runs. Your best customers will feel like you never forget them.</p>
-        </div>
-
-      </div>
-    </div>
-  </section>
-
-  <!-- WHO WE WORK WITH -->
-  <section class="py-24 px-6 bg-white">
-    <div class="max-w-5xl mx-auto text-center">
-      <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Built for businesses like yours.</h2>
-      <p class="text-xl text-gray-500 mb-16">If you have customers, we can help you reach them.</p>
-      <div class="grid grid-cols-2 md:grid-cols-3 gap-6">
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">🍽️</div>
-          <div class="font-semibold text-gray-900">Restaurants</div>
-          <div class="text-sm text-gray-500 mt-1">Cafes, bars, bakeries</div>
-        </div>
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">💇</div>
-          <div class="font-semibold text-gray-900">Salons &amp; Spas</div>
-          <div class="text-sm text-gray-500 mt-1">Hair, nails, massage, esthetics</div>
-        </div>
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">🔧</div>
-          <div class="font-semibold text-gray-900">Home Services</div>
-          <div class="text-sm text-gray-500 mt-1">Plumbers, electricians, cleaners</div>
-        </div>
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">🛍️</div>
-          <div class="font-semibold text-gray-900">Retail</div>
-          <div class="text-sm text-gray-500 mt-1">Boutiques, specialty shops</div>
-        </div>
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">💼</div>
-          <div class="font-semibold text-gray-900">Professional Services</div>
-          <div class="text-sm text-gray-500 mt-1">Lawyers, accountants, consultants</div>
-        </div>
-        <div class="bg-gray-50 rounded-2xl p-8 text-center hover:bg-indigo-50 transition-colors">
-          <div class="text-4xl mb-3">🏃</div>
-          <div class="font-semibold text-gray-900">Health &amp; Wellness</div>
-          <div class="text-sm text-gray-500 mt-1">Gyms, trainers, chiropractors</div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <h3>You're in their phone now.</h3>
+          <p>The first order is the hard one. After that, your shop is a contact in their phone. They'll text you for lunch on Tuesday and breakfast on Saturday because it's the easiest thing they can do.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- HOW IT WORKS -->
-  <section class="py-24 px-6 bg-indigo-50">
-    <div class="max-w-5xl mx-auto">
-      <div class="text-center mb-16">
-        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Up and running in days, not months.</h2>
-        <p class="text-xl text-gray-500">Three steps. That's it.</p>
-      </div>
-      <div class="grid md:grid-cols-3 gap-10 relative">
-
-        <div class="relative step-line text-center">
-          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">1</div>
-          <h3 class="text-xl font-bold mb-3">Tell us about your business</h3>
-          <p class="text-gray-500 text-sm">10-minute onboarding call. You tell us what you do, who your customers are, and what matters most to you.</p>
+  <!-- What makes this different -->
+  <section>
+    <div class="container">
+      <h2>What makes this different</h2>
+      <div class="differences">
+        <div class="diff-card">
+          <h3>A number. Not an app.</h3>
+          <p>Customers don't download anything. They don't make an account. They don't remember a password. They text a number. That's the whole experience.</p>
         </div>
-
-        <div class="relative step-line text-center">
-          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">2</div>
-          <h3 class="text-xl font-bold mb-3">We build your digital presence</h3>
-          <p class="text-gray-500 text-sm">We set up your chat, social accounts, blog, and automations. Trained on your business, matched to your voice.</p>
+        <div class="diff-card">
+          <h3>Sold-out handling that actually works.</h3>
+          <p>Run out of everything bagels? One tap marks it sold out. The system stops offering it immediately. No more calling customers back to tell them their order isn't happening.</p>
         </div>
-
-        <div class="text-center">
-          <div class="w-16 h-16 bg-indigo-600 text-white rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-6">3</div>
-          <h3 class="text-xl font-bold mb-3">We bring customers to you</h3>
-          <p class="text-gray-500 text-sm">Sit back while your digital presence works. Leads come in. Customers get answers. You stay busy doing what you're good at.</p>
+        <div class="diff-card">
+          <h3>Your payments, your books.</h3>
+          <p>Payment links go through a hosted checkout. The money goes to your account. No new merchant processor, no new point of sale, no change to how your bookkeeper closes out the day.</p>
         </div>
-
+        <div class="diff-card">
+          <h3>The customer list belongs to you.</h3>
+          <p>Every number that texts your shop becomes a customer you can reach directly — on your terms, on your schedule. Not locked inside a marketplace app.</p>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- PRICING -->
-  <section id="pricing" class="py-24 px-6 bg-white">
-    <div class="max-w-5xl mx-auto">
-      <div class="text-center mb-16">
-        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Simple, honest pricing.</h2>
-        <p class="text-xl text-gray-500">Start small, scale when you're ready.</p>
+  <!-- Who this is for -->
+  <section>
+    <div class="container">
+      <div class="who-section">
+        <h2>Who this is for</h2>
+        <p>You probably run a shop where:</p>
+        <ul class="who-list">
+          <li>Customers call to order, and the phone rings during the rush.</li>
+          <li>You've tried online ordering and had to call people back when something was sold out.</li>
+          <li>Every delivery app takes a cut that makes you wonder why you bothered.</li>
+          <li>Your regulars know your name, and you'd like to know theirs.</li>
+        </ul>
+        <p class="who-closing">If any of that lands, we should talk.</p>
       </div>
-      <div class="grid md:grid-cols-3 gap-8 items-stretch">
+    </div>
+  </section>
 
-        <!-- Starter -->
-        <div class="border border-gray-200 rounded-2xl p-8 flex flex-col">
-          <div class="mb-6">
-            <div class="flex items-center gap-2 mb-2">
-              <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide">Starter</div>
-              <span class="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">30-day free trial</span>
-            </div>
-            <div class="text-4xl font-extrabold text-gray-900 mb-1">$99<span class="text-lg font-normal text-gray-400">/mo</span></div>
-            <div class="text-sm text-gray-500">No charge for 30 days. Cancel anytime.</div>
-          </div>
-          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> AI website chatbot</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> AI-powered SMS</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Trained on your business</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> 24/7 availability</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Lead capture and follow-up</li>
-          </ul>
-          <a href="/signup/" target="_blank" class="block text-center bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-colors">
-            Start Free Trial
-          </a>
-        </div>
-
-        <!-- Growth -->
-        <div class="border-2 border-indigo-600 rounded-2xl p-8 flex flex-col relative shadow-lg">
-          <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wide">Most Popular</div>
-          <div class="mb-6">
-            <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide mb-2">Growth</div>
-            <div class="text-4xl font-extrabold text-gray-900 mb-1">Let's talk</div>
-            <div class="text-sm text-gray-500">Custom quote for your business.</div>
-          </div>
-          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Everything in Starter</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Social media management</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Blogging &amp; SEO</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Content calendar</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Monthly performance reports</li>
-          </ul>
-          <a href="mailto:hello@getsprintai.com" class="block text-center bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-colors">
-            Book a Call
-          </a>
-        </div>
-
-        <!-- Enterprise -->
-        <div class="border border-gray-200 rounded-2xl p-8 flex flex-col">
-          <div class="mb-6">
-            <div class="text-sm font-semibold text-indigo-600 uppercase tracking-wide mb-2">Enterprise</div>
-            <div class="text-4xl font-extrabold text-gray-900 mb-1">Let's talk</div>
-            <div class="text-sm text-gray-500">For growing businesses that want it all.</div>
-          </div>
-          <ul class="space-y-3 text-sm text-gray-600 flex-1 mb-8">
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Everything in Growth</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Marketing automations</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Review management</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Dedicated strategist</li>
-            <li class="flex gap-2"><span class="text-indigo-500 font-bold">✓</span> Priority support</li>
-          </ul>
-          <a href="mailto:hello@getsprintai.com" class="block text-center border-2 border-indigo-600 text-indigo-600 font-bold py-3 rounded-xl hover:bg-indigo-50 transition-colors">
-            Contact Us
-          </a>
-        </div>
-
+  <!-- The shops we're starting with -->
+  <section>
+    <div class="container">
+      <div class="shops-section">
+        <h2>The shops we're starting with</h2>
+        <p>SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey — a bagel shop, a pizza place, and a few others we're lining up. We're working directly with each owner, learning what a morning rush actually looks like from the inside, and shipping accordingly.</p>
+        <p>If you want to be one of the first shops in your market, now's the moment.</p>
       </div>
     </div>
   </section>
 
   <!-- FAQ -->
-  <section class="py-24 px-6 bg-gray-50">
-    <div class="max-w-3xl mx-auto">
-      <div class="text-center mb-16">
-        <h2 class="text-4xl font-extrabold text-gray-900 mb-4">Common questions.</h2>
-        <p class="text-xl text-gray-500">Straight answers, no fluff.</p>
-      </div>
-
-      <div class="space-y-4" id="faq">
-
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            What kind of businesses do you work with?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">Any local business with customers. Restaurants, salons, contractors, retailers, law firms, gyms, dental offices. If your customers search for you online, we can help you get found and stay in touch.</p>
+  <section id="faq">
+    <div class="container">
+      <h2>Frequently Asked Questions</h2>
+      <div class="faq-list">
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>Will I need new hardware?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">No. A phone for the merchant dashboard and whatever you already use for tickets. That's it.</div>
         </div>
 
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            How does the AI learn about my business?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">During onboarding we walk you through a short questionnaire about your services, pricing, hours, and common customer questions. We use that to train your AI. You can update it anytime.</p>
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>Do I have to change my POS or payment processor?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">No. SprintAI sends payment links through a hosted checkout. Funds go to your account like any other online payment.</div>
         </div>
 
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            Do I need to write any content?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">Nope. We handle all of it. Blog posts, social captions, email copy. You give us the info about your business, and we take it from there. Your voice, our execution.</p>
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>What if we run out of something?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">Tap it sold out in the merchant view. The system stops offering it until the next morning, when it resets automatically. You can also text "OUT everything" from an authorized staff phone.</div>
         </div>
 
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            Can I review posts before they go live?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">Yes. You get a shared content calendar and can approve, edit, or reject anything before it publishes. You stay in control without having to do the work.</p>
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>What if something breaks mid-morning?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">There's a big red "pause ordering" button in your merchant view. One tap and new orders stop coming in until you're ready.</div>
         </div>
 
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            How fast can I get started?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">The Starter plan is instant. Sign up, complete a short setup, and your chat is live within the hour. For Growth and Enterprise, we get you set up within a few business days after your onboarding call.</p>
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>Do you deliver?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">Pickup only for now. The simplest version of the product has to be great before we add anything else.</div>
         </div>
 
-        <div class="bg-white rounded-xl overflow-hidden border border-gray-100">
-          <button onclick="toggleFaq(this)" class="w-full text-left px-6 py-5 font-semibold text-gray-900 flex justify-between items-center">
-            Can I cancel anytime?
-            <span class="text-indigo-500 font-bold text-xl faq-icon">+</span>
-          </button>
-          <div class="faq-content px-6">
-            <p class="pb-5 text-gray-500 text-sm">Yes. No long-term contracts, no cancellation fees. Cancel whenever you want. We're confident you'll stick around once you see results, but we're not going to trap you.</p>
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>How much does it cost?</span>
+            <span class="faq-toggle">+</span>
           </div>
+          <div class="faq-answer">Our first pilot shops are on the house while we build alongside them. Pricing for shop #4 and beyond is in development; we'll be upfront about it before we ask anyone to pay.</div>
         </div>
 
+        <div class="faq-item">
+          <div class="faq-question">
+            <span>Who's behind this?</span>
+            <span class="faq-toggle">+</span>
+          </div>
+          <div class="faq-answer">A small team out of the Lehigh Valley. Background in enterprise software, restaurant customer experience, and actual texting of pizza shops.</div>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- FINAL CTA -->
-  <section class="gradient-hero py-24 px-6 text-center text-white">
-    <div class="max-w-3xl mx-auto">
-      <h2 class="text-4xl md:text-5xl font-extrabold mb-6 leading-tight">
-        Your customers are looking for you online right now.<br />
-        <span class="text-indigo-300">Let's make sure they find you.</span>
-      </h2>
-      <p class="text-xl text-indigo-100 mb-10">
-        Pick a plan and get started today. Or just send us a note and we'll figure out what fits.
-      </p>
-      <div class="flex flex-col sm:flex-row gap-4 justify-center">
-        <a href="/signup/" class="bg-white text-indigo-700 font-bold px-8 py-4 rounded-xl hover:bg-indigo-50 transition-colors text-lg">
-          Start Free Trial
-        </a>
-        <a href="mailto:hello@getsprintai.com" class="border border-white/40 text-white font-semibold px-8 py-4 rounded-xl hover:bg-white/10 transition-colors text-lg">
-          Send Us a Note
-        </a>
+  <!-- Closing CTA -->
+  <section>
+    <div class="container">
+      <div class="closing-cta">
+        <h2>Get a number for your shop.</h2>
+        <p>Two minutes to tell us about your shop. A week or two to get the number approved and live. Then you're the shop that texts back.</p>
+        <div class="closing-ctas">
+          <a href="/signup/" class="cta-primary">Start here</a>
+          <a href="mailto:hello@getsprintai.com" class="cta-secondary">Email us</a>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- FOOTER -->
-  <footer class="bg-gray-900 text-gray-400 py-12 px-6">
-    <div class="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-      <div class="flex items-center gap-2 text-white font-bold text-lg">
-        <span>⚡</span>
-        <span>SprintAI</span>
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div>
+        <h4>Product</h4>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
       </div>
-      <div class="flex flex-col md:flex-row items-center gap-4 text-sm">
-        <a href="/chat/" class="hover:text-white transition-colors">Chat &amp; Text</a>
-        <a href="#services" class="hover:text-white transition-colors">Services</a>
-        <a href="#pricing" class="hover:text-white transition-colors">Pricing</a>
-        <a href="mailto:hello@getsprintai.com" class="hover:text-white transition-colors">hello@getsprintai.com</a>
+      <div>
+        <h4>Company</h4>
+        <a href="/">Home</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/terms.html">Terms</a>
       </div>
-      <div class="text-sm">&copy; 2026 SprintAI</div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:hello@getsprintai.com">Email</a>
+        <a href="/signup/">Get started</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>&copy; 2026 SprintAI. All rights reserved.</p>
     </div>
   </footer>
 
   <script>
-    function toggleFaq(btn) {
-      const content = btn.nextElementSibling;
-      const icon = btn.querySelector('.faq-icon');
-      const isOpen = content.classList.contains('open');
+    // FAQ accordion functionality
+    document.querySelectorAll('.faq-question').forEach(question => {
+      question.addEventListener('click', function() {
+        const answer = this.nextElementSibling;
+        const toggle = this.querySelector('.faq-toggle');
 
-      // Close all
-      document.querySelectorAll('.faq-content').forEach(el => el.classList.remove('open'));
-      document.querySelectorAll('.faq-icon').forEach(el => el.textContent = '+');
+        // Close all other FAQs
+        document.querySelectorAll('.faq-answer').forEach(other => {
+          if (other !== answer) {
+            other.classList.remove('open');
+            other.previousElementSibling.querySelector('.faq-toggle').classList.remove('open');
+          }
+        });
 
-      // Toggle current
-      if (!isOpen) {
-        content.classList.add('open');
-        icon.textContent = '−';
-      }
-    }
+        // Toggle current FAQ
+        answer.classList.toggle('open');
+        toggle.classList.toggle('open');
+      });
+    });
   </script>
 
 </body>

@@ -3,170 +3,241 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Privacy Policy — SprintAI</title>
-  <meta name="description" content="SprintAI Privacy Policy. Learn how we collect, use, and protect your personal information." />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            indigo: {
-              50: '#eef2ff',
-              100: '#e0e7ff',
-              200: '#c7d2fe',
-              400: '#818cf8',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca',
-              800: '#3730a3',
-              900: '#312e81',
-            }
-          }
-        }
-      }
-    }
-  </script>
+  <title>Privacy Policy - SprintAI</title>
+  <meta name="description" content="SprintAI Privacy Policy" />
+
   <style>
-    html { scroll-behavior: smooth; }
-    .gradient-hero {
-      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4338ca 100%);
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      background-color: #0a0a0f;
+      color: #ffffff;
+      line-height: 1.6;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background-color: rgba(10, 10, 15, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 16px 0;
+    }
+
+    header .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-weight: 700;
+      font-size: 20px;
+      color: #ffffff;
+      text-decoration: none;
+    }
+
+    header a {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.7);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    header a:hover {
+      color: #ff6b35;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 60px 20px;
+    }
+
+    h1 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .updated {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 40px;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-top: 48px;
+      margin-bottom: 16px;
+      color: #ff6b35;
+    }
+
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 24px;
+      margin-bottom: 12px;
+    }
+
+    p {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.85);
+      margin-bottom: 16px;
+      line-height: 1.7;
+    }
+
+    ul {
+      margin-left: 24px;
+      margin-bottom: 16px;
+    }
+
+    li {
+      margin-bottom: 12px;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    strong {
+      color: #ffffff;
+    }
+
+    .contact-info {
+      background-color: rgba(255, 107, 53, 0.05);
+      border: 1px solid rgba(255, 107, 53, 0.2);
+      border-radius: 8px;
+      padding: 24px;
+      margin-top: 32px;
+    }
+
+    footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 40px 20px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 13px;
+    }
+
+    @media (max-width: 640px) {
+      h1 {
+        font-size: 24px;
+      }
+
+      h2 {
+        font-size: 18px;
+      }
+
+      .container {
+        padding: 40px 20px;
+      }
     }
   </style>
 </head>
-<body class="bg-gray-50 text-gray-800 font-sans antialiased">
+<body>
 
-  <!-- NAV -->
-  <nav class="bg-white border-b border-gray-100 sticky top-0 z-50">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-      <a href="/" class="flex items-center gap-2">
-        <span class="text-2xl">❄️</span>
-        <span class="font-bold text-xl text-indigo-600">SprintAI</span>
-      </a>
-      <div class="flex items-center gap-3">
-        <a href="/" class="text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">Home</a>
-        <a href="/terms" class="text-sm text-gray-600 hover:text-indigo-600 font-medium transition-colors">Terms</a>
-      </div>
+  <header>
+    <div class="container">
+      <a href="/" class="logo">SprintAI</a>
+      <a href="/">← Back to home</a>
     </div>
-  </nav>
+  </header>
 
-  <!-- HEADER -->
-  <section class="gradient-hero text-white py-16">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6 text-center">
-      <h1 class="text-3xl sm:text-5xl font-extrabold mb-4">Privacy Policy</h1>
-      <p class="text-indigo-200 text-lg">Last updated: February 22, 2026</p>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: April 2026</p>
+
+    <h2>Introduction</h2>
+    <p>SprintAI ("we," "us," "our," or "Company") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our website, mobile application, and services (collectively, the "Services").</p>
+
+    <h2>Information We Collect</h2>
+    <p>We collect information you provide directly to us, such as when you sign up for our service or use our platform:</p>
+    <ul>
+      <li><strong>Shop Owner Information:</strong> Name, phone number, email address, shop name, location, and shop type</li>
+      <li><strong>Customer Information:</strong> Phone numbers and order information from text messages sent to your shop's text-ordering number</li>
+      <li><strong>Payment Information:</strong> Payment details processed through our payment processor (we do not store full payment card details)</li>
+      <li><strong>Usage Data:</strong> Information about how you use our Services, including order history and merchant dashboard activity</li>
+    </ul>
+
+    <h2>SMS and Text Messaging</h2>
+    <p>When customers text your shop's dedicated SprintAI number:</p>
+    <ul>
+      <li>We receive and process their phone numbers, text messages, and order information</li>
+      <li>We store this information securely on your behalf as the shop owner</li>
+      <li>We use this data to fulfill orders, send payment links, and deliver order confirmation messages</li>
+      <li>We do not sell, share, or use customer phone numbers for any purpose other than fulfilling their orders with your shop</li>
+      <li>Customers can opt out of future messages by replying "STOP" at any time. After opting out, we will no longer send messages to that number</li>
+    </ul>
+
+    <h2>How We Use Your Information</h2>
+    <p>We use the information we collect to:</p>
+    <ul>
+      <li>Provide, operate, and improve the SprintAI service</li>
+      <li>Process and fulfill orders placed through text</li>
+      <li>Send payment links and order confirmations</li>
+      <li>Send administrative messages and updates</li>
+      <li>Respond to your inquiries and support requests</li>
+      <li>Monitor and analyze usage and trends to improve our service</li>
+      <li>Comply with legal obligations</li>
+    </ul>
+
+    <h2>Data Security and Storage</h2>
+    <p>We implement appropriate technical and organizational security measures to protect your information against unauthorized access, alteration, disclosure, or destruction. However, no method of transmission over the internet or electronic storage is 100% secure. While we strive to protect your data, we cannot guarantee absolute security.</p>
+
+    <h2>Data Retention</h2>
+    <p>We retain customer phone numbers and order data for as long as necessary to provide our Services to you. Shop owners can request deletion of customer data at any time. Upon request or termination of service, we will delete or anonymize personal data in accordance with applicable law.</p>
+
+    <h2>Sharing of Information</h2>
+    <p>We do not sell, trade, or rent customer phone numbers or personal information to third parties. The customer information collected through your shop's text-ordering number belongs to you and is only used for:</p>
+    <ul>
+      <li>Fulfilling orders and delivering messages to your customers</li>
+      <li>Processing payments</li>
+      <li>Providing and improving our Services</li>
+      <li>Legal compliance and fraud prevention</li>
+    </ul>
+    <p>We may share information with third-party service providers who assist us in operating our Services (such as payment processors, hosting providers, and analytics services). These providers are contractually obligated to use your information only as necessary to provide services to us.</p>
+
+    <h2>Third-Party Links</h2>
+    <p>Our Services may contain links to third-party websites. We are not responsible for the privacy practices of third-party sites. We encourage you to review their privacy policies before providing any information.</p>
+
+    <h2>Children's Privacy</h2>
+    <p>Our Services are not intended for children under 13 years of age, and we do not knowingly collect information from children under 13. If we learn that we have collected personal information from a child under 13, we will delete such information promptly.</p>
+
+    <h2>Your Rights and Choices</h2>
+    <p>You have the right to:</p>
+    <ul>
+      <li>Access the personal information we hold about you</li>
+      <li>Correct inaccurate or incomplete information</li>
+      <li>Request deletion of your data</li>
+      <li>Opt out of marketing communications</li>
+      <li>Withdraw consent at any time (where applicable)</li>
+    </ul>
+    <p>To exercise these rights, please contact us using the information provided below.</p>
+
+    <h2>Changes to This Privacy Policy</h2>
+    <p>We may update this Privacy Policy from time to time. We will notify you of any material changes by posting the updated policy on our website and updating the "Last Updated" date at the top of this policy. Your continued use of our Services following such changes constitutes your acceptance of the updated Privacy Policy.</p>
+
+    <h2>Contact Us</h2>
+    <div class="contact-info">
+      <p><strong>If you have questions about this Privacy Policy or our privacy practices, please contact us at:</strong></p>
+      <p>SprintAI<br />
+      Email: <a href="mailto:hello@getsprintai.com">hello@getsprintai.com</a><br />
+      Address: Lehigh Valley, PA</p>
     </div>
-  </section>
+  </div>
 
-  <!-- CONTENT -->
-  <section class="py-16">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6">
-      <div class="bg-white rounded-2xl border border-gray-100 p-8 sm:p-12 shadow-sm space-y-8">
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Who We Are</h2>
-          <p class="text-gray-600 leading-relaxed">SprintAI is an AI-powered marketing service built for HVAC contractors. SprintAI is operated by <strong>Fanway Corp</strong>. When we say "SprintAI," "we," "us," or "our" in this policy, we're referring to SprintAI and Fanway Corp.</p>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Information We Collect</h2>
-          <p class="text-gray-600 leading-relaxed mb-3">We collect information you provide directly to us, including:</p>
-          <ul class="list-disc list-inside text-gray-600 space-y-2 ml-2">
-            <li><strong>Contact information</strong> — your name, email address, phone number, and business address</li>
-            <li><strong>Business information</strong> — company name, services offered, service areas, and other details about your HVAC business</li>
-            <li><strong>Account information</strong> — login credentials and preferences for your SprintAI portal</li>
-            <li><strong>Communication data</strong> — messages, emails, and other correspondence you send us</li>
-            <li><strong>Usage data</strong> — how you interact with our website and services, collected automatically via cookies and similar technologies</li>
-          </ul>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">How We Use Your Information</h2>
-          <p class="text-gray-600 leading-relaxed mb-3">We use the information we collect to:</p>
-          <ul class="list-disc list-inside text-gray-600 space-y-2 ml-2">
-            <li>Provide, maintain, and improve our marketing services</li>
-            <li>Create and deliver marketing content on your behalf (social media posts, blog articles, review responses)</li>
-            <li>Contact you about your account, services, and updates</li>
-            <li>Respond to your inquiries and provide customer support</li>
-            <li>Send you information about new features, promotions, or services we think may interest you</li>
-            <li>Comply with legal obligations</li>
-          </ul>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Information Sharing</h2>
-          <p class="text-gray-600 leading-relaxed"><strong>We do not sell, rent, or share your personal information with third parties for their marketing purposes.</strong></p>
-          <p class="text-gray-600 leading-relaxed mt-3">We may share your information only in the following limited circumstances:</p>
-          <ul class="list-disc list-inside text-gray-600 space-y-2 ml-2 mt-3">
-            <li><strong>Service providers</strong> — trusted third-party tools we use to deliver our services (e.g., social media platforms, email providers), who are bound by confidentiality obligations</li>
-            <li><strong>Legal requirements</strong> — when required by law, regulation, or legal process</li>
-            <li><strong>Business transfers</strong> — in connection with a merger, acquisition, or sale of assets</li>
-            <li><strong>With your consent</strong> — when you've given us explicit permission</li>
-          </ul>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">SMS / Text Messaging</h2>
-          <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-6">
-            <p class="text-gray-700 leading-relaxed">By providing your phone number, you consent to receive SMS messages from SprintAI. Message and data rates may apply. Reply <strong>STOP</strong> to opt out at any time. Reply <strong>HELP</strong> for assistance.</p>
-            <p class="text-gray-700 leading-relaxed mt-3">We will not send more than 5 SMS messages per month. Your phone number will not be shared with third parties for marketing purposes.</p>
-          </div>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Data Security</h2>
-          <p class="text-gray-600 leading-relaxed">We take reasonable measures to protect your personal information from unauthorized access, use, or disclosure. However, no method of transmission over the Internet or electronic storage is 100% secure, and we cannot guarantee absolute security.</p>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Data Retention</h2>
-          <p class="text-gray-600 leading-relaxed">We retain your personal information for as long as your account is active or as needed to provide you services. If you wish to close your account or request that we delete your data, please contact us at the email address below.</p>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Your Rights</h2>
-          <p class="text-gray-600 leading-relaxed">You have the right to:</p>
-          <ul class="list-disc list-inside text-gray-600 space-y-2 ml-2 mt-3">
-            <li>Access the personal information we hold about you</li>
-            <li>Request correction of inaccurate information</li>
-            <li>Request deletion of your personal information</li>
-            <li>Opt out of marketing communications at any time</li>
-          </ul>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Changes to This Policy</h2>
-          <p class="text-gray-600 leading-relaxed">We may update this privacy policy from time to time. We will notify you of any material changes by posting the updated policy on this page and updating the "last updated" date above.</p>
-        </div>
-
-        <div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-3">Contact Us</h2>
-          <p class="text-gray-600 leading-relaxed">If you have any questions about this privacy policy or our data practices, please contact us:</p>
-          <div class="mt-3 bg-gray-50 rounded-xl p-6">
-            <p class="text-gray-700 font-semibold">SprintAI (operated by Fanway Corp)</p>
-            <p class="text-gray-600 mt-1">Email: <a href="mailto:jason@getsprintai.com" class="text-indigo-600 hover:text-indigo-700 font-medium">jason@getsprintai.com</a></p>
-            <p class="text-gray-600 mt-1">Phone: <a href="tel:+16103792553" class="text-indigo-600 hover:text-indigo-700 font-medium">(610) 379-2553</a></p>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </section>
-
-  <!-- FOOTER -->
-  <footer class="bg-gray-900 text-gray-400 py-10">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 text-center">
-      <div class="flex items-center justify-center gap-2 mb-3">
-        <span class="text-xl">❄️</span>
-        <span class="text-white font-bold text-lg">SprintAI</span>
-      </div>
-      <p class="text-sm mb-2">SprintAI © 2026 · Built for HVAC · <a href="mailto:jason@getsprintai.com" class="text-indigo-400 hover:text-indigo-300 transition-colors">jason@getsprintai.com</a></p>
-      <div class="flex justify-center gap-4 text-sm">
-        <a href="/privacy" class="text-indigo-400 hover:text-indigo-300 transition-colors">Privacy Policy</a>
-        <span class="text-gray-600">·</span>
-        <a href="/terms" class="text-indigo-400 hover:text-indigo-300 transition-colors">Terms & Conditions</a>
-      </div>
-    </div>
+  <footer>
+    <p>&copy; 2026 SprintAI. All rights reserved.</p>
   </footer>
 
 </body>
