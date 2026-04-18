@@ -1,772 +1,1098 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SprintAI - Ordering that feels like texting a friend</title>
-  <meta name="description" content="SprintAI gives small shops a dedicated text-ordering number their customers will actually use. Ordering that feels like texting a friend." />
-  <meta property="og:title" content="SprintAI - Ordering that feels like texting a friend" />
-  <meta property="og:description" content="A text-ordering line for small shops. Your customers want to text you their order." />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://getsprintai.com" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="SprintAI - Ordering that feels like texting a friend" />
-  <meta name="twitter:description" content="A text-ordering line for small shops. Your customers want to text you their order." />
-
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html {
-      scroll-behavior: smooth;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-      background-color: #0a0a0f;
-      color: #ffffff;
-      line-height: 1.6;
-    }
-
-    .container {
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 0 20px;
-    }
-
-    /* Header / Nav */
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      background-color: rgba(10, 10, 15, 0.95);
-      backdrop-filter: blur(8px);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      padding: 16px 0;
-    }
-
-    header .container {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .logo {
-      font-weight: 700;
-      font-size: 20px;
-      color: #ffffff;
-      text-decoration: none;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    nav {
-      display: flex;
-      gap: 32px;
-      align-items: center;
-    }
-
-    nav a {
-      color: rgba(255, 255, 255, 0.7);
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 500;
-      transition: color 0.2s;
-    }
-
-    nav a:hover {
-      color: #ff6b35;
-    }
-
-    .cta-primary {
-      background-color: #ff6b35;
-      color: #ffffff;
-      padding: 10px 24px;
-      border-radius: 6px;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 14px;
-      transition: background-color 0.2s;
-      border: none;
-      cursor: pointer;
-      display: inline-block;
-    }
-
-    .cta-primary:hover {
-      background-color: #ff5a1f;
-    }
-
-    .cta-secondary {
-      background-color: transparent;
-      color: #ffffff;
-      padding: 10px 24px;
-      border-radius: 6px;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 14px;
-      border: 2px solid rgba(255, 255, 255, 0.2);
-      transition: all 0.2s;
-      cursor: pointer;
-      display: inline-block;
-    }
-
-    .cta-secondary:hover {
-      border-color: #ff6b35;
-      color: #ff6b35;
-    }
-
-    /* Hero */
-    .hero {
-      padding: 80px 20px;
-      text-align: center;
-    }
-
-    .hero h1 {
-      font-size: 52px;
-      font-weight: 700;
-      line-height: 1.2;
-      margin-bottom: 24px;
-      max-width: 700px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-
-    .hero p {
-      font-size: 18px;
-      color: rgba(255, 255, 255, 0.85);
-      max-width: 600px;
-      margin: 0 auto 40px;
-      line-height: 1.7;
-    }
-
-    .hero-ctas {
-      display: flex;
-      gap: 16px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    /* Sub-hero / Three-line pitch */
-    .subhero {
-      padding: 60px 20px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      background-color: rgba(255, 107, 53, 0.02);
-    }
-
-    .subhero .container {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 40px;
-    }
-
-    .pitch-item h3 {
-      font-size: 14px;
-      font-weight: 700;
-      color: #ff6b35;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    .pitch-item p {
-      font-size: 15px;
-      line-height: 1.7;
-      color: rgba(255, 255, 255, 0.8);
-    }
-
-    /* Section */
-    section {
-      padding: 60px 20px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    section h2 {
-      font-size: 36px;
-      font-weight: 700;
-      text-align: center;
-      margin-bottom: 48px;
-    }
-
-    /* How it works */
-    .how-it-works {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 32px;
-    }
-
-    .step {
-      position: relative;
-    }
-
-    .step-number {
-      font-size: 48px;
-      font-weight: 700;
-      color: #ff6b35;
-      margin-bottom: 16px;
-    }
-
-    .step h3 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 12px;
-    }
-
-    .step p {
-      font-size: 14px;
-      color: rgba(255, 255, 255, 0.75);
-      line-height: 1.6;
-    }
-
-    /* What makes this different */
-    .differences {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 32px;
-    }
-
-    .diff-card {
-      padding: 32px 24px;
-      border: 1px solid rgba(255, 107, 53, 0.3);
-      border-radius: 8px;
-      background-color: rgba(255, 107, 53, 0.05);
-      transition: all 0.2s;
-    }
-
-    .diff-card:hover {
-      border-color: #ff6b35;
-      background-color: rgba(255, 107, 53, 0.1);
-    }
-
-    .diff-card h3 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: #ffffff;
-    }
-
-    .diff-card p {
-      font-size: 14px;
-      color: rgba(255, 255, 255, 0.75);
-      line-height: 1.6;
-    }
-
-    /* Who this is for */
-    .who-section {
-      max-width: 700px;
-      margin: 0 auto;
-      text-align: center;
-    }
-
-    .who-list {
-      text-align: left;
-      display: grid;
-      gap: 20px;
-      margin: 32px 0;
-      font-size: 15px;
-      color: rgba(255, 255, 255, 0.85);
-    }
-
-    .who-list li {
-      list-style: none;
-      padding-left: 32px;
-      position: relative;
-      line-height: 1.6;
-    }
-
-    .who-list li:before {
-      content: '✓';
-      position: absolute;
-      left: 0;
-      color: #ff6b35;
-      font-weight: 700;
-      font-size: 18px;
-    }
-
-    .who-closing {
-      font-size: 16px;
-      font-weight: 600;
-      margin-top: 40px;
-      color: rgba(255, 255, 255, 0.9);
-    }
-
-    /* Shops section */
-    .shops-section {
-      max-width: 700px;
-      margin: 0 auto;
-      text-align: center;
-    }
-
-    .shops-section h3 {
-      font-size: 18px;
-      font-weight: 600;
-      margin-bottom: 16px;
-      color: #ffffff;
-    }
-
-    .shops-section p {
-      font-size: 15px;
-      color: rgba(255, 255, 255, 0.8);
-      line-height: 1.7;
-      margin-bottom: 24px;
-    }
-
-    /* FAQ */
-    .faq-list {
-      max-width: 700px;
-      margin: 0 auto;
-    }
-
-    .faq-item {
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      padding: 24px 0;
-    }
-
-    .faq-question {
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      color: #ffffff;
-      user-select: none;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      transition: color 0.2s;
-    }
-
-    .faq-question:hover {
-      color: #ff6b35;
-    }
-
-    .faq-toggle {
-      font-size: 20px;
-      color: #ff6b35;
-      transition: transform 0.2s;
-    }
-
-    .faq-toggle.open {
-      transform: rotate(180deg);
-    }
-
-    .faq-answer {
-      max-height: 0;
-      overflow: hidden;
-      transition: max-height 0.3s ease;
-      color: rgba(255, 255, 255, 0.75);
-      font-size: 14px;
-      line-height: 1.7;
-      margin-top: 0;
-    }
-
-    .faq-answer.open {
-      max-height: 500px;
-      margin-top: 16px;
-    }
-
-    /* Closing CTA */
-    .closing-cta {
-      text-align: center;
-      max-width: 600px;
-      margin: 0 auto;
-    }
-
-    .closing-cta h2 {
-      margin-bottom: 24px;
-    }
-
-    .closing-cta p {
-      font-size: 15px;
-      color: rgba(255, 255, 255, 0.8);
-      margin-bottom: 32px;
-      line-height: 1.7;
-    }
-
-    .closing-ctas {
-      display: flex;
-      gap: 16px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    /* Footer */
-    footer {
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      padding: 40px 20px;
-      background-color: rgba(255, 107, 53, 0.01);
-    }
-
-    footer .container {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 40px;
-      text-align: center;
-    }
-
-    footer h4 {
-      font-size: 14px;
-      font-weight: 700;
-      color: #ffffff;
-      margin-bottom: 16px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    footer a {
-      display: block;
-      font-size: 14px;
-      color: rgba(255, 255, 255, 0.6);
-      text-decoration: none;
-      margin-bottom: 8px;
-      transition: color 0.2s;
-    }
-
-    footer a:hover {
-      color: #ff6b35;
-    }
-
-    .footer-bottom {
-      text-align: center;
-      padding-top: 32px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      margin-top: 32px;
-      font-size: 13px;
-      color: rgba(255, 255, 255, 0.5);
-    }
-
-    /* Responsive */
-    @media (max-width: 768px) {
-      nav {
-        gap: 16px;
-      }
-
-      .hero h1 {
-        font-size: 36px;
-      }
-
-      .hero p {
-        font-size: 16px;
-      }
-
-      section h2 {
-        font-size: 28px;
-        margin-bottom: 32px;
-      }
-
-      .subhero .container {
-        grid-template-columns: 1fr;
-        gap: 32px;
-      }
-
-      .how-it-works {
-        grid-template-columns: 1fr;
-      }
-
-      .differences {
-        grid-template-columns: 1fr;
-      }
-
-      .step-number {
-        font-size: 36px;
-      }
-
-      footer .container {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 640px) {
-      header .container {
-        flex-direction: column;
-        gap: 12px;
-      }
-
-      nav {
-        width: 100%;
-        justify-content: space-between;
-        font-size: 12px;
-      }
-
-      .hero {
-        padding: 60px 20px;
-      }
-
-      .hero h1 {
-        font-size: 28px;
-        margin-bottom: 16px;
-      }
-
-      .hero p {
-        font-size: 15px;
-        margin-bottom: 24px;
-      }
-
-      .hero-ctas {
-        gap: 12px;
-      }
-
-      .cta-primary,
-      .cta-secondary {
-        padding: 12px 20px;
-        font-size: 13px;
-        width: 100%;
-      }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SprintAI: Ordering that feels like texting a friend.</title>
+<meta name="description" content="SprintAI gives small shops a dedicated text-ordering number their customers will actually use. Ordering that feels like texting a friend.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400;1,9..144,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --brand: #E8521A;
+  --brand-hover: #C94412;
+  --brand-light: #FEF3EE;
+  --brand-mid: #FBDACC;
+  --cream: #FFFDF9;
+  --warm: #FFF8F3;
+  --navy: #17212E;
+  --ink: #2A3540;
+  --muted: #687585;
+  --light: #96A5B4;
+  --border: #E6ECF2;
+  --border-warm: #EDE3DA;
+  --green: #16A34A;
+  --green-light: #F0FDF4;
+  --green-border: #BBF7D0;
+  --font-d: 'Fraunces', Georgia, serif;
+  --font-b: 'DM Sans', system-ui, sans-serif;
+  --r: 14px;
+  --r-sm: 8px;
+  --r-lg: 20px;
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-b); background: var(--cream); color: var(--ink); line-height: 1.6; overflow-x: hidden; }
+
+/* ── NAV ── */
+nav {
+  position: sticky; top: 0; z-index: 200;
+  background: rgba(255,253,249,0.94);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-warm);
+  padding: 0 48px; height: 66px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.logo-mark {
+  width: 36px; height: 36px; background: var(--brand);
+  border-radius: 10px; display: flex; align-items: center; justify-content: center;
+}
+.logo-mark-inner { font-size: 20px; }
+.logo-text { font-family: var(--font-d); font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.3px; }
+.nav-links { display: flex; gap: 32px; list-style: none; }
+.nav-links a { font-size: 14px; font-weight: 500; color: var(--muted); text-decoration: none; transition: color .2s; }
+.nav-links a:hover { color: var(--navy); }
+.nav-right { display: flex; align-items: center; gap: 12px; }
+.btn-nav {
+  background: var(--brand); color: #fff; border: none;
+  padding: 10px 22px; border-radius: 10px; font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: background .2s;
+}
+.btn-nav:hover { background: var(--brand-hover); }
+
+/* ── HERO ── */
+.hero {
+  max-width: 1140px; margin: 0 auto;
+  padding: 90px 48px 72px;
+  display: grid; grid-template-columns: 1fr 340px; gap: 80px; align-items: center;
+}
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--brand-light); border: 1px solid var(--brand-mid);
+  color: var(--brand); font-size: 13px; font-weight: 600;
+  padding: 5px 14px; border-radius: 100px; margin-bottom: 26px;
+}
+.eyebrow-dot { width: 7px; height: 7px; background: var(--brand); border-radius: 50%; animation: blink 2s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.hero h1 {
+  font-family: var(--font-d); font-size: 56px; font-weight: 800;
+  line-height: 1.06; color: var(--navy); margin-bottom: 22px; letter-spacing: -1.5px;
+}
+.hero h1 em { font-style: italic; color: var(--brand); font-weight: 400; }
+.hero-sub { font-size: 18px; color: var(--muted); line-height: 1.72; max-width: 480px; margin-bottom: 36px; }
+.hero-btns { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 36px; }
+.btn-cta {
+  background: var(--brand); color: #fff; border: none;
+  padding: 15px 28px; border-radius: 12px; font-size: 16px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: background .2s, transform .1s;
+}
+.btn-cta:hover { background: var(--brand-hover); }
+.btn-cta:active { transform: scale(.98); }
+.btn-ghost-lg {
+  background: #fff; color: var(--navy);
+  border: 1.5px solid var(--border); padding: 15px 28px;
+  border-radius: 12px; font-size: 16px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: border-color .2s, color .2s;
+}
+.btn-ghost-lg:hover { border-color: var(--brand); color: var(--brand); }
+.social-proof { display: flex; align-items: center; gap: 14px; }
+.proof-faces { display: flex; }
+.pface {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 2.5px solid var(--cream); margin-left: -9px;
+  font-size: 20px; display: flex; align-items: center; justify-content: center;
+  background: var(--warm);
+}
+.pface:first-child { margin-left: 0; }
+.proof-words { font-size: 14px; color: var(--muted); line-height: 1.4; }
+.proof-words strong { color: var(--navy); }
+
+/* ── PHONE ── */
+.phone-outer { display: flex; justify-content: center; align-items: center; }
+.phone-frame {
+  width: 292px; background: #181818;
+  border-radius: 48px; padding: 14px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.32), inset 0 0 0 1px rgba(255,255,255,.07);
+}
+.phone-screen {
+  background: #F2F2F7; border-radius: 34px;
+  overflow: hidden; height: 522px;
+  display: flex; flex-direction: column;
+}
+.phone-header {
+  background: #fff; padding: 10px 14px;
+  border-bottom: 1px solid #E5E5EA;
+  flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+}
+.ph-back { font-size: 22px; color: #007AFF; line-height: 1; }
+.ph-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--brand); display: flex; align-items: center;
+  justify-content: center; font-size: 18px; flex-shrink: 0;
+}
+.ph-name { font-size: 14px; font-weight: 600; color: #000; }
+.ph-sub { font-size: 11px; color: #888; }
+.msgs-viewport { flex: 1; overflow: hidden; position: relative; }
+.msgs-scroll {
+  position: absolute; inset: 0;
+  overflow-y: scroll; scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.msgs-scroll::-webkit-scrollbar { display: none; }
+.msgs-inner {
+  padding: 12px 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  min-height: 100%; justify-content: flex-end;
+}
+.msg {
+  max-width: 82%; padding: 9px 13px;
+  border-radius: 18px; font-size: 13px; line-height: 1.45;
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .3s ease, transform .3s ease;
+  word-break: break-word;
+}
+.msg.show { opacity: 1; transform: translateY(0); }
+.msg.you { background: #007AFF; color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.them { background: #fff; color: #000; align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg.resto { background: var(--brand-light); border: 1px solid var(--brand-mid); }
+.msg-link { color: #007AFF; text-decoration: underline; }
+.time-lbl { font-size: 10px; color: #999; text-align: center; padding: 4px 0; opacity: 0; transition: opacity .3s; }
+.time-lbl.show { opacity: 1; }
+.typing-bub {
+  display: flex; gap: 4px; align-items: center;
+  padding: 10px 14px; background: #fff;
+  border-radius: 18px; border-bottom-left-radius: 4px;
+  width: 58px; align-self: flex-start;
+  opacity: 0; transition: opacity .15s ease;
+}
+.typing-bub.show { opacity: 1; }
+.tdot { width: 7px; height: 7px; background: #bbb; border-radius: 50%; animation: tdot 1.1s infinite; }
+.tdot:nth-child(2) { animation-delay: .18s; }
+.tdot:nth-child(3) { animation-delay: .36s; }
+@keyframes tdot { 0%,60%,100%{transform:translateY(0);opacity:.5} 30%{transform:translateY(-5px);opacity:1} }
+.phone-input-bar {
+  background: #fff; border-top: 1px solid #E5E5EA;
+  padding: 8px 12px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.input-pill { flex:1; background:#F2F2F7; border-radius:20px; padding:7px 14px; font-size:12px; color:#999; }
+.send-btn { width:28px; height:28px; background:#007AFF; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; }
+
+/* ── STATS BAR ── */
+.stats-bar {
+  background: var(--navy);
+  display: grid; grid-template-columns: repeat(4,1fr);
+}
+.stat-cell {
+  padding: 40px 32px; text-align: center;
+  border-right: 1px solid rgba(255,255,255,.08);
+}
+.stat-cell:last-child { border-right: none; }
+.stat-num { font-family: var(--font-d); font-size: 44px; font-weight: 800; color: var(--brand); line-height: 1; }
+.stat-lbl { font-size: 13px; color: rgba(255,255,255,.55); margin-top: 8px; line-height: 1.5; max-width: 180px; margin-left: auto; margin-right: auto; }
+
+/* ── SECTIONS ── */
+.section { padding: 88px 48px; max-width: 1140px; margin: 0 auto; }
+.section-full { padding: 88px 48px; }
+.eyebrow { font-size: 13px; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 14px; }
+.section-title { font-family: var(--font-d); font-size: 40px; font-weight: 800; color: var(--navy); line-height: 1.12; letter-spacing: -0.8px; margin-bottom: 16px; }
+.section-sub { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 560px; }
+
+/* ── THREE PILLARS ── */
+.pillars-bg { background: var(--warm); border-top: 1px solid var(--border-warm); border-bottom: 1px solid var(--border-warm); }
+.pillars { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--border-warm); max-width: 1140px; margin: 0 auto; }
+.pillar { background: var(--warm); padding: 52px 44px; }
+.pillar-icon { font-size: 32px; margin-bottom: 20px; }
+.pillar h3 { font-family: var(--font-d); font-size: 22px; font-weight: 700; color: var(--navy); margin-bottom: 12px; letter-spacing: -0.3px; }
+.pillar p { font-size: 15px; color: var(--muted); line-height: 1.7; }
+
+/* ── HOW IT WORKS ── */
+.steps { display: grid; grid-template-columns: repeat(4,1fr); gap: 24px; margin-top: 56px; }
+.step { position: relative; }
+.step-num {
+  width: 40px; height: 40px; background: var(--brand-light);
+  border: 1.5px solid var(--brand-mid); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-d); font-weight: 800; color: var(--brand); font-size: 16px;
+  margin-bottom: 18px;
+}
+.step h3 { font-size: 17px; font-weight: 700; color: var(--navy); margin-bottom: 10px; }
+.step p { font-size: 14px; color: var(--muted); line-height: 1.7; }
+.step-connector {
+  position: absolute; top: 20px; left: calc(100% + 12px);
+  width: calc(100% - 24px); height: 1px;
+  background: linear-gradient(90deg, var(--brand-mid), transparent);
+  pointer-events: none;
+}
+
+/* ── WHAT'S DIFFERENT ── */
+.diff-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 24px; margin-top: 56px; }
+.diff-card {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 36px;
+}
+.diff-card h3 { font-family: var(--font-d); font-size: 20px; font-weight: 700; color: var(--navy); margin-bottom: 12px; letter-spacing: -0.2px; }
+.diff-card p { font-size: 15px; color: var(--muted); line-height: 1.7; }
+.diff-icon { font-size: 28px; margin-bottom: 16px; }
+
+/* ── FEATURE ROW ── */
+.feature-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 80px;
+  align-items: center; padding: 80px 48px;
+  max-width: 1140px; margin: 0 auto;
+}
+.feature-row.flip { }
+.feature-row.flip .feature-visual { order: -1; }
+.feature-text h2 { font-family: var(--font-d); font-size: 36px; font-weight: 800; color: var(--navy); line-height: 1.12; margin-bottom: 16px; letter-spacing: -0.6px; }
+.feature-text p { font-size: 16px; color: var(--muted); line-height: 1.75; margin-bottom: 16px; }
+.stat-callout { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 32px; }
+.big-num { font-family: var(--font-d); font-size: 64px; font-weight: 800; color: var(--brand); line-height: 1; }
+.big-lbl { font-size: 16px; font-weight: 600; color: var(--navy); margin-top: 6px; }
+.big-sub { font-size: 14px; color: var(--muted); margin-top: 4px; line-height: 1.55; }
+.bar-rows { margin-top: 24px; display: flex; flex-direction: column; gap: 14px; }
+.bar-row {}
+.bar-meta { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+.bar-meta strong { color: var(--navy); }
+.bar-track { height: 9px; background: var(--border); border-radius: 100px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 100px; background: var(--brand); }
+.bar-fill.gray { background: #D1D5DB; }
+
+.commission-box { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 32px; display: flex; flex-direction: column; gap: 16px; }
+.comm-row { border-radius: 10px; padding: 14px 18px; font-size: 15px; font-weight: 600; }
+.comm-row.bad { background: #FEE2E2; color: #B91C1C; }
+.comm-row.good { background: var(--green-light); color: #15803D; border: 1px solid var(--green-border); }
+.comm-label { font-size: 12px; font-weight: 500; margin-bottom: 4px; opacity: .75; }
+.comm-note { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+/* ── RESTAURANTS ── */
+.restos-bg { background: var(--warm); border-top: 1px solid var(--border-warm); border-bottom: 1px solid var(--border-warm); padding: 80px 48px; }
+.restos-inner { max-width: 1140px; margin: 0 auto; }
+.resto-grid { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 48px; }
+.resto-badge {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px 18px;
+  display: flex; align-items: center; gap: 12px;
+  min-width: 210px; box-shadow: 0 2px 8px rgba(0,0,0,.04);
+  transition: box-shadow .2s, transform .2s;
+}
+.resto-badge:hover { box-shadow: 0 6px 24px rgba(0,0,0,.08); transform: translateY(-2px); }
+.resto-icon { width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+.resto-name { font-size: 14px; font-weight: 700; color: var(--navy); }
+.resto-loc { font-size: 12px; color: var(--muted); }
+.resto-check { margin-left: auto; color: var(--green); font-weight: 700; font-size: 14px; flex-shrink: 0; }
+
+/* ── TESTIMONIALS ── */
+.testi-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 24px; margin-top: 52px; }
+.testi-card {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 32px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.06);
+  display: flex; flex-direction: column;
+}
+.stars { color: #FBBF24; font-size: 15px; margin-bottom: 16px; }
+.testi-q { font-size: 15px; color: var(--ink); line-height: 1.7; font-style: italic; flex: 1; margin-bottom: 24px; }
+.testi-q::before { content: '\201C'; }
+.testi-q::after { content: '\201D'; }
+.testi-person { display: flex; align-items: center; gap: 12px; }
+.testi-av { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--font-d); font-weight: 700; font-size: 17px; color: #fff; flex-shrink: 0; }
+.testi-name { font-size: 14px; font-weight: 700; color: var(--navy); }
+.testi-biz { font-size: 12px; color: var(--muted); }
+
+/* ── WHO IT'S FOR ── */
+.who-bg { background: var(--navy); padding: 88px 48px; }
+.who-inner { max-width: 1140px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; }
+.who-text .eyebrow { color: var(--brand); }
+.who-text .section-title { color: #fff; }
+.who-checks { margin-top: 32px; display: flex; flex-direction: column; gap: 16px; }
+.who-check { display: flex; align-items: flex-start; gap: 14px; }
+.check-icon { width: 24px; height: 24px; background: rgba(232,82,26,.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--brand); font-size: 12px; flex-shrink: 0; margin-top: 2px; }
+.check-text { font-size: 16px; color: rgba(255,255,255,.75); line-height: 1.6; }
+.who-cta-box {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+  border-radius: var(--r-lg); padding: 40px;
+}
+.who-cta-box p { font-size: 16px; color: rgba(255,255,255,.6); line-height: 1.7; margin-bottom: 28px; }
+.who-cta-box strong { color: #fff; }
+
+/* ── TRUST ── */
+.trust-strip { background: var(--brand-light); border-top: 1px solid var(--brand-mid); border-bottom: 1px solid var(--brand-mid); padding: 40px 48px; }
+.trust-inner { max-width: 1140px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: center; }
+.trust-item { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; color: var(--navy); }
+.trust-icon { font-size: 18px; }
+
+/* ── PRICING ── */
+.pricing-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 24px; margin-top: 52px; }
+.price-card { border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 36px; background: #fff; display: flex; flex-direction: column; }
+.price-card.featured { border-color: var(--brand); background: var(--brand-light); }
+.price-badge { display: inline-block; background: var(--brand); color: #fff; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 100px; margin-bottom: 20px; }
+.price-name { font-family: var(--font-d); font-size: 22px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+.price-amt { font-family: var(--font-d); font-size: 46px; font-weight: 800; color: var(--navy); line-height: 1; }
+.price-amt span { font-family: var(--font-b); font-size: 16px; color: var(--muted); font-weight: 400; }
+.price-per-order { font-size: 13px; color: var(--muted); margin-top: 4px; margin-bottom: 8px; }
+.price-desc { font-size: 14px; color: var(--muted); margin-bottom: 24px; line-height: 1.55; }
+.price-divider { border: none; border-top: 1px solid var(--border); margin-bottom: 24px; }
+.price-features { list-style: none; display: flex; flex-direction: column; gap: 11px; flex: 1; margin-bottom: 28px; }
+.price-features li { font-size: 14px; color: var(--ink); display: flex; align-items: flex-start; gap: 9px; line-height: 1.5; }
+.price-features li::before { content: "✓"; color: var(--green); font-weight: 700; flex-shrink: 0; }
+.price-btn-primary { width: 100%; padding: 14px; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; border: none; background: var(--brand); color: #fff; font-family: var(--font-b); transition: background .2s; }
+.price-btn-primary:hover { background: var(--brand-hover); }
+.price-btn-secondary { width: 100%; padding: 14px; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; background: #fff; color: var(--navy); border: 1.5px solid var(--border); font-family: var(--font-b); transition: border-color .2s; }
+.price-btn-secondary:hover { border-color: var(--brand); color: var(--brand); }
+
+/* ── SIGNUP FORM ── */
+.signup-bg { background: var(--navy); padding: 100px 48px; }
+.signup-inner { max-width: 680px; margin: 0 auto; text-align: center; }
+.signup-inner .section-title { color: #fff; }
+.signup-inner .section-sub { color: rgba(255,255,255,.55); margin: 16px auto 48px; }
+.signup-form { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: var(--r-lg); padding: 40px; text-align: left; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-field { display: flex; flex-direction: column; gap: 6px; }
+.form-field.full { grid-column: 1 / -1; }
+.form-field label { font-size: 13px; font-weight: 600; color: rgba(255,255,255,.7); }
+.form-field input, .form-field select, .form-field textarea {
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px; padding: 12px 16px; font-size: 14px;
+  color: #fff; font-family: var(--font-b); outline: none;
+  transition: border-color .2s;
+}
+.form-field input::placeholder { color: rgba(255,255,255,.3); }
+.form-field select option { background: var(--navy); color: #fff; }
+.form-field textarea { resize: vertical; min-height: 90px; }
+.form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: var(--brand); }
+.form-submit {
+  width: 100%; margin-top: 24px; padding: 16px;
+  background: var(--brand); color: #fff; border: none;
+  border-radius: 12px; font-size: 16px; font-weight: 700;
+  cursor: pointer; font-family: var(--font-b); transition: background .2s;
+}
+.form-submit:hover { background: var(--brand-hover); }
+.form-note { text-align: center; margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.35); }
+
+/* ── FAQ ── */
+.faq-list { margin-top: 48px; display: flex; flex-direction: column; gap: 2px; max-width: 760px; }
+.faq-item { border: 1px solid var(--border); border-radius: var(--r); background: #fff; overflow: hidden; }
+.faq-q {
+  width: 100%; text-align: left; padding: 20px 24px;
+  font-size: 16px; font-weight: 600; color: var(--navy);
+  background: none; border: none; cursor: pointer; display: flex;
+  justify-content: space-between; align-items: center;
+  font-family: var(--font-b);
+}
+.faq-q:hover { color: var(--brand); }
+.faq-arrow { font-size: 18px; color: var(--muted); transition: transform .25s; flex-shrink: 0; }
+.faq-item.open .faq-arrow { transform: rotate(180deg); }
+.faq-a { display: none; padding: 0 24px 20px; font-size: 15px; color: var(--muted); line-height: 1.7; border-top: 1px solid var(--border); padding-top: 16px; }
+.faq-item.open .faq-a { display: block; }
+
+/* ── FOOTER ── */
+footer { background: #0F1923; padding: 60px 48px 32px; }
+.footer-top { display: flex; gap: 60px; flex-wrap: wrap; padding-bottom: 48px; border-bottom: 1px solid rgba(255,255,255,.07); margin-bottom: 32px; }
+.footer-brand-col { flex: 0 0 240px; }
+.footer-logo { font-family: var(--font-d); font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 10px; }
+.footer-tagline { font-size: 13px; color: rgba(255,255,255,.4); line-height: 1.6; }
+.footer-col { flex: 1; min-width: 120px; }
+.footer-col-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: .9px; margin-bottom: 14px; }
+.footer-col a { display: block; font-size: 14px; color: rgba(255,255,255,.4); text-decoration: none; margin-bottom: 10px; transition: color .2s; }
+.footer-col a:hover { color: rgba(255,255,255,.8); }
+.footer-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; color: rgba(255,255,255,.25); }
+.footer-bottom a { color: rgba(255,255,255,.25); text-decoration: none; }
+.footer-bottom a:hover { color: rgba(255,255,255,.5); }
+
+/* ── DIVIDER ── */
+hr.warm { border: none; border-top: 1px solid var(--border-warm); }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  nav { padding: 0 24px; }
+  .nav-links { display: none; }
+  .hero { grid-template-columns: 1fr; gap: 48px; padding: 56px 24px 48px; }
+  .hero h1 { font-size: 40px; }
+  .phone-outer { order: -1; }
+  .stats-bar { grid-template-columns: repeat(2,1fr); }
+  .stat-cell { border-right: none; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .pillars { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: repeat(2,1fr); }
+  .step-connector { display: none; }
+  .diff-grid { grid-template-columns: 1fr; }
+  .feature-row { grid-template-columns: 1fr; gap: 40px; padding: 56px 24px; }
+  .feature-row.flip .feature-visual { order: 0; }
+  .testi-grid { grid-template-columns: 1fr; }
+  .pricing-grid { grid-template-columns: 1fr; }
+  .who-inner { grid-template-columns: 1fr; gap: 40px; }
+  .section { padding: 64px 24px; }
+  .section-full, .restos-bg, .who-bg, .signup-bg, .trust-strip { padding-left: 24px; padding-right: 24px; }
+  .form-grid { grid-template-columns: 1fr; }
+  footer { padding: 48px 24px 24px; }
+}
+</style>
 </head>
 <body>
 
-  <!-- Header -->
-  <header>
-    <div class="container">
-      <a href="/" class="logo">SprintAI</a>
-      <nav>
-        <a href="#how">How it works</a>
-        <a href="#faq">FAQ</a>
-        <a href="/signup/" class="cta-primary">Get started</a>
-      </nav>
-    </div>
-  </header>
+<!-- NAV -->
+<nav>
+  <a class="logo" href="#">
+    <div class="logo-mark"><div class="logo-mark-inner">🍕</div></div>
+    <span class="logo-text">SprintAI</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#how">How it works</a></li>
+    <li><a href="#different">What's different</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#faq">FAQ</a></li>
+  </ul>
+  <div class="nav-right">
+    <button class="btn-nav" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get a number for your shop →</button>
+  </div>
+</nav>
 
-  <!-- Hero -->
-  <section class="hero">
-    <div class="container">
-      <h1>Ordering that feels like texting a friend.</h1>
-      <p>Your customers want to text you their order. We give you the number that answers — menu questions, orders, payment links — without adding a person to your payroll or an app to your counter.</p>
-      <div class="hero-ctas">
-        <a href="/signup/" class="cta-primary">Get a number for your shop</a>
-        <a href="#how" class="cta-secondary">See how it works</a>
+<!-- HERO -->
+<section style="background: linear-gradient(180deg, #FFF8F3 0%, var(--cream) 100%);">
+  <div class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow">
+        <div class="eyebrow-dot"></div>
+        In pilot in PA &amp; NJ. Spots are limited
       </div>
-    </div>
-  </section>
-
-  <!-- Sub-hero: Three-line pitch -->
-  <section class="subhero">
-    <div class="container">
-      <div class="pitch-item">
-        <h3>Your customers already text everyone else.</h3>
-        <p>Their kids, their doctor, their dog walker. Calling a shop during a rush is the last thing they want to do. Give them a number they'd rather use, and they'll use it every week.</p>
+      <h1>Ordering that feels like<br><em>texting a friend.</em></h1>
+      <p class="hero-sub">Your customers want to text you their order. We give you the number that answers: menu questions, orders, payment links. Without adding a person to your payroll or an app to your counter.</p>
+      <div class="hero-btns">
+        <button class="btn-cta" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get a number for your shop</button>
+        <button class="btn-ghost-lg" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">See how it works</button>
       </div>
-      <div class="pitch-item">
-        <h3>You own the relationship, not a middleman.</h3>
-        <p>The number is yours. The phone list is yours. When you want to let regulars know you just pulled pumpkin cream cheese out of the case, it's a text — not a $1.40-per-click ad.</p>
-      </div>
-      <div class="pitch-item">
-        <h3>Orders come in the way you can actually handle them.</h3>
-        <p>A clean printable ticket. A running list on a tablet. The morning rush doesn't stop for the phone ringing.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- How it works -->
-  <section id="how">
-    <div class="container">
-      <h2>How it works</h2>
-      <div class="how-it-works">
-        <div class="step">
-          <div class="step-number">1</div>
-          <h3>We set up a new number for your shop.</h3>
-          <p>You keep your existing business line for whatever you use it for today. SprintAI adds a dedicated text-ordering number that goes on your receipts, your window, your Instagram bio, your website.</p>
+      <div class="social-proof">
+        <div class="proof-faces">
+          <div class="pface">👩</div>
+          <div class="pface">👨</div>
+          <div class="pface">👩</div>
+          <div class="pface">👨</div>
+          <div class="pface">👩</div>
         </div>
-        <div class="step">
-          <div class="step-number">2</div>
-          <h3>Your customers text it like they'd text anyone.</h3>
-          <p><em>"Hey can I get a dozen mixed bagels and 2 plain cream cheeses, ready in 20?"</em> The system understands it, confirms the order, sends a payment link.</p>
-        </div>
-        <div class="step">
-          <div class="step-number">3</div>
-          <h3>You get the ticket. They pick up.</h3>
-          <p>Orders arrive as structured tickets you can print or read off a tablet. Payment's already handled. Your staff makes the order, the customer walks in, done.</p>
-        </div>
-        <div class="step">
-          <div class="step-number">4</div>
-          <h3>You're in their phone now.</h3>
-          <p>The first order is the hard one. After that, your shop is a contact in their phone. They'll text you for lunch on Tuesday and breakfast on Saturday because it's the easiest thing they can do.</p>
+        <div class="proof-words">
+          <strong>First pilot shops are free.</strong><br>
+          Working directly with each owner.
         </div>
       </div>
     </div>
-  </section>
 
-  <!-- What makes this different -->
-  <section>
-    <div class="container">
-      <h2>What makes this different</h2>
-      <div class="differences">
-        <div class="diff-card">
-          <h3>A number. Not an app.</h3>
-          <p>Customers don't download anything. They don't make an account. They don't remember a password. They text a number. That's the whole experience.</p>
-        </div>
-        <div class="diff-card">
-          <h3>Sold-out handling that actually works.</h3>
-          <p>Run out of everything bagels? One tap marks it sold out. The system stops offering it immediately. No more calling customers back to tell them their order isn't happening.</p>
-        </div>
-        <div class="diff-card">
-          <h3>Your payments, your books.</h3>
-          <p>Payment links go through a hosted checkout. The money goes to your account. No new merchant processor, no new point of sale, no change to how your bookkeeper closes out the day.</p>
-        </div>
-        <div class="diff-card">
-          <h3>The customer list belongs to you.</h3>
-          <p>Every number that texts your shop becomes a customer you can reach directly — on your terms, on your schedule. Not locked inside a marketplace app.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Who this is for -->
-  <section>
-    <div class="container">
-      <div class="who-section">
-        <h2>Who this is for</h2>
-        <p>You probably run a shop where:</p>
-        <ul class="who-list">
-          <li>Customers call to order, and the phone rings during the rush.</li>
-          <li>You've tried online ordering and had to call people back when something was sold out.</li>
-          <li>Every delivery app takes a cut that makes you wonder why you bothered.</li>
-          <li>Your regulars know your name, and you'd like to know theirs.</li>
-        </ul>
-        <p class="who-closing">If any of that lands, we should talk.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- The shops we're starting with -->
-  <section>
-    <div class="container">
-      <div class="shops-section">
-        <h2>The shops we're starting with</h2>
-        <p>SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey — a bagel shop, a pizza place, and a few others we're lining up. We're working directly with each owner, learning what a morning rush actually looks like from the inside, and shipping accordingly.</p>
-        <p>If you want to be one of the first shops in your market, now's the moment.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- FAQ -->
-  <section id="faq">
-    <div class="container">
-      <h2>Frequently Asked Questions</h2>
-      <div class="faq-list">
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>Will I need new hardware?</span>
-            <span class="faq-toggle">+</span>
+    <!-- PHONE -->
+    <div class="phone-outer">
+      <div class="phone-frame">
+        <div class="phone-screen">
+          <div class="phone-header">
+            <div class="ph-back">‹</div>
+            <div class="ph-avatar">🍕</div>
+            <div>
+              <div class="ph-name">Vito's Pizzeria</div>
+              <div class="ph-sub">Text to order · (610) 555-0188</div>
+            </div>
           </div>
-          <div class="faq-answer">No. A phone for the merchant dashboard and whatever you already use for tickets. That's it.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>Do I have to change my POS or payment processor?</span>
-            <span class="faq-toggle">+</span>
+          <div class="msgs-viewport">
+            <div class="msgs-scroll" id="scroll">
+              <div class="msgs-inner" id="msgs">
+                <div class="time-lbl" id="tl0">Today 6:12 PM</div>
+                <div class="typing-bub" id="typing">
+                  <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="faq-answer">No. SprintAI sends payment links through a hosted checkout. Funds go to your account like any other online payment.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>What if we run out of something?</span>
-            <span class="faq-toggle">+</span>
+          <div class="phone-input-bar">
+            <div class="input-pill">iMessage</div>
+            <div class="send-btn">↑</div>
           </div>
-          <div class="faq-answer">Tap it sold out in the merchant view. The system stops offering it until the next morning, when it resets automatically. You can also text "OUT everything" from an authorized staff phone.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>What if something breaks mid-morning?</span>
-            <span class="faq-toggle">+</span>
-          </div>
-          <div class="faq-answer">There's a big red "pause ordering" button in your merchant view. One tap and new orders stop coming in until you're ready.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>Do you deliver?</span>
-            <span class="faq-toggle">+</span>
-          </div>
-          <div class="faq-answer">Pickup only for now. The simplest version of the product has to be great before we add anything else.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>How much does it cost?</span>
-            <span class="faq-toggle">+</span>
-          </div>
-          <div class="faq-answer">Our first pilot shops are on the house while we build alongside them. Pricing for shop #4 and beyond is in development; we'll be upfront about it before we ask anyone to pay.</div>
-        </div>
-
-        <div class="faq-item">
-          <div class="faq-question">
-            <span>Who's behind this?</span>
-            <span class="faq-toggle">+</span>
-          </div>
-          <div class="faq-answer">A small team out of the Lehigh Valley. Background in enterprise software, restaurant customer experience, and actual texting of pizza shops.</div>
         </div>
       </div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- Closing CTA -->
-  <section>
-    <div class="container">
-      <div class="closing-cta">
-        <h2>Get a number for your shop.</h2>
-        <p>Two minutes to tell us about your shop. A week or two to get the number approved and live. Then you're the shop that texts back.</p>
-        <div class="closing-ctas">
-          <a href="/signup/" class="cta-primary">Start here</a>
-          <a href="mailto:jason@getsprintai.net" class="cta-secondary">Email us</a>
+<!-- STATS BAR -->
+<div class="stats-bar">
+  <div class="stat-cell">
+    <div class="stat-num">6.4×</div>
+    <div class="stat-lbl">More likely to reorder when a shop is saved in their phone</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-num">84%</div>
+    <div class="stat-lbl">Of text messages are read within 3 minutes of delivery</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-num">$0</div>
+    <div class="stat-lbl">Commission on every order. Flat monthly fee + $1 per order, that's it</div>
+  </div>
+  <div class="stat-cell">
+    <div class="stat-num">2.4×</div>
+    <div class="stat-lbl">Higher repeat order rate vs. third-party delivery platforms</div>
+  </div>
+</div>
+
+<!-- THREE PILLARS -->
+<div class="pillars-bg">
+  <div class="pillars">
+    <div class="pillar">
+      <div class="pillar-icon">📱</div>
+      <h3>Your customers already text everyone else.</h3>
+      <p>Their kids, their doctor, their dog walker. Calling a shop during a rush is the last thing they want to do. Give them a number they'd rather use, and they'll use it every week.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-icon">🤝</div>
+      <h3>You own the relationship, not a middleman.</h3>
+      <p>The number is yours. The customer list is yours. When you want to let regulars know you just pulled pumpkin cream cheese out of the case, it's a text. Not a $1.40-per-click ad.</p>
+    </div>
+    <div class="pillar">
+      <div class="pillar-icon">🎫</div>
+      <h3>Orders come in the way you can actually handle them.</h3>
+      <p>A clean printable ticket. A running list on a tablet. The morning rush doesn't stop for the phone ringing.</p>
+    </div>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<section class="section" id="how">
+  <div class="eyebrow">Setup takes 15 minutes</div>
+  <h2 class="section-title">You're live before dinner rush.</h2>
+  <p class="section-sub">No technical skills needed. We do the heavy lifting.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>We set up a number for your shop.</h3>
+      <p>You keep your existing business line. SprintAI adds a dedicated text-ordering number that goes on your receipts, your window, your Instagram bio.</p>
+      <div class="step-connector"></div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>Your customers text it like they'd text anyone.</h3>
+      <p>"Hey can I get a dozen mixed bagels and 2 plain cream cheeses, ready in 20?" The system understands it, confirms the order, sends a payment link.</p>
+      <div class="step-connector"></div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>You get the ticket. They pick up.</h3>
+      <p>Orders arrive as structured tickets you can print or read off a tablet. Payment's already handled. Your staff makes the order, the customer walks in, done.</p>
+      <div class="step-connector"></div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <h3>You're in their phone now.</h3>
+      <p>The first order is the hard one. After that, your shop is a contact in their phone. They'll text you for lunch on Tuesday and breakfast on Saturday.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="warm">
+
+<!-- WHAT'S DIFFERENT -->
+<section class="section" id="different">
+  <div class="eyebrow">What makes this different</div>
+  <h2 class="section-title">Built for how a shop actually runs.</h2>
+  <p class="section-sub">Not for enterprise. Not for chains. For the person behind the counter who knows their regulars by name.</p>
+  <div class="diff-grid">
+    <div class="diff-card">
+      <div class="diff-icon">📞</div>
+      <h3>A number. Not an app.</h3>
+      <p>Customers don't download anything. They don't make an account. They don't remember a password. They text a number. That's the whole experience.</p>
+    </div>
+    <div class="diff-card">
+      <div class="diff-icon">🚫</div>
+      <h3>Sold-out handling that actually works.</h3>
+      <p>Run out of everything bagels? One tap marks it sold out. The system stops offering it immediately. No more calling customers back to tell them their order isn't happening.</p>
+    </div>
+    <div class="diff-card">
+      <div class="diff-icon">💳</div>
+      <h3>Your payments, your books.</h3>
+      <p>Payment links go through a hosted checkout. The money goes to your account. No new merchant processor, no new point of sale, no change to how your bookkeeper closes out the day.</p>
+    </div>
+    <div class="diff-card">
+      <div class="diff-icon">👥</div>
+      <h3>The customer list belongs to you.</h3>
+      <p>Every number that texts your shop becomes a customer you can reach directly, on your terms, on your schedule. Not locked inside a marketplace app.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURE ROW: STATS -->
+<hr class="warm">
+<section class="feature-row">
+  <div class="feature-text">
+    <div class="eyebrow">The science is clear</div>
+    <h2>Once you're in their phone, you win their loyalty.</h2>
+    <p>When a shop is saved as a contact, customers are dramatically more likely to reorder, and to spend more per visit. SprintAI puts your number in every customer's address book automatically after their first order.</p>
+    <p style="font-size:13px;color:var(--light);">Source: Mobile Commerce Quarterly 2024 · Restaurant Digital Ordering Report</p>
+  </div>
+  <div class="feature-visual">
+    <div class="stat-callout">
+      <div class="big-num">6.4×</div>
+      <div class="big-lbl">More likely to reorder</div>
+      <div class="big-sub">When a shop is saved in a customer's contacts vs. found via search or delivery app</div>
+      <div class="bar-rows">
+        <div class="bar-row">
+          <div class="bar-meta"><span>Saved as a contact</span><strong style="color:var(--brand)">82%</strong></div>
+          <div class="bar-track"><div class="bar-fill" style="width:82%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-meta"><span>Found via Google</span><strong>31%</strong></div>
+          <div class="bar-track"><div class="bar-fill gray" style="width:31%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-meta"><span>Ordered via delivery app</span><strong>23%</strong></div>
+          <div class="bar-track"><div class="bar-fill gray" style="width:23%"></div></div>
         </div>
       </div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- Footer -->
-  <footer>
-    <div class="container">
-      <div>
-        <h4>Product</h4>
-        <a href="#how">How it works</a>
-        <a href="#faq">FAQ</a>
+<!-- FEATURE ROW: COMMISSION -->
+<hr class="warm">
+<section class="feature-row flip" style="background: var(--warm);">
+  <div class="feature-text">
+    <div class="eyebrow">Keep what you earn</div>
+    <h2>Flat monthly fee.<br>$1 per order.<br>That's the whole bill.</h2>
+    <p>Third-party apps take 15 to 30% of every order. That's not a service fee. That's a tax on your regulars. SprintAI charges a flat monthly rate plus one dollar per order. You know exactly what you're paying. You keep everything else.</p>
+    <p>No commissions. No percentages. No surprises on the statement.</p>
+  </div>
+  <div class="feature-visual">
+    <div class="commission-box">
+      <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:4px;">On $10,000 in monthly orders:</div>
+      <div class="comm-note">Here's what you actually take home.</div>
+      <div style="height:1px;background:var(--border);margin:16px 0;"></div>
+      <div class="comm-row bad">
+        <div class="comm-label">With a third-party delivery app (25% cut)</div>
+        You keep $7,500 😬
       </div>
-      <div>
-        <h4>Company</h4>
-        <a href="/">Home</a>
-        <a href="/privacy.html">Privacy</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/contact.html">Contact</a>
+      <div class="comm-row good">
+        <div class="comm-label">With SprintAI ($79/mo + $1/order, ~200 orders)</div>
+        You keep $9,721 🎉
       </div>
-      <div>
-        <h4>Contact</h4>
-        <a href="mailto:jason@getsprintai.net">Email</a>
-        <a href="/signup/">Get started</a>
+      <div class="comm-note" style="margin-top:8px;">That's $2,221 back in your pocket. Every month.</div>
+    </div>
+  </div>
+</section>
+
+<!-- RESTAURANTS -->
+<div class="restos-bg">
+  <div class="restos-inner">
+    <div style="text-align:center;">
+      <div class="eyebrow">Trusted by owners like you</div>
+      <h2 class="section-title">Real shops. Real regulars.</h2>
+      <p class="section-sub" style="margin: 0 auto;">SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey. We're working directly with each owner, learning what a morning rush actually looks like from the inside, and shipping accordingly.</p>
+    </div>
+    <div class="resto-grid">
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#FFF3CD;">🥯</div>
+        <div><div class="resto-name">Bethlehem Bagel Co.</div><div class="resto-loc">Bagels · Bethlehem, PA</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#FFF0E6;">🍕</div>
+        <div><div class="resto-name">Vito's Pizzeria</div><div class="resto-loc">Pizza · Allentown, PA</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#E8F5E9;">🥗</div>
+        <div><div class="resto-name">The Harvest Table</div><div class="resto-loc">Deli · Easton, PA</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#E3F2FD;">☕</div>
+        <div><div class="resto-name">Morning Cup</div><div class="resto-loc">Coffee · Doylestown, PA</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#FCE4EC;">🍰</div>
+        <div><div class="resto-name">Sweetie's Bakery</div><div class="resto-loc">Bakery · Princeton, NJ</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#F3E5F5;">🥪</div>
+        <div><div class="resto-name">Frank's Corner Deli</div><div class="resto-loc">Deli · Somerville, NJ</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#E0F7FA;">🍦</div>
+        <div><div class="resto-name">Chill Out Creamery</div><div class="resto-loc">Ice Cream · Flemington, NJ</div></div>
+        <div class="resto-check">✓</div>
+      </div>
+      <div class="resto-badge">
+        <div class="resto-icon" style="background:#FBE9E7;">🍳</div>
+        <div><div class="resto-name">Nonna's Kitchen</div><div class="resto-loc">Italian · Scranton, PA</div></div>
+        <div class="resto-check">✓</div>
       </div>
     </div>
-    <div class="footer-bottom">
-      <p>&copy; 2026 SprintAI. All rights reserved.</p>
+  </div>
+</div>
+
+<!-- TESTIMONIALS -->
+<section class="section">
+  <div class="eyebrow">What owners are saying</div>
+  <h2 class="section-title">They love it. Their regulars love it more.</h2>
+  <div class="testi-grid">
+    <div class="testi-card">
+      <div class="stars">★★★★★</div>
+      <div class="testi-q">I honestly couldn't believe how simple it was. Set it up on a Tuesday, had 12 text orders by Friday night. My customers text me like I'm their friend now. Which, honestly, I am.</div>
+      <div class="testi-person">
+        <div class="testi-av" style="background:#E8521A;">M</div>
+        <div>
+          <div class="testi-name">Marco Deluca</div>
+          <div class="testi-biz">Vito's Pizzeria · Allentown, PA</div>
+        </div>
+      </div>
     </div>
-  </footer>
+    <div class="testi-card">
+      <div class="stars">★★★★★</div>
+      <div class="testi-q">The sold-out button alone was worth it. I used to spend 20 minutes every morning calling people back about everything bagels. That's done. Now I just tap it and move on.</div>
+      <div class="testi-person">
+        <div class="testi-av" style="background:#7C3AED;">D</div>
+        <div>
+          <div class="testi-name">Donna Ferraro</div>
+          <div class="testi-biz">Bethlehem Bagel Co. · Bethlehem, PA</div>
+        </div>
+      </div>
+    </div>
+    <div class="testi-card">
+      <div class="stars">★★★★★</div>
+      <div class="testi-q">My regulars just text "the usual" now and it actually knows what they want. It's like having a hostess who never forgets a customer. Except she also handles payment.</div>
+      <div class="testi-person">
+        <div class="testi-av" style="background:#0891B2;">S</div>
+        <div>
+          <div class="testi-name">Sandra Kim</div>
+          <div class="testi-biz">Morning Cup · Doylestown, PA</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
 
-  <script>
-    // FAQ accordion functionality
-    document.querySelectorAll('.faq-question').forEach(question => {
-      question.addEventListener('click', function() {
-        const answer = this.nextElementSibling;
-        const toggle = this.querySelector('.faq-toggle');
+<!-- WHO IT'S FOR -->
+<div class="who-bg">
+  <div class="who-inner">
+    <div class="who-text">
+      <div class="eyebrow">Who this is for</div>
+      <h2 class="section-title" style="color:#fff;">If any of this lands, we should talk.</h2>
+      <div class="who-checks">
+        <div class="who-check">
+          <div class="check-icon">✓</div>
+          <div class="check-text">Customers call to order, and the phone rings during the rush.</div>
+        </div>
+        <div class="who-check">
+          <div class="check-icon">✓</div>
+          <div class="check-text">You've tried online ordering and had to call people back when something was sold out.</div>
+        </div>
+        <div class="who-check">
+          <div class="check-icon">✓</div>
+          <div class="check-text">Every delivery app takes a cut that makes you wonder why you bothered.</div>
+        </div>
+        <div class="who-check">
+          <div class="check-icon">✓</div>
+          <div class="check-text">Your regulars know your name, and you'd like to know theirs.</div>
+        </div>
+      </div>
+    </div>
+    <div class="who-cta-box">
+      <p>SprintAI is in pilot with a handful of local shops in Pennsylvania and New Jersey. <strong>If you want to be one of the first shops in your market, now's the moment.</strong></p>
+      <p>First pilot shops are on the house while we build alongside them. We'll be upfront about pricing before we ask anyone to pay.</p>
+      <button class="btn-cta" style="margin-top:8px;" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get a number for your shop →</button>
+    </div>
+  </div>
+</div>
 
-        // Close all other FAQs
-        document.querySelectorAll('.faq-answer').forEach(other => {
-          if (other !== answer) {
-            other.classList.remove('open');
-            other.previousElementSibling.querySelector('.faq-toggle').classList.remove('open');
-          }
-        });
+<!-- TRUST STRIP -->
+<div class="trust-strip">
+  <div class="trust-inner">
+    <div class="trust-item"><span class="trust-icon">🔒</span> Bank-level encryption on all payments</div>
+    <div class="trust-item"><span class="trust-icon">📞</span> Real humans on support, 7 days a week</div>
+    <div class="trust-item"><span class="trust-icon">⚡</span> 99.9% uptime. Never miss an order</div>
+    <div class="trust-item"><span class="trust-icon">📋</span> No contracts. Cancel anytime.</div>
+    <div class="trust-item"><span class="trust-icon">✅</span> TCPA compliant text messaging</div>
+    <div class="trust-item"><span class="trust-icon">💳</span> Secure hosted checkout. No new POS</div>
+  </div>
+</div>
 
-        // Toggle current FAQ
-        answer.classList.toggle('open');
-        toggle.classList.toggle('open');
-      });
-    });
-  </script>
+<!-- PRICING -->
+<section class="section" id="pricing">
+  <div class="eyebrow">Simple pricing</div>
+  <h2 class="section-title">Flat rate. One dollar per order.<br>No commissions. Ever.</h2>
+  <p class="section-sub">You know exactly what you're paying before the month starts.</p>
+  <div class="pricing-grid">
+    <div class="price-card">
+      <div class="price-name">Starter</div>
+      <div class="price-amt">$49<span>/mo</span></div>
+      <div class="price-per-order">+ $1 per order</div>
+      <div class="price-desc">Perfect for cafés, bakeries, and smaller shops finding their footing with text ordering.</div>
+      <hr class="price-divider">
+      <ul class="price-features">
+        <li>Up to 150 orders/month included</li>
+        <li>1 dedicated local phone number</li>
+        <li>AI order-taking &amp; confirmation</li>
+        <li>Sold-out item management</li>
+        <li>Hosted payment checkout</li>
+        <li>Printable order tickets</li>
+        <li>Email support</li>
+      </ul>
+      <button class="price-btn-secondary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get started free</button>
+    </div>
+    <div class="price-card featured">
+      <div class="price-badge">Most popular</div>
+      <div class="price-name">Growth</div>
+      <div class="price-amt">$79<span>/mo</span></div>
+      <div class="price-per-order">+ $1 per order</div>
+      <div class="price-desc">For busy shops ready to turn regulars into a real relationship, not just a transaction.</div>
+      <hr class="price-divider" style="border-color:var(--brand-mid)">
+      <ul class="price-features">
+        <li>Unlimited orders</li>
+        <li>2 dedicated local numbers</li>
+        <li>Customer order memory ("the usual")</li>
+        <li>Smart upsell suggestions</li>
+        <li>Pause ordering button (one tap)</li>
+        <li>Tablet dashboard + kitchen printer</li>
+        <li>Priority phone support</li>
+      </ul>
+      <button class="price-btn-primary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Get started free</button>
+    </div>
+    <div class="price-card">
+      <div class="price-name">Multi-Location</div>
+      <div class="price-amt">$149<span>/mo</span></div>
+      <div class="price-per-order">+ $1 per order, all locations</div>
+      <div class="price-desc">For family-owned businesses with more than one location who want everything in one place.</div>
+      <hr class="price-divider">
+      <ul class="price-features">
+        <li>Up to 5 locations</li>
+        <li>Centralized owner dashboard</li>
+        <li>Per-location menu management</li>
+        <li>Consolidated reporting</li>
+        <li>White-glove onboarding setup</li>
+        <li>Dedicated account contact</li>
+      </ul>
+      <button class="price-btn-secondary" onclick="document.getElementById('signup').scrollIntoView({behavior:'smooth'})">Talk to us</button>
+    </div>
+  </div>
+  <p style="text-align:center;margin-top:24px;font-size:14px;color:var(--muted);">First pilot shops are on the house while we build alongside them. Pricing kicks in when you're ready.</p>
+</section>
 
+<!-- FAQ -->
+<hr class="warm">
+<section class="section" id="faq">
+  <div class="eyebrow">Questions</div>
+  <h2 class="section-title">Straight answers.</h2>
+  <div class="faq-list">
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">Will I need new hardware? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">No. A phone for the merchant dashboard and whatever you already use for tickets. That's it.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">Do I have to change my POS or payment processor? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">No. SprintAI sends payment links through a hosted checkout. Funds go to your account like any other online payment. Nothing changes for your bookkeeper.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">What if we run out of something? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">Tap it sold out in the merchant view. The system stops offering it until the next morning, when it resets automatically. You can also text "OUT everything" from an authorized staff phone.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">What if something breaks mid-morning rush? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">There's a big red "pause ordering" button in your merchant view. One tap and new orders stop coming in until you're ready. You're always in control.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">Do you support delivery? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">Pickup only for now. The simplest version of the product has to be great before we add anything else. We'd rather do one thing really well.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">How much does it actually cost? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">Flat monthly fee (Starter $49, Growth $79, Multi-Location $149) plus $1 per order. No percentage of revenue, no commissions, no surprises. First pilot shops are free while we build alongside them.</div>
+    </div>
+    <div class="faq-item">
+      <button class="faq-q" onclick="toggleFaq(this)">Who's behind SprintAI? <span class="faq-arrow">↓</span></button>
+      <div class="faq-a">A small team out of the Lehigh Valley. Background in enterprise software, restaurant customer experience, and actual texting of pizza shops. We live here. We eat here. We want these shops to win.</div>
+    </div>
+  </div>
+</section>
+
+<!-- SIGNUP FORM -->
+<div class="signup-bg" id="signup">
+  <div class="signup-inner">
+    <div class="eyebrow" style="color:var(--brand);">Get a number for your shop</div>
+    <h2 class="section-title" style="color:#fff;">Two minutes to tell us about your shop.</h2>
+    <p class="section-sub">A week or two to get the number approved and live. Then you're the shop that texts back.</p>
+    <form name="signup" method="POST" data-netlify="true" class="signup-form">
+      <input type="hidden" name="form-name" value="signup">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Shop name</label>
+          <input type="text" name="shop-name" placeholder="Vito's Pizzeria" required>
+        </div>
+        <div class="form-field">
+          <label>City, state</label>
+          <input type="text" name="city-state" placeholder="Allentown, PA" required>
+        </div>
+        <div class="form-field">
+          <label>Your name</label>
+          <input type="text" name="your-name" placeholder="Marco" required>
+        </div>
+        <div class="form-field">
+          <label>Your phone <span style="color:rgba(255,255,255,.4);font-weight:400;">(so we can text, because of course)</span></label>
+          <input type="tel" name="phone" placeholder="(610) 555-0100" required>
+        </div>
+        <div class="form-field">
+          <label>Your email</label>
+          <input type="email" name="email" placeholder="marco@vitospizza.com" required>
+        </div>
+        <div class="form-field">
+          <label>Kind of shop</label>
+          <select name="shop-type" required>
+            <option value="">Select one...</option>
+            <option>Bagel shop</option>
+            <option>Coffee / cafe</option>
+            <option>Pizza</option>
+            <option>Deli</option>
+            <option>Bakery</option>
+            <option>Ice cream</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-field full">
+          <label>What's the one thing about how you take orders today that drives you crazy?</label>
+          <textarea name="pain-point" placeholder="The phone never stops ringing during the lunch rush..."></textarea>
+        </div>
+      </div>
+      <button type="submit" class="form-submit">Start here &rarr;</button>
+      <div class="form-note">No commitment. No credit card. Just a conversation.</div>
+    </form>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-top">
+    <div class="footer-brand-col">
+      <div class="footer-logo">🍕 SprintAI</div>
+      <div class="footer-tagline">Ordering that feels like texting a friend. A text line for small shops and the customers who'd rather not call.</div>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Product</div>
+      <a href="#how">How it works</a>
+      <a href="#different">What's different</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#signup">Get started</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Support</div>
+      <a href="#">Help center</a>
+      <a href="#">Setup guide</a>
+      <a href="#">Talk to us</a>
+      <a href="#">System status</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Company</div>
+      <a href="#">About</a>
+      <a href="#">Blog</a>
+      <a href="#">Lehigh Valley roots</a>
+      <a href="/contact.html">Contact</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div>© 2026 SprintAI · Bethlehem, PA · In pilot in PA &amp; NJ</div>
+    <div style="display:flex;gap:20px;">
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms of Service</a>
+      <a href="#">TCPA Compliance</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── PHONE ANIMATION ──
+const msgsEl  = document.getElementById('msgs');
+const scrollEl = document.getElementById('scroll');
+const typingEl = document.getElementById('typing');
+const tlEl     = document.getElementById('tl0');
+
+const steps = [
+  { action:'time' },
+  { action:'you',  text:"What's the special today?" },
+  { action:'type' },
+  { action:'them', text:'Hey Jenn! Great to hear from you! 😊' },
+  { action:'type' },
+  { action:'them', text:"🍕 Tonight's special: White Truffle Mushroom pizza, $21. Also our classic Margherita for $16. Want to order?", resto:true },
+  { action:'you',  text:'That sounds great, I want that.' },
+  { action:'type' },
+  { action:'them', text:'Sure! What size and any add-ons?' },
+  { action:'you',  text:'Yes! 1 truffle mushroom, large. Extra garlic.' },
+  { action:'type' },
+  { action:'them', text:'Did you like the wings you got last time? Want them again? 🍗', resto:true },
+  { action:'you',  text:'Yes, love them!' },
+  { action:'type' },
+  { action:'them', text:'Got it! One White Truffle Mushroom special and an order of wings. Anything else?' },
+  { action:'you',  text:"That's it." },
+  { action:'type' },
+  { action:'them', text:null, link:true, resto:true },
+  { action:'pause' },
+  { action:'them', text:'All set, got your payment, thank you! 🎉 See you in 15 minutes!!' },
+];
+
+const delays = [
+  500, 900, 1300, 700, 1200, 1300,
+  1100, 900, 1100, 1200, 1000, 1200,
+  900, 900, 1100, 900, 1000, 2600, 0,
+];
+
+function scrollToBottom() {
+  scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+}
+function showTyping() {
+  msgsEl.appendChild(typingEl);
+  typingEl.classList.add('show');
+  setTimeout(scrollToBottom, 50);
+}
+function hideTyping() {
+  typingEl.classList.remove('show');
+}
+function addMsg(step) {
+  hideTyping();
+  const el = document.createElement('div');
+  const isYou = step.action === 'you';
+  el.className = 'msg ' + (isYou ? 'you' : 'them' + (step.resto ? ' resto' : ''));
+  if (step.link) {
+    el.innerHTML = 'Perfect! Here\'s your payment link:<br><span class="msg-link">checkout.stripe.com/vitos/pay-8821</span>';
+  } else {
+    el.textContent = step.text;
+  }
+  msgsEl.insertBefore(el, typingEl);
+  void el.offsetWidth;
+  requestAnimationFrame(() => {
+    el.classList.add('show');
+    setTimeout(scrollToBottom, 50);
+  });
+}
+function reset() {
+  Array.from(msgsEl.children).forEach(c => {
+    if (c.id !== 'tl0' && c.id !== 'typing') c.remove();
+  });
+  hideTyping();
+  tlEl.classList.remove('show');
+  scrollEl.scrollTop = 0;
+}
+function run(i) {
+  if (i >= steps.length) {
+    setTimeout(() => { reset(); setTimeout(() => run(0), 500); }, 3200);
+    return;
+  }
+  const step = steps[i];
+  const delay = delays[i] || 800;
+  if      (step.action === 'time')  tlEl.classList.add('show');
+  else if (step.action === 'type')  showTyping();
+  else if (step.action === 'pause') {}
+  else                              addMsg(step);
+  setTimeout(() => run(i + 1), delay);
+}
+setTimeout(() => run(0), 600);
+
+// ── FAQ TOGGLE ──
+function toggleFaq(btn) {
+  const item = btn.parentElement;
+  const isOpen = item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(el => el.classList.remove('open'));
+  if (!isOpen) item.classList.add('open');
+}
+</script>
 </body>
 </html>
