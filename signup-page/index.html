@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Start Your Free Trial | SprintAI</title>
+  <meta name="description" content="Add an AI chat assistant to your business website in minutes. Try free for 30 days. No charge until your trial ends." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f1f5f9;
+      margin: 0;
+      padding: 0;
+      color: #1e293b;
+    }
+
+    /* Layout */
+    .page {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2.5rem 1rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 500px;
+    }
+
+    /* Logo / Header */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      font-weight: 800;
+      font-size: 1.3rem;
+      color: #4f46e5;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .brand-icon svg {
+      width: 18px;
+      height: 18px;
+      fill: white;
+    }
+
+    /* Card */
+    .card {
+      background: white;
+      border-radius: 1.25rem;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 10px 40px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+
+    .card-header {
+      background: linear-gradient(135deg, #4f46e5 0%, #6d28d9 100%);
+      padding: 2rem 2.5rem;
+      color: white;
+    }
+
+    .plan-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 9999px;
+      padding: 0.3rem 0.85rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .plan-badge .dot {
+      width: 6px;
+      height: 6px;
+      background: #a5f3fc;
+      border-radius: 50%;
+    }
+
+    .card-header h1 {
+      font-size: 1.6rem;
+      font-weight: 800;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+
+    .card-header .sub {
+      color: rgba(255,255,255,0.75);
+      font-size: 0.9rem;
+      margin: 0 0 1.25rem;
+    }
+
+    .trial-callout {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 0.6rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.95);
+      line-height: 1.5;
+    }
+
+    .trial-callout strong {
+      display: block;
+      font-size: 0.95rem;
+      margin-bottom: 0.2rem;
+      color: #fff;
+    }
+
+    /* Form Body */
+    .card-body {
+      padding: 2rem 2.5rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 0.4rem;
+    }
+
+    label .optional {
+      font-weight: 400;
+      color: #9ca3af;
+      font-size: 0.78rem;
+      margin-left: 0.3rem;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1.5px solid #e5e7eb;
+      border-radius: 0.6rem;
+      padding: 0.7rem 0.9rem;
+      font-size: 0.9rem;
+      color: #1e293b;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      background: white;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    input::placeholder { color: #9ca3af; }
+
+    input:focus, select:focus {
+      border-color: #4f46e5;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+    }
+
+    .select-wrapper {
+      position: relative;
+    }
+
+    .select-wrapper::after {
+      content: '';
+      position: absolute;
+      right: 0.9rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 5px solid #6b7280;
+      pointer-events: none;
+    }
+
+    /* Error message */
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #dc2626;
+      border-radius: 0.6rem;
+      padding: 0.7rem 0.9rem;
+      font-size: 0.85rem;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
+
+    /* Submit button */
+    .btn-submit {
+      width: 100%;
+      padding: 0.9rem;
+      background: linear-gradient(135deg, #4f46e5, #6d28d9);
+      color: white;
+      border: none;
+      border-radius: 0.75rem;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: -0.01em;
+      margin-top: 0.25rem;
+    }
+
+    .btn-submit:hover:not(:disabled) {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+
+    .btn-submit:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.4rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Security strip */
+    .security {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      color: #9ca3af;
+      margin-top: 0.9rem;
+    }
+
+    /* Features list */
+    .features {
+      border-top: 1px solid #f1f5f9;
+      padding: 1.5rem 2.5rem;
+      background: #fafafa;
+    }
+
+    .features-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #94a3b8;
+      margin-bottom: 0.85rem;
+    }
+
+    .feature-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .feature-list li {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      color: #475569;
+    }
+
+    .check {
+      width: 18px;
+      height: 18px;
+      background: #eef2ff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #4f46e5;
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.78rem;
+      color: #94a3b8;
+    }
+
+    /* Mobile */
+    @media (max-width: 540px) {
+      .card-header { padding: 1.75rem 1.5rem; }
+      .card-body { padding: 1.5rem 1.5rem; }
+      .features { padding: 1.25rem 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="container">
+
+      <!-- Brand -->
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24"><path d="M13 3L4 14h8l-1 7 9-11h-8l1-7z"/></svg>
+        </div>
+        SprintAI
+      </div>
+
+      <div class="card">
+
+        <!-- Card Header -->
+        <div class="card-header">
+          <div class="plan-badge">
+            <span class="dot"></span>
+            Starter Plan
+          </div>
+          <h1>Start Your 30-Day Free Trial</h1>
+          <p class="sub">Your AI assistant, ready in minutes. It learns your business and answers customer questions 24/7.</p>
+          <div class="trial-callout">
+            <strong>No charge for 30 days.</strong>
+            Cancel anytime. $99/mo after your trial ends.
+          </div>
+        </div>
+
+        <!-- Form -->
+        <div class="card-body">
+          <div class="error" id="errorMsg"></div>
+
+          <form id="signupForm" novalidate>
+
+            <div class="form-group">
+              <label for="businessName">Business Name</label>
+              <input
+                type="text"
+                id="businessName"
+                name="businessName"
+                placeholder="e.g. Bella's Salon"
+                autocomplete="organization"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="email">Email Address</label>
+              <input
+                type="email"
+                id="email"
+                name="email"
+                placeholder="you@yourbusiness.com"
+                autocomplete="email"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="businessType">Business Type</label>
+              <div class="select-wrapper">
+                <select id="businessType" name="businessType" required>
+                  <option value="">Select your type...</option>
+                  <option value="restaurant">Restaurant</option>
+                  <option value="salon">Salon / Spa</option>
+                  <option value="home_services">Home Services</option>
+                  <option value="retail">Retail</option>
+                  <option value="professional_services">Professional Services</option>
+                  <option value="health_wellness">Health / Wellness</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="websiteUrl">
+                Website URL
+                <span class="optional">(optional but recommended)</span>
+              </label>
+              <input
+                type="url"
+                id="websiteUrl"
+                name="websiteUrl"
+                placeholder="https://yourbusiness.com"
+                autocomplete="url"
+              />
+            </div>
+
+            <button type="submit" class="btn-submit" id="submitBtn">
+              Start Free Trial &rarr;
+            </button>
+
+          </form>
+
+          <div class="security">
+            <svg width="12" height="14" viewBox="0 0 12 14" fill="none">
+              <path d="M6 0L1 2.5V7c0 2.76 2.13 5.34 5 6 2.87-.66 5-3.24 5-6V2.5L6 0z" fill="#9ca3af"/>
+            </svg>
+            Secured by Stripe &nbsp;&middot;&nbsp; Cancel anytime &nbsp;&middot;&nbsp; No contracts
+          </div>
+        </div>
+
+        <!-- Features -->
+        <div class="features">
+          <div class="features-title">What you get</div>
+          <ul class="feature-list">
+            <li>
+              <span class="check">&#10003;</span>
+              AI answers customer questions 24/7 via chat widget
+            </li>
+            <li>
+              <span class="check">&#10003;</span>
+              Automatically trained on your website content
+            </li>
+            <li>
+              <span class="check">&#10003;</span>
+              Embeds on your site with one line of code
+            </li>
+            <li>
+              <span class="check">&#10003;</span>
+              SMS text channel included
+            </li>
+            <li>
+              <span class="check">&#10003;</span>
+              Live in under 60 minutes after signup
+            </li>
+          </ul>
+        </div>
+
+      </div>
+
+      <div class="footer">
+        Questions? Text us at <a href="sms:+16103792553" style="color:#6366f1;">(610) 379-2553</a>
+        or email <a href="mailto:hello@getsprintai.com" style="color:#6366f1;">hello@getsprintai.com</a>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Config
+    const CHECKOUT_API = 'https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/create-checkout';
+    const STARTER_PRICE_ID = 'price_1TG8GsFPm1l8Fm1TSaLhOIaL';
+
+    // Form Submit
+    document.getElementById('signupForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const btn     = document.getElementById('submitBtn');
+      const errDiv  = document.getElementById('errorMsg');
+
+      errDiv.style.display = 'none';
+      errDiv.textContent = '';
+
+      const businessName = document.getElementById('businessName').value.trim();
+      const email        = document.getElementById('email').value.trim();
+      const businessType = document.getElementById('businessType').value;
+      const websiteUrl   = document.getElementById('websiteUrl').value.trim();
+
+      // Basic validation
+      if (!businessName) {
+        showError('Please enter your business name.');
+        return;
+      }
+      if (!email || !email.includes('@')) {
+        showError('Please enter a valid email address.');
+        return;
+      }
+      if (!businessType) {
+        showError('Please select your business type.');
+        return;
+      }
+
+      // Show loading state
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Connecting to Stripe...';
+
+      try {
+        const successUrl = window.location.origin +
+          (window.location.pathname.replace('index.html', '') || '/') +
+          'success.html?session_id={CHECKOUT_SESSION_ID}';
+
+        const cancelUrl = window.location.href;
+
+        const res = await fetch(CHECKOUT_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            price_id:      STARTER_PRICE_ID,
+            plan:          'starter',
+            business_name: businessName,
+            website_url:   websiteUrl || '',
+            business_type: businessType,
+            email:         email,
+            success_url:   successUrl,
+            cancel_url:    cancelUrl,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.url) {
+          throw new Error(data.error || 'Could not create checkout session. Please try again.');
+        }
+
+        // Redirect to Stripe Checkout
+        window.location.href = data.url;
+
+      } catch (err) {
+        showError(err.message || 'Something went wrong. Please try again.');
+        btn.disabled = false;
+        btn.innerHTML = 'Start Free Trial &rarr;';
+      }
+    });
+
+    function showError(msg) {
+      const errDiv = document.getElementById('errorMsg');
+      errDiv.textContent = msg;
+      errDiv.style.display = 'block';
+      errDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  </script>
+</body>
+</html>
