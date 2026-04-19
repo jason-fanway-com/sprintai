@@ -21,8 +21,14 @@
   to   = "/.netlify/functions/sms-webhook"
   status = 200
 
-# Admin CRM
+# Admin CRM (legacy)
 [[redirects]]
   from = "/admin"
   to = "/admin/index.html"
+  status = 200
+
+# React admin dashboard SPA
+[[redirects]]
+  from = "/dashboard/*"
+  to = "/dashboard/index.html"
   status = 200
