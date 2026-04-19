@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>SprintAI - Sold Out Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green:  #22c55e;
+      --red:    #ef4444;
+      --orange: #f97316;
+      --gray50:  #f9fafb;
+      --gray100: #f3f4f6;
+      --gray200: #e5e7eb;
+      --gray400: #9ca3af;
+      --gray500: #6b7280;
+      --gray700: #374151;
+      --gray900: #111827;
+      --brand:  #4f46e5;
+      --brand-dark: #4338ca;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--gray50);
+      color: var(--gray900);
+      min-height: 100dvh;
+    }
+
+    /* ── PIN SCREEN ──────────────────────────────── */
+    #pin-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: 24px;
+    }
+
+    .pin-card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 36px 28px;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.10);
+      text-align: center;
+    }
+
+    .pin-logo {
+      width: 52px;
+      height: 52px;
+      background: var(--brand);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+
+    .pin-logo svg { color: #fff; width: 28px; height: 28px; }
+
+    .pin-card h1 { font-size: 22px; font-weight: 700; color: var(--gray900); margin-bottom: 6px; }
+    .pin-card p  { font-size: 14px; color: var(--gray500); margin-bottom: 28px; }
+
+    .pin-input-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .pin-input-wrap input {
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 16px;
+      border: 1.5px solid var(--gray200);
+      border-radius: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+      text-align: center;
+      letter-spacing: 0.1em;
+    }
+
+    .pin-input-wrap input:focus { border-color: var(--brand); }
+
+    .pin-input-wrap button {
+      width: 100%;
+      padding: 14px;
+      background: var(--brand);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      min-height: 52px;
+    }
+
+    .pin-input-wrap button:hover    { background: var(--brand-dark); }
+    .pin-input-wrap button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .pin-error {
+      color: var(--red);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    /* ── MAIN APP ─────────────────────────────────── */
+    #app-screen { display: none; }
+
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: #fff;
+      border-bottom: 1px solid var(--gray200);
+      padding: 14px 16px;
+    }
+
+    .app-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .shop-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--gray900);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sold-out-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--red);
+      color: #fff;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sold-out-badge.none {
+      background: var(--green);
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .btn-reset {
+      flex: 1;
+      padding: 10px;
+      background: var(--gray100);
+      color: var(--gray700);
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      min-height: 44px;
+      transition: background 0.15s;
+    }
+
+    .btn-reset:hover { background: var(--gray200); }
+
+    /* ── CATEGORY SECTION ─────────────────────────── */
+    .content { padding-bottom: 120px; }
+
+    .category-header {
+      position: sticky;
+      top: 115px;
+      z-index: 10;
+      padding: 8px 16px;
+      background: var(--gray50);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--gray500);
+      border-bottom: 1px solid var(--gray200);
+    }
+
+    /* ── ITEM ROW ─────────────────────────────────── */
+    .item-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: #fff;
+      border-bottom: 1px solid var(--gray100);
+      border-left: 3px solid transparent;
+      transition: border-color 0.2s, opacity 0.2s;
+      min-height: 64px;
+    }
+
+    .item-row.available  { border-left-color: var(--green); }
+    .item-row.sold-out   { border-left-color: var(--red); opacity: 0.75; }
+
+    .item-info { flex: 1; min-width: 0; }
+    .item-name { font-size: 15px; font-weight: 500; color: var(--gray900); }
+    .item-row.sold-out .item-name { text-decoration: line-through; color: var(--gray400); }
+
+    .item-price {
+      font-size: 13px;
+      color: var(--gray500);
+      margin-top: 2px;
+    }
+    .item-row.sold-out .item-price { text-decoration: line-through; color: var(--gray400); }
+
+    /* ── TOGGLE SWITCH ────────────────────────────── */
+    .toggle-wrap {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+
+    .toggle {
+      position: relative;
+      width: 52px;
+      height: 30px;
+      cursor: pointer;
+    }
+
+    .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+
+    .toggle-track {
+      display: block;
+      width: 52px;
+      height: 30px;
+      border-radius: 15px;
+      background: var(--red);
+      transition: background 0.25s;
+      position: relative;
+    }
+
+    .toggle input:checked + .toggle-track { background: var(--green); }
+
+    .toggle-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      transition: transform 0.25s;
+    }
+
+    .toggle input:checked ~ .toggle-thumb { transform: translateX(22px); }
+
+    /* We put thumb inside track for simpler HTML */
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      transition: transform 0.25s;
+    }
+
+    .toggle input:checked + .toggle-track::after { transform: translateX(22px); }
+
+    /* ── PAUSE FOOTER ─────────────────────────────── */
+    .pause-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 12px 16px 28px;
+      background: linear-gradient(to top, #fff 80%, transparent);
+      z-index: 20;
+    }
+
+    .btn-pause {
+      width: 100%;
+      padding: 16px;
+      background: var(--red);
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 56px;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .btn-pause:hover  { background: #dc2626; }
+    .btn-pause:active { transform: scale(0.98); }
+
+    .btn-resume {
+      background: var(--green);
+    }
+    .btn-resume:hover { background: #16a34a; }
+
+    /* ── LOADING OVERLAY ──────────────────────────── */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px;
+      color: var(--gray500);
+      font-size: 14px;
+    }
+
+    /* ── TOAST ────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      bottom: 90px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--gray900);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 100;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<!-- PIN Screen -->
+<div id="pin-screen">
+  <div class="pin-card">
+    <div class="pin-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+    </div>
+    <h1>Menu Manager</h1>
+    <p id="pin-subtitle">Enter your shop PIN to continue</p>
+    <div class="pin-input-wrap">
+      <input id="pin-input" type="password" inputmode="numeric" maxlength="10" placeholder="PIN" autocomplete="off" />
+      <button id="pin-btn" onclick="handlePinSubmit()">Sign In</button>
+    </div>
+    <p id="pin-error" class="pin-error" style="display:none"></p>
+  </div>
+</div>
+
+<!-- App Screen -->
+<div id="app-screen">
+  <header class="app-header">
+    <div class="app-header-top">
+      <span class="shop-name" id="shop-name-header">Loading...</span>
+      <span class="sold-out-badge" id="sold-out-badge">0 sold out</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn-reset" onclick="resetAll()">Reset All Available</button>
+    </div>
+  </header>
+
+  <div class="content" id="menu-content">
+    <div class="loading">Loading menu...</div>
+  </div>
+
+  <div class="pause-footer">
+    <button id="pause-btn" class="btn-pause" onclick="togglePause()">
+      Pause Online Ordering
+    </button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── Config ───────────────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ5NTMwMDQsImV4cCI6MjA2MDUyOTAwNH0.Pp7Y1fJdkNXtcTYiKuGrfGKnp8v2mFgbLi8WEFrEdgA'
+const SESSION_KEY  = 'merchant_session'
+const SESSION_TTL  = 12 * 60 * 60 * 1000  // 12 hours
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let shopId      = null
+let shopName    = ''
+let isPaused    = false
+let menuItems   = []
+let soldOutSet  = new Set()
+let pendingOps  = []
+let isOnline    = navigator.onLine
+let today       = getTodayDate()
+
+// ─── URL Parsing ──────────────────────────────────────────────────────────────
+function getShopSlugFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  return params.get('shop') || ''
+}
+
+// ─── Session ──────────────────────────────────────────────────────────────────
+function saveSession(data) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...data, savedAt: Date.now() }))
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (Date.now() - data.savedAt > SESSION_TTL) { localStorage.removeItem(SESSION_KEY); return null }
+    return data
+  } catch { return null }
+}
+
+// ─── Supabase REST ────────────────────────────────────────────────────────────
+async function sbGet(table, query = '') {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Accept': 'application/json',
+    }
+  })
+  if (!res.ok) throw new Error(`GET ${table} failed: ${res.status}`)
+  return res.json()
+}
+
+async function sbPost(table, data) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(`POST ${table} failed: ${res.status}`)
+}
+
+async function sbDelete(table, query) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+    method: 'DELETE',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Prefer': 'return=minimal',
+    }
+  })
+  if (!res.ok) throw new Error(`DELETE ${table} failed: ${res.status}`)
+}
+
+async function sbPatch(table, query, data) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+    method: 'PATCH',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status}`)
+}
+
+// ─── Date helper ──────────────────────────────────────────────────────────────
+function getTodayDate() {
+  const d = new Date()
+  return d.toISOString().split('T')[0]
+}
+
+// ─── PIN Auth ─────────────────────────────────────────────────────────────────
+async function handlePinSubmit() {
+  const pin   = document.getElementById('pin-input').value.trim()
+  const slug  = getShopSlugFromUrl()
+  const btn   = document.getElementById('pin-btn')
+  const errEl = document.getElementById('pin-error')
+
+  if (!pin) { showPinError('Please enter your PIN.'); return }
+  if (!slug) { showPinError('No shop specified. Add ?shop=your-slug to the URL.'); return }
+
+  btn.disabled = true
+  btn.textContent = 'Checking...'
+  errEl.style.display = 'none'
+
+  try {
+    const shops = await sbGet('shops', `slug=eq.${encodeURIComponent(slug)}&select=id,name,is_paused,merchant_pin`)
+    if (!shops.length) { showPinError('Shop not found.'); return }
+    const shop = shops[0]
+    if (shop.merchant_pin !== pin) { showPinError('Incorrect PIN. Please try again.'); return }
+    // Auth success
+    saveSession({ shopId: shop.id, shopName: shop.name, slug })
+    shopId   = shop.id
+    shopName = shop.name
+    isPaused = shop.is_paused
+    await initApp()
+  } catch (e) {
+    showPinError('Connection error. Please try again.')
+    console.error(e)
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Sign In'
+  }
+}
+
+function showPinError(msg) {
+  const el = document.getElementById('pin-error')
+  el.textContent = msg
+  el.style.display = 'block'
+}
+
+// ─── Init App ─────────────────────────────────────────────────────────────────
+async function initApp() {
+  document.getElementById('pin-screen').style.display = 'none'
+  document.getElementById('app-screen').style.display = 'block'
+  document.getElementById('shop-name-header').textContent = shopName
+  updatePauseButton()
+  await loadMenu()
+  setInterval(syncPending, 5000)
+}
+
+async function loadMenu() {
+  document.getElementById('menu-content').innerHTML = '<div class="loading">Loading menu...</div>'
+  try {
+    // Get shop's current pause status
+    const shops = await sbGet('shops', `id=eq.${shopId}&select=is_paused`)
+    if (shops.length) isPaused = shops[0].is_paused
+    updatePauseButton()
+
+    // Get latest menu
+    const menus = await sbGet('menus', `shop_id=eq.${shopId}&order=created_at.desc&limit=1&select=id`)
+    if (!menus.length) {
+      document.getElementById('menu-content').innerHTML = '<div class="loading">No menu found. Upload a menu from the admin dashboard.</div>'
+      return
+    }
+    const menuId = menus[0].id
+
+    // Get all active items
+    const items = await sbGet('menu_items', `menu_id=eq.${menuId}&active=eq.true&order=display_order.asc&select=id,name,price_cents,category,display_order`)
+    menuItems = items
+
+    // Get today's availability overrides (sold-out items)
+    today = getTodayDate()
+    const overrides = await sbGet('availability_overrides', `shop_id=eq.${shopId}&business_date=eq.${today}&select=menu_item_id`)
+    soldOutSet = new Set(overrides.map(o => o.menu_item_id))
+
+    renderMenu()
+  } catch (e) {
+    document.getElementById('menu-content').innerHTML = `<div class="loading">Error loading menu: ${e.message}</div>`
+    console.error(e)
+  }
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function renderMenu() {
+  const soldOutCount = soldOutSet.size
+  const badge = document.getElementById('sold-out-badge')
+  badge.textContent  = soldOutCount === 0 ? 'All available' : `${soldOutCount} sold out`
+  badge.className    = 'sold-out-badge' + (soldOutCount === 0 ? ' none' : '')
+
+  // Group by category
+  const groups = {}
+  for (const item of menuItems) {
+    const cat = item.category || 'Other'
+    if (!groups[cat]) groups[cat] = []
+    groups[cat].push(item)
+  }
+
+  let html = ''
+  for (const [cat, items] of Object.entries(groups)) {
+    html += `<div class="category-header">${escHtml(cat)}</div>`
+    for (const item of items) {
+      const soldOut  = soldOutSet.has(item.id)
+      const checked  = !soldOut ? 'checked' : ''
+      const rowClass = soldOut ? 'sold-out' : 'available'
+      html += `
+        <div class="item-row ${rowClass}" id="row-${item.id}">
+          <div class="item-info">
+            <div class="item-name">${escHtml(item.name)}</div>
+            <div class="item-price">$${(item.price_cents / 100).toFixed(2)}</div>
+          </div>
+          <label class="toggle toggle-wrap" title="${soldOut ? 'Mark available' : 'Mark sold out'}">
+            <input type="checkbox" ${checked} onchange="handleToggle('${item.id}', this.checked)" />
+            <div class="toggle-track"></div>
+          </label>
+        </div>`
+    }
+  }
+
+  document.getElementById('menu-content').innerHTML = html || '<div class="loading">No menu items found.</div>'
+}
+
+// ─── Toggle ───────────────────────────────────────────────────────────────────
+async function handleToggle(menuItemId, isAvailable) {
+  // Optimistic update
+  const row = document.getElementById(`row-${menuItemId}`)
+  if (isAvailable) {
+    soldOutSet.delete(menuItemId)
+    row.className = 'item-row available'
+  } else {
+    soldOutSet.add(menuItemId)
+    row.className = 'item-row sold-out'
+  }
+  // Update badge
+  const soldOutCount = soldOutSet.size
+  const badge = document.getElementById('sold-out-badge')
+  badge.textContent = soldOutCount === 0 ? 'All available' : `${soldOutCount} sold out`
+  badge.className   = 'sold-out-badge' + (soldOutCount === 0 ? ' none' : '')
+
+  if (isOnline) {
+    try {
+      await applyToggle(menuItemId, isAvailable)
+    } catch (e) {
+      console.error('Toggle failed, queuing:', e)
+      pendingOps.push({ menuItemId, isAvailable })
+      showToast('Saved offline. Will sync when connected.')
+    }
+  } else {
+    pendingOps.push({ menuItemId, isAvailable })
+    showToast('Saved offline. Will sync when connected.')
+  }
+}
+
+async function applyToggle(menuItemId, isAvailable) {
+  if (isAvailable) {
+    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&menu_item_id=eq.${menuItemId}&business_date=eq.${today}`)
+  } else {
+    // Upsert: delete then insert to avoid conflicts
+    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&menu_item_id=eq.${menuItemId}&business_date=eq.${today}`)
+    await sbPost('availability_overrides', {
+      shop_id:       shopId,
+      menu_item_id:  menuItemId,
+      business_date: today,
+      source:        'merchant',
+      set_by:        'merchant-ui',
+    })
+  }
+}
+
+// ─── Reset All ────────────────────────────────────────────────────────────────
+async function resetAll() {
+  if (!confirm('Mark all items as available for today?')) return
+  try {
+    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&business_date=eq.${today}`)
+    soldOutSet.clear()
+    renderMenu()
+    showToast('All items marked available')
+  } catch (e) {
+    showToast('Error resetting. Please try again.')
+    console.error(e)
+  }
+}
+
+// ─── Pause Toggle ─────────────────────────────────────────────────────────────
+async function togglePause() {
+  const newState = !isPaused
+  const label    = newState ? 'Pause online ordering?' : 'Resume online ordering?'
+  if (!confirm(label)) return
+  try {
+    await sbPatch('shops', `id=eq.${shopId}`, { is_paused: newState })
+    isPaused = newState
+    updatePauseButton()
+    showToast(newState ? 'Ordering paused' : 'Ordering resumed')
+  } catch (e) {
+    showToast('Error updating pause status.')
+    console.error(e)
+  }
+}
+
+function updatePauseButton() {
+  const btn = document.getElementById('pause-btn')
+  if (isPaused) {
+    btn.textContent = 'Resume Online Ordering'
+    btn.className   = 'btn-pause btn-resume'
+  } else {
+    btn.textContent = 'Pause Online Ordering'
+    btn.className   = 'btn-pause'
+  }
+}
+
+// ─── Offline Sync ─────────────────────────────────────────────────────────────
+async function syncPending() {
+  if (!isOnline || pendingOps.length === 0) return
+  const ops = [...pendingOps]
+  pendingOps = []
+  for (const op of ops) {
+    try {
+      await applyToggle(op.menuItemId, op.isAvailable)
+    } catch (e) {
+      pendingOps.push(op)
+      console.error('Sync failed for op:', op, e)
+    }
+  }
+  if (pendingOps.length === 0) showToast('Synced')
+}
+
+window.addEventListener('online',  () => { isOnline = true;  syncPending() })
+window.addEventListener('offline', () => { isOnline = false })
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+let toastTimer = null
+function showToast(msg) {
+  const el = document.getElementById('toast')
+  el.textContent = msg
+  el.classList.add('show')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2000)
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return (str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// Enter key on PIN input
+document.getElementById('pin-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') handlePinSubmit()
+})
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+;(async function boot() {
+  const session = loadSession()
+  const slug    = getShopSlugFromUrl()
+
+  // Pre-fill subtitle with shop slug
+  if (slug) {
+    document.getElementById('pin-subtitle').textContent = `Enter PIN for ${slug}`
+  }
+
+  if (session && session.slug === slug) {
+    shopId   = session.shopId
+    shopName = session.shopName
+    await initApp()
+  }
+  // else: show PIN screen (already visible by default)
+})()
+</script>
+</body>
+</html>
