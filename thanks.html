@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>We got it. | SprintAI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --brand: #E8521A;
+  --cream: #FFFDF9;
+  --navy: #17212E;
+  --ink: #2A3540;
+  --muted: #687585;
+  --border-warm: #EDE3DA;
+  --font-d: 'Fraunces', Georgia, serif;
+  --font-b: 'DM Sans', system-ui, sans-serif;
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font-b);
+  background: var(--cream);
+  color: var(--ink);
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+}
+.logo {
+  display: flex; align-items: center; gap: 10px;
+  text-decoration: none; margin-bottom: 48px;
+}
+.logo-mark {
+  width: 36px; height: 36px; background: var(--brand);
+  border-radius: 10px; display: flex; align-items: center;
+  justify-content: center; font-size: 20px;
+}
+.logo-text {
+  font-family: var(--font-d); font-weight: 700;
+  font-size: 20px; color: var(--navy); letter-spacing: -0.3px;
+}
+.check {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: #F0FDF4; border: 2px solid #BBF7D0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36px; margin: 0 auto 28px;
+}
+h1 {
+  font-family: var(--font-d); font-size: 36px; font-weight: 800;
+  color: var(--navy); margin-bottom: 16px; letter-spacing: -0.8px;
+}
+p {
+  font-size: 18px; color: var(--muted); max-width: 480px;
+  margin: 0 auto 12px; line-height: 1.7;
+}
+.back {
+  display: inline-block; margin-top: 32px;
+  background: var(--brand); color: #fff;
+  padding: 14px 28px; border-radius: 12px;
+  font-size: 16px; font-weight: 600;
+  text-decoration: none; font-family: var(--font-b);
+  transition: background .2s;
+}
+.back:hover { background: #C94412; }
+</style>
+</head>
+<body>
+<a class="logo" href="/">
+  <div class="logo-mark">🍕</div>
+  <span class="logo-text">SprintAI</span>
+</a>
+<div class="check">✓</div>
+<h1>We got your info.</h1>
+<p>We will reach out within 24 hours to get your shop set up. Usually faster.</p>
+<p style="font-size:15px;">If you want to get ahead, snap a photo of your menu and have it ready. That is all we need to get started.</p>
+<a class="back" href="/">Back to SprintAI</a>
+</body>
+</html>
