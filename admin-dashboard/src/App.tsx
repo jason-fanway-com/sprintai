@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import { Toaster } from 'react-hot-toast'
 import { supabase } from './lib/supabase'
 import type { User } from '@supabase/supabase-js'
 
@@ -46,7 +47,9 @@ export default function App() {
   }
 
   return (
-    <Routes>
+    <>
+      <Toaster position="top-right" />
+      <Routes>
       <Route path="/login" element={<Login user={user} />} />
       <Route
         path="/"
@@ -68,5 +71,6 @@ export default function App() {
         <Route path="chat-test" element={<ChatTest />} />
       </Route>
     </Routes>
+    </>
   )
 }
