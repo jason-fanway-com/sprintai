@@ -892,13 +892,16 @@ Deno.serve(async (req: Request) => {
     const upper      = userMessage.toUpperCase().trim();
     const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS.has(upper)) {
-      return twimlResponse("You have been unsubscribed and will receive no further messages. Reply START to resubscribe.");
+      await sendSmsViaTwilio(toNumber, fromNumber, "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.");
+      return emptyTwiml();
     }
     if (upper === "HELP") {
-      return twimlResponse("For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.");
+      await sendSmsViaTwilio(toNumber, fromNumber, "For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.");
+      return emptyTwiml();
     }
     if (upper === "START") {
-      return twimlResponse("You are now subscribed. Text us to start an order!");
+      await sendSmsViaTwilio(toNumber, fromNumber, "You are now subscribed. Text us to start an order!");
+      return emptyTwiml();
     }
 
     const { data: shopData } = await supabase
@@ -907,11 +910,13 @@ Deno.serve(async (req: Request) => {
       .single();
     if (!shopData) {
       console.error("[chat-sms] Shop not found for Twilio number:", toNumber);
-      return twimlResponse("Sorry, this number is not configured for ordering.");
+      await sendSmsViaTwilio(toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
+      return emptyTwiml();
     }
     shop = shopData as Shop;
     if (shop.is_paused) {
-      return twimlResponse(shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
+      await sendSmsViaTwilio(toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
+      return emptyTwiml();
     }
     customerPhone = fromNumber;
     sessionId     = `sms:${fromNumber}`;
@@ -973,7 +978,8 @@ Deno.serve(async (req: Request) => {
     if (convErr || !newConv) {
       console.error("[chat-sms] Failed to create conversation:", convErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      return isSms ? twimlResponse(errMsg) : jsonError(errMsg, 500);
+      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      return jsonError(errMsg, 500);
     }
     conversation = newConv;
   }
@@ -996,7 +1002,8 @@ Deno.serve(async (req: Request) => {
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      return isSms ? twimlResponse(errMsg) : jsonError(errMsg, 500);
+      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      return jsonError(errMsg, 500);
     }
     cart = newCart as OrderCart;
   }
@@ -1006,13 +1013,15 @@ Deno.serve(async (req: Request) => {
     const reply = "Your order is confirmed and paid. Thank you!";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    return isSms ? twimlResponse(reply) : jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   if (cart.phase === "checkout") {
     const reply = "Your payment link was sent. Please complete payment to confirm your order. Say \"restart\" to start over.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    return isSms ? twimlResponse(reply) : jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
 
   // ── Build effective menu ──────────────────────────────────────────────────
@@ -1024,7 +1033,8 @@ Deno.serve(async (req: Request) => {
     const reply = "Sorry, our menu is not available right now. Please call us to place an order.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    return isSms ? twimlResponse(reply) : jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
+    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
   }
 
   // ── Load conversation history ─────────────────────────────────────────────
@@ -1067,7 +1077,10 @@ Deno.serve(async (req: Request) => {
       : combined;
   }
 
-  if (isSms) return twimlResponse(finalReply);
+  if (isSms) {
+    await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, finalReply);
+    return emptyTwiml();
+  }
   return jsonResponse({
     reply:        finalReply,
     cart:         currentCart.cart_json,
