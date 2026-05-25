@@ -8,6 +8,7 @@ interface Shop {
   email_ticket_recipient: string | null
   pause_message: string | null
   phone_number_e164: string | null
+  merchant_pin?: string | null
 }
 
 interface SettingsTabProps {
@@ -88,6 +89,10 @@ export default function SettingsTab({
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Shop ID</label>
             <p className="text-xs font-mono text-gray-400">{shop.id}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Merchant PIN</label>
+            <p className="text-xs font-mono text-gray-400">{(shop as any).merchant_pin ?? <span className="text-gray-300">Not set</span>}</p>
           </div>
         </div>
       </div>
