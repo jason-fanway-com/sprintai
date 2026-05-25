@@ -12,6 +12,36 @@ const FIRECRAWL_BASE = "https://api.firecrawl.dev/v1";
 const MAX_PAGES = 8;
 const MAX_COMBINED_CHARS = 50_000;
 
+/** Extract JSON-LD structured data from raw HTML */
+function extractStructuredData(html: string): string {
+  const blocks: string[] = [];
+  const re = /<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      blocks.push(JSON.stringify(parsed, null, 2));
+    } catch {
+      // skip malformed JSON-LD
+    }
+  }
+  // Also extract footer text (often contains address, hours)
+  const footerRe = /<footer[^>]*>([\s\S]*?)<\/footer>/gi;
+  let footerMatch;
+  while ((footerMatch = footerRe.exec(html)) !== null) {
+    const text = footerMatch[1]
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text.length > 10) blocks.push(`Footer text: ${text.substring(0, 1000)}`);
+  }
+  return blocks.join("\n\n");
+}
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":  "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -85,23 +115,26 @@ function prioritizePages(links: string[], baseUrl: string): string[] {
 }
 
 /** Scrape a single page via Firecrawl /scrape (synchronous, fast) */
-async function scrapePage(url: string, apiKey: string): Promise<string> {
+async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string }> {
   try {
+    const formats = includeRaw ? ["markdown", "rawHtml"] : ["markdown"];
     const res = await fetch(`${FIRECRAWL_BASE}/scrape`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type":  "application/json",
       },
-      body: JSON.stringify({ url, formats: ["markdown"] }),
+      body: JSON.stringify({ url, formats }),
     });
 
-    if (!res.ok) return "";
+    if (!res.ok) return { markdown: "", structured: "" };
 
-    const data: { success: boolean; data?: { markdown?: string } } = await res.json();
-    return data.data?.markdown ?? "";
+    const data: { success: boolean; data?: { markdown?: string; rawHtml?: string } } = await res.json();
+    const markdown = data.data?.markdown ?? "";
+    const structured = includeRaw && data.data?.rawHtml ? extractStructuredData(data.data.rawHtml) : "";
+    return { markdown, structured };
   } catch {
-    return "";
+    return { markdown: "", structured: "" };
   }
 }
 
@@ -147,10 +180,20 @@ Deno.serve(async (req: Request) => {
   }
 
   // Step 2: Scrape each page via /scrape (synchronous, ~0.5s each)
+  // Request rawHtml for homepage to extract structured data (JSON-LD, footer)
   const results: string[] = [];
-  for (const pageUrl of pages) {
-    const md = await scrapePage(pageUrl, firecrawlKey);
-    if (md.trim()) results.push(`## Source: ${pageUrl}\n\n${md}`);
+  let structuredContext = "";
+  for (let i = 0; i < pages.length; i++) {
+    const pageUrl = pages[i];
+    const includeRaw = i === 0; // only homepage for structured data
+    const { markdown, structured } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
+    if (markdown.trim()) results.push(`## Source: ${pageUrl}\n\n${markdown}`);
+    if (structured) structuredContext = structured;
+  }
+
+  // Prepend structured data so the summarizer sees address, hours, etc.
+  if (structuredContext) {
+    results.unshift(`## Structured Data (JSON-LD + Footer)\n\n${structuredContext}`);
   }
 
   const combinedText = results.join("\n\n---\n\n").substring(0, MAX_COMBINED_CHARS);
