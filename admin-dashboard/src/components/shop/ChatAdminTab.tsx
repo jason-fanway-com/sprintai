@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Globe, MessageSquare, UtensilsCrossed, Upload, Settings, Pencil, Trash2, Plus } from 'lucide-react'
 import { UseMutationResult } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import ShopChatTest from '../ShopChatTest'
+import OnboardingWizard from './OnboardingWizard'
 
 interface MenuItem {
   id: string
@@ -105,12 +106,42 @@ export default function ChatAdminTab({
     return () => window.removeEventListener('beforeunload', handler)
   }, [isDirty])
 
+  const [showWizard, setShowWizard] = useState(true)
+  const hasContext = !!(shop.shop_context && shop.shop_context.trim())
+  const hasMenuItems = (menuItems ?? []).length > 0
+  const hasInstructions = !!(shop.ai_instructions && shop.ai_instructions.trim())
+  const isNewShop = !hasContext && !hasMenuItems && !hasInstructions
+
+  // Show wizard only for truly new shops or if user hasn't dismissed
+  const showOnboarding = showWizard && isNewShop
+
   const categoryGroups = (menuItems ?? []).reduce<Record<string, MenuItem[]>>((acc, item) => {
     const cat = item.category ?? 'Other'
     if (!acc[cat]) acc[cat] = []
     acc[cat].push(item)
     return acc
   }, {})
+
+  if (showOnboarding) {
+    return (
+      <OnboardingWizard
+        websiteUrl={shop.website_url ?? ''}
+        hasContext={hasContext}
+        hasMenuItems={hasMenuItems}
+        hasInstructions={hasInstructions}
+        isScraping={isScraping}
+        isUploading={isUploading}
+        urlDraft={urlDraft}
+        instructionsDraft={instructionsDraft}
+        onUrlDraftChange={onUrlDraftChange}
+        onInstructionsDraftChange={onInstructionsDraftChange}
+        onScrape={onScrapeFromChatTab}
+        onUploadPdf={onUploadPdf}
+        onSave={onSaveChatContext}
+        onSkip={() => setShowWizard(false)}
+      />
+    )
+  }
 
   return (
     <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
