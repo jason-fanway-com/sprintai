@@ -1,5 +1,6 @@
 import { Globe, MessageSquare, UtensilsCrossed, Upload, Settings, Pencil, Trash2, Plus } from 'lucide-react'
 import { UseMutationResult } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import ShopChatTest from '../ShopChatTest'
 
 interface MenuItem {
@@ -27,7 +28,6 @@ interface ChatAdminTabProps {
   instructionsDraft: string
   editingContext: boolean
   isScraping: boolean
-  scrapeError: string | null
   isUploading: boolean
   uploadStatus: string
   editingItemId: string | null
@@ -51,6 +51,7 @@ interface ChatAdminTabProps {
   onAddItemFormChange: (form: AddItemForm) => void
   onAddItemCategoryChange: (category: string) => void
   saveChatContext: UseMutationResult<void, Error, void, unknown>
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export default function ChatAdminTab({
@@ -64,7 +65,6 @@ export default function ChatAdminTab({
   instructionsDraft,
   editingContext,
   isScraping,
-  scrapeError,
   isUploading,
   uploadStatus,
   editingItemId,
@@ -88,6 +88,7 @@ export default function ChatAdminTab({
   onAddItemFormChange,
   onAddItemCategoryChange,
   saveChatContext,
+  onDirtyChange,
 }: ChatAdminTabProps) {
   const categoryGroups = (menuItems ?? []).reduce<Record<string, MenuItem[]>>((acc, item) => {
     const cat = item.category ?? 'Other'
@@ -143,7 +144,7 @@ export default function ChatAdminTab({
                   {isScraping ? 'Scraping...' : 'Scrape'}
                 </button>
               </div>
-              {scrapeError && <p className="text-xs text-red-600">{scrapeError}</p>}
+
               <div className="relative">
                 <textarea
                   value={contextDraft}

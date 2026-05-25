@@ -53,7 +53,6 @@ export default function ShopDetail() {
   const [editingShop, setEditingShop] = useState(false)
   const [shopForm, setShopForm] = useState<Partial<Shop>>({})
   const [isScraping, setIsScraping] = useState(false)
-  const [scrapeError, setScrapeError] = useState<string | null>(null)
   const [editingContext, setEditingContext] = useState(false)
   const [urlDraft, setUrlDraft] = useState('')
   const [contextDraft, setContextDraft] = useState('')
@@ -156,7 +155,12 @@ export default function ShopDetail() {
       }).eq('id', id!)
       if (error) throw error
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['shop', id] }); setEditingShop(false) },
+    onSuccess: () => { 
+      qc.invalidateQueries({ queryKey: ['shop', id] })
+      setEditingShop(false)
+      toast.success('Settings saved')
+    },
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const saveChatContext = useMutation({
@@ -171,7 +175,9 @@ export default function ShopDetail() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['shop', id] })
       setEditingContext(false)
+      toast.success('Saved')
     },
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const editMenuItem = useMutation({
@@ -186,6 +192,7 @@ export default function ShopDetail() {
       if (error) throw error
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['menu-items', id] }); setEditingItemId(null) },
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const deleteMenuItem = useMutation({
@@ -194,6 +201,7 @@ export default function ShopDetail() {
       if (error) throw error
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const addMenuItem = useMutation({
@@ -217,12 +225,12 @@ export default function ShopDetail() {
       setAddItemCategory('')
       setAddItemForm({ name: '', price_cents_str: '', description: '' })
     },
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const scrapeFromChatTab = async () => {
     if (!id) return
     setIsScraping(true)
-    setScrapeError(null)
     try {
       if (urlDraft !== (shop?.website_url ?? '')) {
         const { error } = await supabase.from('shops').update({ website_url: urlDraft || null }).eq('id', id)
@@ -240,11 +248,12 @@ export default function ShopDetail() {
       if (result.ok) {
         if (result.context) setContextDraft(result.context)
         qc.invalidateQueries({ queryKey: ['shop', id] })
+        toast.success(`Website scraped — ${result.pages_scraped ?? ''} pages`)
       } else {
-        setScrapeError(result.error ?? 'Scraping failed')
+        toast.error(result.error ?? 'Scraping failed')
       }
     } catch (err) {
-      setScrapeError((err as Error).message)
+      toast.error((err as Error).message)
     } finally {
       setIsScraping(false)
     }
@@ -267,13 +276,13 @@ export default function ShopDetail() {
       const result = await res.json()
       if (result.ok) {
         qc.invalidateQueries({ queryKey: ['menu-items', id] })
-        setUploadStatus(`Parsed ${result.items_parsed} items successfully`)
-        setTimeout(() => setUploadStatus(''), 8000)
+        toast.success(`Parsed ${result.items_parsed} items`)
+        setUploadStatus('')
       } else {
-        setUploadStatus(`Upload failed: ${result.error ?? 'Unknown error'}`)
+        toast.error(result.error ?? 'Unknown error')
       }
     } catch (err) {
-      setUploadStatus(`Upload failed: ${(err as Error).message}`)
+      toast.error((err as Error).message)
     } finally {
       setIsUploading(false)
       e.target.value = ''
@@ -362,7 +371,6 @@ export default function ShopDetail() {
           instructionsDraft={instructionsDraft}
           editingContext={editingContext}
           isScraping={isScraping}
-          scrapeError={scrapeError}
           isUploading={isUploading}
           uploadStatus={uploadStatus}
           editingItemId={editingItemId}
