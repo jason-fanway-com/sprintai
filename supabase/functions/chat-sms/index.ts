@@ -903,7 +903,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: shopData } = await supabase
       .from("shops").select("*")
-      .or(`phone_number_e164.eq.${toNumber},reply_from_e164.eq.${toNumber}`)
+      .eq("phone_number_e164", toNumber)
       .single();
     if (!shopData) {
       console.error("[chat-sms] Shop not found for Twilio number:", toNumber);
