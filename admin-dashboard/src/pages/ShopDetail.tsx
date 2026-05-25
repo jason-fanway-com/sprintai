@@ -174,12 +174,16 @@ export default function ShopDetail() {
   const saveChatContext = useMutation({
     mutationFn: async () => {
       const { error } = await supabase.from('shops').update({
-        website_url:  urlDraft || null,
-        shop_context: contextDraft,
+        website_url:    urlDraft || null,
+        shop_context:   contextDraft,
+        ai_instructions: instructionsDraft || null,
       }).eq('id', id!)
       if (error) throw error
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['shop', id] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shop', id] })
+      setEditingContext(false)
+    },
   })
 
   // Chat tab: edit a menu item
@@ -666,20 +670,6 @@ export default function ShopDetail() {
                   placeholder="Example: When a customer orders a dozen bagels, ask them what kinds they want until they reach 12. Never default to plain."
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
                 />
-                <div className="flex justify-end mt-2">
-                  <button
-                    onClick={async () => {
-                      setSavingInstructions(true)
-                      await supabase.from('shops').update({ ai_instructions: instructionsDraft || null }).eq('id', id!)
-                      setSavingInstructions(false)
-                    }}
-                    disabled={savingInstructions}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    {savingInstructions ? 'Saving...' : 'Save Instructions'}
-                  </button>
-                </div>
               </div>
 
               {/* Shop Context section */}
@@ -709,24 +699,39 @@ export default function ShopDetail() {
                     </button>
                   </div>
                   {scrapeError && <p className="text-xs text-red-600">{scrapeError}</p>}
-                  <textarea
-                    value={contextDraft}
-                    onChange={e => setContextDraft(e.target.value)}
-                    rows={5}
-                    placeholder="AI-generated summary will appear here after scraping..."
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
-                  />
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => saveChatContext.mutate()}
-                      disabled={saveChatContext.isPending}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
-                    >
-                      <Save className="w-3.5 h-3.5" />
-                      {saveChatContext.isPending ? 'Saving...' : 'Save Context'}
-                    </button>
+                  <div className="relative">
+                    <textarea
+                      value={contextDraft}
+                      onChange={e => setContextDraft(e.target.value)}
+                      readOnly={!editingContext}
+                      rows={5}
+                      placeholder="AI-generated summary will appear here after scraping..."
+                      className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none ${
+                        editingContext ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 text-gray-600 cursor-default'
+                      }`}
+                    />
+                    {!editingContext && contextDraft && (
+                      <button
+                        onClick={() => setEditingContext(true)}
+                        className="absolute top-2 right-2 px-2 py-0.5 text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded hover:bg-white transition-colors"
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
                 </div>
+              </div>
+
+              {/* Single save button for instructions + context */}
+              <div className="flex justify-end pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => saveChatContext.mutate()}
+                  disabled={saveChatContext.isPending}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {saveChatContext.isPending ? 'Saving...' : 'Save'}
+                </button>
               </div>
 
               {/* Menu section */}
