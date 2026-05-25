@@ -64,9 +64,15 @@ Deno.serve(async (req: Request) => {
 
   try {
     switch (event.type) {
-      case "checkout.session.completed":
-        await handleCheckoutComplete(supabase, stripe, event.data.object as Stripe.Checkout.Session);
+      case "checkout.session.completed": {
+        const sess = event.data.object as Stripe.Checkout.Session;
+        if (sess.metadata?.order_cart_id) {
+          await handleOrderPaymentComplete(supabase, sess);
+        } else {
+          await handleCheckoutComplete(supabase, stripe, sess);
+        }
         break;
+      }
 
       case "customer.subscription.updated":
         await handleSubscriptionUpdated(supabase, event.data.object as Stripe.Subscription);
@@ -84,6 +90,14 @@ Deno.serve(async (req: Request) => {
         await handlePaymentSucceeded(supabase, stripe, event.data.object as Stripe.Invoice);
         break;
 
+      case "checkout.session.expired": {
+        const sess = event.data.object as Stripe.Checkout.Session;
+        if (sess.metadata?.order_cart_id) {
+          await handleOrderPaymentExpired(supabase, sess);
+        }
+        break;
+      }
+
       default:
         console.log(`[stripe-webhook] Unhandled event type: ${event.type}`);
     }
@@ -96,6 +110,80 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ received: true, error: errMsg });
   }
 });
+
+// ─── Order Payment Handlers ───────────────────────────────────────────────────
+
+/** checkout.session.completed with order_cart_id → mark order paid + log ticket */
+async function handleOrderPaymentComplete(
+  supabase: ReturnType<typeof createClient>,
+  session:  Stripe.Checkout.Session,
+): Promise<void> {
+  const cartId = session.metadata?.order_cart_id;
+  if (!cartId) return;
+  console.log(`[stripe-webhook] Order payment complete for cart: ${cartId}`);
+
+  const { error } = await supabase
+    .from("order_carts")
+    .update({ payment_status: "paid", phase: "confirmed" })
+    .eq("id", cartId);
+
+  if (error) throw new Error(`Failed to update cart ${cartId}: ${error.message}`);
+
+  // Stub email ticket — log full order details
+  const { data: cart } = await supabase
+    .from("order_carts")
+    .select("*, shops(name, email_ticket_recipient)")
+    .eq("id", cartId)
+    .single();
+
+  // Notify customer via chat-sms
+  if (cart?.conversation_id) {
+    await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cartId, "payment_confirmed");
+  }
+
+  if (cart) {
+    const shopName  = (cart.shops as { name: string; email_ticket_recipient: string | null })?.name ?? "Unknown Shop";
+    const recipient = (cart.shops as { name: string; email_ticket_recipient: string | null })?.email_ticket_recipient ?? "n/a";
+    const total     = ((cart.total_cents ?? 0) / 100).toFixed(2);
+    console.log(`[ORDER TICKET] ===========================`);
+    console.log(`[ORDER TICKET] Shop:      ${shopName}`);
+    console.log(`[ORDER TICKET] Email:     ${recipient}`);
+    console.log(`[ORDER TICKET] Cart ID:   ${cartId}`);
+    console.log(`[ORDER TICKET] Total:     $${total}`);
+    console.log(`[ORDER TICKET] Pickup:    ${cart.pickup_name ?? "Not specified"}`);
+    console.log(`[ORDER TICKET] Items:`);
+    for (const item of cart.cart_json ?? []) {
+      const mods = item.modifiers?.length > 0 ? ` [${item.modifiers.join(", ")}]` : "";
+      console.log(`[ORDER TICKET]   ${item.quantity}x ${item.name}${mods} - $${((item.price_cents * item.quantity) / 100).toFixed(2)}`);
+    }
+    console.log(`[ORDER TICKET] ===========================`);
+  }
+}
+
+/** checkout.session.expired with order_cart_id → mark order expired */
+async function handleOrderPaymentExpired(
+  supabase: ReturnType<typeof createClient>,
+  session:  Stripe.Checkout.Session,
+): Promise<void> {
+  const cartId = session.metadata?.order_cart_id;
+  if (!cartId) return;
+  console.log(`[stripe-webhook] Order payment expired for cart: ${cartId}`);
+
+  await supabase
+    .from("order_carts")
+    .update({ payment_status: "expired", phase: "expired" })
+    .eq("id", cartId);
+
+  const { data: expiredCart } = await supabase
+    .from("order_carts")
+    .select("shop_id, conversation_id")
+    .eq("id", cartId)
+    .single();
+
+  if (expiredCart?.conversation_id) {
+    await triggerChatSmsSystemEvent(expiredCart.shop_id, expiredCart.conversation_id, cartId, "payment_expired");
+  }
+}
 
 // ─── Event Handlers ───────────────────────────────────────────────────────────
 
@@ -699,6 +787,44 @@ async function sendWelcomeEmail({ toEmail, businessName, tenantId }: WelcomeEmai
   } catch (err) {
     // Non-fatal: log and continue
     console.error("[stripe-webhook] Failed to send welcome email:", err);
+  }
+}
+
+// ─── Chat-SMS notifier ───────────────────────────────────────────────────────
+
+async function triggerChatSmsSystemEvent(
+  shopId:         string,
+  conversationId: string,
+  orderCartId:    string,
+  systemEvent:    string,
+): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const anonKey     = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  const functionUrl = `${supabaseUrl}/functions/v1/chat-sms`;
+
+  try {
+    const res = await fetch(functionUrl, {
+      method:  "POST",
+      headers: {
+        "Authorization": `Bearer ${anonKey}`,
+        "Content-Type":  "application/json",
+      },
+      body: JSON.stringify({
+        shop_id:         shopId,
+        conversation_id: conversationId,
+        order_cart_id:   orderCartId,
+        system_event:    systemEvent,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[stripe-webhook] chat-sms notify failed: ${res.status} ${errText}`);
+    } else {
+      console.log(`[stripe-webhook] chat-sms notified: ${systemEvent} for cart ${orderCartId}`);
+    }
+  } catch (err) {
+    console.error("[stripe-webhook] Failed to notify chat-sms:", err);
   }
 }
 

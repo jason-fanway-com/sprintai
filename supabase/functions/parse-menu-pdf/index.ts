@@ -2,8 +2,8 @@
  * parse-menu-pdf Edge Function
  *
  * POST multipart/form-data:
- *   file    — PDF file
- *   shop_id — UUID of the shop this menu belongs to
+ *   file    -- PDF file
+ *   shop_id -- UUID of the shop this menu belongs to
  *
  * Returns: { ok: true, menu_id: string, items_parsed: number }
  */
@@ -16,8 +16,9 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const CLAUDE_MODEL = "claude-sonnet-4-6";
+const CLAUDE_MODEL   = "claude-sonnet-4-6";
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
+const MAX_PDF_BYTES  = 10 * 1024 * 1024; // 10 MB
 
 interface MenuItem {
   name:           string;
@@ -27,7 +28,7 @@ interface MenuItem {
   modifiers_json: Array<{ name: string; price_cents: number }> | null;
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
+// ---- Main handler ------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -49,7 +50,7 @@ Deno.serve(async (req: Request) => {
     { auth: { persistSession: false } }
   );
 
-  // ── Parse form data ────────────────────────────────────────────────────────
+  // -- Parse form data ---------------------------------------------------------
   let formData: FormData;
   try {
     formData = await req.formData();
@@ -66,7 +67,12 @@ Deno.serve(async (req: Request) => {
     return jsonError("Only PDF files are supported (.pdf extension required)");
   }
 
-  // ── Verify shop exists ─────────────────────────────────────────────────────
+  // -- File size check ---------------------------------------------------------
+  if (file.size > MAX_PDF_BYTES) {
+    return jsonError(`PDF exceeds the 10 MB limit (received ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+  }
+
+  // -- Verify shop exists ------------------------------------------------------
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
     .select("id, name")
@@ -77,26 +83,28 @@ Deno.serve(async (req: Request) => {
     return jsonError("Shop not found", 404);
   }
 
-  // ── Extract text from PDF ──────────────────────────────────────────────────
-  let pdfText: string;
+  // -- Read PDF as base64 ------------------------------------------------------
+  let pdfBase64: string;
   try {
-    pdfText = await extractPdfText(file);
+    const buffer = await file.arrayBuffer();
+    const bytes  = new Uint8Array(buffer);
+    let binary   = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    pdfBase64 = btoa(binary);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[parse-menu-pdf] PDF extraction failed:", msg);
-    return jsonError("Failed to extract text from PDF: " + msg);
+    console.error("[parse-menu-pdf] Failed to read PDF:", msg);
+    return jsonError("Failed to read PDF file: " + msg);
   }
 
-  if (!pdfText.trim()) {
-    return jsonError("No readable text found in PDF. Ensure the PDF contains selectable text (not a scanned image).");
-  }
+  console.log(`[parse-menu-pdf] Sending "${file.name}" (${(file.size / 1024).toFixed(1)} KB) to Claude for shop ${shop_id}`);
 
-  console.log(`[parse-menu-pdf] Extracted ${pdfText.length} chars from "${file.name}" for shop ${shop_id}`);
-
-  // ── Parse menu with Claude ─────────────────────────────────────────────────
+  // -- Parse menu with Claude --------------------------------------------------
   let menuItems: MenuItem[];
   try {
-    menuItems = await parseMenuWithClaude(pdfText);
+    menuItems = await parseMenuWithClaude(pdfBase64);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[parse-menu-pdf] Claude parsing failed:", msg);
@@ -109,7 +117,20 @@ Deno.serve(async (req: Request) => {
 
   console.log(`[parse-menu-pdf] Claude parsed ${menuItems.length} items for shop ${shop_id}`);
 
-  // ── Persist: menus row ─────────────────────────────────────────────────────
+  // -- Delete old menus + items for this shop ----------------------------------
+  const { data: oldMenus } = await supabase
+    .from("menus")
+    .select("id")
+    .eq("shop_id", shop_id);
+
+  if (oldMenus && oldMenus.length > 0) {
+    const oldMenuIds = oldMenus.map((m: { id: string }) => m.id);
+    await supabase.from("menu_items").delete().in("menu_id", oldMenuIds);
+    await supabase.from("menus").delete().in("id", oldMenuIds);
+    console.log(`[parse-menu-pdf] Deleted ${oldMenus.length} old menu(s) and their items for shop ${shop_id}`);
+  }
+
+  // -- Persist: menus row ------------------------------------------------------
   const menuName = file.name.replace(/\.pdf$/i, "").replace(/[-_]/g, " ");
 
   const { data: menu, error: menuErr } = await supabase
@@ -129,22 +150,21 @@ Deno.serve(async (req: Request) => {
     return jsonError("Failed to create menu record: " + (menuErr?.message ?? "unknown"), 500);
   }
 
-  // ── Persist: menu_items rows ───────────────────────────────────────────────
+  // -- Persist: menu_items rows ------------------------------------------------
   const itemRows = menuItems.map((item, idx) => ({
-    menu_id:       menu.id,
-    name:          item.name,
-    description:   item.description ?? null,
-    price_cents:   item.price_cents,
-    category:      item.category ?? "Uncategorized",
+    menu_id:        menu.id,
+    name:           item.name,
+    description:    item.description ?? null,
+    price_cents:    item.price_cents,
+    category:       item.category ?? "Uncategorized",
     modifiers_json: item.modifiers_json ?? null,
-    display_order: idx,
-    active:        true,
+    display_order:  idx,
+    active:         true,
   }));
 
   const { error: itemsErr } = await supabase.from("menu_items").insert(itemRows);
 
   if (itemsErr) {
-    // Roll back the menu row to keep DB consistent
     await supabase.from("menus").delete().eq("id", menu.id);
     console.error("[parse-menu-pdf] Failed to insert menu_items:", itemsErr.message);
     return jsonError("Failed to save menu items: " + itemsErr.message, 500);
@@ -157,75 +177,42 @@ Deno.serve(async (req: Request) => {
   });
 });
 
-// ─── PDF text extraction ──────────────────────────────────────────────────────
-// Uses pdf-parse (npm) to extract text from a PDF File object.
-// Falls back to manual byte scanning for simple text-based PDFs if pdf-parse
-// is unavailable in the Deno runtime.
+// ---- Claude menu parsing (PDF document API) ---------------------------------
 
-async function extractPdfText(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-
-  // Attempt pdf-parse via npm specifier (requires Deno Node compat)
-  try {
-    // @ts-ignore — npm: specifier, types not bundled
-    const pdfParse = (await import("npm:pdf-parse/lib/pdf-parse.js")).default;
-    const result   = await pdfParse(Buffer.from(buffer));
-    return result.text ?? "";
-  } catch (e) {
-    console.warn("[parse-menu-pdf] pdf-parse unavailable, using fallback extractor:", (e as Error).message);
-  }
-
-  // Fallback: manual BT/ET text extraction (identical to train-tenant approach)
-  return extractPdfTextFallback(new Uint8Array(buffer));
-}
-
-function extractPdfTextFallback(bytes: Uint8Array): string {
-  const decoder = new TextDecoder("latin1");
-  const raw     = decoder.decode(bytes);
-  const lines:  string[] = [];
-
-  const btEt = /BT\s*([\s\S]*?)\s*ET/g;
-  let match: RegExpExecArray | null;
-  while ((match = btEt.exec(raw)) !== null) {
-    const block    = match[1];
-    const strParen = /\(([^)\\]*(?:\\.[^)\\]*)*)\)/g;
-    let m2: RegExpExecArray | null;
-    while ((m2 = strParen.exec(block)) !== null) {
-      const s = m2[1]
-        .replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t")
-        .replace(/\\\(/g, "(").replace(/\\\)/g, ")").replace(/\\\\/g, "\\");
-      lines.push(s);
-    }
-  }
-
-  if (lines.length) return lines.join(" ").replace(/\s+/g, " ").trim();
-
-  // Last resort: printable ASCII runs
-  const asciiRuns = raw.match(/[\x20-\x7E]{4,}/g) ?? [];
-  return asciiRuns
-    .filter(s => /[a-zA-Z]/.test(s) && !/^[0-9\s.+\-*/=<>]+$/.test(s))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// ─── Claude menu parsing ──────────────────────────────────────────────────────
-
-async function parseMenuWithClaude(menuText: string): Promise<MenuItem[]> {
+async function parseMenuWithClaude(pdfBase64: string): Promise<MenuItem[]> {
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY is not configured");
 
-  const prompt = `Parse this restaurant menu into structured JSON. Return ONLY a valid JSON array (no markdown fences, no extra text) where each element has:
-- name: string (item name)
-- description: string or null (item description if present)
-- price_cents: integer (convert dollar amounts to cents, e.g. $9.99 → 999)
-- category: string (section/category the item belongs to, e.g. "Appetizers", "Mains")
-- modifiers_json: array of {name: string, price_cents: integer} or null (e.g. add-ons, sizes with upcharges)
+  const prompt = `You are an expert menu parser for a restaurant ordering system. Your job is to extract EVERY orderable item from this menu into structured JSON. This data will power an AI ordering assistant, so accuracy and completeness are critical.
 
-Group items by their menu section. Be precise with prices. If a price is a range, use the base price.
+Return ONLY a valid JSON array (no markdown fences, no commentary) where each element has:
+- name: string (item name, clear and specific)
+- description: string or null (brief description if present on the menu)
+- price_cents: integer (convert dollar amounts to cents, e.g. $9.99 -> 999)
+- category: string (menu section this belongs to)
+- modifiers_json: array of {name: string, price_cents: integer} or null
 
-Menu text:
-${menuText.slice(0, 12000)}`; // cap to avoid token overflow
+CRITICAL PARSING RULES:
+
+1. QUANTITY AND TIER PRICING: This is CRITICAL. Menus often have pricing tiers for the same item type at different quantities or sizes. Examples: single/half dozen/dozen, small/medium/large, slice/whole pie, half pound/full pound, 6-piece/12-piece. You MUST create a SEPARATE item for EACH pricing tier. Name them clearly with the quantity or size in the name. Include notes in the description (e.g. if a "dozen" means 14, say "14 count, pick your flavors"). These tier items exist IN ADDITION to individual variety/flavor items. Both must be in the output. Look carefully for quantity pricing anywhere on the menu, including separate lines, footnotes, sidebars, or headers above item lists. Do not miss it.
+
+2. SIZE VARIATIONS: If an item comes in Small/Large or Regular/Large at different prices, create separate items for each size OR use modifiers_json. Use modifiers if the price difference is small. Use separate items if sizes are listed as distinct menu entries.
+
+3. FLAVOR/TYPE LISTS: If the menu lists a type of item (e.g. "Bagels") with a list of available flavors/varieties (e.g. Plain, Everything, Sesame), create a SEPARATE ITEM for EACH flavor/variety. This is critical because the shop owner needs to mark individual flavors as sold out. For example, if the menu shows "Bagels: Plain, Everything, Sesame, Poppy - $1.50", create: "Plain Bagel" ($1.50), "Everything Bagel" ($1.50), "Sesame Bagel" ($1.50), "Poppy Bagel" ($1.50) as four separate items. If some flavors cost extra, set the higher price on those items.
+
+4. ADD-ONS AND EXTRAS: Capture all add-on items, extras, and upcharges as separate items in an "Extras" or "Add-Ons" category. These are things customers can add to other items.
+
+5. CHOICE-BASED ITEMS: If a sandwich says "choice of bagel, bread, or roll" with upcharges for some (e.g. flagel +$0.60, wrap +$1.00), include these as modifiers on the item.
+
+6. COMBO/PLATTER ITEMS: Platters that come with sides (e.g. "served with home fries and choice of bagel") should note the included sides in the description.
+
+7. DO NOT SKIP ITEMS: Every single priced item on the menu must appear in your output. Go through the menu section by section and verify you have captured everything. Items listed in small print, sidebars, or footnotes are just as important.
+
+8. PRICING: Always use the base price. If a price says "from $X" or "starting at $X", use X. Never guess a price. If no price is listed for an item, skip it.
+
+9. CATEGORIES: Use the exact section headers from the menu when possible. Common categories: Bagels, Breakfast Sandwiches, Cold Sandwiches, Hot Sandwiches, Wraps, Omelettes, Platters, Salads, Sides, Drinks, Desserts, Spreads, Extras.
+
+Before outputting, mentally walk through the entire menu one more time and ask: "Did I capture every priced item? Did I miss any bulk/quantity pricing? Did I miss any sizes?" Then output the final JSON.`;
 
   const res = await fetch(CLAUDE_API_URL, {
     method:  "POST",
@@ -233,11 +220,28 @@ ${menuText.slice(0, 12000)}`; // cap to avoid token overflow
       "Content-Type":      "application/json",
       "x-api-key":         anthropicKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta":    "pdfs-2024-09-25",
     },
     body: JSON.stringify({
       model:      CLAUDE_MODEL,
-      max_tokens: 4096,
-      messages:   [{ role: "user", content: prompt }],
+      max_tokens: 32768,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type:   "document",
+            source: {
+              type:       "base64",
+              media_type: "application/pdf",
+              data:       pdfBase64,
+            },
+          },
+          {
+            type: "text",
+            text: prompt,
+          },
+        ],
+      }],
     }),
   });
 
@@ -259,7 +263,29 @@ ${menuText.slice(0, 12000)}`; // cap to avoid token overflow
   try {
     parsed = JSON.parse(cleaned);
   } catch {
-    throw new Error(`Claude returned unparseable JSON. Raw response (first 500 chars): ${raw.slice(0, 500)}`);
+    // Attempt to recover truncated JSON array: find last complete object and close the array
+    const lastCompleteObj = cleaned.lastIndexOf('},');
+    const lastObj = cleaned.lastIndexOf('}');
+    if (lastCompleteObj > 0) {
+      try {
+        parsed = JSON.parse(cleaned.slice(0, lastCompleteObj + 1) + ']');
+        console.warn(`[parse-menu-pdf] Recovered truncated JSON: salvaged ${(parsed as unknown[]).length} items`);
+      } catch {
+        // Try at the last } instead
+        if (lastObj > lastCompleteObj) {
+          try {
+            parsed = JSON.parse(cleaned.slice(0, lastObj + 1) + ']');
+            console.warn(`[parse-menu-pdf] Recovered truncated JSON (alt): salvaged ${(parsed as unknown[]).length} items`);
+          } catch {
+            throw new Error(`Claude returned unparseable JSON. Raw response (first 500 chars): ${raw.slice(0, 500)}`);
+          }
+        } else {
+          throw new Error(`Claude returned unparseable JSON. Raw response (first 500 chars): ${raw.slice(0, 500)}`);
+        }
+      }
+    } else {
+      throw new Error(`Claude returned unparseable JSON. Raw response (first 500 chars): ${raw.slice(0, 500)}`);
+    }
   }
 
   if (!Array.isArray(parsed)) {
@@ -273,7 +299,7 @@ ${menuText.slice(0, 12000)}`; // cap to avoid token overflow
   );
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ---- Helpers ----------------------------------------------------------------
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

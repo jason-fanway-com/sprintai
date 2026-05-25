@@ -20,7 +20,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const url = new URL(req.url);
-  const path = url.pathname.replace(/^\/functions\/v1\/admin-api/, "");
+  const path = url.pathname.replace(/^\/functions\/v1\/admin-api/, "").replace(/^\/admin-api/, "");
 
   // Create admin Supabase client (service role — bypasses RLS for admin ops)
   const supabase = createClient(
@@ -40,23 +40,22 @@ Deno.serve(async (req: Request) => {
   const isServiceCall = authHeader === `Bearer ${serviceKey}`;
 
   if (!isServiceCall) {
-    // Validate user JWT
-    const anonClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+    // Validate user JWT by calling Supabase Auth REST API directly
+    // (supabase-js getUser doesn't support ES256 tokens in older versions)
+    const token = authHeader.replace("Bearer ", "");
+    const userRes = await fetch(
+      `${Deno.env.get("SUPABASE_URL")}/auth/v1/user`,
+      { headers: { Authorization: `Bearer ${token}`, apikey: Deno.env.get("SUPABASE_ANON_KEY") ?? "" } }
     );
-    const { data: { user }, error } = await anonClient.auth.getUser(
-      authHeader.replace("Bearer ", "")
-    );
-
-    if (error || !user) {
+    if (!userRes.ok) {
       return apiError("Unauthorized", 401);
     }
+    const user = await userRes.json();
 
-    // Check admin flag
-    const isAdmin = user.user_metadata?.is_admin === true;
+    // Check admin flag in both metadata locations
+    const isAdmin = user.user_metadata?.is_admin === true || user.app_metadata?.is_admin === true;
     if (!isAdmin) {
-      return apiError("Forbidden — admin access required", 403);
+      return apiError("Forbidden - admin access required", 403);
     }
   }
 

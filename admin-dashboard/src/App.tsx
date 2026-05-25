@@ -10,6 +10,10 @@ import Tenants from './pages/Tenants'
 import TenantDetail from './pages/TenantDetail'
 import Conversations from './pages/Conversations'
 import ConversationDetail from './pages/ConversationDetail'
+import Shops from './pages/Shops'
+import ShopCreate from './pages/ShopCreate'
+import ShopDetail from './pages/ShopDetail'
+import ChatTest from './pages/ChatTest'
 
 function ProtectedRoute({ children, user }: { children: React.ReactNode; user: User | null }) {
   if (!user) return <Navigate to="/login" replace />
@@ -58,6 +62,10 @@ export default function App() {
         <Route path="tenants/:id" element={<TenantDetail />} />
         <Route path="conversations" element={<Conversations />} />
         <Route path="conversations/:id" element={<ConversationDetail />} />
+        <Route path="shops" element={<Shops />} />
+        <Route path="shops/new" element={<ShopCreate />} />
+        <Route path="shops/:id" element={<ShopDetail />} />
+        <Route path="chat-test" element={<ChatTest />} />
       </Route>
     </Routes>
   )

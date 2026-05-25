@@ -4,6 +4,7 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? ''
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? ''
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export { supabaseAnonKey, supabaseUrl }
 
 // Admin API base URL (Supabase Edge Function)
 export const ADMIN_API_URL = `${supabaseUrl}/functions/v1/admin-api`

@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { Users, MessageSquare, ShoppingBag, TrendingUp, Activity } from 'lucide-react'
-import { adminFetch } from '../lib/supabase'
+import { Users, MessageSquare, ShoppingBag, Store, Activity } from 'lucide-react'
+import { supabase } from '../lib/supabase'
+import { useNavigate } from 'react-router-dom'
 
 interface PlatformStats {
   total_tenants: number
-  active_tenants: number
+  total_shops: number
   total_conversations: number
   total_messages: number
   total_orders: number
-  messages_last_7_days: number
+  total_menu_items: number
 }
 
 interface StatCardProps {
@@ -28,17 +29,37 @@ function StatCard({ label, value, icon: Icon, color, sub }: StatCardProps) {
           <Icon className="w-5 h-5 text-white" />
         </div>
       </div>
-      <p className="text-3xl font-bold text-gray-900">{value.toLocaleString()}</p>
+      <p className="text-3xl font-bold text-gray-900">{typeof value === 'number' ? value.toLocaleString() : value}</p>
       {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
     </div>
   )
 }
 
+async function fetchStats(): Promise<PlatformStats> {
+  const [tenants, shops, conversations, messages, orders, menuItems] = await Promise.all([
+    supabase.from('tenants').select('id', { count: 'exact', head: true }),
+    supabase.from('shops').select('id', { count: 'exact', head: true }),
+    supabase.from('conversations').select('id', { count: 'exact', head: true }),
+    supabase.from('messages').select('id', { count: 'exact', head: true }),
+    supabase.from('order_carts').select('id', { count: 'exact', head: true }).eq('payment_status', 'paid'),
+    supabase.from('menu_items').select('id', { count: 'exact', head: true }).eq('active', true),
+  ])
+  return {
+    total_tenants: tenants.count ?? 0,
+    total_shops: shops.count ?? 0,
+    total_conversations: conversations.count ?? 0,
+    total_messages: messages.count ?? 0,
+    total_orders: orders.count ?? 0,
+    total_menu_items: menuItems.count ?? 0,
+  }
+}
+
 export default function Dashboard() {
+  const navigate = useNavigate()
   const { data: stats, isLoading, error } = useQuery<PlatformStats>({
     queryKey: ['platform-stats'],
-    queryFn: () => adminFetch<PlatformStats>('/stats'),
-    refetchInterval: 60 * 1000, // refresh every minute
+    queryFn: fetchStats,
+    refetchInterval: 60 * 1000,
   })
 
   if (isLoading) {
@@ -67,86 +88,80 @@ export default function Dashboard() {
     )
   }
 
-  const activeRate = stats && stats.total_tenants > 0
-    ? Math.round((stats.active_tenants / stats.total_tenants) * 100)
-    : 0
-
   return (
     <div className="p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Platform Overview</h1>
-        <p className="text-gray-500 mt-1">SprintAI — all tenants, all conversations</p>
+        <p className="text-gray-500 mt-1">SprintAI Ordering Platform</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <StatCard
-          label="Total Tenants"
-          value={stats?.total_tenants ?? 0}
-          icon={Users}
+          label="Shops"
+          value={stats?.total_shops ?? 0}
+          icon={Store}
           color="bg-brand-600"
-          sub={`${stats?.active_tenants ?? 0} active (${activeRate}%)`}
         />
         <StatCard
-          label="Total Conversations"
+          label="Menu Items"
+          value={stats?.total_menu_items ?? 0}
+          icon={Activity}
+          color="bg-green-600"
+          sub="Active items across all shops"
+        />
+        <StatCard
+          label="Conversations"
           value={stats?.total_conversations ?? 0}
           icon={MessageSquare}
           color="bg-purple-600"
         />
         <StatCard
-          label="Total Messages"
-          value={stats?.total_messages ?? 0}
-          icon={Activity}
-          color="bg-green-600"
-          sub={`${stats?.messages_last_7_days ?? 0} in last 7 days`}
-        />
-        <StatCard
-          label="Orders Placed"
+          label="Paid Orders"
           value={stats?.total_orders ?? 0}
           icon={ShoppingBag}
           color="bg-orange-500"
         />
         <StatCard
-          label="Messages / 7d"
-          value={stats?.messages_last_7_days ?? 0}
-          icon={TrendingUp}
+          label="Messages"
+          value={stats?.total_messages ?? 0}
+          icon={MessageSquare}
           color="bg-pink-600"
-          sub="Inbound customer messages"
+          sub="Total across all conversations"
         />
         <StatCard
-          label="Active Rate"
-          value={`${activeRate}%`}
-          icon={Activity}
+          label="Tenants"
+          value={stats?.total_tenants ?? 0}
+          icon={Users}
           color="bg-teal-600"
-          sub="Tenants currently active"
         />
       </div>
 
       <div className="card p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Links</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <a href="/tenants" className="btn-secondary justify-center">
-            <Users className="w-4 h-4" />
-            View Tenants
-          </a>
-          <a href="/conversations" className="btn-secondary justify-center">
+          <button onClick={() => navigate('/shops')} className="btn-secondary justify-center">
+            <Store className="w-4 h-4" />
+            Shops
+          </button>
+          <button onClick={() => navigate('/chat-test')} className="btn-secondary justify-center">
             <MessageSquare className="w-4 h-4" />
-            Conversations
-          </a>
+            Chat Test
+          </button>
           <a
             href="https://dashboard.stripe.com"
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary justify-center"
           >
-            💳 Stripe
+            Stripe
           </a>
           <a
-            href="https://supabase.com/dashboard"
+            href="https://supabase.com/dashboard/project/rvdqfxtrskxekfkqnegx"
             target="_blank"
             rel="noopener noreferrer"
             className="btn-secondary justify-center"
           >
-            🗄️ Supabase
+            Supabase
           </a>
         </div>
       </div>

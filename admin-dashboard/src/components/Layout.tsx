@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store } from 'lucide-react'
 import type { User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 
@@ -9,6 +9,7 @@ interface LayoutProps {
 
 const nav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/shops', label: 'Shops', icon: Store },
   { to: '/tenants', label: 'Tenants', icon: Users },
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
 ]

@@ -11,9 +11,11 @@ interface LoginProps {
 export default function Login({ user }: LoginProps) {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
+  const [mode, setMode] = useState<'magic' | 'password'>('password')
 
   useEffect(() => {
     if (user) navigate('/dashboard', { replace: true })
@@ -24,18 +26,28 @@ export default function Login({ user }: LoginProps) {
     setLoading(true)
     setError('')
 
-    const { error: authError } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/dashboard`,
-      },
-    })
-
-    setLoading(false)
-    if (authError) {
-      setError(authError.message)
+    if (mode === 'password') {
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
+      setLoading(false)
+      if (authError) {
+        setError(authError.message)
+      }
     } else {
-      setSent(true)
+      const { error: authError } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/dashboard`,
+        },
+      })
+      setLoading(false)
+      if (authError) {
+        setError(authError.message)
+      } else {
+        setSent(true)
+      }
     }
   }
 
@@ -78,6 +90,20 @@ export default function Login({ user }: LoginProps) {
                   />
                 </div>
 
+                {mode === 'password' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="input"
+                      placeholder="Enter password"
+                      required
+                    />
+                  </div>
+                )}
+
                 {error && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
                     {error}
@@ -89,7 +115,15 @@ export default function Login({ user }: LoginProps) {
                   disabled={loading || !email}
                   className="btn-primary w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {loading ? 'Sending...' : 'Send Magic Link'}
+                  {loading ? (mode === 'password' ? 'Signing in...' : 'Sending...') : (mode === 'password' ? 'Sign In' : 'Send Magic Link')}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setMode(mode === 'password' ? 'magic' : 'password'); setError(''); }}
+                  className="w-full text-center text-sm text-gray-500 hover:text-gray-700"
+                >
+                  {mode === 'password' ? 'Use magic link instead' : 'Use password instead'}
                 </button>
               </form>
             </>
