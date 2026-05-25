@@ -61,6 +61,7 @@ interface Shop {
   name:                    string;
   tenant_id:               string;
   phone_number_e164:       string | null;
+  reply_from_e164:         string | null;
   open_hours:              Record<string, Array<{ open: string; close: string }>>;
   timezone:                string;
   email_ticket_recipient:  string | null;
@@ -685,6 +686,23 @@ function twimlResponse(message: string): Response {
   );
 }
 
+function emptyTwiml(): Response {
+  return new Response(
+    '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+    { headers: { ...CORS_HEADERS, "Content-Type": "text/xml" } },
+  );
+}
+
+async function smsReply(shop: Shop, toNumber: string, message: string): Promise<Response> {
+  const replyFrom = shop.reply_from_e164 || shop.phone_number_e164;
+  if (!replyFrom) {
+    console.error("[chat-sms] No reply number configured for shop");
+    return emptyTwiml();
+  }
+  await sendSmsViaTwilio(replyFrom, toNumber, message);
+  return emptyTwiml();
+}
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -884,7 +902,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const { data: shopData } = await supabase
-      .from("shops").select("*").eq("phone_number_e164", toNumber).single();
+      .from("shops").select("*")
+      .or(`phone_number_e164.eq.${toNumber},reply_from_e164.eq.${toNumber}`)
+      .single();
     if (!shopData) {
       console.error("[chat-sms] Shop not found for Twilio number:", toNumber);
       return twimlResponse("Sorry, this number is not configured for ordering.");

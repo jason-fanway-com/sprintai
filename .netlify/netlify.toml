@@ -1,15 +1,15 @@
-functionsDirectory = "/Users/joestrazza/.openclaw/workspace/sprintai-build/netlify/functions"
+functionsDirectory = "/Users/joestrazza/sprintai-ordering/netlify/functions"
 functionsDirectoryOrigin = "config-v1"
 redirectsOrigin = "config"
 plugins = []
 headers = []
 
 [build]
-publish = "/Users/joestrazza/.openclaw/workspace/sprintai-build"
+publish = "/Users/joestrazza/sprintai-ordering"
 publishOrigin = "ui"
 commandOrigin = "config"
 command = "npm install"
-functions = "/Users/joestrazza/.openclaw/workspace/sprintai-build/netlify/functions"
+functions = "/Users/joestrazza/sprintai-ordering/netlify/functions"
 
 [build.environment]
 
@@ -45,6 +45,42 @@ force = false
 [[redirects]]
 from = "/create-checkout-session"
 to = "/.netlify/functions/create-checkout-session"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/sms-webhook"
+to = "/.netlify/functions/sms-webhook"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/admin"
+to = "/admin/index.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/dashboard/*"
+to = "/dashboard/index.html"
 status = 200.0
 force = false
 
