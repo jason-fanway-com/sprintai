@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Globe, MessageSquare, UtensilsCrossed, Upload, Settings, Pencil, Trash2, Plus } from 'lucide-react'
 import { UseMutationResult } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -90,6 +91,20 @@ export default function ChatAdminTab({
   saveChatContext,
   onDirtyChange,
 }: ChatAdminTabProps) {
+  const isDirty = instructionsDraft !== (shop.ai_instructions ?? '') || contextDraft !== (shop.shop_context ?? '')
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
+
+  // Browser beforeunload guard
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
   const categoryGroups = (menuItems ?? []).reduce<Record<string, MenuItem[]>>((acc, item) => {
     const cat = item.category ?? 'Other'
     if (!acc[cat]) acc[cat] = []
@@ -175,11 +190,13 @@ export default function ChatAdminTab({
               disabled={saveChatContext.isPending}
               className="flex items-center gap-1.5 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
             >
-              {/* Save icon */}
+              {isDirty && (
+                <span className="w-2 h-2 rounded-full bg-yellow-300 flex-shrink-0" />
+              )}
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              {saveChatContext.isPending ? 'Saving...' : 'Save'}
+              {saveChatContext.isPending ? 'Saving...' : isDirty ? 'Save*' : 'Save'}
             </button>
           </div>
 

@@ -65,6 +65,7 @@ export default function ShopDetail() {
   const [addingToCategory, setAddingToCategory] = useState<string | null>(null)
   const [addItemForm, setAddItemForm] = useState({ name: '', price_cents_str: '', description: '' })
   const [addItemCategory, setAddItemCategory] = useState('')
+  const [chatDirty, setChatDirty] = useState(false)
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -318,7 +319,13 @@ export default function ShopDetail() {
         {tabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              if (activeTab === 'chat' && chatDirty && tab.id !== 'chat') {
+                if (!window.confirm('You have unsaved changes. Discard?')) return
+                setChatDirty(false)
+              }
+              setActiveTab(tab.id)
+            }}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
               activeTab === tab.id
                 ? 'border-brand-600 text-brand-600'
@@ -394,6 +401,7 @@ export default function ShopDetail() {
           onAddItemFormChange={setAddItemForm}
           onAddItemCategoryChange={setAddItemCategory}
           saveChatContext={saveChatContext}
+          onDirtyChange={setChatDirty}
         />
       )}
     </div>
