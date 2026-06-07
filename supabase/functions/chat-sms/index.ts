@@ -26,6 +26,22 @@ const CORS_HEADERS = {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface OptionChoice {
+  id: string;
+  name: string;
+  price_cents: number;
+  is_default: boolean;
+}
+
+interface OptionGroup {
+  id: string;
+  name: string;
+  required: boolean;
+  min_select: number;
+  max_select: number;
+  choices: OptionChoice[];
+}
+
 interface EffectiveMenuItem {
   id:            string;
   name:          string;
@@ -33,6 +49,7 @@ interface EffectiveMenuItem {
   price_cents:   number;
   category:      string;
   modifiers_json: Array<{ name: string; price_cents: number }> | null;
+  option_groups?: OptionGroup[];
 }
 
 interface CartItem {
@@ -41,6 +58,7 @@ interface CartItem {
   quantity:     number;
   price_cents:  number;
   modifiers:    string[];
+  options?:     Record<string, string[]>;
 }
 
 interface BundleItem {
@@ -77,6 +95,7 @@ interface OrderCart {
   conversation_id:            string;
   phase:                      OrderPhase;
   cart_json:                  AnyCartItem[];
+  notes:                      string | null;
   subtotal_cents:             number | null;
   total_cents:                number | null;
   stripe_checkout_session_id: string | null;
@@ -104,6 +123,7 @@ const ORDERING_TOOLS = [
         menu_item_id: { type: "string", description: "Exact ID from the available menu list" },
         quantity:     { type: "integer", minimum: 1, description: "How many to add" },
         modifiers:    { type: "array", items: { type: "string" }, description: "Modifier names from the item's options" },
+        options:      { type: "object", description: "Selected options from option groups. Keys are group names (e.g. 'Bread Type'), values are arrays of chosen names (e.g. ['Roll']). Required for items with required option groups.", additionalProperties: { type: "array", items: { type: "string" } } },
       },
       required: ["menu_item_id", "quantity"],
     },
@@ -183,6 +203,17 @@ const ORDERING_TOOLS = [
       properties: {},
     },
   },
+  {
+    name: "set_note",
+    description: "Set or update the order notes for prep instructions like toasted, scooped, extra cream cheese, cut in half, lightly toasted, etc. Call this whenever the customer mentions a preparation preference. Replaces any previous notes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        note: { type: "string", description: "The preparation instructions, e.g. 'Everything bagels toasted, plain bagels not toasted' or 'All bagels scooped'" },
+      },
+      required: ["note"],
+    },
+  },
 ];
 
 // ─── Effective menu builder ───────────────────────────────────────────────────
@@ -212,6 +243,47 @@ async function buildEffectiveMenu(
 
   if (!items?.length) return [];
 
+  // Load option groups and choices for these menu items
+  const itemIds = items.map(i => i.id);
+  const { data: optionGroupsData } = await supabase
+    .from("option_groups")
+    .select("id, menu_item_id, name, required, min_select, max_select, display_order")
+    .in("menu_item_id", itemIds)
+    .order("display_order");
+
+  const groupIds = (optionGroupsData || []).map(g => g.id);
+  const { data: optionChoicesData } = groupIds.length > 0
+    ? await supabase
+        .from("option_choices")
+        .select("id, option_group_id, name, price_cents, is_default, display_order")
+        .in("option_group_id", groupIds)
+        .order("display_order")
+    : { data: [] };
+
+  // Assemble option groups with their choices
+  const choicesByGroup: Record<string, OptionChoice[]> = {};
+  for (const c of (optionChoicesData || [])) {
+    if (!choicesByGroup[c.option_group_id]) choicesByGroup[c.option_group_id] = [];
+    choicesByGroup[c.option_group_id].push({
+      id: c.id,
+      name: c.name,
+      price_cents: c.price_cents,
+      is_default: c.is_default,
+    });
+  }
+  const groupsByItem: Record<string, OptionGroup[]> = {};
+  for (const g of (optionGroupsData || [])) {
+    if (!groupsByItem[g.menu_item_id]) groupsByItem[g.menu_item_id] = [];
+    groupsByItem[g.menu_item_id].push({
+      id: g.id,
+      name: g.name,
+      required: g.required,
+      min_select: g.min_select,
+      max_select: g.max_select,
+      choices: choicesByGroup[g.id] || [],
+    });
+  }
+
   const { data: overrides } = await supabase
     .from("availability_overrides")
     .select("menu_item_id")
@@ -229,6 +301,7 @@ async function buildEffectiveMenu(
       price_cents:    item.price_cents,
       category:       item.category,
       modifiers_json: item.modifiers_json,
+      option_groups:  groupsByItem[item.id] || [],
     }));
 }
 
@@ -241,6 +314,7 @@ function buildSystemPrompt(
   cart:           AnyCartItem[],
   currentTime:    string,
   isFirstMessage: boolean,
+  notes?:         string | null,
 ): string {
   const dayMap: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
   const today = dayMap[new Date().getDay()];
@@ -263,7 +337,8 @@ function buildSystemPrompt(
         }
         const r = i as CartItem;
         const mods = r.modifiers?.length > 0 ? ` [${r.modifiers.join(", ")}]` : "";
-        return `${r.quantity}x ${r.name}${mods} - $${((r.price_cents * r.quantity) / 100).toFixed(2)}`;
+        const opts = r.options ? ` [${Object.entries(r.options).map(([_k, v]) => v.join(', ')).join(', ')}]` : "";
+        return `${r.quantity}x ${r.name}${mods}${opts} - $${((r.price_cents * r.quantity) / 100).toFixed(2)}`;
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
@@ -283,9 +358,18 @@ function buildSystemPrompt(
     .map(([cat, items]) => {
       const rows = items.map(item => {
         const price = `$${(item.price_cents / 100).toFixed(2)}`;
-        const mods  = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
         const desc  = item.description ? ` - ${item.description}` : "";
-        return `  ID:${item.id} | ${item.name} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}`;
+        const groups = item.option_groups || [];
+        if (groups.length > 0) {
+          const groupLines = groups.map(g => {
+            const reqLabel = g.required ? `required, pick ${g.max_select > 1 ? g.min_select + '-' + g.max_select : '1'}` : `optional${g.max_select > 1 ? ', pick up to ' + g.max_select : ''}`;
+            return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
+          }).join('\n');
+          return `  ID:${item.id} | ${item.name} ${price}${desc}\n${groupLines}`;
+        } else {
+          const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
+          return `  ID:${item.id} | ${item.name} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}`;
+        }
       }).join("\n");
       return `${cat}:\n${rows}`;
     })
@@ -307,6 +391,7 @@ ${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
 ${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}` : ""}
+${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
 - Keep ALL responses under 300 characters for SMS
@@ -317,10 +402,26 @@ RULES:
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise
 - Process the ENTIRE customer message. If they mention multiple items (e.g. "a dozen bagels and some cream cheese"), acknowledge ALL items and work through each one. Do not ignore part of the request.
-- When you ask for a pickup name and the customer gives a name, call submit_order with that name immediately. A short response like a first name ("Jason", "Mike") after you asked for a name is ALWAYS the pickup name, not a new conversation.
-- When a customer orders a bundle (e.g. Dozen Bagels, Half Dozen Bagels, or any item with multiple flavor slots), use start_bundle to begin. Then use add_to_bundle for each flavor. The system tracks the count. Keep asking for flavors until the system says the bundle is complete. Show the running count after each selection. Example: "Got it, 4 Everything so far. That is 4 of 14. What else would you like?"
+- PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
+- SANDWICH MAPPING: "Bacon egg and cheese" = BOBO Sandwich (Bacon). "Sausage egg and cheese" = SOBO Sandwich. "Ham egg and cheese" = HOBO Sandwich. "Pork roll egg and cheese" = PROBO Sandwich. "Turkey bacon egg and cheese" = TBOBO Sandwich. These all come on a bagel by default. If a customer asks for one of these, add the matching item immediately. Do NOT say "I don't see that on the menu."
+- MULTI-ITEM FOCUS: When a customer asks for multiple items in sequence, process EACH one fully before moving on. If you said you're adding something, USE THE TOOL to actually add it. Never claim you added something without calling add_item. If add_item fails, tell the customer the specific error.
+- CRITICAL BUNDLE RULE: When a customer says "a dozen", "I'll take a dozen", "dozen bagels", "half dozen", etc., you MUST call start_bundle IMMEDIATELY in that same turn. Do NOT just acknowledge it in text. You MUST use the tool. "I'll take a dozen" = call start_bundle with bundle_item_name="One Dozen Bagels", bundle_size=14, bundle_price_cents=1500. "half dozen" = call start_bundle with bundle_item_name="Half Dozen Bagels", bundle_size=6, bundle_price_cents=750.
+- If the customer also provides flavors in the same message, call start_bundle THEN add_to_bundle for each flavor -- all in one turn. If they just say "a dozen" without flavors, call start_bundle and then ask for flavors.
+- Example 1: "I'll take a dozen" → call start_bundle(bundle_item_name="One Dozen Bagels", bundle_size=14, bundle_price_cents=1500), then reply asking for flavors.
+- Example 2: "I want a dozen bagels -- 6 plain, 3 everything, 2 jalapeno, 3 sesame" → call start_bundle, then add_to_bundle for each flavor. All in one turn.
+- When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If they say "7 sesame and 7 plain" and a dozen bundle is active, that is 14 bagels which completes the dozen. Just add them.
 - While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
+- Never state the number of available flavors or menu items. If asked what flavors are available, just list them without counting.
+- NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
+- NEVER ask "are you ordering individual bagels or a bundle?" If the customer already said "a dozen" or you started a bundle, they are ordering a bundle. Period.
+- REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), you MUST ask the customer for their choices BEFORE calling add_item. Example: "What kind of bread -- roll, bagel, or english muffin?" Keep it casual like a real deli counter. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
+- OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
+- OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
 - COMBO ITEMS: Items in the "Bagel With" category (e.g. "Bagel with Plain Cream Cheese", "Bagel with Flavored Cream Cheese") ALREADY INCLUDE the bagel. Do NOT add a standalone bagel AND a "Bagel With" item separately. When a customer says "cinnamon raisin bagel with cream cheese", add ONE item from "Bagel With" (e.g. "Bagel with Plain Cream Cheese" at $3.50) and note the bagel flavor choice. NEVER double-charge by adding a standalone bagel plus a spread item.
+- CREAM CHEESE DISAMBIGUATION: This menu has TWO types of cream cheese products. (1) "Bagel With" items -- a single bagel WITH cream cheese already on it. (2) "Cream Cheese Spread (per pound)" -- a full pound of cream cheese to take home. If a customer just says "cream cheese" after ordering bagels, ask ONE time: "Do you want cream cheese on a bagel ($3.50-$4.95) or a pound of cream cheese spread to go ($10.95-$13.95)?" Then REMEMBER their answer. NEVER ask again. If they say "by the pound" or "a pound" at ANY point, they want the Spread. Use add_item immediately.
+- CONTEXT MEMORY: Pay close attention to what the customer said in previous messages. If they already told you what type/flavor they want, do NOT ask again. If they said "jalapeno cheddar" two messages ago, you KNOW the flavor. Do not lose track.
+- TOASTED PROMPT: After adding a "Bagel With" item (cream cheese bagel) or a breakfast sandwich, if the customer has NOT already mentioned toasting preference, ask: "Want that toasted?" Keep it casual and brief, just like a real bagel shop counter. If they already said "toasted" or "not toasted" in their message, do NOT ask -- just note it. Only ask ONCE per order, not for every item. Do NOT ask about toasting for bundle orders (dozen, half dozen, baker's dozen) or standalone plain bagels -- those are take-home items.
+- PREP INSTRUCTIONS: When a customer says "toasted", "scooped", "extra toasted", "lightly toasted", "cut in half", "extra cream cheese", "light butter", or any other preparation preference, call set_note to save it. These instructions go directly to the kitchen. NEVER tell the customer to "let the shop know" -- YOU are the shop. Capture it and confirm: "Got it, noted toasted." If they mention prep preferences along with items, add the items AND set the note in the same turn.
 
 PHASE BEHAVIOR:
 - greeting/building: Help build the order, answer menu questions
@@ -364,12 +465,37 @@ async function executeTool(
       if (invalidMods.length > 0) {
         return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}. Valid options for ${menuItem.name}: ${validMods.join(", ") || "none"}` } };
       }
-      const existing = cart.findIndex(i => i.menu_item_id === menu_item_id);
+
+      // Validate option groups
+      const itemGroups = menuItem.option_groups || [];
+      const inputOptions = ((input as any).options || {}) as Record<string, string[]>;
+      let extraCents = 0;
+
+      for (const group of itemGroups) {
+        const selections = inputOptions[group.name] || [];
+        if (group.required && selections.length === 0) {
+          const choiceNames = group.choices.map(c => c.name).join(', ');
+          return { ok: false, result: { error: `"${group.name}" is required for ${menuItem.name}. Options: ${choiceNames}. Ask the customer which they want.` } };
+        }
+        if (selections.length > group.max_select) {
+          return { ok: false, result: { error: `"${group.name}" allows max ${group.max_select} selection(s), got ${selections.length}.` } };
+        }
+        for (const sel of selections) {
+          const choice = group.choices.find(c => c.name.toLowerCase() === sel.toLowerCase());
+          if (!choice) {
+            const validNames = group.choices.map(c => c.name).join(', ');
+            return { ok: false, result: { error: `"${sel}" is not a valid choice for ${group.name}. Valid: ${validNames}` } };
+          }
+          extraCents += choice.price_cents;
+        }
+      }
+
+      const existing = cart.findIndex(i => i.menu_item_id === menu_item_id && JSON.stringify(i.options) === JSON.stringify(inputOptions));
       if (existing >= 0) {
         cart[existing].quantity += (quantity as number);
         cart[existing].modifiers = inputMods;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents, modifiers: inputMods });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents, modifiers: inputMods, options: Object.keys(inputOptions).length > 0 ? inputOptions : undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + i.price_cents * i.quantity, 0);
@@ -457,20 +583,36 @@ async function executeTool(
             unit_amount:  r.price_cents,
             product_data: {
               name:        r.name,
-              description: r.modifiers?.length > 0 ? r.modifiers.join(", ") : undefined,
+              description: r.modifiers?.length > 0 ? r.modifiers.join(", ") : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(', ')}`).join('; ') : undefined),
             },
           },
           quantity: r.quantity,
         };
       });
 
+      // Fetch notes for Stripe metadata
+      const { data: cartRow } = await supabase.from("order_carts").select("notes").eq("id", cartId).single();
+      const orderNotes = cartRow?.notes || "";
+
+      // Add notes as a $0 line item so the shop sees them on the receipt
+      if (orderNotes) {
+        lineItems.push({
+          price_data: {
+            currency:     "usd",
+            unit_amount:  0,
+            product_data: { name: `Prep Notes: ${orderNotes}` },
+          },
+          quantity: 1,
+        });
+      }
+
       const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "https://your-project.supabase.co";
       const session = await stripe.checkout.sessions.create({
         mode:                 "payment",
         payment_method_types: ["card"],
         line_items:           lineItems,
-        metadata:             { order_cart_id: cartId },
-        custom_text:          { submit: { message: `Your order from ${shopName}` } },
+        metadata:             { order_cart_id: cartId, notes: orderNotes },
+        custom_text:          { submit: { message: `Your order from ${shopName}${orderNotes ? ` -- ${orderNotes}` : ""}` } },
         success_url:          `${supabaseUrl}/order-success?cart=${cartId}`,
         cancel_url:           `${supabaseUrl}/order-cancel?cart=${cartId}`,
       });
@@ -495,6 +637,18 @@ async function executeTool(
       if (!bundle_item_name || !bundle_size || bundle_size < 1) {
         return { ok: false, result: { error: "bundle_item_name and a positive bundle_size are required." } };
       }
+      // FIX 4: Prevent multiple bundles for same category
+      // Check if a completed bundle with a similar name already exists
+      const existingCompleted = cart.find(i => 
+        (i as BundleItem).type === "bundle" && 
+        (i as BundleItem).complete &&
+        ((i as BundleItem).name.toLowerCase().includes("dozen") && bundle_item_name.toLowerCase().includes("dozen"))
+      ) as BundleItem | undefined;
+      
+      if (existingCompleted) {
+        return { ok: false, result: { error: `Already have "${existingCompleted.name}" in cart. Ask the customer if they want to replace it or add another bundle.` } };
+      }
+
       const newBundle: BundleItem = {
         type:        "bundle",
         name:        bundle_item_name,
@@ -568,6 +722,12 @@ async function executeTool(
       cart.splice(bundleIdx, 1);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { message: "Bundle cancelled." } };
+    }
+
+    case "set_note": {
+      const { note } = input as { note: string };
+      await supabase.from("order_carts").update({ notes: note }).eq("id", cartId);
+      return { ok: true, result: { message: `Order notes saved: ${note}` } };
     }
 
     default:
@@ -678,6 +838,18 @@ async function runOrderingLoop(
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
 
+// FIX 1: Strip markdown from all replies
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")      // **bold** → bold
+    .replace(/\*(.+?)\*/g, "$1")           // *italic* → italic
+    .replace(/__(.+?)__/g, "$1")            // __bold__ → bold
+    .replace(/_(.+?)_/g, "$1")              // _italic_ → italic
+    .replace(/^###\s+(.+)$/gm, "$1")       // ### heading → heading
+    .replace(/^##\s+(.+)$/gm, "$1")        // ## heading → heading
+    .replace(/^#\s+(.+)$/gm, "$1");        // # heading → heading
+}
+
 function twimlResponse(message: string): Response {
   const safe = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return new Response(
@@ -745,16 +917,11 @@ async function saveMessage(
   role:           "customer" | "assistant" | "system",
   content:        string,
 ): Promise<void> {
-  const now = new Date().toISOString();
   const { error } = await supabase.from("messages").insert({
     conversation_id: conversationId,
     tenant_id: tenantId,
     role,
     content,
-    topic: "ordering",
-    extension: "chat-sms",
-    updated_at: now,
-    inserted_at: now,
   });
   if (error) console.error("[chat-sms] Failed to save message:", error.message);
 }
@@ -782,7 +949,11 @@ async function sendSmsViaTwilio(
         "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
         "Content-Type":  "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({ From: fromNumber, To: toNumber, Body: message }),
+      body: new URLSearchParams({
+        MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID") ?? fromNumber,
+        To: toNumber,
+        Body: message,
+      }),
     }
   );
 
@@ -1017,11 +1188,34 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   if (cart.phase === "checkout") {
-    const reply = "Your payment link was sent. Please complete payment to confirm your order. Say \"restart\" to start over.";
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
-    return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    const upper = userMessage.toUpperCase().trim();
+    const wantsRestart = /\b(RESTART|START OVER|CANCEL|NEW ORDER)\b/.test(upper);
+    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
+
+    if (wantsRestart) {
+      // Clear cart and start fresh
+      cart.cart_json = [];
+      await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0 }).eq("id", cart.id);
+      const reply = "No problem! Your order has been cancelled. What would you like to order?";
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
+    }
+
+    if (wantsChange) {
+      // Go back to building phase so the LLM can handle modifications
+      await supabase.from("order_carts").update({ phase: "building", stripe_checkout_session_id: null }).eq("id", cart.id);
+      cart.phase = "building" as OrderPhase;
+      // Fall through to the LLM loop below so it can process the change request
+    } else {
+      // Default: remind about payment but offer options
+      const reply = "Your payment link was sent -- check your texts for it. If something looks wrong, say \"change my order\" to make edits, or \"restart\" to start over.";
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    }
   }
 
   // ── Build effective menu ──────────────────────────────────────────────────
@@ -1038,12 +1232,15 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Load conversation history ─────────────────────────────────────────────
+  // Fetch the MOST RECENT 40 messages (descending), then reverse for chronological order.
+  // Using 40 to give enough context for complex multi-item orders.
   const { data: historyRows } = await supabase
     .from("messages").select("role, content")
     .eq("conversation_id", conversation.id)
-    .order("created_at", { ascending: true }).limit(20);
+    .order("created_at", { ascending: false }).limit(40);
 
   const history = (historyRows ?? [])
+    .reverse()
     .filter((m: { role: string }) => m.role === "customer" || m.role === "assistant")
     .map((m: { role: string; content: string }) => ({
       role:    m.role === "customer" ? "user" as const : "assistant" as const,
@@ -1054,7 +1251,7 @@ Deno.serve(async (req: Request) => {
   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes);
   const cartItems    = [...cart.cart_json];
 
   const { reply, checkoutUrl } = await runOrderingLoop(
@@ -1067,13 +1264,14 @@ Deno.serve(async (req: Request) => {
   const { data: updatedCart } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
   const currentCart = (updatedCart as OrderCart) ?? cart;
 
-  // Append payment URL to SMS if present
-  let finalReply = reply;
-  if (checkoutUrl) {
-    // Always append the payment URL to the reply so the customer can see it
-    const combined = `${reply}\n\nPay here: ${checkoutUrl}`;
+  // Strip markdown for clean SMS/text output
+  let finalReply = stripMarkdown(reply);
+
+  // Append payment URL if present and not already in the reply
+  if (checkoutUrl && !finalReply.includes(checkoutUrl)) {
+    const combined = `${finalReply}\n\nPay here: ${checkoutUrl}`;
     finalReply = isSms
-      ? (combined.length <= 1600 ? combined : `${reply.substring(0, 1200)}\n${checkoutUrl}`)
+      ? (combined.length <= 1600 ? combined : `${finalReply.substring(0, 1200)}\n${checkoutUrl}`)
       : combined;
   }
 
@@ -1085,6 +1283,7 @@ Deno.serve(async (req: Request) => {
     reply:        finalReply,
     cart:         currentCart.cart_json,
     phase:        currentCart.phase,
+    notes:        currentCart.notes,
     session_id:   sessionId,
     checkout_url: checkoutUrl,
   });
