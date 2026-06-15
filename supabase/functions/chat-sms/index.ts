@@ -99,6 +99,7 @@ interface OrderCart {
   subtotal_cents:             number | null;
   total_cents:                number | null;
   stripe_checkout_session_id: string | null;
+  test_mode:                  boolean;
 }
 
 interface ClaudeContentBlock {
@@ -613,8 +614,8 @@ async function executeTool(
         line_items:           lineItems,
         metadata:             { order_cart_id: cartId, notes: orderNotes },
         custom_text:          { submit: { message: `Your order from ${shopName}${orderNotes ? ` -- ${orderNotes}` : ""}` } },
-        success_url:          `${supabaseUrl}/order-success?cart=${cartId}`,
-        cancel_url:           `${supabaseUrl}/order-cancel?cart=${cartId}`,
+        success_url:          `https://getsprintai.com/order-success?cart=${cartId}`,
+        cancel_url:           `https://getsprintai.com/order-cancel?cart=${cartId}`,
       });
 
       await supabase.from("order_carts").update({
@@ -1005,8 +1006,9 @@ async function handleSystemEvent(
     const dayMap: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
     const today    = dayMap[new Date().getDay()];
     const hours    = shop.open_hours?.[today] ?? [];
+    const fmt12Confirm = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
     const hoursStr = hours.length > 0
-      ? hours.map((h: { open: string; close: string }) => `${h.open}-${h.close}`).join(", ")
+      ? hours.map((h: { open: string; close: string }) => `${fmt12Confirm(h.open)}-${fmt12Confirm(h.close)}`).join(", ")
       : "see our hours for details";
 
     message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}. Pickup hours: ${hoursStr}. Thank you!`;
@@ -1019,10 +1021,26 @@ async function handleSystemEvent(
   await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message);
 
   if (conversation.channel === "sms" && conversation.customer_phone) {
+    // Direct Twilio SMS delivery
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
       await sendSmsViaTwilio(shop.phone_number_e164, conversation.customer_phone, message);
+    }
+  } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
+    // iMessage bridge: extract real phone from "web:imsg-p{digits}-{sessionid}"
+    // Format: web:imsg-p16102565023-1781561505 → +16102565023
+    const match = conversation.customer_phone.match(/web:imsg-p(\d+)-/);
+    if (match) {
+      const realPhone = "+" + match[1];
+      const { error: qErr } = await supabase
+        .from("outbound_queue")
+        .insert({ to_phone: realPhone, message });
+      if (qErr) {
+        console.error("[chat-sms] Failed to queue outbound iMessage:", qErr.message);
+      } else {
+        console.log(`[chat-sms] Queued outbound iMessage to ${realPhone}`);
+      }
     }
   }
 
@@ -1179,6 +1197,16 @@ Deno.serve(async (req: Request) => {
     cart = newCart as OrderCart;
   }
 
+  // RESET keyword — expire current cart so next message gets a clean one
+  if (userMessage.trim().toUpperCase() === "RESET") {
+    await supabase.from("order_carts").update({ phase: "expired", test_mode: false }).eq("id", cart.id);
+    const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
+    await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    return jsonResponse({ reply, cart: [], phase: "expired", session_id: sessionId });
+  }
+
   // Short-circuit on terminal phases
   if (cart.phase === "confirmed") {
     const reply = "Your order is confirmed and paid. Thank you!";
@@ -1229,6 +1257,39 @@ Deno.serve(async (req: Request) => {
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
     if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
+  }
+
+  // ── Business hours check ────────────────────────────────────────────────
+  if (cart.phase === "greeting") {
+    const dayMap2: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
+    const todayKey = dayMap2[new Date().getDay()];
+    const todayHours = shop.open_hours?.[todayKey] ?? [];
+
+    // Check if current time falls within any open window
+    const isOpen = todayHours.some((window: { open: string; close: string }) => {
+      const [openH, openM] = window.open.split(":").map(Number);
+      const [closeH, closeM] = window.close.split(":").map(Number);
+      const nowInShopTz = new Date(new Date().toLocaleString("en-US", { timeZone: shop.timezone }));
+      const nowMins = nowInShopTz.getHours() * 60 + nowInShopTz.getMinutes();
+      const openMins = openH * 60 + openM;
+      const closeMins = closeH * 60 + closeM;
+      return nowMins >= openMins && nowMins < closeMins;
+    });
+
+    const activatingTestMode = userMessage.trim().toUpperCase() === "TESTMODE";
+    if (activatingTestMode && !cart.test_mode) {
+      await supabase.from("order_carts").update({ test_mode: true }).eq("id", cart.id);
+      cart.test_mode = true;
+    }
+    if (!isOpen && todayHours.length > 0 && !cart.test_mode) {
+      const fmt12 = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
+      const hoursDisplay = todayHours.map((h: { open: string; close: string }) => `${fmt12(h.open)}-${fmt12(h.close)}`).join(", ");
+      const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours -- you'll be happy you did!`;
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
+      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+      return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
+    }
   }
 
   // ── Load conversation history ─────────────────────────────────────────────

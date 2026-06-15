@@ -252,7 +252,7 @@ footer { background: #0F1923; padding: 48px 48px 28px; }
 
   try {
     const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co';
-    const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQyMjY5MTcsImV4cCI6MjA1OTgwMjkxN30.KvYhYXuoHMEVpn-UNiWkWCrQ6lJC7pDyiYmg0ZLe3Ms';
+    const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NDg2ODksImV4cCI6MjA5MDMyNDY4OX0.5SOW_FX92dIw_zgbqF7HO2SM5ueQC3YPaAexKCFAv3E';
 
     const res  = await fetch(
       `${SUPABASE_URL}/rest/v1/order_carts?id=eq.${encodeURIComponent(cartId)}&select=test_mode,phase,cart_json,pickup_name,total_cents`,
