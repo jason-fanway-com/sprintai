@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Confirmed | SprintAI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --brand: #E8521A;
+  --cream: #FFFDF9;
+  --navy: #17212E;
+  --ink: #2A3540;
+  --muted: #687585;
+  --border-warm: #EDE3DA;
+  --green: #1A7A4A;
+  --green-bg: #F0FAF4;
+  --yellow: #B45309;
+  --yellow-bg: #FFFBEB;
+  --font-d: 'Fraunces', Georgia, serif;
+  --font-b: 'DM Sans', system-ui, sans-serif;
+}
+body {
+  background: var(--cream);
+  color: var(--ink);
+  font-family: var(--font-b);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.card {
+  background: #fff;
+  border: 1px solid var(--border-warm);
+  border-radius: 16px;
+  padding: 2.5rem 2rem;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+}
+.icon { font-size: 3rem; margin-bottom: 1rem; }
+h1 { font-family: var(--font-d); font-size: 1.75rem; color: var(--navy); margin-bottom: 0.75rem; }
+p { color: var(--muted); font-size: 1rem; line-height: 1.6; margin-bottom: 0.5rem; }
+.test-banner {
+  background: var(--yellow-bg);
+  border: 1px solid #FCD34D;
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  color: var(--yellow);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.real-banner {
+  background: var(--green-bg);
+  border: 1px solid #6EE7A0;
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  color: var(--green);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.powered {
+  margin-top: 2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.powered span { color: var(--brand); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="content">
+    <div class="icon">⏳</div>
+    <h1>Loading...</h1>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const params = new URLSearchParams(window.location.search);
+  const cartId = params.get('cart');
+  const content = document.getElementById('content');
+
+  if (!cartId) {
+    content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
+    return;
+  }
+
+  try {
+    const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co';
+    const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQyMjY5MTcsImV4cCI6MjA1OTgwMjkxN30.KvYhYXuoHMEVpn-UNiWkWCrQ6lJC7pDyiYmg0ZLe3Ms';
+
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/order_carts?id=eq.${cartId}&select=test_mode,phase,cart_json,pickup_name,total_cents,shop_id`, {
+      headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` }
+    });
+    const data = await res.json();
+    const cart = data?.[0];
+
+    if (!cart) {
+      content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
+      return;
+    }
+
+    const isTest = cart.test_mode === true;
+    const name = cart.pickup_name ? ` for ${cart.pickup_name}` : '';
+    const total = cart.total_cents ? `$${(cart.total_cents / 100).toFixed(2)}` : '';
+
+    if (isTest) {
+      content.innerHTML = `
+        <div class="icon">🧪</div>
+        <div class="test-banner">TEST MODE -- No real order was placed and your card was not charged.</div>
+        <h1>Test Order Complete</h1>
+        <p>This was a test of the SprintAI ordering system.</p>
+        ${total ? `<p style="margin-top:0.75rem;font-weight:600;color:var(--ink);">Simulated total: ${total}</p>` : ''}
+        <p class="powered">Powered by <span>SprintAI</span></p>
+      `;
+    } else {
+      content.innerHTML = `
+        <div class="icon">🎉</div>
+        <div class="real-banner">Payment confirmed! Your order is placed.</div>
+        <h1>We got it${name}!</h1>
+        <p>Your order is confirmed. You'll get a text when it's ready for pickup.</p>
+        ${total ? `<p style="margin-top:0.75rem;font-weight:600;color:var(--ink);">Total: ${total}</p>` : ''}
+        <p class="powered">Powered by <span>SprintAI</span></p>
+      `;
+    }
+  } catch(e) {
+    content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
+  }
+})();
+</script>
+</body>
+</html>
