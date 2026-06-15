@@ -4,134 +4,267 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Order Confirmed | SprintAI</title>
+<meta name="description" content="Your SprintAI order is confirmed.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400;1,9..144,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
   --brand: #E8521A;
+  --brand-hover: #C94412;
+  --brand-light: #FEF3EE;
+  --brand-mid: #FBDACC;
   --cream: #FFFDF9;
+  --warm: #FFF8F3;
   --navy: #17212E;
   --ink: #2A3540;
   --muted: #687585;
+  --light: #96A5B4;
+  --border: #E6ECF2;
   --border-warm: #EDE3DA;
-  --green: #1A7A4A;
-  --green-bg: #F0FAF4;
-  --yellow: #B45309;
-  --yellow-bg: #FFFBEB;
+  --green: #16A34A;
+  --green-light: #F0FDF4;
+  --green-border: #BBF7D0;
   --font-d: 'Fraunces', Georgia, serif;
   --font-b: 'DM Sans', system-ui, sans-serif;
+  --r: 14px;
+  --r-lg: 20px;
 }
-body {
-  background: var(--cream);
-  color: var(--ink);
-  font-family: var(--font-b);
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-b); background: var(--cream); color: var(--ink); line-height: 1.6; overflow-x: hidden; }
+
+/* NAV */
+nav {
+  position: sticky; top: 0; z-index: 200;
+  background: rgba(255,253,249,0.94);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-warm);
+  padding: 0 48px; height: 66px;
+  display: flex; align-items: center; justify-content: space-between;
 }
-.card {
-  background: #fff;
-  border: 1px solid var(--border-warm);
-  border-radius: 16px;
-  padding: 2.5rem 2rem;
-  max-width: 420px;
-  width: 100%;
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.logo-mark { width: 36px; height: 36px; background: var(--brand); border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+.logo-mark-inner { font-size: 20px; }
+.logo-text { font-family: var(--font-d); font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.3px; }
+.nav-links { display: flex; gap: 32px; list-style: none; }
+.nav-links a { font-size: 14px; font-weight: 500; color: var(--muted); text-decoration: none; transition: color .2s; }
+.nav-links a:hover { color: var(--navy); }
+.nav-right { display: flex; align-items: center; gap: 12px; }
+.btn-nav { background: var(--brand); color: #fff; border: none; padding: 10px 22px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: var(--font-b); transition: background .2s; text-decoration: none; }
+.btn-nav:hover { background: var(--brand-hover); }
+
+/* PAGE CONTENT */
+.page-wrap {
+  min-height: calc(100vh - 66px - 200px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 64px 24px;
+}
+.confirm-card {
+  background: #fff; border: 1px solid var(--border-warm);
+  border-radius: 24px; padding: 3rem 2.5rem;
+  max-width: 480px; width: 100%;
   text-align: center;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+  box-shadow: 0 4px 32px rgba(0,0,0,.07);
 }
-.icon { font-size: 3rem; margin-bottom: 1rem; }
-h1 { font-family: var(--font-d); font-size: 1.75rem; color: var(--navy); margin-bottom: 0.75rem; }
-p { color: var(--muted); font-size: 1rem; line-height: 1.6; margin-bottom: 0.5rem; }
-.test-banner {
-  background: var(--yellow-bg);
-  border: 1px solid #FCD34D;
-  border-radius: 10px;
-  padding: 1rem;
-  margin-bottom: 1.5rem;
-  color: var(--yellow);
-  font-weight: 600;
-  font-size: 0.9rem;
+.confirm-icon { font-size: 3.5rem; margin-bottom: 1rem; line-height: 1; }
+.confirm-card h1 { font-family: var(--font-d); font-size: 2rem; font-weight: 800; color: var(--navy); margin-bottom: 0.75rem; letter-spacing: -0.5px; line-height: 1.1; }
+.confirm-card p { color: var(--muted); font-size: 1rem; line-height: 1.65; }
+.confirm-total { font-family: var(--font-d); font-size: 1.5rem; font-weight: 700; color: var(--navy); margin: 1.25rem 0 0.25rem; }
+
+.banner {
+  border-radius: 12px; padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem; font-size: 0.875rem; font-weight: 600; line-height: 1.5;
 }
-.real-banner {
-  background: var(--green-bg);
-  border: 1px solid #6EE7A0;
-  border-radius: 10px;
-  padding: 1rem;
-  margin-bottom: 1.5rem;
-  color: var(--green);
-  font-weight: 600;
-  font-size: 0.9rem;
+.banner-test { background: #FFFBEB; border: 1px solid #FCD34D; color: #92400E; }
+.banner-real { background: var(--green-light); border: 1px solid var(--green-border); color: #15803D; }
+
+.items-list { text-align: left; background: var(--warm); border: 1px solid var(--border-warm); border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0; }
+.item-row { display: flex; justify-content: space-between; font-size: 0.9rem; padding: 0.3rem 0; color: var(--ink); border-bottom: 1px solid var(--border-warm); }
+.item-row:last-child { border-bottom: none; }
+.item-name { color: var(--ink); }
+.item-price { color: var(--muted); font-weight: 600; }
+.total-row { display: flex; justify-content: space-between; font-size: 1rem; font-weight: 700; color: var(--navy); padding-top: 0.75rem; margin-top: 0.25rem; border-top: 2px solid var(--border-warm); }
+
+.btn-home { display: inline-block; margin-top: 1.75rem; background: var(--brand); color: #fff; border: none; padding: 13px 28px; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: var(--font-b); text-decoration: none; transition: background .2s; }
+.btn-home:hover { background: var(--brand-hover); }
+
+/* FOOTER */
+footer { background: #0F1923; padding: 48px 48px 28px; }
+.footer-top { display: flex; gap: 60px; flex-wrap: wrap; padding-bottom: 36px; border-bottom: 1px solid rgba(255,255,255,.07); margin-bottom: 24px; }
+.footer-brand-col { flex: 0 0 220px; }
+.footer-logo { font-family: var(--font-d); font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+.footer-tagline { font-size: 13px; color: rgba(255,255,255,.4); line-height: 1.6; }
+.footer-col { flex: 1; min-width: 120px; }
+.footer-col-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: .9px; margin-bottom: 12px; }
+.footer-col a { display: block; font-size: 14px; color: rgba(255,255,255,.4); text-decoration: none; margin-bottom: 9px; transition: color .2s; }
+.footer-col a:hover { color: rgba(255,255,255,.8); }
+.footer-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; color: rgba(255,255,255,.25); }
+.footer-bottom a { color: rgba(255,255,255,.25); text-decoration: none; }
+.footer-bottom a:hover { color: rgba(255,255,255,.5); }
+
+@media (max-width: 600px) {
+  nav { padding: 0 20px; }
+  .nav-links, .nav-right { display: none; }
+  footer { padding: 40px 20px 20px; }
+  .confirm-card { padding: 2rem 1.5rem; }
 }
-.powered {
-  margin-top: 2rem;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.powered span { color: var(--brand); font-weight: 600; }
 </style>
 </head>
 <body>
-<div class="card">
-  <div id="content">
-    <div class="icon">⏳</div>
+
+<nav>
+  <a class="logo" href="https://getsprintai.com">
+    <div class="logo-mark"><div class="logo-mark-inner">🍕</div></div>
+    <span class="logo-text">SprintAI</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="https://getsprintai.com/#how">How it works</a></li>
+    <li><a href="https://getsprintai.com/#different">What's different</a></li>
+    <li><a href="https://getsprintai.com/#pricing">Pricing</a></li>
+    <li><a href="https://getsprintai.com/#faq">FAQ</a></li>
+  </ul>
+  <div class="nav-right">
+    <a class="btn-nav" href="https://getsprintai.com/#signup">Get a number for your shop →</a>
+  </div>
+</nav>
+
+<div class="page-wrap">
+  <div class="confirm-card" id="card">
+    <div class="confirm-icon">⏳</div>
     <h1>Loading...</h1>
   </div>
 </div>
 
+<footer>
+  <div class="footer-top">
+    <div class="footer-brand-col">
+      <div class="footer-logo">🍕 SprintAI</div>
+      <div class="footer-tagline">Ordering that feels like texting a friend. A text line for small shops and the customers who'd rather not call.</div>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Product</div>
+      <a href="https://getsprintai.com/#how">How it works</a>
+      <a href="https://getsprintai.com/#different">What's different</a>
+      <a href="https://getsprintai.com/#pricing">Pricing</a>
+      <a href="https://getsprintai.com/#signup">Get started</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Support</div>
+      <a href="#">Help center</a>
+      <a href="#">Setup guide</a>
+      <a href="#">Talk to us</a>
+      <a href="#">System status</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Company</div>
+      <a href="#">About</a>
+      <a href="#">Blog</a>
+      <a href="#">Lehigh Valley roots</a>
+      <a href="https://getsprintai.com/contact.html">Contact</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div>© 2026 SprintAI · Bethlehem, PA · Serving shops in PA &amp; NJ</div>
+    <div style="display:flex;gap:20px;">
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms of Service</a>
+      <a href="#">TCPA Compliance</a>
+    </div>
+  </div>
+</footer>
+
 <script>
 (async () => {
-  const params = new URLSearchParams(window.location.search);
-  const cartId = params.get('cart');
-  const content = document.getElementById('content');
+  const params  = new URLSearchParams(window.location.search);
+  const cartId  = params.get('cart');
+  const card    = document.getElementById('card');
 
-  if (!cartId) {
-    content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
-    return;
-  }
+  const renderReal = (cart) => {
+    const name    = cart.pickup_name ? ` for ${cart.pickup_name}` : '';
+    const total   = cart.total_cents ? `$${(cart.total_cents / 100).toFixed(2)}` : null;
+    const items   = (cart.cart_json || []);
+
+    let itemsHtml = '';
+    if (items.length > 0) {
+      const rows = items.map(i => {
+        const nm  = i.type === 'bundle' ? i.name : `${i.quantity}x ${i.name}`;
+        const prc = i.type === 'bundle'
+          ? `$${(i.price_cents / 100).toFixed(2)}`
+          : `$${((i.price_cents * i.quantity) / 100).toFixed(2)}`;
+        return `<div class="item-row"><span class="item-name">${nm}</span><span class="item-price">${prc}</span></div>`;
+      }).join('');
+      const totalRow = total
+        ? `<div class="total-row"><span>Total</span><span>${total}</span></div>`
+        : '';
+      itemsHtml = `<div class="items-list">${rows}${totalRow}</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="confirm-icon">🎉</div>
+      <div class="banner banner-real">✅ Payment confirmed! Your order is placed.</div>
+      <h1>We got it${name}!</h1>
+      <p>Your order is confirmed. You'll get a text when it's ready for pickup.</p>
+      ${itemsHtml}
+      <a class="btn-home" href="https://getsprintai.com">Back to SprintAI</a>
+    `;
+  };
+
+  const renderTest = (cart) => {
+    const total = cart.total_cents ? `$${(cart.total_cents / 100).toFixed(2)}` : null;
+    const items = (cart.cart_json || []);
+
+    let itemsHtml = '';
+    if (items.length > 0) {
+      const rows = items.map(i => {
+        const nm  = i.type === 'bundle' ? i.name : `${i.quantity}x ${i.name}`;
+        const prc = i.type === 'bundle'
+          ? `$${(i.price_cents / 100).toFixed(2)}`
+          : `$${((i.price_cents * i.quantity) / 100).toFixed(2)}`;
+        return `<div class="item-row"><span class="item-name">${nm}</span><span class="item-price">${prc}</span></div>`;
+      }).join('');
+      const totalRow = total
+        ? `<div class="total-row"><span>Simulated total</span><span>${total}</span></div>`
+        : '';
+      itemsHtml = `<div class="items-list">${rows}${totalRow}</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="confirm-icon">🧪</div>
+      <div class="banner banner-test">⚠️ TEST MODE — No real order was placed. Your card was not charged.</div>
+      <h1>Test Order Complete</h1>
+      <p>This was a test of the SprintAI ordering flow. Everything above is simulated.</p>
+      ${itemsHtml}
+      <a class="btn-home" href="https://getsprintai.com">Back to SprintAI</a>
+    `;
+  };
+
+  const renderFallback = () => {
+    card.innerHTML = `
+      <div class="confirm-icon">✅</div>
+      <div class="banner banner-real">Payment confirmed!</div>
+      <h1>Order Confirmed!</h1>
+      <p>Your order has been placed. You'll receive a confirmation text shortly.</p>
+      <a class="btn-home" href="https://getsprintai.com">Back to SprintAI</a>
+    `;
+  };
+
+  if (!cartId) { renderFallback(); return; }
 
   try {
     const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co';
-    const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQyMjY5MTcsImV4cCI6MjA1OTgwMjkxN30.KvYhYXuoHMEVpn-UNiWkWCrQ6lJC7pDyiYmg0ZLe3Ms';
+    const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQyMjY5MTcsImV4cCI6MjA1OTgwMjkxN30.KvYhYXuoHMEVpn-UNiWkWCrQ6lJC7pDyiYmg0ZLe3Ms';
 
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/order_carts?id=eq.${cartId}&select=test_mode,phase,cart_json,pickup_name,total_cents,shop_id`, {
-      headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` }
-    });
+    const res  = await fetch(
+      `${SUPABASE_URL}/rest/v1/order_carts?id=eq.${encodeURIComponent(cartId)}&select=test_mode,phase,cart_json,pickup_name,total_cents`,
+      { headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` } }
+    );
     const data = await res.json();
     const cart = data?.[0];
 
-    if (!cart) {
-      content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
-      return;
-    }
-
-    const isTest = cart.test_mode === true;
-    const name = cart.pickup_name ? ` for ${cart.pickup_name}` : '';
-    const total = cart.total_cents ? `$${(cart.total_cents / 100).toFixed(2)}` : '';
-
-    if (isTest) {
-      content.innerHTML = `
-        <div class="icon">🧪</div>
-        <div class="test-banner">TEST MODE -- No real order was placed and your card was not charged.</div>
-        <h1>Test Order Complete</h1>
-        <p>This was a test of the SprintAI ordering system.</p>
-        ${total ? `<p style="margin-top:0.75rem;font-weight:600;color:var(--ink);">Simulated total: ${total}</p>` : ''}
-        <p class="powered">Powered by <span>SprintAI</span></p>
-      `;
-    } else {
-      content.innerHTML = `
-        <div class="icon">🎉</div>
-        <div class="real-banner">Payment confirmed! Your order is placed.</div>
-        <h1>We got it${name}!</h1>
-        <p>Your order is confirmed. You'll get a text when it's ready for pickup.</p>
-        ${total ? `<p style="margin-top:0.75rem;font-weight:600;color:var(--ink);">Total: ${total}</p>` : ''}
-        <p class="powered">Powered by <span>SprintAI</span></p>
-      `;
-    }
+    if (!cart) { renderFallback(); return; }
+    cart.test_mode ? renderTest(cart) : renderReal(cart);
   } catch(e) {
-    content.innerHTML = `<div class="icon">✅</div><h1>Order Confirmed!</h1><p>Your order has been placed. You'll receive a confirmation text shortly.</p><p class="powered">Powered by <span>SprintAI</span></p>`;
+    renderFallback();
   }
 })();
 </script>
