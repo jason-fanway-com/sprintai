@@ -441,6 +441,7 @@ async function executeTool(
   cartId:    string,
   supabase:  ReturnType<typeof createClient>,
   shopName:  string,
+  testMode:  boolean = false,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -614,7 +615,9 @@ async function executeTool(
         line_items:           lineItems,
         metadata:             { order_cart_id: cartId, notes: orderNotes },
         custom_text:          { submit: { message: `Your order from ${shopName}${orderNotes ? ` -- ${orderNotes}` : ""}` } },
-        success_url:          `https://getsprintai.com/order-success?cart=${cartId}`,
+        success_url:          testMode
+          ? `https://getsprintai.com/order-success-test?cart=${cartId}`
+          : `https://getsprintai.com/order-success?cart=${cartId}`,
         cancel_url:           `https://getsprintai.com/order-cancel?cart=${cartId}`,
       });
 
@@ -765,6 +768,7 @@ async function runOrderingLoop(
   cartId:       string,
   supabase:     ReturnType<typeof createClient>,
   shopName:     string,
+  testMode:     boolean = false,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
@@ -822,6 +826,7 @@ async function runOrderingLoop(
         cartId,
         supabase,
         shopName,
+        testMode,
       );
       if (result.checkoutUrl) checkoutUrl = result.checkoutUrl;
       if (result.newPhase)    finalPhase  = result.newPhase;
@@ -830,6 +835,15 @@ async function runOrderingLoop(
         tool_use_id: toolBlock.id!,
         content:     JSON.stringify(result.result),
       });
+      // Stop immediately after checkout is created — don't let Claude generate
+      // another turn that could hallucinate a confirmation message
+      if (toolBlock.name === "create_checkout" && checkoutUrl) {
+        return {
+          reply:      "Payment link sent! Tap it to complete your order. Check your text or email.",
+          checkoutUrl,
+          finalPhase,
+        };
+      }
     }
     messages.push({ role: "user", content: toolResults });
   }
@@ -1011,7 +1025,9 @@ async function handleSystemEvent(
       ? hours.map((h: { open: string; close: string }) => `${fmt12Confirm(h.open)}-${fmt12Confirm(h.close)}`).join(", ")
       : "see our hours for details";
 
-    message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}. Pickup hours: ${hoursStr}. Thank you!`;
+    const closeTime = hours.length > 0 ? fmt12Confirm(hours[hours.length - 1].close) : null;
+    const closePart  = closeTime ? ` (we're open til ${closeTime})` : "";
+    message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
   } else if (system_event === "payment_expired") {
     message = `Your payment link expired. Reply "restart" to start a new order.`;
   } else {
@@ -1019,6 +1035,85 @@ async function handleSystemEvent(
   }
 
   await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message);
+
+  // Send order ticket email on payment confirmed
+  if (system_event === "payment_confirmed" && shop.email_ticket_recipient) {
+    try {
+      const resendApiKey = Deno.env.get("RESEND_API_KEY");
+      if (!resendApiKey) {
+        console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
+      } else {
+        const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
+        const emailPickup = cartRow.pickup_name ?? "Unknown";
+        const now = new Date();
+        const etTime = now.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
+        const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
+          if ((i as BundleItem).type === "bundle") {
+            const b = i as BundleItem;
+            const bPrice = b.price_cents != null ? `$${(b.price_cents / 100).toFixed(2)}` : "";
+            return `<tr><td style="padding:6px 8px;">${b.name}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
+          }
+          const r = i as CartItem;
+          const linePrice = r.price_cents != null ? `$${((r.price_cents * r.quantity) / 100).toFixed(2)}` : "";
+          return `<tr><td style="padding:6px 8px;">${r.name}</td><td style="padding:6px 8px;text-align:center;">${r.quantity}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
+        }).join("");
+        const emailHtml = `<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
+  <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="background:#1a1a2e;padding:24px 32px;">
+      <h1 style="margin:0;color:#fff;font-size:20px;">${shop.name}</h1>
+      <p style="margin:4px 0 0;color:#aaa;font-size:14px;">New Order Received</p>
+    </div>
+    <div style="padding:24px 32px;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:2px solid #eee;">
+            <th style="text-align:left;padding:6px 8px;font-size:13px;color:#666;">Item</th>
+            <th style="text-align:center;padding:6px 8px;font-size:13px;color:#666;">Qty</th>
+            <th style="text-align:right;padding:6px 8px;font-size:13px;color:#666;">Price</th>
+          </tr>
+        </thead>
+        <tbody>${cartItems}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #eee;">
+            <td colspan="2" style="padding:10px 8px;font-weight:bold;">Total</td>
+            <td style="padding:10px 8px;text-align:right;font-weight:bold;">$${emailTotal}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="margin-top:20px;padding:16px;background:#f8f8f8;border-radius:6px;">
+        <p style="margin:0 0 6px;"><strong>Pickup Name:</strong> ${emailPickup}</p>
+        <p style="margin:0;"><strong>Time Received:</strong> ${etTime}</p>
+      </div>
+    </div>
+    <div style="padding:16px 32px;background:#f4f4f4;text-align:center;">
+      <p style="margin:0;font-size:12px;color:#999;">Powered by SprintAI</p>
+    </div>
+  </div>
+</body>
+</html>`;
+        const emailResp = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from: "SprintAI Orders <joe.strazza@fanway.com>",
+            to: [shop.email_ticket_recipient],
+            subject: `New Order \u2014 ${emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
+            html: emailHtml,
+          }),
+        });
+        if (!emailResp.ok) {
+          const errText = await emailResp.text();
+          console.error(`[chat-sms] Resend email failed (${emailResp.status}): ${errText}`);
+        } else {
+          console.log(`[chat-sms] Order ticket email sent to ${shop.email_ticket_recipient}`);
+        }
+      }
+    } catch (emailErr) {
+      console.error("[chat-sms] Non-fatal: order ticket email threw:", emailErr);
+    }
+  }
 
   if (conversation.channel === "sms" && conversation.customer_phone) {
     // Direct Twilio SMS delivery
@@ -1033,9 +1128,11 @@ async function handleSystemEvent(
     const match = conversation.customer_phone.match(/web:imsg-p(\d+)-/);
     if (match) {
       const realPhone = "+" + match[1];
+      // Delay confirmation 10s so the payment link message always arrives first
+      const sendAfter = new Date(Date.now() + 10_000).toISOString();
       const { error: qErr } = await supabase
         .from("outbound_queue")
-        .insert({ to_phone: realPhone, message });
+        .insert({ to_phone: realPhone, message, send_after: sendAfter });
       if (qErr) {
         console.error("[chat-sms] Failed to queue outbound iMessage:", qErr.message);
       } else {
@@ -1277,9 +1374,22 @@ Deno.serve(async (req: Request) => {
     });
 
     const activatingTestMode = userMessage.trim().toUpperCase() === "TESTMODE";
-    if (activatingTestMode && !cart.test_mode) {
-      await supabase.from("order_carts").update({ test_mode: true }).eq("id", cart.id);
+    if (activatingTestMode) {
+      // Always reset cart state on TESTMODE — clear stale items, set test flag, back to greeting
+      await supabase.from("order_carts").update({
+        test_mode: true,
+        cart_json: [],
+        phase: "greeting",
+        notes: null,
+        subtotal_cents: 0,
+        total_cents: 0,
+        stripe_checkout_session_id: null,
+        pickup_name: null,
+      }).eq("id", cart.id);
       cart.test_mode = true;
+      cart.cart_json = [];
+      cart.phase = "greeting";
+      cart.notes = null;
     }
     if (!isOpen && todayHours.length > 0 && !cart.test_mode) {
       const fmt12 = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
@@ -1316,17 +1426,22 @@ Deno.serve(async (req: Request) => {
   const cartItems    = [...cart.cart_json];
 
   const { reply, checkoutUrl } = await runOrderingLoop(
-    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name,
+    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
   );
 
-  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+  // If checkout was created, override Claude's reply entirely — prevents hallucinated confirmations
+  const safeReply = checkoutUrl
+    ? "Payment link sent! Tap it to complete your order. Check your text or email."
+    : reply;
+
+  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", safeReply);
 
   // Reload cart for response
   const { data: updatedCart } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
   const currentCart = (updatedCart as OrderCart) ?? cart;
 
   // Strip markdown for clean SMS/text output
-  let finalReply = stripMarkdown(reply);
+  let finalReply = stripMarkdown(safeReply);
 
   // Append payment URL if present and not already in the reply
   if (checkoutUrl && !finalReply.includes(checkoutUrl)) {

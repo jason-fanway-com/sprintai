@@ -9,6 +9,9 @@ interface Shop {
   pause_message: string | null
   phone_number_e164: string | null
   merchant_pin?: string | null
+  toast_client_id?: string | null
+  toast_client_secret?: string | null
+  toast_location_guid?: string | null
 }
 
 interface SettingsTabProps {
@@ -94,6 +97,37 @@ export default function SettingsTab({
             <label className="block text-xs font-medium text-gray-500 mb-1">Merchant PIN</label>
             <p className="text-xs font-mono text-gray-400">{(shop as any).merchant_pin ?? <span className="text-gray-300">Not set</span>}</p>
           </div>
+        </div>
+      </div>
+
+      {/* POS Integration (Toast) */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="font-semibold text-gray-900 mb-1">POS Integration (Toast)</h3>
+        <p className="text-xs text-gray-500 mb-4">Contact your Toast account rep to request custom integration credentials.</p>
+        <div className="space-y-4">
+          {[
+            { label: 'Toast Client ID', field: 'toast_client_id' as const, type: 'text' },
+            { label: 'Toast Client Secret', field: 'toast_client_secret' as const, type: 'password' },
+            { label: 'Toast Location GUID', field: 'toast_location_guid' as const, type: 'text' },
+          ].map(({ label, field, type }) => (
+            <div key={field}>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+              {editingShop ? (
+                <input
+                  type={type}
+                  value={(shopForm[field] ?? '') as string}
+                  onChange={e => onFormChange(field, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+              ) : (
+                <p className="text-sm text-gray-700">
+                  {field === 'toast_client_secret' && shop[field]
+                    ? '••••••••'
+                    : ((shop[field] ?? '') as string) || <span className="text-gray-300">Not set</span>}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
