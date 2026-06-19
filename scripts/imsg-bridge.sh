@@ -28,7 +28,7 @@
 
 source ~/.openclaw/.secrets
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# -- Config ───────────────────────────────────────────────────────────────────
 SHOP_ID="b0000000-0000-0000-0000-000000000001"
 EDGE_URL="${SPRINTAI_CHAT_SUPABASE_URL}/functions/v1/chat-sms"
 EDGE_KEY="${SPRINTAI_CHAT_SUPABASE_ANON_KEY}"
@@ -37,13 +37,17 @@ PID_FILE="/tmp/sprintai-imsg-bridge.pid"
 POLL_INTERVAL=2
 SESSION_DIR="${HOME}/.sprintai-bridge/sessions"
 PROCESSED_DIR="${HOME}/.sprintai-bridge/processed"
+PROCESSED_IDS_FILE="${HOME}/.sprintai-bridge/processed-ids.txt"
+PROCESSED_IDS_MAX=10000
+MAX_MSG_AGE_SECONDS=86400
 ORDERING_NUMBER="${ORDERING_NUMBER:-+14842018054}"
 MODE="${1:-}"
 
-mkdir -p "$SESSION_DIR" "$PROCESSED_DIR"
+mkdir -p "$SESSION_DIR" "$PROCESSED_DIR" "${HOME}/.sprintai-bridge"
+# (No declare -A — using bash-3.2-compatible named-variable set; see load/is/mark below)
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+# -- Helpers ──────────────────────────────────────────────────────────────────
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
 SHUTDOWN_REQUESTED=false
 
@@ -59,7 +63,7 @@ for cmd in imsg jq curl; do
   command -v "$cmd" &>/dev/null || { echo "ERROR: $cmd not found" >&2; exit 1; }
 done
 
-# ── Session management ────────────────────────────────────────────────────────
+# -- Session management ────────────────────────────────────────────────────────
 # Maps customer phone → persistent session_id (24h TTL)
 get_session_id() {
   local sender="$1"
@@ -79,17 +83,67 @@ get_session_id() {
   fi
 }
 
-# ── Dedup: track processed message IDs ───────────────────────────────────────
-is_processed() {
-  [[ -f "$PROCESSED_DIR/$1" ]]
-}
-mark_processed() {
-  touch "$PROCESSED_DIR/$1"
-  # Prune old entries (> 24h)
-  find "$PROCESSED_DIR" -type f -mmin +1440 -delete 2>/dev/null || true
+# -- Dedup: persistent flat-file processed IDs ───────────────────────────────
+# IDs are stored one-per-line in PROCESSED_IDS_FILE and loaded into
+# PROCESSED_IDS_SET (associative array) on startup. This survives restarts.
+
+load_processed_ids() {
+  if [[ -f "$PROCESSED_IDS_FILE" ]]; then
+    local count=0
+    while IFS= read -r mid; do
+      # Bash 3.2-compatible: store each ID as a named variable _PROC_<id>=1
+      [[ -n "$mid" ]] && { eval "_PROC_${mid}=1"; (( count++ )); }
+    done < "$PROCESSED_IDS_FILE"
+    log "Loaded $count processed IDs from $PROCESSED_IDS_FILE"
+  else
+    log "No persistent processed-IDs file found — starting fresh"
+  fi
 }
 
-# ── Call edge function ────────────────────────────────────────────────────────
+_trim_processed_ids_file() {
+  local count
+  count=$(wc -l < "$PROCESSED_IDS_FILE" 2>/dev/null | tr -d ' ') || return 0
+  if (( count > PROCESSED_IDS_MAX )); then
+    local tmp
+    tmp=$(mktemp) || return 0
+    tail -n "$PROCESSED_IDS_MAX" "$PROCESSED_IDS_FILE" > "$tmp" && mv "$tmp" "$PROCESSED_IDS_FILE"
+    log "Trimmed processed-IDs file from $count to $PROCESSED_IDS_MAX entries"
+  fi
+}
+
+is_processed() {
+  # Bash 3.2-compatible indirect variable lookup
+  local _varname="_PROC_${1}"
+  [[ "${!_varname}" == "1" ]]
+}
+
+mark_processed() {
+  local mid="$1"
+  if ! is_processed "$mid"; then
+    eval "_PROC_${mid}=1"
+    echo "$mid" >> "$PROCESSED_IDS_FILE"
+  fi
+}
+
+# -- Age check: skip messages older than MAX_MSG_AGE_SECONDS ──────────────────
+# created_at comes from imsg JSON in ISO8601 form e.g. "2026-06-18T19:38:20.290Z"
+msg_is_too_old() {
+  local created_at="$1"
+  [[ -z "$created_at" ]] && return 1  # no date → don't skip
+
+  # Strip milliseconds and trailing Z, then parse
+  local dt_clean
+  dt_clean=$(echo "$created_at" | sed 's/\.[0-9]*Z$//' | sed 's/Z$//')
+  local msg_epoch
+  # TZ=UTC ensures the stripped ISO8601 string is parsed as UTC (the Z suffix indicates UTC)
+  msg_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$dt_clean" +%s 2>/dev/null) || return 1
+
+  local now_epoch
+  now_epoch=$(date +%s)
+  (( now_epoch - msg_epoch > MAX_MSG_AGE_SECONDS ))
+}
+
+# -- Call edge function ────────────────────────────────────────────────────────
 call_sprint() {
   local message="$1"
   local session_id="$2"
@@ -105,7 +159,7 @@ call_sprint() {
       '{shop_id: $shop_id, message: $message, session_id: $session_id}')" 2>/dev/null
 }
 
-# ── Send reply ────────────────────────────────────────────────────────────────
+# -- Send reply ────────────────────────────────────────────────────────────────
 send_reply() {
   local to="$1"
   local text="$2"
@@ -119,7 +173,7 @@ send_reply() {
   imsg send --to "$to" --text "$text" --service imessage 2>&1 | tee -a "$LOG_FILE"
 }
 
-# ── Process one message ───────────────────────────────────────────────────────
+# -- Process one message ───────────────────────────────────────────────────────
 # Errors are caught and logged; the message is always marked processed to
 # avoid infinite retry loops on poison messages.
 process_message() {
@@ -177,7 +231,7 @@ process_message() {
   mark_processed "$msg_id"
 }
 
-# ── Test mode ─────────────────────────────────────────────────────────────────
+# -- Test mode ─────────────────────────────────────────────────────────────────
 if [[ "$MODE" == "--test" ]]; then
   log "TEST MODE: Sending test message to edge function"
   response=$(call_sprint "Hi, what bagels do you have?" "test-session-$(date +%s)")
@@ -185,12 +239,14 @@ if [[ "$MODE" == "--test" ]]; then
   exit 0
 fi
 
-# ── Seed existing messages on first run ───────────────────────────────────────
-# Mark all existing messages as processed so we only catch genuinely new ones
+# -- Seed existing messages on first run ───────────────────────────────────────
+# Mark all existing messages as processed so we only catch genuinely new ones.
+# Uses ${PROCESSED_IDS_FILE}.seeded as a durable marker (not in the prunable dir).
 seed_existing() {
-  [[ -f "$PROCESSED_DIR/.seeded" ]] && return 0
+  [[ -f "${PROCESSED_IDS_FILE}.seeded" ]] && return 0
 
   log "First run: seeding existing messages as processed..."
+  local seed_count=0
   while IFS= read -r chat_line; do
     local chat_id chat_identifier
     chat_id=$(echo "$chat_line" | jq -r '.id' 2>/dev/null) || continue
@@ -199,20 +255,23 @@ seed_existing() {
     while IFS= read -r msg_line; do
       local msg_id
       msg_id=$(echo "$msg_line" | jq -r '.id // empty' 2>/dev/null) || continue
-      [[ -n "$msg_id" ]] && touch "$PROCESSED_DIR/$msg_id"
+      if [[ -n "$msg_id" ]]; then
+        mark_processed "$msg_id"
+        (( seed_count++ ))
+      fi
     done < <(imsg history --chat-id "$chat_id" --limit 10 --json 2>/dev/null)
   done < <(imsg chats --limit 30 --json 2>/dev/null)
-  touch "$PROCESSED_DIR/.seeded"
-  local seed_count
-  seed_count=$(find "$PROCESSED_DIR" -type f -not -name '.seeded' | wc -l | tr -d ' ')
-  log "Seeded $seed_count existing messages"
+  touch "${PROCESSED_IDS_FILE}.seeded"
+  log "Seeded $seed_count existing messages into flat file"
 }
 
-# ── Outbound queue drain ─────────────────────────────────────────────────────
+# -- Outbound queue drain ─────────────────────────────────────────────────────
 drain_outbound_queue() {
   local rows
+  local now_iso
+  now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   rows=$(curl -s \
-    "${SPRINTAI_CHAT_SUPABASE_URL}/rest/v1/outbound_queue?sent_at=is.null&order=created_at.asc&limit=20" \
+    "${SPRINTAI_CHAT_SUPABASE_URL}/rest/v1/outbound_queue?sent_at=is.null&send_after=lte.${now_iso}&order=created_at.asc&limit=20" \
     -H "apikey: ${SPRINTAI_CHAT_SUPABASE_ANON_KEY}" \
     -H "Authorization: Bearer ${SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY}" \
     -H "Accept: application/json" 2>/dev/null) || return 0
@@ -253,8 +312,10 @@ drain_outbound_queue() {
   done
 }
 
-# ── Main poll loop ────────────────────────────────────────────────────────────
+# -- Main poll loop ────────────────────────────────────────────────────────────
 run_bridge() {
+  load_processed_ids
+  _trim_processed_ids_file
   seed_existing
 
   while [[ "$SHUTDOWN_REQUESTED" != "true" ]]; do
@@ -272,22 +333,30 @@ run_bridge() {
 
       # Get latest 3 messages from this chat
       while IFS= read -r msg_line; do
-        local is_from_me msg_text msg_id destination_caller_id
+        local is_from_me msg_text msg_id destination_caller_id msg_created_at
         is_from_me=$(echo "$msg_line" | jq -r '.is_from_me // false' 2>/dev/null) || continue
         msg_text=$(echo "$msg_line" | jq -r '.text // empty' 2>/dev/null) || continue
         msg_id=$(echo "$msg_line" | jq -r '.id // empty' 2>/dev/null) || continue
         destination_caller_id=$(echo "$msg_line" | jq -r '.destination_caller_id // empty' 2>/dev/null) || continue
+        msg_created_at=$(echo "$msg_line" | jq -r '.created_at // empty' 2>/dev/null) || true
 
         # Debug: log every message evaluated
         local is_proc_flag="false"
         is_processed "$msg_id" && is_proc_flag="true"
-        log "[MSG] id=$msg_id from_me=$is_from_me dst=$destination_caller_id processed=$is_proc_flag text='${msg_text:0:30}'"
+        log "[MSG] id=$msg_id from_me=$is_from_me dst=$destination_caller_id processed=$is_proc_flag created_at=$msg_created_at text='${msg_text:0:30}'"
 
         # Skip outbound, empty, or already processed
         [[ "$is_from_me" == "true" ]] && { log "[SKIP] id=$msg_id: is_from_me"; continue; }
         [[ -z "$msg_text" ]] && { log "[SKIP] id=$msg_id: empty text"; continue; }
         [[ -z "$msg_id" ]] && continue
-        is_processed "$msg_id" && { log "[SKIP] id=$msg_id: already processed"; continue; }
+        is_processed "$msg_id" && { log "[SKIP] id=$msg_id: already processed (persistent)"; continue; }
+
+        # Skip messages older than 24h (belt-and-suspenders against stale re-processing)
+        if msg_is_too_old "$msg_created_at"; then
+          log "[SKIP] id=$msg_id: message older than ${MAX_MSG_AGE_SECONDS}s ($msg_created_at) — marking processed"
+          mark_processed "$msg_id"
+          continue
+        fi
 
         # Only process messages addressed to the ordering number
         if [[ "$destination_caller_id" != "$ORDERING_NUMBER" ]]; then
@@ -312,16 +381,16 @@ run_bridge() {
   done
 }
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+# -- Startup ───────────────────────────────────────────────────────────────────
 echo $$ > "$PID_FILE"
-log "═══════════════════════════════════════════════════"
+log "================================================="
 log "SprintAI iMessage Bridge started (PID $$)"
 log "Shop: Not Just Bagels ($SHOP_ID)"
 log "Mode: ${MODE:-live}"
 log "Poll interval: ${POLL_INTERVAL}s"
-log "═══════════════════════════════════════════════════"
+log "================================================="
 
-# ── Restart-on-crash wrapper ──────────────────────────────────────────────────
+# -- Restart-on-crash wrapper ──────────────────────────────────────────────────
 # If run_bridge exits unexpectedly, log and restart after 5s.
 # Cap at MAX_CRASHES within CRASH_WINDOW seconds to prevent a tight crash loop;
 # after that, exit so launchd (KeepAlive: true) can handle the restart cleanly.
