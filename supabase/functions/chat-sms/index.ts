@@ -1014,8 +1014,14 @@ async function handleSystemEvent(
       const r = i as CartItem;
       return `${r.quantity}x ${r.name}`;
     }).join(", ");
+    const subtotal   = ((cartRow.subtotal_cents ?? 0) / 100).toFixed(2);
+    const serviceFee  = ((cartRow.service_fee_cents ?? 0) / 100).toFixed(2);
     const total  = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
     const pickup = cartRow.pickup_name ? ` for ${cartRow.pickup_name}` : "";
+    // Reconciliation line shown only when a service fee was charged (new orders).
+    const feeLine = (cartRow.service_fee_cents ?? 0) > 0
+      ? ` (Subtotal $${subtotal} + Service fee $${serviceFee})`
+      : "";
 
     const dayMap: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
     const today    = dayMap[new Date().getDay()];
@@ -1027,11 +1033,23 @@ async function handleSystemEvent(
 
     const closeTime = hours.length > 0 ? fmt12Confirm(hours[hours.length - 1].close) : null;
     const closePart  = closeTime ? ` (we're open til ${closeTime})` : "";
-    message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
+    message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}${feeLine}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
   } else if (system_event === "payment_expired") {
     message = `Your payment link expired. Reply "restart" to start a new order.`;
+  } else if (system_event === "order_refunded") {
+    const refunded = ((cartRow.refunded_cents ?? 0) / 100).toFixed(2);
+    message = `A refund of $${refunded} has been issued for your order. It may take a few business days to appear on your statement.`;
+  } else if (system_event === "order_disputed") {
+    // Internal/shop-facing event; no diner-facing copy needed, but ack so the
+    // webhook's notify call succeeds. Keep diner messaging silent here.
+    message = ``;
   } else {
     return jsonError(`Unknown system event: ${system_event}`);
+  }
+
+  // Silent events (e.g. order_disputed) produce no diner-facing message.
+  if (!message) {
+    return jsonResponse({ ok: true, silent: true });
   }
 
   await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message);
@@ -1097,7 +1115,7 @@ async function handleSystemEvent(
           method: "POST",
           headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            from: "SprintAI Orders <joe.strazza@fanway.com>",
+            from: "SprintAI Orders <orders@getsprintai.com>",
             to: [shop.email_ticket_recipient],
             subject: `New Order \u2014 ${emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
             html: emailHtml,

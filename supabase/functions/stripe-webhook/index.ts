@@ -8,6 +8,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
+import { deriveConnectStatus } from "../_shared/connect.ts";
 
 const PLAN_PRICES: Record<string, string> = {
   // Map Stripe price IDs to plan names — update with real Stripe price IDs
@@ -54,7 +55,10 @@ Deno.serve(async (req: Request) => {
     return jsonError("Invalid signature", 400);
   }
 
-  console.log(`[stripe-webhook] Event: ${event.type} — ${event.id}`);
+  // `event.account` is set for CONNECTED-ACCOUNT events (direct-charge
+  // refunds/disputes fire here, NOT on the platform). Empty for platform events.
+  const connectedAccount = (event as Stripe.Event & { account?: string }).account ?? "";
+  console.log(`[stripe-webhook] Event: ${event.type} — ${event.id}${connectedAccount ? ` (acct ${connectedAccount})` : " (platform)"}`);
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -62,12 +66,35 @@ Deno.serve(async (req: Request) => {
     { auth: { persistSession: false } }
   );
 
+  // Idempotency: record (event_id, connected_account) before handling. If the
+  // pair already exists, we've processed this delivery — ack and skip.
+  const alreadyProcessed = await recordEventOnce(supabase, event.id, connectedAccount, event.type);
+  if (alreadyProcessed) {
+    console.log(`[stripe-webhook] Duplicate event ${event.id} (acct '${connectedAccount}') — skipping`);
+    return jsonResponse({ received: true, duplicate: true });
+  }
+
   try {
     switch (event.type) {
+      // ── Connect: platform-level account state ──────────────────────────
+      case "account.updated":
+        await handleAccountUpdated(supabase, event.data.object as Stripe.Account);
+        break;
+
+      // ── Connect: connected-account order events (DIRECT charges) ───────
+      case "charge.refunded":
+        await handleChargeRefunded(supabase, event.data.object as Stripe.Charge, connectedAccount);
+        break;
+
+      case "charge.dispute.created":
+        await handleDisputeCreated(supabase, event.data.object as Stripe.Dispute, connectedAccount);
+        break;
+
       case "checkout.session.completed": {
         const sess = event.data.object as Stripe.Checkout.Session;
         if (sess.metadata?.order_cart_id) {
-          await handleOrderPaymentComplete(supabase, sess);
+          // DIRECT-CHARGE order: this event fires on the CONNECTED account.
+          await handleOrderPaymentComplete(supabase, stripe, sess, connectedAccount);
         } else {
           await handleCheckoutComplete(supabase, stripe, sess);
         }
@@ -106,25 +133,250 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[stripe-webhook] Error handling ${event.type}:`, errMsg);
-    // Return 200 to prevent Stripe from retrying (we log the error internally)
+    // On real failures, roll back the idempotency record so Stripe's retry can
+    // re-attempt this event rather than being silently skipped.
+    await unrecordEvent(supabase, event.id, connectedAccount);
+    // Return 200 to prevent immediate Stripe retry storms; Stripe still retries
+    // on non-2xx, but we log internally. (Order events above will be retried
+    // because we removed the idempotency row.)
     return jsonResponse({ received: true, error: errMsg });
   }
 });
+
+// ─── Idempotency ledger ──────────────────────────────────────────────────────
+
+/** Insert (event_id, stripe_account); returns true if it was ALREADY present. */
+async function recordEventOnce(
+  supabase: ReturnType<typeof createClient>,
+  eventId: string,
+  stripeAccount: string,
+  eventType: string,
+): Promise<boolean> {
+  const { error } = await supabase
+    .from("stripe_webhook_events")
+    .insert({ event_id: eventId, stripe_account: stripeAccount, event_type: eventType });
+  if (!error) return false; // inserted fresh
+  // 23505 = unique_violation → already processed.
+  if ((error as { code?: string }).code === "23505") return true;
+  // Unknown error: log but don't block handling (fail open on idempotency).
+  console.error("[stripe-webhook] idempotency insert error:", error.message);
+  return false;
+}
+
+async function unrecordEvent(
+  supabase: ReturnType<typeof createClient>,
+  eventId: string,
+  stripeAccount: string,
+): Promise<void> {
+  await supabase
+    .from("stripe_webhook_events")
+    .delete()
+    .eq("event_id", eventId)
+    .eq("stripe_account", stripeAccount);
+}
+
+// ─── Connect: account.updated (platform-level) ───────────────────────────────
+
+/** Update a shop's go-live flags from a changed connected account. */
+async function handleAccountUpdated(
+  supabase: ReturnType<typeof createClient>,
+  account: Stripe.Account,
+): Promise<void> {
+  const { data: shop } = await supabase
+    .from("shops")
+    .select("id, connect_status")
+    .eq("stripe_connected_account_id", account.id)
+    .single();
+
+  if (!shop) {
+    console.log(`[stripe-webhook] account.updated for unknown account ${account.id} — ignoring`);
+    return;
+  }
+
+  const status = deriveConnectStatus(account, shop.connect_status as string | null);
+
+  await supabase
+    .from("shops")
+    .update({
+      charges_enabled: account.charges_enabled ?? false,
+      payouts_enabled: account.payouts_enabled ?? false,
+      connect_requirements_due: account.requirements?.currently_due ?? [],
+      connect_status: status,
+    })
+    .eq("id", shop.id);
+
+  console.log(`[stripe-webhook] account.updated ${account.id} → shop ${shop.id}: charges=${account.charges_enabled} payouts=${account.payouts_enabled} status=${status}`);
+}
+
+// ─── Connect: connected-account order events (DIRECT charges) ────────────────
+
+/**
+ * charge.refunded on the CONNECTED account. Update the order's refund state.
+ * Note: whether the $0.99 application fee was returned is controlled at
+ * refund-creation time via `refund_application_fee` (see refund-fee handler);
+ * this webhook just records the resulting refund totals on the order.
+ */
+async function handleChargeRefunded(
+  supabase: ReturnType<typeof createClient>,
+  charge: Stripe.Charge,
+  connectedAccount: string,
+): Promise<void> {
+  const cart = await findCartForCharge(supabase, charge, connectedAccount);
+  if (!cart) {
+    console.log(`[stripe-webhook] charge.refunded ${charge.id} (acct ${connectedAccount}) — no matching order`);
+    return;
+  }
+
+  const refunded = charge.amount_refunded ?? 0;
+  const amount = charge.amount ?? 0;
+  const refundStatus = refunded <= 0 ? "none" : refunded >= amount ? "full" : "partial";
+
+  await supabase
+    .from("order_carts")
+    .update({
+      refunded_cents: refunded,
+      refund_status: refundStatus,
+      payment_status: refundStatus === "full" ? "refunded" : "paid",
+    })
+    .eq("id", cart.id);
+
+  console.log(`[stripe-webhook] charge.refunded ${charge.id} → cart ${cart.id}: ${refundStatus} ($${(refunded / 100).toFixed(2)} of $${(amount / 100).toFixed(2)})`);
+
+  if (cart.conversation_id) {
+    await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_refunded");
+  }
+}
+
+/**
+ * charge.dispute.created on the CONNECTED account. The dispute debits the
+ * RESTAURANT's balance (they are merchant of record); Sprint only records and
+ * notifies the shop.
+ */
+async function handleDisputeCreated(
+  supabase: ReturnType<typeof createClient>,
+  dispute: Stripe.Dispute,
+  connectedAccount: string,
+): Promise<void> {
+  const chargeId = typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
+  const { data: cart } = await supabase
+    .from("order_carts")
+    .select("id, shop_id, conversation_id")
+    .eq("stripe_charge_id", chargeId ?? "__none__")
+    .maybeSingle();
+
+  if (!cart) {
+    console.log(`[stripe-webhook] dispute ${dispute.id} on charge ${chargeId} (acct ${connectedAccount}) — no matching order; recording notice only`);
+    return;
+  }
+
+  await supabase
+    .from("order_carts")
+    .update({ dispute_status: dispute.status ?? "created" })
+    .eq("id", cart.id);
+
+  console.log(`[stripe-webhook] DISPUTE ${dispute.id} (${dispute.reason}) on cart ${cart.id} acct ${connectedAccount} — debits RESTAURANT; notifying shop`);
+
+  // Notify the shop (restaurant owns the dispute). Email + SMS via chat-sms.
+  await notifyShopOfDispute(supabase, cart.shop_id, cart.id, dispute);
+  if (cart.conversation_id) {
+    await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_disputed");
+  }
+}
+
+/** Find the order_cart for a charge, by payment_intent then charge id. */
+async function findCartForCharge(
+  supabase: ReturnType<typeof createClient>,
+  charge: Stripe.Charge,
+  _connectedAccount: string,
+): Promise<{ id: string; shop_id: string; conversation_id: string | null } | null> {
+  const piId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+  if (piId) {
+    const { data } = await supabase
+      .from("order_carts")
+      .select("id, shop_id, conversation_id")
+      .eq("stripe_payment_intent_id", piId)
+      .maybeSingle();
+    if (data) return data as { id: string; shop_id: string; conversation_id: string | null };
+  }
+  const { data: byCharge } = await supabase
+    .from("order_carts")
+    .select("id, shop_id, conversation_id")
+    .eq("stripe_charge_id", charge.id)
+    .maybeSingle();
+  return (byCharge as { id: string; shop_id: string; conversation_id: string | null }) ?? null;
+}
+
+/** Email the shop that a diner disputed an order (restaurant bears liability). */
+async function notifyShopOfDispute(
+  supabase: ReturnType<typeof createClient>,
+  shopId: string,
+  cartId: string,
+  dispute: Stripe.Dispute,
+): Promise<void> {
+  const { data: shop } = await supabase
+    .from("shops")
+    .select("name, email_ticket_recipient")
+    .eq("id", shopId)
+    .single();
+  const recipient = (shop as { email_ticket_recipient?: string } | null)?.email_ticket_recipient;
+  const amount = ((dispute.amount ?? 0) / 100).toFixed(2);
+  console.log(`[DISPUTE NOTICE] shop=${(shop as { name?: string } | null)?.name} email=${recipient ?? "n/a"} cart=${cartId} amount=$${amount} reason=${dispute.reason} — a chargeback was filed; funds are held from your Stripe balance pending response.`);
+
+  const resendApiKey = Deno.env.get("RESEND_API_KEY");
+  if (!resendApiKey || !recipient) return;
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "SprintAI <hello@getsprintai.com>",
+        to: [recipient],
+        subject: `Chargeback filed on an order — action may be required`,
+        html: `<p>A diner disputed a recent order (cart ${cartId}) for <strong>$${amount}</strong> (reason: ${dispute.reason}).</p>
+               <p>Because you are the merchant of record, this chargeback is held against your Stripe balance. Respond with evidence from your Stripe Dashboard to contest it.</p>`,
+      }),
+    });
+  } catch (err) {
+    console.error("[stripe-webhook] dispute email failed:", err);
+  }
+}
 
 // ─── Order Payment Handlers ───────────────────────────────────────────────────
 
 /** checkout.session.completed with order_cart_id → mark order paid + log ticket */
 async function handleOrderPaymentComplete(
   supabase: ReturnType<typeof createClient>,
+  stripe:   Stripe,
   session:  Stripe.Checkout.Session,
+  connectedAccount: string,
 ): Promise<void> {
   const cartId = session.metadata?.order_cart_id;
   if (!cartId) return;
-  console.log(`[stripe-webhook] Order payment complete for cart: ${cartId}`);
+  console.log(`[stripe-webhook] Order payment complete for cart: ${cartId} (acct ${connectedAccount || "platform"})`);
+
+  // Capture the PaymentIntent + Charge id from the CONNECTED account so refund
+  // and dispute webhooks can route back to this order. For a direct charge the
+  // PI/Charge live on the connected account, so we read with the Stripe-Account.
+  const piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null;
+  let chargeId: string | null = null;
+  if (piId && connectedAccount) {
+    try {
+      const pi = await stripe.paymentIntents.retrieve(piId, { stripeAccount: connectedAccount });
+      chargeId = (pi.latest_charge as string | null) ?? null;
+    } catch (err) {
+      console.error(`[stripe-webhook] could not retrieve PI ${piId} on acct ${connectedAccount}:`, err);
+    }
+  }
 
   const { error } = await supabase
     .from("order_carts")
-    .update({ payment_status: "paid", phase: "confirmed" })
+    .update({
+      payment_status: "paid",
+      phase: "confirmed",
+      stripe_payment_intent_id: piId,
+      stripe_charge_id: chargeId,
+      stripe_connected_account_id: connectedAccount || null,
+    })
     .eq("id", cartId);
 
   if (error) throw new Error(`Failed to update cart ${cartId}: ${error.message}`);
@@ -144,19 +396,63 @@ async function handleOrderPaymentComplete(
   if (cart) {
     const shopName  = (cart.shops as { name: string; email_ticket_recipient: string | null })?.name ?? "Unknown Shop";
     const recipient = (cart.shops as { name: string; email_ticket_recipient: string | null })?.email_ticket_recipient ?? "n/a";
-    const total     = ((cart.total_cents ?? 0) / 100).toFixed(2);
+    // Reconciliation breakdown — must match the Stripe charge to the cent.
+    const subtotal   = ((cart.subtotal_cents ?? 0) / 100).toFixed(2); // food + tax
+    const serviceFee = ((cart.service_fee_cents ?? 0) / 100).toFixed(2);
+    const total      = ((cart.total_cents ?? 0) / 100).toFixed(2);
     console.log(`[ORDER TICKET] ===========================`);
-    console.log(`[ORDER TICKET] Shop:      ${shopName}`);
-    console.log(`[ORDER TICKET] Email:     ${recipient}`);
-    console.log(`[ORDER TICKET] Cart ID:   ${cartId}`);
-    console.log(`[ORDER TICKET] Total:     $${total}`);
-    console.log(`[ORDER TICKET] Pickup:    ${cart.pickup_name ?? "Not specified"}`);
+    console.log(`[ORDER TICKET] Shop:        ${shopName}`);
+    console.log(`[ORDER TICKET] Email:       ${recipient}`);
+    console.log(`[ORDER TICKET] Cart ID:     ${cartId}`);
+    console.log(`[ORDER TICKET] Charge:      ${cart.stripe_charge_id ?? "n/a"} (acct ${connectedAccount || "platform"})`);
+    console.log(`[ORDER TICKET] Pickup:      ${cart.pickup_name ?? "Not specified"}`);
     console.log(`[ORDER TICKET] Items:`);
     for (const item of cart.cart_json ?? []) {
       const mods = item.modifiers?.length > 0 ? ` [${item.modifiers.join(", ")}]` : "";
       console.log(`[ORDER TICKET]   ${item.quantity}x ${item.name}${mods} - $${((item.price_cents * item.quantity) / 100).toFixed(2)}`);
     }
+    console.log(`[ORDER TICKET] --------------------------`);
+    console.log(`[ORDER TICKET] Subtotal (food+tax): $${subtotal}`);
+    console.log(`[ORDER TICKET] Service fee:         $${serviceFee}`);
+    console.log(`[ORDER TICKET] Grand total:         $${total}`);
     console.log(`[ORDER TICKET] ===========================`);
+
+    // Email the reconciled ticket if Resend is configured.
+    await sendOrderTicketEmail(recipient, shopName, cartId, cart, { subtotal, serviceFee, total });
+  }
+}
+
+/** Send a reconciled order ticket email (food+tax, $0.99 fee, grand total). */
+async function sendOrderTicketEmail(
+  recipient: string,
+  shopName: string,
+  cartId: string,
+  cart: Record<string, unknown>,
+  totals: { subtotal: string; serviceFee: string; total: string },
+): Promise<void> {
+  const resendApiKey = Deno.env.get("RESEND_API_KEY");
+  if (!resendApiKey || !recipient || recipient === "n/a") return;
+  const items = (cart.cart_json as Array<{ quantity: number; name: string; modifiers?: string[]; price_cents: number }>) ?? [];
+  const rows = items.map((i) => {
+    const mods = i.modifiers?.length ? ` (${i.modifiers.join(", ")})` : "";
+    return `<tr><td>${i.quantity}× ${i.name}${mods}</td><td align="right">$${((i.price_cents * i.quantity) / 100).toFixed(2)}</td></tr>`;
+  }).join("");
+  const html = `<h2>New order — ${shopName}</h2>
+    <p>Pickup: ${(cart.pickup_name as string) ?? "Not specified"}</p>
+    <table style="width:100%;border-collapse:collapse;">${rows}
+      <tr><td>Subtotal (food + tax)</td><td align="right">$${totals.subtotal}</td></tr>
+      <tr><td>Service fee</td><td align="right">$${totals.serviceFee}</td></tr>
+      <tr><td><strong>Total charged</strong></td><td align="right"><strong>$${totals.total}</strong></td></tr>
+    </table>
+    <p style="color:#64748b;font-size:12px;">Cart ${cartId}. Totals reconcile to the Stripe charge.</p>`;
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "SprintAI <hello@getsprintai.com>", to: [recipient], subject: `New order — ${shopName} ($${totals.total})`, html }),
+    });
+  } catch (err) {
+    console.error("[stripe-webhook] order ticket email failed:", err);
   }
 }
 

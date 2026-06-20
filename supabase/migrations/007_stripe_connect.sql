@@ -44,3 +44,23 @@ COMMENT ON COLUMN shops.connect_status IS
   'none → not started; pending → account created/onboarding incomplete; enabled → charges+payouts on & no due items; disabled → Stripe disabled the account.';
 COMMENT ON COLUMN shops.connect_requirements_due IS
   'Mirror of Stripe account.requirements.currently_due (array of requirement strings).';
+
+-- ------------------------------------------------------------
+-- Webhook idempotency ledger.
+-- Stripe can deliver the same event more than once; handlers must be
+-- idempotent. We record each processed (event id, connected account) pair.
+-- For platform events stripe_account is the empty string ''.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+  event_id       TEXT        NOT NULL,
+  stripe_account TEXT        NOT NULL DEFAULT '',
+  event_type     TEXT        NOT NULL,
+  processed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (event_id, stripe_account)
+);
+
+COMMENT ON TABLE stripe_webhook_events IS
+  'Idempotency ledger for Stripe webhooks. (event_id, stripe_account) is unique; stripe_account is '''' for platform-level events and the connected account id for connected-account events.';
+
+ALTER TABLE stripe_webhook_events ENABLE ROW LEVEL SECURITY;
+-- Service-role only (Edge Functions use the service key); no public policies.

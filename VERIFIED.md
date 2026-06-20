@@ -2,8 +2,12 @@
 
 **Builder:** John Walsh · **Date:** 2026-06-20 · **Mode:** Stripe TEST only
 Every API name flagged "VERIFY" in the source specs was confirmed against current
-`docs.stripe.com` before coding. Results below. **A material spec-vs-Stripe
-conflict was found (see §10.4 / BLOCKER) and work was halted per hard constraints.**
+`docs.stripe.com` before coding. Results below.
+
+**UPDATE 2026-06-20 (direct-charge rebuild):** The earlier destination-charge
+BLOCKER is RESOLVED — the model is now DIRECT charges (confirmed by Jason). All
+VERIFY items re-confirmed for the direct-charge variant, including an **empirical**
+Stripe API test of the Express controller config. See §§10.3 / 10.4 / 10.6 below.
 
 ---
 
@@ -37,27 +41,119 @@ conflict was found (see §10.4 / BLOCKER) and work was halted per hard constrain
 - Server returns `{ account_id, client_secret }` for the wizard to mount. (Wizard
   UI itself is spec 05; spec 01 only provides the session.)
 
-## §10.3 — Express controller / fee-payer / loss-owner / dashboard
-- **Confirmed (Accounts v1 `controller` properties):**
+## §10.3 — Express controller config for DIRECT charges (RESOLVED, empirically tested)
+
+**The spec asked us to confirm the exact controller combination for an Express
+account doing DIRECT charges with the restaurant bearing fees. We tested it live
+with the TEST key.**
+
+### Empirical finding 1 — you CANNOT set `fees.payer='account'` on an express dashboard
+Attempting `controller.stripe_dashboard.type='express'` + `controller.fees.payer='account'`
++ `controller.losses.payments='stripe'` is **REJECTED** by Stripe:
+
+> `invalid_request_error`: "When `stripe_dashboard[type]=express`, your platform
+> must collect fees and be liable for negative balances or refunds and chargebacks."
+
+So the spec's literal instruction (`controller.fees.payer='account'` on an Express
+account) is **impossible**. Recorded here as the authoritative correction.
+
+### Empirical finding 2 — use `type:'express'`, which yields `application_express`
+The correct way to get the intended economics (restaurant bears processing +
+disputes for DIRECT charges) on an Express-dashboard account is to create it with
+**`type: 'express'`**. Stripe assigns such accounts the fee-payer behavior
+**`application_express`**. Per
+`docs.stripe.com/connect/direct-charges-fee-payer-behavior` (fetched 2026-06-20),
+the behavior table for `application_express` on **direct charges** is:
+
+| Product | application_express |
+|---|---|
+| Stripe payment processing fees | **Connected Account** |
+| Dispute fees | **Connected Account** |
+
+That is exactly the intended posture: the **restaurant bears Stripe processing fees
+and owns/bears disputes**, and Sprint keeps the full flat `application_fee_amount`
+(§10.4). NOTE: `application_express` is NOT a value you can pass at creation — it is
+assigned automatically to `type=express` accounts. We therefore create Express
+accounts with `type:'express'` and do **not** override the controller.
+
+### Confirmed `controller` property vocabulary (for Standard/OAuth, §10.1)
   - `controller.fees.payer` — `'account'` | `'application'`
   - `controller.losses.payments` — `'stripe'` | `'application'`
   - `controller.stripe_dashboard.type` — `'express'` | `'none'` | `'full'`
   - `controller.requirement_collection` — `'stripe'` | `'application'`
-- For an Express-equivalent account: `stripe_dashboard.type='express'`, and Stripe
-  **requires** `losses.payments='application'` and `fees.payer='application'` when
-  dashboard is `express`.
-- Account creation: `stripe.accounts.create({ controller: {...}, capabilities: { card_payments: { requested: true }, transfers: { requested: true } }, business_profile: { mcc: '5812' }, country: 'US', email, company/individual prefill })`.
-  (Spec allows either `type:'express'` or controller properties; controller
-  properties are the current recommended path and are backwards compatible.)
+  Standard/OAuth accounts default to `fees.payer='account'` (restaurant bears fees
+  on direct charges) — no override needed.
 
-## §10.4 — Charge parameters (application_fee_amount / transfer_data.destination / on_behalf_of)
-- **Confirmed names (Checkout Session):**
-  - `payment_intent_data.application_fee_amount` (integer cents) ✅
-  - `payment_intent_data.transfer_data.destination` (connected acct id) ✅ — this is what makes it a **destination charge**
-  - `payment_intent_data.on_behalf_of` (connected acct id) ✅ — sets the **settlement merchant**
-- All three names are current and correct.
+### Express account creation (as built in connect-create-express)
+`stripe.accounts.create({ type: 'express', country: 'US', email,
+  business_profile: { mcc: '5812', name }, capabilities: { card_payments: {
+  requested: true }, transfers: { requested: true } }, metadata: { shop_id } })`.
 
-### ⛔ BLOCKER — economic model conflict (load-bearing)
+### Pre-flight blocker for the live capability proof
+**Connect is NOT enabled on the test platform account.** Account creation returns:
+> "You can only create new accounts if you've signed up for Connect, which you can
+> do at https://dashboard.stripe.com/connect."
+So the **DIRECT-charge capability proof on a test Express account is BLOCKED** until
+Connect is enabled in test mode. The controller question itself is fully resolved
+above via the rejection + the docs table.
+
+## §10.4 — DIRECT-charge Checkout Session params (RESOLVED)
+**Confirmed against `docs.stripe.com/connect/direct-charges` (web=stripe-hosted), 2026-06-20:**
+- Create the Checkout Session **with the `Stripe-Account: <connected_account_id>`
+  header** — "This header indicates a direct charge for your connected account."
+  In the Stripe Deno SDK this is `connectedAccountOpts(id)` =>
+  `{ stripeAccount: id, idempotencyKey }` passed as the 2nd arg to
+  `stripe.checkout.sessions.create(params, opts)`.
+- `payment_intent_data.application_fee_amount` (integer cents) — confirmed; the
+  doc: "After the payment is processed on the connected account, the
+  `application_fee_amount` is transferred to the platform." => Sprint keeps the
+  full $0.99 whole.
+- **NO** `transfer_data.destination` and **NO** `on_behalf_of` — those are
+  destination-charge params and are absent by design. (Their names remain valid
+  Stripe params; they are simply not used in the direct-charge model.)
+- Idempotency: pass `idempotencyKey` in the request options; because the
+  `Stripe-Account` header scopes the request to the connected account, the key is
+  effectively per-connected-account. We key it on `checkout_<order_cart_id>`.
+
+### Economic correctness (the whole reason for the rebuild)
+On a **direct charge** with `application_express`/`account` fee-payer, Stripe debits
+the **connected (restaurant) account** for processing, and the `application_fee_amount`
+is transferred to the platform intact. So on a $30 order charged $30.99, Sprint nets
+the **full $0.99** and the restaurant absorbs the ~$1.20 processing fee as cost of
+acceptance — matching the canonical §4. This structurally fixes the −0.21/order loss
+that destination charges caused.
+
+### §10.6 — Refund of the application fee (RESOLVED, Jason 2026-06-20)
+**Confirmed against `docs.stripe.com` (direct-charges + connect refunds/disputes):**
+- "Application fees aren't automatically refunded when issuing a refund." → the
+  $0.99 is NOT returned unless we ask.
+- To return it on a **FULL** refund, pass **`refund_application_fee: true`** on the
+  Refund create call (`stripe.refunds.create({ payment_intent, refund_application_fee:
+  true }, { stripeAccount })`). "The application fee refund amount is proportional to
+  the payment refund amount."
+- **PARTIAL** refunds: we do NOT set it → Sprint keeps the $0.99 (documented in
+  `refund-order/index.ts`).
+- Refunds on direct charges are created "using your platform's secret key while
+  authenticated as the connected account" → i.e. with the `Stripe-Account` header.
+
+### §10.7 — Connected-account webhook delivery shape (RESOLVED)
+- For DIRECT charges, `charge.refunded` and `charge.dispute.created` are delivered
+  as **connected-account events**: the Stripe `Event` object carries
+  **`event.account = <connected_account_id>`** (and the connected-account webhook
+  delivery sets the account context). `account.updated` is a **platform-level**
+  Connect event (no `event.account` for the platform's own listener routing; the
+  account object is in `event.data.object`). The webhook reads `event.account` to
+  distinguish the two and routes connected-account order events to the shop by
+  `stripe_connected_account_id`. Idempotency is keyed on
+  `(event_id, stripe_account)` so platform and connected deliveries never collide.
+
+---
+
+### ✅ RESOLVED (was: BLOCKER) — destination-charge economics, superseded by DIRECT charges
+The section below is the ORIGINAL blocker analysis, kept for the decision record.
+It is the reason Jason switched the model to direct charges. **No longer blocking.**
+
+#### ⛔ (historical) economic model conflict on destination charges
 The spec's stated economics are **not achievable with a destination charge**:
 
 > Spec/canonical §4: *"SprintAI keeps the full $0.99 application fee — it is not
@@ -119,12 +215,22 @@ match whichever charge model is approved.
 ## Environment / secrets status (Supabase)
 | Secret | Present? | Needed for |
 |---|---|---|
-| `STRIPE_SECRET_KEY` | ✅ | all (must be a **test** key — confirm value is `sk_test_…`) |
-| `STRIPE_WEBHOOK_SECRET` | ✅ | webhook sig verify (must be the **test** endpoint secret) |
+| `STRIPE_SECRET_KEY` (Supabase) | ⚠️ **LIVE** | all functions read this; currently `sk_live_…` |
+| `STRIPE_TEST_SECRET_KEY` (.secrets) | ✅ `sk_test_…` | the TEST key used for all verification calls here |
+| `STRIPE_WEBHOOK_SECRET` | ✅ | webhook sig verify (confirm it's the **test** endpoint secret) |
 | `STRIPE_CONNECT_CLIENT_ID` | ❌ **MISSING** | OAuth Path A (`connect-oauth`) |
 | `STRIPE_OAUTH_REDIRECT_URL` | ❌ **MISSING** | OAuth Path A redirect/callback |
+| Connect enabled (test mode) | ❌ **NOT ENABLED** | any connected-account creation/charge |
 
-> Could not confirm whether `STRIPE_SECRET_KEY` is test vs live without printing the
-> value (which is forbidden). **Jason/lead must confirm the configured key is a TEST
-> key before any account creation runs**, since these functions will create real
-> connected accounts in whatever mode the key targets.
+> **⚠️ KEY HYGIENE — ACTION REQUIRED.** The masked prefixes in `~/.openclaw/.secrets`
+> show `STRIPE_SECRET_KEY=sk_live_51O8…` (LIVE) and a separate
+> `STRIPE_TEST_SECRET_KEY=sk_test_b9d7…` (TEST). The edge functions read
+> `STRIPE_SECRET_KEY`, which in Supabase currently resolves to the **LIVE** key.
+> **Before any test deploy, repoint Supabase `STRIPE_SECRET_KEY` to the TEST value**
+> (and `STRIPE_WEBHOOK_SECRET` to the test endpoint secret). I did NOT run any
+> account/charge against the live key. All verification API calls above used
+> `STRIPE_TEST_SECRET_KEY` only.
+>
+> Outstanding to unblock live tests: (1) enable Connect in test mode, (2) add
+> `STRIPE_CONNECT_CLIENT_ID` + `STRIPE_OAUTH_REDIRECT_URL`, (3) repoint
+> `STRIPE_SECRET_KEY` to test for the deploy.
