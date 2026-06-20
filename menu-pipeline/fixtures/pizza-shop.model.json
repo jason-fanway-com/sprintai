@@ -1,0 +1,132 @@
+{
+  "menuName": "Synthetic Pizza Shop (TEST FIXTURE)",
+  "categoryOrder": ["Pizza", "By the Slice", "Wings", "Salads", "Entrees"],
+  "items": [
+    {
+      "category": "Pizza",
+      "name": "Cheese",
+      "size": "Small (10\")",
+      "price": 11.99,
+      "description": "House red sauce, mozzarella",
+      "promptFor": [],
+      "upsell": ["add extra toppings"]
+    },
+    {
+      "category": "Pizza",
+      "name": "Cheese",
+      "size": "Large (16\")",
+      "price": 17.99,
+      "description": "House red sauce, mozzarella",
+      "promptFor": [],
+      "upsell": ["add extra toppings"]
+    },
+    {
+      "category": "Pizza",
+      "name": "Buffalo Chicken",
+      "size": "Large (16\")",
+      "price": 22.99,
+      "description": "Chopped chicken; topped with bleu cheese or ranch",
+      "promptFor": ["which sauce (hot, mild, or BBQ); bleu cheese or ranch"],
+      "upsell": ["add extra toppings"]
+    },
+    {
+      "category": "By the Slice",
+      "name": "Cheese Slice",
+      "size": "",
+      "price": 3.25,
+      "description": "House red sauce, mozzarella",
+      "promptFor": [],
+      "upsell": []
+    },
+    {
+      "category": "Wings",
+      "name": "Wings",
+      "size": "6 piece",
+      "price": 8.99,
+      "description": "Choose a flavor",
+      "promptFor": ["which wing flavor (buffalo, bbq, or garlic parmesan)"],
+      "upsell": []
+    },
+    {
+      "category": "Wings",
+      "name": "Wings",
+      "size": "12 piece",
+      "price": 15.99,
+      "description": "Choose a flavor",
+      "promptFor": ["which wing flavor (buffalo, bbq, or garlic parmesan)"],
+      "upsell": []
+    },
+    {
+      "category": "Salads",
+      "name": "Greek",
+      "size": "",
+      "price": 10.99,
+      "description": "Tomatoes, red onions, cucumbers, kalamata olives, feta cheese",
+      "promptFor": ["which dressing (ranch, balsamic, or greek)"],
+      "upsell": ["add a protein (chicken +$4, shrimp +$6, salmon +$8)"]
+    },
+    {
+      "category": "Entrees",
+      "name": "Chicken Marsala",
+      "size": "",
+      "price": 19.95,
+      "description": "Served with choice of pasta, garlic knots, side salad. Marsala wine sauce, mushrooms, sauteed garlic, onions",
+      "promptFor": ["which pasta (spaghetti, penne, angel hair, or linguine)"],
+      "upsell": []
+    }
+  ],
+  "modifierBlocks": [
+    {
+      "label": "Pizza Toppings - Regular",
+      "options": [
+        { "name": "Pepperoni (Whole pizza)", "priceDelta": 2.5 },
+        { "name": "Pepperoni (Half pizza)", "priceDelta": 1.5 },
+        { "name": "Mushrooms (Whole pizza)", "priceDelta": 2.0 },
+        { "name": "Onions (Whole pizza)", "priceDelta": 2.0 }
+      ]
+    },
+    {
+      "label": "Wing Flavors",
+      "options": [
+        { "name": "Buffalo", "priceDelta": 0 },
+        { "name": "BBQ", "priceDelta": 0 },
+        { "name": "Garlic Parmesan", "priceDelta": 0 }
+      ]
+    },
+    {
+      "label": "Buffalo Sauce Options",
+      "options": [
+        { "name": "Hot", "priceDelta": 0 },
+        { "name": "Mild", "priceDelta": 0 },
+        { "name": "BBQ", "priceDelta": 0 }
+      ]
+    },
+    {
+      "label": "Salad Dressings",
+      "options": [
+        { "name": "Ranch", "priceDelta": 0 },
+        { "name": "Balsamic", "priceDelta": 0 },
+        { "name": "Greek", "priceDelta": 0 },
+        { "name": "Bleu Cheese", "priceDelta": 0 }
+      ]
+    },
+    {
+      "label": "Salad Protein Add-ons",
+      "options": [
+        { "name": "Chicken", "priceDelta": 4.0 },
+        { "name": "Shrimp", "priceDelta": 6.0 },
+        { "name": "Salmon", "priceDelta": 8.0 }
+      ]
+    },
+    {
+      "label": "Pasta Choices",
+      "options": [
+        { "name": "Spaghetti", "priceDelta": 0 },
+        { "name": "Penne", "priceDelta": 0 },
+        { "name": "Angel Hair", "priceDelta": 0 },
+        { "name": "Linguine", "priceDelta": 0 }
+      ]
+    }
+  ],
+  "openQuestions": []
+}

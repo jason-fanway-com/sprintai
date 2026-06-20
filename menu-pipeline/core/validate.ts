@@ -11,7 +11,7 @@
  * (importer, CLI with --strict).
  */
 
-import { CanonicalRow, ValidationError, ValidationResult } from "./types.ts";
+import type { CanonicalRow, ValidationError, ValidationResult } from "./types.ts";
 import { FIXED_BLOCK_ORDER } from "./ordering.ts";
 
 const KNOWN_BLOCK_SET = new Set(FIXED_BLOCK_ORDER.map((s) => s.toLowerCase()));
@@ -51,9 +51,11 @@ export function collectBlockLabels(rows: CanonicalRow[]): Set<string> {
     );
     // And the block has a recognizable modifier label form (contains a known
     // keyword) — avoids misclassifying a real item category that happens to have
-    // no sizes/prompts (e.g. a plain "Sides" listing).
-    const looksLikeBlock = /toppings|sauce|dressing|protein|add-?on|choices|substitut|flavor|extra/i
-      .test(cat);
+    // no sizes/prompts (e.g. a plain "Sides" listing). This vocabulary tracks the
+    // standard's block labels plus the common answer-set nouns.
+    const looksLikeBlock =
+      /toppings|sauce|salsa|dressing|protein|add-?on|choices|choice|options|option|substitut|flavor|extras?|sides? sub/i
+        .test(cat);
     if (allModifierShape && looksLikeBlock) labels.add(lc);
   }
   return labels;

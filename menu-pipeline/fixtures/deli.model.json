@@ -1,0 +1,63 @@
+{
+  "menuName": "Synthetic Deli (TEST FIXTURE)",
+  "categoryOrder": ["Sandwiches", "Kids"],
+  "items": [
+    {
+      "category": "Sandwiches",
+      "name": "Turkey Club",
+      "size": "",
+      "price": 9.5,
+      "description": "Served with chips and a pickle. Roasted turkey, bacon, lettuce, tomato, mayo",
+      "promptFor": ["which bread (white, wheat, or rye)"],
+      "upsell": ["add a protein (bacon +$2)"]
+    },
+    {
+      "category": "Sandwiches",
+      "name": "Veggie",
+      "size": "",
+      "price": 8.0,
+      "description": "Served with chips. Lettuce, tomato, cucumber, hummus",
+      "promptFor": ["which bread (white, wheat, or rye)"],
+      "upsell": []
+    },
+    {
+      "category": "Kids",
+      "name": "Kids Grilled Cheese",
+      "size": "",
+      "price": 5.0,
+      "description": "Served with apple slices",
+      "promptFor": [],
+      "upsell": []
+    }
+  ],
+  "modifierBlocks": [
+    {
+      "label": "Quesadilla/Other Protein Add-ons",
+      "options": [
+        { "name": "Bacon", "priceDelta": 2.0 }
+      ]
+    },
+    {
+      "label": "Side Substitutions",
+      "options": [
+        { "name": "Sweet Potato Fries", "priceDelta": null },
+        { "name": "Side Salad", "priceDelta": 2.0 }
+      ]
+    },
+    {
+      "label": "Bread Choices",
+      "options": [
+        { "name": "White", "priceDelta": 0 },
+        { "name": "Wheat", "priceDelta": 0 },
+        { "name": "Rye", "priceDelta": 0 }
+      ]
+    }
+  ],
+  "openQuestions": [
+    {
+      "area": "Side Substitutions / Sweet Potato Fries",
+      "issue": "Menu says \"for an upcharge\" with no amount",
+      "question": "What is the upcharge to substitute Sweet Potato Fries?"
+    }
+  ]
+}

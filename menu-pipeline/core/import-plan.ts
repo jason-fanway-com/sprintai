@@ -17,7 +17,7 @@
  *     loudly if any reference is unresolved.
  */
 
-import { CanonicalRow } from "./types.ts";
+import type { CanonicalRow } from "./types.ts";
 import { collectBlockLabels, extractPromptOptions, extractUpsellAddons } from "./validate.ts";
 
 // ---- Desired-state shapes --------------------------------------------------

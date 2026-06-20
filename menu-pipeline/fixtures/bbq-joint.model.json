@@ -1,0 +1,59 @@
+{
+  "menuName": "Synthetic BBQ Joint (TEST FIXTURE)",
+  "categoryOrder": ["Plates", "By the Pound"],
+  "items": [
+    {
+      "category": "Plates",
+      "name": "Brisket Plate",
+      "size": "",
+      "price": 14.99,
+      "description": "Served with two sides and cornbread. Sliced smoked brisket",
+      "promptFor": ["which sauce (sweet, spicy, or carolina)"],
+      "upsell": []
+    },
+    {
+      "category": "Plates",
+      "name": "Pulled Pork Plate",
+      "size": "",
+      "price": 12.99,
+      "description": "Served with two sides and cornbread. Pulled smoked pork",
+      "promptFor": ["which sauce (sweet, spicy, or carolina)"],
+      "upsell": []
+    },
+    {
+      "category": "By the Pound",
+      "name": "Brisket",
+      "size": "Half pound",
+      "price": 11.0,
+      "description": "Sliced smoked brisket by weight",
+      "promptFor": [],
+      "upsell": []
+    },
+    {
+      "category": "By the Pound",
+      "name": "Brisket",
+      "size": "Full pound",
+      "price": 21.0,
+      "description": "Sliced smoked brisket by weight",
+      "promptFor": [],
+      "upsell": []
+    }
+  ],
+  "modifierBlocks": [
+    {
+      "label": "BBQ Sauce Options",
+      "options": [
+        { "name": "Sweet", "priceDelta": 0 },
+        { "name": "Spicy", "priceDelta": 0 },
+        { "name": "Carolina", "priceDelta": 0 }
+      ]
+    }
+  ],
+  "openQuestions": [
+    {
+      "area": "Plates",
+      "issue": "Brisket and Pulled Pork plates differ by $2 but layout was cramped",
+      "question": "Confirm Brisket Plate is 14.99 and Pulled Pork Plate is 12.99 (not a layout artifact)."
+    }
+  ]
+}

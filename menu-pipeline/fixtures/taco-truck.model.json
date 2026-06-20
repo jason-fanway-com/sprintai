@@ -1,0 +1,49 @@
+{
+  "menuName": "Synthetic Taco Truck (TEST FIXTURE)",
+  "categoryOrder": ["Tacos", "Burritos"],
+  "items": [
+    {
+      "category": "Tacos",
+      "name": "Street Taco",
+      "size": "",
+      "price": 3.5,
+      "description": "Corn tortilla, onions, cilantro",
+      "promptFor": ["which protein (carne asada, al pastor, or pollo)"],
+      "upsell": ["add a protein (carne asada +$1)"]
+    },
+    {
+      "category": "Burritos",
+      "name": "Burrito",
+      "size": "",
+      "price": 9.0,
+      "description": "Rice, beans, cheese, salsa",
+      "promptFor": ["which protein (carne asada, al pastor, or pollo); which salsa (verde, roja, or habanero)"],
+      "upsell": []
+    }
+  ],
+  "modifierBlocks": [
+    {
+      "label": "Taco Protein Choices",
+      "options": [
+        { "name": "Carne Asada", "priceDelta": 0 },
+        { "name": "Al Pastor", "priceDelta": 0 },
+        { "name": "Pollo", "priceDelta": 0 }
+      ]
+    },
+    {
+      "label": "Salsa Options",
+      "options": [
+        { "name": "Verde", "priceDelta": 0 },
+        { "name": "Roja", "priceDelta": 0 },
+        { "name": "Habanero", "priceDelta": 0 }
+      ]
+    },
+    {
+      "label": "Taco Protein Add-ons",
+      "options": [
+        { "name": "Carne Asada", "priceDelta": 1.0 }
+      ]
+    }
+  ],
+  "openQuestions": []
+}

@@ -1,0 +1,8 @@
+category,name,size,price,description,prompt_for,upsell
+Plates,Brisket Plate,,14.99,Served with two sides and cornbread. Sliced smoked brisket,"which sauce (sweet, spicy, or carolina)",
+Plates,Pulled Pork Plate,,12.99,Served with two sides and cornbread. Pulled smoked pork,"which sauce (sweet, spicy, or carolina)",
+By the Pound,Brisket,Half pound,11.00,Sliced smoked brisket by weight,,
+By the Pound,Brisket,Full pound,21.00,Sliced smoked brisket by weight,,
+BBQ Sauce Options,Carolina,,0.00,,,
+BBQ Sauce Options,Spicy,,0.00,,,
+BBQ Sauce Options,Sweet,,0.00,,,

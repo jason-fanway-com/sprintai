@@ -14,8 +14,8 @@
  * no hard dependency on Deno or Node globals and can be unit-tested with a stub.
  */
 
-import { MenuModel } from "../core/types.ts";
-import { MenuFrontEnd, MenuSource } from "../core/parse.ts";
+import type { MenuModel } from "../core/types.ts";
+import type { MenuFrontEnd, MenuSource } from "../core/parse.ts";
 
 export const CLAUDE_MODEL = "claude-sonnet-4-6";
 export const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";

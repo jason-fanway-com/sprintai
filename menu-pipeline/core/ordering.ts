@@ -82,8 +82,27 @@ export function sizeOrderKey(size: string): [number, number, string] {
   const inches = extractInches(s);
   if (inches > 0) return [100, inches, s];
 
+  // Count/quantity sizes (e.g. "6 piece", "12 piece", "half dozen", "dozen",
+  // "half pound", "full pound"): order by the leading numeric magnitude so
+  // 6 < 12, half < full. Deterministic and matches human expectation.
+  const count = extractCount(s);
+  if (count !== null) return [110, count, s];
+
   // Unknown size: sort after everything else, alphabetically.
   return [999, 0, s];
+}
+
+/**
+ * Extract a numeric magnitude for count/quantity-style sizes so they order
+ * naturally: explicit numbers first, then known fractional/whole words.
+ */
+function extractCount(s: string): number | null {
+  const num = s.match(/(\d+(?:\.\d+)?)\s*(?:piece|pc|pcs|count|ct|pound|lb|dozen|wing)/);
+  if (num) return parseFloat(num[1]);
+  if (/\bhalf\b/.test(s)) return 0.5;
+  if (/\b(?:full|whole)\b/.test(s)) return 1;
+  if (/\bdozen\b/.test(s)) return 12;
+  return null;
 }
 
 function extractInches(s: string): number {

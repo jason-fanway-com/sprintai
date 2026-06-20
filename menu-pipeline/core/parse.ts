@@ -19,7 +19,7 @@
  * module has no hard Deno/Node dependency).
  */
 
-import {
+import type {
   MenuModel,
   StageAOutput,
 } from "./types.ts";

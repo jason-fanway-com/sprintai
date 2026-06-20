@@ -1,0 +1,30 @@
+category,name,size,price,description,prompt_for,upsell
+Pizza,Buffalo Chicken,"Large (16"")",22.99,Chopped chicken; topped with bleu cheese or ranch,"which sauce (hot, mild, or BBQ); bleu cheese or ranch","add extra toppings; suggest wings, garlic knots, or drinks"
+Pizza,Cheese,"Small (10"")",11.99,"House red sauce, mozzarella",,"add extra toppings; suggest wings, garlic knots, or drinks"
+Pizza,Cheese,"Large (16"")",17.99,"House red sauce, mozzarella",,"add extra toppings; suggest wings, garlic knots, or drinks"
+By the Slice,Cheese Slice,,3.25,"House red sauce, mozzarella",,suggest making it a combo with a drink
+Wings,Wings,6 piece,8.99,Choose a flavor,"which wing flavor (buffalo, bbq, or garlic parmesan)",suggest fries and a drink
+Wings,Wings,12 piece,15.99,Choose a flavor,"which wing flavor (buffalo, bbq, or garlic parmesan)",suggest fries and a drink
+Salads,Greek,,10.99,"Tomatoes, red onions, cucumbers, kalamata olives, feta cheese","which dressing (ranch, balsamic, or greek)","add a protein (chicken +$4, shrimp +$6, salmon +$8); suggest a drink"
+Entrees,Chicken Marsala,,19.95,"Served with choice of pasta, garlic knots, side salad. Marsala wine sauce, mushrooms, sauteed garlic, onions","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Pizza Toppings - Regular,Mushrooms (Whole pizza),,2.00,,,
+Pizza Toppings - Regular,Onions (Whole pizza),,2.00,,,
+Pizza Toppings - Regular,Pepperoni (Half pizza),,1.50,,,
+Pizza Toppings - Regular,Pepperoni (Whole pizza),,2.50,,,
+Wing Flavors,BBQ,,0.00,,,
+Wing Flavors,Buffalo,,0.00,,,
+Wing Flavors,Garlic Parmesan,,0.00,,,
+Salad Dressings,Balsamic,,0.00,,,
+Salad Dressings,Bleu Cheese,,0.00,,,
+Salad Dressings,Greek,,0.00,,,
+Salad Dressings,Ranch,,0.00,,,
+Salad Protein Add-ons,Chicken,,4.00,,,
+Salad Protein Add-ons,Salmon,,8.00,,,
+Salad Protein Add-ons,Shrimp,,6.00,,,
+Pasta Choices,Angel Hair,,0.00,,,
+Pasta Choices,Linguine,,0.00,,,
+Pasta Choices,Penne,,0.00,,,
+Pasta Choices,Spaghetti,,0.00,,,
+Buffalo Sauce Options,BBQ,,0.00,,,
+Buffalo Sauce Options,Hot,,0.00,,,
+Buffalo Sauce Options,Mild,,0.00,,,

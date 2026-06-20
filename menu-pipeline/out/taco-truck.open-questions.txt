@@ -1,0 +1,3 @@
+OPEN QUESTIONS
+
+None — every price and option was read directly from the menu with no ambiguity.

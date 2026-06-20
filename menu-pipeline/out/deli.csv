@@ -1,0 +1,10 @@
+category,name,size,price,description,prompt_for,upsell
+Sandwiches,Turkey Club,,9.50,"Served with chips and a pickle. Roasted turkey, bacon, lettuce, tomato, mayo","which bread (white, wheat, or rye)",add a protein (bacon +$2); suggest a drink
+Sandwiches,Veggie,,8.00,"Served with chips. Lettuce, tomato, cucumber, hummus","which bread (white, wheat, or rye)",suggest a drink
+Kids,Kids Grilled Cheese,,5.00,Served with apple slices,,suggest a kids drink
+Quesadilla/Other Protein Add-ons,Bacon,,2.00,,,
+Bread Choices,Rye,,0.00,,,
+Bread Choices,Wheat,,0.00,,,
+Bread Choices,White,,0.00,,,
+Side Substitutions,Side Salad,,2.00,,,
+Side Substitutions,Sweet Potato Fries,,,Upcharge TBD,,

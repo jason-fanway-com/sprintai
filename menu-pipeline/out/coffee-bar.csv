@@ -1,0 +1,9 @@
+category,name,size,price,description,prompt_for,upsell
+Drinks,Drip Coffee,Cup,2.50,House roast,,
+Drinks,Drip Coffee,Bowl,3.50,House roast,,
+Drinks,Latte,Small,4.25,Espresso and steamed milk,"which milk (whole, oat, or almond)",
+Drinks,Latte,Large,5.25,Espresso and steamed milk,"which milk (whole, oat, or almond)",
+Pastries,Seasonal Tart,,,Rotating seasonal fruit tart,,
+Milk Choices,Almond,,0.00,,,
+Milk Choices,Oat,,0.00,,,
+Milk Choices,Whole,,0.00,,,

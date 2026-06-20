@@ -14,9 +14,9 @@
  *   - modifier blocks deduped
  */
 
-import {
+import { CSV_COLUMNS } from "./types.ts";
+import type {
   CanonicalRow,
-  CSV_COLUMNS,
   MenuModel,
   ModifierBlock,
   ModifierOption,

@@ -1,0 +1,68 @@
+{
+  "menuName": "Synthetic Coffee Bar (TEST FIXTURE)",
+  "categoryOrder": ["Drinks", "Pastries"],
+  "items": [
+    {
+      "category": "Drinks",
+      "name": "Drip Coffee",
+      "size": "Cup",
+      "price": 2.5,
+      "description": "House roast",
+      "promptFor": [],
+      "upsell": []
+    },
+    {
+      "category": "Drinks",
+      "name": "Drip Coffee",
+      "size": "Bowl",
+      "price": 3.5,
+      "description": "House roast",
+      "promptFor": [],
+      "upsell": []
+    },
+    {
+      "category": "Drinks",
+      "name": "Latte",
+      "size": "Small",
+      "price": 4.25,
+      "description": "Espresso and steamed milk",
+      "promptFor": ["which milk (whole, oat, or almond)"],
+      "upsell": []
+    },
+    {
+      "category": "Drinks",
+      "name": "Latte",
+      "size": "Large",
+      "price": 5.25,
+      "description": "Espresso and steamed milk",
+      "promptFor": ["which milk (whole, oat, or almond)"],
+      "upsell": []
+    },
+    {
+      "category": "Pastries",
+      "name": "Seasonal Tart",
+      "size": "",
+      "price": null,
+      "description": "Rotating seasonal fruit tart",
+      "promptFor": [],
+      "upsell": []
+    }
+  ],
+  "modifierBlocks": [
+    {
+      "label": "Milk Choices",
+      "options": [
+        { "name": "Whole", "priceDelta": 0 },
+        { "name": "Oat", "priceDelta": 0 },
+        { "name": "Almond", "priceDelta": 0 }
+      ]
+    }
+  ],
+  "openQuestions": [
+    {
+      "area": "Pastries / Seasonal Tart",
+      "issue": "No price printed on the menu",
+      "question": "What is the price of the Seasonal Tart?"
+    }
+  ]
+}

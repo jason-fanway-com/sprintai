@@ -6,7 +6,8 @@
  * order. Pure / runtime-agnostic.
  */
 
-import { CanonicalRow, CSV_COLUMNS } from "./types.ts";
+import { CSV_COLUMNS } from "./types.ts";
+import type { CanonicalRow } from "./types.ts";
 
 /** Parse a canonical 7-column CSV string into rows. Throws on header mismatch. */
 export function parseCanonicalCsv(csv: string): CanonicalRow[] {

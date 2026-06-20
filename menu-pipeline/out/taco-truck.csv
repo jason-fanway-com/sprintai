@@ -1,0 +1,10 @@
+category,name,size,price,description,prompt_for,upsell
+Tacos,Street Taco,,3.50,"Corn tortilla, onions, cilantro","which protein (carne asada, al pastor, or pollo)",add a protein (carne asada +$1)
+Burritos,Burrito,,9.00,"Rice, beans, cheese, salsa","which protein (carne asada, al pastor, or pollo); which salsa (verde, roja, or habanero)",
+Salsa Options,Habanero,,0.00,,,
+Salsa Options,Roja,,0.00,,,
+Salsa Options,Verde,,0.00,,,
+Taco Protein Add-ons,Carne Asada,,1.00,,,
+Taco Protein Choices,Al Pastor,,0.00,,,
+Taco Protein Choices,Carne Asada,,0.00,,,
+Taco Protein Choices,Pollo,,0.00,,,
