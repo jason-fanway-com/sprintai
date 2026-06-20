@@ -24,6 +24,8 @@ import { assertValid } from "../../../menu-pipeline/core/validate.ts";
 import {
   buildImportPlan,
   diffItems,
+} from "../../../menu-pipeline/core/import-plan.ts";
+import type {
   DesiredItem,
   ExistingItem,
 } from "../../../menu-pipeline/core/import-plan.ts";
