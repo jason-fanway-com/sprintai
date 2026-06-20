@@ -172,6 +172,9 @@ Deno.serve(async (req: Request) => {
       .from("order_carts")
       .update({
         stripe_checkout_session_id: session.id,
+        // PI is usually null at session-creation time for mode:payment; the
+        // webhook (checkout.session.completed) captures the PI + charge id from
+        // the connected account once payment completes.
         stripe_payment_intent_id: typeof session.payment_intent === "string" ? session.payment_intent : null,
         stripe_connected_account_id: connectedAccountId,
         subtotal_cents: subtotalCents,
