@@ -1,2 +1,4 @@
-Stage-A serialize byte-identical: true | sha 6673cc985ca57f7c 6673cc985ca57f7c
-import plan JSON identical: true | importHash bd6def44 bd6def44
+Jacks fixture parse->serialize determinism
+run1 sha256: 6673cc985ca57f7c1e4087f707e28bbfda5f079ba6282fac7ae2946a52e071f4
+run2 sha256: 6673cc985ca57f7c1e4087f707e28bbfda5f079ba6282fac7ae2946a52e071f4
+BYTE-IDENTICAL ✅

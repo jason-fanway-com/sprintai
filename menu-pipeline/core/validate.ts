@@ -121,6 +121,19 @@ function stripJoinWords(name: string): string {
     prev = s;
     s = s.replace(/\s*(?:[,;/&]+|\b(?:or|and)\b)$/i, "").trim();
   } while (s !== prev);
+  // Interior "or" split: when an UNPRICED option precedes a priced one in an
+  // alternatives list, the regex captures the gap text whole — e.g. scanning
+  // "shrimp or salmon +$8" yields "shrimp or salmon" because only salmon is
+  // priced. Only the segment adjacent to the "+$amount" (the priced option)
+  // belongs to THIS amount; the unpriced "shrimp" carries no price and must NOT
+  // inherit one (golden rule: never invent a price). Keep the last "or"-segment.
+  // We split on "or" ONLY (not "and"): "or" denotes price-list alternatives,
+  // whereas "and" legitimately appears inside option names ("mac and cheese",
+  // "surf and turf"), so splitting on "and" would corrupt real names.
+  if (/\bor\b/i.test(s)) {
+    const parts = s.split(/\s+\bor\b\s+/i);
+    s = (parts[parts.length - 1] || "").trim();
+  }
   return s;
 }
 

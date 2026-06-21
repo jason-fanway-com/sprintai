@@ -72,6 +72,36 @@ const orSteak = extractUpsellAddons("shrimp +$6 or steak +$8");
 check('"shrimp +$6 or steak +$8" yields clean ["shrimp","steak"] (no "or steak")',
   JSON.stringify(orSteak) === JSON.stringify(["shrimp", "steak"]), JSON.stringify(orSteak));
 
+// 9) INTERIOR-"or" with an UNPRICED leading option: only the priced option is
+// captured; the unpriced one must NOT inherit a price (golden rule: never invent).
+eq('"shrimp or salmon +$8" (leading option unpriced) -> ["salmon"]',
+  extractUpsellAddons("shrimp or salmon +$8"),
+  ["salmon"]);
+
+// 10) trailing option unpriced: only the priced option is captured, no invented price.
+eq('"shrimp +$6 or salmon" (trailing option unpriced) -> ["shrimp"]',
+  extractUpsellAddons("shrimp +$6 or salmon"),
+  ["shrimp"]);
+
+// 11) chained "or" (3 priced options).
+eq('"shrimp +$6 or salmon +$8 or steak +$10" -> [shrimp,salmon,steak]',
+  extractUpsellAddons("shrimp +$6 or salmon +$8 or steak +$10"),
+  ["shrimp", "salmon", "steak"]);
+
+// 12) MIXED comma + or in one list.
+eq('"chicken +$4, shrimp +$6 or salmon +$8, steak +$8" -> [chicken,shrimp,salmon,steak]',
+  extractUpsellAddons("chicken +$4, shrimp +$6 or salmon +$8, steak +$8"),
+  ["chicken", "shrimp", "salmon", "steak"]);
+
+// 13) "and" INSIDE a real option name must be preserved (NOT treated as a
+// price-list separator). Splitting on "and" would corrupt "mac and cheese".
+eq('"mac and cheese +$3" keeps the real name (and-in-name preserved)',
+  extractUpsellAddons("mac and cheese +$3"),
+  ["mac and cheese"]);
+eq('"surf and turf +$12" keeps the real name',
+  extractUpsellAddons("surf and turf +$12"),
+  ["surf and turf"]);
+
 console.log("\n=== resolves() — word-token matching, not naive substring ===\n");
 
 // Build a tiny menu: one item that upsells "or steak" garbage vs a real
@@ -102,6 +132,40 @@ const bogusRes = validateRows([bogusItem, ...blockRows], { strictReferences: tru
 check('"steakhouse" does NOT resolve to "Black Diamond Steak" (whole-word, not substring)',
   !bogusRes.ok && bogusRes.errors.some((e) => e.code === "UPSELL_UNRESOLVED"),
   bogusRes.ok ? "unexpectedly OK" : bogusRes.errors.map((e) => e.code).join(","));
+
+console.log("\n=== no-price golden rule: blank + flag, never invented ===\n");
+
+// An add-on option with an unknown upcharge (priceDelta === null) must serialize
+// to a BLANK price (not "0.00") and be flagged "Upcharge TBD" in the row, so the
+// Open-Question gate catches it. Proves we never invent a price for an unpriced
+// "or"-list option.
+const { buildCanonicalRows } = await import(join(ROOT, "core", "serialize.ts"));
+const { formatPrice } = await import(join(ROOT, "core", "serialize.ts"));
+check('formatPrice(null) is blank (not "0.00")', formatPrice(null) === "", JSON.stringify(formatPrice(null)));
+check('formatPrice(undefined) is blank', formatPrice(undefined) === "", JSON.stringify(formatPrice(undefined)));
+check('formatPrice(6) -> "6.00"', formatPrice(6) === "6.00", formatPrice(6));
+
+const modelWithTbd = {
+  menuName: "NoPrice Test",
+  categoryOrder: ["Salad Protein Add-ons"],
+  items: [],
+  modifierBlocks: [
+    { label: "Salad Protein Add-ons", options: [
+      { name: "Shrimp", priceDelta: 6 },
+      { name: "Salmon", priceDelta: null }, // unknown upcharge -> must stay blank + flagged
+    ] },
+  ],
+  openQuestions: [],
+};
+const tbdRows = buildCanonicalRows(modelWithTbd);
+const salmonRow = tbdRows.find((r) => r.name === "Salmon");
+const shrimpRow = tbdRows.find((r) => r.name === "Shrimp");
+check('unpriced "Salmon" serializes BLANK price (never invented / never 0.00)',
+  !!salmonRow && salmonRow.price === "", salmonRow ? JSON.stringify(salmonRow.price) : "missing");
+check('unpriced "Salmon" flagged "Upcharge TBD"',
+  !!salmonRow && salmonRow.description === "Upcharge TBD", salmonRow ? salmonRow.description : "missing");
+check('priced "Shrimp" serializes "6.00" (real price preserved)',
+  !!shrimpRow && shrimpRow.price === "6.00", shrimpRow ? shrimpRow.price : "missing");
 
 console.log("\n=== " + (fail === 0 ? "ALL UNIT TESTS PASS ✅" : fail + " UNIT TEST(S) FAILED ❌") + " ===");
 process.exit(fail === 0 ? 0 : 1);

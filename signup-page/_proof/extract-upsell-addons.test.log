@@ -8,10 +8,25 @@ PASS  "chicken +$4, shrimp +$6, salmon +$8, steak +$8"
 PASS  "shrimp +$6 OR steak +$8" (uppercase OR)
 PASS  "add shrimp +$6" (verb retained, pre-existing)
 PASS  "shrimp +$6 or steak +$8" yields clean ["shrimp","steak"] (no "or steak")  — ["shrimp","steak"]
+PASS  "shrimp or salmon +$8" (leading option unpriced) -> ["salmon"]
+PASS  "shrimp +$6 or salmon" (trailing option unpriced) -> ["shrimp"]
+PASS  "shrimp +$6 or salmon +$8 or steak +$10" -> [shrimp,salmon,steak]
+PASS  "chicken +$4, shrimp +$6 or salmon +$8, steak +$8" -> [chicken,shrimp,salmon,steak]
+PASS  "mac and cheese +$3" keeps the real name (and-in-name preserved)
+PASS  "surf and turf +$12" keeps the real name
 
 === resolves() — word-token matching, not naive substring ===
 
 PASS  clean "steak" short-form resolves to "Black Diamond Steak" (strict OK)
 PASS  "steakhouse" does NOT resolve to "Black Diamond Steak" (whole-word, not substring)  — UPSELL_UNRESOLVED
+
+=== no-price golden rule: blank + flag, never invented ===
+
+PASS  formatPrice(null) is blank (not "0.00")  — ""
+PASS  formatPrice(undefined) is blank  — ""
+PASS  formatPrice(6) -> "6.00"  — 6.00
+PASS  unpriced "Salmon" serializes BLANK price (never invented / never 0.00)  — ""
+PASS  unpriced "Salmon" flagged "Upcharge TBD"  — Upcharge TBD
+PASS  priced "Shrimp" serializes "6.00" (real price preserved)  — 6.00
 
 === ALL UNIT TESTS PASS ✅ ===
