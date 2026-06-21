@@ -1,5 +1,10 @@
 [build]
-  command   = "npm install"
+  # Assemble ONLY the public marketing/app surface into ./public, then publish
+  # that dir. The origin therefore serves an explicit allowlist — internal
+  # source (admin-dashboard/, supabase/, *.md, *.htmltext, _proof/, scripts,
+  # specs, etc.) is never on the origin. See scripts/build-public-site.sh.
+  command   = "npm install && bash scripts/build-public-site.sh"
+  publish   = "public"
   functions = "netlify/functions"
 
 [functions]
@@ -21,14 +26,7 @@
   to   = "/.netlify/functions/sms-webhook"
   status = 200
 
-# Admin CRM (legacy)
-[[redirects]]
-  from = "/admin"
-  to = "/admin/index.html"
-  status = 200
-
-# React admin dashboard SPA
-[[redirects]]
-  from = "/dashboard/*"
-  to = "/dashboard/index.html"
-  status = 200
+# NOTE: the legacy /admin CRM and /dashboard/* admin SPA redirects were removed.
+# Those are INTERNAL tools and are intentionally no longer served from the
+# public root origin (they are not copied into ./public by the assembler). The
+# admin dashboard ships from its OWN Netlify site (admin-dashboard/, publish=dist).
