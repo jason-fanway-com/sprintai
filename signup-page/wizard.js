@@ -502,31 +502,136 @@
   };
 
   // 7 ── FULFILLMENT & OPS ─────────────────────────────────────────────────────
+  // Canonical day order + labels for the hours grid. The stored shape is
+  // open_hours = { mon: [{open:"11:00", close:"21:00"}], ... }; a CLOSED day is
+  // simply omitted (no window). The schema (migration 003) supports multiple
+  // windows per day; the wizard collects a single open/close per day for
+  // simplicity (the common case) and we document multi-window as a follow-up.
+  var HOURS_DAYS = [
+    ["mon", "Monday"], ["tue", "Tuesday"], ["wed", "Wednesday"],
+    ["thu", "Thursday"], ["fri", "Friday"], ["sat", "Saturday"], ["sun", "Sunday"]
+  ];
+
+  // Read existing open_hours into a flat per-day editor model. Missing/empty day
+  // => closed. Defaults for a brand-new shop: open every day 11:00–21:00.
+  function hoursToEditorModel(openHours) {
+    var hasAny = openHours && Object.keys(openHours).length > 0;
+    var model = {};
+    HOURS_DAYS.forEach(function (d) {
+      var key = d[0];
+      var windows = (openHours && openHours[key]) || [];
+      if (windows.length > 0) {
+        model[key] = { closed: false, open: windows[0].open || "11:00", close: windows[0].close || "21:00" };
+      } else if (hasAny) {
+        model[key] = { closed: true, open: "11:00", close: "21:00" };
+      } else {
+        // brand-new shop: sensible default, owner can mark days closed
+        model[key] = { closed: false, open: "11:00", close: "21:00" };
+      }
+    });
+    return model;
+  }
+
+  // Convert the editor model back into the canonical stored shape. Closed days
+  // are omitted entirely (no window) so the diner bot reads them as closed.
+  function editorModelToHours(model) {
+    var out = {};
+    HOURS_DAYS.forEach(function (d) {
+      var key = d[0];
+      var row = model[key];
+      if (row && !row.closed && row.open && row.close) {
+        out[key] = [{ open: row.open, close: row.close }];
+      }
+    });
+    return out;
+  }
+
   RENDERERS.fulfillment = function () {
     var s = state.shop || {};
+    var hoursModel = hoursToEditorModel(s.open_hours);
     elCard.innerHTML = "";
+
+    var rowsHtml = HOURS_DAYS.map(function (d) {
+      var key = d[0], label = d[1], m = hoursModel[key];
+      return '<div class="hours-row" data-day="' + key + '">' +
+        '<span class="hours-day">' + label + '</span>' +
+        '<label class="hours-closed"><input type="checkbox" class="h-closed" ' + (m.closed ? "checked" : "") + '> Closed</label>' +
+        '<input type="time" class="h-open" value="' + esc(m.open) + '"' + (m.closed ? " disabled" : "") + '>' +
+        '<span class="hours-to">to</span>' +
+        '<input type="time" class="h-close" value="' + esc(m.close) + '"' + (m.closed ? " disabled" : "") + '>' +
+        '</div>';
+    }).join("");
+
     elCard.appendChild(h(
       '<div>' +
       '<div class="step-h">Fulfillment &amp; ops</div>' +
-      '<div class="step-desc">How orders reach you, your customer-facing name, tax, and your hours.</div>' +
+      '<div class="step-desc">How orders reach you, your customer-facing name, tax, and your real hours — so your assistant knows when you\'re open.</div>' +
       '<label class="fld"><span>Display name in customer texts</span><input id="f-dn" value="' + esc(s.display_name || s.name || "") + '" placeholder="Jack\'s Slice"></label>' +
       '<label class="fld"><span>Order ticket email</span><input id="f-em" type="email" value="' + esc(s.email_ticket_recipient || "") + '" placeholder="kitchen@jacksslice.com"></label>' +
       '<label class="fld"><span>Sales tax %</span><input id="f-tax" type="number" step="0.01" min="0" value="' + ((s.tax_rate_bps || 0) / 100) + '"><div class="hint">Leave 0 for tax-included pricing.</div></label>' +
-      '<label class="fld"><span>Open hours (simple: comma-separated days you\'re open)</span><input id="f-hours" placeholder="mon,tue,wed,thu,fri,sat,sun"></label>' +
+      '<div class="fld"><span>Open hours</span>' +
+      '<div class="hint" style="margin-top:0;margin-bottom:8px">Set each day. Times are in your shop\'s timezone (' + esc(s.timezone || "America/New_York") + '). Your assistant uses these to tell customers if you\'re open.</div>' +
+      '<div class="hours-grid" id="hours-grid">' + rowsHtml + '</div>' +
+      '<div class="btn-row" style="margin-top:10px;justify-content:flex-start"><button type="button" class="btn btn-ghost" id="copy-all">Copy Monday\'s hours to all days</button></div>' +
+      '</div>' +
       '<div class="btn-row"><button class="btn btn-ghost" id="bk">← Back</button>' +
       '<button class="btn btn-primary" id="go">Save &amp; continue →</button></div>' +
       '</div>'
     ));
+
+    // Closed toggle disables that day's time inputs.
+    Array.prototype.forEach.call(elCard.querySelectorAll(".hours-row"), function (row) {
+      var cb = row.querySelector(".h-closed");
+      var openI = row.querySelector(".h-open");
+      var closeI = row.querySelector(".h-close");
+      cb.addEventListener("change", function () {
+        openI.disabled = cb.checked;
+        closeI.disabled = cb.checked;
+      });
+    });
+
+    // Copy-to-all: take Monday's (first row) state and apply to every day.
+    document.getElementById("copy-all").onclick = function () {
+      var rows = elCard.querySelectorAll(".hours-row");
+      var src = rows[0];
+      var sClosed = src.querySelector(".h-closed").checked;
+      var sOpen = src.querySelector(".h-open").value;
+      var sClose = src.querySelector(".h-close").value;
+      Array.prototype.forEach.call(rows, function (row) {
+        var cb = row.querySelector(".h-closed");
+        var openI = row.querySelector(".h-open");
+        var closeI = row.querySelector(".h-close");
+        cb.checked = sClosed;
+        openI.value = sOpen; closeI.value = sClose;
+        openI.disabled = sClosed; closeI.disabled = sClosed;
+      });
+    };
+
+    // Read the grid back into the editor model on save.
+    function readHoursModel() {
+      var model = {};
+      Array.prototype.forEach.call(elCard.querySelectorAll(".hours-row"), function (row) {
+        var key = row.getAttribute("data-day");
+        model[key] = {
+          closed: row.querySelector(".h-closed").checked,
+          open: row.querySelector(".h-open").value || "11:00",
+          close: row.querySelector(".h-close").value || "21:00"
+        };
+      });
+      return model;
+    }
+
     document.getElementById("bk").onclick = back;
     document.getElementById("go").onclick = function () {
-      var days = document.getElementById("f-hours").value.split(",").map(function (d) { return d.trim().toLowerCase(); }).filter(Boolean);
-      var hours = {};
-      days.forEach(function (d) { hours[d] = [{ open: "11:00", close: "21:00" }]; });
+      var openHours = editorModelToHours(readHoursModel());
+      // keep local state in sync so resume/re-render shows what was entered
+      state.shop = state.shop || {};
+      state.shop.open_hours = openHours;
       saveStep("fulfillment", {
         display_name: document.getElementById("f-dn").value.trim(),
         email_ticket_recipient: document.getElementById("f-em").value.trim(),
         tax_rate_bps: Math.round(parseFloat(document.getElementById("f-tax").value || "0") * 100),
-        open_hours: hours
+        open_hours: openHours
       }).then(next);
     };
   };

@@ -1,0 +1,22 @@
+=== FIX 2A — hours round-trip + closed-day handling ===
+
+PASS  stored shape: Monday omitted (closed), others present
+PASS  closed day has NO window in stored shape (bot reads as closed)
+PASS  round-trip: Monday rehydrates as closed
+PASS  round-trip: Saturday rehydrates open with 22:00 close  — {"closed":false,"open":"11:00","close":"22:00"}
+PASS  round-trip is stable (store(read(store)) === store)
+PASS  fresh shop: every day defaults to open
+
+=== FIX 2B — diner bot 'are we open?' (timezone-aware) ===
+
+PASS  Tue 1:00pm ET -> OPEN
+PASS  Tue 10:30pm ET -> CLOSED (after 9pm)
+PASS  Mon 1:00pm ET -> CLOSED (closed day)
+PASS  Sat 9:30pm ET -> OPEN (weekend til 10pm)
+PASS  near-midnight: 11:30pm Sun ET resolves day key to 'sun' (not UTC 'mon')  — sun
+PASS  near-midnight: 9:30pm Sun ET -> OPEN via Sunday's window (UTC already Mon)  — dayKey=sun
+PASS  multi-window: 3:00pm Wed (the gap) -> CLOSED
+PASS  multi-window: 12:30pm Wed (lunch) -> OPEN
+PASS  multi-window: 6:00pm Wed (dinner) -> OPEN
+
+=== ALL FIX-2 TESTS PASS ✅ ===

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FIX 2 — Hours step UI preview</title>
+<link rel="stylesheet" href="../wizard.css" />
+<style> body { background:#faf7f2; padding:28px; } .wrap { max-width: 620px; margin: 0 auto; } </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="step-card" id="stepCard"></div>
+</div>
+<script>
+// Standalone preview of RENDERERS.fulfillment hours grid (FIX 2). Mirrors the
+// markup emitted by signup-page/wizard.js so Melvin can see the UI without a
+// backend. State pretends an existing shop with Monday closed + weekend late.
+var esc = function (s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});};
+var HOURS_DAYS = [["mon","Monday"],["tue","Tuesday"],["wed","Wednesday"],["thu","Thursday"],["fri","Friday"],["sat","Saturday"],["sun","Sunday"]];
+var s = { display_name:"Jack's Slice", email_ticket_recipient:"kitchen@jacksslice.com", tax_rate_bps:600, timezone:"America/New_York",
+  open_hours:{ tue:[{open:"11:00",close:"21:00"}], wed:[{open:"11:00",close:"21:00"}], thu:[{open:"11:00",close:"21:00"}], fri:[{open:"11:00",close:"21:00"}], sat:[{open:"11:00",close:"22:00"}], sun:[{open:"11:00",close:"22:00"}] } };
+function hoursToEditorModel(openHours){var hasAny=openHours&&Object.keys(openHours).length>0;var model={};HOURS_DAYS.forEach(function(d){var k=d[0];var w=(openHours&&openHours[k])||[];if(w.length>0)model[k]={closed:false,open:w[0].open||"11:00",close:w[0].close||"21:00"};else if(hasAny)model[k]={closed:true,open:"11:00",close:"21:00"};else model[k]={closed:false,open:"11:00",close:"21:00"};});return model;}
+var hoursModel = hoursToEditorModel(s.open_hours);
+var rowsHtml = HOURS_DAYS.map(function(d){var key=d[0],label=d[1],m=hoursModel[key];
+  return '<div class="hours-row" data-day="'+key+'"><span class="hours-day">'+label+'</span>'+
+  '<label class="hours-closed"><input type="checkbox" class="h-closed" '+(m.closed?"checked":"")+'> Closed</label>'+
+  '<input type="time" class="h-open" value="'+esc(m.open)+'"'+(m.closed?" disabled":"")+'>'+
+  '<span class="hours-to">to</span>'+
+  '<input type="time" class="h-close" value="'+esc(m.close)+'"'+(m.closed?" disabled":"")+'></div>';}).join("");
+document.getElementById("stepCard").innerHTML =
+  '<div class="step-h">Fulfillment &amp; ops</div>'+
+  '<div class="step-desc">How orders reach you, your customer-facing name, tax, and your real hours — so your assistant knows when you\'re open.</div>'+
+  '<label class="fld"><span>Display name in customer texts</span><input id="f-dn" value="'+esc(s.display_name)+'"></label>'+
+  '<label class="fld"><span>Order ticket email</span><input id="f-em" type="email" value="'+esc(s.email_ticket_recipient)+'"></label>'+
+  '<label class="fld"><span>Sales tax %</span><input id="f-tax" type="number" step="0.01" min="0" value="'+(s.tax_rate_bps/100)+'"><div class="hint">Leave 0 for tax-included pricing.</div></label>'+
+  '<div class="fld"><span>Open hours</span><div class="hint" style="margin-top:0;margin-bottom:8px">Set each day. Times are in your shop\'s timezone ('+esc(s.timezone)+'). Your assistant uses these to tell customers if you\'re open.</div>'+
+  '<div class="hours-grid">'+rowsHtml+'</div>'+
+  '<div class="btn-row" style="margin-top:10px;justify-content:flex-start"><button type="button" class="btn btn-ghost">Copy Monday\'s hours to all days</button></div></div>'+
+  '<div class="btn-row"><button class="btn btn-ghost">← Back</button><button class="btn btn-primary">Save &amp; continue →</button></div>';
+</script>
+</body>
+</html>

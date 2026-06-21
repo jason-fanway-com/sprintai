@@ -317,8 +317,7 @@ function buildSystemPrompt(
   isFirstMessage: boolean,
   notes?:         string | null,
 ): string {
-  const dayMap: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
-  const today = dayMap[new Date().getDay()];
+  const today = getBusinessDayKey(shop.timezone);
   const hours = shop.open_hours?.[today] ?? [];
   const hoursStr = hours.length > 0
     ? hours.map((h: { open: string; close: string }) => `${h.open}-${h.close}`).join(", ")
@@ -925,6 +924,41 @@ function getCurrentTime(timezone: string): string {
   }
 }
 
+// Day-of-week KEY (mon/tue/...) in the SHOP'S local timezone. Using
+// new Date().getDay() returns the SERVER (UTC) day, which can be wrong near
+// midnight — e.g. 11:30pm Sun in America/New_York is already Mon in UTC, so the
+// bot would read Monday's hours on a Sunday night. open_hours is keyed by the
+// shop's local day, so the lookup must use the shop's local day too.
+function getBusinessDayKey(timezone: string): string {
+  const dayMap: Record<string, string> = {
+    Sun: "sun", Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat",
+  };
+  try {
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(new Date());
+    return dayMap[wd] ?? wd.slice(0, 3).toLowerCase();
+  } catch {
+    const fallback = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    return fallback[new Date().getDay()];
+  }
+}
+
+// Current minutes-since-midnight in the shop's local timezone (0–1439).
+// Computed from formatted local parts so it is correct regardless of where the
+// function runs (no reliance on server timezone or Date parsing quirks).
+function getLocalMinutes(timezone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const h = Number(parts.find(p => p.type === "hour")?.value ?? "0") % 24;
+    const m = Number(parts.find(p => p.type === "minute")?.value ?? "0");
+    return h * 60 + m;
+  } catch {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  }
+}
+
 async function saveMessage(
   supabase:       ReturnType<typeof createClient>,
   conversationId: string,
@@ -1023,8 +1057,7 @@ async function handleSystemEvent(
       ? ` (Subtotal $${subtotal} + Service fee $${serviceFee})`
       : "";
 
-    const dayMap: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
-    const today    = dayMap[new Date().getDay()];
+    const today    = getBusinessDayKey(shop.timezone);
     const hours    = shop.open_hours?.[today] ?? [];
     const fmt12Confirm = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
     const hoursStr = hours.length > 0
@@ -1376,16 +1409,17 @@ Deno.serve(async (req: Request) => {
 
   // ── Business hours check ────────────────────────────────────────────────
   if (cart.phase === "greeting") {
-    const dayMap2: Record<number, string> = { 0: "sun", 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri", 6: "sat" };
-    const todayKey = dayMap2[new Date().getDay()];
+    // Day-of-week and current time are both computed in the SHOP'S timezone so
+    // the lookup is correct near midnight (see getBusinessDayKey/getLocalMinutes).
+    const todayKey = getBusinessDayKey(shop.timezone);
     const todayHours = shop.open_hours?.[todayKey] ?? [];
+    const nowMins = getLocalMinutes(shop.timezone);
 
-    // Check if current time falls within any open window
+    // Check if current time falls within any open window (handles multi-window
+    // days, e.g. lunch + dinner, since open_hours[day] is an array).
     const isOpen = todayHours.some((window: { open: string; close: string }) => {
       const [openH, openM] = window.open.split(":").map(Number);
       const [closeH, closeM] = window.close.split(":").map(Number);
-      const nowInShopTz = new Date(new Date().toLocaleString("en-US", { timeZone: shop.timezone }));
-      const nowMins = nowInShopTz.getHours() * 60 + nowInShopTz.getMinutes();
       const openMins = openH * 60 + openM;
       const closeMins = closeH * 60 + closeM;
       return nowMins >= openMins && nowMins < closeMins;
