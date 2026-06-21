@@ -99,14 +99,52 @@ export function extractPromptOptions(phrase: string): string[] {
   return opts;
 }
 
-/** Extract `+$`-hinted add-on names from an upsell phrase. */
+/**
+ * Strip leading/trailing join words ("or", "and") and surrounding punctuation
+ * from a captured add-on name. The `+$` list separators "or"/"and" are NOT part
+ * of the option name — e.g. when scanning "shrimp +$6 or salmon +$8", the regex
+ * captures "or salmon" for the second amount because the gap text between the
+ * first price and the second name includes the connector. We peel it off here so
+ * "or salmon" -> "salmon" and "and bacon" -> "bacon". Case-insensitive; handles
+ * repeated connectors and stray commas/slashes.
+ */
+function stripJoinWords(name: string): string {
+  let s = name.trim();
+  // Peel leading connectors / punctuation, repeatedly.
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/^(?:[,;/&]+|\b(?:or|and)\b)\s*/i, "").trim();
+  } while (s !== prev);
+  // Peel trailing connectors / punctuation, repeatedly.
+  do {
+    prev = s;
+    s = s.replace(/\s*(?:[,;/&]+|\b(?:or|and)\b)$/i, "").trim();
+  } while (s !== prev);
+  return s;
+}
+
+/**
+ * Extract `+$`-hinted add-on names from an upsell phrase.
+ *
+ * Handles add-on lists joined by commas AND by the words "or"/"and":
+ *   "chicken +$4, shrimp +$6"          -> [chicken, shrimp]
+ *   "shrimp +$6 or salmon +$8"         -> [shrimp, salmon]
+ *   "x +$6 or y +$8 or z +$9"          -> [x, y, z]
+ *   "a +$1 and b +$2"                  -> [a, b]
+ * The regex greedily captures the text immediately preceding each `+$amount`;
+ * that captured text can carry a leading connector ("or salmon") from the prior
+ * list element, so we strip leading/trailing "or"/"and"/punctuation before
+ * normalizing. Deterministic: single left-to-right pass, no Set/Map ordering.
+ */
 export function extractUpsellAddons(phrase: string): string[] {
   const addons: string[] = [];
   // Match "name +$4" possibly inside a list "chicken +$4, shrimp +$6"
   const re = /([a-zA-Z][a-zA-Z0-9 '\-]*?)\s*\+\$\s*(\d+(?:\.\d+)?)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(phrase)) !== null) {
-    const name = normalizeOption(m[1]);
+    const cleaned = stripJoinWords(m[1]);
+    const name = normalizeOption(cleaned);
     if (name) addons.push(name);
   }
   return addons;
@@ -138,12 +176,44 @@ function buildKnownOptionIndex(
   return { all, byBlock };
 }
 
-/** Does any known option contain (or is contained by) the candidate token? */
+/**
+ * Does the candidate token resolve to a known modifier-block option?
+ *
+ * Resolution is by NORMALIZED WHOLE-WORD matching, not naive substring
+ * containment. The old `k.includes(candidate) || candidate.includes(k)` check
+ * let garbage like "or steak" resolve merely because the substring "steak"
+ * appears inside it — masking the parser bug above. We instead require that the
+ * candidate's word set be a (non-empty) subset of a known option's word set, or
+ * vice-versa. This keeps legitimate short-form matches working:
+ *   "salmon"  ~ "blackened salmon"      (candidate words ⊆ option words)
+ *   "steak"   ~ "black diamond steak"   (candidate words ⊆ option words)
+ * while rejecting accidental substring hits:
+ *   "or steak" has words {or, steak} which is NOT a subset of
+ *   {black, diamond, steak} -> does not resolve (the connector word "or" is not
+ *   part of any option), so the parser is forced to produce clean tokens.
+ */
+function wordSet(s: string): Set<string> {
+  return new Set(s.split(/\s+/).filter(Boolean));
+}
+
+function isSubset(small: Set<string>, big: Set<string>): boolean {
+  if (small.size === 0) return false;
+  for (const w of small) {
+    if (!big.has(w)) return false;
+  }
+  return true;
+}
+
 function resolves(candidate: string, known: Set<string>): boolean {
   if (!candidate) return true;
   if (known.has(candidate)) return true;
+  const cWords = wordSet(candidate);
+  if (cWords.size === 0) return false;
   for (const k of known) {
-    if (k.includes(candidate) || candidate.includes(k)) return true;
+    const kWords = wordSet(k);
+    // candidate is a short-form of a known option ("salmon" of "blackened salmon")
+    // or known is a short-form of the candidate — both directions, whole-word.
+    if (isSubset(cWords, kWords) || isSubset(kWords, cWords)) return true;
   }
   return false;
 }

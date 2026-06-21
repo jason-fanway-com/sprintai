@@ -1,0 +1,17 @@
+=== extractUpsellAddons — or/and split + clean tokens ===
+
+PASS  "shrimp +$6 or salmon +$8"
+PASS  "x +$6 or y +$8 or z +$9"
+PASS  "a +$1 and b +$2"
+PASS  "chicken +$4, shrimp +$6 or salmon +$8"
+PASS  "chicken +$4, shrimp +$6, salmon +$8, steak +$8"
+PASS  "shrimp +$6 OR steak +$8" (uppercase OR)
+PASS  "add shrimp +$6" (verb retained, pre-existing)
+PASS  "shrimp +$6 or steak +$8" yields clean ["shrimp","steak"] (no "or steak")  — ["shrimp","steak"]
+
+=== resolves() — word-token matching, not naive substring ===
+
+PASS  clean "steak" short-form resolves to "Black Diamond Steak" (strict OK)
+PASS  "steakhouse" does NOT resolve to "Black Diamond Steak" (whole-word, not substring)  — UPSELL_UNRESOLVED
+
+=== ALL UNIT TESTS PASS ✅ ===
