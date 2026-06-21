@@ -55,3 +55,6 @@ verify_jwt = false  # Called from public dashboard
 
 [functions.admin-api]
 verify_jwt = true   # Requires admin JWT
+
+[functions.merchant-auth]
+verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC session token

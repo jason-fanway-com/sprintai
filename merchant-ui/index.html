@@ -394,9 +394,11 @@ const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co'
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NDg2ODksImV4cCI6MjA5MDMyNDY4OX0.5SOW_FX92dIw_zgbqF7HO2SM5ueQC3YPaAexKCFAv3E'
 const SESSION_KEY  = 'merchant_session'
 const SESSION_TTL  = 12 * 60 * 60 * 1000  // 12 hours
+const FN_URL       = `${SUPABASE_URL}/functions/v1/merchant-auth`
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let shopId      = null
+let token       = null   // server-side merchant-auth session token (HMAC)
 let shopName    = ''
 let isPaused    = false
 let menuItems   = []
@@ -426,58 +428,11 @@ function loadSession() {
   } catch { return null }
 }
 
-// ─── Supabase REST ────────────────────────────────────────────────────────────
-async function sbGet(table, query = '') {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-    headers: {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Accept': 'application/json',
-    }
-  })
-  if (!res.ok) throw new Error(`GET ${table} failed: ${res.status}`)
-  return res.json()
-}
-
-async function sbPost(table, data) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal',
-    },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error(`POST ${table} failed: ${res.status}`)
-}
-
-async function sbDelete(table, query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-    method: 'DELETE',
-    headers: {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Prefer': 'return=minimal',
-    }
-  })
-  if (!res.ok) throw new Error(`DELETE ${table} failed: ${res.status}`)
-}
-
-async function sbPatch(table, query, data) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-    method: 'PATCH',
-    headers: {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal',
-    },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status}`)
-}
+// ─── Supabase access ──────────────────────────────────────────────────────────
+// NOTE: direct anon REST helpers (sbGet/sbPost/sbDelete/sbPatch) were REMOVED.
+// After migration 012 the anon key can no longer read shops.merchant_pin nor
+// write availability_overrides / shops.is_paused. All shop access now goes
+// through the server-side merchant-auth edge function (see sbFn below).
 
 // ─── Date helper ──────────────────────────────────────────────────────────────
 function getTodayDate() {
@@ -486,6 +441,25 @@ function getTodayDate() {
 }
 
 // ─── PIN Auth ─────────────────────────────────────────────────────────────────
+// merchant-auth edge function call. All shop reads/writes (PIN verify,
+// availability, pause) go through this server-side function. The anon key is
+// only the transport bearer; the real authorization is the server-verified PIN
+// + short-lived HMAC session token.
+async function sbFn(payload) {
+  const res = await fetch(FN_URL, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`)
+  return data
+}
+
 async function handlePinSubmit() {
   const pin   = document.getElementById('pin-input').value.trim()
   const slug  = getShopSlugFromUrl()
@@ -500,19 +474,25 @@ async function handlePinSubmit() {
   errEl.style.display = 'none'
 
   try {
-    const shops = await sbGet('shops', `slug=eq.${encodeURIComponent(slug)}&select=id,name,is_paused,merchant_pin`)
-    if (!shops.length) { showPinError('Shop not found.'); return }
-    const shop = shops[0]
-    if (shop.merchant_pin !== pin) { showPinError('Incorrect PIN. Please try again.'); return }
+    // PIN is verified SERVER-SIDE; merchant_pin is never sent to or read by the client.
+    const res = await sbFn({ action: 'verify', slug, pin })
     // Auth success
-    saveSession({ shopId: shop.id, shopName: shop.name, slug })
-    shopId   = shop.id
-    shopName = shop.name
-    isPaused = shop.is_paused
+    token    = res.token
+    shopId   = res.shop.id
+    shopName = res.shop.name
+    isPaused = res.shop.is_paused
+    saveSession({ shopId, shopName, slug, token })
     await initApp()
   } catch (e) {
-    showPinError('Connection error. Please try again.')
-    console.error(e)
+    // 401 from the function => wrong PIN; everything else => connection error.
+    if (/incorrect pin/i.test(e.message)) {
+      showPinError('Incorrect PIN. Please try again.')
+    } else if (/not found/i.test(e.message)) {
+      showPinError('Shop not found.')
+    } else {
+      showPinError('Connection error. Please try again.')
+      console.error(e)
+    }
   } finally {
     btn.disabled = false
     btn.textContent = 'Sign In'
@@ -538,30 +518,28 @@ async function initApp() {
 async function loadMenu() {
   document.getElementById('menu-content').innerHTML = '<div class="loading">Loading menu...</div>'
   try {
-    // Get shop's current pause status
-    const shops = await sbGet('shops', `id=eq.${shopId}&select=is_paused`)
-    if (shops.length) isPaused = shops[0].is_paused
+    // Single server-side round-trip: pause status + menu items + today's
+    // sold-out set, all scoped to the token's shop (no anon table reads).
+    const state = await sbFn({ action: 'state', token })
+    isPaused = state.shop.is_paused
     updatePauseButton()
 
-    // Get latest menu
-    const menus = await sbGet('menus', `shop_id=eq.${shopId}&order=created_at.desc&limit=1&select=id`)
-    if (!menus.length) {
+    today = state.business_date || getTodayDate()
+    menuItems = state.menu_items || []
+    soldOutSet = new Set(state.sold_out || [])
+
+    if (!menuItems.length) {
       document.getElementById('menu-content').innerHTML = '<div class="loading">No menu found. Upload a menu from the admin dashboard.</div>'
       return
     }
-    const menuId = menus[0].id
-
-    // Get all active items
-    const items = await sbGet('menu_items', `menu_id=eq.${menuId}&active=eq.true&order=display_order.asc&select=id,name,price_cents,category,display_order`)
-    menuItems = items
-
-    // Get today's availability overrides (sold-out items)
-    today = getTodayDate()
-    const overrides = await sbGet('availability_overrides', `shop_id=eq.${shopId}&business_date=eq.${today}&select=menu_item_id`)
-    soldOutSet = new Set(overrides.map(o => o.menu_item_id))
-
     renderMenu()
   } catch (e) {
+    // Expired/invalid token => force re-auth.
+    if (/sign in again|invalid or expired/i.test(e.message)) {
+      localStorage.removeItem(SESSION_KEY)
+      location.reload()
+      return
+    }
     document.getElementById('menu-content').innerHTML = `<div class="loading">Error loading menu: ${e.message}</div>`
     console.error(e)
   }
@@ -638,26 +616,16 @@ async function handleToggle(menuItemId, isAvailable) {
 }
 
 async function applyToggle(menuItemId, isAvailable) {
-  if (isAvailable) {
-    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&menu_item_id=eq.${menuItemId}&business_date=eq.${today}`)
-  } else {
-    // Upsert: delete then insert to avoid conflicts
-    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&menu_item_id=eq.${menuItemId}&business_date=eq.${today}`)
-    await sbPost('availability_overrides', {
-      shop_id:       shopId,
-      menu_item_id:  menuItemId,
-      business_date: today,
-      source:        'merchant',
-      set_by:        'merchant-ui',
-    })
-  }
+  // sold_out is the inverse of isAvailable. Write goes through the server path,
+  // which re-verifies the token and scopes the change to the token's shop.
+  await sbFn({ action: 'set_availability', token, menu_item_id: menuItemId, sold_out: !isAvailable })
 }
 
 // ─── Reset All ────────────────────────────────────────────────────────────────
 async function resetAll() {
   if (!confirm('Mark all items as available for today?')) return
   try {
-    await sbDelete('availability_overrides', `shop_id=eq.${shopId}&business_date=eq.${today}`)
+    await sbFn({ action: 'reset_availability', token })
     soldOutSet.clear()
     renderMenu()
     showToast('All items marked available')
@@ -673,8 +641,8 @@ async function togglePause() {
   const label    = newState ? 'Pause online ordering?' : 'Resume online ordering?'
   if (!confirm(label)) return
   try {
-    await sbPatch('shops', `id=eq.${shopId}`, { is_paused: newState })
-    isPaused = newState
+    const res = await sbFn({ action: 'set_pause', token, paused: newState })
+    isPaused = res.is_paused
     updatePauseButton()
     showToast(newState ? 'Ordering paused' : 'Ordering resumed')
   } catch (e) {
@@ -743,9 +711,12 @@ document.getElementById('pin-input').addEventListener('keydown', e => {
     document.getElementById('pin-subtitle').textContent = `Enter PIN for ${slug}`
   }
 
-  if (session && session.slug === slug) {
+  if (session && session.slug === slug && session.token) {
     shopId   = session.shopId
     shopName = session.shopName
+    token    = session.token
+    // initApp -> loadMenu calls the server with the token; if it's expired the
+    // server returns 401 and loadMenu forces re-auth. No client-side trust.
     await initApp()
   }
   // else: show PIN screen (already visible by default)
