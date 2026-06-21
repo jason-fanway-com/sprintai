@@ -1,0 +1,25 @@
+=== JACK'S SLICE — Phase-1 menu E2E (real fixture) ===
+
+PASS  parsed real Jack's CSV  — 326 rows
+PASS  36 categories present  — 36 categories
+PASS  9 Upcharge-TBD side-sub Open Questions surfaced  — 9 found
+    Open-Question rows:
+      - Side Substitutions · Sweet Potato Fries
+      - Side Substitutions · Pierogies
+      - Side Substitutions · Sauteed Pierogies
+      - Side Substitutions · Mozzarella Sticks
+      - Side Substitutions · Onion Rings
+      - Side Substitutions · Side Salad
+      - Side Substitutions - Kids · Pierogies
+      - Side Substitutions - Kids · Sauteed Pierogies
+      - Side Substitutions - Kids · Onion Rings
+PASS  none invented/assumed a price (blank, not $0.00)
+PASS  every Open Question resolved before confirm (gate)
+PASS  strict validation passes after resolution
+PASS  import plan built  — 221 menu_items, 39 option_groups, 110 option_choices
+PASS  plan carries an import_hash (idempotency)  — bd6def44
+    Resolved side-sub items -> price_cents:
+PASS  resolved upcharges written as real cents (not 0)
+PASS  GATE: wizard would block confirm while Open Questions remain  — 9 still open
+
+=== ALL PHASE-1 MENU E2E CHECKS PASS ✅ ===

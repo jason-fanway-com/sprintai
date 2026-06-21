@@ -1,0 +1,327 @@
+category,name,size,price,description,prompt_for,upsell
+Pizza,Cheese,"Small (10"")",12.95,,,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Cheese,"Medium (14"")",14.95,,,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Cheese,"Large (16"")",16.50,,,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,German,"Small (10"")",12.95,"Chopped steak, onions, black olives, banana peppers",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,German,"Medium (14"")",15.50,"Chopped steak, onions, black olives, banana peppers",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,German,"Large (16"")",19.99,"Chopped steak, onions, black olives, banana peppers",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Veggie,"Small (10"")",12.95,"Onions, green peppers, black olives, mushrooms, tomatoes",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Veggie,"Medium (14"")",19.99,"Onions, green peppers, black olives, mushrooms, tomatoes",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Veggie,"Large (16"")",21.99,"Onions, green peppers, black olives, mushrooms, tomatoes",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Jack's Special,"Small (10"")",12.95,"Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Jack's Special,"Medium (14"")",21.99,"Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Jack's Special,"Large (16"")",24.99,"Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Hawaiian,"Small (10"")",12.95,"Ham, pineapple",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Hawaiian,"Medium (14"")",17.99,"Ham, pineapple",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Hawaiian,"Large (16"")",19.99,"Ham, pineapple",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Meat Lover,"Small (10"")",12.95,"Bacon, ham, sausage, pepperoni",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Meat Lover,"Medium (14"")",19.99,"Bacon, ham, sausage, pepperoni",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Meat Lover,"Large (16"")",21.99,"Bacon, ham, sausage, pepperoni",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Margherita,"Small (10"")",12.95,"Marinara sauce, fresh mozzarella, basil, finished with olive oil, parmesan cheese",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Margherita,"Medium (14"")",19.99,"Marinara sauce, fresh mozzarella, basil, finished with olive oil, parmesan cheese",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Margherita,"Large (16"")",22.99,"Marinara sauce, fresh mozzarella, basil, finished with olive oil, parmesan cheese",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Grandma's,"Small (10"")",12.95,"Sweet sauce, basil, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Grandma's,"Medium (14"")",19.99,"Sweet sauce, basil, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Grandma's,"Large (16"")",21.99,"Sweet sauce, basil, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Bruschetta,"Small (10"")",12.95,"Tomatoes, garlic sauce, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Bruschetta,"Medium (14"")",17.99,"Tomatoes, garlic sauce, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Bruschetta,"Large (16"")",19.99,"Tomatoes, garlic sauce, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Buffalo Chicken,"Small (10"")",12.95,Chopped chicken; choose sauce; topped with bleu cheese or ranch,"which sauce (hot, mild, or BBQ); bleu cheese or ranch","add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Buffalo Chicken,"Medium (14"")",19.99,Chopped chicken; choose sauce; topped with bleu cheese or ranch,"which sauce (hot, mild, or BBQ); bleu cheese or ranch","add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Buffalo Chicken,"Large (16"")",22.99,Chopped chicken; choose sauce; topped with bleu cheese or ranch,"which sauce (hot, mild, or BBQ); bleu cheese or ranch","add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Chicken Bacon Ranch,"Small (10"")",12.95,"Crispy chicken, bacon topped with ranch",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Chicken Bacon Ranch,"Medium (14"")",19.99,"Crispy chicken, bacon topped with ranch",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Chicken Bacon Ranch,"Large (16"")",22.99,"Crispy chicken, bacon topped with ranch",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Thai Sweet Chili Chicken,"Small (10"")",12.95,"Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Thai Sweet Chili Chicken,"Medium (14"")",19.99,"Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Thai Sweet Chili Chicken,"Large (16"")",21.99,"Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Pierogie,"Small (10"")",12.95,"Sauteed pierogies, onions, mozzarella, topped with cheese blend",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Pierogie,"Medium (14"")",20.99,"Sauteed pierogies, onions, mozzarella, topped with cheese blend",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Pierogie,"Large (16"")",22.99,"Sauteed pierogies, onions, mozzarella, topped with cheese blend",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Roma,"Small (10"")",12.95,"Ricotta cheese, mozzarella, broccoli, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Roma,"Medium (14"")",19.99,"Ricotta cheese, mozzarella, broccoli, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Roma,"Large (16"")",22.99,"Ricotta cheese, mozzarella, broccoli, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Taco,"Small (10"")",12.95,"Seasoned ground beef, American cheese, mozzarella, cheddar, topped with lettuce, tomato, tortilla chips",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Taco,"Medium (14"")",19.99,"Seasoned ground beef, American cheese, mozzarella, cheddar, topped with lettuce, tomato, tortilla chips",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Taco,"Large (16"")",23.99,"Seasoned ground beef, American cheese, mozzarella, cheddar, topped with lettuce, tomato, tortilla chips",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gyro,"Small (10"")",12.95,"Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gyro,"Medium (14"")",19.99,"Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gyro,"Large (16"")",22.99,"Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Spicy Chapo,"Small (10"")",12.95,"Crispy chicken, jalapeno peppers, fresh tomatoes, mozzarella, jalapeno ranch sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Spicy Chapo,"Medium (14"")",19.99,"Crispy chicken, jalapeno peppers, fresh tomatoes, mozzarella, jalapeno ranch sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Spicy Chapo,"Large (16"")",21.99,"Crispy chicken, jalapeno peppers, fresh tomatoes, mozzarella, jalapeno ranch sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Mikes Hot n Honey,"Small (10"")",13.95,"Sweet spicy sauce, pepperoni, bacon, crispy chicken, Mikes Hot n Honey, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Mikes Hot n Honey,"Medium (14"")",19.99,"Sweet spicy sauce, pepperoni, bacon, crispy chicken, Mikes Hot n Honey, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Mikes Hot n Honey,"Large (16"")",22.99,"Sweet spicy sauce, pepperoni, bacon, crispy chicken, Mikes Hot n Honey, mozzarella",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,White,"Small (10"")",12.95,"Ricotta, mozzarella with garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,White,"Medium (14"")",15.50,"Ricotta, mozzarella with garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,White,"Large (16"")",19.99,"Ricotta, mozzarella with garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gourmet White Fiesta,"Small (10"")",12.95,"Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gourmet White Fiesta,"Medium (14"")",21.99,"Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gourmet White Fiesta,"Large (16"")",23.99,"Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Thin Sicilian Pizza,One size (made to order),17.50,Made to order,,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+Pizza,Gluten-Free Pizza,One size,15.50,Gluten-free crust,,"add extra toppings; add gourmet toppings (steak, grilled chicken, etc.); suggest wings, garlic knots, or drinks"
+By the Slice,Regular Slice,Slice,2.85,Cheese slice,,add toppings; add gourmet toppings; suggest making it a combo with a drink
+Wings,Wings (Bone-In),10 Pieces,16.99,Choose flavor(s),which wing flavor(s),add extra dip or celery; suggest fries and a drink
+Wings,Wings (Boneless),10 Pieces,11.99,Choose flavor(s),which wing flavor(s),add extra dip or celery; suggest fries and a drink
+Appetizers,Side Salad,,3.99,,,suggest a drink
+Appetizers,French Fries,,4.99,,,suggest a drink
+Appetizers,Nacho Cheese Fries,,6.99,,,suggest a drink
+Appetizers,Bacon Cheese Fries,,8.49,,,suggest a drink
+Appetizers,Sweet Potato Fries,,6.49,,,suggest a drink
+Appetizers,Crab Fries,,8.99,Old bay seasoning with a side of nacho cheese,,suggest a drink
+Appetizers,Crazy Fries,,9.99,"Chicken steak meat, onions, nacho cheese, mild sauce",,suggest a drink
+Appetizers,Texas Fries,,9.99,"Bacon, cheddar cheese and jalapeno peppers",,suggest a drink
+Appetizers,Cali Fries,,9.99,"Mozzarella, bacon, ranch",,suggest a drink
+Appetizers,Pierogies (3),,5.99,,,suggest a drink
+Appetizers,Sauteed Pierogies with onions (5),,9.99,,,suggest a drink
+Appetizers,Mozzarella Sticks (6),,8.99,,,suggest a drink
+Appetizers,Onion Rings,,7.99,,,suggest a drink
+Appetizers,Nonas Meatballs (3),,9.50,In marinara sauce topped with a scoop of fresh ricotta,,suggest a drink
+Appetizers,Spinach Artichoke Dip,,9.99,Served with tortilla chips,,suggest a drink
+Appetizers,Homemade Buffalo Chicken Dip,,12.99,Served with toasted pita chips,,suggest a drink
+Appetizers,Jack's Loaded Nachos,,12.95,"Lettuce, tomatoes, onions, nacho cheese. Served with sour cream, salsa",steak or chicken,suggest a drink
+Appetizers,Chicken Fingers (5) with french fries,,10.95,,,suggest a drink
+Appetizers,Jalapeno Poppers (5),,6.99,,,suggest a drink
+Appetizers,Garlic Knots (6),,5.99,,,suggest a drink
+Appetizers,Boom Boom Shrimp,,11.99,,,suggest a drink
+Appetizers,Shrimp in Basket with french fries,,12.50,,,suggest a drink
+Appetizers,Fish and Chips,,13.50,,,suggest a drink
+Appetizers,Mussels Fra Diavolo,,14.99,Spicy marinara with toasted bread,,suggest a drink
+Appetizers,Bruschetta,,9.99,"Chopped tomatoes, garlic, basil, olive oil and parmesan cheese on toasted bread",,suggest a drink
+Appetizers,Caprese Salad,,9.99,"Fresh mozzarella, tomatoes, basil, balsamic glaze",,suggest a drink
+Appetizers,Loaded Pierogies,,11.99,"Sauteed spinach, tomatoes, onions topped with cheese blend",,suggest a drink
+Soups,Chicken Noodle,Cup,4.99,,,suggest a side salad
+Soups,Chicken Noodle,Bowl,7.99,,,suggest a side salad
+Soups,Lobster Bisque,Cup,4.99,,,suggest a side salad
+Soups,Lobster Bisque,Bowl,7.99,,,suggest a side salad
+Soups,Soup of the Day,Cup,5.99,,,suggest a side salad
+Soups,Soup of the Day,Bowl,8.99,,,suggest a side salad
+Salads,House,,8.99,"Tomatoes, onions, cucumbers",which dressing,add extra dressing; suggest a drink
+Salads,Tuna,,11.95,"Tomatoes, onions, cucumbers, provolone cheese",which dressing,add extra dressing; suggest a drink
+Salads,Greek,,10.99,"Tomatoes, red onions, cucumbers, kalamata olives, feta cheese",which dressing,"add extra dressing; add a protein (chicken +$4, shrimp +$6, salmon +$8, steak +$8); suggest a drink"
+Salads,Antipasta,,11.99,"Ham, provolone, salami, tomatoes, onions, cucumbers",which dressing,add extra dressing; suggest a drink
+Salads,Chicken Caesar,,12.95,"Grilled chicken, croutons, parmesan cheese",which dressing,"add extra dressing; add a protein (shrimp +$6, salmon +$8); suggest a drink"
+Salads,Caprese Chicken,,12.95,"Grilled chicken, tomatoes, fresh mozzarella, olive oil with balsamic glaze. Served on a bed of lettuce",which dressing,add extra dressing; add shrimp +$6; suggest a drink
+Salads,Grilled Chicken,,12.95,"Tomatoes, onions, cucumbers",which dressing,add extra dressing; add a protein (shrimp +$6 or steak +$8); suggest a drink
+Salads,Buffalo Grilled Chicken,,12.95,"Tomatoes, onions, cucumbers; choose sauce","which dressing; which sauce (hot, mild, BBQ, or sweet & spicy)",add extra dressing; suggest a drink
+Salads,Cajun Chicken,,12.95,"Tomatoes, onions, cucumbers",which dressing,add extra dressing; add shrimp +$6; suggest a drink
+Salads,Cheesesteak / Chicken Cheesesteak,,12.95,"With onions, served over house salad",which dressing; steak or chicken,add extra dressing; suggest a drink
+Salads,Triple Bogey,,12.95,"Grilled chicken, romaine lettuce, bacon, egg, tomatoes, avocado",which dressing,add extra dressing; add shrimp +$6; suggest a drink
+Salads,Shrimp Thai Sweet Chili,,12.99,"Fried shrimp, pineapple, tomatoes, red onions, cucumbers",which dressing,add extra dressing; suggest a drink
+Salads,Gyro (Beef or Chicken),,14.99,"Tomatoes, onions, cucumbers, chopped pita, homemade tzatziki sauce",which dressing; beef or chicken,add extra dressing; add a protein (shrimp +$6 or steak +$8); suggest a drink
+Salads,Southwest,,11.99,"Fire roasted corn, avocado, black beans, tortilla strips, served with cilantro lime vinaigrette",which dressing,"add extra dressing; add a protein (chicken +$4, shrimp +$6, salmon +$8, steak +$8); suggest a drink"
+Flatbreads,BBQ Chicken,,10.50,"BBQ sauce, chicken, cheese blend",,suggest wings or a drink
+Flatbreads,Buffalo Chicken,,10.50,"Wing sauce, chicken, cheese blend; choose sauce",which sauce (hot or mild),suggest wings or a drink
+Flatbreads,Buffalo Chicken Dip,,10.50,"Topped with cheese blend, ranch",,suggest wings or a drink
+Flatbreads,Cheesesteak,,10.50,"Chopped steak meat, fried onions, hot peppers, cheese blend",,suggest wings or a drink
+Flatbreads,Chicken Bacon Ranch,,10.50,"Chopped chicken, bacon, cheese blend, ranch dressing",,suggest wings or a drink
+Flatbreads,Margherita,,10.50,"Marinara sauce, fresh mozzarella, fresh basil",,suggest wings or a drink
+Wraps,Grilled Chicken Bacon & Ranch,,9.99,"Served with homemade chips. Grilled chicken, lettuce, tomatoes, onions, bacon, ranch dressing",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Chicken Caesar,,9.99,"Served with homemade chips. Grilled chicken, chopped romaine, parmesan cheese, croutons, caesar dressing",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Buffalo Chicken,,9.99,"Served with homemade chips. Grilled chicken, lettuce, tomatoes, onions; choose sauce","which sauce (hot, mild, BBQ, or sweet & spicy)","upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Italian,,9.99,"Served with homemade chips. Ham, salami, provolone cheese, lettuce, tomatoes, onions, oil-vinegar",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Tuna,,9.99,"Served with homemade chips. Tuna, lettuce, tomatoes, onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Veggie,,9.99,"Served with homemade chips. Lettuce, tomatoes, onions, black olives, green peppers, mushrooms",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Cheesesteak / Chicken Cheesesteak,,9.99,"Served with homemade chips. Chopped steak or chicken, onions, lettuce, tomatoes, American cheese, mayo",steak or chicken,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Greek Chicken,,10.99,"Served with homemade chips. Grilled chicken, lettuce, tomatoes, red onion, kalamata olives, feta cheese, balsamic glaze",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Southwest Grilled Chicken,,10.99,"Served with homemade chips. Lettuce, fire roasted corn, avocado, black beans, tortilla strips. Served with cilantro lime vinaigrette",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Wraps,Southwest Shrimp,,12.99,"Served with homemade chips. Lettuce, fire roasted corn, avocado, black beans, tortilla strips. Served with cilantro lime vinaigrette",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Buffalo Chicken Cheesesteak,,10.99,"Served with fries. Lettuce, tomatoes, red onions, American cheese; choose sauce","which sauce (hot, mild, BBQ, or sweet & spicy)","upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Cheesesteak,,10.99,"Served with fries. Lettuce, tomatoes, fried onions, American cheese, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Chicken Cheesesteak,,10.99,"Served with fries. Lettuce, tomatoes, fried onions, American cheese, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,BLT,,10.99,"Served with fries. Bacon, lettuce, tomatoes, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Turkey,,10.99,"Served with fries. Lettuce, tomatoes, fried onions, provolone cheese, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Italian,,10.99,"Served with fries. Ham, salami, provolone, lettuce, tomatoes, red onions, oil-vinegar",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Grilled Chicken,,10.99,"Served with fries. Lettuce, tomatoes, red onions, provolone cheese, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Homemade Paninis,Tuna Melt,,10.99,"Served with fries. Lettuce, tomatoes, red onions, bacon, provolone cheese, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Quesadillas,Steak,,12.49,"Served with sour cream and salsa. Chopped steak, cheese blend with lettuce, tomatoes, fried onions",,add a protein (shrimp +$6 or steak +$8); suggest a drink
+Quesadillas,Chicken,,12.49,"Served with sour cream and salsa. Chopped chicken, cheese blend with lettuce, tomatoes, fried onions",,add a protein (shrimp +$6 or steak +$8); suggest a drink
+Quesadillas,Veggie,,12.49,"Served with sour cream and salsa. Lettuce, tomatoes, onions, black olives, mushrooms, green peppers",,add a protein (shrimp +$6 or steak +$8); suggest a drink
+Quesadillas,Chicken Fajita,,13.49,"Served with sour cream and salsa. Grilled chicken, cheese blend, sauteed onions, green peppers",,add a protein (shrimp +$6 or steak +$8); suggest a drink
+Quesadillas,Southwest Chicken,,13.49,"Served with sour cream and salsa. Grilled chicken, cheese blend, corn bean mix",,add a protein (shrimp +$6 or steak +$8); suggest a drink
+Entrees,Chicken Parmesan,,17.95,"Served with choice of pasta, garlic knots, side salad","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Chicken Marsala,,19.95,"Served with choice of pasta, garlic knots, side salad. Marsala wine sauce, mushrooms, sauteed garlic, onions","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Chicken Piccata,,19.95,"Served with choice of pasta, garlic knots, side salad. White wine, lemon juice, fresh garlic, roasted peppers, capers","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Alfredo - Chicken,,19.95,"Served with choice of pasta, garlic knots, side salad. Sauteed garlic, tomato in a parmesan creamy sauce","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Alfredo - Shrimp,,21.95,"Served with choice of pasta, garlic knots, side salad. Sauteed garlic, tomato in a parmesan creamy sauce","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Shrimp Fra Diavolo,,21.95,"Served with choice of pasta, garlic knots, side salad. Marinara sauce, spicy or mild","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Shrimp Scampi,,21.95,"Served with choice of pasta, garlic knots, side salad. White wine, lemon juice, fresh garlic, roasted peppers","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Mussels Fra Diavolo,,22.99,"Served with choice of pasta, garlic knots, side salad. Spicy marinara","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Entrees,Pasta with Clam Sauce,,21.95,"Served with choice of pasta, garlic knots, side salad. Red or white clam sauce","which pasta (spaghetti, penne, angel hair, or linguine)",suggest an appetizer and drinks
+Baked Pasta,Stuffed Shells,,16.95,"Served with garlic knots, side salad. Prepared with a marinara sauce",,suggest garlic knots or a drink
+Baked Pasta,Cheese Ravioli,,16.95,"Served with garlic knots, side salad. Prepared with a marinara sauce",,suggest garlic knots or a drink
+Baked Pasta,Baked Ziti,,16.95,"Served with garlic knots, side salad. Ziti covered in marinara sauce, ricotta cheese, mozzarella",,suggest garlic knots or a drink
+Stromboli,House,Personal,12.95,"Ham, salami, green peppers, mushrooms, onions",,suggest a side salad or drink
+Stromboli,House,"14""",18.95,"Ham, salami, green peppers, mushrooms, onions",,suggest a side salad or drink
+Stromboli,House,"16""",22.95,"Ham, salami, green peppers, mushrooms, onions",,suggest a side salad or drink
+Stromboli,Gyro,Personal,12.95,"Gyro meat, red onions, fresh tomatoes, homemade tzatziki sauce",,suggest a side salad or drink
+Stromboli,Gyro,"14""",18.95,"Gyro meat, red onions, fresh tomatoes, homemade tzatziki sauce",,suggest a side salad or drink
+Stromboli,Gyro,"16""",22.95,"Gyro meat, red onions, fresh tomatoes, homemade tzatziki sauce",,suggest a side salad or drink
+Stromboli,Chicken Parmesan,Personal,12.95,"Fried chicken, mozzarella, marinara sauce",,suggest a side salad or drink
+Stromboli,Chicken Parmesan,"14""",18.95,"Fried chicken, mozzarella, marinara sauce",,suggest a side salad or drink
+Stromboli,Chicken Parmesan,"16""",22.95,"Fried chicken, mozzarella, marinara sauce",,suggest a side salad or drink
+Stromboli,The Slice,Personal,12.95,"Steak meat, mozzarella sticks, onion rings, mozzarella",,suggest a side salad or drink
+Stromboli,The Slice,"14""",18.95,"Steak meat, mozzarella sticks, onion rings, mozzarella",,suggest a side salad or drink
+Stromboli,The Slice,"16""",22.95,"Steak meat, mozzarella sticks, onion rings, mozzarella",,suggest a side salad or drink
+Stromboli,Calzone,Personal,12.95,"Ham, ricotta, mozzarella",,suggest a side salad or drink
+Stromboli,Calzone,"14""",18.95,"Ham, ricotta, mozzarella",,suggest a side salad or drink
+Stromboli,Calzone,"16""",22.95,"Ham, ricotta, mozzarella",,suggest a side salad or drink
+Stromboli Rolls,Cheesesteak,,9.99,With onions,,suggest fries or a drink
+Stromboli Rolls,Chicken Cheesesteak,,9.99,With onions,,suggest fries or a drink
+Stromboli Rolls,Everything,,9.99,"Pepperoni, green peppers, onions, sausage, mushrooms, bacon, mozzarella",,suggest fries or a drink
+Stromboli Rolls,Buffalo Chicken Cheesesteak,,9.99,With onions; choose sauce,"which sauce (hot, mild, BBQ, or sweet & spicy)",suggest fries or a drink
+Stromboli Rolls,Pepperoni,,9.99,"Pepperoni, mozzarella",,suggest fries or a drink
+Stromboli Rolls,Sausage,,9.99,"Green peppers, onions, mozzarella",,suggest fries or a drink
+Stromboli Rolls,Meat Lovers,,9.99,"Bacon, ham, sausage, pepperoni, mozzarella",,suggest fries or a drink
+Stromboli Rolls,Veggie,,9.99,"Tomatoes, green peppers, mushrooms, onions, black olives, mozzarella",,suggest fries or a drink
+Angus Burgers & Specialty,California Cheeseburger,,10.99,"Served with fries. Lettuce, tomatoes, onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Bacon Cheeseburger,,10.99,Served with fries,,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Cheese Burger,,8.49,Served with fries,,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Grilled Chicken Burger,,9.99,"Served with fries. American cheese, lettuce, tomatoes, red onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Swiss Burger,,10.99,"Served with fries. Swiss cheese, sauteed onions, mushrooms",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Big Boy Burger,,12.95,"Served with fries. 2 Angus beef patties, onion rings, bacon, cheddar cheese, lettuce, tomatoes",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Cowboy Burger,,9.50,"Served with fries. Onion rings, BBQ sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Godfather Burger,,11.99,"Served with fries. Mozzarella sticks, bacon, cheddar cheese, lettuce, tomatoes",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,California Bacon Cheeseburger,,12.99,"Served with fries. Bacon, lettuce, tomatoes, onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,Farm Burger,,13.50,"Served with fries. Fried egg, bacon, American cheese, lettuce, tomatoes, onions",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Angus Burgers & Specialty,"""OG"" Seasoned Crispy Chicken",,13.50,"Served with crab fries. ""OG"" sauce, pickles",,suggest a drink
+Angus Burgers & Specialty,Spicy Crispy Chicken,,13.50,"Served with crab fries. Spicy ""OG"" sauce, pickles",,suggest a drink
+Angus Burgers & Specialty,CBR Seasoned Crispy Chicken,,13.50,"Served with crab fries. Lettuce, bacon, ranch dressing",,suggest a drink
+Angus Burgers & Specialty,Fish Sandwich,,13.50,"Served with fries. Battered cod, lettuce, pickles, tarter sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,Turkey Club,,9.99,"Served with chips. Turkey, bacon, lettuce, tomatoes, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,Italian Hoagie,,9.99,"Served with chips. Ham, provolone, salami, lettuce, tomatoes, onions, oil & vinegar",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,Turkey Hoagie,,9.99,"Served with chips. Lettuce, tomatoes, provolone, onion, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,Veggie Hoagie,,9.99,"Served with chips. Lettuce, tomatoes, onions, green peppers, cucumbers",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,BLT,,7.99,"Served with chips. Bacon, lettuce, tomatoes, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Cold Sandwiches,Tuna Hoagie,,9.99,"Served with chips. Lettuce, tomatoes, onions",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Cheesesteak,,11.99,"Served with fries. American cheese, sauce, fried onions",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,California Cheesesteak,,11.99,"Served with fries. American cheese, lettuce, tomatoes, fried onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Chicken Cheesesteak,,11.99,"Served with fries. American cheese, sauce, fried onions",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,California Chicken Cheesesteak,,12.99,"Served with fries. American cheese, lettuce, tomatoes, fried onions, mayo",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,The Slice Cheesesteak,,13.99,"Served with fries. Mozzarella sticks, onion rings, fried onions, nacho cheese",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Supreme Cheesesteak,,13.99,"Served with fries. American cheese, mushrooms, fried onions, green peppers, pepperoni, marinara sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Garlic Cheesesteak,,11.99,"Served with fries. Sauteed garlic, fried onions, American cheese",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Buffalo Chicken Cheesesteak,,11.99,"Served with fries. With fried onions, American cheese; choose sauce","which sauce (hot, mild, BBQ, or sweet & spicy)","upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Meatball Parmesan,,11.99,"Served with fries. Mozzarella, marinara sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Sausage Parmesan,,11.99,"Served with fries. Mozzarella, marinara sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Sausage,,11.99,"Served with fries. Marinara sauce, sauteed green peppers, fried onions",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Chicken Parmesan,,11.99,"Served with fries. Mozzarella, marinara sauce",,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Hot Sandwiches,Gyro (Beef or Chicken),,10.99,Served with fries,beef or chicken,"upgrade the side (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad); suggest a drink"
+Kids' Menu,Chicken Nuggets (5),,5.99,Served with fries,,"upgrade the side (pierogies, sauteed pierogies, onion rings); suggest a kids drink"
+Kids' Menu,Chicken Fingers (3),,5.99,Served with fries,,"upgrade the side (pierogies, sauteed pierogies, onion rings); suggest a kids drink"
+Kids' Menu,Grilled Cheese,,5.99,Served with fries,,"upgrade the side (pierogies, sauteed pierogies, onion rings); suggest a kids drink"
+Kids' Menu,Hot Dog,,5.99,Served with fries,,"upgrade the side (pierogies, sauteed pierogies, onion rings); suggest a kids drink"
+Beverages,Coke,,2.99,,,
+Beverages,Diet Coke,,2.99,,,
+Beverages,Sprite,,2.99,,,
+Beverages,Ginger Ale,,2.99,,,
+Beverages,Unsweetened Iced Tea,,2.99,,,
+Beverages,Lemonade,,2.99,,,
+Pizza Toppings - Regular,Pepperoni (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Sausage (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Bacon (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Green Peppers (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Mushrooms (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Onions (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Garlic Sauce (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Tomatoes (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Anchovies (Whole pizza),,4.50,,,
+Pizza Toppings - Regular,Pepperoni (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Sausage (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Bacon (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Green Peppers (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Mushrooms (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Onions (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Garlic Sauce (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Tomatoes (Half pizza),,3.50,,,
+Pizza Toppings - Regular,Anchovies (Half pizza),,3.50,,,
+Pizza Toppings - Gourmet,Steak (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Chicken Steak (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Grilled Chicken (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Gyro Meat (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Roasted Peppers (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Broccoli (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Spinach (Whole pizza),,5.00,,,
+Pizza Toppings - Gourmet,Steak (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Chicken Steak (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Grilled Chicken (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Gyro Meat (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Roasted Peppers (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Broccoli (Half pizza),,4.00,,,
+Pizza Toppings - Gourmet,Spinach (Half pizza),,4.00,,,
+Slice Toppings - Regular,Pepperoni,,0.50,,,
+Slice Toppings - Regular,Sausage,,0.50,,,
+Slice Toppings - Regular,Bacon,,0.50,,,
+Slice Toppings - Regular,Green Peppers,,0.50,,,
+Slice Toppings - Regular,Mushrooms,,0.50,,,
+Slice Toppings - Regular,Onions,,0.50,,,
+Slice Toppings - Regular,Garlic Sauce,,0.50,,,
+Slice Toppings - Regular,Tomatoes,,0.50,,,
+Slice Toppings - Regular,Anchovies,,0.50,,,
+Slice Toppings - Gourmet,Steak,,1.50,,,
+Slice Toppings - Gourmet,Chicken Steak,,1.50,,,
+Slice Toppings - Gourmet,Grilled Chicken,,1.50,,,
+Slice Toppings - Gourmet,Gyro Meat,,1.50,,,
+Slice Toppings - Gourmet,Roasted Peppers,,1.50,,,
+Slice Toppings - Gourmet,Broccoli,,1.50,,,
+Slice Toppings - Gourmet,Spinach,,1.50,,,
+Wing Flavors,Hot,,0.00,,,
+Wing Flavors,Mild,,0.00,,,
+Wing Flavors,BBQ,,0.00,,,
+Wing Flavors,Sweet & Spicy,,0.00,,,
+Wing Flavors,Old Bay,,0.00,,,
+Wing Flavors,Garlic Parmesan,,0.00,,,
+Wing Flavors,Pineapple Teriyaki,,0.00,,,
+Wing Flavors,Garlic Hot,,0.00,,,
+Wing Flavors,Sweet Red Chili,,0.00,,,
+Wing Flavors,Honey Garlic BBQ,,0.00,,,
+Wing Flavors,Mango Habanero,,0.00,,,
+Wing Flavors,Jamaican Jerk,,0.00,,,
+Wing Flavors,Mike's Hot n' Honey,,0.00,,,
+Wing Extras,Extra Ranch,,0.50,,,
+Wing Extras,Extra Bleu Cheese,,0.50,,,
+Wing Extras,Extra Celery,,0.50,,,
+Salad Dressings,Ranch,,0.00,,,
+Salad Dressings,Caesar,,0.00,,,
+Salad Dressings,Bleu Cheese,,0.00,,,
+Salad Dressings,French,,0.00,,,
+Salad Dressings,Italian,,0.00,,,
+Salad Dressings,Creamy Italian,,0.00,,,
+Salad Dressings,Oil-Vinegar,,0.00,,,
+Salad Dressings,House Balsamic,,0.00,,,
+Salad Dressings,Honey Mustard,,0.00,,,
+Salad Dressings,Thousand Island,,0.00,,,
+Salad Dressings,Raspberry Vinaigrette,,0.00,,,
+Salad Dressings,Cilantro Lime,,0.00,,,
+Salad Dressings,Jalapeno Ranch,,0.00,,,
+Extra Dressing,Extra Dressing,,0.50,,,
+Salad Protein Add-ons,Chicken,,4.00,,,
+Salad Protein Add-ons,Shrimp,,6.00,,,
+Salad Protein Add-ons,Blackened Salmon,,8.00,,,
+Salad Protein Add-ons,Black Diamond Steak,,8.00,,,
+Quesadilla Protein Add-ons,Shrimp,,6.00,,,
+Quesadilla Protein Add-ons,Black Diamond Steak,,8.00,,,
+Pasta Choices,Spaghetti,,0.00,,,
+Pasta Choices,Penne,,0.00,,,
+Pasta Choices,Angel Hair,,0.00,,,
+Pasta Choices,Linguine,,0.00,,,
+Buffalo Sauce Options,Hot,,0.00,,,
+Buffalo Sauce Options,Mild,,0.00,,,
+Buffalo Sauce Options,BBQ,,0.00,,,
+Buffalo Sauce Options,Sweet & Spicy,,0.00,,,
+Pizza Finish (Buffalo Chicken),Bleu Cheese,,0.00,,,
+Pizza Finish (Buffalo Chicken),Ranch,,0.00,,,
+Steak or Chicken Choice,Steak,,0.00,,,
+Steak or Chicken Choice,Chicken,,0.00,,,
+Gyro Protein Choice,Beef,,0.00,,,
+Gyro Protein Choice,Chicken,,0.00,,,
+Side Substitutions,Sweet Potato Fries,,,Upcharge TBD,,
+Side Substitutions,Pierogies,,,Upcharge TBD,,
+Side Substitutions,Sauteed Pierogies,,,Upcharge TBD,,
+Side Substitutions,Mozzarella Sticks,,,Upcharge TBD,,
+Side Substitutions,Onion Rings,,,Upcharge TBD,,
+Side Substitutions,Side Salad,,,Upcharge TBD,,
+Side Substitutions - Kids,Pierogies,,,Upcharge TBD,,
+Side Substitutions - Kids,Sauteed Pierogies,,,Upcharge TBD,,
+Side Substitutions - Kids,Onion Rings,,,Upcharge TBD,,
