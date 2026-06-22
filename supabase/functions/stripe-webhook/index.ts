@@ -243,6 +243,10 @@ async function handleChargeRefunded(
   console.log(`[stripe-webhook] charge.refunded ${charge.id} → cart ${cart.id}: ${refundStatus} ($${(refunded / 100).toFixed(2)} of $${(amount / 100).toFixed(2)})`);
 
   if (cart.conversation_id) {
+    // ALLOWED TRANSACTIONAL EXCEPTION #2 of 2 (lead directive 2026-06-22):
+    // the REFUND NOTICE. This outbound directly follows the customer's own
+    // paid order being refunded — a consented, expected transactional message.
+    // This and payment_confirmed are the ONLY two customer-facing pushes allowed.
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_refunded");
   }
 }
@@ -279,6 +283,9 @@ async function handleDisputeCreated(
   // Notify the shop (restaurant owns the dispute). Email + SMS via chat-sms.
   await notifyShopOfDispute(supabase, cart.shop_id, cart.id, dispute);
   if (cart.conversation_id) {
+    // SHOP-FACING ONLY, not a customer push. order_disputed resolves to a
+    // SILENT branch in chat-sms (no diner-facing copy); the shop is notified
+    // separately via notifyShopOfDispute above. No unsolicited customer text.
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_disputed");
   }
 }
@@ -388,7 +395,11 @@ async function handleOrderPaymentComplete(
     .eq("id", cartId)
     .single();
 
-  // Notify customer via chat-sms
+  // ALLOWED TRANSACTIONAL EXCEPTION #1 of 2 (lead directive 2026-06-22):
+  // the PAID-ORDER RECEIPT. This outbound directly follows the customer's own
+  // action (they completed checkout and paid) — a consented, expected
+  // transactional message. This and order_refunded are the ONLY two
+  // customer-facing pushes allowed.
   if (cart?.conversation_id) {
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cartId, "payment_confirmed");
   }
@@ -465,20 +476,17 @@ async function handleOrderPaymentExpired(
   if (!cartId) return;
   console.log(`[stripe-webhook] Order payment expired for cart: ${cartId}`);
 
+  // Update internal state ONLY. No customer-facing outbound on expiry.
+  // COMPLIANCE (TCPA/10DLC), lead directive 2026-06-22: a checkout link
+  // expiring is NOT a customer action — pushing an unsolicited "your link
+  // expired" text is an unconsented outbound and is KILLED. If the customer
+  // texts again in an active session and their link is expired, the inbound
+  // reply path handles it synchronously ("that link expired — want to
+  // reorder?"). We never push here.
   await supabase
     .from("order_carts")
     .update({ payment_status: "expired", phase: "expired" })
     .eq("id", cartId);
-
-  const { data: expiredCart } = await supabase
-    .from("order_carts")
-    .select("shop_id, conversation_id")
-    .eq("id", cartId)
-    .single();
-
-  if (expiredCart?.conversation_id) {
-    await triggerChatSmsSystemEvent(expiredCart.shop_id, expiredCart.conversation_id, cartId, "payment_expired");
-  }
 }
 
 // ─── Event Handlers ───────────────────────────────────────────────────────────

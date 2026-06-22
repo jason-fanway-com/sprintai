@@ -316,6 +316,7 @@ function buildSystemPrompt(
   currentTime:    string,
   isFirstMessage: boolean,
   notes?:         string | null,
+  priorLinkExpired = false,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = shop.open_hours?.[today] ?? [];
@@ -379,6 +380,14 @@ function buildSystemPrompt(
     ? "\n\nCOMPLIANCE NOTE: Append this sentence to your very first message (after your greeting): \"Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.\""
     : "";
 
+  // SYNCHRONOUS expired-link nudge (lead directive 2026-06-22). This is added
+  // to the prompt ONLY because the customer just texted us again (a fresh
+  // inbound). We never PUSH an expired notice; we only mention it inline in a
+  // reply the customer's own message triggered.
+  const expiredNote = priorLinkExpired
+    ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
+    : "";
+
   return `You are the ordering assistant for ${shop.name}. Help customers order for pickup via text.
 
 CURRENT PHASE: ${phase}
@@ -427,7 +436,7 @@ PHASE BEHAVIOR:
 - greeting/building: Help build the order, answer menu questions
 - checkout: Payment link was sent. Remind them to check their text or email for the payment link.
 - confirmed: Order is confirmed and paid. Thank them and give pickup info.
-- expired: Their payment link expired. Ask if they want to restart.${complianceNote}`;
+- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${complianceNote}`;
 }
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
@@ -1118,7 +1127,13 @@ async function handleSystemEvent(
 
   let message: string;
 
+  // ── ALLOWED TRANSACTIONAL EXCEPTIONS (lead directive 2026-06-22) ──────────
+  // Only payment_confirmed (paid receipt) and order_refunded (refund notice)
+  // may produce a customer-facing push. Both directly follow the customer's
+  // OWN action and are consented transactional messages. Every other
+  // unsolicited system_event outbound is KILLED (see payment_expired below).
   if (system_event === "payment_confirmed") {
+    // ALLOWED EXCEPTION #1 of 2: paid-order receipt (customer just paid).
     const items = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
       if ((i as BundleItem).type === "bundle") return (i as BundleItem).name;
       const r = i as CartItem;
@@ -1144,8 +1159,16 @@ async function handleSystemEvent(
     const closePart  = closeTime ? ` (we're open til ${closeTime})` : "";
     message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}${feeLine}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
   } else if (system_event === "payment_expired") {
-    message = `Your payment link expired. Reply "restart" to start a new order.`;
+    // KILLED (TCPA/10DLC, lead directive 2026-06-22): a checkout link expiring
+    // is NOT a customer action. We never push an unsolicited "your link
+    // expired" text. The upstream stripe-webhook no longer enqueues this; this
+    // branch is kept ONLY as a fail-closed guard so any stray call produces NO
+    // outbound. If the customer texts again with an expired link, the normal
+    // inbound reply path handles it synchronously ("that link expired — want to
+    // reorder?").
+    return jsonResponse({ ok: true, silent: true, killed: "payment_expired_outbound" });
   } else if (system_event === "order_refunded") {
+    // ALLOWED EXCEPTION #2 of 2: refund notice (customer's paid order refunded).
     const refunded = ((cartRow.refunded_cents ?? 0) / 100).toFixed(2);
     message = `A refund of $${refunded} has been issued for your order. It may take a few business days to appear on your statement.`;
   } else if (system_event === "order_disputed") {
@@ -1405,9 +1428,19 @@ Deno.serve(async (req: Request) => {
     .order("created_at", { ascending: false }).limit(1).single();
 
   let cart: OrderCart;
+  // SYNCHRONOUS expired-link handling (lead directive 2026-06-22): we never
+  // PUSH an "expired" notice. But if the customer texts us again and their most
+  // recent cart was expired, surface a reorder nudge INLINE in this reply.
+  let priorLinkExpired = false;
   if (existingCart) {
     cart = existingCart as OrderCart;
   } else {
+    const { data: lastExpired } = await supabase
+      .from("order_carts").select("id, phase")
+      .eq("conversation_id", conversation.id)
+      .eq("phase", "expired")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (lastExpired) priorLinkExpired = true;
     const { data: newCart, error: cartErr } = await supabase
       .from("order_carts")
       .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [] })
@@ -1550,7 +1583,7 @@ Deno.serve(async (req: Request) => {
   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired);
   const cartItems    = [...cart.cart_json];
 
   const loopResult = await runOrderingLoop(

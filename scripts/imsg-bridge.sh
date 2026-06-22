@@ -39,7 +39,12 @@ SESSION_DIR="${HOME}/.sprintai-bridge/sessions"
 PROCESSED_DIR="${HOME}/.sprintai-bridge/processed"
 PROCESSED_IDS_FILE="${HOME}/.sprintai-bridge/processed-ids.txt"
 PROCESSED_IDS_MAX=10000
-MAX_MSG_AGE_SECONDS=86400
+# COMPLIANCE (TCPA/10DLC, lead directive 2026-06-22): the age window is the
+# fail-closed gate against replaying stale inbound messages as fresh auto-
+# replies. A message older than this is NEVER a live inbound worth auto-
+# answering. Tightened from 24h to 15 min. Overridable via env for tests only.
+MAX_MSG_AGE_SECONDS="${MAX_MSG_AGE_SECONDS:-900}"   # 15 minutes
+LOCK_FILE="${SPRINTAI_BRIDGE_LOCK_FILE:-${HOME}/.sprintai-bridge/bridge.lock}"
 ORDERING_NUMBER="${ORDERING_NUMBER:-+14842018054}"
 MODE="${1:-}"
 
@@ -49,12 +54,64 @@ mkdir -p "$SESSION_DIR" "$PROCESSED_DIR" "${HOME}/.sprintai-bridge"
 # -- Helpers ──────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
+# -- Single-instance lock ─────────────────────────────────────────────────────
+# COMPLIANCE (lead directive 2026-06-22): two bridges running concurrently was a
+# root cause of double/replayed sends. Enforce a single live instance.
+#
+# macOS bash 3.2 has no flock(1), so we use an atomic mkdir lock plus a PID-
+# liveness check. mkdir is atomic on the local filesystem: only one process can
+# create the dir. We store our PID inside it. On startup, if the lock exists but
+# the owning PID is dead (stale lock from a crash/kill), we reclaim it. If the
+# owning PID is alive, we refuse to start. Robust to launchd KeepAlive (a
+# relaunch only succeeds once the prior process is gone) and to manual starts.
+LOCK_ACQUIRED=false
+
+acquire_singleton_lock() {
+  local pidfile="${LOCK_FILE}/pid"
+  local tries=0
+  while (( tries < 2 )); do
+    if mkdir "$LOCK_FILE" 2>/dev/null; then
+      echo "$$" > "$pidfile"
+      LOCK_ACQUIRED=true
+      log "Acquired single-instance lock (PID $$) at $LOCK_FILE"
+      return 0
+    fi
+    # Lock dir exists — check whether the owner is still alive.
+    local owner=""
+    [[ -f "$pidfile" ]] && owner=$(cat "$pidfile" 2>/dev/null | tr -cd '0-9')
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null && [[ "$owner" != "$$" ]]; then
+      log "REFUSING TO START: another live bridge holds the lock (PID $owner). Exiting."
+      echo "ERROR: another bridge instance is already running (PID $owner)" >&2
+      return 1
+    fi
+    # Stale lock (owner empty or dead) — reclaim it and retry once.
+    log "Stale lock detected (owner='${owner:-none}', not alive) — reclaiming."
+    rm -rf "$LOCK_FILE"
+    (( tries++ ))
+  done
+  log "REFUSING TO START: could not acquire lock after reclaim attempts. Exiting."
+  return 1
+}
+
+release_singleton_lock() {
+  # Only remove the lock if WE own it (avoid deleting another instance's lock).
+  if [[ "$LOCK_ACQUIRED" == "true" ]]; then
+    local owner=""
+    [[ -f "${LOCK_FILE}/pid" ]] && owner=$(cat "${LOCK_FILE}/pid" 2>/dev/null | tr -cd '0-9')
+    if [[ "$owner" == "$$" ]]; then
+      rm -rf "$LOCK_FILE"
+      log "Released single-instance lock (PID $$)"
+    fi
+  fi
+}
+
 SHUTDOWN_REQUESTED=false
 
 cleanup() {
   SHUTDOWN_REQUESTED=true
   log "Bridge shutting down (PID $$)"
   rm -f "$PID_FILE"
+  release_singleton_lock
 }
 trap cleanup SIGINT SIGTERM
 
@@ -83,16 +140,40 @@ get_session_id() {
   fi
 }
 
+# -- Returning-phone detection (defensive greeting guard) ──────────────────
+# COMPLIANCE (lead directive 2026-06-22): a phone has "prior history" if it
+# already has a session file on disk. Used by the defensive TTL-rollover guard
+# so an aged/replayed message can't mint a brand-new session and fire a fresh
+# "Welcome" to someone we've talked to before. The age guard is the primary
+# defense; this is belt-and-suspenders.
+phone_has_session_history() {
+  local sender="$1"
+  local safe
+  safe=$(echo "$sender" | tr '+' 'p' | tr -cd '[:alnum:]')
+  [[ -f "$SESSION_DIR/$safe" ]]
+}
+
 # -- Dedup: persistent flat-file processed IDs ───────────────────────────────
 # IDs are stored one-per-line in PROCESSED_IDS_FILE and loaded into
 # PROCESSED_IDS_SET (associative array) on startup. This survives restarts.
+
+# Map an arbitrary message id to a SAFE bash variable name for the in-memory
+# fast-path cache. Message ids can contain hyphens/colons/slashes (real iMessage
+# GUIDs do), which are illegal in a bash identifier and would make a naive
+# `eval _PROC_<id>=1` fail (treated as a command). We replace every non-alnum
+# char with `_`. The on-disk PROCESSED_IDS_FILE always stores the RAW id, so this
+# sanitization only affects the cache key, never the source-of-truth lookup.
+_proc_varname() {
+  local raw="$1"
+  printf '_PROC_%s' "$(printf '%s' "$raw" | tr -c '[:alnum:]' '_')"
+}
 
 load_processed_ids() {
   if [[ -f "$PROCESSED_IDS_FILE" ]]; then
     local count=0
     while IFS= read -r mid; do
-      # Bash 3.2-compatible: store each ID as a named variable _PROC_<id>=1
-      [[ -n "$mid" ]] && { eval "_PROC_${mid}=1"; (( count++ )); }
+      # Bash 3.2-compatible: store each ID as a named (sanitized) variable
+      [[ -n "$mid" ]] && { local _v; _v=$(_proc_varname "$mid"); eval "${_v}=1"; (( count++ )); }
     done < "$PROCESSED_IDS_FILE"
     log "Loaded $count processed IDs from $PROCESSED_IDS_FILE"
   else
@@ -111,35 +192,69 @@ _trim_processed_ids_file() {
   fi
 }
 
+# COMPLIANCE (lead directive 2026-06-22): the on-disk PROCESSED_IDS_FILE is the
+# SINGLE SOURCE OF TRUTH for dedup. The in-memory _PROC_* vars are ONLY a
+# fast-path cache and may NEVER override a positive on-disk hit. This kills the
+# replay bug where a stale in-memory snapshot (second logical reader / restarted
+# loop) could let an already-processed id re-send.
 is_processed() {
-  # Bash 3.2-compatible indirect variable lookup
-  local _varname="_PROC_${1}"
-  [[ "${!_varname}" == "1" ]]
+  local mid="$1"
+  [[ -z "$mid" ]] && return 1
+  # 1) Fast-path: in-memory cache. A cache HIT is authoritative-positive.
+  local _varname; _varname=$(_proc_varname "$mid")
+  [[ "${!_varname}" == "1" ]] && return 0
+  # 2) On a cache MISS, the cache is NOT trusted (it may be a stale snapshot).
+  #    Consult the durable file as the source of truth on EVERY call.
+  if [[ -f "$PROCESSED_IDS_FILE" ]] && grep -qxF "$mid" "$PROCESSED_IDS_FILE" 2>/dev/null; then
+    # Warm the cache for next time, then report processed.
+    eval "${_varname}=1"
+    return 0
+  fi
+  return 1
 }
 
+# mark_processed writes THROUGH to the durable file (atomic append) and does so
+# BEFORE the send is attempted by the caller, so a crash mid-send can never
+# cause a double-send. Append (O_APPEND, single line) is atomic on local FS; the
+# singleton lock makes concurrency moot, but this stays correct on its own.
 mark_processed() {
   local mid="$1"
-  if ! is_processed "$mid"; then
-    eval "_PROC_${mid}=1"
-    echo "$mid" >> "$PROCESSED_IDS_FILE"
+  [[ -z "$mid" ]] && return 0
+  # Write-through to disk first (durable source of truth), guarded against dupes.
+  if ! { [[ -f "$PROCESSED_IDS_FILE" ]] && grep -qxF "$mid" "$PROCESSED_IDS_FILE" 2>/dev/null; }; then
+    printf '%s\n' "$mid" >> "$PROCESSED_IDS_FILE"
   fi
+  # Then warm the in-memory fast-path cache (sanitized var name).
+  local _v; _v=$(_proc_varname "$mid")
+  eval "${_v}=1"
 }
 
 # -- Age check: skip messages older than MAX_MSG_AGE_SECONDS ──────────────────
 # created_at comes from imsg JSON in ISO8601 form e.g. "2026-06-18T19:38:20.290Z"
+# COMPLIANCE (lead directive 2026-06-22): this gate FAILS CLOSED. Return 0
+# ("too old → SKIP") is the path the caller uses to NOT auto-reply. A message
+# with a MISSING, EMPTY, or UNPARSEABLE created_at is treated as too old and is
+# skipped — we never auto-reply to a message we cannot prove is fresh. Only a
+# successfully-parsed timestamp within MAX_MSG_AGE_SECONDS is allowed through
+# (return 1 = "fresh → process").
 msg_is_too_old() {
   local created_at="$1"
-  [[ -z "$created_at" ]] && return 1  # no date → don't skip
+  # Missing/empty timestamp → cannot prove freshness → TOO OLD (skip).
+  [[ -z "$created_at" ]] && return 0
 
   # Strip milliseconds and trailing Z, then parse
   local dt_clean
   dt_clean=$(echo "$created_at" | sed 's/\.[0-9]*Z$//' | sed 's/Z$//')
   local msg_epoch
-  # TZ=UTC ensures the stripped ISO8601 string is parsed as UTC (the Z suffix indicates UTC)
-  msg_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$dt_clean" +%s 2>/dev/null) || return 1
+  # TZ=UTC ensures the stripped ISO8601 string is parsed as UTC (the Z suffix indicates UTC).
+  # Parse failure → cannot prove freshness → TOO OLD (skip).
+  msg_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$dt_clean" +%s 2>/dev/null) || return 0
+  # Empty/non-numeric epoch (defensive) → TOO OLD (skip).
+  [[ "$msg_epoch" =~ ^[0-9]+$ ]] || return 0
 
   local now_epoch
   now_epoch=$(date +%s)
+  # Fresh only if within the window; otherwise too old (skip).
   (( now_epoch - msg_epoch > MAX_MSG_AGE_SECONDS ))
 }
 
@@ -222,13 +337,17 @@ process_message() {
   log "  Phase: $phase"
   log "  Reply: $reply"
 
+  # COMPLIANCE (lead directive 2026-06-22): mark processed (write-through to
+  # disk) BEFORE attempting the send. If we crash mid-send, the id is already
+  # durably recorded, so the message can never be re-sent on restart. We accept
+  # the rare "marked but not sent" over the unacceptable "sent twice."
+  mark_processed "$msg_id"
+
   if send_reply "$sender" "$reply"; then
     log "  ✓ Sent"
   else
     log "  ERROR: imsg send failed"
   fi
-
-  mark_processed "$msg_id"
 }
 
 # -- Test mode ─────────────────────────────────────────────────────────────────
@@ -351,9 +470,22 @@ run_bridge() {
         [[ -z "$msg_id" ]] && continue
         is_processed "$msg_id" && { log "[SKIP] id=$msg_id: already processed (persistent)"; continue; }
 
-        # Skip messages older than 24h (belt-and-suspenders against stale re-processing)
+        # PRIMARY DEFENSE (fail-closed): skip messages we cannot prove are fresh
+        # within MAX_MSG_AGE_SECONDS. A stale/replayed inbound is marked processed
+        # and never auto-answered.
         if msg_is_too_old "$msg_created_at"; then
-          log "[SKIP] id=$msg_id: message older than ${MAX_MSG_AGE_SECONDS}s ($msg_created_at) — marking processed"
+          log "[SKIP] id=$msg_id: not fresh within ${MAX_MSG_AGE_SECONDS}s ($msg_created_at) — marking processed"
+          mark_processed "$msg_id"
+          continue
+        fi
+
+        # DEFENSIVE TTL-ROLLOVER GREETING GUARD (belt-and-suspenders):
+        # Even if a message slipped the age gate, never let a non-fresh message
+        # mint a brand-new session (and thus a fresh "Welcome") for a phone that
+        # already has prior history. With the fail-closed age guard above this is
+        # moot in practice, but it closes the greeting path independently.
+        if [[ -z "$msg_created_at" ]] && phone_has_session_history "$chat_identifier"; then
+          log "[SKIP] id=$msg_id: undateable message for returning phone $chat_identifier — refusing to re-greet, marking processed"
           mark_processed "$msg_id"
           continue
         fi
@@ -394,6 +526,19 @@ log "================================================="
 # If run_bridge exits unexpectedly, log and restart after 5s.
 # Cap at MAX_CRASHES within CRASH_WINDOW seconds to prevent a tight crash loop;
 # after that, exit so launchd (KeepAlive: true) can handle the restart cleanly.
+#
+# COMPLIANCE (lead directive 2026-06-22): acquire the single-instance lock ONCE
+# here, BEFORE any processing and BEFORE the crash-restart loop, so the same PID
+# keeps the lock across self-restarts. If another live bridge holds it, refuse to
+# start (exit non-zero) WITHOUT processing anything. Tests override
+# SPRINTAI_BRIDGE_LOCK_FILE to a temp path so they never collide with PID 18724's
+# lock. The cleanup trap (release_singleton_lock) runs on SIGINT/SIGTERM.
+if ! acquire_singleton_lock; then
+  log "Startup aborted: singleton lock not acquired."
+  rm -f "$PID_FILE"
+  exit 1
+fi
+
 CRASH_TIMES=()
 MAX_CRASHES=3
 CRASH_WINDOW=60

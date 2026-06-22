@@ -1,0 +1,36 @@
+=== Bridge compliance proofs ===
+Workdir: /var/folders/g7/6fv_b6ns3ljdwgxz_qgpxw8m0000gn/T//bridge-proof.aCskOR
+Live bridge PID 18724 status: 18724 (untouched)
+
+Config in effect (temp):
+  LOCK_FILE          = /var/folders/g7/6fv_b6ns3ljdwgxz_qgpxw8m0000gn/T//bridge-proof.aCskOR/bridge.lock
+  PROCESSED_IDS_FILE = /var/folders/g7/6fv_b6ns3ljdwgxz_qgpxw8m0000gn/T//bridge-proof.aCskOR/home/.sprintai-bridge/processed-ids.txt
+  SESSION_DIR        = /var/folders/g7/6fv_b6ns3ljdwgxz_qgpxw8m0000gn/T//bridge-proof.aCskOR/home/.sprintai-bridge/sessions
+  MAX_MSG_AGE_SECONDS= 900
+
+--- (a) singleton lock ---
+ERROR: another bridge instance is already running (PID 4428)
+  PASS: (a1) acquire REFUSED while live foreign lock held (PID 4428) -> non-zero
+  PASS: (a1) foreign lock left intact
+  PASS: (a2) stale lock (dead PID 999990) reclaimed; now owned by 4406
+
+--- (b) dedup: on-disk authority beats stale in-memory cache ---
+  PASS: (b) precondition: id not processed
+  PASS: (b) mark_processed wrote-through to disk
+  PASS: (b) in-memory cache var cleared (simulated stale snapshot)
+  PASS: (b) is_processed=TRUE from on-disk authority despite empty in-memory cache (NO re-process)
+
+--- (c) age-guard fail-closed ---
+  PASS: (c) empty: created_at='' -> skip
+  PASS: (c) garbage: created_at='not-a-timestamp' -> skip
+  PASS: (c) 16min-old: created_at='2026-06-22T18:48:38.000Z' -> skip
+  PASS: (c) 5min-old: created_at='2026-06-22T18:59:38.000Z' -> allow
+
+--- (d) Erin-replay scenario (dedup + age guard combined) ---
+  PASS: (d) Erin replay (>15min, already-processed, stale cache) => NO (already processed - on-disk)
+  PASS: (d) age-guard ALONE blocks the 42min-old replay (defense-in-depth)
+
+=== RESULTS: 13 passed, 0 failed ===
+Live bridge PID 18724 status after tests: 18724 (untouched)
+Real ~/.sprintai-bridge NOT touched by this harness (used /var/folders/g7/6fv_b6ns3ljdwgxz_qgpxw8m0000gn/T//bridge-proof.aCskOR).
+ALL PROOFS PASSED
