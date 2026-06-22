@@ -1,0 +1,66 @@
+=== Conversation-Judge PIPELINE proof (no LLM/DB) ===
+
+--- Idempotency (transcript hash) ---
+[PASS] same transcript → identical hash (skip re-judge) :: 237dee6cdd98
+[PASS] changed transcript → different hash (re-judge allowed) :: 237dee6c vs 69dd3c5f
+
+--- Digest assembly (severity-ordered; MINOR excluded from immediate) ---
+[PASS] immediate digest built
+[PASS] worst-first: first line is CRITICAL :: phantom_payment_link
+[PASS] second line is MAJOR :: wrong_hours
+[PASS] MINOR excluded from immediate digest
+[PASS] contains shop name
+[PASS] contains check
+[PASS] contains evidence snippet
+[PASS] contains transcript ref
+[PASS] eval_ids only for crit+major
+
+  --- IMMEDIATE DIGEST ARTIFACT ---
+  🏁 *Sprint Conversation Judge* — 2 new issue(s)
+  
+  🔴 *CRITICAL* — Blue Wave Sushi
+     check: `phantom_payment_link`
+     claimed link, none exists
+     transcript: https://app.getsprintai.com/conversations/conv-crit
+  
+  🟠 *MAJOR* — Nonna's Brick
+     check: `wrong_hours`
+     said closed but open
+     transcript: https://app.getsprintai.com/conversations/conv-major
+
+--- MINOR daily rollup ---
+[PASS] minor rollup built
+[PASS] rollup contains only minor
+
+  --- MINOR ROLLUP ARTIFACT ---
+  🏁 *Sprint Judge — daily quality rollup (MINOR)*
+  
+  🟡 Nonna's Brick — `cold_tone` ×1
+
+--- Quiet on clean ---
+[PASS] no immediate digest when only MINOR present (quiet)
+[PASS] no immediate digest when zero rows (quiet)
+
+--- Safe-degrade (LLM gibberish) ---
+[PASS] gibberish parses to null (→ eval errored, sweep continues)
+[PASS] valid JSON with trailing prose still parses (hardened)
+[PASS] maxSeverityOf empty → null
+
+--- Auto-fix seam (must be OFF) ---
+[PASS] autofixEnabled() false by default
+[PASS] maybeAutoFix does NOT dispatch when disabled
+[judge-autofix] EVAL_AUTOFIX_ENABLED=true and CRITICAL candidates present, but dispatch is not wired (seam only). No task created. {
+  conversationId: "conv-crit",
+  shop: "Blue Wave Sushi",
+  candidates: [
+    {
+      check: "phantom_payment_link",
+      severity: "critical",
+      evidence_message_ids: [ "a2" ],
+      explanation: "x"
+    }
+  ]
+}
+[PASS] even when flag=true, no real dispatch (seam only) :: enabled-but-dispatch-not-wired (seam only)
+
+=== OVERALL: ALL PASS ===

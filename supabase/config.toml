@@ -56,5 +56,12 @@ verify_jwt = false  # Called from public dashboard
 [functions.admin-api]
 verify_jwt = true   # Requires admin JWT
 
+[functions.eval-sweep]
+verify_jwt = false  # Conversation Judge worker. Invoked by the scheduled sweep
+                    # (cron / Supabase scheduled function) with the service-role
+                    # key, NOT by end users. Async, read-only, out-of-band — it
+                    # NEVER sits in the chat-sms live path. Schedule (set at
+                    # deploy, e.g. every 5 min):  */5 * * * *
+
 [functions.merchant-auth]
 verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC session token

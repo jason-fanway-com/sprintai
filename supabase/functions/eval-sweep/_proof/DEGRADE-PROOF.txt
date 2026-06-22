@@ -1,0 +1,10 @@
+=== Safe-degrade proof (LLM down) ===
+
+  conv c1-down: judge errored (error sending request for url (http://12…) → eval verdict='errored', continue
+  conv c2-ok: judged ok → continue
+[PASS] LLM-down call throws after retries (does not hang/crash)
+[PASS] sweep CONTINUES past the errored conversation :: swept 2/2
+[PASS] worker writes verdict='errored' on failure (logic path exercised)
+[PASS] parseJudgeJson on empty/garbage → null (→ errored, never a fake verdict)
+
+=== OVERALL: ALL PASS ===

@@ -1,0 +1,18 @@
+== APPLY UP (1st) ==
+columns: id, tenant_id, shop_id, conversation_id, judged_at, transcript_hash, model, verdict, max_severity, flags, raw_judge_output, cost_cents, notified_at, created_at
+[PASS] table created with expected cols
+== APPLY UP (2nd, must be no-op) ==
+[PASS] re-running UP is a no-op (no error)
+indexes: conversation_evals_pkey, idx_conversation_evals_conversation, idx_conversation_evals_pending_notify, idx_conversation_evals_tenant_sev_judged, uq_conversation_evals_conv_hash
+[PASS] 4 expected indexes present
+policies: Admins have full access to conversation_evals | Tenants can view their own conversation_evals
+[PASS] 2 RLS policies present
+[PASS] row inserted (FKs resolve)
+[PASS] unique (conversation_id, transcript_hash) enforced
+[PASS] verdict CHECK constraint enforced
+== APPLY DOWN ==
+[PASS] table dropped by DOWN
+== APPLY DOWN again (idempotent) ==
+[PASS] re-running DOWN is a no-op (no error)
+
+=== OVERALL: ALL PASS ===

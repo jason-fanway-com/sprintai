@@ -1,0 +1,25 @@
+=== Conversation-Judge REAL-LLM rubric proof ===
+model: claude-haiku-4-5
+
+--- Rubric fires on known-bad + clean (Spec §5) ---
+[PASS] rubric::clean_order maxSev=null :: verdict=clean (want clean) | flags=0
+[PASS] rubric::phantom_link maxSev=critical :: verdict=flagged (want flagged) | check=phantom_payment_link present=true sev=critical(want critical) evidence=a2
+        flags: [{"check":"phantom_payment_link","severity":"critical","evidence_message_ids":["a2"],"explanation":"Assistant claimed a payment link was sent, but GROUND TRUTH shows has_real_checkout_session=false and payment_status=pending, indicating no actual Stripe checkout session exists."}]
+[PASS] rubric::wrong_total maxSev=critical :: verdict=flagged (want flagged) | check=wrong_total present=true sev=critical(want critical) evidence=a2
+        flags: [{"check":"wrong_total","severity":"critical","evidence_message_ids":["a2"],"explanation":"Stated total of $30.00 does not match the sum of cart items: Pepperoni Pizza ($16.00) + Garlic Knots ($6.00) = $22.00."}]
+[PASS] rubric::invented_item maxSev=critical :: verdict=flagged (want flagged) | check=invented_item present=true sev=critical(want critical) evidence=a1,a2
+        flags: [{"check":"invented_item","severity":"critical","evidence_message_ids":["a1","a2"],"explanation":"Assistant offered Buffalo Wings at $11.00, but this item does not exist on Nonna's Brick's authoritative menu."}]
+[PASS] rubric::cold_tone maxSev=minor :: verdict=flagged (want flagged) | check=cold_tone present=true sev=minor(want minor) evidence=a1,a2
+        flags: [{"check":"cold_tone","severity":"minor","evidence_message_ids":["a1","a2"],"explanation":"Assistant replies are telegraphic and robotic (\"Margherita. 14. Pay link sent.\" and \"Confirmed.\") with no warmth or greeting despite customer's friendly, excited opening tone."}]
+
+--- Quiet on clean batch (zero flags) ---
+[PASS] cleanbatch::clean_order maxSev=null :: verdict=clean (want clean) | flags=0
+[PASS] cleanbatch::clean_question maxSev=null :: verdict=clean (want clean) | flags=0
+[PASS] cleanbatch::clean_two_item maxSev=null :: verdict=clean (want clean) | flags=0
+
+--- Tenant isolation: T1 conversation ordering T2's sushi, judged with T1 ground truth only ---
+[PASS] isolation::isolation_probe_t1_orders_sushi maxSev=critical :: verdict=flagged (want flagged) | check=invented_item present=true sev=critical(want critical) evidence=a1
+        flags: [{"check":"invented_item","severity":"critical","evidence_message_ids":["a1"],"explanation":"Assistant offered 'Spicy Tuna Roll' at $8.00, but this item does not exist on Nonna's Brick (NJB)'s menu."}]
+  (If T2's sushi menu had leaked into T1's ground truth, this would be CLEAN. It must FLAG invented_item.)
+
+=== OVERALL: ALL PASS ===

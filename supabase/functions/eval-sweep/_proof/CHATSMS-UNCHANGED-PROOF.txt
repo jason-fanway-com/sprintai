@@ -1,0 +1,46 @@
+=== chat-sms ZERO-COUPLING proof (Spec 06 §5) ===
+Branch: feat/conversation-judge  Base: origin/main (fb0718c)
+
+--- git diff stat for the entire live order path vs origin/main ---
+(empty above = the live path is byte-for-byte UNCHANGED by this branch)
+
+--- chat-sms md5 on this branch ---
+MD5 (supabase/functions/chat-sms/index.ts) = ce3896d736f69b78bc889ffa17420d92
+--- chat-sms md5 on origin/main ---
+ce3896d736f69b78bc889ffa17420d92
+
+--- All files this branch changed/added (NONE in chat-sms) ---
+admin-dashboard/dist/assets/index-C0hsZubO.css
+admin-dashboard/dist/assets/index-DpqbIs_e.js
+admin-dashboard/dist/index.html
+admin-dashboard/src/App.tsx
+admin-dashboard/src/components/Layout.tsx
+supabase/config.toml
+admin-dashboard/dist/assets/index-C0hsZubO.css
+admin-dashboard/dist/assets/index-DpqbIs_e.js
+admin-dashboard/dist/index.html
+admin-dashboard/src/App.tsx
+admin-dashboard/src/components/Layout.tsx
+supabase/config.toml
+admin-dashboard/dist/assets/index-Dxu9Dsok.css
+admin-dashboard/dist/assets/index-DzoKJ4mU.js
+admin-dashboard/src/pages/ConversationQuality.tsx
+deno.lock
+supabase/functions/_shared/judge-autofix.ts
+supabase/functions/_shared/judge-notify.ts
+supabase/functions/_shared/judge-rubric.ts
+supabase/functions/eval-sweep/
+supabase/migrations/014_conversation_evals.down.sql
+supabase/migrations/014_conversation_evals.sql
+
+--- grep: does the judge import or call chat-sms? (want NONE) ---
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:1:=== chat-sms ZERO-COUPLING proof (Spec 06 §5) ===
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:7:--- chat-sms md5 on this branch ---
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:8:MD5 (supabase/functions/chat-sms/index.ts) = ce3896d736f69b78bc889ffa17420d92
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:9:--- chat-sms md5 on origin/main ---
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:12:--- All files this branch changed/added (NONE in chat-sms) ---
+supabase/functions/eval-sweep/_proof/CHATSMS-UNCHANGED-PROOF.txt:36:--- grep: does the judge import or call chat-sms? (want NONE) ---
+supabase/functions/eval-sweep/index.ts:17: * LLM is down or this whole function crashes, the diner bot (chat-sms) is
+supabase/functions/_shared/judge-rubric.ts:91:  placed, but the GROUND TRUTH shows NO real Stripe checkout session exists for
+supabase/functions/_shared/judge-rubric.ts:139:  /** True iff a real Stripe checkout session exists for this conversation. */
+=== END ===
