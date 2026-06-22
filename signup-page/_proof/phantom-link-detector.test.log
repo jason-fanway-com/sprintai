@@ -22,6 +22,17 @@ PASS  caught=true  "I've placed your order."
 PASS  caught=true  "I placed your order, payment link incoming."
 PASS  caught=true  "Order's in! Link on the way."
 PASS  caught=true  "Your order is on its way."
+PASS  caught=true  "Order placed!"
+PASS  caught=true  "Order confirmed!"
+PASS  caught=true  "Order submitted!"
+PASS  caught=true  "Order complete!"
+PASS  caught=true  "Order completed!"
+PASS  caught=true  "Done! Order placed."
+PASS  caught=true  "order placed 🎉"
+PASS  caught=true  "Great news — order confirmed."
+PASS  caught=true  "Your order placed successfully."
+PASS  caught=true  "order completed, see you at pickup!"
+PASS  caught=true  "OK, order submitted to the kitchen."
 
 === SHOULD NOT CATCH (normal chatter) ===
 PASS  caught=false  "Want that toasted?"
@@ -39,6 +50,14 @@ PASS  caught=false  "Sure! What flavors would you like in your dozen?"
 PASS  caught=false  "Your subtotal is $9.00. Anything else before we wrap up?"
 PASS  caught=false  "Got your order! What name should I put it under for pickup?"
 PASS  caught=false  "Almost there! Your bundle still needs a few more picks."
+PASS  caught=false  "Here's your order so far"
+PASS  caught=false  "What would you like to order?"
+PASS  caught=false  "Review your order"
+PASS  caught=false  "Complete your order by tapping the link"
+PASS  caught=false  "In order to pay, tap below"
+PASS  caught=false  "your order so far is $9.95"
+PASS  caught=false  "To complete your order, just say confirm."
+PASS  caught=false  "What order would you like them in?"
 
-TOTAL: 38 cases, 0 failures
+TOTAL: 57 cases, 0 failures
 RESULT: PASS

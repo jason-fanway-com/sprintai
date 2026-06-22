@@ -28,6 +28,7 @@ const PAYMENT_CLAIM_PATTERNS = [
   /\b(?:your )?order (?:is|has been|was) (?:placed|submitted|confirmed|complete|completed|in|on its way)\b/,
   /\b(?:i(?:'ve| have) )?(?:placed|submitted|confirmed|sent) (?:your |the )?order\b/,
   /\border(?:'s| is) (?:placed|in|confirmed|all set|on the way)\b/,
+  /\border (?:placed|confirmed|submitted|complete|completed)\b/,
   /\bready (?:to|for) (?:pay|payment|checkout)\b.*\b(?:link|text|email|tap|click)\b/,
   /\bproceed to (?:pay|payment|checkout)\b.*\b(?:link|text|email)\b/,
 ];
@@ -69,6 +70,19 @@ const SHOULD_CATCH = [
   "I placed your order, payment link incoming.",
   "Order's in! Link on the way.",
   "Your order is on its way.",
+  // Bare past-participle completion claims with NO copula (the residual hole).
+  "Order placed!",
+  "Order confirmed!",
+  "Order submitted!",
+  "Order complete!",
+  "Order completed!",
+  "Done! Order placed.",
+  // Adversarial completion variants.
+  "order placed \ud83c\udf89",
+  "Great news \u2014 order confirmed.",
+  "Your order placed successfully.",
+  "order completed, see you at pickup!",
+  "OK, order submitted to the kitchen.",
 ];
 
 // MUST NOT be caught (normal building / review chatter — false positives here
@@ -89,6 +103,16 @@ const SHOULD_NOT_CATCH = [
   "Your subtotal is $9.00. Anything else before we wrap up?",
   "Got your order! What name should I put it under for pickup?", // honest fallback copy
   "Almost there! Your bundle still needs a few more picks.",     // honest fallback copy
+  // NO-FALSE-POSITIVE set for the new bare-participle pattern: "order" + a
+  // verb in the WRONG position (instruction / review / menu-building chatter).
+  "Here's your order so far",
+  "What would you like to order?",
+  "Review your order",
+  "Complete your order by tapping the link",
+  "In order to pay, tap below",
+  "your order so far is $9.95",
+  "To complete your order, just say confirm.",
+  "What order would you like them in?",
 ];
 
 // ── Run ─────────────────────────────────────────────────────────────────────

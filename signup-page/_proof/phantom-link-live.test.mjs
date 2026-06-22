@@ -44,6 +44,7 @@ const PAYMENT_CLAIM_PATTERNS = [
   /\b(?:your )?order (?:is|has been|was) (?:placed|submitted|confirmed|complete|completed|in|on its way)\b/,
   /\b(?:i(?:'ve| have) )?(?:placed|submitted|confirmed|sent) (?:your |the )?order\b/,
   /\border(?:'s| is) (?:placed|in|confirmed|all set|on the way)\b/,
+  /\border (?:placed|confirmed|submitted|complete|completed)\b/,
   /\bready (?:to|for) (?:pay|payment|checkout)\b.*\b(?:link|text|email|tap|click)\b/,
   /\bproceed to (?:pay|payment|checkout)\b.*\b(?:link|text|email)\b/,
 ];

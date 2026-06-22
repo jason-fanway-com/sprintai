@@ -898,6 +898,11 @@ export const PAYMENT_CLAIM_PATTERNS: RegExp[] = [
   /\b(?:your )?order (?:is|has been|was) (?:placed|submitted|confirmed|complete|completed|in|on its way)\b/,
   /\b(?:i(?:'ve| have) )?(?:placed|submitted|confirmed|sent) (?:your |the )?order\b/,
   /\border(?:'s| is) (?:placed|in|confirmed|all set|on the way)\b/,
+  // Bare past-participle completion claims with no copula:
+  // "Order placed!", "Order confirmed!", "Order submitted!", "Order complete[d]!".
+  // The verb FOLLOWS "order", so the instruction "complete your order" (verb
+  // before noun) does NOT match — only the completion sense fires.
+  /\border (?:placed|confirmed|submitted|complete|completed)\b/,
   // Generic payment-ready claims
   /\bready (?:to|for) (?:pay|payment|checkout)\b.*\b(?:link|text|email|tap|click)\b/,
   /\bproceed to (?:pay|payment|checkout)\b.*\b(?:link|text|email)\b/,
