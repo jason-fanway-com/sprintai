@@ -80,6 +80,12 @@ Deno.serve(async (req: Request) => {
     if (refundAmount != null) params.amount = refundAmount;
 
     // FULL refund returns the $0.99; PARTIAL keeps it.
+    // NOTE: do NOT add `reverse_transfer` here. These are DIRECT charges
+    // (Stripe-Account header, no transfer_data) so NO transfer exists to
+    // reverse — Stripe rejects reverse_transfer with "does not have an
+    // associated transfer". Proven in TEST mode 2026-06-22; see
+    // REFUND-REVERSE-TRANSFER-FINDING.md. reverse_transfer is only for
+    // destination/separate charges, which this model intentionally does not use.
     if (isFull) params.refund_application_fee = true;
 
     const refund = await stripe.refunds.create(
