@@ -26,7 +26,33 @@
   to   = "/.netlify/functions/sms-webhook"
   status = 200
 
-# NOTE: the legacy /admin CRM and /dashboard/* admin SPA redirects were removed.
-# Those are INTERNAL tools and are intentionally no longer served from the
-# public root origin (they are not copied into ./public by the assembler). The
-# admin dashboard ships from its OWN Netlify site (admin-dashboard/, publish=dist).
+# Admin dashboard (incl. Command Center) is a SEPARATE, login-gated Netlify
+# site (sprintai-chat-admin). It is intentionally NOT copied into ./public.
+# These proxy rewrites let staff reach the gated admin via getsprintai.com/admin
+# WITHOUT putting any admin source on the root origin: Netlify proxies the
+# request to the external admin site at request time. Auth still happens on the
+# admin app (Supabase login) — the proxy exposes nothing that login doesn't.
+[[redirects]]
+  from = "/admin"
+  to = "https://sprintai-chat-admin.netlify.app/dashboard"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/admin/*"
+  to = "https://sprintai-chat-admin.netlify.app/:splat"
+  status = 200
+  force = true
+
+# The admin SPA loads its bundle from absolute /dashboard/* and /vite.svg.
+# Proxy those so assets resolve when reached via getsprintai.com.
+[[redirects]]
+  from = "/dashboard/*"
+  to = "https://sprintai-chat-admin.netlify.app/dashboard/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/vite.svg"
+  to = "https://sprintai-chat-admin.netlify.app/vite.svg"
+  status = 200
