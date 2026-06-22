@@ -104,10 +104,23 @@ async function spentTodayCents(supabase: SupabaseClient): Promise<number> {
 // Loads ONLY the given conversation's own tenant/shop data. The shop is derived
 // from this conversation's order_cart (or its tenant's single shop). A
 // conversation's ground truth is NEVER built from another tenant's menu.
-async function loadGroundTruth(
+//
+// Returns the JudgeGroundTruth PLUS a resolution signal used to annotate eval
+// CONFIDENCE (orthogonal to severity): `confidence` is 'high' iff a real, in-
+// tenant menu with >=1 item was loaded for this conversation; otherwise 'low'
+// (no resolvable shop, or a shop with no menu items). This does NOT change what
+// the judge flags — it only labels how much menu ground truth backed the eval.
+interface GroundTruthResult {
+  ground: JudgeGroundTruth;
+  shopId: string | null;
+  menuLoaded: boolean;
+  confidence: "high" | "low";
+}
+
+export async function loadGroundTruth(
   supabase: SupabaseClient,
   conv: { id: string; tenant_id: string },
-): Promise<JudgeGroundTruth> {
+): Promise<GroundTruthResult> {
   // shop + cart state for THIS conversation
   const { data: cart } = await supabase
     .from("order_carts")
@@ -135,6 +148,7 @@ async function loadGroundTruth(
   let timezone = "America/New_York";
   let openHours: JudgeGroundTruth["open_hours"] = {};
   let menu: JudgeGroundTruth["menu"] = [];
+  let menuLoaded = false;
 
   if (shopId) {
     const { data: shop } = await supabase
@@ -165,6 +179,9 @@ async function loadGroundTruth(
           .eq("active", true)
           .order("display_order", { ascending: true });
         menu = (items ?? []) as JudgeGroundTruth["menu"];
+        // Real menu ground truth = an in-tenant shop whose latest menu has >=1
+        // active item. Empty/absent menu stays low-confidence.
+        menuLoaded = menu.length > 0;
       }
     } else if (shop && shop.tenant_id !== conv.tenant_id) {
       console.error(
@@ -174,14 +191,24 @@ async function loadGroundTruth(
     }
   }
 
+  // Confidence: HIGH only when a real, in-tenant menu was actually loaded for
+  // this conversation. shopId may be non-null but still yield no menu items →
+  // that is LOW (we had no menu ground truth to judge invented_item against).
+  const confidence: "high" | "low" = (shopId && menuLoaded) ? "high" : "low";
+
   return {
-    shop_name: shopName,
-    timezone,
-    open_hours: openHours,
-    menu,
-    has_checkout_session: Boolean(cart?.stripe_checkout_session_id),
-    cart_phase: cart?.phase ?? null,
-    payment_status: cart?.payment_status ?? null,
+    ground: {
+      shop_name: shopName,
+      timezone,
+      open_hours: openHours,
+      menu,
+      has_checkout_session: Boolean(cart?.stripe_checkout_session_id),
+      cart_phase: cart?.phase ?? null,
+      payment_status: cart?.payment_status ?? null,
+    },
+    shopId,
+    menuLoaded,
+    confidence,
   };
 }
 
@@ -282,7 +309,15 @@ async function callJudge(
 // A conversation is judgeable when it is "done": its latest cart phase is
 // terminal (confirmed/expired) OR it has been idle > IDLE_MINUTES. We then skip
 // any conversation that already has a live eval for its current transcript hash.
-async function selectCandidates(
+//
+// SELECTION ORDER (within the SAME cap): cart-bearing (shop-resolvable)
+// conversations are judged FIRST, then cart-less ones. Cart-less conversations
+// are NOT skipped — they are still judged if cap/budget remains; they just sort
+// after. This pulls real, menu-backed conversations to the front so the per-
+// sweep cap spends its budget on high-confidence evals first. Deterministic:
+// a stable partition preserves each group's existing relative order so repeated
+// sweeps are reproducible. The cap is unchanged.
+export async function selectCandidates(
   supabase: SupabaseClient,
 ): Promise<Array<{ id: string; tenant_id: string }>> {
   const idleCutoff = new Date(Date.now() - IDLE_MINUTES * 60_000).toISOString();
@@ -293,6 +328,7 @@ async function selectCandidates(
     .select("id, tenant_id, last_message_at")
     .lt("last_message_at", idleCutoff)
     .order("last_message_at", { ascending: true })
+    .order("id", { ascending: true })
     .limit(MAX_CONVERSATIONS_PER_SWEEP * 3);
 
   // Terminal-phase conversations (confirmed/expired carts), even if recent.
@@ -302,6 +338,7 @@ async function selectCandidates(
     .in("phase", ["confirmed", "expired"])
     .limit(MAX_CONVERSATIONS_PER_SWEEP * 3);
 
+  // Insertion order here defines the stable base order of the candidate set.
   const ids = new Map<string, { id: string; tenant_id: string }>();
   for (const c of idle ?? []) ids.set(c.id, { id: c.id, tenant_id: c.tenant_id });
 
@@ -314,7 +351,34 @@ async function selectCandidates(
     for (const c of convs ?? []) ids.set(c.id, { id: c.id, tenant_id: c.tenant_id });
   }
 
-  return [...ids.values()].slice(0, MAX_CONVERSATIONS_PER_SWEEP);
+  const candidates = [...ids.values()];
+  if (candidates.length === 0) return [];
+
+  // Which candidate conversations have ANY cart at all (→ shop-resolvable)?
+  // A cart-bearing conversation can resolve a shop (and thus a menu) and is
+  // therefore eligible for high-confidence ground truth. We prioritize these.
+  const cartBearing = new Set<string>();
+  const candidateIds = candidates.map((c) => c.id);
+  // Chunk the IN() to stay well under URL/row limits on large sweeps.
+  const CHUNK = 200;
+  for (let i = 0; i < candidateIds.length; i += CHUNK) {
+    const slice = candidateIds.slice(i, i + CHUNK);
+    const { data: carts } = await supabase
+      .from("order_carts")
+      .select("conversation_id")
+      .in("conversation_id", slice);
+    for (const c of carts ?? []) cartBearing.add(c.conversation_id);
+  }
+
+  // Stable partition: cart-bearing first (in their existing relative order),
+  // then cart-less (in their existing relative order). No comparator that could
+  // reshuffle equal keys non-deterministically. THEN apply the (unchanged) cap.
+  const prioritized = [
+    ...candidates.filter((c) => cartBearing.has(c.id)),
+    ...candidates.filter((c) => !cartBearing.has(c.id)),
+  ];
+
+  return prioritized.slice(0, MAX_CONVERSATIONS_PER_SWEEP);
 }
 
 // ─── Sweep ──────────────────────────────────────────────────────────────────────
@@ -330,7 +394,7 @@ interface SweepReport {
   digest: { stubbed: boolean; sent: boolean; lines: number } | null;
 }
 
-async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
+export async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
   const report: SweepReport = {
     scanned: 0, judged: 0, flagged: 0, clean: 0, errored: 0,
     skipped_unchanged: 0, spend_cents: 0, ceiling_hit: false, digest: null,
@@ -375,7 +439,13 @@ async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
       continue;
     }
 
-    const ground = await loadGroundTruth(supabase, conv);
+    const gt = await loadGroundTruth(supabase, conv);
+    const ground = gt.ground;
+    // Confidence is decided by ground-truth resolution, independent of the
+    // judge's verdict/severity. An errored eval (judge couldn't complete) is
+    // labeled by the SAME ground-truth signal; if no menu was resolvable it is
+    // 'low'. This never suppresses or downgrades a flag.
+    const confidence: "high" | "low" = gt.confidence;
 
     let verdict: "clean" | "flagged" | "errored" = "clean";
     let flags: EvalFlag[] = [];
@@ -404,12 +474,13 @@ async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
       .from("conversation_evals")
       .insert({
         tenant_id: conv.tenant_id,
-        shop_id: null, // set via ground-truth shop below if resolved
+        shop_id: gt.shopId, // resolved in-tenant shop (null when none resolvable)
         conversation_id: conv.id,
         transcript_hash: hash,
         model: `${JUDGE_MODEL}/${RUBRIC_VERSION}`,
         verdict,
         max_severity: maxSev,
+        confidence, // 'high' iff real menu ground truth was loaded; else 'low'
         flags,
         raw_judge_output: raw,
         cost_cents: Number(costCents.toFixed(4)),
@@ -430,7 +501,7 @@ async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
       newlyFlaggedRows.push({
         id: inserted?.id ?? "",
         tenant_id: conv.tenant_id,
-        shop_id: null,
+        shop_id: gt.shopId,
         conversation_id: conv.id,
         shop_name: ground.shop_name,
         max_severity: maxSev,

@@ -18,6 +18,8 @@ interface EvalFlag {
   explanation: string
 }
 
+type Confidence = 'high' | 'low'
+
 interface EvalRow {
   id: string
   tenant_id: string
@@ -25,6 +27,7 @@ interface EvalRow {
   judged_at: string
   verdict: 'clean' | 'flagged' | 'errored'
   max_severity: Severity | null
+  confidence: Confidence
   flags: EvalFlag[]
   model: string
 }
@@ -45,6 +48,9 @@ const sevBadge: Record<Severity, string> = {
 export default function ConversationQuality() {
   const [tenantFilter, setTenantFilter] = useState<string>('all')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  // Low-confidence evals (no menu ground truth) are advisory, not alarming.
+  // Shown by default but de-emphasized; this toggle hides them entirely.
+  const [showLowConfidence, setShowLowConfidence] = useState<boolean>(true)
 
   const { data: tenants } = useQuery<Tenant[]>({
     queryKey: ['cq-tenants'],
@@ -59,12 +65,20 @@ export default function ConversationQuality() {
     queryFn: async () => {
       let q = supabase
         .from('conversation_evals')
-        .select('id, tenant_id, conversation_id, judged_at, verdict, max_severity, flags, model')
+        .select('id, tenant_id, conversation_id, judged_at, verdict, max_severity, confidence, flags, model')
+        // DB-side: high-confidence first (text asc puts 'high' before 'low'),
+        // then newest first. Final worst-first ordering is applied client-side.
+        .order('confidence', { ascending: true })
         .order('judged_at', { ascending: false })
         .limit(500)
       if (tenantFilter !== 'all') q = q.eq('tenant_id', tenantFilter)
       const { data } = await q
-      return (data ?? []) as EvalRow[]
+      // Default 'high' for any legacy row written before the confidence column
+      // existed, so the UI never shows undefined.
+      return ((data ?? []) as EvalRow[]).map((r) => ({
+        ...r,
+        confidence: (r.confidence ?? 'high') as Confidence,
+      }))
     },
   })
 
@@ -75,10 +89,19 @@ export default function ConversationQuality() {
   const flaggedCount = rows.filter((r) => r.verdict === 'flagged').length
   const erroredCount = rows.filter((r) => r.verdict === 'errored').length
 
-  // Flagged list: worst severity first, then newest first.
+  const lowConfCount = rows.filter((r) => r.verdict === 'flagged' && r.confidence === 'low').length
+
+  // Flagged list: HIGH-confidence first, then worst severity first, then newest
+  // first. Confidence is orthogonal to severity — we never reorder away a real
+  // CRITICAL; high-confidence CRITICALs simply float above low-confidence ones.
   const flagged = rows
     .filter((r) => r.verdict === 'flagged')
+    .filter((r) => showLowConfidence || r.confidence === 'high')
     .sort((a, b) => {
+      // high before low
+      const ca = a.confidence === 'high' ? 1 : 0
+      const cb = b.confidence === 'high' ? 1 : 0
+      if (cb !== ca) return cb - ca
       const sa = a.max_severity ? SEV_RANK[a.max_severity] : 0
       const sb = b.max_severity ? SEV_RANK[b.max_severity] : 0
       if (sb !== sa) return sb - sa
@@ -94,16 +117,27 @@ export default function ConversationQuality() {
             Automated judge results — flagged conversations surfaced worst-first.
           </p>
         </div>
-        <select
-          value={tenantFilter}
-          onChange={(e) => setTenantFilter(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="all">All tenants</option>
-          {tenants?.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-600 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showLowConfidence}
+              onChange={(e) => setShowLowConfidence(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Show low-confidence{lowConfCount > 0 ? ` (${lowConfCount})` : ''}
+          </label>
+          <select
+            value={tenantFilter}
+            onChange={(e) => setTenantFilter(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="all">All tenants</option>
+            {tenants?.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Counts */}
@@ -163,13 +197,23 @@ export default function ConversationQuality() {
                         </button>
                       </td>
                       <td className="px-4 py-3">
-                        {r.max_severity && (
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${sevBadge[r.max_severity]}`}>
-                            {r.max_severity.toUpperCase()}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {r.max_severity && (
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${sevBadge[r.max_severity]}`}>
+                              {r.max_severity.toUpperCase()}
+                            </span>
+                          )}
+                          {r.confidence === 'low' && (
+                            <span
+                              className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-400 border border-gray-200"
+                              title="No menu ground truth was available for this conversation, so this flag is advisory."
+                            >
+                              low confidence — no menu ground truth
+                            </span>
+                          )}
+                        </div>
                       </td>
-                      <td className="px-4 py-3">{tenantName(r.tenant_id)}</td>
+                      <td className={`px-4 py-3 ${r.confidence === 'low' ? 'text-gray-400' : ''}`}>{tenantName(r.tenant_id)}</td>
                       <td className="px-4 py-3 text-gray-600">
                         {r.flags.map((f) => f.check).join(', ')}
                       </td>

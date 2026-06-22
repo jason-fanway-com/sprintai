@@ -1,0 +1,27 @@
+=== 015_eval_confidence MIGRATION proof (pglite, throwaway) ===
+
+-- baseline (014 only): confidence absent --
+[PASS] confidence column absent before 015
+
+== APPLY 015 UP (1st) ==
+[PASS] confidence column added
+[PASS] sort index added
+[PASS] CHECK constraint added
+[PASS] existing/new row defaults confidence='high' :: high
+[PASS] explicit confidence='low' accepted
+[PASS] CHECK rejects confidence not in (high,low)
+
+== APPLY 015 UP (2nd, must be no-op) ==
+[PASS] re-running UP is a no-op (no error)
+[PASS] column still present after re-up
+
+== APPLY 015 DOWN ==
+[PASS] confidence column dropped by DOWN
+[PASS] sort index dropped by DOWN
+[PASS] CHECK constraint dropped by DOWN
+[PASS] base conversation_evals table untouched by 015 DOWN
+
+== APPLY 015 DOWN again (idempotent) ==
+[PASS] re-running DOWN is a no-op (no error)
+
+=== OVERALL: ALL PASS ===

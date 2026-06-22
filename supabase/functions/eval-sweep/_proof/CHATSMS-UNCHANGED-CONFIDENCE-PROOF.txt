@@ -1,0 +1,7 @@
+=== CHATSMS-UNCHANGED PROOF (2026-06-22T20:47:30Z) ===
+--- git diff origin/main -- supabase/functions/chat-sms/ (expect EMPTY) ---
+[diff byte count: 0]
+--- md5 comparison ---
+working tree chat-sms/index.ts: 8d93baba4e5dd68674aa2424d750f91a
+origin/main   chat-sms/index.ts: 8d93baba4e5dd68674aa2424d750f91a
+RESULT: chat-sms IDENTICAL to origin/main

@@ -1,0 +1,31 @@
+=== eval-sweep CONFIDENCE / SELECTION / NO-SUPPRESSION proof ===
+
+--- (A) CONFIDENCE LOGIC (loadGroundTruth) ---
+[PASS] cart-bearing conv with real menu → confidence='high' :: shopId=22222222-2222-2222-2222-222222222222 menuLoaded=true
+[PASS] high case actually loaded menu items
+[PASS] cart-less conv (no shop/menu) → confidence='low' :: shopId=null menuLoaded=false
+[PASS] low case has no menu ground truth
+
+--- (B) SELECTION ORDER (cart-bearing first; cap unchanged) ---
+[PASS] cap respected (<= 50) :: got 50
+[PASS] selected exactly the cap (60 candidates > cap) :: got 50
+[PASS] PARTITION: every cart-bearing precedes every cart-less :: lastCb=19 firstCl=20
+[PASS] all 20 cart-bearing selected (none dropped by cap) :: cb=20
+[PASS] cart-less NOT skipped entirely (fills remaining cap) :: cl=30
+[PASS] cap truncation falls on cart-less tail only
+[PASS] selection is deterministic (stable across runs)
+
+--- (C) NO SUPPRESSION (real invented_item stays CRITICAL/high) ---
+[PASS] eval was stored
+[PASS] verdict flagged (not hidden) :: flagged
+[PASS] max_severity CRITICAL (not downgraded) :: critical
+[PASS] invented_item flag present
+[PASS] confidence='high' (real menu ground truth) :: high
+[PASS] shop_id persisted on eval :: 22222222-2222-2222-2222-222222222222
+  sweep report: judged=1 flagged=1 clean=0 errored=0
+
+--- (A2) STORED confidence='low' for cart-less conv via runSweep ---
+[PASS] cart-less eval stored with confidence='low' :: low
+[PASS] cart-less eval shop_id null :: null
+
+=== OVERALL: ALL PASS ===
