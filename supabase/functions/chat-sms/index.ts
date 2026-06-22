@@ -11,6 +11,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
+import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -964,13 +965,15 @@ function emptyTwiml(): Response {
   );
 }
 
-async function smsReply(shop: Shop, toNumber: string, message: string): Promise<Response> {
+// NOTE: currently unused. Kept gated so it can NEVER become an ungated send
+// path: it requires an OutboundContext, same as every other call site.
+async function smsReply(ctx: OutboundContext, shop: Shop, toNumber: string, message: string): Promise<Response> {
   const replyFrom = shop.reply_from_e164 || shop.phone_number_e164;
   if (!replyFrom) {
     console.error("[chat-sms] No reply number configured for shop");
     return emptyTwiml();
   }
-  await sendSmsViaTwilio(replyFrom, toNumber, message);
+  await sendSmsViaTwilio(ctx, replyFrom, toNumber, message);
   return emptyTwiml();
 }
 
@@ -1062,7 +1065,13 @@ async function saveMessage(
 
 // ─── System event handler ────────────────────────────────────────────────────
 
+// STRUCTURAL OUTBOUND WATCHDOG: every customer-facing SMS send goes through
+// the guard. The signature REQUIRES an OutboundContext as its first argument,
+// so a call site cannot reach Twilio without declaring a valid reason. The real
+// network call lives inside guardedSend's `deliver` closure and runs ONLY on
+// ALLOW; on DENY the guard logs CRITICAL and nothing leaves the system.
 async function sendSmsViaTwilio(
+  ctx:        OutboundContext,
   fromNumber: string,
   toNumber:   string,
   message:    string,
@@ -1075,27 +1084,34 @@ async function sendSmsViaTwilio(
     return;
   }
 
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-    {
-      method:  "POST",
-      headers: {
-        "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
-        "Content-Type":  "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID") ?? fromNumber,
-        To: toNumber,
-        Body: message,
-      }),
-    }
-  );
+  const { sent } = await guardedSend({ ...ctx, to: toNumber }, async () => {
+    const res = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      {
+        method:  "POST",
+        headers: {
+          "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
+          "Content-Type":  "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID") ?? fromNumber,
+          To: toNumber,
+          Body: message,
+        }),
+      }
+    );
 
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[chat-sms] Twilio send failed: ${res.status} ${errText}`);
-  } else {
-    console.log(`[chat-sms] SMS sent to ${toNumber}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[chat-sms] Twilio send failed: ${res.status} ${errText}`);
+    } else {
+      console.log(`[chat-sms] SMS sent to ${toNumber}`);
+    }
+  });
+
+  if (!sent) {
+    // Watchdog blocked it. Already logged CRITICAL inside the guard.
+    console.warn(`[chat-sms] OUTBOUND BLOCKED by watchdog (reason=${ctx.reason}); no SMS sent.`);
   }
 }
 
@@ -1265,12 +1281,28 @@ async function handleSystemEvent(
     }
   }
 
+  // ── STRUCTURAL OUTBOUND WATCHDOG: transactional push context ──────────────
+  // The reason here is the system_event itself (payment_confirmed/order_refunded
+  // are the only two that produce a non-empty message and reach this point).
+  // We attach VERIFIED cart state as evidence: payment_status for the receipt,
+  // refunded_cents for the refund. If the cart state does not actually back the
+  // claimed transaction, the guard DENIES and nothing is sent or queued.
+  const txnCtx: OutboundContext = {
+    reason: system_event as OutboundContext["reason"],
+    shopId: shop.id,
+    tenantId: conversation.tenant_id as string,
+    conversationId: conversation.id as string,
+    cartId: order_cart_id,
+    cartPaymentStatus: (cartRow.payment_status as string | null) ?? null,
+    cartRefundedCents: (cartRow.refunded_cents as number | null) ?? null,
+  };
+
   if (conversation.channel === "sms" && conversation.customer_phone) {
     // Direct Twilio SMS delivery
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
-      await sendSmsViaTwilio(shop.phone_number_e164, conversation.customer_phone, message);
+      await sendSmsViaTwilio(txnCtx, shop.phone_number_e164, conversation.customer_phone, message);
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
     // iMessage bridge: extract real phone from "web:imsg-p{digits}-{sessionid}"
@@ -1278,15 +1310,23 @@ async function handleSystemEvent(
     const match = conversation.customer_phone.match(/web:imsg-p(\d+)-/);
     if (match) {
       const realPhone = "+" + match[1];
-      // Delay confirmation 10s so the payment link message always arrives first
-      const sendAfter = new Date(Date.now() + 10_000).toISOString();
-      const { error: qErr } = await supabase
-        .from("outbound_queue")
-        .insert({ to_phone: realPhone, message, send_after: sendAfter });
-      if (qErr) {
-        console.error("[chat-sms] Failed to queue outbound iMessage:", qErr.message);
-      } else {
-        console.log(`[chat-sms] Queued outbound iMessage to ${realPhone}`);
+      // WATCHDOG GATE: only ENQUEUE for the bridge to drain if the same
+      // transactional invariant holds. Fail closed — a cart that is not paid /
+      // not refunded never gets a queued push, so the bridge can't send one.
+      const { sent } = await guardedSend({ ...txnCtx, to: realPhone }, async () => {
+        // Delay confirmation 10s so the payment link message always arrives first
+        const sendAfter = new Date(Date.now() + 10_000).toISOString();
+        const { error: qErr } = await supabase
+          .from("outbound_queue")
+          .insert({ to_phone: realPhone, message, send_after: sendAfter });
+        if (qErr) {
+          console.error("[chat-sms] Failed to queue outbound iMessage:", qErr.message);
+        } else {
+          console.log(`[chat-sms] Queued outbound iMessage to ${realPhone}`);
+        }
+      });
+      if (!sent) {
+        console.warn(`[chat-sms] OUTBOUND QUEUE BLOCKED by watchdog (reason=${txnCtx.reason}); nothing queued.`);
       }
     }
   }
@@ -1316,6 +1356,9 @@ Deno.serve(async (req: Request) => {
   let userMessage:   string;
   let sessionId:     string;
   let channel:       "sms" | "web";
+  // STRUCTURAL OUTBOUND WATCHDOG: ctx for every synchronous SMS reply in this
+  // request. Set for the SMS channel below; web channel never calls Twilio.
+  let inboundReplyCtx: OutboundContext = { reason: "inbound_reply", inboundAtMs: Date.now() };
 
   // ── Parse channel ─────────────────────────────────────────────────────────
   if (isSms) {
@@ -1325,18 +1368,34 @@ Deno.serve(async (req: Request) => {
     const fromNumber = params.get("From") ?? "";
     userMessage  = (params.get("Body") ?? "").trim();
 
+    // ── STRUCTURAL OUTBOUND WATCHDOG: synchronous inbound-reply context ──────
+    // Every SMS send in this handler is a SYNCHRONOUS reply to THIS inbound
+    // webhook. The triggering inbound is the request we're handling right now:
+    // its id is the Twilio MessageSid (fallback synthesized) and its timestamp
+    // is now (we are processing it live, so it is by definition fresh). This
+    // single ctx is passed to every sendSmsViaTwilio call below so the guard can
+    // prove freshness; if it were ever invoked outside a live inbound the
+    // evidence would be absent and the guard would DENY.
+    inboundReplyCtx = {
+      reason: "inbound_reply",
+      to: fromNumber,
+      inboundMessageId:
+        params.get("MessageSid") ?? params.get("SmsMessageSid") ?? `inbound-${crypto.randomUUID()}`,
+      inboundAtMs: Date.now(),
+    };
+
     const upper      = userMessage.toUpperCase().trim();
     const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS.has(upper)) {
-      await sendSmsViaTwilio(toNumber, fromNumber, "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.");
+      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.");
       return emptyTwiml();
     }
     if (upper === "HELP") {
-      await sendSmsViaTwilio(toNumber, fromNumber, "For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.");
+      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.");
       return emptyTwiml();
     }
     if (upper === "START") {
-      await sendSmsViaTwilio(toNumber, fromNumber, "You are now subscribed. Text us to start an order!");
+      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "You are now subscribed. Text us to start an order!");
       return emptyTwiml();
     }
 
@@ -1346,12 +1405,12 @@ Deno.serve(async (req: Request) => {
       .single();
     if (!shopData) {
       console.error("[chat-sms] Shop not found for Twilio number:", toNumber);
-      await sendSmsViaTwilio(toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
+      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
       return emptyTwiml();
     }
     shop = shopData as Shop;
     if (shop.is_paused) {
-      await sendSmsViaTwilio(toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
+      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
       return emptyTwiml();
     }
     customerPhone = fromNumber;
@@ -1414,7 +1473,7 @@ Deno.serve(async (req: Request) => {
     if (convErr || !newConv) {
       console.error("[chat-sms] Failed to create conversation:", convErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
       return jsonError(errMsg, 500);
     }
     conversation = newConv;
@@ -1448,7 +1507,7 @@ Deno.serve(async (req: Request) => {
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
       return jsonError(errMsg, 500);
     }
     cart = newCart as OrderCart;
@@ -1460,7 +1519,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: [], phase: "expired", session_id: sessionId });
   }
 
@@ -1469,7 +1528,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Your order is confirmed and paid. Thank you!";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   if (cart.phase === "checkout") {
@@ -1484,7 +1543,7 @@ Deno.serve(async (req: Request) => {
       const reply = "No problem! Your order has been cancelled. What would you like to order?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
     }
 
@@ -1498,7 +1557,7 @@ Deno.serve(async (req: Request) => {
       const reply = "Your payment link was sent -- check your texts for it. If something looks wrong, say \"change my order\" to make edits, or \"restart\" to start over.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     }
   }
@@ -1512,7 +1571,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Sorry, our menu is not available right now. Please call us to place an order.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
   }
 
@@ -1558,7 +1617,7 @@ Deno.serve(async (req: Request) => {
       const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours -- you'll be happy you did!`;
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-      if (isSms) { await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
       return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
     }
   }
@@ -1691,7 +1750,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (isSms) {
-    await sendSmsViaTwilio(shop.phone_number_e164!, customerPhone, finalReply);
+    await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, finalReply);
     return emptyTwiml();
   }
   return jsonResponse({

@@ -279,10 +279,72 @@ call_sprint() {
       '{shop_id: $shop_id, message: $message, session_id: $session_id}')" 2>/dev/null
 }
 
+# -- STRUCTURAL OUTBOUND WATCHDOG (bridge side) ───────────────────────────────
+# Parallel to supabase/functions/_shared/outbound-guard.ts. EVERY customer-
+# facing imsg send on the bridge MUST pass through assert_outbound_allowed
+# first. It returns 0 (ALLOW) only for a recognized reason WITH valid evidence;
+# otherwise it logs a CRITICAL line (alert trail) and returns 1 (DENY). The two
+# bridge send paths (send_reply, drain_outbound_queue) are the ONLY callers of
+# `imsg send` for customer text, and both are gated below. Default-deny: an
+# unknown/blank reason is DENIED.
+#
+# Reasons:
+#   inbound_reply     -- synchronous reply to a fresh inbound. Evidence:
+#                        $2=inbound msg id (non-empty), $3=inbound epoch secs
+#                        (within MAX_MSG_AGE_SECONDS of now).
+#   payment_confirmed -- queued paid-order receipt drained from outbound_queue.
+#   order_refunded    -- queued refund notice drained from outbound_queue.
+#                        For the two transactional reasons evidence is $2=queue
+#                        row id (non-empty); the row only exists because the
+#                        functions-side guard already verified paid/refund state
+#                        at enqueue time, and the drain query requires sent_at IS
+#                        NULL so a row is never sent twice.
+assert_outbound_allowed() {
+  local reason="$1"
+  local ev1="${2:-}"
+  local ev2="${3:-}"
+  local critical
+  critical() {
+    # ids + reason + short why only. NO message body, NO secrets.
+    log "[OUTBOUND-WATCHDOG][CRITICAL] DENY reason=${reason:-(blank)} ev1=${ev1:-of-} why=\"$1\""
+  }
+
+  case "$reason" in
+    inbound_reply)
+      if [[ -z "$ev1" ]]; then critical "inbound_reply missing inbound message id"; return 1; fi
+      if ! [[ "$ev2" =~ ^[0-9]+$ ]]; then critical "inbound_reply missing/invalid inbound timestamp"; return 1; fi
+      local now age
+      now=$(date +%s)
+      age=$(( now - ev2 ))
+      if (( age < 0 )); then critical "inbound_reply timestamp in the future"; return 1; fi
+      if (( age > MAX_MSG_AGE_SECONDS )); then critical "inbound_reply stale (age ${age}s > ${MAX_MSG_AGE_SECONDS}s)"; return 1; fi
+      return 0
+      ;;
+    payment_confirmed|order_refunded)
+      if [[ -z "$ev1" ]]; then critical "$reason missing queue row id"; return 1; fi
+      return 0
+      ;;
+    *)
+      critical "unknown or blank reason"
+      return 1
+      ;;
+  esac
+}
+
 # -- Send reply ────────────────────────────────────────────────────────────────
+# reason/evidence are passed so the watchdog can prove this is a fresh inbound
+# reply. $3=inbound msg id, $4=inbound epoch secs.
 send_reply() {
   local to="$1"
   local text="$2"
+  local inbound_id="${3:-}"
+  local inbound_ts="${4:-}"
+
+  # WATCHDOG GATE: fail closed if this is not a fresh inbound reply.
+  if ! assert_outbound_allowed "inbound_reply" "$inbound_id" "$inbound_ts"; then
+    log "  ✗ OUTBOUND BLOCKED by watchdog (send_reply); no imsg sent."
+    return 1
+  fi
 
   if [[ "$MODE" == "--dry-run" ]]; then
     log "[DRY RUN] Would send to $to: $text"
@@ -300,6 +362,18 @@ process_message() {
   local sender="$1"
   local text="$2"
   local msg_id="$3"
+  local created_at="${4:-}"
+
+  # Convert the inbound created_at to epoch seconds for the watchdog freshness
+  # evidence. If it cannot be parsed we pass 0, which the guard treats as stale
+  # and DENIES (fail-closed) — the same posture as msg_is_too_old upstream.
+  local inbound_ts=0
+  if [[ -n "$created_at" ]]; then
+    local _dt
+    _dt=$(echo "$created_at" | sed 's/\.[0-9]*Z$//' | sed 's/Z$//')
+    inbound_ts=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$_dt" +%s 2>/dev/null) || inbound_ts=0
+    [[ "$inbound_ts" =~ ^[0-9]+$ ]] || inbound_ts=0
+  fi
 
   # Skip if already processed
   if is_processed "$msg_id"; then
@@ -348,10 +422,10 @@ process_message() {
   # the rare "marked but not sent" over the unacceptable "sent twice."
   mark_processed "$msg_id"
 
-  if send_reply "$sender" "$reply"; then
+  if send_reply "$sender" "$reply" "$msg_id" "$inbound_ts"; then
     log "  ✓ Sent"
   else
-    log "  ERROR: imsg send failed"
+    log "  ERROR: imsg send failed or blocked by watchdog"
   fi
 }
 
@@ -413,6 +487,25 @@ drain_outbound_queue() {
     message=$(echo "$row" | jq -r '.message') || continue
 
     log "[OUTBOUND] Sending to $to_phone: ${message:0:60}"
+
+    # WATCHDOG GATE: queued rows are the transactional pushes (paid receipt /
+    # refund) that the functions-side guard already verified against real cart
+    # state at enqueue time. We still gate here so the bridge cannot send a
+    # queued message without a recognized reason + row-id evidence (default-deny
+    # if either is absent). reason column is optional; default to the receipt
+    # class when absent (both allowed reasons behave identically here).
+    local q_reason
+    q_reason=$(echo "$row" | jq -r '.reason // "payment_confirmed"' 2>/dev/null) || q_reason="payment_confirmed"
+    if ! assert_outbound_allowed "$q_reason" "$id"; then
+      log "[OUTBOUND] BLOCKED by watchdog (id=$id reason=$q_reason); not sent."
+      curl -s -X PATCH \
+        "${SPRINTAI_CHAT_SUPABASE_URL}/rest/v1/outbound_queue?id=eq.${id}" \
+        -H "apikey: ${SPRINTAI_CHAT_SUPABASE_ANON_KEY}" \
+        -H "Authorization: Bearer ${SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"error\": \"watchdog denied\"}" > /dev/null 2>&1
+      continue
+    fi
 
     if imsg send --to "$to_phone" --text "$message" --service imessage >> "$LOG_FILE" 2>&1; then
       # Mark sent
@@ -504,7 +597,7 @@ run_bridge() {
         # Wrap so unexpected errors in process_message don't abort the loop;
         # always mark processed to prevent infinite retries on poison messages.
         {
-          process_message "$chat_identifier" "$msg_text" "$msg_id"
+          process_message "$chat_identifier" "$msg_text" "$msg_id" "$msg_created_at"
         } || {
           log "  ERROR: process_message threw for msg=$msg_id — marking processed"
           mark_processed "$msg_id"
