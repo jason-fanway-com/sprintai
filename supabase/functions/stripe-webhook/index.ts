@@ -9,6 +9,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { deriveConnectStatus } from "../_shared/connect.ts";
+import { guardedSend } from "../_shared/outbound-guard.ts";
 
 const PLAN_PRICES: Record<string, string> = {
   // Map Stripe price IDs to plan names — update with real Stripe price IDs
@@ -243,6 +244,10 @@ async function handleChargeRefunded(
   console.log(`[stripe-webhook] charge.refunded ${charge.id} → cart ${cart.id}: ${refundStatus} ($${(refunded / 100).toFixed(2)} of $${(amount / 100).toFixed(2)})`);
 
   if (cart.conversation_id) {
+    // ALLOWED TRANSACTIONAL EXCEPTION #2 of 2 (lead directive 2026-06-22):
+    // the REFUND NOTICE. This outbound directly follows the customer's own
+    // paid order being refunded — a consented, expected transactional message.
+    // This and payment_confirmed are the ONLY two customer-facing pushes allowed.
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_refunded");
   }
 }
@@ -279,6 +284,9 @@ async function handleDisputeCreated(
   // Notify the shop (restaurant owns the dispute). Email + SMS via chat-sms.
   await notifyShopOfDispute(supabase, cart.shop_id, cart.id, dispute);
   if (cart.conversation_id) {
+    // SHOP-FACING ONLY, not a customer push. order_disputed resolves to a
+    // SILENT branch in chat-sms (no diner-facing copy); the shop is notified
+    // separately via notifyShopOfDispute above. No unsolicited customer text.
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cart.id, "order_disputed");
   }
 }
@@ -388,7 +396,11 @@ async function handleOrderPaymentComplete(
     .eq("id", cartId)
     .single();
 
-  // Notify customer via chat-sms
+  // ALLOWED TRANSACTIONAL EXCEPTION #1 of 2 (lead directive 2026-06-22):
+  // the PAID-ORDER RECEIPT. This outbound directly follows the customer's own
+  // action (they completed checkout and paid) — a consented, expected
+  // transactional message. This and order_refunded are the ONLY two
+  // customer-facing pushes allowed.
   if (cart?.conversation_id) {
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cartId, "payment_confirmed");
   }
@@ -465,20 +477,17 @@ async function handleOrderPaymentExpired(
   if (!cartId) return;
   console.log(`[stripe-webhook] Order payment expired for cart: ${cartId}`);
 
+  // Update internal state ONLY. No customer-facing outbound on expiry.
+  // COMPLIANCE (TCPA/10DLC), lead directive 2026-06-22: a checkout link
+  // expiring is NOT a customer action — pushing an unsolicited "your link
+  // expired" text is an unconsented outbound and is KILLED. If the customer
+  // texts again in an active session and their link is expired, the inbound
+  // reply path handles it synchronously ("that link expired — want to
+  // reorder?"). We never push here.
   await supabase
     .from("order_carts")
     .update({ payment_status: "expired", phase: "expired" })
     .eq("id", cartId);
-
-  const { data: expiredCart } = await supabase
-    .from("order_carts")
-    .select("shop_id, conversation_id")
-    .eq("id", cartId)
-    .single();
-
-  if (expiredCart?.conversation_id) {
-    await triggerChatSmsSystemEvent(expiredCart.shop_id, expiredCart.conversation_id, cartId, "payment_expired");
-  }
 }
 
 // ─── Event Handlers ───────────────────────────────────────────────────────────
@@ -595,7 +604,16 @@ async function handleCheckoutComplete(
   // Send welcome SMS
   const finalNumber = assignedNumber ?? Deno.env.get("TWILIO_PHONE_NUMBER");
   if (finalNumber && customer.phone) {
-    await sendWelcomeSMS(tenant.name, customer.phone, finalNumber);
+    // WATCHDOG EVIDENCE: read the REAL Stripe subscription state, not a constant.
+    // The merchant_welcome reason is allowed ONLY when the merchant's own
+    // subscription is in a live, paid state. If Stripe says the subscription is
+    // not active/trialing, the guard DENIES and no welcome SMS is sent.
+    const subActive =
+      subscription.status === "active" || subscription.status === "trialing";
+    await sendWelcomeSMS(tenant.name, customer.phone, finalNumber, {
+      subscriptionActive: subActive,
+      tenantId: tenant.id,
+    });
   }
 
   // Send welcome email with embed code
@@ -840,11 +858,20 @@ async function triggerOnboarding(
   console.log(`[stripe-webhook] Onboarding triggered for tenant ${tenantId}`);
 }
 
-/** Send welcome SMS via Twilio */
+/**
+ * Send welcome SMS via Twilio (MERCHANT-facing, B2B).
+ * STRUCTURAL OUTBOUND WATCHDOG: even though this is the merchant audience (the
+ * restaurant owner who just completed subscription checkout), it is the only
+ * DIRECT Twilio send in this function, so it is routed through the same guard
+ * with the explicit `merchant_welcome` reason. `subscriptionActive` is the
+ * verified evidence — this is only ever called from the checkout-completed
+ * handler. A call without that evidence fails closed.
+ */
 async function sendWelcomeSMS(
   businessName: string,
   customerPhone: string,
-  fromNumber: string
+  fromNumber: string,
+  evidence: { subscriptionActive: boolean; tenantId?: string | null } = { subscriptionActive: true },
 ): Promise<void> {
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
   const authToken = Deno.env.get("TWILIO_AUTH_TOKEN") ?? "";
@@ -852,26 +879,40 @@ async function sendWelcomeSMS(
   const message = `Welcome to SprintAI! Your AI chat assistant for ${businessName} is now live. ` +
     `Share this number with your customers: ${fromNumber}. Text START to test it yourself!`;
 
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+  const { sent } = await guardedSend(
     {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        To: customerPhone,
-        From: fromNumber,
-        Body: message,
-      }),
-    }
+      reason: "merchant_welcome",
+      to: customerPhone,
+      tenantId: evidence.tenantId ?? null,
+      subscriptionActive: evidence.subscriptionActive,
+    },
+    async () => {
+      const res = await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            To: customerPhone,
+            From: fromNumber,
+            Body: message,
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        console.error(`[stripe-webhook] Failed to send welcome SMS: ${res.status}`);
+      } else {
+        console.log(`[stripe-webhook] Welcome SMS sent to ${customerPhone}`);
+      }
+    },
   );
 
-  if (!res.ok) {
-    console.error(`[stripe-webhook] Failed to send welcome SMS: ${res.status}`);
-  } else {
-    console.log(`[stripe-webhook] Welcome SMS sent to ${customerPhone}`);
+  if (!sent) {
+    console.warn("[stripe-webhook] WELCOME SMS BLOCKED by watchdog; nothing sent.");
   }
 }
 
