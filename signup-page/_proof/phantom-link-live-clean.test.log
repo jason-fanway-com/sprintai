@@ -1,0 +1,41 @@
+=== LIVE phantom-link proof: 15 runs vs https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/chat-sms (TEST/sk_test) ===
+
+run  1: REAL-SESSION  phase=checkout  sess=cs_test_a1dN...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1dNeThwelR2X3M0os
+run  2: REAL-SESSION  phase=checkout  sess=cs_test_a1R2...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1R219NvcJPYBgYULH
+run  3: REAL-SESSION  phase=checkout  sess=cs_test_a1dZ...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1dZexGG0tgIqDfTvl
+run  4: REAL-SESSION  phase=checkout  sess=cs_test_a13F...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a13F3A2n2i4gpaSgx8
+run  5: REAL-SESSION  phase=checkout  sess=cs_test_a1hd...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1hdBcSBwIUTDYdaaO
+run  6: REAL-SESSION  phase=checkout  sess=cs_test_a1wG...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1wGa2Gz92pXvwoVln
+run  7: REAL-SESSION  phase=checkout  sess=cs_test_a1Ia...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1IalbCDmCN0GHwfCH
+run  8: REAL-SESSION  phase=checkout  sess=cs_test_a1Ue...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1UexndI7Rbx28qnSK
+run  9: REAL-SESSION  phase=checkout  sess=cs_test_a1ep...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1epcD592kgPqqumVx
+run 10: REAL-SESSION  phase=checkout  sess=cs_test_a1zV...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1zVRI7smuJEJad250
+run 11: REAL-SESSION  phase=checkout  sess=cs_test_a1Ar...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1ArhWZXIGp2yZeSzb
+run 12: REAL-SESSION  phase=checkout  sess=cs_test_a1ZY...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1ZYCPubljrzFrCOFT
+run 13: REAL-SESSION  phase=checkout  sess=cs_test_a13z...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a13zlvyW4Bjbb08GXC
+run 14: REAL-SESSION  phase=checkout  sess=cs_test_a1c4...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1c4lLo8vS4X7BZVmM
+run 15: REAL-SESSION  phase=checkout  sess=cs_test_a1L0...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1L01v1ILbDzfXA5lN
+
+--- RESULTS over 15 runs ---
+Reached confirm (cart had items): 15
+REAL-SESSION (cs_test_ + checkout, or url): 15
+HONEST (no claim, no session): 0
+PHANTOM (claim + null/non-checkout session): 0   <-- MUST be 0
+Errors: 0
+
+RESULT: PASS

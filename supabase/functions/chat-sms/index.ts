@@ -864,6 +864,82 @@ function stripMarkdown(text: string): string {
     .replace(/^#\s+(.+)$/gm, "$1");        // # heading → heading
 }
 
+// ─── Phantom-link guard ───────────────────────────────────────────────────────
+//
+// PROBLEM (launch-critical): the model sometimes writes prose like "Payment
+// link sent!" / "You're all set" WITHOUT calling submit_order. The result is a
+// reply that PROMISES a payment link while no Stripe checkout session was ever
+// created (cart stays phase="building", stripe_checkout_session_id stays null).
+// The customer then waits for a link that never arrives — the worst possible
+// failure for an ordering bot.
+//
+// claimsPaymentSent() is a deterministic detector for that payment-claim/
+// order-placed language. It is exported for unit testing. The main handler uses
+// it as a POST-TURN SAFETY NET: a reply that asserts "payment link sent / order
+// placed" is only ever allowed to go out if a REAL checkout session exists.
+//
+// Matching strategy: normalize the text (lowercase, collapse whitespace, strip
+// most punctuation) then test against a maintained list of phrase patterns.
+// Patterns are intentionally specific to *claims that a link/payment is already
+// sent or the order is placed* — NOT normal building chatter ("want that
+// toasted?", "added to your cart", "ready to check out?").
+export const PAYMENT_CLAIM_PATTERNS: RegExp[] = [
+  // Link was sent / is coming
+  /\bpayment link (?:is )?(?:sent|on (?:its|the) way|coming|ready|created|below|here|attached)\b/,
+  /\b(?:a |the )?link (?:is |has been |was )?(?:sent|on (?:its|the) way|coming|ready)\b/,
+  /\b(?:sent|sending) (?:you )?(?:a |the |your )?(?:payment )?link\b/,
+  /\bhere(?:'s| is) (?:your |the |a )?(?:payment )?link\b/,
+  /\b(?:tap|click|use|follow) (?:the|your|this) (?:payment )?link\b/,
+  /\bcheck (?:your )?(?:text|texts|phone|email|inbox|messages)\b.*\blink\b/,
+  /\blink\b.*\bcheck (?:your )?(?:text|texts|phone|email|inbox|messages)\b/,
+  // "All set" / order placed / confirmed (claims completion)
+  /\byou(?:'re| are) all set\b/,
+  /\ball set\b.*\b(?:link|pay|payment|text|email)\b/,
+  /\b(?:your )?order (?:is|has been|was) (?:placed|submitted|confirmed|complete|completed|in|on its way)\b/,
+  /\b(?:i(?:'ve| have) )?(?:placed|submitted|confirmed|sent) (?:your |the )?order\b/,
+  /\border(?:'s| is) (?:placed|in|confirmed|all set|on the way)\b/,
+  // Bare past-participle completion claims with no copula:
+  // "Order placed!", "Order confirmed!", "Order submitted!", "Order complete[d]!".
+  // The verb FOLLOWS "order", so the instruction "complete your order" (verb
+  // before noun) does NOT match — only the completion sense fires.
+  /\border (?:placed|confirmed|submitted|complete|completed)\b/,
+  // Generic payment-ready claims
+  /\bready (?:to|for) (?:pay|payment|checkout)\b.*\b(?:link|text|email|tap|click)\b/,
+  /\bproceed to (?:pay|payment|checkout)\b.*\b(?:link|text|email)\b/,
+];
+
+export function claimsPaymentSent(text: string): boolean {
+  if (!text) return false;
+  // Normalize: lowercase, replace curly quotes, collapse whitespace.
+  const norm = text
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+  return PAYMENT_CLAIM_PATTERNS.some(re => re.test(norm));
+}
+
+// True if the cart row already carries a real Stripe session id (defensive:
+// avoid creating a second session if one exists).
+function checkoutAlreadyExists(row: { stripe_checkout_session_id?: string | null; phase?: string } | null | undefined): boolean {
+  return !!row && (!!row.stripe_checkout_session_id || row.phase === "checkout");
+}
+
+// Honest reply used when the model falsely claimed a link was sent but we could
+// NOT create a real session. It asks for the missing piece and never asserts a
+// link/payment was sent. Stays under the 300-char SMS budget.
+function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): string {
+  if (!cart || cart.length === 0) {
+    return "What can I get started for you? Let me know your items and I'll get your order going.";
+  }
+  if (incompleteBundle) {
+    return "Almost there! Your bundle still needs a few more picks before I can send your payment link. What else would you like in it?";
+  }
+  // Has items, just missing the pickup name to submit.
+  return "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link.";
+}
+
 function twimlResponse(message: string): Response {
   const safe = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return new Response(
@@ -1477,9 +1553,87 @@ Deno.serve(async (req: Request) => {
   const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes);
   const cartItems    = [...cart.cart_json];
 
-  const { reply, checkoutUrl } = await runOrderingLoop(
+  const loopResult = await runOrderingLoop(
     systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
   );
+  let reply       = loopResult.reply;
+  let checkoutUrl = loopResult.checkoutUrl;
+
+  // ── POST-TURN PHANTOM-LINK SAFETY NET ────────────────────────────────────
+  // INVARIANT: a reply that claims a payment link was sent / the order is
+  // placed may ONLY go out if a real Stripe checkout session exists this turn.
+  //
+  // If the model wrote a payment-claim WITHOUT submit_order having created a
+  // session (checkoutUrl is falsy), the reply is a lie. We do one of two things:
+  //   (a) RECOVER: if the cart is submittable (has items, no incomplete bundle)
+  //       and we know a pickup name, force submit_order ourselves to produce a
+  //       REAL link, then send the real success copy. This is deterministic and
+  //       reuses submit_order's own idempotency-friendly path.
+  //   (b) HONEST FALLBACK: if we genuinely can't submit (empty cart, incomplete
+  //       bundle, or no pickup name), replace the reply with a truthful message
+  //       that asks for what's missing and NEVER claims a link was sent.
+  if (!checkoutUrl && claimsPaymentSent(reply)) {
+    console.warn(`[chat-sms] PHANTOM-LINK GUARD tripped (conv=${conversation.id}, cart=${cart.id}). Model claimed payment without submit_order. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+
+    // Re-read authoritative cart state (cartItems was mutated in-loop; pickup_name lives on the row).
+    const { data: guardCartRow } = await supabase
+      .from("order_carts").select("cart_json, pickup_name, phase, stripe_checkout_session_id")
+      .eq("id", cart.id).single();
+    const guardCart = (guardCartRow?.cart_json as AnyCartItem[]) ?? cartItems;
+    const hasItems = guardCart.length > 0;
+    const incompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
+
+    // Determine a pickup name: prefer the stored one; otherwise, if the bot had
+    // just asked for a name and the user's last message is a short name-like
+    // token, use that (mirrors the PICKUP NAME RULE in the system prompt).
+    let pickupName: string | undefined = (guardCartRow?.pickup_name as string | undefined) || undefined;
+    if (!pickupName) {
+      const trimmed = userMessage.trim();
+      const looksLikeName = /^[A-Za-z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;
+      // Only treat as a name if the prior assistant turn actually asked for one.
+      const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+      const askedForName = typeof lastAssistant?.content === "string"
+        && /\bname\b/i.test(lastAssistant.content)
+        && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for/i.test(lastAssistant.content);
+      if (looksLikeName && askedForName) pickupName = trimmed;
+    }
+
+    if (checkoutAlreadyExists(guardCartRow)) {
+      // A real session already exists on the row (created earlier). Do NOT make
+      // a second one (idempotency). Send an honest reminder to check for the
+      // existing link instead of a fresh "sent!" claim.
+      reply = "Your payment link was already sent -- check your texts or email for it. Tap it to finish your order.";
+      console.log(`[chat-sms] PHANTOM-LINK GUARD: session already existed (cart=${cart.id}); sent existing-link reminder, no new session.`);
+    } else if (hasItems && !incompleteBundle && pickupName) {
+      // RECOVER: force the real submit_order path deterministically.
+      try {
+        const forced = await executeTool(
+          "submit_order",
+          { pickup_name: pickupName },
+          [...guardCart],
+          effectiveMenu,
+          cart.id,
+          supabase,
+          shop.name,
+          cart.test_mode,
+        );
+        if (forced.ok && forced.checkoutUrl) {
+          checkoutUrl = forced.checkoutUrl;
+          console.log(`[chat-sms] PHANTOM-LINK GUARD recovered: forced submit_order created a real session (cart=${cart.id}).`);
+        } else {
+          reply = honestFallbackReply(guardCart);
+          console.warn(`[chat-sms] PHANTOM-LINK GUARD: forced submit_order did not produce a link (${JSON.stringify(forced.result).slice(0,160)}). Sent honest fallback.`);
+        }
+      } catch (e) {
+        reply = honestFallbackReply(guardCart);
+        console.error(`[chat-sms] PHANTOM-LINK GUARD: forced submit_order threw. Sent honest fallback.`, e);
+      }
+    } else {
+      // HONEST FALLBACK: cannot submit — ask for what's missing, claim nothing.
+      reply = honestFallbackReply(guardCart, !!incompleteBundle);
+      console.warn(`[chat-sms] PHANTOM-LINK GUARD: cannot submit (hasItems=${hasItems}, incompleteBundle=${!!incompleteBundle}, pickupName=${!!pickupName}). Sent honest fallback.`);
+    }
+  }
 
   // If checkout was created, override Claude's reply entirely — prevents hallucinated confirmations
   const safeReply = checkoutUrl
