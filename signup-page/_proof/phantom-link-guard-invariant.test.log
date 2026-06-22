@@ -1,0 +1,27 @@
+=== INVARIANT: claim-out => real session, else honest reply ===
+
+PASS  [REAL-SESSION+claim]  claim + items + stored name (RECOVER)
+        -> "Payment link sent! Tap it to complete your order. Check your text or email."
+PASS  [REAL-SESSION+claim]  claim + items + name in user msg (RECOVER)
+        -> "Payment link sent! Tap it to complete your order. Check your text or email."
+PASS  [HONEST(no-claim)]  claim + items + NO name (HONEST ask name)
+        -> "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link."
+PASS  [HONEST(no-claim)]  claim + EMPTY cart (HONEST restart)
+        -> "What can I get started for you? Let me know your items and I'll get your order going."
+PASS  [HONEST(no-claim)]  claim + incomplete bundle (HONEST bundle)
+        -> "Almost there! Your bundle still needs a few more picks before I can send your payment link. What else would you like in it?"
+PASS  [REAL-SESSION+claim]  claim + session already exists (NO 2nd)
+        -> "Your payment link was already sent -- check your texts or email for it. Tap it to finish your order."
+PASS  [REAL-SESSION+claim]  REAL path: claim WITH real session (pass)
+        -> "Payment link sent! Tap it to complete your order. Check your text or email."
+PASS  [HONEST(no-claim)]  non-claim building reply (untouched)
+        -> "Want that toasted?"
+
+--- Counts over 3 passes x 8 scenarios = 24 runs ---
+Real sessions / valid-claim replies : 12
+Honest no-claim replies             : 12
+PHANTOM (claim + null session)      : 0   <-- MUST be 0
+Stripe sessions created (stub)      : 6
+No-double-session (expect 6)        : PASS
+
+RESULT: PASS

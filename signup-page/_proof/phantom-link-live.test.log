@@ -1,0 +1,47 @@
+=== LIVE phantom-link proof: 18 runs vs https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/chat-sms (TEST/sk_test) ===
+
+run  1: REAL-SESSION  phase=checkout  sess=cs_test_a1f4...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1f4xADWDNwniA6l1s
+run  2: REAL-SESSION  phase=checkout  sess=cs_test_a1zE...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1zEJyUF3PdNjeMyVe
+run  3: REAL-SESSION  phase=checkout  sess=cs_test_a18u...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a18uWVPCRI7fs7TXCZ
+run  4: REAL-SESSION  phase=checkout  sess=cs_test_a1TK...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1TKXzgiWa48pBjR7g
+run  5: REAL-SESSION  phase=checkout  sess=cs_test_a1Vn...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1VnOrDSdmYP1ARXjh
+run  6: REAL-SESSION  phase=checkout  sess=cs_test_a1I6...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1I635eU6JjHaKTqYN
+run  7: REAL-SESSION  phase=checkout  sess=cs_test_a1bS...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1bSlWvSqovUeBtC7F
+run  8: REAL-SESSION  phase=checkout  sess=cs_test_a1kz...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1kz6DrWPUcrzZ7UwV
+run  9: REAL-SESSION  phase=checkout  sess=cs_test_a1cG...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1cG6NRhwI1ukKeFTc
+run 10: REAL-SESSION  phase=checkout  sess=cs_test_a1Eu...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1EuZMkrtdwheBKn3K
+run 11: REAL-SESSION  phase=checkout  sess=cs_test_a10Y...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a10Y1U2b9zvLi6yIwt
+run 12: REAL-SESSION  phase=checkout  sess=cs_test_a13v...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a13vdvxAN7nACGIaj9
+run 13: REAL-SESSION  phase=checkout  sess=cs_test_a1tl...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1tlvjX85O6dOPZfL6
+run 14: REAL-SESSION  phase=checkout  sess=cs_test_a1bQ...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1bQdCwxgkcTWejmyd
+run 15: REAL-SESSION  phase=checkout  sess=cs_test_a1eO...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1eOtKCdNd3RqXfnIS
+run 16: REAL-SESSION  phase=checkout  sess=cs_test_a1t9...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1t9tihUlo9VU7lNT4
+run 17: REAL-SESSION  phase=checkout  sess=cs_test_a1ie...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1iedbGcAhvDjjTaep
+run 18: REAL-SESSION  phase=checkout  sess=cs_test_a1JJ...  claims=true url=true
+         reply: "Payment link sent! Tap it to complete your order. Check your text or email.\n\nPay here: https://checkout.stripe.com/c/pay/cs_test_a1JJ3E9vV7fOvodJMV
+
+--- RESULTS over 18 runs ---
+Reached confirm (cart had items): 18
+REAL-SESSION (cs_test_ + checkout, or url): 18
+HONEST (no claim, no session): 0
+PHANTOM (claim + null/non-checkout session): 0   <-- MUST be 0
+Errors: 0
+
+RESULT: PASS

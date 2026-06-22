@@ -1,0 +1,13 @@
+=== FORCED-PHANTOM live proof (guard catch + recovery) ===
+
+CASE A (items+name, forced phantom): PASS
+  recovered real session: true (sess=cs_test_a1RpQV, phase=checkout, url=false)
+  reply: "Your payment link was already sent -- check your texts or email for it. Tap it to finish your order."
+  phantom: false  <-- MUST be false
+
+CASE B (items, NO name, forced phantom): PASS
+  reply claims payment: false  session: null phase=building url=false
+  reply: "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link."
+  phantom: false  <-- MUST be false
+
+RESULT: PASS
