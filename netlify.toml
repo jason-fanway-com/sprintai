@@ -32,23 +32,33 @@
 # WITHOUT putting any admin source on the root origin: Netlify proxies the
 # request to the external admin site at request time. Auth still happens on the
 # admin app (Supabase login) — the proxy exposes nothing that login doesn't.
+# The admin SPA is built with <BrowserRouter basename="/dashboard">, so it ONLY
+# works when the browser URL is under /dashboard. We therefore proxy /dashboard/*
+# (the app's real base) and make /admin a friendly REDIRECT (301) to /dashboard
+# so the address bar becomes /dashboard and the client router matches.
 [[redirects]]
   from = "/admin"
-  to = "https://sprintai-chat-admin.netlify.app/dashboard"
-  status = 200
+  to = "/dashboard/"
+  status = 301
   force = true
 
 [[redirects]]
   from = "/admin/*"
-  to = "https://sprintai-chat-admin.netlify.app/:splat"
-  status = 200
+  to = "/dashboard/:splat"
+  status = 301
   force = true
 
-# The admin SPA loads its bundle from absolute /dashboard/* and /vite.svg.
-# Proxy those so assets resolve when reached via getsprintai.com.
+# Proxy the gated admin site under its own /dashboard base (preserves basename).
+# :splat keeps the full client path so deep links + SPA fallback work.
 [[redirects]]
   from = "/dashboard/*"
   to = "https://sprintai-chat-admin.netlify.app/dashboard/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/dashboard"
+  to = "https://sprintai-chat-admin.netlify.app/dashboard/"
   status = 200
   force = true
 
