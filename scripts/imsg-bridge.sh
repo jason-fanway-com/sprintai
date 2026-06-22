@@ -254,6 +254,11 @@ msg_is_too_old() {
 
   local now_epoch
   now_epoch=$(date +%s)
+  # Future-skew bound (TCPA fail-closed gate, per Melvin QA 2026-06-22): an
+  # implausibly future-dated created_at (clock tampering, bad parse, replay)
+  # must NOT slip through as "fresh". We allow 120s of benign clock skew; any
+  # timestamp more than 120s in the FUTURE is treated as too old → SKIP.
+  (( msg_epoch - now_epoch > 120 )) && return 0
   # Fresh only if within the window; otherwise too old (skip).
   (( now_epoch - msg_epoch > MAX_MSG_AGE_SECONDS ))
 }

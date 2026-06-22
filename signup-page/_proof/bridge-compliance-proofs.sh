@@ -146,10 +146,16 @@ check_age() { # $1=label $2=created_at $3=expect(skip|allow)
   else bad "(c) $label: created_at='$ca' -> $verdict (expected $expect)"; fi
 }
 now_minus() { TZ=UTC date -u -v-"$1" +%Y-%m-%dT%H:%M:%S.000Z; }
+# Future-skew helpers (Melvin QA 2026-06-22): an implausibly future-dated
+# created_at must fail closed (skip); a small clock skew must still be allowed.
+now_plus()  { TZ=UTC date -u -v+"$1" +%Y-%m-%dT%H:%M:%S.000Z; }
 check_age "empty"        ""                       skip
 check_age "garbage"      "not-a-timestamp"        skip
 check_age "16min-old"    "$(now_minus 16M)"       skip
 check_age "5min-old"     "$(now_minus 5M)"        allow
+# Future-skew bound: >120s into the future fails closed; <=120s is tolerated.
+check_age "5min-future"  "$(now_plus 5M)"         skip
+check_age "90s-future"   "$(now_plus 90S)"        allow
 echo
 
 # ============================================================================
