@@ -1294,8 +1294,8 @@ Deno.serve(async (req: Request) => {
       .from("conversations").select("id")
       .eq("tenant_id", shop.tenant_id).eq("customer_phone", customerPhone)
       .eq("channel", "sms").eq("status", "active")
-      .gte("created_at", windowStart)
-      .order("created_at", { ascending: false }).limit(1).single();
+      .gte("started_at", windowStart)
+      .order("started_at", { ascending: false }).limit(1).single();
     conversation = data;
   }
 
