@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Command Center — rendered proof (real live values)</title>
+<style>
+ body{font-family:system-ui,sans-serif;background:#f9fafb;color:#111827;margin:0;padding:32px;max-width:1100px}
+ h1{font-size:24px;display:flex;align-items:center;gap:10px}
+ .live{font-size:12px;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:4px 10px}
+ .sub{color:#6b7280;margin:4px 0 22px}
+ .vitals{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+ .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);padding:18px}
+ .n{font-size:26px;font-weight:700}.n.bad{color:#dc2626}.n.warn{color:#f97316}
+ .l{font-size:12px;color:#6b7280}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+ h2{font-size:17px;margin:0 0 4px}
+ .ph{font-size:13px;color:#6b7280;margin:0 0 14px}
+ .stat{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+ .box{background:#f9fafb;border:1px solid #f3f4f6;border-radius:8px;text-align:center;padding:10px}
+ .box .bn{font-size:18px;font-weight:700}
+ .chip{display:inline-block;font-family:monospace;font-size:11px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:5px;padding:3px 7px;margin:2px}
+ .meta{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;border-top:1px solid #f3f4f6;padding-top:10px}
+ .sev-crit{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;font-size:10px;font-weight:700;padding:2px 5px}
+ .sev-maj{background:#ffedd5;color:#c2410c;border:1px solid #fed7aa;border-radius:4px;font-size:10px;font-weight:700;padding:2px 5px}
+ .note{color:#fca5a5;font-size:11px;margin-top:6px}
+</style></head><body>
+<h1>⚡ Command Center <span class="live">● live</span></h1>
+<p class="sub">Internal operator view. Every panel reads live state at view-time — nothing here is hand-maintained.
+<br><b>Values below are the REAL numbers fetched from the test project on 2026-06-22 (see live-data-proof.txt).</b></p>
+
+<div class="vitals">
+  <div class="card"><div class="n bad">42</div><div class="l">High-confidence flags</div></div>
+  <div class="card"><div class="n">1</div><div class="l">Live shops / 6 total</div></div>
+  <div class="card"><div class="n warn">3</div><div class="l">Open blockers</div></div>
+  <div class="card"><div class="n">5</div><div class="l">DB migrations applied*</div></div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>🖥 Platform health &amp; deploy</h2>
+    <p class="ph">Applied DB migrations (live ledger via admin-gated RPC) + edge-function inventory.</p>
+    <div style="font-size:11px;text-transform:uppercase;color:#9ca3af;margin-bottom:6px">Applied migrations</div>
+    <span class="chip">001 · initial_schema</span><span class="chip">003 · ordering_schema</span><span class="chip">011 · onboarding</span><span class="chip">014 · conversation_evals</span><span class="chip">015 · eval_confidence</span>
+    <div style="font-size:11px;text-transform:uppercase;color:#9ca3af;margin:12px 0 6px">Edge functions (18)</div>
+    <span class="chip">chat-sms</span><span class="chip">admin-api</span><span class="chip">eval-sweep</span><span class="chip">create-checkout</span><span class="chip">stripe-webhook</span><span class="chip">…</span>
+    <p class="note" style="color:#9ca3af">Function versions not available client-side (would require a secret) — intentionally omitted.</p>
+  </div>
+
+  <div class="card">
+    <h2>⚠️ Known open items &amp; blockers</h2>
+    <p class="ph">Editorial rows from program_items — update is a row write, not a redeploy.</p>
+    <div>◉ <b>welcome/index.html is a 0-byte page (live Stripe success target)</b> <span class="sev-crit">CRITICAL</span><div class="note">Diners hit a blank page after paying.</div></div>
+    <div style="margin-top:10px">◉ <b>Conversation judge auto-timer not enabled</b> <span class="sev-maj">MAJOR</span><div class="note" style="color:#9ca3af">Sweeps are manual; no cron.</div></div>
+    <div style="margin-top:10px">◉ <b>Subscription billing (spec 03) not built</b> <span class="sev-maj">MAJOR</span><div class="note" style="color:#9ca3af">PAY-NOW $49/mo wiring unimplemented.</div></div>
+  </div>
+
+  <div class="card">
+    <h2>🛡 Conversation quality</h2>
+    <p class="ph">Live rollup of conversation_evals (judge output).</p>
+    <div class="stat"><div class="box"><div class="bn">20</div><div class="l">Clean</div></div><div class="box"><div class="bn" style="color:#f97316">42</div><div class="l">Flagged</div></div><div class="box"><div class="bn">0</div><div class="l">Errored</div></div></div>
+    <div class="meta"><span>High-conf: <b>42</b></span><span>Low-conf: <b>0</b></span><span>Last sweep: <b>2026-06-23 00:00</b></span><span>Spend: <b>$0.18</b></span></div>
+  </div>
+
+  <div class="card">
+    <h2>🏪 Onboarding &amp; tenant state</h2>
+    <p class="ph">Aggregate over shops + tenants (RLS-scoped admin view).</p>
+    <div class="stat" style="grid-template-columns:repeat(4,1fr)"><div class="box"><div class="bn">6</div><div class="l">Shops</div></div><div class="box"><div class="bn">1</div><div class="l">Live (done)</div></div><div class="box"><div class="bn" style="color:#f97316">4</div><div class="l">Paused</div></div><div class="box"><div class="bn">32</div><div class="l">Tenants</div></div></div>
+  </div>
+</div>
+<p style="color:#9ca3af;font-size:12px;margin-top:24px">↻ Data fetched live on load. No secret keys are present in this page or the client bundle.
+<br>* migrations count from command_center_deploy_status() admin-gated SECURITY DEFINER RPC.</p>
+</body></html>

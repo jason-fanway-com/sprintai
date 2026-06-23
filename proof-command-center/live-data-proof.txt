@@ -1,0 +1,22 @@
+LIVE-DATA PROOF — what each Command Center panel will compute, against the real test project
+Project ref: rvdqfxtrskxekfkqnegx   Generated: Mon Jun 22 20:12:06 EDT 2026
+(read with service-role FROM SHELL for proof only — never baked into the app)
+
+== PANEL 2: conversation-quality rollup (conversation_evals) ==
+total evals: 62
+  clean: 20
+  flagged: 42
+  errored: 0
+  high-confidence flagged: 42   low-confidence flagged: 0
+  last sweep (most recent judged_at):
+[{"judged_at":"2026-06-23T00:00:24.994975+00:00"}]  total sweep spend (sum cost_cents):
+    sum = 18.3540 cents = $0.18
+
+== PANEL 3: onboarding/tenant state (shops + tenants) ==
+shops total: 6
+  live (onboarding_step=done): 1    paused: 4    tenants: 32
+
+== PANEL 1: deploy state — migrations ledger NOT reachable via PostgREST (proves the SECURITY DEFINER fn is needed) ==
+{"code":"PGRST106","details":null,"hint":"Only the following schemas are exposed: public, graphql_public","message":"Invalid schema: supabase_migrations"}  -> hence command_center_deploy_status() (admin-gated SECURITY DEFINER) supplies it. Local proof: proof-command-center/migration-proof.txt
+
+== PANEL 4: program_items — seeded by migration 016 (proof in migration-proof.txt) ==

@@ -1,0 +1,25 @@
+MIGRATION PROOF — 016_command_center (throwaway local PG 16.14, db=ccproof)
+Generated: Mon Jun 22 20:09:16 EDT 2026
+
+== Applied migrations seen by command_center_deploy_status() (ADMIN) ==
+SET
+ version |        name        
+---------+--------------------
+ 001     | initial_schema
+ 003     | ordering_schema
+ 011     | onboarding
+ 014     | conversation_evals
+ 015     | eval_confidence
+(5 rows)
+
+== program_items seed (live rows) ==
+           item_key           |                                   title                                   | status | severity | sort_order 
+------------------------------+---------------------------------------------------------------------------+--------+----------+------------
+ judge-auto-timer             | Conversation judge auto-timer not enabled                                 | open   | major    |         10
+ welcome-index-zero-byte      | welcome/index.html is a 0-byte page and is the live Stripe success target | open   | critical |         20
+ subscription-billing-spec-03 | Subscription billing (spec 03) not built                                  | open   | major    |         30
+(3 rows)
+
+== non-admin call is rejected ==
+ERROR:  forbidden: admin access required
+Cycle proven this session: UP, REUP(no dup → 3 rows), DOWN(table+fn dropped), REDOWN(idempotent), UP-AFTER-DOWN(3 rows).
