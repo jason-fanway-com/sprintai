@@ -1,0 +1,110 @@
+============================================================
+STEP 0: load minimal fixture schema (RLS enabled, mirrors prod)
+============================================================
+[ok] conversations + messages created, RLS enabled
+============================================================
+STEP 1: REPRODUCE THE BUG (no trigger yet)
+============================================================
+Without the trigger, last_message_at stays FROZEN at birth while a newer message exists:
+                  id                  | frozen_last_message_at |      true_newest       
+--------------------------------------+------------------------+------------------------
+ be210325-54fb-4e19-a465-025ab294337e | 2026-06-22 15:39:00+00 | 2026-06-23 10:48:00+00
+(1 row)
+
+============================================================
+STEP 2: APPLY MIGRATION UP (creates fn + trigger + runs backfill)
+============================================================
+psql:<stdin>:87: NOTICE:  trigger "trg_bump_conversation_last_message_at" for relation "public.messages" does not exist, skipping
+[ok] 018 up applied
+BACKFILL PROOF: the stuck NJB conversation now reflects its true newest message:
+                  id                  |    last_message_at     
+--------------------------------------+------------------------
+ be210325-54fb-4e19-a465-025ab294337e | 2026-06-23 10:48:00+00
+(1 row)
+
+============================================================
+STEP 3: TRIGGER WORKS — new INSERT advances last_message_at
+============================================================
+before insert:
+        last_message_at        
+-------------------------------
+ 2026-06-22 11:48:25.992569+00
+(1 row)
+
+after insert (should == 2026-06-23 12:00:00+00):
+    last_message_at     
+------------------------
+ 2026-06-23 12:00:00+00
+(1 row)
+
+============================================================
+STEP 4: GREATEST SEMANTICS — older insert does NOT regress
+============================================================
+after inserting an OLDER message (should STILL be 2026-06-23 12:00:00+00, not 2020):
+    last_message_at     
+------------------------
+ 2026-06-23 12:00:00+00
+(1 row)
+
+============================================================
+STEP 5: NULL created_at defensive COALESCE (writer omits created_at? default fires; explicit NULL? coalesced to now())
+============================================================
+last_message_at should be ~now() (not null), proving COALESCE handled explicit NULL created_at:
+ not_null | is_recent 
+----------+-----------
+ t        | t
+(1 row)
+
+============================================================
+STEP 6: EVAL-SWEEP VISIBILITY — idle query selects >10min-old, excludes <10min-old
+============================================================
+sanity — both last_message_at values (idle=~11min ago, fresh=~1min ago):
+ customer_phone |        last_message_at        
+----------------+-------------------------------
+ web:fresh      | 2026-06-23 11:47:26.293112+00
+ web:idle       | 2026-06-23 11:37:26.293112+00
+(2 rows)
+
+Replicating selectCandidates idle filter exactly: .lt('last_message_at', now()-10min)
+EXPECT: idle(aaaa...) PRESENT, fresh(bbbb...) ABSENT:
+                  id                  |        last_message_at        
+--------------------------------------+-------------------------------
+ aaaaaaaa-0000-0000-0000-000000000000 | 2026-06-23 11:37:26.293112+00
+(1 row)
+
+============================================================
+STEP 7: IDEMPOTENT RE-UP — re-apply migration, trigger NOT duplicated
+============================================================
+[ok] 018 up re-applied (no error)
+trigger count on messages (MUST be exactly 1):
+ trigger_count 
+---------------
+             1
+(1 row)
+
+============================================================
+STEP 8: DOWN — remove trigger + function
+============================================================
+[ok] 018 down applied
+trigger + function should both be GONE (count 0 each):
+ triggers | functions 
+----------+-----------
+        0 |         0
+(1 row)
+
+after DOWN, the bug returns (insert no longer bumps):
+should STILL be 2026-06-23 12:00:00+00 (trigger gone, no bump):
+    last_message_at     
+------------------------
+ 2026-06-23 12:00:00+00
+(1 row)
+
+============================================================
+STEP 9: IDEMPOTENT RE-DOWN — re-apply down, no error
+============================================================
+psql:<stdin>:17: NOTICE:  trigger "trg_bump_conversation_last_message_at" for relation "public.messages" does not exist, skipping
+psql:<stdin>:18: NOTICE:  function public.bump_conversation_last_message_at() does not exist, skipping
+[ok] 018 down re-applied clean (DROP ... IF EXISTS)
+============================================================
+ALL PROOF STEPS PASSED
+============================================================
