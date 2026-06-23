@@ -1,0 +1,24 @@
+Fixture: 201 conversations (200 old idle + 1 fresh checkout), idleCutoff=2026-06-23T12:00:18.475Z
+
+=== OLD (oldest-first, phases=confirmed,expired) ===
+  selected count: 50 (cap=50, honored=true)
+  NEWEST (be210325-54fb-4e19-a465-025ab294337e) selected? NO
+  first 3 selected: old-200-0000-0000-0000-000000000000, old-150-0000-0000-0000-000000000000, old-100-0000-0000-0000-000000000000
+
+=== NEW (newest-first, phases=confirmed,expired,checkout) ===
+  selected count: 50 (cap=50, honored=true)
+  NEWEST (be210325-54fb-4e19-a465-025ab294337e) selected? YES at position 0
+  first 3 selected: be210325-54fb-4e19-a465-025ab294337e, old-050-0000-0000-0000-000000000000, old-100-0000-0000-0000-000000000000
+
+=== checkout force-include when NOT idle (active 1 min ago) ===
+  OLD includes active-checkout conv? NO (expected NO)
+  NEW includes active-checkout conv? YES (expected YES)
+
+=== SUMMARY ===
+  determinism (NEW == NEW2): PASS
+  bug reproduced (OLD excludes newest): PASS
+  fix works (NEW selects newest): PASS
+  cap honored: PASS
+  checkout force-include (not idle): PASS
+
+  ALL CHECKS: PASS ✅

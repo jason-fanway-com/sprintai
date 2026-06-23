@@ -307,35 +307,48 @@ async function callJudge(
 
 // ─── Candidate selection ─────────────────────────────────────────────────────────
 // A conversation is judgeable when it is "done": its latest cart phase is
-// terminal (confirmed/expired) OR it has been idle > IDLE_MINUTES. We then skip
-// any conversation that already has a live eval for its current transcript hash.
+// terminal (confirmed/expired/checkout) OR it has been idle > IDLE_MINUTES. We
+// then skip any conversation that already has a live eval for its current
+// transcript hash.
 //
-// SELECTION ORDER (within the SAME cap): cart-bearing (shop-resolvable)
-// conversations are judged FIRST, then cart-less ones. Cart-less conversations
-// are NOT skipped — they are still judged if cap/budget remains; they just sort
-// after. This pulls real, menu-backed conversations to the front so the per-
-// sweep cap spends its budget on high-confidence evals first. Deterministic:
-// a stable partition preserves each group's existing relative order so repeated
-// sweeps are reproducible. The cap is unchanged.
+// EFFECTIVE SELECTION ORDER (within the SAME cap), applied as a stable partition:
+//   1. cart-bearing (shop-resolvable) conversations FIRST, then cart-less ones;
+//   2. WITHIN each group, NEWEST-active first (idle rows arrive newest-first,
+//      terminal-cart rows append after, and the partition preserves that order).
+// Cart-less conversations are NOT skipped — they are still judged if cap/budget
+// remains; they just sort after. This pulls real, menu-backed AND recently-
+// active conversations to the front so the per-sweep cap spends its budget on
+// high-confidence, high-relevance evals first. Deterministic: a stable partition
+// preserves each group's existing relative order so repeated sweeps are
+// reproducible. The cap is unchanged.
 export async function selectCandidates(
   supabase: SupabaseClient,
 ): Promise<Array<{ id: string; tenant_id: string }>> {
   const idleCutoff = new Date(Date.now() - IDLE_MINUTES * 60_000).toISOString();
 
   // Idle conversations (no new messages for N minutes).
+  // NEWEST-FIRST: the most-recently-active idle conversations are the highest-
+  // value to judge promptly — they are what an operator just tested and what a
+  // diner just experienced. Ordering oldest-first + capping at cap*3 used to
+  // push freshly-active conversations OUTSIDE the window whenever there were
+  // >cap*3 older idle rows, making a just-run test effectively unjudgeable.
+  // The `id` tiebreaker preserves determinism.
   const { data: idle } = await supabase
     .from("conversations")
     .select("id, tenant_id, last_message_at")
     .lt("last_message_at", idleCutoff)
-    .order("last_message_at", { ascending: true })
+    .order("last_message_at", { ascending: false })
     .order("id", { ascending: true })
     .limit(MAX_CONVERSATIONS_PER_SWEEP * 3);
 
-  // Terminal-phase conversations (confirmed/expired carts), even if recent.
+  // Terminal-phase conversations, even if recent. 'confirmed'/'expired' are the
+  // settled end states; 'checkout' is a real order ATTEMPT (a cart that reached
+  // the Stripe checkout seam, set by chat-sms) — high judging signal — so it is
+  // force-included even before it goes idle. Kept narrow to these three.
   const { data: terminalCarts } = await supabase
     .from("order_carts")
     .select("conversation_id")
-    .in("phase", ["confirmed", "expired"])
+    .in("phase", ["confirmed", "expired", "checkout"])
     .limit(MAX_CONVERSATIONS_PER_SWEEP * 3);
 
   // Insertion order here defines the stable base order of the candidate set.
