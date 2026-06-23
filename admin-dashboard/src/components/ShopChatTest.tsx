@@ -25,6 +25,15 @@ function makeStorageKey(shopId: string) {
   return `chat-test-session-${shopId}`
 }
 
+// Gated test-mode affordance: when the admin dashboard is opened with ?test=1
+// in the page URL, the chat test sends `test: true` to chat-sms, which puts the
+// cart in test mode (bypasses business hours, routes payment to the test
+// success page). The normal customer-facing widget never sets this flag, so
+// real diners are unaffected. Read once at module load.
+const WEB_TEST_MODE =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('test') === '1'
+
 function getOrCreateSessionId(shopId: string): string {
   const key = makeStorageKey(shopId)
   let id = localStorage.getItem(key)
@@ -155,6 +164,7 @@ export default function ShopChatTest({ shopId, shopName }: Props) {
           shop_id:    shopId,
           message:    userMsg,
           session_id: sessionId,
+          ...(WEB_TEST_MODE ? { test: true } : {}),
         }),
       })
 

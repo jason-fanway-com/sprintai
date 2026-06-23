@@ -1356,6 +1356,13 @@ Deno.serve(async (req: Request) => {
   let userMessage:   string;
   let sessionId:     string;
   let channel:       "sms" | "web";
+  // WEB/iMessage test-mode affordance. Only ever set true when a WEB JSON
+  // request carries an explicit `test: true` flag (see web parse below). The
+  // SMS form path never sets it (default false), so SMS diners are unaffected.
+  // When true it has the SAME effect as the customer-typed TESTMODE keyword:
+  // test_mode=true on the cart, hours-gating bypassed, success_url ->
+  // /order-success-test. The normal customer flow never sends this flag.
+  let requestTestMode = false;
   // STRUCTURAL OUTBOUND WATCHDOG: ctx for every synchronous SMS reply in this
   // request. Set for the SMS channel below; web channel never calls Twilio.
   let inboundReplyCtx: OutboundContext = { reason: "inbound_reply", inboundAtMs: Date.now() };
@@ -1417,7 +1424,7 @@ Deno.serve(async (req: Request) => {
     sessionId     = `sms:${fromNumber}`;
     channel       = "sms";
   } else {
-    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string };
+    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean };
     try { body = await req.json(); } catch { return jsonError("Invalid JSON body"); }
 
     if (body.system_event) {
@@ -1429,6 +1436,15 @@ Deno.serve(async (req: Request) => {
     userMessage = message.trim();
     sessionId   = session_id ?? crypto.randomUUID();
     channel     = "web";
+    // GATED test-mode signal: only the WEB JSON path can carry `test: true`,
+    // and only an explicit boolean true counts. The normal diner flow never
+    // sends this. Also accept ?test=1 on the function URL as an equivalent
+    // affordance (whichever the web client can send). SMS path leaves
+    // requestTestMode=false. See test-mode activation in the greeting block.
+    {
+      const url = new URL(req.url);
+      requestTestMode = body.test === true || url.searchParams.get("test") === "1";
+    }
     const { data: shopData } = await supabase
       .from("shops").select("*").eq("id", shop_id).single();
     if (!shopData) return jsonError("Shop not found", 404);
@@ -1444,8 +1460,17 @@ Deno.serve(async (req: Request) => {
   let conversation: { id: string } | null = null;
 
   if (channel === "web") {
+    // Mirror the SMS freshness window: only reuse a web conversation that is
+    // still active AND was started within the last 24h. A stale prior-day
+    // session no longer welds onto a new one -- it times out and we start a
+    // fresh conversation. Within-window same-session reuse is unchanged
+    // (started_at >= windowStart for any conversation begun today).
     const { data } = await supabase
-      .from("conversations").select("id").eq("session_id", sessionId).eq("channel", "web").single();
+      .from("conversations").select("id")
+      .eq("session_id", sessionId).eq("channel", "web")
+      .eq("status", "active")
+      .gte("started_at", windowStart)
+      .order("started_at", { ascending: false }).limit(1).maybeSingle();
     conversation = data;
   } else {
     const { data } = await supabase
@@ -1593,7 +1618,20 @@ Deno.serve(async (req: Request) => {
       return nowMins >= openMins && nowMins < closeMins;
     });
 
-    const activatingTestMode = userMessage.trim().toUpperCase() === "TESTMODE";
+    // Test mode is activated either by the customer-typed TESTMODE keyword
+    // (any channel) OR by a WEB request carrying the gated `test` flag
+    // (requestTestMode). Both have the identical effect below. requestTestMode
+    // is false for every SMS request and for any web request without the flag,
+    // so real diners are never put into test mode.
+    // The customer-typed TESTMODE keyword always resets the cart (explicit
+    // user intent to start a clean test). The WEB `test` flag (requestTestMode)
+    // is sent on EVERY message of a test session by the client, so it must NOT
+    // reset a cart that is already in test mode -- otherwise an in-progress
+    // test order would be wiped each turn. We therefore only act on the flag
+    // the FIRST time (when the cart is not yet in test mode); after that it is
+    // a no-op and the order proceeds normally through the test success page.
+    const keywordTestMode = userMessage.trim().toUpperCase() === "TESTMODE";
+    const activatingTestMode = keywordTestMode || (requestTestMode && !cart.test_mode);
     if (activatingTestMode) {
       // Always reset cart state on TESTMODE — clear stale items, set test flag, back to greeting
       await supabase.from("order_carts").update({

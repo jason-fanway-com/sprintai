@@ -1,0 +1,37 @@
+
+[FIX 1] Web test-mode flag derivation
+  PASS  body {test:true} → requestTestMode=true
+  PASS  ?test=1 → requestTestMode=true
+  PASS  no flag, no param → requestTestMode=false
+  PASS  body {test:'true'} (string) → false
+  PASS  body {test:1} (number) → false
+  PASS  body {test:false} → false
+  PASS  ?test=0 → false
+  PASS  ?test=true (not '1') → false
+
+[FIX 1] Activation guard
+  PASS  TESTMODE keyword (fresh cart) → activate
+  PASS  testmode keyword lowercased → activate
+  PASS  TESTMODE keyword while already in test → activate (explicit reset)
+  PASS  web flag, cart NOT yet test → activate
+  PASS  web flag, cart ALREADY test → NO activate (order preserved)
+  PASS  no flag, normal message → NO activate
+  PASS  no flag, cart somehow test → still NO re-activate via flag
+
+[FIX 1] Hours-gating bypass
+  PASS  closed + has hours + NOT test → gated (real diner blocked)
+  PASS  closed + has hours + TEST → bypass (Jason can test)
+  PASS  open + NOT test → not gated
+
+[FIX 1] success_url routing
+  PASS  testMode=true → /order-success-test
+  PASS  testMode=false → /order-success (real)
+
+[FIX 2] Web reuse freshness window
+  PASS  active conv started 1h ago → REUSE (same-sitting order preserved)
+  PASS  active conv started 23h ago → REUSE (still in window)
+  PASS  active conv started 25h ago (stale prior-day) → NEW (no weld)
+  PASS  inactive conv 1h ago → NEW (status gate)
+  PASS  active conv started just now → REUSE
+
+==== RESULT: 25 passed, 0 failed ====
