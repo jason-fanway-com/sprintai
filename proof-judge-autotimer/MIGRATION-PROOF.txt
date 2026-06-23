@@ -1,0 +1,94 @@
+=== JUDGE AUTO-TIMER MIGRATION PROOF ===
+Local throwaway DB: supabase/postgres:15.8.1.060 (bundles pg_cron, pg_net, supabase_vault)
+Generated: 2026-06-23T00:43:39Z
+
+### PRE: enable supabase_vault (pre-installed on real Supabase; enabled here so vault.* resolves) ###
+NOTICE:  extension "supabase_vault" already exists, skipping
+CREATE EXTENSION
+
+### Seed a PLACEHOLDER bearer in Vault (mimics the lead's out-of-band injection; NOT a real key) ###
+9119df6f-618b-4807-aa0c-f4f4e1fb4e52
+
+========================================================
+### UP #1 — apply 017_judge_autotimer.sql ###
+========================================================
+CREATE EXTENSION
+CREATE EXTENSION
+DO
+ schedule 
+----------
+        1
+(1 row)
+
+
+### cron.job row after UP #1 ###
+ jobid |     jobname      |  schedule   | active 
+-------+------------------+-------------+--------
+     1 | judge-eval-sweep | */5 * * * * | t
+(1 row)
+
+### job command (proves Vault reference, no literal key) ###
+
+  SELECT net.http_post(
+    url     := 'https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/eval-sweep',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization',
+        'Bearer ' || COALESCE(
+          (SELECT decrypted_secret
+             FROM vault.decrypted_secrets
+            WHERE name = 'eval_sweep_bearer'
+            LIMIT 1),
+          ''  -- fail-closed: empty bearer → 401, no judging, no spend
+        )
+    ),
+    body    := '{}'::jsonb,
+    timeout_milliseconds := 120000  -- generous; a full 50-conv sweep finishes well under this
+  ) AS request_id;
+  
+
+========================================================
+### UP #2 — RE-APPLY 017 (idempotency: must not duplicate, must not error) ###
+========================================================
+NOTICE:  extension "pg_cron" already exists, skipping
+CREATE EXTENSION
+NOTICE:  extension "pg_net" already exists, skipping
+CREATE EXTENSION
+DO
+ schedule 
+----------
+        2
+(1 row)
+
+### cron.job rows named judge-eval-sweep after RE-UP (expect EXACTLY 1) ###
+ job_count 
+-----------
+         1
+(1 row)
+
+
+========================================================
+### DOWN #1 — apply 017_judge_autotimer.down.sql ###
+========================================================
+DO
+### cron.job rows after DOWN (expect 0) ###
+ job_count 
+-----------
+         0
+(1 row)
+
+### vault secret still present after DOWN (down does NOT delete it — by design) ###
+eval_sweep_bearer
+
+========================================================
+### DOWN #2 — RE-APPLY down (idempotency: must not error when job already gone) ###
+========================================================
+DO
+### final job count (expect 0) ###
+ job_count 
+-----------
+         0
+(1 row)
+
+
+=== RESULT: UP idempotent, DOWN reversible+idempotent, job toggles 1<->0, no literal key in command ===

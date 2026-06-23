@@ -1,0 +1,41 @@
+=== DEDUP/COST PROOF — back-to-back eval-sweep invocations ===
+Generated: 2026-06-23T00:44:20Z
+Endpoint: https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/eval-sweep  (bearer from SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY env — NOT committed)
+Goal: prove a 5-min repeat on unchanged data is cheap (skipped_unchanged, ~0 spend).
+
+### RUN 1 ###
+{
+    "ok": true,
+    "autofix_enabled": false,
+    "report": {
+        "scanned": 50,
+        "judged": 0,
+        "flagged": 0,
+        "clean": 0,
+        "errored": 0,
+        "skipped_unchanged": 12,
+        "spend_cents": 0,
+        "ceiling_hit": false,
+        "digest": null
+    }
+}
+
+### RUN 2 (immediately after — simulates the next cron tick) ###
+{
+    "ok": true,
+    "autofix_enabled": false,
+    "report": {
+        "scanned": 50,
+        "judged": 0,
+        "flagged": 0,
+        "clean": 0,
+        "errored": 0,
+        "skipped_unchanged": 12,
+        "spend_cents": 0,
+        "ceiling_hit": false,
+        "digest": null
+    }
+}
+
+### Extracted RUN 2 deltas (judged should be ~0, skipped_unchanged>0, spend_cents~0) ###
+judged=0 flagged=0 skipped_unchanged=12 spend_cents=0 scanned=50 ceiling_hit=False
