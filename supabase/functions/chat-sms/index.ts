@@ -1652,7 +1652,9 @@ Deno.serve(async (req: Request) => {
     if (!isOpen && todayHours.length > 0 && !cart.test_mode) {
       const fmt12 = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
       const hoursDisplay = todayHours.map((h: { open: string; close: string }) => `${fmt12(h.open)}-${fmt12(h.close)}`).join(", ");
-      const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours -- you'll be happy you did!`;
+      const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours — you'll be happy you did!
+
+Testing? Reply TESTMODE to try out the ordering experience.`;
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
       if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
