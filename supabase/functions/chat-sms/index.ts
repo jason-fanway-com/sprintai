@@ -1171,9 +1171,10 @@ async function handleSystemEvent(
       ? hours.map((h: { open: string; close: string }) => `${fmt12Confirm(h.open)}-${fmt12Confirm(h.close)}`).join(", ")
       : "see our hours for details";
 
+    const orderNum = cartRow.order_number ? ` ORDER #${cartRow.order_number} ` : " ";
     const closeTime = hours.length > 0 ? fmt12Confirm(hours[hours.length - 1].close) : null;
     const closePart  = closeTime ? ` (we're open til ${closeTime})` : "";
-    message = `Payment confirmed! Order${pickup}: ${items}. Total: $${total}${feeLine}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
+    message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}${feeLine}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
   } else if (system_event === "payment_expired") {
     // KILLED (TCPA/10DLC, lead directive 2026-06-22): a checkout link expiring
     // is NOT a customer action. We never push an unsolicited "your link
@@ -1209,6 +1210,7 @@ async function handleSystemEvent(
       if (!resendApiKey) {
         console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
       } else {
+        const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
         const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
         const emailPickup = cartRow.pickup_name ?? "Unknown";
         const now = new Date();
@@ -1229,7 +1231,7 @@ async function handleSystemEvent(
   <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
     <div style="background:#1a1a2e;padding:24px 32px;">
       <h1 style="margin:0;color:#fff;font-size:20px;">${shop.name}</h1>
-      <p style="margin:4px 0 0;color:#aaa;font-size:14px;">New Order Received</p>
+      <p style="margin:4px 0 0;color:#aaa;font-size:14px;">${emailOrderNum ? `New Order ${emailOrderNum}` : "New Order Received"}</p>
     </div>
     <div style="padding:24px 32px;">
       <table style="width:100%;border-collapse:collapse;">
@@ -1249,6 +1251,7 @@ async function handleSystemEvent(
         </tfoot>
       </table>
       <div style="margin-top:20px;padding:16px;background:#f8f8f8;border-radius:6px;">
+        ${emailOrderNum ? `<p style="margin:0 0 6px;"><strong>Order:</strong> ${emailOrderNum}</p>` : ""}
         <p style="margin:0 0 6px;"><strong>Pickup Name:</strong> ${emailPickup}</p>
         <p style="margin:0;"><strong>Time Received:</strong> ${etTime}</p>
       </div>
@@ -1265,7 +1268,7 @@ async function handleSystemEvent(
           body: JSON.stringify({
             from: "SprintAI Orders <orders@getsprintai.com>",
             to: [shop.email_ticket_recipient],
-            subject: `New Order \u2014 ${emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
+            subject: `New Order${emailOrderNum ? ` ${emailOrderNum}` : ""} \u2014 ${emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
             html: emailHtml,
           }),
         });

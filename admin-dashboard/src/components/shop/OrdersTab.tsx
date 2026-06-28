@@ -2,6 +2,7 @@ import { ShoppingBag } from 'lucide-react'
 
 interface OrderCart {
   id: string
+  order_number: number | null
   phase: string
   total_cents: number | null
   created_at: string
@@ -28,7 +29,9 @@ export default function OrdersTab({ orders }: OrdersTabProps) {
             <div key={order.id} className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-start justify-between mb-2">
                 <div>
-                  <p className="font-medium text-gray-900">{order.pickup_name ?? 'No name'}</p>
+                  <p className="font-medium text-gray-900">
+                    {order.order_number ? `#${order.order_number} — ` : ''}{order.pickup_name ?? 'No name'}
+                  </p>
                   <p className="text-xs text-gray-400">{new Date(order.created_at).toLocaleString()}</p>
                 </div>
                 <span className="text-sm font-semibold text-gray-900">

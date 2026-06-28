@@ -45,6 +45,7 @@ interface OrderCart {
   created_at: string
   cart_json: Array<{ name: string; quantity: number; price_cents: number }>
   pickup_name: string | null
+  order_number: number | null
 }
 
 type Tab = 'menu' | 'orders' | 'settings' | 'chat'
