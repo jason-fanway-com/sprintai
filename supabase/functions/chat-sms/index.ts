@@ -5,7 +5,7 @@
  *   a) Twilio SMS webhook  (application/x-www-form-urlencoded)
  *   b) Web chat test       (application/json { shop_id, message, session_id })
  *
- * Uses Claude Haiku for the conversation engine.
+ * Uses DeepSeek V4 Flash (via OpenRouter) for the conversation engine.
  * Persists messages to the messages table and cart state to order_carts.
  */
 
@@ -15,8 +15,8 @@ import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const HAIKU_MODEL = "claude-haiku-4-5";
-const CLAUDE_API  = "https://api.anthropic.com/v1/messages";
+const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+const CHAT_API   = "https://openrouter.ai/api/v1/messages";
 const MAX_RETRIES = 8;
 
 const CORS_HEADERS = {
@@ -103,7 +103,7 @@ interface OrderCart {
   test_mode:                  boolean;
 }
 
-interface ClaudeContentBlock {
+interface ContentBlock {
   type:         string;
   id?:          string;
   name?:        string;
@@ -770,7 +770,7 @@ async function saveCart(
 
 async function runOrderingLoop(
   systemPrompt: string,
-  history:      Array<{ role: "user" | "assistant"; content: string | ClaudeContentBlock[] }>,
+  history:      Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }>,
   userMessage:  string,
   cart:         AnyCartItem[],
   menu:         EffectiveMenuItem[],
@@ -782,7 +782,7 @@ async function runOrderingLoop(
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
-  const messages: Array<{ role: "user" | "assistant"; content: string | ClaudeContentBlock[] }> = [
+  const messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [
     ...history,
     { role: "user", content: userMessage },
   ];
@@ -791,15 +791,16 @@ async function runOrderingLoop(
   let finalPhase:  OrderPhase | undefined;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const res = await fetch(CLAUDE_API, {
+    const res = await fetch(CHAT_API, {
       method:  "POST",
       headers: {
-        "x-api-key":         apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://getsprintai.com",
+        "X-Title":      "SprintAI",
       },
       body: JSON.stringify({
-        model:      HAIKU_MODEL,
+        model:      CHAT_MODEL,
         max_tokens: 512,
         system:     systemPrompt,
         messages,
@@ -809,11 +810,11 @@ async function runOrderingLoop(
 
     if (!res.ok) {
       const errText = await res.text();
-      console.error("[chat-sms] Claude API error:", res.status, errText);
+      console.error("[chat-sms] Chat API error:", res.status, errText);
       break;
     }
 
-    const data: { stop_reason: string; content: ClaudeContentBlock[] } = await res.json();
+    const data: { stop_reason: string; content: ContentBlock[] } = await res.json();
     const content    = data.content ?? [];
     const toolBlocks = content.filter(b => b.type === "tool_use");
     const textBlocks = content.filter(b => b.type === "text");
@@ -825,7 +826,7 @@ async function runOrderingLoop(
 
     messages.push({ role: "assistant", content });
 
-    const toolResults: ClaudeContentBlock[] = [];
+    const toolResults: ContentBlock[] = [];
     for (const toolBlock of toolBlocks) {
       const result = await executeTool(
         toolBlock.name!,
@@ -844,7 +845,7 @@ async function runOrderingLoop(
         tool_use_id: toolBlock.id!,
         content:     JSON.stringify(result.result),
       });
-      // Stop immediately after checkout is created — don't let Claude generate
+      // Stop immediately after checkout is created — don't let the model generate
       // another turn that could hallucinate a confirmation message
       if (toolBlock.name === "create_checkout" && checkoutUrl) {
         return {
@@ -1770,7 +1771,7 @@ Reply with TESTMODE to bypass and start a test session.`;
     }
   }
 
-  // If checkout was created, override Claude's reply entirely — prevents hallucinated confirmations
+  // If checkout was created, override the model's reply entirely — prevents hallucinated confirmations
   const safeReply = checkoutUrl
     ? "Payment link sent! Tap it to complete your order. Check your text or email."
     : reply;

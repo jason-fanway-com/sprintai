@@ -18,7 +18,7 @@
  * completely unaffected — they share no code path and no table writes.
  *
  * Cost/reliability guards:
- *   - cheap model (JUDGE_MODEL, default claude-haiku-4-5)
+ *   - cheap model (JUDGE_MODEL, default deepseek/deepseek-v4-flash via OpenRouter)
  *   - one LLM call per conversation
  *   - cap conversations per sweep (MAX_CONVERSATIONS_PER_SWEEP)
  *   - retry/backoff on transient LLM failure
@@ -49,21 +49,21 @@ import {
 import { maybeAutoFix, autofixEnabled } from "../_shared/judge-autofix.ts";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const JUDGE_MODEL = Deno.env.get("JUDGE_MODEL") ?? "claude-haiku-4-5";
-const CLAUDE_API = "https://api.anthropic.com/v1/messages";
+const JUDGE_MODEL = Deno.env.get("JUDGE_MODEL") ?? "deepseek/deepseek-v4-flash";
+const JUDGE_API  = "https://openrouter.ai/api/v1/messages";
 const IDLE_MINUTES = Number(Deno.env.get("JUDGE_IDLE_MINUTES") ?? "10"); // Spec §6 N=10
 const MAX_CONVERSATIONS_PER_SWEEP = Number(
   Deno.env.get("JUDGE_MAX_PER_SWEEP") ?? "50",
 );
 const MAX_RETRIES = 2;
-// Hard daily spend ceiling. Haiku is cheap (~$0.001-0.005/conversation); 200¢/day
-// = ~$2/day is a very generous testing-scale ceiling. Named in BUILD-NOTES.
+// Hard daily spend ceiling. DeepSeek Flash is ~$0.00006/conversation. 10¢/day
+// is a generous testing-scale ceiling. Named in BUILD-NOTES.
 const DAILY_SPEND_CEILING_CENTS = Number(
-  Deno.env.get("JUDGE_DAILY_SPEND_CEILING_CENTS") ?? "200",
+  Deno.env.get("JUDGE_DAILY_SPEND_CEILING_CENTS") ?? "10",  // ~$0.10/day at full sweep; was $2/day for Haiku
 );
-// Rough Haiku pricing for cost accounting (USD per Mtok).
-const PRICE_IN_PER_MTOK = 1.0;
-const PRICE_OUT_PER_MTOK = 5.0;
+// DeepSeek V4 Flash pricing for cost accounting (USD per Mtok).
+const PRICE_IN_PER_MTOK = 0.14;   // DeepSeek V4 Flash input  $0.14/MTok
+const PRICE_OUT_PER_MTOK = 0.28;  // DeepSeek V4 Flash output $0.28/MTok
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -260,23 +260,25 @@ async function callJudge(
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetch(CLAUDE_API, {
+      const res = await fetch(JUDGE_API, {
         method: "POST",
         headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://getsprintai.com",
+          "X-Title":      "SprintAI",
         },
         body: JSON.stringify({
           model: JUDGE_MODEL,
           max_tokens: 1024,
+          reasoning: { enabled: false },  // disable thinking blocks — wasted tokens for judge
           system,
           messages: [{ role: "user", content: user }],
         }),
       });
       if (!res.ok) {
         const t = await res.text();
-        lastErr = new Error(`Claude ${res.status}: ${t}`);
+        lastErr = new Error(`Judge API ${res.status}: ${t}`);
         if (res.status >= 500 || res.status === 429) {
           await sleep(300 * (attempt + 1));
           continue;
