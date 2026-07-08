@@ -1,5 +1,9 @@
 -- SprintAI — Conversation Judge eval store (Spec 06).
 --
+-- SELF-HEALING: if a prior apply left the migration record, remove it so the
+-- CLI can re-INSERT it. The DDL uses IF NOT EXISTS so it's safe to re-run.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '014';
+--
 -- An async, READ-ONLY LLM judge writes one row here per judged conversation.
 -- This table is NEVER read or written by the live order path (chat-sms). It is
 -- populated out-of-band by the scheduled judge worker (eval-sweep edge fn) and

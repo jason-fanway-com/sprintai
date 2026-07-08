@@ -58,6 +58,9 @@
 -- pg_cron: scheduler (installs into schema `cron`, runs in the postgres DB).
 -- pg_net : async HTTP from SQL (net.http_post). On Supabase pg_net installs into
 -- schema `extensions` and is exposed as `net.*`.
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '017';
+
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 

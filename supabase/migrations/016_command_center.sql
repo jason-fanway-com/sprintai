@@ -29,6 +29,9 @@
 -- ============================================================
 -- program_items — editorial "known open items / blockers"
 -- ============================================================
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '016';
+
 CREATE TABLE IF NOT EXISTS program_items (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   title       TEXT        NOT NULL,

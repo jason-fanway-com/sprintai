@@ -2,13 +2,16 @@
 -- Each shop gets its own sequence (NJB-1, NJB-2, ...). Numbers never collide across shops.
 -- Only confirmed/paid orders get a number; abandoned carts do not consume one.
 
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '020';
+
 BEGIN;
 
 -- 1) Add the nullable column
-ALTER TABLE order_carts ADD COLUMN order_number INTEGER;
+ALTER TABLE order_carts ADD COLUMN IF NOT EXISTS order_number INTEGER;
 
 -- 2) Unique per shop so no two confirmed orders share a number
-CREATE UNIQUE INDEX idx_order_carts_shop_order_number
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_carts_shop_order_number
   ON order_carts(shop_id, order_number)
   WHERE order_number IS NOT NULL;
 
@@ -33,7 +36,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 4) Attach trigger
+-- 4) Attach trigger (idempotent)
+DROP TRIGGER IF EXISTS trg_assign_order_number ON order_carts;
 CREATE TRIGGER trg_assign_order_number
   BEFORE UPDATE ON order_carts
   FOR EACH ROW

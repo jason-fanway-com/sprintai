@@ -64,6 +64,9 @@
 -- ── 1. Trigger function ───────────────────────────────────────────────────────
 -- AFTER INSERT ON messages: advance the parent conversation's last_message_at to
 -- the newest message time it has ever seen (monotonic via GREATEST).
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '018';
+
 CREATE OR REPLACE FUNCTION public.bump_conversation_last_message_at()
 RETURNS trigger
 LANGUAGE plpgsql

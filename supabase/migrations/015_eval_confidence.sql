@@ -16,6 +16,9 @@
 -- downgrades a flag — a real invented_item on a real menu stays CRITICAL/high.
 
 -- ── confidence column ────────────────────────────────────────────────────────
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '015';
+
 ALTER TABLE conversation_evals
   ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT 'high';
 

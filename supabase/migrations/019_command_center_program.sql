@@ -23,6 +23,9 @@
 -- ============================================================
 -- shared: generic updated_at trigger fn (idempotent CREATE OR REPLACE)
 -- ============================================================
+-- SELF-HEALING: remove stale schema_migrations record from a prior partial apply.
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '019';
+
 CREATE OR REPLACE FUNCTION set_program_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
