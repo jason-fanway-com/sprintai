@@ -449,7 +449,9 @@ seed_existing() {
     local chat_id chat_identifier
     chat_id=$(echo "$chat_line" | jq -r '.id' 2>/dev/null) || continue
     chat_identifier=$(echo "$chat_line" | jq -r '.identifier // empty' 2>/dev/null) || continue
-    [[ "$chat_identifier" != +* ]] && continue
+    if [[ "$chat_identifier" != +* ]]; then
+      [[ "$chat_identifier" == "jason@fanway.com" ]] || continue
+    fi
     while IFS= read -r msg_line; do
       local msg_id
       msg_id=$(echo "$msg_line" | jq -r '.id // empty' 2>/dev/null) || continue
@@ -543,8 +545,10 @@ run_bridge() {
       chat_id=$(echo "$chat_line" | jq -r '.id' 2>/dev/null) || continue
       chat_identifier=$(echo "$chat_line" | jq -r '.identifier // empty' 2>/dev/null) || continue
 
-      # Skip non-phone-number chats (Apple IDs like jason@fanway.com)
-      [[ "$chat_identifier" != +* ]] && continue
+      # Skip non-phone-number chats except test Apple IDs
+      if [[ "$chat_identifier" != +* ]]; then
+        [[ "$chat_identifier" == "jason@fanway.com" ]] || continue
+      fi
 
       log "[SCAN] chat=$chat_identifier"
 
@@ -588,9 +592,32 @@ run_bridge() {
           continue
         fi
 
-        # Only process messages addressed to the ordering number
-        if [[ "$destination_caller_id" != "$ORDERING_NUMBER" ]]; then
+        # Only process messages addressed to the ordering number.
+        # Messages.app uses multiple identity formats: raw phone, tel: prefix,
+        # and iCloud email (when routing through the iMessage account).
+        # Accept any that match the ordering number. Also accept the Sprint
+        # iCloud identity (joe.strazza.24@icloud.com) for iMessage-routed messages.
+        #
+        # NOTE: Messages with dst=tel:+14842018054 are the bridge's own outbound
+        # replies appearing in the chat.db — skip them to prevent self-reply loops.
+        local dst_ok=false
+        case "$destination_caller_id" in
+          tel:*) dst_ok=false ;;  # bot's own outbound
+          "$ORDERING_NUMBER"|"${ORDERING_NUMBER#+}") dst_ok=true ;;
+          "joe.strazza.24@icloud.com") dst_ok=true ;;
+        esac
+        if [[ "$dst_ok" != "true" ]]; then
           log "[SKIP] id=$msg_id: dst=$destination_caller_id != $ORDERING_NUMBER"
+          continue
+        fi
+
+        # Guard against the bridge consuming its own outbound replies.
+        # When the bridge sends via imsg, those messages can appear as
+        # from_me=false in the chat db. Skip any text starting with a known
+        # bot reply signature.
+        if [[ "$msg_text" == "Hey! The kitchen is closed"* ]]; then
+          log "[SKIP] id=$msg_id: bot self-reply (kitchen-closed) — marking processed"
+          mark_processed "$msg_id"
           continue
         fi
 
