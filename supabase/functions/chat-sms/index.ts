@@ -1445,9 +1445,15 @@ Deno.serve(async (req: Request) => {
     // sends this. Also accept ?test=1 on the function URL as an equivalent
     // affordance (whichever the web client can send). SMS path leaves
     // requestTestMode=false. See test-mode activation in the greeting block.
+    //
+    // HARD-GATE: test mode is FORBIDDEN when the Supabase key is live (sk_live_).
+    // On production, ?test=1 is a silent no-op. No shared secret, no env var —
+    // just key the gate directly to the one signal that tells us this is real money.
     {
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      const isLive = supabaseKey.startsWith("sk_live_");
       const url = new URL(req.url);
-      requestTestMode = body.test === true || url.searchParams.get("test") === "1";
+      requestTestMode = isLive ? false : (body.test === true || url.searchParams.get("test") === "1");
     }
     const { data: shopData } = await supabase
       .from("shops").select("*").eq("id", shop_id).single();
