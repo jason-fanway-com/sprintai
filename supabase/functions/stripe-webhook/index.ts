@@ -30,11 +30,45 @@ Deno.serve(async (req: Request) => {
     return jsonError("Method Not Allowed", 405);
   }
 
-  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-  const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "";
+  const liveSecretKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+  const testSecretKey = Deno.env.get("STRIPE_TEST_SECRET_KEY") ?? "";
+  const liveWebhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "";
+  const testWebhookSecret = Deno.env.get("STRIPE_TEST_WEBHOOK_SECRET") ?? "";
 
+  // Verify Stripe webhook signature — try test secret first, then live.
+  // Stripe signs test-mode events with the test signing secret and live-mode
+  // events with the live signing secret. We must match the correct one.
+  const signature = req.headers.get("stripe-signature") ?? "";
+  const rawBody = await req.arrayBuffer();
+  const bodyText = new TextDecoder().decode(rawBody);
+
+  let event: Stripe.Event;
+  let isTestEvent = false;
+  try {
+    // Try test webhook secret first (both secrets will be set in production).
+    event = await new Stripe(testSecretKey || liveSecretKey, {
+      apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
+    }).webhooks.constructEventAsync(bodyText, signature, testWebhookSecret);
+    isTestEvent = true;
+  } catch (_testErr) {
+    // Try live webhook secret as fallback.
+    try {
+      event = await new Stripe(liveSecretKey, {
+        apiVersion: "2023-10-16",
+        httpClient: Stripe.createFetchHttpClient(),
+      }).webhooks.constructEventAsync(bodyText, signature, liveWebhookSecret);
+      isTestEvent = false;
+    } catch (liveErr) {
+      console.error("[stripe-webhook] Signature verification failed with both test and live secrets");
+      return jsonError("Invalid signature", 400);
+    }
+  }
+
+  // Use the Stripe API key matching the event's environment.
+  const stripeSecretKey = isTestEvent ? testSecretKey : liveSecretKey;
   if (!stripeSecretKey) {
-    console.error("[stripe-webhook] STRIPE_SECRET_KEY not configured");
+    console.error("[stripe-webhook] No Stripe secret key for", isTestEvent ? "test" : "live", "mode");
     return jsonError("Stripe not configured", 500);
   }
 
@@ -43,18 +77,7 @@ Deno.serve(async (req: Request) => {
     httpClient: Stripe.createFetchHttpClient(),
   });
 
-  // Verify Stripe webhook signature
-  const signature = req.headers.get("stripe-signature") ?? "";
-  const rawBody = await req.arrayBuffer();
-  const bodyText = new TextDecoder().decode(rawBody);
-
-  let event: Stripe.Event;
-  try {
-    event = await stripe.webhooks.constructEventAsync(bodyText, signature, webhookSecret);
-  } catch (err) {
-    console.error("[stripe-webhook] Signature verification failed:", err);
-    return jsonError("Invalid signature", 400);
-  }
+  console.log(`[stripe-webhook] Verified ${isTestEvent ? "test" : "live"} event: ${event.type} — ${event.id}`);
 
   // `event.account` is set for CONNECTED-ACCOUNT events (direct-charge
   // refunds/disputes fire here, NOT on the platform). Empty for platform events.
