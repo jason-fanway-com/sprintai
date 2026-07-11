@@ -267,6 +267,14 @@ msg_is_too_old() {
 call_sprint() {
   local message="$1"
   local session_id="$2"
+  local real_phone="${3:-}"
+
+  local extra=""
+  if [[ -n "$real_phone" ]]; then
+    extra=$(jq -n --arg phone "$real_phone" '{phone: $phone}')
+  else
+    extra='{}'
+  fi
 
   curl -s -X POST "$EDGE_URL" \
     -H "Content-Type: application/json" \
@@ -276,7 +284,8 @@ call_sprint() {
       --arg shop_id "$SHOP_ID" \
       --arg message "$message" \
       --arg session_id "$session_id" \
-      '{shop_id: $shop_id, message: $message, session_id: $session_id}')" 2>/dev/null
+      --argjson extra "$extra" \
+      '{shop_id: $shop_id, message: $message, session_id: $session_id} * $extra')" 2>/dev/null
 }
 
 # -- STRUCTURAL OUTBOUND WATCHDOG (bridge side) ───────────────────────────────
@@ -392,9 +401,17 @@ process_message() {
   fi
   log "  Session: $session_id"
 
+  # Determine real phone for transactional pushes (payment confirmations, refunds)
+  local real_phone=""
+  if [[ "$sender" == +* ]]; then
+    real_phone="$sender"
+  elif [[ "$sender" == "jason@fanway.com" ]]; then
+    real_phone="+16102565023"
+  fi
+
   # Call edge function — failure is non-fatal
   local response
-  response=$(call_sprint "$text" "$session_id") || true
+  response=$(call_sprint "$text" "$session_id" "$real_phone") || true
 
   if [[ -z "$response" ]]; then
     log "  ERROR: No response from edge function"

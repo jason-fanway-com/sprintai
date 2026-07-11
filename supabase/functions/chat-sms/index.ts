@@ -1157,7 +1157,7 @@ async function handleSystemEvent(
 
   const { data: conversation } = await supabase
     .from("conversations")
-    .select("id, channel, customer_phone, tenant_id")
+    .select("id, channel, customer_phone, tenant_id, metadata")
     .eq("id", conversation_id)
     .single();
 
@@ -1330,11 +1330,34 @@ async function handleSystemEvent(
       await sendSmsViaTwilio(txnCtx, shop.phone_number_e164, conversation.customer_phone, message);
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
-    // iMessage bridge: extract real phone from "web:imsg-p{digits}-{sessionid}"
-    // Format: web:imsg-p16102565023-1781561505 → +16102565023
-    const match = conversation.customer_phone.match(/web:imsg-p(\d+)-/);
-    if (match) {
-      const realPhone = "+" + match[1];
+    // iMessage bridge: extract real phone from "web:imsg-{identifier}-{sessionid}"
+    // Two formats supported:
+    //   web:imsg-p6102565023-1781561505 → +16102565023 (digit-only)
+    //   web:imsg-jasonfanwaycom-1783778364 → lookup real phone in conversation metadata or fall back to session lookup
+    let realPhone: string | null = null;
+    
+    // Try format 1: web:imsg-p{digits}-{sessionid}
+    const digitMatch = conversation.customer_phone.match(/web:imsg-p(\d+)-/);
+    if (digitMatch) {
+      realPhone = "+" + digitMatch[1];
+    } else {
+      // Format 2: web:imsg-{email_or_id}-{sessionid} — lookup real phone from conversation metadata or shop config
+      const emailMatch = conversation.customer_phone.match(/web:imsg-(.+?)-([a-f0-9]+)$/);
+      if (emailMatch) {
+        // Fallback: use conversation metadata, then shop phone
+        const metaPhone = (conversation.metadata as { phone?: string } | null)?.phone;
+        if (metaPhone) {
+          realPhone = metaPhone;
+        } else {
+          // Last fallback: shop phone (likely the test shop owner)
+          if (shop.phone_number_e164) {
+            realPhone = shop.phone_number_e164;
+          }
+        }
+      }
+    }
+
+    if (realPhone) {
       // WATCHDOG GATE: only ENQUEUE for the bridge to drain if the same
       // transactional invariant holds. Fail closed — a cart that is not paid /
       // not refunded never gets a queued push, so the bridge can't send one.
@@ -1353,6 +1376,8 @@ async function handleSystemEvent(
       if (!sent) {
         console.warn(`[chat-sms] OUTBOUND QUEUE BLOCKED by watchdog (reason=${txnCtx.reason}); nothing queued.`);
       }
+    } else {
+      console.error(`[chat-sms] iMessage push blocked: could not determine phone for customer_phone=${conversation.customer_phone}; not queued.`);
     }
   }
 
@@ -1456,11 +1481,12 @@ Deno.serve(async (req: Request) => {
       return await handleSystemEvent(supabase, body);
     }
 
-    const { shop_id, message, session_id } = body;
+    const { shop_id, message, session_id, phone } = body;
     if (!shop_id || !message) return jsonError("shop_id and message are required");
     userMessage = message.trim();
     sessionId   = session_id ?? crypto.randomUUID();
     channel     = "web";
+    const userPhone = typeof phone === "string" && phone.length > 0 ? phone : null;
     // GATED test-mode signal: only the WEB JSON path can carry `test: true`,
     // and only an explicit boolean true counts. The normal diner flow never
     // sends this. Also accept ?test=1 on the function URL as an equivalent
@@ -1516,6 +1542,7 @@ Deno.serve(async (req: Request) => {
   const isFirstMessage = !conversation;
 
   if (!conversation) {
+    const metadata = userPhone ? { phone: userPhone } : {};
     const { data: newConv, error: convErr } = await supabase
       .from("conversations")
       .insert({
@@ -1524,6 +1551,7 @@ Deno.serve(async (req: Request) => {
         channel,
         session_id:     channel === "web" ? sessionId : null,
         status:         "active",
+        metadata,
       })
       .select("id").single();
     if (convErr || !newConv) {
