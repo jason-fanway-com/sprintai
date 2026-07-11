@@ -25,6 +25,7 @@ const PRICE_TO_PLAN: Record<string, string> = {
   "price_1TG8GtFPm1l8Fm1T1erCd7MB": "enterprise", // $497/mo
 };
 
+// v3: dual-signature verification for test + live webhooks
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return jsonError("Method Not Allowed", 405);
@@ -34,6 +35,10 @@ Deno.serve(async (req: Request) => {
   const testSecretKey = Deno.env.get("STRIPE_TEST_SECRET_KEY") ?? "";
   const liveWebhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? "";
   const testWebhookSecret = Deno.env.get("STRIPE_TEST_WEBHOOK_SECRET") ?? "";
+  
+  console.log("[stripe-webhook] testSecretKey prefix:", testSecretKey.substring(0, 7) + "...");
+  console.log("[stripe-webhook] testWebhookSecret hash:", testWebhookSecret ? "set (len=" + testWebhookSecret.length + ")" : "NOT SET");
+  console.log("[stripe-webhook] liveWebhookSecret hash:", liveWebhookSecret ? "set (len=" + liveWebhookSecret.length + ")" : "NOT SET");
 
   // Verify Stripe webhook signature — try test secret first, then live.
   // Stripe signs test-mode events with the test signing secret and live-mode
@@ -54,6 +59,7 @@ Deno.serve(async (req: Request) => {
   } catch (_testErr) {
     // Try live webhook secret as fallback.
     try {
+      console.error("[stripe-webhook] Test signature check failed:", String(_testErr).substring(0, 200));
       event = await new Stripe(liveSecretKey, {
         apiVersion: "2023-10-16",
         httpClient: Stripe.createFetchHttpClient(),

@@ -12,6 +12,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts";
+import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -567,7 +568,7 @@ async function executeTool(
         const r = i as CartItem;
         return s + r.price_cents * r.quantity;
       }, 0);
-      await supabase.from("order_carts").update({ subtotal_cents: subtotal, total_cents: subtotal }).eq("id", cartId);
+      await supabase.from("order_carts").update({ subtotal_cents: subtotal }).eq("id", cartId);
 
       const stripeKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
       if (!stripeKey) {
@@ -616,6 +617,26 @@ async function executeTool(
           quantity: 1,
         });
       }
+
+      // Add Sprint service fee as a visible line item
+      lineItems.push({
+        price_data: {
+          currency:     "usd",
+          unit_amount:  SERVICE_FEE_CENTS,
+          product_data: {
+            name: "Service fee",
+            description: "SprintAI platform service fee",
+          },
+        },
+        quantity: 1,
+      });
+
+      const totalCents = subtotal + SERVICE_FEE_CENTS;
+      await supabase.from("order_carts").update({
+        subtotal_cents: subtotal,
+        service_fee_cents: SERVICE_FEE_CENTS,
+        total_cents: totalCents,
+      }).eq("id", cartId);
 
       const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "https://your-project.supabase.co";
       const session = await stripe.checkout.sessions.create({
