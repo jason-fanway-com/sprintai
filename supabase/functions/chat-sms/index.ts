@@ -87,6 +87,9 @@ interface Shop {
   email_ticket_recipient:  string | null;
   is_paused:               boolean;
   pause_message:           string | null;
+  delivery_enabled:         boolean;
+  delivery_paused_until:    string | null;
+  delivery_pause_reason:    string | null;
   shop_context:            string | null;
   ai_instructions:         string | null;
 }
@@ -1403,6 +1406,7 @@ Deno.serve(async (req: Request) => {
 
   let shop:          Shop;
   let customerPhone: string;
+  let userPhone:     string | null = null;
   let userMessage:   string;
   let sessionId:     string;
   let channel:       "sms" | "web";
@@ -1486,7 +1490,7 @@ Deno.serve(async (req: Request) => {
     userMessage = message.trim();
     sessionId   = session_id ?? crypto.randomUUID();
     channel     = "web";
-    const userPhone = typeof phone === "string" && phone.length > 0 ? phone : null;
+    userPhone = typeof phone === "string" && phone.length > 0 ? phone : null;
     // GATED test-mode signal: only the WEB JSON path can carry `test: true`,
     // and only an explicit boolean true counts. The normal diner flow never
     // sends this. Also accept ?test=1 on the function URL as an equivalent
@@ -1651,6 +1655,27 @@ Deno.serve(async (req: Request) => {
   const currentTime   = getCurrentTime(shop.timezone);
   const effectiveMenu = await buildEffectiveMenu(supabase, shop.id, businessDate);
 
+  // ── Load today's specials & fold into effective menu ─────────────────────
+  const todayDate = businessDate; // already in YYYY-MM-DD
+  const { data: todaysSpecials } = await supabase
+    .from("specials")
+    .select("id, name, price_cents, description")
+    .eq("shop_id", shop.id)
+    .eq("active_date", todayDate);
+  if (todaysSpecials && todaysSpecials.length > 0) {
+    for (const s of todaysSpecials) {
+      effectiveMenu.push({
+        id: `SPECIAL-${s.id}`,
+        name: s.name,
+        price_cents: s.price_cents,
+        description: s.description ?? `Today's daily special`,
+        category: "Today's Specials",
+        modifiers_json: null,
+        option_groups: [],
+      });
+    }
+  }
+
   if (effectiveMenu.length === 0 && cart.phase === "greeting") {
     const reply = "Sorry, our menu is not available right now. Please call us to place an order.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
@@ -1719,6 +1744,33 @@ Reply with TESTMODE to bypass and start a test session.`;
       if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
       return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
     }
+  }
+
+  // ── Load conversation history ─────────────────────────────────────────────
+
+  // ── Delivery pause enforcement ───────────────────────────────────────────
+  // If the shop has paused delivery and it's still in effect, inform the
+  // customer immediately. This overrides normal ordering flow.
+  const now = new Date();
+  const pausedUntil = shop.delivery_paused_until ? new Date(shop.delivery_paused_until) : null;
+  const deliveryIsPaused = !shop.delivery_enabled || (pausedUntil && pausedUntil > now);
+  if (deliveryIsPaused && cart.phase === "greeting" && !cart.test_mode) {
+    const reason = shop.delivery_pause_reason
+      ? ` ${shop.delivery_pause_reason}`
+      : "";
+    const resumeTime = pausedUntil
+      ? new Date(pausedUntil.getTime() - now.getTime()).getMinutes() > 0
+        ? ` Back in about ${Math.ceil((pausedUntil.getTime() - now.getTime()) / 60_000)} minutes.`
+        : " Back shortly."
+      : "";
+    const resumeTimeStr = pausedUntil
+      ? ` Back in about ${Math.ceil((pausedUntil.getTime() - now.getTime()) / 60_000)} minutes.`
+      : "";
+    const pauseMsg = `Quick heads up — we're pickup-only right now.${reason}${resumeTimeStr} Want to put in a pickup order?`;
+    await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", pauseMsg);
+    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, pauseMsg); return emptyTwiml(); }
+    return jsonResponse({ reply: pauseMsg, cart: [], phase: "greeting", session_id: sessionId });
   }
 
   // ── Load conversation history ─────────────────────────────────────────────

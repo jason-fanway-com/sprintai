@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Globe, MessageSquare, UtensilsCrossed, Upload, Settings, Pencil, Trash2, Plus } from 'lucide-react'
+import { Globe, MessageSquare, UtensilsCrossed, Upload, Settings, Pencil, Trash2, Plus, Sparkles } from 'lucide-react'
 import { UseMutationResult } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import ShopChatTest from '../ShopChatTest'
+import ConversationalAdminChat from './ConversationalAdminChat'
 import OnboardingWizard from './OnboardingWizard'
 
 interface MenuItem {
@@ -474,9 +475,55 @@ export default function ChatAdminTab({
         </div>
       </div>
 
-      {/* Right panel: phone mockup (1/3 on desktop) */}
-      <div className="lg:w-1/3 flex-shrink-0 flex justify-center items-start pt-6 pb-6 border-t border-gray-200 lg:border-t-0 lg:border-l overflow-hidden">
-        <ShopChatTest shopId={shopId} shopName={shopName} />
+      {/* Right panel: admin chat + order preview (1/3 on desktop) */}
+      <RightPanel shopId={shopId} shopName={shopName} />
+    </div>
+  )
+}
+
+// Right panel: toggle between Conversational Admin Chat and Customer Chat Preview
+type RightPanelTab = 'admin' | 'preview'
+
+function RightPanel({ shopId, shopName }: { shopId: string; shopName: string }) {
+  const [tab, setTab] = useState<RightPanelTab>('admin')
+
+  return (
+    <div className="lg:w-1/3 flex-shrink-0 flex flex-col border-t border-gray-200 lg:border-t-0 lg:border-l overflow-hidden">
+      {/* Toggle tabs */}
+      <div className="flex border-b border-gray-200 flex-shrink-0 px-3 pt-3">
+        <button
+          onClick={() => setTab('admin')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
+            tab === 'admin'
+              ? 'border-brand-600 text-brand-600'
+              : 'border-transparent text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          Talk to Menu
+        </button>
+        <button
+          onClick={() => setTab('preview')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
+            tab === 'preview'
+              ? 'border-brand-600 text-brand-600'
+              : 'border-transparent text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <MessageSquare className="w-3.5 h-3.5" />
+          Customer View
+        </button>
+      </div>
+
+      {/* Panel content */}
+      <div className="flex-1 min-h-0">
+        {tab === 'admin' ? (
+          <ConversationalAdminChat shopId={shopId} />
+        ) : (
+          <div className="flex justify-center items-start pt-6 pb-6 h-full overflow-hidden">
+            <ShopChatTest shopId={shopId} shopName={shopName} />
+          </div>
+        )}
       </div>
     </div>
   )

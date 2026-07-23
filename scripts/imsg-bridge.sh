@@ -554,22 +554,20 @@ run_bridge() {
   _trim_processed_ids_file
   seed_existing
 
+  # Fixed chat IDs — only poll the chats that matter, not every iMessage chat
+  # on the machine. 35=ordering number, 1=jason@fanway.com (test), 6=Jason's phone
+  local -A CHAT_ID_TO_IDENTIFIER
+  CHAT_ID_TO_IDENTIFIER[35]="+14842018054"
+  CHAT_ID_TO_IDENTIFIER[1]="jason@fanway.com"
+  CHAT_ID_TO_IDENTIFIER[6]="+16102565023"
+  MONITOR_CHATS=(35 1 6)
+
   while [[ "$SHUTDOWN_REQUESTED" != "true" ]]; do
     drain_outbound_queue
-    # Get all recent chats
-    while IFS= read -r chat_line; do
-      local chat_id chat_identifier
-      chat_id=$(echo "$chat_line" | jq -r '.id' 2>/dev/null) || continue
-      chat_identifier=$(echo "$chat_line" | jq -r '.identifier // empty' 2>/dev/null) || continue
 
-      # Skip non-phone-number chats except test Apple IDs
-      if [[ "$chat_identifier" != +* ]]; then
-        [[ "$chat_identifier" == "jason@fanway.com" ]] || continue
-      fi
-
-      log "[SCAN] chat=$chat_identifier"
-
-      # Get latest 3 messages from this chat
+    for cid in "${MONITOR_CHATS[@]}"; do
+      local chat_identifier="${CHAT_ID_TO_IDENTIFIER[$cid]}"
+      # Get latest 3 messages from this chat only
       while IFS= read -r msg_line; do
         local is_from_me msg_text msg_id destination_caller_id msg_created_at
         is_from_me=$(echo "$msg_line" | jq -r '.is_from_me // false' 2>/dev/null) || continue
@@ -578,16 +576,11 @@ run_bridge() {
         destination_caller_id=$(echo "$msg_line" | jq -r '.destination_caller_id // empty' 2>/dev/null) || continue
         msg_created_at=$(echo "$msg_line" | jq -r '.created_at // empty' 2>/dev/null) || true
 
-        # Debug: log every message evaluated
-        local is_proc_flag="false"
-        is_processed "$msg_id" && is_proc_flag="true"
-        log "[MSG] id=$msg_id from_me=$is_from_me dst=$destination_caller_id processed=$is_proc_flag created_at=$msg_created_at text='${msg_text:0:30}'"
-
-        # Skip outbound, empty, or already processed
-        [[ "$is_from_me" == "true" ]] && { log "[SKIP] id=$msg_id: is_from_me"; continue; }
-        [[ -z "$msg_text" ]] && { log "[SKIP] id=$msg_id: empty text"; continue; }
+        # Skip outbound, empty, or already processed (no verbose logging — keeps log size manageable)
+        [[ "$is_from_me" == "true" ]] && continue
+        [[ -z "$msg_text" ]] && continue
         [[ -z "$msg_id" ]] && continue
-        is_processed "$msg_id" && { log "[SKIP] id=$msg_id: already processed (persistent)"; continue; }
+        is_processed "$msg_id" && continue
 
         # PRIMARY DEFENSE (fail-closed): skip messages we cannot prove are fresh
         # within MAX_MSG_AGE_SECONDS. A stale/replayed inbound is marked processed
@@ -609,9 +602,8 @@ run_bridge() {
           continue
         fi
 
-        # Only process messages addressed to the ordering number.
-        # Messages.app uses multiple identity formats: raw phone, tel: prefix,
-        # and iCloud email (when routing through the iMessage account).
+        # Only log when we find a genuinely new message to process
+        log "[SCAN] NEW msg from $chat_identifier: ${msg_text:0:40}"
         # Accept any that match the ordering number. Also accept the Sprint
         # iCloud identity (joe.strazza.24@icloud.com) for iMessage-routed messages.
         #
@@ -647,9 +639,8 @@ run_bridge() {
           mark_processed "$msg_id"
         }
 
-      done < <(imsg history --chat-id "$chat_id" --limit 3 --json 2>/dev/null)
-
-    done < <(imsg chats --limit 30 --json 2>/dev/null)
+      done < <(imsg history --chat-id "$cid" --limit 3 --json 2>/dev/null)
+    done
 
     sleep "$POLL_INTERVAL"
   done
