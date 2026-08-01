@@ -803,8 +803,8 @@ async function runOrderingLoop(
   shopName:     string,
   testMode:     boolean = false,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
 
   const messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [
     ...history,
