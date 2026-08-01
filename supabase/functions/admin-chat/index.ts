@@ -727,7 +727,8 @@ Deno.serve(async (req: Request) => {
     id: string; user_metadata: { tenant_id?: string; is_admin?: boolean };
   };
   const tenantId = user_metadata?.tenant_id;
-  if (!tenantId) return jsonResponse({ error: "No tenant_id in user_metadata" }, 403);
+  const isAdmin = user_metadata?.is_admin === true;
+  if (!tenantId && !isAdmin) return jsonResponse({ error: "No tenant_id in user_metadata" }, 403);
 
   // Parse request
   let body: { message?: string; message_history?: { role: string; content: string }[]; shop_id?: string; confirmed_action_id?: string };
@@ -740,7 +741,7 @@ Deno.serve(async (req: Request) => {
   const { data: shopData } = await supabase.from("shops").select("*").eq("id", shop_id).single();
   if (!shopData) return jsonResponse({ error: "Shop not found" }, 404);
   const shop = shopData as unknown as Shop;
-  if (shop.tenant_id !== tenantId && !user_metadata?.is_admin) {
+  if (shop.tenant_id !== tenantId && !isAdmin) {
     return jsonResponse({ error: "Forbidden: shop does not belong to your tenant" }, 403);
   }
 
