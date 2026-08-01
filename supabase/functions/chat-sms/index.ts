@@ -228,7 +228,7 @@ async function buildEffectiveMenu(
   supabase:     ReturnType<typeof createClient>,
   shopId:       string,
   businessDate: string,
-): Promise<EffectiveMenuItem[]> {
+): Promise<{ menu: EffectiveMenuItem[]; soldOutNames: string[] }> {
   const { data: menu } = await supabase
     .from("menus")
     .select("id")
@@ -238,7 +238,7 @@ async function buildEffectiveMenu(
     .limit(1)
     .single();
 
-  if (!menu) return [];
+  if (!menu) return { menu: [], soldOutNames: [] };
 
   const { data: items } = await supabase
     .from("menu_items")
@@ -247,7 +247,7 @@ async function buildEffectiveMenu(
     .eq("active", true)
     .order("display_order", { ascending: true });
 
-  if (!items?.length) return [];
+  if (!items?.length) return { menu: [], soldOutNames: [] };
 
   // Load option groups and choices for these menu items
   const itemIds = items.map(i => i.id);
@@ -297,8 +297,11 @@ async function buildEffectiveMenu(
     .eq("business_date", businessDate);
 
   const soldOutIds = new Set((overrides ?? []).map((o: { menu_item_id: string }) => o.menu_item_id));
+  const soldOutNames = items
+    .filter((item: { id: string }) => soldOutIds.has(item.id))
+    .map((item: { name: string }) => item.name);
 
-  return items
+  const effectiveItems = items
     .filter((item: { id: string }) => !soldOutIds.has(item.id))
     .map((item: EffectiveMenuItem) => ({
       id:             item.id,
@@ -309,6 +312,8 @@ async function buildEffectiveMenu(
       modifiers_json: item.modifiers_json,
       option_groups:  groupsByItem[item.id] || [],
     }));
+
+  return { menu: effectiveItems, soldOutNames };
 }
 
 // ─── System prompt builder ────────────────────────────────────────────────────
@@ -322,6 +327,7 @@ function buildSystemPrompt(
   isFirstMessage: boolean,
   notes?:         string | null,
   priorLinkExpired = false,
+  soldOutNames:   string[] = [],
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = shop.open_hours?.[today] ?? [];
@@ -401,7 +407,7 @@ TODAY'S HOURS: ${hoursStr}
 
 AVAILABLE MENU:
 ${menuStr}
-${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these exactly):\n${shop.ai_instructions}\n` : ""}
+${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a customer asks, tell them we're temporarily out): ${soldOutNames.join(", ")}\n` : ""}${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these exactly):\n${shop.ai_instructions}\n` : ""}
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
 ${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}` : ""}
@@ -411,6 +417,7 @@ RULES:
 - Keep ALL responses under 300 characters for SMS
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
+- SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
 - When cart has items and customer says they are done or asks to check out, show a brief summary and ask for confirmation
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
@@ -1653,7 +1660,7 @@ Deno.serve(async (req: Request) => {
   // ── Build effective menu ──────────────────────────────────────────────────
   const businessDate  = getBusinessDate(shop.timezone);
   const currentTime   = getCurrentTime(shop.timezone);
-  const effectiveMenu = await buildEffectiveMenu(supabase, shop.id, businessDate);
+  const { menu: effectiveMenu, soldOutNames } = await buildEffectiveMenu(supabase, shop.id, businessDate);
 
   // ── Load today's specials & fold into effective menu ─────────────────────
   const todayDate = businessDate; // already in YYYY-MM-DD
@@ -1793,7 +1800,7 @@ Reply with TESTMODE to bypass and start a test session.`;
   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames);
   const cartItems    = [...cart.cart_json];
 
   const loopResult = await runOrderingLoop(
