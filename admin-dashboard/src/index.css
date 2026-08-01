@@ -3,20 +3,45 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     @apply bg-gray-50 text-gray-900 antialiased;
+    /* Prevent iOS zoom on input focus */
+    font-size: 16px;
+  }
+  /* Prevent horizontal overflow */
+  html, body, #root {
+    @apply overflow-x-hidden;
+    max-width: 100vw;
+  }
+}
+
+@layer utilities {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
   }
 }
 
 @layer components {
   .btn-primary {
     @apply inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors font-medium text-sm;
+    min-height: 44px;
   }
   .btn-secondary {
     @apply inline-flex items-center gap-2 px-4 py-2 bg-white text-gray-700 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors font-medium text-sm;
+    min-height: 44px;
   }
   .btn-danger {
     @apply inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-sm;
+    min-height: 44px;
   }
   .card {
     @apply bg-white rounded-xl border border-gray-200 shadow-sm;
@@ -35,5 +60,21 @@
   }
   .input {
     @apply block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent;
+    min-height: 44px;
+  }
+  /* Mobile textarea — 16px min to avoid iOS zoom */
+  textarea.input, textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  input[type="text"], input[type="email"], input[type="password"], input[type="url"], select {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  /* Bottom nav item */
+  .bottom-nav-item {
+    @apply flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-xs font-medium transition-colors rounded-lg;
+    min-width: 48px;
+    min-height: 44px;
   }
 }

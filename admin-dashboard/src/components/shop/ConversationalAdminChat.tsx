@@ -314,19 +314,19 @@ export default function ConversationalAdminChat({ shopId }: Props) {
     <div className="flex flex-col h-full bg-white">
       {/* Live Status Header */}
       {statusHeader && (
-        <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-3 text-xs">
+        <div className="px-3 sm:px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2 sm:gap-3 text-xs flex-wrap">
           <div className={`flex items-center gap-1.5 ${statusHeader.delivery_enabled ? 'text-green-700' : 'text-orange-600'}`}>
             <div className={`w-2 h-2 rounded-full ${statusHeader.delivery_enabled ? 'bg-green-500' : 'bg-orange-500'}`} />
             {statusHeader.delivery_enabled ? 'Delivery on' : 'Delivery off'}
           </div>
           <div className="text-gray-500">
-            <span className="font-semibold text-red-600">{statusHeader.items_86d_today}</span> items 86'd
+            <span className="font-semibold text-red-600">{statusHeader.items_86d_today}</span> 86'd
           </div>
           <div className="text-gray-500">
             <span className="font-semibold text-brand-600">{statusHeader.active_specials_count}</span> specials
           </div>
           {statusHeader.items_86d_names.length > 0 && (
-            <div className="text-gray-400 truncate ml-auto max-w-[40%]" title={statusHeader.items_86d_names.join(', ')}>
+            <div className="text-gray-400 truncate flex-1 min-w-0 text-right" title={statusHeader.items_86d_names.join(', ')}>
               86'd: {statusHeader.items_86d_names.slice(0, 3).join(', ')}{statusHeader.items_86d_names.length > 3 ? '...' : ''}
             </div>
           )}
@@ -334,7 +334,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-brand-600" />
           <h3 className="text-sm font-semibold text-gray-700">Talk to Your Menu</h3>
@@ -344,6 +344,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
             onClick={clearHistory}
             className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-600 transition-colors rounded"
             title="Clear chat history"
+            style={{ minHeight: 44 }}
           >
             <RefreshCw className="w-3 h-3" />
             Clear
@@ -352,7 +353,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0">
         {messages.length === 0 && (
           <div className="text-center py-8">
             <MessageSquare className="w-8 h-8 mx-auto mb-3 text-gray-300" />
@@ -408,6 +409,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
                         }}
                         disabled={isLoading}
                         className="flex items-center gap-1 px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        style={{ minHeight: 44 }}
                       >
                         <X className="w-3 h-3" />
                         Cancel
@@ -416,6 +418,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
                         onClick={() => confirmAction(msg.confirmationCard!)}
                         disabled={isLoading}
                         className="flex items-center gap-1 px-3 py-1.5 text-xs text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50"
+                        style={{ minHeight: 44 }}
                       >
                         {isLoading ? (
                           <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white" />
@@ -434,6 +437,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
                     onClick={() => undoAction(msg.executedResult!.undo_token)}
                     disabled={isLoading}
                     className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-brand-600 border border-gray-200 rounded-md hover:border-brand-300 transition-colors"
+                    style={{ minHeight: 44 }}
                   >
                     <Undo2 className="w-3 h-3" />
                     Undo
@@ -460,13 +464,14 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       </div>
 
       {/* Quick-action chips */}
-      <div className="px-4 py-2 flex gap-2 overflow-x-auto border-t border-gray-100">
+      <div className="px-3 sm:px-4 py-2 flex gap-2 overflow-x-auto border-t border-gray-100">
         {QUICK_ACTIONS.map(action => (
           <button
             key={action.label}
             onClick={() => sendMessage(action.message)}
             disabled={isLoading}
             className="flex-shrink-0 px-3 py-1.5 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-brand-50 hover:text-brand-600 border border-transparent hover:border-brand-200 transition-colors disabled:opacity-50"
+            style={{ minHeight: 36 }}
           >
             {action.label}
           </button>
@@ -474,7 +479,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t border-gray-200">
+      <div className="px-3 sm:px-4 py-3 border-t border-gray-200">
         <form
           onSubmit={e => { e.preventDefault(); sendMessage() }}
           className="flex gap-2"
@@ -484,12 +489,13 @@ export default function ConversationalAdminChat({ shopId }: Props) {
             type="button"
             onClick={toggleListening}
             disabled={isLoading}
-            className={`flex items-center justify-center w-9 h-9 rounded-lg transition-colors flex-shrink-0 ${
+            className={`flex items-center justify-center w-10 h-10 sm:w-9 sm:h-9 rounded-lg transition-colors flex-shrink-0 ${
               isListening
                 ? 'bg-red-500 text-white animate-pulse'
                 : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }`}
             title={isListening ? 'Stop listening' : 'Dictate'}
+            style={{ minHeight: 44, minWidth: 44 }}
           >
             {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           </button>
@@ -502,11 +508,13 @@ export default function ConversationalAdminChat({ shopId }: Props) {
             placeholder="86 the tuna melt..."
             disabled={isLoading}
             className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+            style={{ minHeight: 44 }}
           />
           <button
             type="submit"
             disabled={isLoading || !inputValue.trim()}
             className="flex items-center gap-1 px-3 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors flex-shrink-0"
+            style={{ minHeight: 44, minWidth: 44 }}
           >
             {isLoading ? (
               <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />

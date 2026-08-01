@@ -5,6 +5,38 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Serve PWA assets at both root and /dashboard/ paths
+# (root = direct admin site access, /dashboard/ = proxied via getsprintai.com)
+[[redirects]]
+  from = "/manifest.json"
+  to = "/manifest.json"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/manifest.json"
+  to = "/manifest.json"
+  status = 200
+
+[[redirects]]
+  from = "/sw.js"
+  to = "/sw.js"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/sw.js"
+  to = "/sw.js"
+  status = 200
+
+[[redirects]]
+  from = "/icons/*"
+  to = "/icons/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/icons/*"
+  to = "/icons/:splat"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

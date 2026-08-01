@@ -15,7 +15,16 @@ export default {
           700: '#0369a1',
           900: '#0c4a6e',
         }
-      }
+      },
+      animation: {
+        'slide-in-left': 'slideInLeft 200ms ease-out',
+      },
+      keyframes: {
+        slideInLeft: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
+      },
     },
   },
   plugins: [],

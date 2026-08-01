@@ -18,6 +18,7 @@ interface MenuItem {
 
 type EditItemForm = { name: string; price_cents_str: string; description: string; category: string }
 type AddItemForm = { name: string; price_cents_str: string; description: string }
+type MobileTab = 'chat' | 'setup'
 
 interface ChatAdminTabProps {
   shopId: string
@@ -94,6 +95,7 @@ export default function ChatAdminTab({
   onDirtyChange,
 }: ChatAdminTabProps) {
   const isDirty = instructionsDraft !== (shop.ai_instructions ?? '') || contextDraft !== (shop.shop_context ?? '')
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chat')
 
   useEffect(() => {
     onDirtyChange?.(isDirty)
@@ -112,8 +114,6 @@ export default function ChatAdminTab({
   const hasMenuItems = (menuItems ?? []).length > 0
   const hasInstructions = !!(shop.ai_instructions && shop.ai_instructions.trim())
   const isNewShop = !hasContext && !hasMenuItems && !hasInstructions
-
-  // Show wizard only for truly new shops or if user hasn't dismissed
   const showOnboarding = showWizard && isNewShop
 
   const categoryGroups = (menuItems ?? []).reduce<Record<string, MenuItem[]>>((acc, item) => {
@@ -146,8 +146,39 @@ export default function ChatAdminTab({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-      {/* Left panel: knowledge base (2/3 on desktop) */}
-      <div className="lg:w-2/3 overflow-y-auto border-b border-gray-200 lg:border-b-0 lg:border-r max-h-64 lg:max-h-none">
+      {/* ---- MOBILE TABS (hidden on lg+) ---- */}
+      <div className="lg:hidden flex border-b border-gray-200 flex-shrink-0 bg-white">
+        <button
+          onClick={() => setMobileTab('chat')}
+          className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px flex-1 justify-center ${
+            mobileTab === 'chat'
+              ? 'border-brand-600 text-brand-600'
+              : 'border-transparent text-gray-500'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4" />
+          Chat
+        </button>
+        <button
+          onClick={() => setMobileTab('setup')}
+          className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px flex-1 justify-center ${
+            mobileTab === 'setup'
+              ? 'border-brand-600 text-brand-600'
+              : 'border-transparent text-gray-500'
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          Setup
+          {isDirty && (
+            <span className="w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0" />
+          )}
+        </button>
+      </div>
+
+      {/* ---- LEFT PANEL: Knowledge Base (desktop: always visible, mobile: setup tab) ---- */}
+      <div className={`lg:w-2/3 overflow-y-auto border-b border-gray-200 lg:border-b-0 lg:border-r ${
+        mobileTab === 'setup' ? 'block' : 'hidden lg:block'
+      }`}>
         <div className="p-4 space-y-6">
           {/* AI Training Instructions */}
           <div>
@@ -184,6 +215,7 @@ export default function ChatAdminTab({
                   onClick={onScrapeFromChatTab}
                   disabled={isScraping || !urlDraft.trim()}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm border border-brand-200 text-brand-600 rounded-lg hover:bg-brand-50 transition-colors disabled:opacity-50 flex-shrink-0"
+                  style={{ minHeight: 44 }}
                 >
                   {isScraping
                     ? <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-brand-600" />
@@ -221,6 +253,7 @@ export default function ChatAdminTab({
               onClick={() => onSaveChatContext()}
               disabled={saveChatContext.isPending}
               className="flex items-center gap-1.5 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
+              style={{ minHeight: 44 }}
             >
               {isDirty && (
                 <span className="w-2 h-2 rounded-full bg-yellow-300 flex-shrink-0" />
@@ -239,7 +272,9 @@ export default function ChatAdminTab({
                 <UtensilsCrossed className="w-4 h-4 text-gray-400" />
                 Menu
               </h3>
-              <label className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors cursor-pointer ${isUploading ? 'bg-gray-400 cursor-wait' : 'bg-brand-600 hover:bg-brand-700'} text-white`}>
+              <label className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors cursor-pointer ${isUploading ? 'bg-gray-400 cursor-wait' : 'bg-brand-600 hover:bg-brand-700'} text-white`}
+                style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center' }}
+              >
                 {isUploading ? <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" /> : <Upload className="w-3.5 h-3.5" />}
                 {isUploading ? 'Parsing...' : 'Upload PDF'}
                 <input type="file" accept=".pdf" className="hidden" onChange={onUploadPdf} disabled={isUploading} />
@@ -294,6 +329,7 @@ export default function ChatAdminTab({
                               <button
                                 onClick={() => onEditItemIdChange(null)}
                                 className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                                style={{ minHeight: 44 }}
                               >
                                 Cancel
                               </button>
@@ -301,6 +337,7 @@ export default function ChatAdminTab({
                                 onClick={() => onEditMenuItem.mutate({ itemId: item.id, form: editItemForm })}
                                 disabled={onEditMenuItem.isPending || !editItemForm.name.trim()}
                                 className="px-3 py-1 text-xs text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
+                                style={{ minHeight: 44 }}
                               >
                                 {onEditMenuItem.isPending ? 'Saving...' : 'Save'}
                               </button>
@@ -387,6 +424,7 @@ export default function ChatAdminTab({
                         <button
                           onClick={() => onAddingToCategoryChange(null)}
                           className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                          style={{ minHeight: 44 }}
                         >
                           Cancel
                         </button>
@@ -394,6 +432,7 @@ export default function ChatAdminTab({
                           onClick={() => onAddMenuItem.mutate({ category, form: addItemForm })}
                           disabled={onAddMenuItem.isPending || !addItemForm.name.trim()}
                           className="px-3 py-1 text-xs text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                          style={{ minHeight: 44 }}
                         >
                           {onAddMenuItem.isPending ? 'Adding...' : 'Add'}
                         </button>
@@ -404,6 +443,7 @@ export default function ChatAdminTab({
                       <button
                         onClick={() => onAddingToCategoryChange(category)}
                         className="w-full px-3 py-2 text-xs text-gray-400 hover:text-brand-600 hover:bg-gray-50 transition-colors flex items-center gap-1"
+                        style={{ minHeight: 44 }}
                       >
                         <Plus className="w-3.5 h-3.5" />
                         Add item
@@ -449,6 +489,7 @@ export default function ChatAdminTab({
                     <button
                       onClick={() => onAddingToCategoryChange(null)}
                       className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                      style={{ minHeight: 44 }}
                     >
                       Cancel
                     </button>
@@ -456,6 +497,7 @@ export default function ChatAdminTab({
                       onClick={() => onAddMenuItem.mutate({ category: addItemCategory.trim() || 'Other', form: addItemForm })}
                       disabled={onAddMenuItem.isPending || !addItemForm.name.trim()}
                       className="px-3 py-1 text-xs text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                      style={{ minHeight: 44 }}
                     >
                       {onAddMenuItem.isPending ? 'Adding...' : 'Add'}
                     </button>
@@ -465,6 +507,7 @@ export default function ChatAdminTab({
                 <button
                   onClick={() => onAddingToCategoryChange('__new__')}
                   className="mt-3 w-full py-2 text-xs text-gray-400 hover:text-brand-600 border border-dashed border-gray-200 rounded-lg hover:border-brand-300 transition-colors flex items-center justify-center gap-1"
+                  style={{ minHeight: 44 }}
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add item to new category
@@ -475,8 +518,12 @@ export default function ChatAdminTab({
         </div>
       </div>
 
-      {/* Right panel: admin chat + order preview (1/3 on desktop) */}
-      <RightPanel shopId={shopId} shopName={shopName} />
+      {/* ---- RIGHT PANEL: Chat (desktop: always visible, mobile: chat tab) ---- */}
+      <div className={`lg:w-1/3 lg:flex-shrink-0 lg:flex lg:flex-col lg:border-t-0 lg:border-l overflow-hidden ${
+        mobileTab === 'chat' ? 'block' : 'hidden lg:flex'
+      }`}>
+        <RightPanel shopId={shopId} shopName={shopName} />
+      </div>
     </div>
   )
 }
@@ -488,7 +535,7 @@ function RightPanel({ shopId, shopName }: { shopId: string; shopName: string }) 
   const [tab, setTab] = useState<RightPanelTab>('admin')
 
   return (
-    <div className="lg:w-1/3 flex-shrink-0 flex flex-col border-t border-gray-200 lg:border-t-0 lg:border-l overflow-hidden">
+    <div className="flex flex-col h-full min-h-0">
       {/* Toggle tabs */}
       <div className="flex border-b border-gray-200 flex-shrink-0 px-3 pt-3">
         <button
@@ -498,6 +545,7 @@ function RightPanel({ shopId, shopName }: { shopId: string; shopName: string }) 
               ? 'border-brand-600 text-brand-600'
               : 'border-transparent text-gray-400 hover:text-gray-600'
           }`}
+          style={{ minHeight: 44 }}
         >
           <Sparkles className="w-3.5 h-3.5" />
           Talk to Menu
@@ -509,6 +557,7 @@ function RightPanel({ shopId, shopName }: { shopId: string; shopName: string }) 
               ? 'border-brand-600 text-brand-600'
               : 'border-transparent text-gray-400 hover:text-gray-600'
           }`}
+          style={{ minHeight: 44 }}
         >
           <MessageSquare className="w-3.5 h-3.5" />
           Customer View

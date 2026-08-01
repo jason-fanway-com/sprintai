@@ -315,14 +315,14 @@ export default function ShopDetail() {
   ]
 
   return (
-    <div className={activeTab === 'chat' ? 'flex flex-col h-screen overflow-hidden' : 'p-8 max-w-5xl mx-auto'}>
+    <div className={activeTab === 'chat' ? 'flex flex-col h-full overflow-hidden' : 'p-4 sm:p-8 max-w-5xl mx-auto'}>
       {/* Header */}
-      <div className={`flex items-center gap-4 flex-shrink-0 ${activeTab === 'chat' ? 'px-8 pt-8 pb-0' : 'mb-6'}`}>
+      <div className={`flex items-center gap-4 flex-shrink-0 ${activeTab === 'chat' ? 'px-4 sm:px-8 pt-4 sm:pt-8 pb-0' : 'mb-6'}`}>
         <ShopHeader shop={shop} togglePause={togglePause} />
       </div>
 
       {/* Tabs */}
-      <div className={`flex gap-1 border-b border-gray-200 flex-shrink-0 ${activeTab === 'chat' ? 'mx-8 mt-6' : 'mb-6'}`}>
+      <div className={`flex gap-1 border-b border-gray-200 flex-shrink-0 ${activeTab === 'chat' ? 'mx-4 sm:mx-8 mt-4 sm:mt-6' : 'mb-6 overflow-x-auto'} `}>
         {tabs.map(tab => (
           <button
             key={tab.id}
