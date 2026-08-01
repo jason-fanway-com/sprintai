@@ -15,8 +15,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
-const CHAT_API = "https://api.anthropic.com/v1/messages";
-const CHAT_MODEL = "claude-sonnet-4-20250514";
+const CHAT_API = "https://openrouter.ai/api/v1/messages";
+const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
 const MAX_RETRIES = 3;
 
 const CORS_HEADERS = {
@@ -808,8 +808,8 @@ Deno.serve(async (req: Request) => {
   const systemPrompt = buildSystemPrompt(shop, menuItems, specials, eightySixList.map(e => e.item), currentTime);
 
   // Anthropic API
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-  if (!apiKey) return jsonResponse({ error: "ANTHROPIC_API_KEY not configured" }, 500);
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? "";
+  if (!apiKey) return jsonResponse({ error: "OPENROUTER_API_KEY not configured" }, 500);
 
   const messages: Array<{ role: string; content: string }> = [
     ...message_history,
