@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Download, MessageSquare, UserPlus } from 'lucide-react'
+import { Download, MessageSquare, MessageCircle, UserPlus } from 'lucide-react'
 
 interface Shop {
   id: string
@@ -93,7 +93,7 @@ export default function QRCodesTab({ shop }: QRCodesTabProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* SMS QR */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 flex flex-col items-center">
           <div className="flex items-center gap-2 mb-1 text-gray-700">
@@ -178,6 +178,39 @@ export default function QRCodesTab({ shop }: QRCodesTabProps) {
             </div>
           )}
         </div>
+
+        {/* Store Chat QR — owner-facing */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 flex flex-col items-center">
+          <div className="flex items-center gap-2 mb-1 text-gray-700">
+            <MessageCircle className="w-4 h-4 text-brand-600" />
+            <h3 className="font-semibold text-sm">Scan to Open Store Chat</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-4 text-center">
+            Opens the shop owner chat PWA — manage orders and chat with customers
+          </p>
+          <div className="p-4 bg-white rounded-xl border border-gray-100">
+            <QRCodeSVG
+              id="qr-store-chat"
+              value="https://getsprintai.com/chat"
+              size={200}
+              level="M"
+              includeMargin={true}
+            />
+          </div>
+          <p className="text-xs text-gray-500 mt-3 text-center">
+            getsprintai.com/chat
+          </p>
+          <button
+            onClick={() => {
+              const svg = document.getElementById('qr-store-chat') as unknown as SVGSVGElement
+              if (svg) downloadSvg(svg, `${shop.slug}-store-chat.svg`)
+            }}
+            className="mt-4 flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-700 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download QR
+          </button>
+        </div>
       </div>
 
       {/* Print instructions */}
@@ -187,6 +220,7 @@ export default function QRCodesTab({ shop }: QRCodesTabProps) {
           <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
             <li><b>Scan to Text Us</b> — Print and display at the counter or on tables. Customer scans, a text opens pre-filled, they hit send.</li>
             <li><b>Scan to Save Contact</b> — Print near the register. Customer scans, the shop saves to their contacts so they can text anytime.</li>
+            <li><b>Scan to Open Store Chat</b> — Print for staff or keep behind the counter. Opens the shop owner chat PWA to manage orders and talk with customers.</li>
             <li>Download the SVG files for high-quality printing at any size.</li>
           </ul>
         </div>

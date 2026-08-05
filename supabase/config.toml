@@ -65,3 +65,6 @@ verify_jwt = false  # Conversation Judge worker. Invoked by the scheduled sweep
 
 [functions.merchant-auth]
 verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC session token
+
+[functions.issue-detector]
+verify_jwt = false  # Scheduled sweep; invoked with service-role key, not by end users
