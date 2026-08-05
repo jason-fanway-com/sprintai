@@ -1777,7 +1777,7 @@ Deno.serve(async (req: Request) => {
     if (lastExpired) priorLinkExpired = true;
     const { data: newCart, error: cartErr } = await supabase
       .from("order_carts")
-      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [] })
+      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [], test_mode: false })
       .select("*").single();
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
@@ -1967,7 +1967,7 @@ Deno.serve(async (req: Request) => {
   // customer immediately. This overrides normal ordering flow.
   const now = new Date();
   const pausedUntil = shop.delivery_paused_until ? new Date(shop.delivery_paused_until) : null;
-  const deliveryIsPaused = !shop.delivery_enabled || (pausedUntil && pausedUntil > now);
+  const deliveryIsPaused = shop.delivery_enabled === false || (pausedUntil && pausedUntil > now);
   if (deliveryIsPaused && cart.phase === "greeting" && !cart.test_mode) {
     const reason = shop.delivery_pause_reason
       ? ` ${shop.delivery_pause_reason}`
@@ -2122,6 +2122,7 @@ Deno.serve(async (req: Request) => {
     reply:        finalReply,
     cart:         currentCart.cart_json,
     phase:        currentCart.phase,
+    test_mode:    currentCart.test_mode ?? false,
     notes:        currentCart.notes,
     session_id:   sessionId,
     checkout_url: checkoutUrl,
