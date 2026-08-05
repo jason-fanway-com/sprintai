@@ -91,6 +91,7 @@ interface Shop {
   delivery_enabled:         boolean;
   delivery_paused_until:    string | null;
   delivery_pause_reason:    string | null;
+  delivery_fee_cents:       number | null;
   shop_context:            string | null;
   ai_instructions:         string | null;
 }
@@ -106,6 +107,10 @@ interface OrderCart {
   total_cents:                number | null;
   stripe_checkout_session_id: string | null;
   test_mode:                  boolean;
+  order_type:                 string | null;
+  delivery_address:           Record<string, unknown> | null;
+  delivery_fee_cents:         number | null;
+  driver_tip_cents:           number | null;
 }
 
 interface ContentBlock {
@@ -221,6 +226,43 @@ const ORDERING_TOOLS = [
       required: ["note"],
     },
   },
+  {
+    name: "set_order_type",
+    description: "Set whether this is a pickup or delivery order. Call early in the conversation when the customer indicates their preference.",
+    input_schema: {
+      type: "object",
+      properties: {
+        order_type: { type: "string", enum: ["pickup", "delivery"] },
+      },
+      required: ["order_type"],
+    },
+  },
+  {
+    name: "set_delivery_address",
+    description: "Set the delivery address for a delivery order. Collect the street, city, state, and zip from the customer first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        street: { type: "string" },
+        unit:   { type: "string" },
+        city:   { type: "string" },
+        state:  { type: "string" },
+        zip:    { type: "string" },
+      },
+      required: ["street", "city", "state", "zip"],
+    },
+  },
+  {
+    name: "set_driver_tip",
+    description: "Add an optional driver tip to a delivery order. Only call for delivery orders, and only after the address is set.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tip_cents: { type: "integer", minimum: 0, maximum: 5000 },
+      },
+      required: ["tip_cents"],
+    },
+  },
 ];
 
 // ─── Effective menu builder ───────────────────────────────────────────────────
@@ -329,6 +371,10 @@ function buildSystemPrompt(
   notes?:         string | null,
   priorLinkExpired = false,
   soldOutNames:   string[] = [],
+  orderTypeStr?:  string | null,
+  deliveryAddress?: Record<string, unknown> | null,
+  driverTipCents?: number | null,
+  deliveryFeeCents?: number | null,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = shop.open_hours?.[today] ?? [];
@@ -400,11 +446,27 @@ function buildSystemPrompt(
     ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
     : "";
 
-  return `You are the ordering assistant for ${shop.name}. Help customers order for pickup via text.
+  const orderTypeInfo = orderTypeStr === "delivery"
+    ? `\nORDER TYPE: Delivery`
+    : `\nORDER TYPE: Pickup`;
+
+  const deliveryInfo = deliveryAddress
+    ? `\nDELIVERY ADDRESS: ${(deliveryAddress as Record<string,unknown>).formatted || JSON.stringify(deliveryAddress)}`
+    : "";
+
+  const tipInfo = driverTipCents && driverTipCents > 0
+    ? `\nDRIVER TIP: $${(driverTipCents / 100).toFixed(2)}`
+    : "";
+
+  const deliveryFeeInfo = deliveryFeeCents && deliveryFeeCents > 0
+    ? `\nDELIVERY FEE: $${(deliveryFeeCents / 100).toFixed(2)} (added at checkout)`
+    : "";
+
+  return `You are the ordering assistant for ${shop.name}. Help customers order for pickup or delivery via text.
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
-TODAY'S HOURS: ${hoursStr}
+TODAY'S HOURS: ${hoursStr}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}
 
 AVAILABLE MENU:
 ${menuStr}
@@ -429,6 +491,9 @@ RULES:
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - Process the ENTIRE customer message. If they mention multiple items (e.g. "a dozen bagels and some cream cheese"), acknowledge ALL items and work through each one. Do not ignore part of the request.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
+- DELIVERY FLOW: If the shop offers delivery and the customer asks for delivery, call set_order_type("delivery"), then collect their delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. If the customer hasn't specified, assume pickup.
+- ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
+- DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
 - SANDWICH MAPPING: "Bacon egg and cheese" = BOBO Sandwich (Bacon). "Sausage egg and cheese" = SOBO Sandwich. "Ham egg and cheese" = HOBO Sandwich. "Pork roll egg and cheese" = PROBO Sandwich. "Turkey bacon egg and cheese" = TBOBO Sandwich. These all come on a bagel by default. If a customer asks for one of these, add the matching item immediately. Do NOT say "I don't see that on the menu."
 - MULTI-ITEM FOCUS: When a customer asks for multiple items in sequence, process EACH one fully before moving on. If you said you're adding something, USE THE TOOL to actually add it. Never claim you added something without calling add_item. If add_item fails, tell the customer the specific error.
 - CRITICAL BUNDLE RULE: When a customer says "a dozen", "I'll take a dozen", "dozen bagels", "half dozen", etc., you MUST call start_bundle IMMEDIATELY in that same turn. Do NOT just acknowledge it in text. You MUST use the tool. "I'll take a dozen" = call start_bundle with bundle_item_name="One Dozen Bagels", bundle_size=14, bundle_price_cents=1500. "half dozen" = call start_bundle with bundle_item_name="Half Dozen Bagels", bundle_size=6, bundle_price_cents=750.
@@ -467,6 +532,7 @@ async function executeTool(
   supabase:  ReturnType<typeof createClient>,
   shopName:  string,
   testMode:  boolean = false,
+  deliveryFeeCents?: number | null,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -622,9 +688,22 @@ async function executeTool(
         };
       });
 
-      // Fetch notes for Stripe metadata
-      const { data: cartRow } = await supabase.from("order_carts").select("notes").eq("id", cartId).single();
+      // Fetch notes + delivery fields for Stripe metadata
+      const { data: cartRow } = await supabase.from("order_carts")
+        .select("notes, order_type, delivery_address, delivery_fee_cents, driver_tip_cents")
+        .eq("id", cartId).single();
       const orderNotes = cartRow?.notes || "";
+      const orderType = (cartRow?.order_type as string) || "pickup";
+      const deliveryAddress = cartRow?.delivery_address as Record<string, unknown> | null;
+      const deliveryFeeCents = (cartRow?.delivery_fee_cents as number) || 0;
+      const driverTipCents = (cartRow?.driver_tip_cents as number) || 0;
+
+      // Pre-submit delivery validation
+      if (orderType === "delivery") {
+        if (!deliveryAddress) {
+          return { ok: false, result: { error: "Please provide a delivery address first." } };
+        }
+      }
 
       // Add notes as a $0 line item so the shop sees them on the receipt
       if (orderNotes) {
@@ -632,7 +711,31 @@ async function executeTool(
           price_data: {
             currency:     "usd",
             unit_amount:  0,
-            product_data: { name: `Prep Notes: ${orderNotes}` },
+            product_data: { name: `Prep Notes: ${orderNotes}`, description: undefined },
+          },
+          quantity: 1,
+        });
+      }
+
+      // Delivery fee line item (if delivery)
+      if (orderType === "delivery" && deliveryFeeCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency:     "usd",
+            unit_amount:  deliveryFeeCents,
+            product_data: { name: "Delivery fee", description: undefined },
+          },
+          quantity: 1,
+        });
+      }
+
+      // Driver tip line item (if > 0)
+      if (driverTipCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency:     "usd",
+            unit_amount:  driverTipCents,
+            product_data: { name: "Driver tip", description: undefined },
           },
           quantity: 1,
         });
@@ -651,11 +754,13 @@ async function executeTool(
         quantity: 1,
       });
 
-      const totalCents = subtotal + SERVICE_FEE_CENTS;
+      const totalCents = subtotal + SERVICE_FEE_CENTS + deliveryFeeCents + driverTipCents;
       await supabase.from("order_carts").update({
         subtotal_cents: subtotal,
         service_fee_cents: SERVICE_FEE_CENTS,
         total_cents: totalCents,
+        delivery_fee_cents: deliveryFeeCents,
+        driver_tip_cents: driverTipCents,
       }).eq("id", cartId);
 
       const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "https://your-project.supabase.co";
@@ -784,6 +889,43 @@ async function executeTool(
       return { ok: true, result: { message: `Order notes saved: ${note}` } };
     }
 
+    case "set_order_type": {
+      const { order_type } = input as { order_type: "pickup" | "delivery" };
+      const update: Record<string, unknown> = { order_type };
+      // Clear delivery fields if switching to pickup
+      if (order_type === "pickup") {
+        update.delivery_address = null;
+        update.driver_tip_cents = 0;
+        update.delivery_fee_cents = 0;
+      }
+      await supabase.from("order_carts").update(update).eq("id", cartId);
+      return { ok: true, result: { message: `Order type set to ${order_type}.` }, newPhase: "building" };
+    }
+
+    case "set_delivery_address": {
+      const { street, unit, city, state, zip } = input as {
+        street: string; unit?: string; city: string; state: string; zip: string;
+      };
+      const formatted = [street, unit, `${city}, ${state} ${zip}`].filter(Boolean).join(", ");
+      const address: Record<string, unknown> = { street, city, state, zip, formatted };
+      if (unit) address.unit = unit;
+      const update: Record<string, unknown> = {
+        order_type: "delivery",
+        delivery_address: address,
+      };
+      if (deliveryFeeCents && deliveryFeeCents > 0) {
+        update.delivery_fee_cents = deliveryFeeCents;
+      }
+      await supabase.from("order_carts").update(update).eq("id", cartId);
+      return { ok: true, result: { message: `Delivery address set: ${formatted}` }, newPhase: "building" };
+    }
+
+    case "set_driver_tip": {
+      const { tip_cents } = input as { tip_cents: number };
+      await supabase.from("order_carts").update({ driver_tip_cents: tip_cents }).eq("id", cartId);
+      return { ok: true, result: { message: `Driver tip set to $${(tip_cents / 100).toFixed(2)}.` }, newPhase: "building" };
+    }
+
     default:
       return { ok: false, result: { error: `Unknown tool: ${toolName}` } };
   }
@@ -819,6 +961,7 @@ async function runOrderingLoop(
   supabase:     ReturnType<typeof createClient>,
   shopName:     string,
   testMode:     boolean = false,
+  deliveryFeeCents?: number | null,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
@@ -878,6 +1021,7 @@ async function runOrderingLoop(
         supabase,
         shopName,
         testMode,
+        deliveryFeeCents,
       );
       if (result.checkoutUrl) checkoutUrl = result.checkoutUrl;
       if (result.newPhase)    finalPhase  = result.newPhase;
@@ -1863,11 +2007,11 @@ Deno.serve(async (req: Request) => {
   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents);
   const cartItems    = [...cart.cart_json];
 
   const loopResult = await runOrderingLoop(
-    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents,
   );
   let reply       = loopResult.reply;
   let checkoutUrl = loopResult.checkoutUrl;

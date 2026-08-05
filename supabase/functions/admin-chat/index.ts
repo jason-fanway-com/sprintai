@@ -761,10 +761,17 @@ Deno.serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  // Service-role client — bypasses RLS, used for auth validation, logging, and super_admin ops.
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+  // User-JWT client — honors RLS, used for shop_owner data access (step 3: owner path avoids service-role).
+  const supabaseRls = createClient(supabaseUrl, anonKey, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
 
   const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${token}`, apikey: Deno.env.get("SUPABASE_ANON_KEY") ?? "" },
+    headers: { Authorization: `Bearer ${token}`, apikey: anonKey },
   });
   if (!userRes.ok) {
     logTranscript(supabase, requestStart, {
@@ -774,19 +781,29 @@ Deno.serve(async (req: Request) => {
     });
     return jsonResponse({ error: "Invalid auth token" }, 401);
   }
-  const { id: userId, user_metadata } = await userRes.json() as {
-    id: string; user_metadata: { tenant_id?: string; is_admin?: boolean };
+  const { id: userId, user_metadata, app_metadata } = await userRes.json() as {
+    id: string;
+    user_metadata?: { tenant_id?: string; is_admin?: boolean };
+    app_metadata?: { tenant_id?: string; role?: string };
   };
-  const tenantId = user_metadata?.tenant_id;
-  const isAdmin = user_metadata?.is_admin === true;
+  // Read role from app_metadata first (server-controlled), user_metadata fallback for transition
+  const appRole = app_metadata?.role;
+  const isAdmin = appRole === 'super_admin'
+    || (!appRole && user_metadata?.is_admin === true);
+  // tenant_id: app_metadata first, user_metadata fallback. super_admin may not have tenant.
+  const tenantId = app_metadata?.tenant_id || user_metadata?.tenant_id || null;
   if (!tenantId && !isAdmin) {
     logTranscript(supabase, requestStart, {
       turn_type: "message", outcome: "error", user_id: userId,
-      response_sent: { error: "No tenant_id in user_metadata" },
+      response_sent: { error: "No tenant_id in app_metadata and not admin" },
       error_message: "Missing tenant_id and not admin",
     });
-    return jsonResponse({ error: "No tenant_id in user_metadata" }, 403);
+    return jsonResponse({ error: "No tenant_id in app_metadata and not admin" }, 403);
   }
+
+  // db: shop_owners go through RLS (supabaseRls using user JWT).
+  // super_admins keep service-role client (bypasses RLS, full access).
+  const db = isAdmin ? supabase : supabaseRls;
 
   // Parse request
   let body: { message?: string; message_history?: { role: string; content: string }[]; shop_id?: string; confirmed_action_id?: string };
@@ -812,8 +829,8 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "shop_id is required" }, 400);
   }
 
-  // Load shop
-  const { data: shopData } = await supabase.from("shops").select("*").eq("id", shop_id).single();
+  // Load shop (through RLS when shop_owner)
+  const { data: shopData } = await db.from("shops").select("*").eq("id", shop_id).single();
   if (!shopData) {
     logTranscript(supabase, requestStart, {
       shop_id, user_id: userId, session_id: requestSessionId,
@@ -852,15 +869,15 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Invalid confirmation payload" }, 400);
     }
 
-    // Load current state
-    const { data: menuData } = await supabase
+    // Load current state (through RLS when shop_owner)
+    const { data: menuData } = await db
       .from("menus").select("id").eq("shop_id", shop_id)
       .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
       .order("created_at", { ascending: false }).limit(1).single();
 
     let menuItems: MenuItem[] = [];
     if (menuData) {
-      const { data: items } = await supabase
+      const { data: items } = await db
         .from("menu_items")
         .select("id, name, price_cents, description, category, active")
         .eq("menu_id", menuData.id)
@@ -868,12 +885,12 @@ Deno.serve(async (req: Request) => {
       menuItems = items ?? [];
     }
 
-    const eightySixList = await get86List(supabase, shop_id, businessDate);
-    const specials = await getActiveSpecials(supabase, shop_id, businessDate);
+    const eightySixList = await get86List(db, shop_id, businessDate);
+    const specials = await getActiveSpecials(db, shop_id, businessDate);
 
     const executed = await executeAction(
       proposal, confirmed_action_id, shop_id, userId, `[confirmed: ${confirmed_action_id}]`,
-      businessDate, shop.timezone, supabase, menuItems, eightySixList, specials,
+      businessDate, shop.timezone, db, menuItems, eightySixList, specials,
     );
     logTranscript(supabase, requestStart, {
       shop_id, user_id: userId, session_id: requestSessionId,
@@ -895,15 +912,15 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "message is required" }, 400);
   }
 
-  // Load current menu
-  const { data: menuData } = await supabase
+  // Load current menu (through RLS when shop_owner)
+  const { data: menuData } = await db
     .from("menus").select("id").eq("shop_id", shop_id)
     .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
     .order("created_at", { ascending: false }).limit(1).single();
 
   let menuItems: MenuItem[] = [];
   if (menuData) {
-    const { data: items } = await supabase
+    const { data: items } = await db
       .from("menu_items")
       .select("id, name, price_cents, description, category, active")
       .eq("menu_id", menuData.id)
@@ -911,8 +928,8 @@ Deno.serve(async (req: Request) => {
     menuItems = items ?? [];
   }
 
-  const eightySixList = await get86List(supabase, shop_id, businessDate);
-  const specials = await getActiveSpecials(supabase, shop_id, businessDate);
+  const eightySixList = await get86List(db, shop_id, businessDate);
+  const specials = await getActiveSpecials(db, shop_id, businessDate);
 
   const currentTime = new Date().toLocaleString("en-US", { timeZone: shop.timezone ?? "America/New_York" });
   const systemPrompt = buildSystemPrompt(shop, menuItems, specials, eightySixList.map(e => e.item), currentTime);
@@ -1025,8 +1042,8 @@ Deno.serve(async (req: Request) => {
 
     // For QUERY_STATUS, just return the reply directly
     if (intent === "QUERY_STATUS") {
-      const fresh86 = await get86List(supabase, shop_id, businessDate);
-      const freshSpecials = await getActiveSpecials(supabase, shop_id, businessDate);
+      const fresh86 = await get86List(db, shop_id, businessDate);
+      const freshSpecials = await getActiveSpecials(db, shop_id, businessDate);
       const deliveryOn = !!(shop.delivery_enabled) && !shop.delivery_paused_until;
       const statusHeader: StatusHeader = {
         delivery_enabled: deliveryOn,
@@ -1051,7 +1068,7 @@ Deno.serve(async (req: Request) => {
       const actionId = crypto.randomUUID();
       const executed = await executeAction(
         proposal, actionId, shop_id, userId, message,
-        businessDate, shop.timezone, supabase, menuItems, eightySixList, specials,
+        businessDate, shop.timezone, db, menuItems, eightySixList, specials,
       );
       logTranscript(supabase, requestStart, {
         shop_id, user_id: userId, session_id: requestSessionId,
