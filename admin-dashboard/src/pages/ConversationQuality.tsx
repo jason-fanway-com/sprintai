@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ShieldCheck, ShieldAlert, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, AlertTriangle, ChevronDown, ChevronRight, Stethoscope } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 // Conversation Quality panel (Spec 06 §4) — reads conversation_evals written by
@@ -45,6 +45,48 @@ const sevBadge: Record<Severity, string> = {
   minor: 'bg-yellow-100 text-yellow-700 border border-yellow-200',
 }
 
+interface IssueRow {
+  id: string
+  eval_id: string
+  severity: string // sev_1, sev_2, sev_3
+  status: string // open, acknowledged, resolved, dismissed
+  title: string
+  description: string
+  created_at: string
+  acknowledged_at: string | null
+  resolved_at: string | null
+}
+
+interface ResolutionLogEntry {
+  id: string
+  issue_id: string
+  action: string // created, acknowledged, dismissed, note_added, resolved
+  actor: string
+  note: string | null
+  old_status: string | null
+  new_status: string | null
+  created_at: string
+}
+
+const issueSevLabel: Record<string, string> = {
+  sev_1: 'Critical',
+  sev_2: 'Major',
+  sev_3: 'Minor',
+}
+
+const issueSevBadge: Record<string, string> = {
+  sev_1: 'bg-red-100 text-red-700 border border-red-200',
+  sev_2: 'bg-orange-100 text-orange-700 border border-orange-200',
+  sev_3: 'bg-yellow-100 text-yellow-700 border border-yellow-200',
+}
+
+const statusBadge: Record<string, string> = {
+  open: 'bg-blue-100 text-blue-700 border border-blue-200',
+  acknowledged: 'bg-orange-100 text-orange-700 border border-orange-200',
+  resolved: 'bg-green-100 text-green-700 border border-green-200',
+  dismissed: 'bg-gray-100 text-gray-700 border border-gray-200',
+}
+
 export default function ConversationQuality() {
   const [tenantFilter, setTenantFilter] = useState<string>('all')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -81,6 +123,57 @@ export default function ConversationQuality() {
       }))
     },
   })
+
+  // Collect flagged eval IDs for triage queries
+  const flaggedEvalIds = (data ?? [])
+    .filter((r) => r.verdict === 'flagged')
+    .map((r) => r.id)
+
+  const { data: issues } = useQuery<IssueRow[]>({
+    queryKey: ['triage-issues', flaggedEvalIds],
+    queryFn: async () => {
+      if (flaggedEvalIds.length === 0) return []
+      const { data } = await supabase
+        .from('issues')
+        .select('id, eval_id, severity, status, title, description, created_at, acknowledged_at, resolved_at')
+        .in('eval_id', flaggedEvalIds)
+      return (data ?? []) as IssueRow[]
+    },
+    enabled: flaggedEvalIds.length > 0,
+  })
+
+  const issueIds = (issues ?? []).map((i) => i.id)
+
+  const { data: resolutionLogs } = useQuery<ResolutionLogEntry[]>({
+    queryKey: ['triage-resolution-logs', issueIds],
+    queryFn: async () => {
+      if (issueIds.length === 0) return []
+      const { data } = await supabase
+        .from('resolution_log')
+        .select('id, issue_id, action, actor, note, old_status, new_status, created_at')
+        .in('issue_id', issueIds)
+        .order('created_at', { ascending: true })
+      return (data ?? []) as ResolutionLogEntry[]
+    },
+    enabled: issueIds.length > 0,
+  })
+
+  // Lookup maps for triage data by eval_id
+  const issueByEvalId = new Map<string, IssueRow>()
+  if (issues) {
+    for (const iss of issues) {
+      issueByEvalId.set(iss.eval_id, iss)
+    }
+  }
+
+  const logsByIssueId = new Map<string, ResolutionLogEntry[]>()
+  if (resolutionLogs) {
+    for (const log of resolutionLogs) {
+      const arr = logsByIssueId.get(log.issue_id) || []
+      arr.push(log)
+      logsByIssueId.set(log.issue_id, arr)
+    }
+  }
 
   const rows = data ?? []
   const tenantName = (id: string) => tenants?.find((t) => t.id === id)?.name ?? id.slice(0, 8)
@@ -188,6 +281,8 @@ export default function ConversationQuality() {
             ) : (
               flagged.map((r) => {
                 const open = expanded[r.id]
+                const issue = issueByEvalId.get(r.id)
+                const issueLogs = issue ? (logsByIssueId.get(issue.id) ?? []) : []
                 return (
                   <>
                     <tr key={r.id} className="hover:bg-gray-50">
@@ -245,6 +340,67 @@ export default function ConversationQuality() {
                               </div>
                             ))}
                             <p className="text-xs text-gray-400">judge model: {r.model}</p>
+
+                            {/* Triage & Resolution */}
+                            <div className="border-t border-gray-200 pt-3 mt-3">
+                              <div className="flex items-center gap-1.5 mb-3">
+                                <Stethoscope className="w-4 h-4 text-gray-500" />
+                                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Triage &amp; Resolution</span>
+                              </div>
+
+                              {!issue ? (
+                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                                  Not yet triaged
+                                </span>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="flex items-center gap-2">
+                                    {issue.severity && (
+                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${issueSevBadge[issue.severity] || 'bg-gray-100 text-gray-700 border border-gray-200'}`}>
+                                        {issueSevLabel[issue.severity] || issue.severity}
+                                      </span>
+                                    )}
+                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadge[issue.status] || 'bg-gray-100 text-gray-700 border border-gray-200'}`}>
+                                      {issue.status}
+                                    </span>
+                                    <span className="text-xs text-gray-400">
+                                      created {new Date(issue.created_at).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  {issue.title && (
+                                    <p className="text-sm font-medium text-gray-800">{issue.title}</p>
+                                  )}
+                                  {issue.description && (
+                                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{issue.description}</p>
+                                  )}
+
+                                  {issueLogs.length > 0 && (
+                                    <div className="space-y-2 mt-2">
+                                      <span className="text-xs font-medium text-gray-500">Resolution timeline</span>
+                                      <div className="space-y-2">
+                                        {issueLogs.map((log) => (
+                                          <div key={log.id} className="border-l-2 border-gray-300 pl-3">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-xs font-medium text-gray-700">{log.action}</span>
+                                              <span className="text-xs text-gray-500">{log.actor}</span>
+                                              <span className="text-xs text-gray-400">{new Date(log.created_at).toLocaleString()}</span>
+                                            </div>
+                                            {log.old_status && log.new_status && (
+                                              <p className="text-xs text-gray-400 mt-0.5">
+                                                {log.old_status} → {log.new_status}
+                                              </p>
+                                            )}
+                                            {log.note && (
+                                              <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{log.note}</p>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>

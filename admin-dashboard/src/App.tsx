@@ -19,6 +19,8 @@ import ConversationQuality from './pages/ConversationQuality'
 import CommandCenter from './pages/CommandCenter'
 import ShopChatTranscripts from './pages/ShopChatTranscripts'
 import ShopChatDetail from './pages/ShopChatDetail'
+import Issues from './pages/Issues'
+import IssueDetail from './pages/IssueDetail'
 
 function ProtectedRoute({ children, user }: { children: React.ReactNode; user: User | null }) {
   if (!user) return <Navigate to="/login" replace />
@@ -77,6 +79,8 @@ export default function App() {
         <Route path="chat-test" element={<ChatTest />} />
         <Route path="shop-chats" element={<ShopChatTranscripts />} />
         <Route path="shop-chats/:id" element={<ShopChatDetail />} />
+        <Route path="issues" element={<Issues />} />
+        <Route path="issues/:id" element={<IssueDetail />} />
       </Route>
     </Routes>
     </>
