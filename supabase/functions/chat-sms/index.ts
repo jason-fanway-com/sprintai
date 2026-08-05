@@ -13,6 +13,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
+import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -584,7 +585,12 @@ async function executeTool(
       }, 0);
       await supabase.from("order_carts").update({ subtotal_cents: subtotal }).eq("id", cartId);
 
-      const stripeKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+      // HARD-GATE: test mode MUST use test Stripe, never live keys.
+      // Uses the shared test-mode key helper (single source of truth).
+      // If test_mode is true and no valid test key is available, fail closed.
+      const stripeKey = testMode
+        ? (getTestModeStripeKey() ?? "")
+        : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
       if (!stripeKey) {
         return { ok: false, result: { error: "Payment system not configured. Please call the shop directly." } };
       }
@@ -1401,6 +1407,29 @@ async function handleSystemEvent(
   return jsonResponse({ ok: true, message });
 }
 
+/** Reset a cart into test mode — DB update + local mutation. Single source of
+ *  truth for both the SMS TESTMODE keyword branch and the web `test` flag branch. */
+async function activateTestMode(
+  supabase: ReturnType<typeof createClient>,
+  cart:      OrderCart,
+): Promise<void> {
+  const reset = {
+    test_mode: true,
+    cart_json: [] as AnyCartItem[],
+    phase: "greeting" as const,
+    notes: null,
+    subtotal_cents: 0,
+    total_cents: 0,
+    stripe_checkout_session_id: null,
+    pickup_name: null,
+  };
+  await supabase.from("order_carts").update(reset).eq("id", cart.id);
+  cart.test_mode = true;
+  cart.cart_json = [];
+  cart.phase = "greeting";
+  cart.notes = null;
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -1728,10 +1757,39 @@ Deno.serve(async (req: Request) => {
     // test order would be wiped each turn. We therefore only act on the flag
     // the FIRST time (when the cart is not yet in test mode); after that it is
     // a no-op and the order proceeds normally through the test success page.
-    const keywordTestMode = userMessage.trim().toUpperCase() === "TESTMODE";
-    const activatingTestMode = keywordTestMode || (requestTestMode && !cart.test_mode);
+    // Normalize for keyword matching: trim, strip punctuation, collapse whitespace
+    const normalizedMsg = userMessage.trim().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const keywordTestMode = normalizedMsg === "TEST MODE" || normalizedMsg === "TESTMODE";
+
+    if (keywordTestMode) {
+      // SMS KEYWORD: reset cart, set test flag, and send ack immediately.
+      // The next message the customer sends goes through the normal ordering
+      // flow with test_mode=true (hours bypass, test Stripe).
+      await supabase.from("order_carts").update({
+        test_mode: true,
+        cart_json: [],
+        phase: "greeting",
+        notes: null,
+        subtotal_cents: 0,
+        total_cents: 0,
+        stripe_checkout_session_id: null,
+        pickup_name: null,
+      }).eq("id", cart.id);
+      cart.test_mode = true;
+      cart.cart_json = [];
+      cart.phase = "greeting";
+      cart.notes = null;
+      const ack = "You're in test mode 🧪 Order just like it's the real thing — the kitchen's open and this behaves exactly like a live order. At checkout you'll use a test card, and you won't be charged a cent.";
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", ack);
+      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, ack); return emptyTwiml(); }
+      return jsonResponse({ reply: ack, cart: [], phase: "greeting", session_id: sessionId, test_mode: true });
+    }
+
+    const activatingTestMode = requestTestMode && !cart.test_mode;
     if (activatingTestMode) {
-      // Always reset cart state on TESTMODE — clear stale items, set test flag, back to greeting
+      // WEB test flag: same effect as keyword but no ack (client already knows).
+      // Only activates on first turn — preserves in-progress test orders.
       await supabase.from("order_carts").update({
         test_mode: true,
         cart_json: [],
