@@ -15,6 +15,7 @@ const sidebarNav = [
   { to: '/tenants', label: 'Tenants', icon: Users },
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Conv Quality', icon: ShieldCheck },
+  { to: '/shop-chats', label: 'Shop Chats', icon: MessageSquare },
 ]
 
 // Bottom nav: 5 key items for mobile
