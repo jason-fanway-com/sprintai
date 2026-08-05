@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings } from 'lucide-react'
+import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings, QrCode } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, supabaseAnonKey } from '../lib/supabase'
 import ShopHeader from '../components/shop/ShopHeader'
@@ -9,6 +9,7 @@ import MenuTab from '../components/shop/MenuTab'
 import OrdersTab from '../components/shop/OrdersTab'
 import SettingsTab from '../components/shop/SettingsTab'
 import ChatAdminTab from '../components/shop/ChatAdminTab'
+import QRCodesTab from '../components/shop/QRCodesTab'
 
 interface Shop {
   id: string
@@ -48,7 +49,7 @@ interface OrderCart {
   order_number: number | null
 }
 
-type Tab = 'menu' | 'orders' | 'settings' | 'chat'
+type Tab = 'menu' | 'orders' | 'settings' | 'chat' | 'qr'
 
 export default function ShopDetail() {
   const { id } = useParams<{ id: string }>()
@@ -157,6 +158,7 @@ export default function ShopDetail() {
         email_ticket_recipient: shopForm.email_ticket_recipient,
         pause_message: shopForm.pause_message,
         timezone: shopForm.timezone,
+        phone_number_e164: shopForm.phone_number_e164 ?? null,
         toast_client_id: shopForm.toast_client_id ?? null,
         toast_client_secret: shopForm.toast_client_secret ?? null,
         toast_location_guid: shopForm.toast_location_guid ?? null,
@@ -312,6 +314,7 @@ export default function ShopDetail() {
     { id: 'menu', label: 'Menu', icon: UtensilsCrossed },
     { id: 'orders', label: 'Orders', icon: ShoppingBag },
     { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'qr', label: 'QR Codes', icon: QrCode },
   ]
 
   return (
@@ -359,6 +362,8 @@ export default function ShopDetail() {
       )}
 
       {activeTab === 'orders' && <OrdersTab orders={orders} />}
+
+      {activeTab === 'qr' && <QRCodesTab shop={shop} />}
 
       {activeTab === 'settings' && (
         <SettingsTab

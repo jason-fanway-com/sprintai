@@ -32,37 +32,31 @@
 # WITHOUT putting any admin source on the root origin: Netlify proxies the
 # request to the external admin site at request time. Auth still happens on the
 # admin app (Supabase login) — the proxy exposes nothing that login doesn't.
-# The admin SPA is built with <BrowserRouter basename="/dashboard">, so it ONLY
-# works when the browser URL is under /dashboard. We therefore proxy /dashboard/*
-# (the app's real base) and make /admin a friendly REDIRECT (301) to /dashboard
-# so the address bar becomes /dashboard and the client router matches.
+# The admin SPA is built with base="/admin/" and BrowserRouter basename="/admin".
 [[redirects]]
   from = "/admin"
-  to = "/dashboard/"
-  status = 301
+  to = "https://sprintai-chat-admin.netlify.app/admin"
+  status = 200
   force = true
 
 [[redirects]]
   from = "/admin/*"
-  to = "/dashboard/:splat"
-  status = 301
-  force = true
-
-# Proxy the gated admin site under its own /dashboard base (preserves basename).
-# :splat keeps the full client path so deep links + SPA fallback work.
-[[redirects]]
-  from = "/dashboard/*"
-  to = "https://sprintai-chat-admin.netlify.app/dashboard/:splat"
+  to = "https://sprintai-chat-admin.netlify.app/admin/:splat"
   status = 200
   force = true
 
-[[redirects]]
-  from = "/dashboard"
-  to = "https://sprintai-chat-admin.netlify.app/dashboard/"
-  status = 200
-  force = true
+# ── Shop owner chat PWA ────────────────────────────────────────────────────
+# shop-chat is a Vite PWA built to shop-chat/dist/ and copied to public/chat/
+# by build-public-site.sh. Served as static files on the root origin.
+# Netlify auto-redirects /chat → /chat/ for directories with index.html.
+# Do NOT add an explicit /chat → /chat/ 301 with force=true — it matches
+# /chat/ too and creates a self-redirect loop at the edge.
 
+# SPA catch-all: /chat/* serves from public/chat/ (publish dir).
+# Vite base="/chat/" ensures all asset references are /chat/assets/...
+# which resolves correctly from the publish directory.
+# Netlify serves real files first; unmatched paths fall back to index.html.
 [[redirects]]
-  from = "/vite.svg"
-  to = "https://sprintai-chat-admin.netlify.app/vite.svg"
+  from = "/chat/*"
+  to = "/chat/index.html"
   status = 200

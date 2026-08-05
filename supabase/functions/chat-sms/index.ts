@@ -1126,9 +1126,12 @@ async function sendSmsViaTwilio(
           "Content-Type":  "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-          MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID") ?? fromNumber,
+          From: fromNumber,
           To: toNumber,
           Body: message,
+          ...(Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")
+            ? { MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")! }
+            : {}),
         }),
       }
     );

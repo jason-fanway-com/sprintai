@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/chat/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/chat/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/chat/icons/icon-512.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#4f46e5" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sprint" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/chat/manifest.json" />
+    <title>Sprint Chat</title>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/chat/sw.js', { scope: '/chat/' })
+        })
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

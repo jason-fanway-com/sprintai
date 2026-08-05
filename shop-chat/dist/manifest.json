@@ -1,0 +1,25 @@
+{
+  "name": "Sprint Chat",
+  "short_name": "Sprint",
+  "description": "Chat with your Sprint AI assistant to manage your restaurant menu",
+  "start_url": "/chat/",
+  "scope": "/chat/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#4f46e5",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/chat/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/chat/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

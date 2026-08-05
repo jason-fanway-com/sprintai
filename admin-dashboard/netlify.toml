@@ -5,38 +5,25 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# Serve PWA assets at both root and /dashboard/ paths
-# (root = direct admin site access, /dashboard/ = proxied via getsprintai.com)
+# Vite base="/admin/" makes index.html reference /admin/assets/...
+# but the built files live at /assets/ in the publish dir.
+# These rewrites map /admin/* paths to the real files BEFORE the SPA fallback.
 [[redirects]]
-  from = "/manifest.json"
-  to = "/manifest.json"
+  from = "/admin/assets/*"
+  to = "/assets/:splat"
   status = 200
 
 [[redirects]]
-  from = "/dashboard/manifest.json"
-  to = "/manifest.json"
-  status = 200
-
-[[redirects]]
-  from = "/sw.js"
-  to = "/sw.js"
-  status = 200
-
-[[redirects]]
-  from = "/dashboard/sw.js"
-  to = "/sw.js"
-  status = 200
-
-[[redirects]]
-  from = "/icons/*"
+  from = "/admin/icons/*"
   to = "/icons/:splat"
   status = 200
 
 [[redirects]]
-  from = "/dashboard/icons/*"
-  to = "/icons/:splat"
+  from = "/admin/manifest.json"
+  to = "/manifest.json"
   status = 200
 
+# SPA fallback — must be LAST
 [[redirects]]
   from = "/*"
   to = "/index.html"

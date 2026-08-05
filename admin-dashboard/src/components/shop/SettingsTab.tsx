@@ -87,7 +87,16 @@ export default function SettingsTab({
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Phone Number (SMS)</label>
-            <p className="text-sm text-gray-700">{shop.phone_number_e164 ?? <span className="text-gray-300">Not configured</span>}</p>
+            {editingShop ? (
+              <input
+                value={(shopForm.phone_number_e164 ?? '') as string}
+                onChange={e => onFormChange('phone_number_e164', e.target.value)}
+                placeholder="+16103792553"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            ) : (
+              <p className="text-sm text-gray-700">{shop.phone_number_e164 ?? <span className="text-gray-300">Not configured</span>}</p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Shop ID</label>

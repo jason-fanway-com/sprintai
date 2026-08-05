@@ -51,19 +51,38 @@ for f in "${PUBLIC_FILES[@]}"; do
   fi
 done
 
+# ── Build shop-chat PWA (Vite app) ──────────────────────────────────────────
+# shop-chat/ is a Vite + React PWA. It must be built before copying.
+echo "[build-public-site] building shop-chat PWA..."
+if [[ -d "shop-chat" ]]; then
+  (cd shop-chat && npm install --silent && npm run build) || {
+    echo "  ! shop-chat build failed" >&2; exit 1;
+  }
+  echo "  + built shop-chat/dist/"
+else
+  echo "  ! MISSING shop-chat/ directory" >&2
+fi
+
 # ── Public app directories (live customer flow) ─────────────────────────────
 # signup/      — onboarding wizard (older)
 # signup-page/ — onboarding wizard (actively developed); EXCLUDES _proof/
 # checkout/    — Stripe checkout cancel target (verified in functions)
 # welcome/     — Stripe checkout success target (verified in functions)
-# chat/        — chat ordering frontend
 PUBLIC_DIRS=(
   "signup"
   "signup-page"
   "checkout"
   "welcome"
-  "chat"
 )
+
+# shop-chat/dist/ is copied to public/chat/ (built above)
+if [[ -d "shop-chat/dist" ]]; then
+  mkdir -p "$OUT/chat"
+  cp -R shop-chat/dist/* "$OUT/chat/"
+  echo "  + dir   chat/ (from shop-chat/dist/)"
+else
+  echo "  ! MISSING shop-chat/dist/ — build may have failed" >&2
+fi
 
 for d in "${PUBLIC_DIRS[@]}"; do
   if [[ -d "$d" ]]; then

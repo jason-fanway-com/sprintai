@@ -697,8 +697,52 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
 }
 
+// ─── Observability: turn transcript logging ────────────────────────────────────
+// Fire-and-forget — never blocks the response, never throws.
+function logTranscript(
+  supabase: ReturnType<typeof createClient>,
+  requestStart: number,
+  params: {
+    shop_id?: string;
+    user_id?: string;
+    session_id?: string;
+    turn_type: string;
+    raw_message?: string;
+    message_history?: unknown;
+    llm_raw_response?: unknown;
+    parsed_intent?: string;
+    parsed_proposal?: unknown;
+    outcome: string;
+    response_sent: unknown;
+    error_message?: string;
+  },
+) {
+  const row: Record<string, unknown> = {
+    shop_id: params.shop_id ?? null,
+    user_id: params.user_id ?? null,
+    session_id: params.session_id ?? null,
+    turn_type: params.turn_type,
+    raw_message: params.raw_message ?? null,
+    message_history: params.message_history ?? null,
+    llm_raw_response: params.llm_raw_response ?? null,
+    parsed_intent: params.parsed_intent ?? null,
+    parsed_proposal: params.parsed_proposal ?? null,
+    outcome: params.outcome,
+    response_sent: params.response_sent,
+    error_message: params.error_message ?? null,
+    latency_ms: Date.now() - requestStart,
+  };
+  // Fire and forget — don't await, don't let failures break the chat
+  supabase.from("admin_chat_transcripts").insert(row).then(
+    () => {},
+    (err: unknown) => console.error("[admin-chat] transcript insert error:", err),
+  );
+}
+
 // ─── Main Handler ──────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
+  const requestStart = Date.now();
+
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
 
   const url = new URL(req.url);
@@ -722,26 +766,71 @@ Deno.serve(async (req: Request) => {
   const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
     headers: { Authorization: `Bearer ${token}`, apikey: Deno.env.get("SUPABASE_ANON_KEY") ?? "" },
   });
-  if (!userRes.ok) return jsonResponse({ error: "Invalid auth token" }, 401);
+  if (!userRes.ok) {
+    logTranscript(supabase, requestStart, {
+      turn_type: "message", outcome: "error",
+      response_sent: { error: "Invalid auth token" },
+      error_message: "Auth token validation failed",
+    });
+    return jsonResponse({ error: "Invalid auth token" }, 401);
+  }
   const { id: userId, user_metadata } = await userRes.json() as {
     id: string; user_metadata: { tenant_id?: string; is_admin?: boolean };
   };
   const tenantId = user_metadata?.tenant_id;
   const isAdmin = user_metadata?.is_admin === true;
-  if (!tenantId && !isAdmin) return jsonResponse({ error: "No tenant_id in user_metadata" }, 403);
+  if (!tenantId && !isAdmin) {
+    logTranscript(supabase, requestStart, {
+      turn_type: "message", outcome: "error", user_id: userId,
+      response_sent: { error: "No tenant_id in user_metadata" },
+      error_message: "Missing tenant_id and not admin",
+    });
+    return jsonResponse({ error: "No tenant_id in user_metadata" }, 403);
+  }
 
   // Parse request
   let body: { message?: string; message_history?: { role: string; content: string }[]; shop_id?: string; confirmed_action_id?: string };
-  try { body = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
+  try { body = await req.json(); } catch {
+    logTranscript(supabase, requestStart, {
+      turn_type: "message", outcome: "error", user_id: userId,
+      response_sent: { error: "Invalid JSON" },
+      error_message: "Failed to parse request body as JSON",
+    });
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
   const { message, message_history = [], shop_id, confirmed_action_id } = body;
 
-  if (!shop_id) return jsonResponse({ error: "shop_id is required" }, 400);
+  const requestSessionId = crypto.randomUUID();
+
+  if (!shop_id) {
+    logTranscript(supabase, requestStart, {
+      turn_type: "message", outcome: "error", user_id: userId,
+      session_id: requestSessionId, raw_message: message,
+      response_sent: { error: "shop_id is required" },
+      error_message: "Missing shop_id",
+    });
+    return jsonResponse({ error: "shop_id is required" }, 400);
+  }
 
   // Load shop
   const { data: shopData } = await supabase.from("shops").select("*").eq("id", shop_id).single();
-  if (!shopData) return jsonResponse({ error: "Shop not found" }, 404);
+  if (!shopData) {
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "message", outcome: "error", raw_message: message,
+      response_sent: { error: "Shop not found" },
+      error_message: `Shop ${shop_id} not found`,
+    });
+    return jsonResponse({ error: "Shop not found" }, 404);
+  }
   const shop = shopData as unknown as Shop;
   if (shop.tenant_id !== tenantId && !isAdmin) {
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "message", outcome: "error", raw_message: message,
+      response_sent: { error: "Forbidden: shop does not belong to your tenant" },
+      error_message: "Tenant mismatch",
+    });
     return jsonResponse({ error: "Forbidden: shop does not belong to your tenant" }, 403);
   }
 
@@ -754,6 +843,12 @@ Deno.serve(async (req: Request) => {
     try {
       proposal = JSON.parse(message);
     } catch {
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "confirmation", outcome: "error", raw_message: message,
+        response_sent: { error: "Invalid confirmation payload" },
+        error_message: "Failed to parse confirmation payload as JSON",
+      });
       return jsonResponse({ error: "Invalid confirmation payload" }, 400);
     }
 
@@ -780,11 +875,25 @@ Deno.serve(async (req: Request) => {
       proposal, confirmed_action_id, shop_id, userId, `[confirmed: ${confirmed_action_id}]`,
       businessDate, shop.timezone, supabase, menuItems, eightySixList, specials,
     );
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "confirmation", outcome: "executed",
+      raw_message: message, parsed_intent: proposal.intent,
+      parsed_proposal: proposal, response_sent: executed,
+    });
     return jsonResponse(executed);
   }
 
   // ─── NORMAL FLOW: parse message, return proposal ──────────────────────────────
-  if (!message?.trim()) return jsonResponse({ error: "message is required" }, 400);
+  if (!message?.trim()) {
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "message", outcome: "error",
+      response_sent: { error: "message is required" },
+      error_message: "Empty message",
+    });
+    return jsonResponse({ error: "message is required" }, 400);
+  }
 
   // Load current menu
   const { data: menuData } = await supabase
@@ -810,7 +919,16 @@ Deno.serve(async (req: Request) => {
 
   // Anthropic API
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? "";
-  if (!apiKey) return jsonResponse({ error: "OPENROUTER_API_KEY not configured" }, 500);
+  if (!apiKey) {
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "message", outcome: "api_error", raw_message: message,
+      message_history: message_history,
+      response_sent: { error: "OPENROUTER_API_KEY not configured" },
+      error_message: "Missing OPENROUTER_API_KEY env var",
+    });
+    return jsonResponse({ error: "OPENROUTER_API_KEY not configured" }, 500);
+  }
 
   const messages: Array<{ role: string; content: string }> = [
     ...message_history,
@@ -841,6 +959,13 @@ Deno.serve(async (req: Request) => {
     if (!res.ok) {
       const errText = await res.text();
       console.error("[admin-chat] API error:", res.status, errText);
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "api_error", raw_message: message,
+        message_history: message_history,
+        response_sent: { reply: "Sorry, I had trouble connecting. Try again in a moment." },
+        error_message: `OpenRouter API returned ${res.status}: ${errText.slice(0, 500)}`,
+      });
       return jsonResponse({ reply: "Sorry, I had trouble connecting. Try again in a moment." });
     }
 
@@ -852,6 +977,12 @@ Deno.serve(async (req: Request) => {
 
     if (toolBlocks.length === 0) {
       // No tool call — might be a text reply. Try to use it as clarification.
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "no_tool_call", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        response_sent: { reply: assistantText || "I didn't understand that. Can you rephrase?" },
+      });
       return jsonResponse({ reply: assistantText || "I didn't understand that. Can you rephrase?" });
     }
 
@@ -861,7 +992,15 @@ Deno.serve(async (req: Request) => {
     const intent = tool.name as string;
 
     if (intent === "UNKNOWN_OR_OUT_OF_SCOPE") {
-      return jsonResponse({ reply: (input.suggestion as string) ?? "I can only handle same-day operational changes like 86'ing items, adding specials, or pausing delivery." });
+      const suggestion = (input.suggestion as string) ?? "I can only handle same-day operational changes like 86'ing items, adding specials, or pausing delivery.";
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "out_of_scope", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        parsed_intent: intent, parsed_proposal: input,
+        response_sent: { reply: suggestion },
+      });
+      return jsonResponse({ reply: suggestion });
     }
 
     proposal = {
@@ -896,10 +1035,15 @@ Deno.serve(async (req: Request) => {
         items_86d_names: fresh86.map(e => e.item.name),
         active_specials_names: freshSpecials.map(s => s.name),
       };
-      return jsonResponse({
-        reply: proposal.summary,
-        status_header: statusHeader,
+      const responseBody = { reply: proposal.summary, status_header: statusHeader };
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "query_status", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        parsed_intent: intent, parsed_proposal: proposal,
+        response_sent: responseBody,
       });
+      return jsonResponse(responseBody);
     }
 
     // For UNDO, execute immediately (no confirmation needed)
@@ -909,6 +1053,13 @@ Deno.serve(async (req: Request) => {
         proposal, actionId, shop_id, userId, message,
         businessDate, shop.timezone, supabase, menuItems, eightySixList, specials,
       );
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "undo", outcome: "executed", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        parsed_intent: intent, parsed_proposal: proposal,
+        response_sent: executed,
+      });
       return jsonResponse(executed);
     }
 
@@ -918,16 +1069,31 @@ Deno.serve(async (req: Request) => {
     );
 
     if (!validation.valid) {
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "validation_error", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        parsed_intent: intent, parsed_proposal: proposal,
+        response_sent: { reply: validation.error ?? "Invalid proposal", needs_correction: true },
+        error_message: validation.error ?? "Invalid proposal",
+      });
       return jsonResponse({ reply: validation.error ?? "Invalid proposal", needs_correction: true });
     }
 
     if (validation.clarification) {
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "message", outcome: "clarification", raw_message: message,
+        message_history: message_history, llm_raw_response: data,
+        parsed_intent: intent, parsed_proposal: proposal,
+        response_sent: validation.clarification,
+      });
       return jsonResponse(validation.clarification);
     }
 
     // Return confirmation card
     const actionId = crypto.randomUUID();
-    return jsonResponse({
+    const confirmationResponse = {
       type: "confirmation_card",
       action_id: actionId,
       intent: proposal.intent,
@@ -935,8 +1101,24 @@ Deno.serve(async (req: Request) => {
       details: proposal,
       cancel_label: "Cancel",
       confirm_label: "Confirm",
+    };
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "message", outcome: "confirmation_card", raw_message: message,
+      message_history: message_history, llm_raw_response: data,
+      parsed_intent: intent, parsed_proposal: proposal,
+      response_sent: confirmationResponse,
     });
+    return jsonResponse(confirmationResponse);
   }
 
+  // Retries exhausted
+  logTranscript(supabase, requestStart, {
+    shop_id, user_id: userId, session_id: requestSessionId,
+    turn_type: "message", outcome: "error", raw_message: message,
+    message_history: message_history,
+    response_sent: { reply: "I couldn't process that. Can you try again?" },
+    error_message: "All LLM retry attempts exhausted",
+  });
   return jsonResponse({ reply: "I couldn't process that. Can you try again?" });
 });

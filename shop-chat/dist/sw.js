@@ -1,7 +1,7 @@
-const CACHE_NAME = 'sprint-admin-v1'
+const CACHE_NAME = 'chat-v1'
 const APP_SHELL = [
-  '/dashboard/',
-  '/dashboard/index.html',
+  '/chat/',
+  '/chat/index.html',
 ]
 
 // Install — cache app shell
