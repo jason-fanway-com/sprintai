@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings, QrCode } from 'lucide-react'
+import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings, Gift } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, supabaseAnonKey } from '../lib/supabase'
 import ShopHeader from '../components/shop/ShopHeader'
@@ -314,7 +314,7 @@ export default function ShopDetail() {
     { id: 'menu', label: 'Menu', icon: UtensilsCrossed },
     { id: 'orders', label: 'Orders', icon: ShoppingBag },
     { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'qr', label: 'QR Codes', icon: QrCode },
+    { id: 'qr', label: 'Demo Kit', icon: Gift },
   ]
 
   return (
