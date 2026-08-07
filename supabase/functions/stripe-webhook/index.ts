@@ -469,54 +469,11 @@ async function handleOrderPaymentComplete(
     console.log(`[ORDER TICKET] Grand total:         $${total}`);
     console.log(`[ORDER TICKET] ===========================`);
 
-    // Email the reconciled ticket if Resend is configured.
-    await sendOrderTicketEmail(recipient, shopName, cartId, cart, { subtotal, serviceFee, total });
+
   }
 }
 
-/** Send a reconciled order ticket email (food+tax, $0.99 fee, grand total). */
-async function sendOrderTicketEmail(
-  recipient: string,
-  shopName: string,
-  cartId: string,
-  cart: Record<string, unknown>,
-  totals: { subtotal: string; serviceFee: string; total: string },
-): Promise<void> {
-  const resendApiKey = Deno.env.get("RESEND_API_KEY");
-  if (!resendApiKey || !recipient || recipient === "n/a") return;
-  const items = (cart.cart_json as Array<{ quantity: number; name: string; modifiers?: string[]; price_cents: number }>) ?? [];
-  const orderType = (cart.order_type as string) || "pickup";
-  const typeBadge = orderType === "delivery" ? "🚗 DELIVERY" : "🏪 PICKUP";
-  const deliveryAddr = cart.delivery_address as Record<string, unknown> | null;
-  const deliveryInfo = orderType === "delivery" && deliveryAddr
-    ? `<p>Delivery to: ${(deliveryAddr as Record<string,unknown>).formatted || "Address provided"}</p>`
-    : "";
-  const driverTipCents = (cart.driver_tip_cents as number) || 0;
-  const deliveryFeeCents = (cart.delivery_fee_cents as number) || 0;
-  const rows = items.map((i) => {
-    const mods = i.modifiers?.length ? ` (${i.modifiers.join(", ")})` : "";
-    return `<tr><td>${i.quantity}× ${i.name}${mods}</td><td align="right">$${((i.price_cents * i.quantity) / 100).toFixed(2)}</td></tr>`;
-  }).join("");
-  const html = `<h2>New order — ${shopName} <span style="font-size:14px;background:#f0f0f0;padding:2px 8px;border-radius:4px;">${typeBadge}</span></h2>
-    <p>Pickup: ${(cart.pickup_name as string) ?? "Not specified"}</p>${deliveryInfo}
-    <table style="width:100%;border-collapse:collapse;">${rows}
-      <tr><td>Subtotal (food + tax)</td><td align="right">$${totals.subtotal}</td></tr>${deliveryFeeCents > 0 ? `
-      <tr><td>Delivery fee</td><td align="right">$${(deliveryFeeCents / 100).toFixed(2)}</td></tr>` : ""}${driverTipCents > 0 ? `
-      <tr><td>Driver tip</td><td align="right">$${(driverTipCents / 100).toFixed(2)}</td></tr>` : ""}
-      <tr><td>Service fee</td><td align="right">$${totals.serviceFee}</td></tr>
-      <tr><td><strong>Total charged</strong></td><td align="right"><strong>$${totals.total}</strong></td></tr>
-    </table>
-    <p style="color:#64748b;font-size:12px;">Cart ${cartId}. Totals reconcile to the Stripe charge.</p>`;
-  try {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: "SprintAI <hello@getsprintai.com>", to: [recipient], subject: `${typeBadge} New order — ${shopName} ($${totals.total})`, html }),
-    });
-  } catch (err) {
-    console.error("[stripe-webhook] order ticket email failed:", err);
-  }
-}
+
 
 /** checkout.session.expired with order_cart_id → mark order expired */
 async function handleOrderPaymentExpired(
