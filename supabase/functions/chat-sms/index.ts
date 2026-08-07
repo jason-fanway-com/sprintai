@@ -1417,40 +1417,51 @@ async function handleSystemEvent(
 
   // Send order ticket email on payment confirmed
   if (system_event === "payment_confirmed" && shop.email_ticket_recipient) {
-    try {
-      const resendApiKey = Deno.env.get("RESEND_API_KEY");
-      if (!resendApiKey) {
-        console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
-      } else {
-        const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
-        const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
-        const emailPickup = cartRow.pickup_name ?? "Unknown";
-        const emailOrderType = (cartRow.order_type as string) === "delivery" ? "DELIVERY" : "TAKEOUT";
-        const emailDeliveryAddr = cartRow.delivery_address as Record<string, unknown> | null;
-        const emailDeliveryFormatted = emailDeliveryAddr
-          ? ((emailDeliveryAddr.formatted as string) || `${emailDeliveryAddr.street || ""}, ${emailDeliveryAddr.city || ""}, ${emailDeliveryAddr.state || ""} ${emailDeliveryAddr.zip || ""}`.trim().replace(/^, /, "").replace(/, $/, ""))
-          : null;
-        const now = new Date();
-        const etTime = now.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
-        const emailNotes = (cartRow.notes as string | null) ?? null;
-        const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
-          if ((i as BundleItem).type === "bundle") {
-            const b = i as BundleItem;
-            const bPrice = b.price_cents != null ? `$${(b.price_cents / 100).toFixed(2)}` : "";
-            const flavorSub = b.selections?.length
-              ? `<br><span style="font-size:11px;color:#888;">${b.selections.map(s => `${s.quantity}\u00d7 ${h(s.flavor)}`).join(", ")}</span>`
-              : "";
-            return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
-          }
-          const r = i as CartItem;
-          const linePrice = r.price_cents != null ? `$${((r.price_cents * r.quantity) / 100).toFixed(2)}` : "";
-          const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
-          const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
-          const detail = [...new Set([...mods, ...opts])].join(", ");
-          const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
-          return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
-        }).join("");
-        const emailHtml = `<!DOCTYPE html>
+    // Idempotency guard: claim the ticket-email slot with a conditional UPDATE.
+    // Only one concurrent caller can claim it (WHERE ticket_emailed_at IS NULL).
+    const { data: claimed } = await supabase
+      .from("order_carts")
+      .update({ ticket_emailed_at: new Date().toISOString() })
+      .eq("id", order_cart_id)
+      .is("ticket_emailed_at", null)
+      .select("id");
+    if (!claimed || claimed.length === 0) {
+      console.log(`[chat-sms] ticket already emailed for cart ${order_cart_id}, skipping`);
+    } else {
+      try {
+        const resendApiKey = Deno.env.get("RESEND_API_KEY");
+        if (!resendApiKey) {
+          console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
+        } else {
+          const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
+          const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
+          const emailPickup = cartRow.pickup_name ?? "Unknown";
+          const emailOrderType = (cartRow.order_type as string) === "delivery" ? "DELIVERY" : "TAKEOUT";
+          const emailDeliveryAddr = cartRow.delivery_address as Record<string, unknown> | null;
+          const emailDeliveryFormatted = emailDeliveryAddr
+            ? ((emailDeliveryAddr.formatted as string) || `${emailDeliveryAddr.street || ""}, ${emailDeliveryAddr.city || ""}, ${emailDeliveryAddr.state || ""} ${emailDeliveryAddr.zip || ""}`.trim().replace(/^, /, "").replace(/, $/, ""))
+            : null;
+          const now = new Date();
+          const etTime = now.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
+          const emailNotes = (cartRow.notes as string | null) ?? null;
+          const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
+            if ((i as BundleItem).type === "bundle") {
+              const b = i as BundleItem;
+              const bPrice = b.price_cents != null ? `$${(b.price_cents / 100).toFixed(2)}` : "";
+              const flavorSub = b.selections?.length
+                ? `<br><span style="font-size:11px;color:#888;">${b.selections.map(s => `${s.quantity}\u00d7 ${h(s.flavor)}`).join(", ")}</span>`
+                : "";
+              return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
+            }
+            const r = i as CartItem;
+            const linePrice = r.price_cents != null ? `$${((r.price_cents * r.quantity) / 100).toFixed(2)}` : "";
+            const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
+            const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
+            const detail = [...new Set([...mods, ...opts])].join(", ");
+            const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
+            return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
+          }).join("");
+          const emailHtml = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
   <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
@@ -1490,26 +1501,27 @@ async function handleSystemEvent(
   </div>
 </body>
 </html>`;
-        const emailResp = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from: "SprintAI Orders <orders@getsprintai.com>",
-            to: [shop.email_ticket_recipient],
-            subject: `New ${emailOrderType}${emailOrderNum ? ` ${hs(emailOrderNum)}` : ""} \u2014 ${emailOrderType === "DELIVERY" && emailDeliveryFormatted ? hs(emailDeliveryFormatted) : hs(emailPickup)} \u2014 $${emailTotal} \u2014 ${hs(shop.name)}`,
-            html: emailHtml,
-          }),
-        });
-        if (!emailResp.ok) {
-          const errText = await emailResp.text();
-          console.error(`[chat-sms] Resend email failed (${emailResp.status}): ${errText}`);
-        } else {
-          console.log(`[chat-sms] Order ticket email sent to ${shop.email_ticket_recipient}`);
+          const emailResp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from: "SprintAI Orders <orders@getsprintai.com>",
+              to: [shop.email_ticket_recipient],
+              subject: `New ${emailOrderType}${emailOrderNum ? ` ${hs(emailOrderNum)}` : ""} \u2014 ${emailOrderType === "DELIVERY" && emailDeliveryFormatted ? hs(emailDeliveryFormatted) : hs(emailPickup)} \u2014 $${emailTotal} \u2014 ${hs(shop.name)}`,
+              html: emailHtml,
+            }),
+          });
+          if (!emailResp.ok) {
+            const errText = await emailResp.text();
+            console.error(`[chat-sms] Resend email failed (${emailResp.status}): ${errText}`);
+          } else {
+            console.log(`[chat-sms] Order ticket email sent to ${shop.email_ticket_recipient}`);
+          }
         }
+      } catch (emailErr) {
+        console.error("[chat-sms] Non-fatal: order ticket email threw:", emailErr);
       }
-    } catch (emailErr) {
-      console.error("[chat-sms] Non-fatal: order ticket email threw:", emailErr);
-    }
+    } // closes else (idempotency-guard claimed block)
   }
 
   // ── STRUCTURAL OUTBOUND WATCHDOG: transactional push context ──────────────
