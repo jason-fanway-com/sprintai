@@ -1262,14 +1262,21 @@ async function saveMessage(
   tenantId:       string,
   role:           "customer" | "assistant" | "system",
   content:        string,
-): Promise<void> {
+  messageSid?:    string,
+): Promise<{ inserted: boolean }> {
   const { error } = await supabase.from("messages").insert({
     conversation_id: conversationId,
     tenant_id: tenantId,
     role,
     content,
+    ...(messageSid ? { message_sid: messageSid } : {}),
   });
-  if (error) console.error("[chat-sms] Failed to save message:", error.message);
+  if (error) {
+    // 23505 = unique_violation → duplicate message_sid, already processed
+    if (error.code === "23505") return { inserted: false };
+    console.error("[chat-sms] Failed to save message:", error.message);
+  }
+  return { inserted: true };
 }
 
 // ─── System event handler ────────────────────────────────────────────────────
@@ -1511,6 +1518,24 @@ async function handleSystemEvent(
               html: emailHtml,
             }),
           });
+          // ── Audit: log every send attempt to ticket_send_log for determinism proof
+          try {
+            let resendMessageId: string | null = null;
+            try {
+              const resendBody = await emailResp.clone().json();
+              resendMessageId = (resendBody && typeof resendBody === "object" && "id" in resendBody) ? String((resendBody as Record<string, unknown>).id) : null;
+            } catch { /* body may not be JSON or already consumed — id stays null */ }
+            await supabase.from("ticket_send_log").insert({
+              cart_id: order_cart_id,
+              shop_id: shop.id,
+              order_number: cartRow.order_number ?? null,
+              recipient: shop.email_ticket_recipient,
+              resend_message_id: resendMessageId,
+              http_status: emailResp.status,
+            });
+          } catch (auditErr) {
+            console.error("[chat-sms] Non-fatal: failed to insert ticket_send_log row:", auditErr);
+          }
           if (!emailResp.ok) {
             const errText = await emailResp.text();
             console.error(`[chat-sms] Resend email failed (${emailResp.status}): ${errText}`);
@@ -1658,6 +1683,7 @@ Deno.serve(async (req: Request) => {
   // STRUCTURAL OUTBOUND WATCHDOG: ctx for every synchronous SMS reply in this
   // request. Set for the SMS channel below; web channel never calls Twilio.
   let inboundReplyCtx: OutboundContext = { reason: "inbound_reply", inboundAtMs: Date.now() };
+  let messageSid: string | undefined; // external message id for dedup
 
   // ── Parse channel ─────────────────────────────────────────────────────────
   if (isSms) {
@@ -1666,6 +1692,7 @@ Deno.serve(async (req: Request) => {
     const toNumber   = params.get("To")   ?? "";
     const fromNumber = params.get("From") ?? "";
     userMessage  = (params.get("Body") ?? "").trim();
+    messageSid   = params.get("MessageSid") ?? params.get("SmsMessageSid") ?? undefined;
 
     // ── STRUCTURAL OUTBOUND WATCHDOG: synchronous inbound-reply context ──────
     // Every SMS send in this handler is a SYNCHRONOUS reply to THIS inbound
@@ -1679,7 +1706,7 @@ Deno.serve(async (req: Request) => {
       reason: "inbound_reply",
       to: fromNumber,
       inboundMessageId:
-        params.get("MessageSid") ?? params.get("SmsMessageSid") ?? `inbound-${crypto.randomUUID()}`,
+        messageSid ?? `inbound-${crypto.randomUUID()}`,
       inboundAtMs: Date.now(),
     };
 
@@ -1716,14 +1743,15 @@ Deno.serve(async (req: Request) => {
     sessionId     = `sms:${fromNumber}`;
     channel       = "sms";
   } else {
-    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean };
+    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean; phone?: string; message_sid?: string };
     try { body = await req.json(); } catch { return jsonError("Invalid JSON body"); }
 
     if (body.system_event) {
       return await handleSystemEvent(supabase, body);
     }
 
-    const { shop_id, message, session_id, phone } = body;
+    const { shop_id, message, session_id, phone, message_sid } = body;
+    messageSid = message_sid ?? undefined;
     if (!shop_id || !message) return jsonError("shop_id and message are required");
     userMessage = message.trim();
     sessionId   = session_id ?? crypto.randomUUID();
@@ -2054,8 +2082,18 @@ Deno.serve(async (req: Request) => {
       content: m.content,
     }));
 
-  // Save user message
-  await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+  // Save user message with dedup on message_sid (prevents double-processing on
+  // retransmitted SMS or duplicate webhook). If this message_sid was already
+  // persisted by a prior invocation, the unique constraint blocks the insert
+  // atomically and we return a no-op — no LLM, no cart mutation, no charge.
+  {
+    const result = await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage, messageSid);
+    if (!result.inserted) {
+      console.log("[chat-sms] Duplicate message ignored (message_sid = " + (messageSid ?? "none") + ")");
+      if (isSms) return emptyTwiml();
+      return jsonResponse({ reply: "", action: "noop", duplicate: true });
+    }
+  }
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
   const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode);
