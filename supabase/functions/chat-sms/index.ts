@@ -375,6 +375,7 @@ function buildSystemPrompt(
   deliveryAddress?: Record<string, unknown> | null,
   driverTipCents?: number | null,
   deliveryFeeCents?: number | null,
+  deliveryEnabled?: boolean,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = shop.open_hours?.[today] ?? [];
@@ -462,11 +463,15 @@ function buildSystemPrompt(
     ? `\nDELIVERY FEE: $${(deliveryFeeCents / 100).toFixed(2)} (added at checkout)`
     : "";
 
+  const deliveryAvail = deliveryEnabled === true
+    ? `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`
+    : `\nDELIVERY AVAILABLE: No — this shop is pickup only. Never offer delivery.`;
+
   return `You are the ordering assistant for ${shop.name}. Help customers order for pickup or delivery via text.
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
-TODAY'S HOURS: ${hoursStr}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}
+TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}
 
 AVAILABLE MENU:
 ${menuStr}
@@ -491,7 +496,7 @@ RULES:
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - Process the ENTIRE customer message. If they mention multiple items (e.g. "a dozen bagels and some cream cheese"), acknowledge ALL items and work through each one. Do not ignore part of the request.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
-- DELIVERY FLOW: If the shop offers delivery and the customer asks for delivery, call set_order_type("delivery"), then collect their delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. If the customer hasn't specified, assume pickup.
+- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
 - DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
 - SANDWICH MAPPING: "Bacon egg and cheese" = BOBO Sandwich (Bacon). "Sausage egg and cheese" = SOBO Sandwich. "Ham egg and cheese" = HOBO Sandwich. "Pork roll egg and cheese" = PROBO Sandwich. "Turkey bacon egg and cheese" = TBOBO Sandwich. These all come on a bagel by default. If a customer asks for one of these, add the matching item immediately. Do NOT say "I don't see that on the menu."
@@ -1402,6 +1407,11 @@ async function handleSystemEvent(
         const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
         const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
         const emailPickup = cartRow.pickup_name ?? "Unknown";
+        const emailOrderType = (cartRow.order_type as string) === "delivery" ? "DELIVERY" : "TAKEOUT";
+        const emailDeliveryAddr = cartRow.delivery_address as Record<string, unknown> | null;
+        const emailDeliveryFormatted = emailDeliveryAddr
+          ? ((emailDeliveryAddr.formatted as string) || `${emailDeliveryAddr.street || ""}, ${emailDeliveryAddr.city || ""}, ${emailDeliveryAddr.state || ""} ${emailDeliveryAddr.zip || ""}`.trim().replace(/^, /, "").replace(/, $/, ""))
+          : null;
         const now = new Date();
         const etTime = now.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
         const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
@@ -1420,7 +1430,7 @@ async function handleSystemEvent(
   <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
     <div style="background:#1a1a2e;padding:24px 32px;">
       <h1 style="margin:0;color:#fff;font-size:20px;">${shop.name}</h1>
-      <p style="margin:4px 0 0;color:#aaa;font-size:14px;">${emailOrderNum ? `New Order ${emailOrderNum}` : "New Order Received"}</p>
+      <p style="margin:4px 0 0;color:#fff;font-size:14px;font-weight:bold;">${emailOrderNum ? `New ${emailOrderType} Order ${emailOrderNum}` : `New ${emailOrderType} Order`}</p>
     </div>
     <div style="padding:24px 32px;">
       <table style="width:100%;border-collapse:collapse;">
@@ -1441,7 +1451,9 @@ async function handleSystemEvent(
       </table>
       <div style="margin-top:20px;padding:16px;background:#f8f8f8;border-radius:6px;">
         ${emailOrderNum ? `<p style="margin:0 0 6px;"><strong>Order:</strong> ${emailOrderNum}</p>` : ""}
-        <p style="margin:0 0 6px;"><strong>Pickup Name:</strong> ${emailPickup}</p>
+        ${emailOrderType === "DELIVERY" && emailDeliveryFormatted
+          ? `<p style="margin:0 0 6px;"><strong>Delivery Address:</strong> ${emailDeliveryFormatted}</p>`
+          : `<p style="margin:0 0 6px;"><strong>Pickup Name:</strong> ${emailPickup}</p>`}
         <p style="margin:0;"><strong>Time Received:</strong> ${etTime}</p>
       </div>
     </div>
@@ -1457,7 +1469,7 @@ async function handleSystemEvent(
           body: JSON.stringify({
             from: "SprintAI Orders <orders@getsprintai.com>",
             to: [shop.email_ticket_recipient],
-            subject: `New Order${emailOrderNum ? ` ${emailOrderNum}` : ""} \u2014 ${emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
+            subject: `New ${emailOrderType}${emailOrderNum ? ` ${emailOrderNum}` : ""} \u2014 ${emailOrderType === "DELIVERY" && emailDeliveryFormatted ? emailDeliveryFormatted : emailPickup} \u2014 $${emailTotal} \u2014 ${shop.name}`,
             html: emailHtml,
           }),
         });
@@ -2007,7 +2019,7 @@ Deno.serve(async (req: Request) => {
   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled);
   const cartItems    = [...cart.cart_json];
 
   const loopResult = await runOrderingLoop(
