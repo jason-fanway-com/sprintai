@@ -3,12 +3,16 @@ import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck,
 import { useState, useEffect } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import type { UserRoleInfo } from '../lib/roles'
+import { useRole } from '../lib/RoleContext'
 
 interface LayoutProps {
   user: User | null
+  role: UserRoleInfo
 }
 
-const sidebarNav = [
+// Full nav for super-admins
+const superAdminNav = [
   { to: '/command-center', label: 'Command Center', icon: Activity },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/shops', label: 'Shops', icon: Store },
@@ -19,8 +23,8 @@ const sidebarNav = [
   { to: '/shop-chats', label: 'Shop Chats', icon: MessageSquare },
 ]
 
-// Bottom nav: 5 key items for mobile
-const bottomNav = [
+// Bottom nav for super-admins (mobile)
+const superAdminBottomNav = [
   { to: '/command-center', label: 'Commands', icon: Activity },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/shops', label: 'Shops', icon: Store },
@@ -28,10 +32,11 @@ const bottomNav = [
   { to: '/tenants', label: 'Tenants', icon: Users },
 ]
 
-export default function Layout({ user }: LayoutProps) {
+export default function Layout({ user, role: _role }: LayoutProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const { isSuperAdmin } = useRole()
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -42,6 +47,11 @@ export default function Layout({ user }: LayoutProps) {
     await supabase.auth.signOut()
     navigate('/login')
   }
+
+  // Shop owners get a minimal nav (no tenant switcher, no command center, etc.)
+  // Their main nav is on the ShopOwnerDashboard tile cards.
+  const sidebarNav = isSuperAdmin ? superAdminNav : []
+  const bottomNav = isSuperAdmin ? superAdminBottomNav : []
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
@@ -57,18 +67,20 @@ export default function Layout({ user }: LayoutProps) {
           <div className="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-medium">
             {user?.email?.[0]?.toUpperCase() ?? 'A'}
           </div>
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="p-2 -mr-1 text-gray-300 hover:text-white"
-            aria-label="Open menu"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
+          {isSuperAdmin && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="p-2 -mr-1 text-gray-300 hover:text-white"
+              aria-label="Open menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          )}
         </div>
       </header>
 
-      {/* ---- MOBILE SLIDEOVER SIDEBAR (lg:hidden) ---- */}
-      {sidebarOpen && (
+      {/* ---- MOBILE SLIDEOVER SIDEBAR (lg:hidden) — super-admin only ---- */}
+      {sidebarOpen && isSuperAdmin && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           {/* Backdrop */}
           <div
@@ -122,83 +134,87 @@ export default function Layout({ user }: LayoutProps) {
         </div>
       )}
 
-      {/* ---- DESKTOP SIDEBAR (hidden on mobile) ---- */}
-      <aside className="hidden lg:flex w-64 bg-gray-900 text-white flex-col flex-shrink-0">
-        {/* Logo */}
-        <div className="p-6 border-b border-gray-700">
-          <div className="flex items-center gap-2">
-            <Zap className="w-6 h-6 text-brand-500" />
-            <span className="font-bold text-lg">SprintAI</span>
-            <span className="text-xs text-gray-400 ml-1">Admin</span>
+      {/* ---- DESKTOP SIDEBAR (hidden on mobile) — super-admin only ---- */}
+      {isSuperAdmin && (
+        <aside className="hidden lg:flex w-64 bg-gray-900 text-white flex-col flex-shrink-0">
+          {/* Logo */}
+          <div className="p-6 border-b border-gray-700">
+            <div className="flex items-center gap-2">
+              <Zap className="w-6 h-6 text-brand-500" />
+              <span className="font-bold text-lg">SprintAI</span>
+              <span className="text-xs text-gray-400 ml-1">Admin</span>
+            </div>
           </div>
-        </div>
 
-        {/* Nav */}
-        <nav className="flex-1 p-4 space-y-1">
-          {sidebarNav.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-brand-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-700 hover:text-white'
-                }`
-              }
+          {/* Nav */}
+          <nav className="flex-1 p-4 space-y-1">
+            {sidebarNav.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-brand-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                  }`
+                }
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {label}
+              </NavLink>
+            ))}
+          </nav>
+
+          {/* User */}
+          <div className="p-4 border-t border-gray-700">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-medium">
+                {user?.email?.[0]?.toUpperCase() ?? 'A'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white truncate">{user?.email}</p>
+                <p className="text-xs text-gray-400">Admin</p>
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
             >
-              <Icon className="w-4 h-4 flex-shrink-0" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-
-        {/* User */}
-        <div className="p-4 border-t border-gray-700">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-medium">
-              {user?.email?.[0]?.toUpperCase() ?? 'A'}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">{user?.email}</p>
-              <p className="text-xs text-gray-400">Admin</p>
-            </div>
+              <LogOut className="w-4 h-4" />
+              Sign out
+            </button>
           </div>
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-            Sign out
-          </button>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       {/* ---- MAIN CONTENT ---- */}
       <main className="flex-1 overflow-auto min-h-0 pb-16 lg:pb-0">
         <Outlet />
       </main>
 
-      {/* ---- MOBILE BOTTOM NAV (lg:hidden) ---- */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around safe-area-bottom z-40">
-        {bottomNav.map(({ to, label, icon: Icon }) => {
-          const isActive = location.pathname === to || location.pathname.startsWith(to + '/')
-          return (
-            <NavLink
-              key={to}
-              to={to}
-              className={`bottom-nav-item flex-1 ${
-                isActive
-                  ? 'text-brand-600'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              <Icon className="w-5 h-5 flex-shrink-0" />
-              <span className="text-[10px] leading-tight">{label}</span>
-            </NavLink>
-          )
-        })}
-      </nav>
+      {/* ---- MOBILE BOTTOM NAV (lg:hidden) — super-admin only ---- */}
+      {isSuperAdmin && bottomNav.length > 0 && (
+        <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around safe-area-bottom z-40">
+          {bottomNav.map(({ to, label, icon: Icon }) => {
+            const isActive = location.pathname === to || location.pathname.startsWith(to + '/')
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                className={`bottom-nav-item flex-1 ${
+                  isActive
+                    ? 'text-brand-600'
+                    : 'text-gray-400 hover:text-gray-600'
+                }`}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                <span className="text-[10px] leading-tight">{label}</span>
+              </NavLink>
+            )
+          })}
+        </nav>
+      )}
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { getUserRole } from '../lib/roles'
 import type { User } from '@supabase/supabase-js'
 import { Zap, Mail } from 'lucide-react'
 
@@ -18,7 +19,13 @@ export default function Login({ user }: LoginProps) {
   const [mode, setMode] = useState<'magic' | 'password'>('password')
 
   useEffect(() => {
-    if (user) navigate('/dashboard', { replace: true })
+    if (!user) return
+    const { isShopOwner } = getUserRole(user)
+    if (isShopOwner) {
+      navigate('/shop-owner', { replace: true })
+    } else {
+      navigate('/dashboard', { replace: true })
+    }
   }, [user, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {

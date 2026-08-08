@@ -894,7 +894,7 @@ Deno.serve(async (req: Request) => {
       return apiError("Unauthorized", 401);
     }
     const user = await userRes.json();
-    const isAdmin = user.user_metadata?.is_admin === true || user.app_metadata?.is_admin === true;
+    const isAdmin = user.app_metadata?.role === 'super_admin' || user.user_metadata?.is_admin === true;
     if (!isAdmin) {
       return apiError("Forbidden - admin access required", 403);
     }

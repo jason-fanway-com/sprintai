@@ -5,10 +5,10 @@ plugins = []
 headers = []
 
 [build]
-publish = "/Users/joestrazza/sprintai-ordering"
-publishOrigin = "ui"
+publish = "/Users/joestrazza/sprintai-ordering/public"
+publishOrigin = "config"
 commandOrigin = "config"
-command = "npm install"
+command = "npm install && bash scripts/build-public-site.sh"
 functions = "/Users/joestrazza/sprintai-ordering/netlify/functions"
 
 [build.environment]
@@ -29,6 +29,54 @@ functions = "/Users/joestrazza/sprintai-ordering/netlify/functions"
 
 [functions."*"]
 node_bundler = "esbuild"
+
+[[redirects]]
+from = "/admin/assets/*"
+to = "/assets/:splat"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/admin/icons/*"
+to = "/icons/:splat"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/admin/manifest.json"
+to = "/manifest.json"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
 
 [[redirects]]
 from = "/webhook"
@@ -68,9 +116,9 @@ force = false
 
 [[redirects]]
 from = "/admin"
-to = "/admin/index.html"
+to = "https://sprintai-chat-admin.netlify.app/admin"
 status = 200.0
-force = false
+force = true
 
 [redirects.query]
 
@@ -79,8 +127,20 @@ force = false
 [redirects.headers]
 
 [[redirects]]
-from = "/dashboard/*"
-to = "/dashboard/index.html"
+from = "/admin/*"
+to = "https://sprintai-chat-admin.netlify.app/admin/:splat"
+status = 200.0
+force = true
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/chat/*"
+to = "/chat/index.html"
 status = 200.0
 force = false
 
