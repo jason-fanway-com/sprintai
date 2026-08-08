@@ -18,11 +18,12 @@ interface LedgerOrder {
   driver_tip: string;
   service_fee: string;
   refunded: string;
-  estimated_stripe_fee: string;
+  stripe_fee: string;
   net: string;
   pickup_name: string | null;
   customer_phone: string | null;
   test_mode: boolean;
+  fees_estimated: boolean;
 }
 
 interface LedgerResponse {
@@ -171,11 +172,7 @@ export function TransactionLedger({ shopId, dateRange }: TransactionLedgerProps)
           <option value="pending">Pending</option>
           <option value="failed">Failed</option>
         </select>
-        {data?.fees_estimated && (
-          <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-amber-100 text-amber-800 rounded">
-            Fees estimated
-          </span>
-        )}
+
         {data && (
           <span className="text-xs text-gray-400 self-center ml-auto">
             {data.total} transaction{data.total !== 1 ? "s" : ""}
@@ -256,6 +253,11 @@ export function TransactionLedger({ shopId, dateRange }: TransactionLedgerProps)
                   />
                   <th className="text-right px-3 py-2 font-medium text-gray-500 text-xs">
                     Fee
+                    {data?.fees_estimated && (
+                      <span className="inline-flex items-center px-1 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 rounded ml-1">
+                        est.
+                      </span>
+                    )}
                   </th>
                   <th className="text-right px-3 py-2 font-medium text-gray-500 text-xs">
                     Net
@@ -298,8 +300,13 @@ export function TransactionLedger({ shopId, dateRange }: TransactionLedgerProps)
                     <td className="px-3 py-2 whitespace-nowrap text-right text-xs">
                       ${order.driver_tip}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-right text-xs text-gray-400">
-                      -${order.estimated_stripe_fee}
+                    <td className="px-3 py-2 whitespace-nowrap text-right text-xs">
+                      <span className={order.fees_estimated ? "text-gray-400 italic" : "text-gray-500"}>
+                        -${order.stripe_fee}
+                        {order.fees_estimated && (
+                          <span className="text-[10px] text-amber-600 ml-0.5">~</span>
+                        )}
+                      </span>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-right text-xs font-medium text-green-700">
                       ${order.net}

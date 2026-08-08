@@ -1,15 +1,23 @@
 /**
  * SprintAI shop-financials Edge Function
- * Shop-level financial reporting: summary KPIs, paginated ledger, CSV export.
+ * Shop-level financial reporting: summary KPIs, paginated ledger, CSV export, payouts.
  *
  * Auth: Bearer JWT (Supabase Auth — admin session pattern).
  * Tenant isolation: shop must belong to caller's tenant (or caller is platform admin).
  *
- * Phase 1 MVP — Stripe fees are ESTIMATED (2.9% + $0.30).
- * Phase 2 will add live Stripe payout reconciliation.
+ * Phase 2 — REAL Stripe fees from balance transactions, per-row fees_estimated flag,
+ * and read-only payout reconciliation. Falls back to estimated fee when no settled
+ * balance transaction exists yet.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import type { Stripe } from "npm:stripe";
+import {
+  resolveStripeKey,
+  batchFetchFees,
+  listPayouts,
+  listPayoutTransactions,
+} from "../_shared/stripe-financials.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -23,7 +31,7 @@ const STRIPE_FEE_FIXED_CENTS = 30;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseClientAny = any;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface OrderRow {
   id: string;
@@ -43,6 +51,16 @@ interface OrderRow {
   pickup_name: string | null;
   customer_phone: string | null;
   test_mode: boolean;
+  stripe_charge_id: string | null;
+  stripe_connected_account_id: string | null;
+  stripe_fee_cents: number;
+  fees_estimated: boolean;
+}
+
+interface OrderChargeInfo {
+  stripe_charge_id: string | null;
+  stripe_connected_account_id: string | null;
+  test_mode: boolean;
 }
 
 interface ConvoRow {
@@ -50,7 +68,7 @@ interface ConvoRow {
   customer_phone: string | null;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Money helpers ──────────────────────────────────────────────────────────
 
 function centsToDollars(cents: number): string {
   return (cents / 100).toFixed(2);
@@ -82,7 +100,63 @@ function parseDateParam(param: string | null, fallback: string): string {
   return fallback;
 }
 
-// ─── CSV Generation ───────────────────────────────────────────────────────────
+// ─── Fee resolution ─────────────────────────────────────────────────────────
+
+interface ResolvedFeeMap {
+  feeMap: Map<string, number>;          // charge_id → real fee cents (settled only)
+  settledCount: number;                  // number of charges with settled balance txns
+}
+
+/**
+ * Batch-fetch real Stripe fees for a list of orders with charge info.
+ * Groups by mode (live vs test) and issues separate batch calls.
+ * Only settled balance transactions get real fees; unsolved charges are
+ * absent from the map (caller uses estimate fallback).
+ */
+async function resolveFeesForOrders(
+  orders: OrderChargeInfo[],
+): Promise<ResolvedFeeMap> {
+  const feeMap = new Map<string, number>();
+  const liveCharges: Array<{ charge_id: string; connected_account_id: string | null }> = [];
+  const testCharges: Array<{ charge_id: string; connected_account_id: string | null }> = [];
+
+  for (const o of orders) {
+    if (!o.stripe_charge_id) continue;
+    if (o.test_mode) {
+      testCharges.push({ charge_id: o.stripe_charge_id, connected_account_id: o.stripe_connected_account_id });
+    } else {
+      liveCharges.push({ charge_id: o.stripe_charge_id, connected_account_id: o.stripe_connected_account_id });
+    }
+  }
+
+  let settledCount = 0;
+
+  if (liveCharges.length > 0) {
+    const liveKey = resolveStripeKey(false);
+    if (liveKey) {
+      const liveFees = await batchFetchFees(liveKey, liveCharges);
+      for (const [chargeId, result] of liveFees) {
+        feeMap.set(chargeId, result.fee_cents);
+        settledCount++;
+      }
+    }
+  }
+
+  if (testCharges.length > 0) {
+    const testKey = resolveStripeKey(true);
+    if (testKey) {
+      const testFees = await batchFetchFees(testKey, testCharges);
+      for (const [chargeId, result] of testFees) {
+        feeMap.set(chargeId, result.fee_cents);
+        settledCount++;
+      }
+    }
+  }
+
+  return { feeMap, settledCount };
+}
+
+// ─── CSV Generation ─────────────────────────────────────────────────────────
 
 function escapeCsvField(val: string): string {
   if (val.includes(",") || val.includes('"') || val.includes("\n")) {
@@ -108,7 +182,7 @@ function generateSimpleCSV(rows: OrderRow[], shopName: string, from: string, to:
     lines.push(`${date},${escapeCsvField(desc)},${amount}`);
 
     // Stripe fee as separate line
-    const fee = estimateStripeFeeCents(row.total_cents);
+    const fee = row.stripe_fee_cents;
     if (fee > 0) {
       lines.push(`${date},"Stripe Processing Fee",-${centsToDollars(fee)}`);
     }
@@ -135,7 +209,7 @@ function generateQuickBooksCSV(rows: OrderRow[], shopName: string, from: string,
     lines.push(`${date},${escapeCsvField(desc)},${centsToDollars(netAmount)},`);
 
     // Stripe fee on debit column
-    const fee = estimateStripeFeeCents(row.total_cents);
+    const fee = row.stripe_fee_cents;
     if (fee > 0) {
       lines.push(`${date},"Stripe Processing Fee",,${centsToDollars(fee)}`);
     }
@@ -148,7 +222,7 @@ function generateQuickBooksCSV(rows: OrderRow[], shopName: string, from: string,
   return lines.join("\n");
 }
 
-// ─── Batch Phone Lookup ───────────────────────────────────────────────────────
+// ─── Batch Phone Lookup ────────────────────────────────────────────────────
 
 async function batchFetchPhones(
   supabase: SupabaseClientAny,
@@ -170,34 +244,54 @@ async function batchFetchPhones(
   return phoneMap;
 }
 
-// ─── Tenant / Shop Verification ──────────────────────────────────────────────
+// ─── Tenant / Shop Verification ─────────────────────────────────────────────
 
 async function verifyShopAccess(
   supabase: SupabaseClientAny,
   shopId: string,
   tenantId: string | null,
-): Promise<{ allowed: boolean; shopName: string }> {
+): Promise<{ allowed: boolean; shopName: string; testMode: boolean; connectedAccountId: string | null }> {
   const { data, error } = await supabase
     .from("shops")
-    .select("id, name, tenant_id")
+    .select("id, name, tenant_id, test_mode, stripe_connected_account_id")
     .eq("id", shopId);
 
   if (error || !data || !Array.isArray(data) || data.length === 0) {
-    return { allowed: false, shopName: "" };
+    return { allowed: false, shopName: "", testMode: false, connectedAccountId: null };
   }
 
-  const shop = data[0] as unknown as { id: string; name: string; tenant_id: string };
+  const shop = data[0] as unknown as {
+    id: string;
+    name: string;
+    tenant_id: string;
+    test_mode?: boolean;
+    stripe_connected_account_id: string | null;
+  };
 
   // Platform admin (no tenant_id restriction) sees everything
-  if (tenantId === null) return { allowed: true, shopName: shop.name };
+  if (tenantId === null) {
+    return {
+      allowed: true,
+      shopName: shop.name,
+      testMode: shop.test_mode === true,
+      connectedAccountId: shop.stripe_connected_account_id,
+    };
+  }
 
   // Tenant-scoped: shop must belong to caller's tenant
-  if (shop.tenant_id === tenantId) return { allowed: true, shopName: shop.name };
+  if (shop.tenant_id === tenantId) {
+    return {
+      allowed: true,
+      shopName: shop.name,
+      testMode: shop.test_mode === true,
+      connectedAccountId: shop.stripe_connected_account_id,
+    };
+  }
 
-  return { allowed: false, shopName: "" };
+  return { allowed: false, shopName: "", testMode: false, connectedAccountId: null };
 }
 
-// ─── Route Handlers ───────────────────────────────────────────────────────────
+// ─── Route Handlers ─────────────────────────────────────────────────────────
 
 async function getSummary(
   supabase: SupabaseClientAny,
@@ -212,7 +306,7 @@ async function getSummary(
   let query = supabase
     .from("order_carts")
     .select(
-      "id, total_cents, subtotal_cents, tax_cents, delivery_fee_cents, driver_tip_cents, service_fee_cents, refunded_cents"
+      "id, total_cents, subtotal_cents, tax_cents, delivery_fee_cents, driver_tip_cents, service_fee_cents, refunded_cents, stripe_charge_id, stripe_connected_account_id, test_mode"
     )
     .eq("shop_id", shopId)
     .eq("phase", "confirmed")
@@ -235,7 +329,19 @@ async function getSummary(
     driver_tip_cents: number | null;
     service_fee_cents: number | null;
     refunded_cents: number | null;
+    stripe_charge_id: string | null;
+    stripe_connected_account_id: string | null;
+    test_mode: boolean;
   }>;
+
+  // Resolve real fees
+  const { feeMap, settledCount } = await resolveFeesForOrders(
+    rows.map((r) => ({
+      stripe_charge_id: r.stripe_charge_id,
+      stripe_connected_account_id: r.stripe_connected_account_id,
+      test_mode: r.test_mode,
+    })),
+  );
 
   const orderCount = rows.length;
   const grossSalesCents = rows.reduce((sum, r) => sum + parseCents(r.total_cents), 0);
@@ -245,12 +351,23 @@ async function getSummary(
   const totalServiceFeeCents = rows.reduce((sum, r) => sum + parseCents(r.service_fee_cents), 0);
   const totalRefundedCents = rows.reduce((sum, r) => sum + parseCents(r.refunded_cents), 0);
 
-  const estimatedStripeFeesCents = rows.reduce(
-    (sum, r) => sum + estimateStripeFeeCents(parseCents(r.total_cents)),
-    0,
-  );
+  // Fee total: real where available, estimate fallback
+  let realFeesTotal = 0;
+  let estimatedFeesTotal = 0;
+  let anyEstimated = false;
 
-  const netRevenueCents = grossSalesCents - totalRefundedCents - estimatedStripeFeesCents;
+  for (const r of rows) {
+    const total = parseCents(r.total_cents);
+    if (r.stripe_charge_id && feeMap.has(r.stripe_charge_id)) {
+      realFeesTotal += feeMap.get(r.stripe_charge_id)!;
+    } else {
+      estimatedFeesTotal += estimateStripeFeeCents(total);
+      if (total > 0) anyEstimated = true;
+    }
+  }
+
+  const totalStripeFeesCents = realFeesTotal + estimatedFeesTotal;
+  const netRevenueCents = grossSalesCents - totalRefundedCents - totalStripeFeesCents;
   const avgTicketCents = orderCount > 0 ? Math.round(grossSalesCents / orderCount) : 0;
 
   return apiResponse({
@@ -269,11 +386,12 @@ async function getSummary(
     total_service_fees: centsToDollars(totalServiceFeeCents),
     total_refunded_cents: totalRefundedCents,
     total_refunded: centsToDollars(totalRefundedCents),
-    estimated_stripe_fees_cents: estimatedStripeFeesCents,
-    estimated_stripe_fees: centsToDollars(estimatedStripeFeesCents),
+    stripe_fees_cents: totalStripeFeesCents,
+    stripe_fees: centsToDollars(totalStripeFeesCents),
     avg_ticket_cents: avgTicketCents,
     avg_ticket: centsToDollars(avgTicketCents),
-    fees_estimated: true,
+    fees_estimated: anyEstimated,
+    settled_charge_count: settledCount,
     period: { from, to },
   });
 }
@@ -313,7 +431,8 @@ async function getLedger(
        subtotal_cents, tax_cents, total_cents,
        delivery_fee_cents, driver_tip_cents, service_fee_cents,
        refunded_cents, refund_status,
-       pickup_name, conversation_id, test_mode`,
+       pickup_name, conversation_id, test_mode,
+       stripe_charge_id, stripe_connected_account_id`,
       { count: "exact" }
     )
     .eq("shop_id", shopId)
@@ -362,15 +481,36 @@ async function getLedger(
     pickup_name: string | null;
     conversation_id: string;
     test_mode: boolean;
+    stripe_charge_id: string | null;
+    stripe_connected_account_id: string | null;
   }>;
+
+  // Resolve real fees for this page
+  const { feeMap } = await resolveFeesForOrders(
+    rows.map((r) => ({
+      stripe_charge_id: r.stripe_charge_id,
+      stripe_connected_account_id: r.stripe_connected_account_id,
+      test_mode: r.test_mode,
+    })),
+  );
 
   const conversationIds = [...new Set(rows.map((r) => r.conversation_id).filter(Boolean))] as string[];
   const phoneMap = await batchFetchPhones(supabase, conversationIds);
 
+  // Per-row flag detection — set fees_estimated true if ANY row uses an estimate
+  let anyEstimated = false;
+
   const orders = rows.map((r) => {
     const totalCents = parseCents(r.total_cents);
     const refundedCents = parseCents(r.refunded_cents);
-    const feeCents = estimateStripeFeeCents(totalCents);
+
+    // Use real fee if charge_id has a settled balance txn, else fall back
+    const hasRealFee = !!(r.stripe_charge_id && feeMap.has(r.stripe_charge_id));
+    if (totalCents > 0 && !hasRealFee) anyEstimated = true;
+
+    const feeCents = hasRealFee
+      ? feeMap.get(r.stripe_charge_id!)!
+      : estimateStripeFeeCents(totalCents);
     const netCents = totalCents - refundedCents - feeCents;
 
     return {
@@ -394,13 +534,14 @@ async function getLedger(
       refunded_cents: refundedCents,
       refunded: centsToDollars(refundedCents),
       refund_status: r.refund_status ?? "none",
-      estimated_stripe_fee_cents: feeCents,
-      estimated_stripe_fee: centsToDollars(feeCents),
+      stripe_fee_cents: feeCents,
+      stripe_fee: centsToDollars(feeCents),
       net_cents: netCents,
       net: centsToDollars(netCents),
       pickup_name: r.pickup_name,
       customer_phone: phoneMap[r.conversation_id] ?? null,
       test_mode: r.test_mode,
+      fees_estimated: !hasRealFee,
     };
   });
 
@@ -410,7 +551,7 @@ async function getLedger(
     page,
     page_size: pageSize,
     total_pages: Math.ceil((count ?? 0) / pageSize),
-    fees_estimated: true,
+    fees_estimated: anyEstimated,
   });
 }
 
@@ -426,7 +567,7 @@ async function getRevenueChart(
 
   let query = supabase
     .from("order_carts")
-    .select("created_at, total_cents, subtotal_cents")
+    .select("created_at, total_cents, subtotal_cents, stripe_charge_id, stripe_connected_account_id, test_mode")
     .eq("shop_id", shopId)
     .eq("phase", "confirmed")
     .gte("created_at", fromDate)
@@ -441,13 +582,35 @@ async function getRevenueChart(
 
   if (error) return apiError(error.message);
 
+  const chartRows = (data ?? []) as Array<{
+    created_at: string;
+    total_cents: number | null;
+    subtotal_cents: number | null;
+    stripe_charge_id: string | null;
+    stripe_connected_account_id: string | null;
+    test_mode: boolean;
+  }>;
+
+  // Resolve real fees
+  const { feeMap } = await resolveFeesForOrders(
+    chartRows.map((r) => ({
+      stripe_charge_id: r.stripe_charge_id,
+      stripe_connected_account_id: r.stripe_connected_account_id,
+      test_mode: r.test_mode,
+    })),
+  );
+
   // Group by day
   const dayMap = new Map<string, { gross_cents: number; net_cents: number; count: number }>();
-  for (const row of (data ?? []) as Array<{ created_at: string; total_cents: number | null; subtotal_cents: number | null }>) {
+  for (const row of chartRows) {
     const day = row.created_at.split("T")[0];
     const entry = dayMap.get(day) ?? { gross_cents: 0, net_cents: 0, count: 0 };
     const gross = parseCents(row.total_cents);
-    const fee = estimateStripeFeeCents(gross);
+
+    // Use real fee where available, else estimate
+    const hasRealFee = !!(row.stripe_charge_id && feeMap.has(row.stripe_charge_id));
+    const fee = hasRealFee ? feeMap.get(row.stripe_charge_id!)! : estimateStripeFeeCents(gross);
+
     entry.gross_cents += gross;
     entry.net_cents += gross - fee;
     entry.count += 1;
@@ -489,7 +652,8 @@ async function getExport(
        subtotal_cents, tax_cents, total_cents,
        delivery_fee_cents, driver_tip_cents, service_fee_cents,
        refunded_cents, refund_status,
-       pickup_name, conversation_id`
+       pickup_name, conversation_id,
+       stripe_charge_id, stripe_connected_account_id, test_mode`
     )
     .eq("shop_id", shopId)
     .eq("phase", "confirmed")
@@ -511,25 +675,47 @@ async function getExport(
   const conversationIds = [...new Set(rows.map((r: { conversation_id: string }) => r.conversation_id).filter(Boolean))] as string[];
   const phoneMap = await batchFetchPhones(supabase, conversationIds);
 
-  const orders: OrderRow[] = rows.map((r: Record<string, unknown>) => ({
-    id: r.id as string,
-    created_at: r.created_at as string,
-    order_number: r.order_number as number | null,
-    order_type: r.order_type as string,
-    payment_status: r.payment_status as string,
-    phase: "confirmed",
-    subtotal_cents: parseCents(r.subtotal_cents as number | null),
-    tax_cents: parseCents(r.tax_cents as number | null),
-    total_cents: parseCents(r.total_cents as number | null),
-    delivery_fee_cents: parseCents(r.delivery_fee_cents as number | null),
-    driver_tip_cents: parseCents(r.driver_tip_cents as number | null),
-    service_fee_cents: parseCents(r.service_fee_cents as number | null),
-    refunded_cents: parseCents(r.refunded_cents as number | null),
-    refund_status: (r.refund_status as string) ?? "none",
-    pickup_name: r.pickup_name as string | null,
-    customer_phone: phoneMap[r.conversation_id as string] ?? null,
-    test_mode: (r.test_mode as boolean) ?? false,
-  }));
+  // Resolve real fees
+  const { feeMap } = await resolveFeesForOrders(
+    rows.map((r: Record<string, unknown>) => ({
+      stripe_charge_id: r.stripe_charge_id as string | null,
+      stripe_connected_account_id: r.stripe_connected_account_id as string | null,
+      test_mode: (r.test_mode as boolean) ?? false,
+    })),
+  );
+
+  const orders: OrderRow[] = rows.map((r: Record<string, unknown>) => {
+    const totalCents = parseCents(r.total_cents as number | null);
+    const chargeId = (r.stripe_charge_id as string) ?? null;
+    const hasRealFee = !!(chargeId && feeMap.has(chargeId));
+    const stripe_fee_cents = hasRealFee
+      ? feeMap.get(chargeId!)!
+      : estimateStripeFeeCents(totalCents);
+
+    return {
+      id: r.id as string,
+      created_at: r.created_at as string,
+      order_number: r.order_number as number | null,
+      order_type: r.order_type as string,
+      payment_status: r.payment_status as string,
+      phase: "confirmed",
+      subtotal_cents: parseCents(r.subtotal_cents as number | null),
+      tax_cents: parseCents(r.tax_cents as number | null),
+      total_cents: totalCents,
+      delivery_fee_cents: parseCents(r.delivery_fee_cents as number | null),
+      driver_tip_cents: parseCents(r.driver_tip_cents as number | null),
+      service_fee_cents: parseCents(r.service_fee_cents as number | null),
+      refunded_cents: parseCents(r.refunded_cents as number | null),
+      refund_status: (r.refund_status as string) ?? "none",
+      pickup_name: r.pickup_name as string | null,
+      customer_phone: phoneMap[r.conversation_id as string] ?? null,
+      test_mode: (r.test_mode as boolean) ?? false,
+      stripe_charge_id: chargeId,
+      stripe_connected_account_id: (r.stripe_connected_account_id as string) ?? null,
+      stripe_fee_cents,
+      fees_estimated: !hasRealFee,
+    };
+  });
 
   const safeName = shopName.replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, 50);
   const filename = `${safeName}-financials-${from}-to-${to}.csv`;
@@ -548,7 +734,130 @@ async function getExport(
   });
 }
 
-// ─── Main Handler ─────────────────────────────────────────────────────────────
+// ─── Payouts ────────────────────────────────────────────────────────────────
+
+async function getPayouts(
+  supabase: SupabaseClientAny,
+  shopId: string,
+  connectedAccountId: string | null,
+  testMode: boolean,
+): Promise<Response> {
+  const stripeKey = resolveStripeKey(testMode);
+  if (!stripeKey) {
+    return apiError("Stripe not configured for this shop's mode", 500);
+  }
+
+  const payouts = await listPayouts(stripeKey, connectedAccountId, 50);
+  if (payouts.length === 0) {
+    return apiResponse({ payouts: [] });
+  }
+
+  // Fetch balance transactions once per payout, collecting charge IDs for cross-reference
+  const payoutTxnMap = new Map<string, Stripe.BalanceTransaction[]>();
+  const allChargeIds: string[] = [];
+
+  for (const p of payouts) {
+    const txns = await listPayoutTransactions(stripeKey, p.id, connectedAccountId, 100);
+    payoutTxnMap.set(p.id, txns);
+    for (const t of txns) {
+      const source = typeof t.source === "string" ? t.source : null;
+      if (source && source.startsWith("ch_")) {
+        allChargeIds.push(source);
+      }
+    }
+  }
+
+  // Batch-resolve charge IDs → order_carts
+  const ordersByCharge = new Map<
+    string,
+    { order_cart_id: string; order_number: number | null; total_cents: number; created_at: string }
+  >();
+
+  if (allChargeIds.length > 0) {
+    const { data: orderData, error: orderErr } = await supabase
+      .from("order_carts")
+      .select("id, stripe_charge_id, order_number, total_cents, created_at")
+      .eq("shop_id", shopId)
+      .in("stripe_charge_id", allChargeIds);
+
+    if (!orderErr && orderData) {
+      for (const row of orderData as unknown as Array<{
+        id: string;
+        stripe_charge_id: string | null;
+        order_number: number | null;
+        total_cents: number | null;
+        created_at: string;
+      }>) {
+        if (row.stripe_charge_id) {
+          ordersByCharge.set(row.stripe_charge_id, {
+            order_cart_id: row.id,
+            order_number: row.order_number,
+            total_cents: parseCents(row.total_cents),
+            created_at: row.created_at,
+          });
+        }
+      }
+    }
+  }
+
+  // Build response from cached transactions
+  const detailedPayouts = payouts.map((p) => {
+    const txns = payoutTxnMap.get(p.id) ?? [];
+
+    const details = txns.map((t) => {
+      const source = (typeof t.source === "string" ? t.source : null) ?? "";
+      const order = source ? ordersByCharge.get(source) : undefined;
+
+      return {
+        balance_transaction_id: t.id,
+        amount_cents: t.amount,
+        amount: centsToDollars(t.amount),
+        fee_cents: t.fee,
+        fee: centsToDollars(t.fee),
+        net_cents: t.net,
+        net: centsToDollars(t.net),
+        created: t.created,
+        type: t.type,
+        status: t.status,
+        source_id: source || null,
+        description: t.description ?? null,
+        matched_order: order ? {
+          order_cart_id: order.order_cart_id,
+          order_number: order.order_number,
+          total_cents: order.total_cents,
+          total: centsToDollars(order.total_cents),
+          created_at: order.created_at,
+        } : null,
+      };
+    });
+
+    const chargeCount = txns.filter((t) => {
+      const s = typeof t.source === "string" ? t.source : null;
+      return s !== null && s.startsWith("ch_");
+    }).length;
+
+    return {
+      id: p.id,
+      arrival_date: p.arrival_date,
+      amount_cents: p.amount,
+      amount: centsToDollars(p.amount),
+      status: p.status,
+      automatic: p.automatic,
+      type: p.type,
+      currency: p.currency,
+      method: p.method,
+      statement_descriptor: p.statement_descriptor ?? null,
+      arrival_date_readable: new Date(p.arrival_date * 1000).toISOString().split("T")[0],
+      transaction_count: txns.length,
+      matched_order_count: chargeCount,
+      balances: details,
+    };
+  });
+
+  return apiResponse({ payouts: detailedPayouts });
+}
+
+// ─── Main Handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -636,6 +945,15 @@ Deno.serve(async (req: Request) => {
       const { allowed, shopName } = await verifyShopAccess(supabase, shopId, callerTenantId);
       if (!allowed) return apiError("Not found", 404);
       return await getExport(supabase, shopId, shopName, url.searchParams);
+    }
+
+    // ── Route: GET /:shopId/payouts ────────────────────────────────────────
+    const payoutsMatch = path.match(/^\/([a-f0-9-]+)\/payouts$/);
+    if (payoutsMatch && req.method === "GET") {
+      const shopId = payoutsMatch[1];
+      const { allowed, testMode, connectedAccountId } = await verifyShopAccess(supabase, shopId, callerTenantId);
+      if (!allowed) return apiError("Not found", 404);
+      return await getPayouts(supabase, shopId, connectedAccountId, testMode);
     }
 
     return apiError(`Route not found: ${req.method} ${path}`, 404);

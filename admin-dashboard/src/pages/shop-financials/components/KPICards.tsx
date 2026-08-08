@@ -15,9 +15,10 @@ interface Summary {
   avg_ticket: string;
   total_refunded_cents: number;
   total_refunded: string;
-  estimated_stripe_fees_cents: number;
-  estimated_stripe_fees: string;
+  stripe_fees_cents: number;
+  stripe_fees: string;
   fees_estimated: boolean;
+  settled_charge_count?: number;
   period: { from: string; to: string };
 }
 
@@ -108,9 +109,9 @@ export function KPICards({ shopId, dateRange }: KPICardsProps) {
     <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
       <KPICard label="Gross Sales" value={`$${data.gross_sales}`} />
       <KPICard
-        label="Net Revenue"
+        label="Net Revenue (Est)"
         value={`$${data.net_revenue}`}
-        subtitle={data.fees_estimated ? "Fees estimated" : undefined}
+        subtitle={data.fees_estimated ? (data.settled_charge_count ? `${data.settled_charge_count} verified` : "Fees estimated") : undefined}
       />
       {hasTips && (
         <KPICard label="Tips Collected" value={`$${data.total_tips}`} />
@@ -122,8 +123,8 @@ export function KPICards({ shopId, dateRange }: KPICardsProps) {
       />
       <KPICard
         label="Stripe Fees"
-        value={`-$${data.estimated_stripe_fees}`}
-        subtitle={data.fees_estimated ? "Estimated" : undefined}
+        value={`-$${data.stripe_fees}`}
+        subtitle={data.fees_estimated ? (data.settled_charge_count ? `${data.settled_charge_count} verified • rest est.` : "All estimated") : "Verified"}
       />
     </div>
   );
