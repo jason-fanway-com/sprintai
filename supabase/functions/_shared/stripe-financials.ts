@@ -73,13 +73,13 @@ export async function batchFetchFees(
 
   const resolutions = await Promise.allSettled(
     charges.map(async ({ charge_id, connected_account_id }) => {
-      const opts: Stripe.RequestOptions = connected_account_id
-        ? connectedAccountOpts(connected_account_id)
-        : {};
+      const optsArr = connected_account_id
+        ? [connectedAccountOpts(connected_account_id)]
+        : [];
 
       const charge = await stripe.charges.retrieve(charge_id, {
         expand: ["balance_transaction"],
-      }, opts);
+      }, ...optsArr);
 
       const bt =
         typeof charge.balance_transaction === "string"
@@ -137,11 +137,11 @@ export async function listPayouts(
   if (!stripeKey) return [];
 
   const stripe = makeStripe(stripeKey);
-  const opts: Stripe.RequestOptions = connectedAccountId
-    ? connectedAccountOpts(connectedAccountId)
-    : {};
+  const optsArr = connectedAccountId
+    ? [connectedAccountOpts(connectedAccountId)]
+    : [];
 
-  const payouts = await stripe.payouts.list({ limit: Math.min(limit, 100) }, opts);
+  const payouts = await stripe.payouts.list({ limit: Math.min(limit, 100) }, ...optsArr);
   return payouts.data;
 }
 
@@ -158,13 +158,13 @@ export async function listPayoutTransactions(
   if (!stripeKey) return [];
 
   const stripe = makeStripe(stripeKey);
-  const opts: Stripe.RequestOptions = connectedAccountId
-    ? connectedAccountOpts(connectedAccountId)
-    : {};
+  const optsArr = connectedAccountId
+    ? [connectedAccountOpts(connectedAccountId)]
+    : [];
 
   const txnList = await stripe.balanceTransactions.list(
     { payout: payoutId, limit: Math.min(limit, 100) },
-    opts,
+    ...optsArr,
   );
   return txnList.data;
 }
