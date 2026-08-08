@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -142,8 +142,20 @@ These are encoded in the architecture, not just in marketing.
   primary number. Twilio handles additional numbers.
 - **Quality monitoring** (eval-sweep + issue-detector) is deployed and running
   on a schedule. Auto-fix is implemented but disabled (OFF by default).
-- **Delivery flow** (order_type, delivery_address, driver_tip) was recently
-  added (migration 039) and is live in the ordering bot.
+- **Delivery flow** (order_type, delivery_address, driver_tip) is live. The ordering
+  bot handles pickup vs delivery natively, and kitchen ticket emails label orders
+  TAKEOUT or DELIVERY with the delivery address when applicable.
+- **Kitchen ticket emails** (Resend) are sent per-order with full detail: bundle
+  flavor breakdowns, modifier/option rendering, prep notes. Ticket dedup is
+  enforced at the database level (ticket_emailed_at conditional claim) and every
+  send is audited in `ticket_send_log`. Order numbers are hardened against
+  direct-paid insert paths.
+- **Inbound message dedup** (045): duplicate SMS webhook deliveries are
+  silently skipped via Postgres unique constraint on `message_sid` — preventing
+  double-orders from retransmitted messages.
+- **Ops-table security** (041): `outbound_queue` (customer phones + SMS bodies)
+  and `number_provision_log` (Twilio numbers) are locked to service-role-only.
+  Anon key can no longer read PII.
 - **Menu pipeline** imports from CSV and scrapes from websites. Supports option
   groups for item modifications. Bundles (e.g., "dozen bagels" with flavor
   selection) are built into the tool loop.

@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -78,7 +78,7 @@ sprintai-ordering/
 │   │       ├── connect.ts         # Stripe helpers + isShopLive() gate
 │   │       ├── test-mode.ts       # Test key allowlist
 │   │       └── judge-*.ts         # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–040)
+│   └── migrations/           # SQL migrations (001–045)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -113,7 +113,8 @@ sprintai-ordering/
 5. `netlify.toml` — build, publish, admin proxy. The topology document.
 
 6. `supabase/migrations/` — skim 038 (tenant isolation), 039 (delivery flow),
-   040 (test mode fixes).
+   040 (test mode fixes), 041 (ops-table RLS lock), 042–045 (kitchen-ticket
+   idempotency, order-number hardening, audit log, inbound dedup).
 
 ---
 

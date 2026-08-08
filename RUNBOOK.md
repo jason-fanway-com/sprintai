@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-07
+Last updated: 2026-08-08
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -228,12 +228,17 @@ Single Postgres database with tenant isolation enforced by RLS policies.
 Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `order_carts`, `cart_items`, `messages`, `conversations`, `conversation_evals`,
 `knowledge_base`, `availability_overrides`, `admin_action_log`, `issues`,
-`resolution_log`, `sprintai_clients`.
+`resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
+`number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–040). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–045). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
-via the `set-app-metadata` edge function.
+via the `set-app-metadata` edge function. Migration `041` locked ops tables
+(outbound_queue, number_provision_log) behind service-role-only RLS (PII was
+anon-readable). Migrations `042–045` added kitchen-ticket idempotency, order-
+number assignment hardening, per-send audit logging, and inbound message_sid
+dedup.
 
 ### RLS model
 
@@ -259,7 +264,21 @@ via the `set-app-metadata` edge function.
 4. **Phantom-link guard**: Payment links can only be sent on a paid cart — the
    guard checks `cart.status === 'paid'` and `cart.stripe_payment_id` exists.
 
-5. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
+5. **Inbound message dedup**: Inbound SMS/webchat messages carry a `message_sid`
+   that is uniqued in Postgres (partial unique index, 045). Duplicate webhook
+   deliveries or Twilio retransmits hit a constraint violation and are silently
+   skipped — preventing double-orders from replayed messages.
+
+6. **Kitchen ticket idempotency**: `ticket_emailed_at` on `order_carts` is
+   claimed via atomic conditional UPDATE (`WHERE ticket_emailed_at IS NULL`)
+   before sending. Only one caller wins; duplicate `payment_confirmed` events
+   cannot produce duplicate tickets.
+
+7. **Ops-table RLS (041)**: `outbound_queue` and `number_provision_log` are
+   service-role-only. Anon and authenticated roles have no privileges. Customer
+   phone numbers and Twilio SIDs are not readable from the anon key.
+
+8. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
    permanently, observes quiet hours.
 
 ---
