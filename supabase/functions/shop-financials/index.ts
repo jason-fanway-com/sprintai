@@ -253,7 +253,7 @@ async function verifyShopAccess(
 ): Promise<{ allowed: boolean; shopName: string; testMode: boolean; connectedAccountId: string | null }> {
   const { data, error } = await supabase
     .from("shops")
-    .select("id, name, tenant_id, test_mode, stripe_connected_account_id")
+    .select("id, name, tenant_id, stripe_connected_account_id")
     .eq("id", shopId);
 
   if (error || !data || !Array.isArray(data) || data.length === 0) {
@@ -264,7 +264,6 @@ async function verifyShopAccess(
     id: string;
     name: string;
     tenant_id: string;
-    test_mode?: boolean;
     stripe_connected_account_id: string | null;
   };
 
@@ -273,7 +272,7 @@ async function verifyShopAccess(
     return {
       allowed: true,
       shopName: shop.name,
-      testMode: shop.test_mode === true,
+      testMode: false,
       connectedAccountId: shop.stripe_connected_account_id,
     };
   }
@@ -283,7 +282,7 @@ async function verifyShopAccess(
     return {
       allowed: true,
       shopName: shop.name,
-      testMode: shop.test_mode === true,
+      testMode: false,
       connectedAccountId: shop.stripe_connected_account_id,
     };
   }
