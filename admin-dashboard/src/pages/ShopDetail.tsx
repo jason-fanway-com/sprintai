@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings, Gift } from 'lucide-react'
+import { MessageSquare, UtensilsCrossed, ShoppingBag, Settings, Gift, DollarSign } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, supabaseAnonKey } from '../lib/supabase'
 import ShopHeader from '../components/shop/ShopHeader'
@@ -326,6 +326,13 @@ export default function ShopDetail() {
 
       {/* Tabs */}
       <div className={`flex gap-1 border-b border-gray-200 flex-shrink-0 ${activeTab === 'chat' ? 'mx-4 sm:mx-8 mt-4 sm:mt-6' : 'mb-6 overflow-x-auto'} `}>
+        <Link
+          to={`/shop/${id}/financials`}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px border-transparent text-gray-500 hover:text-gray-700"
+        >
+          <DollarSign className="w-4 h-4" />
+          Financials
+        </Link>
         {tabs.map(tab => (
           <button
             key={tab.id}

@@ -21,6 +21,7 @@ import ShopChatTranscripts from './pages/ShopChatTranscripts'
 import ShopChatDetail from './pages/ShopChatDetail'
 import Issues from './pages/Issues'
 import IssueDetail from './pages/IssueDetail'
+import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 
 function ProtectedRoute({ children, user }: { children: React.ReactNode; user: User | null }) {
   if (!user) return <Navigate to="/login" replace />
@@ -81,6 +82,7 @@ export default function App() {
         <Route path="shop-chats/:id" element={<ShopChatDetail />} />
         <Route path="issues" element={<Issues />} />
         <Route path="issues/:id" element={<IssueDetail />} />
+        <Route path="shop/:id/financials" element={<ShopFinancialsPage />} />
       </Route>
     </Routes>
     </>
