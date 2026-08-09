@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -73,12 +73,14 @@ sprintai-ordering/
 │   │   ├── go-live/          # All-or-nothing go-live gate
 │   │   ├── provision-number/ # Auto-buy Twilio number
 │   │   ├── merchant-auth/    # PIN auth for sold-out manager
+│   │   ├── shop-financials/  # Shop financial reporting (KPIs, ledger, payouts)
 │   │   └── _shared/          # Shared libraries
-│   │       ├── outbound-guard.ts  # THE chokepoint — every send goes here
-│   │       ├── connect.ts         # Stripe helpers + isShopLive() gate
-│   │       ├── test-mode.ts       # Test key allowlist
-│   │       └── judge-*.ts         # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–045)
+│   │       ├── outbound-guard.ts      # THE chokepoint — every send goes here
+│   │       ├── connect.ts             # Stripe helpers + isShopLive() gate
+│   │       ├── test-mode.ts           # Test key allowlist
+│   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
+│   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
+│   └── migrations/           # SQL migrations (001–046)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -114,7 +116,10 @@ sprintai-ordering/
 
 6. `supabase/migrations/` — skim 038 (tenant isolation), 039 (delivery flow),
    040 (test mode fixes), 041 (ops-table RLS lock), 042–045 (kitchen-ticket
-   idempotency, order-number hardening, audit log, inbound dedup).
+   idempotency, order-number hardening, audit log, inbound dedup),
+   046 (PII-table RLS forced + admin transcript INSERT gate).
+7. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
+   (super_admin / shop_owner), route guards, shop-scoped dashboards.
 
 ---
 
@@ -172,8 +177,9 @@ logic is embedded in the `add_to_cart` and `show_cart` tools.
 - **Public site**: `git push main` → Netlify auto-deploy. `build-public-site.sh`
   assembles the allowlist into `public/`.
 - **Admin dashboard**: `npm run build` in `admin-dashboard/`, copy `dist/` to
-  `deploy-root/dashboard/`, then `netlify deploy --dir deploy-root --site
-  sprintai-chat-admin`.
+  `deploy-root/admin/`, then `netlify deploy --dir deploy-root --site
+  sprintai-chat-admin`. The SPA uses `<BrowserRouter basename="/dashboard">`;
+  `deploy-root/_redirects` has separate rewrites for `/admin/*` and `/dashboard/*`.
 - **Edge functions**: `supabase functions deploy <name>`.
 - **Commit format**: functional prefix (`feat:`, `fix:`, `docs:`, `chore:`).
 
@@ -202,7 +208,11 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   build. It deploys manually. The proxy in `netlify.toml` routes
   `getsprintai.com/admin` → `sprintai-chat-admin.netlify.app/admin`. The SPA
   uses `<BrowserRouter basename="/dashboard">`. The deploy-root `_redirects`
-  catches all paths.
+  now serves both `/admin/*` and `/dashboard/*` (internal SPA routes).
+- **Role-gating is in the JWT.** Users have `role` (super_admin / shop_owner)
+  and `tenant_id` in `app_metadata`. The frontend (`roles.ts`, `RoleContext`)
+  reads these and guards routes. Shop owners see only their shop, super_admins
+  see everything. Legacy `is_admin` in `user_metadata` is a fallback.
 
 - **The iMessage bridge is a bash script running on a Mac.** It polls
   Messages.app via AppleScript. It's the only non-cloud piece of infrastructure.

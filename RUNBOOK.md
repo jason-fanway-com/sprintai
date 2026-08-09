@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -44,7 +44,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 - The `sprintai-dev` site is git auto-deploy from `main` (build: `npm install && bash scripts/build-public-site.sh`, publish: `public/`).
 - The admin site is **manual deploy** — see "Admin dashboard deploy" below.
 - The `/admin` and `/admin/*` routes on `getsprintai.com` are Netlify proxy rewrites to `sprintai-chat-admin.netlify.app/admin` — the admin source NEVER reaches the root origin.
-- The admin SPA uses `<BrowserRouter basename="/dashboard">`. The deploy-root `_redirects` rewrites all paths to `/dashboard/index.html`.
+- The admin SPA uses `<BrowserRouter basename="/dashboard">`. The deploy-root `_redirects` serves both `/admin/*` (landing at getsprintai.com/admin) and `/dashboard/*` (internal SPA routes), each rewriting to their respective `index.html`.
 
 ### Supabase project
 
@@ -52,7 +52,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–040) |
+| Migrations | `supabase/migrations/` (001–046) |
 
 ---
 
@@ -76,8 +76,8 @@ build (`shop-chat/dist/` → `public/chat/`). Nothing from `supabase/`,
 cd admin-dashboard
 npm run build
 # Vite outputs to dist/ (base="/dashboard/")
-# Manually copy dist/ contents to deploy-root/dashboard/
-cp -r dist/* deploy-root/dashboard/
+# Copy dist/ contents to deploy-root/admin/ (the proxy route at getsprintai.com/admin)
+cp -r dist/* deploy-root/admin/
 # Deploy to the SEPARATE site:
 netlify deploy --dir admin-dashboard/deploy-root --site sprintai-chat-admin
 # If good:
@@ -86,6 +86,10 @@ netlify deploy --dir admin-dashboard/deploy-root --site sprintai-chat-admin --pr
 
 After deploy, verify: `curl -s https://getsprintai.com/admin/ | head -20` should
 return the admin SPA HTML (proxied from `sprintai-chat-admin`).
+
+The live SPA is at `getsprintai.com/admin`; internally it routes under
+`/dashboard/` (Vite `base` + `<BrowserRouter basename>`). The
+`deploy-root/_redirects` has separate rewrites for both path prefixes.
 
 ### Supabase edge functions
 
@@ -179,6 +183,7 @@ Models per function:
 | `go-live` | All-or-nothing go-live gate check | No |
 | `merchant-auth` | Server-side PIN auth for sold-out manager | No |
 | `set-app-metadata` | Set user roles in app_metadata (service-key only) | No |
+| `shop-financials` | Shop financial reporting (KPIs, ledger, payouts, CSV export) | Yes |
 
 ### Payments
 | Function | Purpose | JWT |
@@ -215,6 +220,7 @@ Models per function:
 | `outbound-guard.ts` | Structural chokepoint — all customer-facing sends route here |
 | `connect.ts` | Stripe Connect helpers, `isShopLive()` gate, service fee constant |
 | `test-mode.ts` | Test-mode Stripe key resolution with allowlist gate |
+| `stripe-financials.ts` | Real Stripe fee lookup + payout reconciliation for financials |
 | `judge-rubric.ts` | Conversation Judge rubric (single source of truth) |
 | `judge-notify.ts` | Judge digest → Telegram notification |
 | `judge-autofix.ts` | Auto-fix seam (OFF by default) |
@@ -231,18 +237,21 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–045). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–046). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
 (outbound_queue, number_provision_log) behind service-role-only RLS (PII was
 anon-readable). Migrations `042–045` added kitchen-ticket idempotency, order-
 number assignment hardening, per-send audit logging, and inbound message_sid
-dedup.
+dedup. Migration `046` hardened PII-table RLS — forced RLS on outbound_queue + 
+number_provision_log, and gated admin_chat_transcripts INSERT to super_admin only.
 
 ### RLS model
 
-- User roles: `is_admin`, `tenant_id` in `auth.users.app_metadata`.
+- User roles: `super_admin`, `shop_owner` in `auth.users.app_metadata.role`.
+  Legacy `is_admin` in `user_metadata` accepted as super_admin fallback.
+- `tenant_id` in `app_metadata` scopes shop_owner access to their shop only.
 - Policies read `auth.jwt() → app_metadata` — client-cannot-edit.
 - Service-role key bypasses RLS for edge functions that need cross-tenant access.
 
@@ -274,11 +283,16 @@ dedup.
    before sending. Only one caller wins; duplicate `payment_confirmed` events
    cannot produce duplicate tickets.
 
-7. **Ops-table RLS (041)**: `outbound_queue` and `number_provision_log` are
-   service-role-only. Anon and authenticated roles have no privileges. Customer
-   phone numbers and Twilio SIDs are not readable from the anon key.
+7. **Ops-table RLS (041, 046)**: `outbound_queue` and `number_provision_log` are
+   service-role-only with RLS forced on. Anon and authenticated roles have no
+   privileges. Customer phone numbers and Twilio SIDs are not readable from
+   the anon key.
 
-8. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
+8. **Admin transcript INSERT gate (046)**: `admin_chat_transcripts` INSERT
+   requires `is_super_admin()` (user JWT) or service_role key. WITH CHECK(true)
+   replaced — any authenticated user could previously inject transcripts.
+
+9. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
    permanently, observes quiet hours.
 
 ---
@@ -308,8 +322,9 @@ dedup.
 
 ### Admin dashboard blank page
 - Confirm `sprintai-chat-admin` site has the latest deploy.
-- Confirm `deploy-root/_redirects` has the SPA catch-all.
+- Confirm `deploy-root/_redirects` has both `/admin/*` and `/dashboard/*` rewrites.
 - Check `admin-dashboard/vite.config.ts` has `base: "/dashboard/"`.
+- The live URL is `getsprintai.com/admin`; the SPA internally routes under `/dashboard/`.
 
 ### Edge function deploy fails
 - `supabase functions deploy <name>` — check `supabase/config.toml` has the

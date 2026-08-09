@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -59,8 +59,15 @@ Two user surfaces:
 3. **Sold-out manager.** PIN-protected simple toggle: tap to mark items sold
    out for today. Designed for line cooks and counter staff who don't have time
    on a computer.
-4. **Dashboard.** Orders, revenue, conversation transcripts, quality scores.
-   Purpose-built for a restaurant owner, not a SaaS power user.
+4. **Role-gated dashboard.** Super admins see all shops; shop owners see only
+   their own. Role is carried in the JWT (`app_metadata.role`), verified
+   server-side, and enforced with frontend route guards.
+5. **Financial reporting.** Per-shop transaction ledger with real Stripe fees,
+   revenue KPIs, payout reconciliation, and QuickBooks-compatible CSV export.
+   Every charge shows its exact Stripe fee (or an estimate for pending charges),
+   so the owner sees net revenue, not just gross.
+6. **Dashboard.** Orders, revenue, conversation transcripts, quality scores,
+   financial reporting. Purpose-built for a restaurant owner, not a SaaS power user.
 
 ---
 
@@ -153,9 +160,17 @@ These are encoded in the architecture, not just in marketing.
 - **Inbound message dedup** (045): duplicate SMS webhook deliveries are
   silently skipped via Postgres unique constraint on `message_sid` — preventing
   double-orders from retransmitted messages.
-- **Ops-table security** (041): `outbound_queue` (customer phones + SMS bodies)
-  and `number_provision_log` (Twilio numbers) are locked to service-role-only.
-  Anon key can no longer read PII.
+- **Ops-table security** (041, 046): `outbound_queue` (customer phones + SMS bodies)
+  and `number_provision_log` (Twilio numbers) are locked to service-role-only
+  with RLS forced on. `admin_chat_transcripts` INSERT gated to super_admin only.
+  Anon key can no longer read or write PII surfaces.
+- **Role-gating**: `super_admin` and `shop_owner` roles in `app_metadata`.
+  Frontend route guards enforce access; shop owners see only their shop.
+  Legacy `is_admin` in `user_metadata` is a fallback for continuity.
+- **Shop financial reporting**: Per-shop transaction ledger with real Stripe
+  fees from balance transactions (estimated for pending charges). KPIs,
+  revenue chart, payout reconciliation, and QuickBooks-compatible CSV export.
+  Owners see net revenue, not just gross.
 - **Menu pipeline** imports from CSV and scrapes from websites. Supports option
   groups for item modifications. Bundles (e.g., "dozen bagels" with flavor
   selection) are built into the tool loop.
@@ -169,7 +184,7 @@ These are encoded in the architecture, not just in marketing.
 2. **First real restaurant** — onboard one paying shop with their real menu,
    real Stripe, and real phone number. Validate the end-to-end in production
    with real customers.
-3. **Stripe Connect secrets** — add the missing OAuth keys so Path A (existing
+3. **Stripe Connect OAuth secrets** — add the missing keys so Path A (existing
    Stripe merchants) works end-to-end.
 4. **Multi-number scale** — once the Standard brand is approved, provision
    numbers for multiple shops from the Messaging Service pool.
