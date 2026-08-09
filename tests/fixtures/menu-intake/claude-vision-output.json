@@ -1,0 +1,1563 @@
+[
+  {
+    "name": "Regular Slice",
+    "description": null,
+    "price_cents": 285,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Pepperoni (each)",
+    "description": null,
+    "price_cents": 50,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Pepperoni, sausage, bacon, green peppers, mushrooms, onions, garlic sauce, tomatoes, anchovies",
+    "description": null,
+    "price_cents": 150,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet (each)",
+    "description": "Steak, chicken steak, grilled chicken, gyro meat, roasted peppers, broccoli, spinach",
+    "price_cents": 150,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheese Pizza (Small 10\")",
+    "description": null,
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheese Pizza (Medium 14\")",
+    "description": null,
+    "price_cents": 1495,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheese Pizza (Large 16\")",
+    "description": null,
+    "price_cents": 1650,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Thin Sicilian Pizza (Medium only)",
+    "description": null,
+    "price_cents": 1750,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gluten-Free Pizza (Small 12\")",
+    "description": null,
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gluten-Free Pizza (Medium 15.5\")",
+    "description": null,
+    "price_cents": 1550,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "German Pizza (Small)",
+    "description": "Chopped steak, onions, black olives, banana peppers",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "German Pizza (Medium)",
+    "description": "Chopped steak, onions, black olives, banana peppers",
+    "price_cents": 1550,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "German Pizza (Large)",
+    "description": "Chopped steak, onions, black olives, banana peppers",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Pizza (Small)",
+    "description": "Onions, green peppers, black olives, mushrooms, tomatoes",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Pizza (Medium)",
+    "description": "Onions, green peppers, black olives, mushrooms, tomatoes",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Pizza (Large)",
+    "description": "Onions, green peppers, black olives, mushrooms, tomatoes",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jack's Special Pizza (Small)",
+    "description": "Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jack's Special Pizza (Medium)",
+    "description": "Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jack's Special Pizza (Large)",
+    "description": "Onions, pepperoni, green peppers, extra cheese, sausage, bacon, mushrooms",
+    "price_cents": 2499,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Delicious Pizza (Small)",
+    "description": "Pepperoni, sausage, mushrooms, green peppers",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Delicious Pizza (Medium)",
+    "description": "Pepperoni, sausage, mushrooms, green peppers",
+    "price_cents": 1799,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Delicious Pizza (Large)",
+    "description": "Pepperoni, sausage, mushrooms, green peppers",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Meat Lover Pizza (Small)",
+    "description": "Bacon, ham, sausage, pepperoni",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Meat Lover Pizza (Medium)",
+    "description": "Bacon, ham, sausage, pepperoni",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Meat Lover Pizza (Large)",
+    "description": "Bacon, ham, sausage, pepperoni",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Margherita Pizza (Small)",
+    "description": "Marinara sauce, fresh mozzarella, tomatoes, basil, finished with olive oil, parmesan cheese",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Margherita Pizza (Medium)",
+    "description": "Marinara sauce, fresh mozzarella, tomatoes, basil, finished with olive oil, parmesan cheese",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Margherita Pizza (Large)",
+    "description": "Marinara sauce, fresh mozzarella, tomatoes, basil, finished with olive oil, parmesan cheese",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grandma's Pizza (Small)",
+    "description": "Sweet sauce, basil, mozzarella",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grandma's Pizza (Medium)",
+    "description": "Sweet sauce, basil, mozzarella",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grandma's Pizza (Large)",
+    "description": "Sweet sauce, basil, mozzarella",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bruschetta Pizza (Small)",
+    "description": "Tomato sauce, garlic sauce, mozzarella",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bruschetta Pizza (Medium)",
+    "description": "Tomato sauce, garlic sauce, mozzarella",
+    "price_cents": 1799,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bruschetta Pizza (Large)",
+    "description": "Tomato sauce, garlic sauce, mozzarella",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Pizza (Small)",
+    "description": "Mild or BBQ, chopped chicken, topped with bleu cheese or ranch",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Pizza (Medium)",
+    "description": "Mild or BBQ, chopped chicken, topped with bleu cheese or ranch",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Pizza (Large)",
+    "description": "Mild or BBQ, chopped chicken, topped with bleu cheese or ranch",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bacon Ranch Pizza (Small)",
+    "description": "Crispy chicken, bacon topped with ranch",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bacon Ranch Pizza (Medium)",
+    "description": "Crispy chicken, bacon topped with ranch",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bacon Ranch Pizza (Large)",
+    "description": "Crispy chicken, bacon topped with ranch",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Thai Sweet Chili Chicken Pizza (Small)",
+    "description": "Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Thai Sweet Chili Chicken Pizza (Medium)",
+    "description": "Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Thai Sweet Chili Chicken Pizza (Large)",
+    "description": "Mozzarella, crispy chicken, pineapples, tossed in a Thai sweet chili sauce",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Perogies Pizza (Small)",
+    "description": "Sweet and pierogies, onions, mozzarella, topped with cheese blend",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Perogies Pizza (Medium)",
+    "description": "Sweet and pierogies, onions, mozzarella, topped with cheese blend",
+    "price_cents": 2099,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Perogies Pizza (Large)",
+    "description": "Sweet and pierogies, onions, mozzarella, topped with cheese blend",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Roma Pizza (Small)",
+    "description": "Roma cheese, mozzarella, broccoli, garlic sauce",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Roma Pizza (Medium)",
+    "description": "Roma cheese, mozzarella, broccoli, garlic sauce",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Roma Pizza (Large)",
+    "description": "Roma cheese, mozzarella, broccoli, garlic sauce",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Taco Pizza (Small)",
+    "description": "Spicy ground beef, American cheese, mozzarella, cheddar cheese, topped with lettuce, tomato, tortilla chips",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Taco Pizza (Medium)",
+    "description": "Spicy ground beef, American cheese, mozzarella, cheddar cheese, topped with lettuce, tomato, tortilla chips",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Taco Pizza (Large)",
+    "description": "Spicy ground beef, American cheese, mozzarella, cheddar cheese, topped with lettuce, tomato, tortilla chips",
+    "price_cents": 2399,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro Pizza (Small)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro Pizza (Medium)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro Pizza (Large)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Spicy Gyro Pizza (Small)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions, jalapeno ranch sauce",
+    "price_cents": 1625,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Spicy Gyro Pizza (Medium)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions, jalapeno ranch sauce",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Spicy Gyro Pizza (Large)",
+    "description": "Mozzarella, gyro meat, homemade tzatziki sauce, fresh tomatoes, red onions, jalapeno ranch sauce",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mikes Hot n Honey Pizza (Small)",
+    "description": "Spicy crispy chicken, bacon, lettuce, tomato, Mike's Hot n Honey, mozzarella",
+    "price_cents": 1395,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mikes Hot n Honey Pizza (Medium)",
+    "description": "Spicy crispy chicken, bacon, lettuce, tomato, Mike's Hot n Honey, mozzarella",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mikes Hot n Honey Pizza (Large)",
+    "description": "Spicy crispy chicken, bacon, lettuce, tomato, Mike's Hot n Honey, mozzarella",
+    "price_cents": 2299,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "White Pizza (Small)",
+    "description": "Ricotta, mozzarella with garlic sauce",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "White Pizza (Medium)",
+    "description": "Ricotta, mozzarella with garlic sauce",
+    "price_cents": 1550,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "White Pizza (Large)",
+    "description": "Ricotta, mozzarella with garlic sauce",
+    "price_cents": 1999,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet White Fiesta Pizza (Small)",
+    "description": "Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",
+    "price_cents": 1295,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet White Fiesta Pizza (Medium)",
+    "description": "Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",
+    "price_cents": 2199,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet White Fiesta Pizza (Large)",
+    "description": "Mozzarella, spinach, broccoli, tomatoes, roasted red peppers, garlic sauce",
+    "price_cents": 2399,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Toppings (each) Half",
+    "description": "Pepperoni, sausage, bacon, green peppers, mushrooms, onions, garlic sauce, tomatoes, anchovies",
+    "price_cents": 450,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Toppings (each) Whole",
+    "description": "Pepperoni, sausage, bacon, green peppers, mushrooms, onions, garlic sauce, tomatoes, anchovies",
+    "price_cents": 450,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet Toppings Half",
+    "description": "Steak, chicken steak, grilled chicken, gyro meat, roasted peppers, broccoli, spinach",
+    "price_cents": 400,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gourmet Toppings Whole",
+    "description": "Steak, chicken steak, grilled chicken, gyro meat, roasted peppers, broccoli, spinach",
+    "price_cents": 500,
+    "category": "PIZZA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Side Salad",
+    "description": null,
+    "price_cents": 399,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "French Fries",
+    "description": null,
+    "price_cents": 499,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Nacho Cheese Fries",
+    "description": null,
+    "price_cents": 699,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bacon Cheese Fries",
+    "description": null,
+    "price_cents": 849,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Sweet Potato Fries",
+    "description": null,
+    "price_cents": 649,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Crab Fries",
+    "description": "Old bay seasoning with a side of nacho cheese",
+    "price_cents": 899,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Fries",
+    "description": "Chicken steak meat, onions, melted mozzarella, mild sauce",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Texas Fries",
+    "description": "Bacon, ham, cheese, jalape\u00f1o, hot peppers",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cali Fries",
+    "description": "Lettuce, cheese, bacon, ranch",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Pierogies (3)",
+    "description": null,
+    "price_cents": 599,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Saut\u00e9ed Pierogies with onions (5)",
+    "description": null,
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mozzarella Sticks (6)",
+    "description": null,
+    "price_cents": 899,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Onion Rings",
+    "description": null,
+    "price_cents": 750,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jalape\u00f1o Poppers (8)",
+    "description": "Marinara sauce topped with cheese, a scoop of fresh",
+    "price_cents": 950,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Spinach Artichoke Dip",
+    "description": "Served with tortilla chips",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Homemade Buffalo Chicken Dip",
+    "description": "Served with tortilla chips",
+    "price_cents": 1299,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jack's Located Chicken Dip",
+    "description": null,
+    "price_cents": 1295,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jack's Located Cheese",
+    "description": "Steak or chicken, lettuce, tomatoes, onions, nacho cheese. Served with sour cream, salsa",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Fingers (5) with french fries",
+    "description": null,
+    "price_cents": 1095,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Jalape\u00f1o Poppers (8)",
+    "description": null,
+    "price_cents": 699,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Garlic Knots (6)",
+    "description": null,
+    "price_cents": 599,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bread Sticks (8)",
+    "description": "Served with french bread, garlic",
+    "price_cents": 1199,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Fried Shrimp",
+    "description": null,
+    "price_cents": 1250,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Fish and Chips",
+    "description": null,
+    "price_cents": 1350,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mussels Fra Diavalo",
+    "description": null,
+    "price_cents": 1499,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bruschetta (5)",
+    "description": "Spicy marinara with toasted bread",
+    "price_cents": 999,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Caprese Salad",
+    "description": "Fresh tomatoes, basil, olive oil and mozzarella cheese on toasted bread",
+    "price_cents": 750,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Loaded Pierogies",
+    "description": "Saut\u00e9ed pierogies, tomatoes, onions, bacon, cheese, hot peppers, lettuce",
+    "price_cents": 1199,
+    "category": "APPETIZERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Noodle Soup (cup)",
+    "description": null,
+    "price_cents": 499,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Noodle Soup (bowl)",
+    "description": null,
+    "price_cents": 799,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bisque Soup (cup)",
+    "description": null,
+    "price_cents": 499,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bisque Soup (bowl)",
+    "description": null,
+    "price_cents": 799,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Soup of the Day (cup)",
+    "description": null,
+    "price_cents": 599,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Soup of the Day (bowl)",
+    "description": null,
+    "price_cents": 899,
+    "category": "SOUPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "10 Pieces Wings",
+    "description": null,
+    "price_cents": 1699,
+    "category": "WINGS",
+    "modifiers_json": null
+  },
+  {
+    "name": "10 Boneless Wings",
+    "description": null,
+    "price_cents": 1199,
+    "category": "WINGS",
+    "modifiers_json": null
+  },
+  {
+    "name": "House Salad",
+    "description": "Dressing: Ranch | Caesar | Bleu Cheese French | Italian | Creamy Italian | Oil/Vinegar Honey Mustard | Balsamic | Honey Mustard Catalina | 1000 Island | Russian | Vidalia Cilantro Lime | Jalape\u00f1o Ranch",
+    "price_cents": 50,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Extra Dressings",
+    "description": "Tomatoes, onions, cucumbers",
+    "price_cents": 899,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Garden Salad",
+    "description": "Tomatoes, onions, cucumbers, mozzarella, one cheese",
+    "price_cents": 1195,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Greek Salad",
+    "description": "Tomatoes, red onions, cucumbers, jalape\u00f1o rings, feta cheese",
+    "price_cents": 1099,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Antipasta",
+    "description": "Ham, salami, capicola, tomatoes, onions, cucumbers",
+    "price_cents": 1199,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Caesar",
+    "description": "Grilled chicken, croutons, parmesan cheese",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Caprese Chicken",
+    "description": "Grilled chicken, tomatoes, fresh mozzarella, olive oil, basil, balsamic glaze. Served on a bed of lettuce",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grilled Chicken Salad",
+    "description": "Tomatoes, onions, cucumbers",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Grilled Chicken Salad",
+    "description": "Hot, mild, BBQ or sweet & spicy grilled chicken, lettuce, tomatoes, red onions, cucumbers",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Shrimp Thai Sweet Chili Salad",
+    "description": "Fried shrimp tossed in pineapple, tomatoes, cucumbers, red onions, cucumbers",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Cheesesteak Salad with onions",
+    "description": "Tomatoes, onions, cucumbers",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro on Gyro Salad",
+    "description": "Grilled chicken, romaine lettuce, bacon, egg, tomatoes, onions",
+    "price_cents": 1295,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyn on Colors",
+    "description": "Crispy chicken, romaine lettuce, parmesan cheese, topped pita, homemade tzatziki sauce",
+    "price_cents": 1499,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Southwest Salad",
+    "description": "Trio cheese corn, avocado, black beans, tortilla strips served with cilantro lime vinaigrette",
+    "price_cents": 1199,
+    "category": "SALADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "BBQ Flatbread",
+    "description": "BBQ sauce, chicken, cheese blend",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Flatbread",
+    "description": "Hot or mild wing sauce, chicken, cheese blend",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Dip Flatbread",
+    "description": "Topped with cheese blend, ranch",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheesesteak Flatbread",
+    "description": "Chopped steak meat, fried onions, hot peppers, cheese blend",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Bacon Ranch Flatbread",
+    "description": "Grilled chicken, bacon, onions, cheese blend, ranch dressing",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Margherita Flatbread",
+    "description": "Marinara sauce, fresh mozzarella, fresh basil",
+    "price_cents": 1050,
+    "category": "FLATBREADS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grilled Chicken Bacon & Ranch Wrap",
+    "description": "Served with homemade chips (substitute fries, sweet potato fries, pierogies, saut\u00e9ed pierogies, mozzarella sticks, onion rings or side salad for an upcharge)",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Caesar Wrap",
+    "description": "Grilled chicken, lettuce, onions, bacon, ranch dressing",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Wrap",
+    "description": "Hot, mild, BBQ & spicy grilled chicken, lettuce, tomatoes, onions",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Italian Wrap",
+    "description": "Ham, salami, provolone cheese, lettuce, tomatoes, onions, oil vinegar",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Tuna Wrap",
+    "description": "Lettuce, tomatoes, onions, mayo",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Wrap",
+    "description": "Lettuce, tomatoes, onions, black olives, green peppers, mushrooms",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheesesteak Chicken Cheesesteak Wrap",
+    "description": "Chopped steak or chicken, onions, lettuce, tomatoes, American cheese, mayo",
+    "price_cents": 999,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Greek Gyro Wrap",
+    "description": "Grilled chicken, lettuce, tomatoes, red onion, kalamata olives, feta cheese, tzatziki",
+    "price_cents": 1099,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Southwest Wrap",
+    "description": "Lettuce, tomato, avocado, black beans, tortilla strips. Served with cilantro lime vinaigrette",
+    "price_cents": 1099,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Shrimp Wrap",
+    "description": null,
+    "price_cents": 1299,
+    "category": "WRAPS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Cheesesteak",
+    "description": "Served with fries (substitute sweet potato fries, pierogies, saut\u00e9ed pierogies, mozzarella sticks, onion rings or side salad for an upcharge)",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheesesteak",
+    "description": "Hot, mild BBQ or sweet & spicy, lettuce, tomatoes, red onions, American cheese",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Cheesesteak",
+    "description": "Lettuce, tomatoes, fried onions, American cheese, mayo",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "BLT",
+    "description": "Bacon, lettuce, tomatoes, mayo",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Turkey Lettuce",
+    "description": "Turkey, lettuce, tomatoes, fried onions, provolone cheese, mayo",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Italian Ham",
+    "description": "Salami, provolone, lettuce, tomatoes, red onions, oil vinegar",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grilled Chicken",
+    "description": "Lettuce, tomatoes, onions, red onions, provolone cheese, mayo",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Tuna Melt",
+    "description": "Lettuce, tomatoes, red onions, bacon, provolone cheese, mayo",
+    "price_cents": 1099,
+    "category": "HOMEMADE PANINIS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Steak Quesadilla",
+    "description": "Served with sour cream and salsa",
+    "price_cents": 1249,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Quesadilla",
+    "description": "Chopped steak, cheese blend with lettuce, tomatoes, fried onions",
+    "price_cents": 1249,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Quesadilla",
+    "description": "Chopped chicken, cheese blend with lettuce, tomatoes, fried onions",
+    "price_cents": 1249,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Fajita Quesadilla",
+    "description": "Lettuce, tomatoes, onions, black olives, mushrooms, green peppers, tomatoes",
+    "price_cents": 1349,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Southwest Chicken Quesadilla",
+    "description": "Grilled chicken, cheese blend, saut\u00e9ed onions, green peppers",
+    "price_cents": 1349,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Shrimp Quesadilla",
+    "description": "Southwest chicken, cheese blend, avocado",
+    "price_cents": 1500,
+    "category": "QUESADILLAS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Parmesan",
+    "description": "All entrees served with choice of pasta, garlic knots and side salad Pasta choices: spaghetti, penne, angel hair, linguine",
+    "price_cents": 1795,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Marsala",
+    "description": null,
+    "price_cents": 1995,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Piccata",
+    "description": "Marinara wine sauce, mushrooms, saut\u00e9ed garlic, onions",
+    "price_cents": 1995,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Alfredo Chicken",
+    "description": "White wine, lemon juice, fresh garlic, roasted peppers, capers",
+    "price_cents": 1995,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Alfredo Shrimp",
+    "description": null,
+    "price_cents": 2195,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Shrimp Fra Diavolo",
+    "description": "Served garlic, tomato in a parmesan creamy sauce",
+    "price_cents": 2195,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Shrimp Scampi",
+    "description": "Marinara sauce, spicy or mild",
+    "price_cents": 2195,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Mussels Fra Diavolo",
+    "description": "White wine, lemon juice, fresh garlic, roasted peppers",
+    "price_cents": 2299,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Pasta with Clam Sauce",
+    "description": "Spicy marinara",
+    "price_cents": 2195,
+    "category": "ENTR\u00c9ES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Baked Pasta",
+    "description": "Red or white clam sauce",
+    "price_cents": 1695,
+    "category": "BAKED PASTA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Stuffed Shells",
+    "description": "Served with garlic knots and side salad",
+    "price_cents": 1695,
+    "category": "BAKED PASTA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheese Ravioli",
+    "description": "Prepared with a marinara sauce",
+    "price_cents": 1695,
+    "category": "BAKED PASTA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Baked Ziti",
+    "description": "Prepared with a marinara sauce",
+    "price_cents": 1695,
+    "category": "BAKED PASTA",
+    "modifiers_json": null
+  },
+  {
+    "name": "Stromboli Personal (12\")",
+    "description": "Ziti covered in marinara sauce, ricotta cheese, mozzarella",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Stromboli (14\")",
+    "description": null,
+    "price_cents": 1895,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Stromboli (16\")",
+    "description": null,
+    "price_cents": 2295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "House Stromboli",
+    "description": "Ham, salami, green peppers, mushrooms, onions",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro Stromboli",
+    "description": "Gyro meat, red onions, fresh tomatoes, homemade tzatziki sauce",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Parmesan Stromboli",
+    "description": "Chicken Parmesan Fried chicken, fresh mozzarella, marinara sauce",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "The Slice Special Stromboli",
+    "description": "Mozzarella sticks, onion rings, mozzarella",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Calzone Stromboli",
+    "description": "Ham, ricotta, mozzarella",
+    "price_cents": 1295,
+    "category": "STROMBOLI",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheesesteak Stromboli Rolls with onions",
+    "description": null,
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Cheesesteak Stromboli Rolls with onions",
+    "description": null,
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Everything Stromboli Rolls",
+    "description": "Pepperoni, sausage, green peppers, onions, sausage, mushrooms, bacon, mozzarella",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Cheesesteak Stromboli Rolls with onions",
+    "description": "Hot, mild, BBQ or sweet & spicy",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Pepperoni Stromboli Rolls",
+    "description": "Pepperoni, mozzarella",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Sausage Stromboli Rolls",
+    "description": "Green peppers, onions, mozzarella",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Meat Lovers Stromboli Rolls",
+    "description": "Bacon, ham, sausage, pepperoni, mozzarella",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Stromboli Rolls",
+    "description": "Tomatoes, green peppers, mushrooms, onions, black olives, mozzarella",
+    "price_cents": 999,
+    "category": "STROMBOLI ROLLS",
+    "modifiers_json": null
+  },
+  {
+    "name": "California Cheeseburger",
+    "description": "Served with fries (substitute sweet potato fries, pierogies, saut\u00e9ed pierogies, mozzarella sticks, onion rings or side salad for an upcharge)",
+    "price_cents": 1099,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Bacon Cheeseburger",
+    "description": "Lettuce, tomatoes, onions, mayo",
+    "price_cents": 1099,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheese Burger",
+    "description": null,
+    "price_cents": 849,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grilled Chicken Burger",
+    "description": null,
+    "price_cents": 999,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Swiss Burger",
+    "description": "American cheese, lettuce, tomatoes, red onions, mayo",
+    "price_cents": 1099,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Big Boy Burger",
+    "description": "Swiss cheese, saut\u00e9ed onions, mushrooms",
+    "price_cents": 1295,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cowboy Burger",
+    "description": "2 Angus beef patties, onion rings, bacon, cheddar cheese, lettuce, tomatoes",
+    "price_cents": 950,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Godfather Burger",
+    "description": "Onion rings, BBQ sauce",
+    "price_cents": 1199,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "California Bacon Cheeseburger",
+    "description": "Mozzarella sticks, bacon, cheddar cheese, lettuce, tomatoes",
+    "price_cents": 1299,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Farm Burger",
+    "description": "Bacon, lettuce, tomatoes, onions, mayo",
+    "price_cents": 1350,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "\"OG\" Seasoned Crispy Chicken",
+    "description": "Fried egg, bacon, American cheese, lettuce, tomatoes, onions",
+    "price_cents": 1350,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Spicy Crispy Chicken",
+    "description": "\"OG\" with pickles. Served with crab fries",
+    "price_cents": 1350,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "CBR Seasoned Crispy Chicken",
+    "description": "Spicy \"OG\" sauce, pickles. Served with crab fries",
+    "price_cents": 1350,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Fish Sandwich",
+    "description": "Lettuce, bacon, ranch dressing. Served with crab fries",
+    "price_cents": 1350,
+    "category": "BURGERS",
+    "modifiers_json": null
+  },
+  {
+    "name": "Turkey Club",
+    "description": "Fish sandwich cod, lettuce, pickles, tartar sauce",
+    "price_cents": 999,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Italian Hoagie",
+    "description": "Turkey, bacon, lettuce, tomatoes, mayo",
+    "price_cents": 999,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Turkey Hoagie",
+    "description": "Ham, provolone, salami, lettuce, tomatoes, onions, oil & vinegar",
+    "price_cents": 999,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Veggie Hoagie",
+    "description": "Lettuce, tomatoes, provolone, onion, mayo",
+    "price_cents": 999,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "BLT",
+    "description": "Lettuce, tomatoes, onions, green peppers, cucumbers",
+    "price_cents": 799,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Tuna Hoagie",
+    "description": "Bacon, lettuce, tomatoes, mayo",
+    "price_cents": 999,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Cheesesteak",
+    "description": "Lettuce, tomatoes, onions",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "California Cheesesteak",
+    "description": "American cheese, sauce, fried onions",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Cheesesteak",
+    "description": "American cheese, lettuce, tomatoes, fried onions, mayo",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "California Chicken Cheesesteak",
+    "description": "American cheese, sauce, fried onions",
+    "price_cents": 1299,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "The Slice Cheesesteak",
+    "description": "American cheese, lettuce, tomatoes, fried onions, mayo",
+    "price_cents": 1399,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Supreme Cheesesteak",
+    "description": "Mozzarella sticks, onion rings, fried onions, nacho cheese",
+    "price_cents": 1399,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Garlic Cheesesteak",
+    "description": "American cheese, sauce, fried onions, green peppers, pepperoni, marinara sauce",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Buffalo Chicken Cheesesteak with fried onions",
+    "description": "Saut\u00e9ed garlic, fried onions, American cheese",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Meatball Parmesan",
+    "description": "Hot, mild, BBQ or sweet & spicy. American cheese",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Sausage Parmesan",
+    "description": "Mozzarella, marinara sauce",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Sausage",
+    "description": "Mozzarella, marinara sauce",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Parmesan",
+    "description": "Marinara sauce, saut\u00e9ed green peppers, fried onions",
+    "price_cents": 1199,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Gyro",
+    "description": "Mozzarella, marinara sauce",
+    "price_cents": 1099,
+    "category": "SANDWICHES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Nuggets (5)",
+    "description": "Beef or chicken",
+    "price_cents": 599,
+    "category": "KIDS' MENU",
+    "modifiers_json": null
+  },
+  {
+    "name": "Chicken Fingers (3)",
+    "description": "(substitute pierogies, saut\u00e9ed pierogies or side salad, or cheese dips, onion rings for an upcharge)",
+    "price_cents": 599,
+    "category": "KIDS' MENU",
+    "modifiers_json": null
+  },
+  {
+    "name": "Grilled Cheese",
+    "description": null,
+    "price_cents": 599,
+    "category": "KIDS' MENU",
+    "modifiers_json": null
+  },
+  {
+    "name": "Hot Dog",
+    "description": null,
+    "price_cents": 599,
+    "category": "KIDS' MENU",
+    "modifiers_json": null
+  },
+  {
+    "name": "Coke",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Diet Coke",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Sprite",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Ginger Ale",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Unsweetened Iced Tea",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  },
+  {
+    "name": "Lemonade",
+    "description": null,
+    "price_cents": 299,
+    "category": "BEVERAGES",
+    "modifiers_json": null
+  }
+]
