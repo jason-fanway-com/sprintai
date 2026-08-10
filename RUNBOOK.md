@@ -200,6 +200,7 @@ Models per function:
 | `train-tenant` | Text paste / document upload → embed | No |
 | `scrape-shop` | Firecrawl + Claude summary → shop_context | No |
 | `import-menu-csv` | CSV menu importer (idempotent, diff-based) | No |
+| `parse-menu-pdf` | PDF/photo menu intake — multi-pass, triple-extract consensus | No |
 
 ### Operations & maintenance
 | Function | Purpose | JWT |

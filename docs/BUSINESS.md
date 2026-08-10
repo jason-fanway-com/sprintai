@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -171,9 +171,12 @@ These are encoded in the architecture, not just in marketing.
   fees from balance transactions (estimated for pending charges). KPIs,
   revenue chart, payout reconciliation, and QuickBooks-compatible CSV export.
   Owners see net revenue, not just gross.
-- **Menu pipeline** imports from CSV and scrapes from websites. Supports option
-  groups for item modifications. Bundles (e.g., "dozen bagels" with flavor
-  selection) are built into the tool loop.
+- **Menu pipeline** imports from PDF/photo, CSV, and website scrape. The Menu
+  Intake Standard defines a 7-column canonical schema with triple-extract
+  consensus pricing, a deterministic QA validator, and a mandatory owner
+  sign-off gate — no menu goes live without the restaurant owner confirming
+  every price. Supports option groups for item modifications. Bundles (e.g.,
+  "dozen bagels" with flavor selection) are built into the tool loop.
 
 ---
 

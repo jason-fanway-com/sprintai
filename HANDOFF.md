@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -118,7 +118,10 @@ sprintai-ordering/
    040 (test mode fixes), 041 (ops-table RLS lock), 042–045 (kitchen-ticket
    idempotency, order-number hardening, audit log, inbound dedup),
    046 (PII-table RLS forced + admin transcript INSERT gate).
-7. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
+7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
+   double-extract fidelity check (§B), mandatory owner sign-off (§C).
+   This is the contract every menu must satisfy before go-live.
+8. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
    (super_admin / shop_owner), route guards, shop-scoped dashboards.
 
 ---
@@ -222,9 +225,12 @@ Secrets live in Supabase/Netlify environment settings, never in code.
 - **verify_jwt is set per-function in `supabase/config.toml`**, not in the
   function code. If you change a function's auth model, change the config file.
 
-- **The LLM never creates a menu item.** The menu is imported via CSV
-  (`import-menu-csv`), scraped from a website (`onboard-tenant`), or managed
-  conversationally (`admin-chat`). The ordering bot only reads it.
+- **The LLM never creates a menu item.** The menu is imported via PDF/photo
+  (`parse-menu-pdf`) or CSV (`import-menu-csv`), scraped from a website
+  (`onboard-tenant`), or managed conversationally (`admin-chat`). The ordering
+  bot only reads it. Every menu is validated against the Menu Intake Standard
+  (`docs/specs/menu-intake-standard.md`) and requires owner sign-off before
+  go-live — Sprint never guesses a price.
 
 - **Test mode is real.** When `test_mode=true` on a shop, all charges route to
   Stripe test keys. The test-mode gate (`_shared/test-mode.ts`) allowlists only
