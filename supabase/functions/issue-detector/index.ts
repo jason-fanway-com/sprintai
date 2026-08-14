@@ -20,7 +20,7 @@
  *   - low_score_conversation: any flagged eval (minor severity)
  */
 
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.570";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const LOOKBACK_HOURS = 24;
@@ -88,13 +88,20 @@ async function isDuplicate(
   supabase: SupabaseClient,
   issue: PendingIssue,
 ): Promise<boolean> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("issues")
     .select("id")
     .eq("detection_rule", issue.detection_rule)
     .eq("tenant_id", issue.tenant_id)
-    .eq("status", "open")
-    .maybeSingle();
+    .eq("status", "open");
+
+  // Inclusion of conversation_id in dedup prevents a single critical eval
+  // from shadowing all subsequent criticals on the same tenant.
+  if (issue.conversation_id) {
+    query = query.eq("conversation_id", issue.conversation_id);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     console.warn("[issue-detector] dedup query error:", error.message);
@@ -142,6 +149,20 @@ async function createIssue(
       old_status: null,
       new_status: "open",
     });
+
+    // NOTIFIED_AT CONTRACT: the issue-detector is the single actioner.
+    // After creating the tracked issue, mark the source eval as notified
+    // so neither eval-sweep nor the heartbeat re-DMs for it.
+    if (issue.eval_id) {
+      const { error: updateErr } = await supabase
+        .from("conversation_evals")
+        .update({ notified_at: new Date().toISOString() })
+        .eq("id", issue.eval_id)
+        .is("notified_at", null); // only if not already set
+      if (updateErr) {
+        console.warn("[issue-detector] notified_at update failed:", updateErr.message);
+      }
+    }
   }
 
   return true;
@@ -152,8 +173,11 @@ async function createIssue(
 /** Sev-1: Error spike — >=N errored evals for same tenant in 1 hour. */
 async function detectErrorSpike(
   supabase: SupabaseClient,
+  opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
-  const since = new Date(Date.now() - ERROR_SPIKE_WINDOW_MIN * 60_000).toISOString();
+  const since = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - ERROR_SPIKE_WINDOW_MIN * 60_000).toISOString();
   const { data } = await supabase
     .from("conversation_evals")
     .select("tenant_id, shop_id, verdict, judged_at")
@@ -194,8 +218,11 @@ async function detectErrorSpike(
 /** Sev-1: Compliance violation — flagged evals with critical severity. */
 async function detectComplianceViolations(
   supabase: SupabaseClient,
+  opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
-  const since = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
+  const since = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
   const { data } = await supabase
     .from("conversation_evals")
     .select("id, tenant_id, shop_id, conversation_id, judged_at, flags, max_severity")
@@ -233,12 +260,16 @@ async function detectComplianceViolations(
 /** Sev-2: Quality decline — flagged rate > 30% in last 50 evals per tenant. */
 async function detectQualityDecline(
   supabase: SupabaseClient,
+  opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
   // Get recent evals per tenant — order by newest for sample
+  const lookback = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
   const { data: tenants } = await supabase
     .from("conversation_evals")
     .select("tenant_id")
-    .gte("judged_at", new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString())
+    .gte("judged_at", lookback)
     .order("tenant_id");
 
   const tenantIds = [...new Set((tenants ?? []).map((t: { tenant_id: string }) => t.tenant_id))] as string[];
@@ -277,8 +308,11 @@ async function detectQualityDecline(
 /** Sev-2: Intent failure — >N flagged conversations in 1 hour for same tenant. */
 async function detectIntentFailure(
   supabase: SupabaseClient,
+  opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
-  const since = new Date(Date.now() - INTENT_FAILURE_WINDOW_MIN * 60_000).toISOString();
+  const since = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - INTENT_FAILURE_WINDOW_MIN * 60_000).toISOString();
   const { data } = await supabase
     .from("conversation_evals")
     .select("tenant_id, shop_id, conversation_id")
@@ -322,6 +356,7 @@ async function detectIntentFailure(
 /** Sev-2: Latency spike — conversations with avg message gap > 60s (>= 10 msgs). */
 async function detectLatencySpike(
   supabase: SupabaseClient,
+  _opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
   const since = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
 
@@ -383,8 +418,11 @@ async function detectLatencySpike(
 /** Sev-3: Low-score conversation — any flagged eval with minor severity. */
 async function detectLowScoreConversations(
   supabase: SupabaseClient,
+  opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
-  const since = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
+  const since = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
   const { data } = await supabase
     .from("conversation_evals")
     .select("id, tenant_id, shop_id, conversation_id, flags, max_severity")
@@ -418,8 +456,12 @@ async function detectLowScoreConversations(
   });
 }
 
+interface SweepOptions {
+  backfill?: boolean;
+}
+
 // ─── Sweep orchestrator ──────────────────────────────────────────────────────
-async function runDetection(supabase: SupabaseClient): Promise<ScanReport> {
+async function runDetection(supabase: SupabaseClient, opts: SweepOptions = {}): Promise<ScanReport> {
   const report: ScanReport = {
     evals_scanned: 0,
     tenants_scanned: 0,
@@ -432,17 +474,17 @@ async function runDetection(supabase: SupabaseClient): Promise<ScanReport> {
   const allIssues: PendingIssue[] = [];
 
   const ruleRunners = [
-    { fn: detectErrorSpike, label: "error_spike" },
-    { fn: detectComplianceViolations, label: "compliance_violation" },
-    { fn: detectQualityDecline, label: "quality_decline" },
-    { fn: detectIntentFailure, label: "intent_failure" },
-    { fn: detectLatencySpike, label: "latency_spike" },
-    { fn: detectLowScoreConversations, label: "low_score_conversation" },
+    { fn: () => detectErrorSpike(supabase, opts), label: "error_spike" },
+    { fn: () => detectComplianceViolations(supabase, opts), label: "compliance_violation" },
+    { fn: () => detectQualityDecline(supabase, opts), label: "quality_decline" },
+    { fn: () => detectIntentFailure(supabase, opts), label: "intent_failure" },
+    { fn: () => detectLatencySpike(supabase, opts), label: "latency_spike" },
+    { fn: () => detectLowScoreConversations(supabase, opts), label: "low_score_conversation" },
   ];
 
   for (const { fn, label } of ruleRunners) {
     try {
-      const issues = await fn(supabase);
+      const issues = await fn();
       allIssues.push(...issues);
       if (issues.length > 0) {
         console.log(`[issue-detector] ${label}: ${issues.length} issues detected`);
@@ -484,10 +526,25 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  // Parse optional mode:
+  //  - backfill=true → remove lookback window, scan ALL evals for flagged/unresolved
+  let backfill = false;
+  try {
+    const body = await req.json();
+    backfill = Boolean(body?.backfill);
+  } catch { /* default: regular sweep with lookback */ }
+
+  // On backfill, temporarily widen the lookback to include all evals since epoch.
+  // We do this by setting a wide LOOKBACK global that the rules use.
+  if (backfill) {
+    // Widen to 365 days — effectively all evals.
+    console.log("[issue-detector] BACKFILL mode — scanning all evals, no lookback limit");
+  }
+
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
   try {
-    const report = await runDetection(supabase);
+    const report = await runDetection(supabase, { backfill });
     return new Response(JSON.stringify({ ok: true, report }), {
       status: 200,
       headers: { ...CORS, "content-type": "application/json" },

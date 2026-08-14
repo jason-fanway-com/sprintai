@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import { supabase } from './lib/supabase'
 import { getUserRole, type UserRoleInfo } from './lib/roles'
 import { RoleContext } from './lib/RoleContext'
+import { ViewProvider } from './lib/ViewContext'
 import type { User } from '@supabase/supabase-js'
 
 import Layout from './components/Layout'
@@ -25,6 +26,7 @@ import Issues from './pages/Issues'
 import IssueDetail from './pages/IssueDetail'
 import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 import ShopOwnerDashboard from './pages/ShopOwnerDashboard'
+import TestSuite from './pages/TestSuite'
 
 // ── route guards ────────────────────────────────────────────────────────────
 // Every protected route uses one of these. Navigation links hiding is
@@ -82,6 +84,7 @@ export default function App() {
 
   return (
     <RoleContext.Provider value={roleInfo}>
+     <ViewProvider>
       <Toaster position="top-right" />
       <Routes>
         <Route path="/login" element={<Login user={user} />} />
@@ -220,6 +223,14 @@ export default function App() {
             }
           />
           <Route
+            path="test-suite"
+            element={
+              <SuperAdminRoute role={roleInfo}>
+                <TestSuite />
+              </SuperAdminRoute>
+            }
+          />
+          <Route
             path="issues"
             element={
               <SuperAdminRoute role={roleInfo}>
@@ -237,6 +248,7 @@ export default function App() {
           />
         </Route>
       </Routes>
+     </ViewProvider>
     </RoleContext.Provider>
   )
 }

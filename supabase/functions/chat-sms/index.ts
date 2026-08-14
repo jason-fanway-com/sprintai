@@ -514,7 +514,7 @@ RULES:
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - Process the ENTIRE customer message. If they mention multiple items (e.g. "a dozen bagels and some cream cheese"), acknowledge ALL items and work through each one. Do not ignore part of the request.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
-- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
+- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
 - DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
 - SANDWICH MAPPING: "Bacon egg and cheese" = BOBO Sandwich (Bacon). "Sausage egg and cheese" = SOBO Sandwich. "Ham egg and cheese" = HOBO Sandwich. "Pork roll egg and cheese" = PROBO Sandwich. "Turkey bacon egg and cheese" = TBOBO Sandwich. These all come on a bagel by default. If a customer asks for one of these, add the matching item immediately. Do NOT say "I don't see that on the menu."
@@ -1026,9 +1026,20 @@ async function runOrderingLoop(
     const toolBlocks = content.filter(b => b.type === "tool_use");
     const textBlocks = content.filter(b => b.type === "text");
 
-    if (data.stop_reason === "end_turn" || toolBlocks.length === 0) {
+    // Only finish when there are NO pending tool calls. Previously an `end_turn`
+    // stop_reason short-circuited here even when the model had emitted tool_use
+    // blocks in the same turn (DeepSeek Flash does this for some items, e.g.
+    // breakfast sandwiches). Those calls were dropped — the item never got added
+    // and, with no text, the customer got "I couldn't process that". Always
+    // execute pending tools; only return once the model stops calling them.
+    if (toolBlocks.length === 0) {
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
-      return { reply: reply || "I'm sorry, I couldn't process that. Please try again.", checkoutUrl, finalPhase };
+      if (reply) return { reply, checkoutUrl, finalPhase };
+      // Model produced neither tools nor text — degrade gracefully, never error at the customer.
+      const soft = cart.length > 0
+        ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
+        : "Sorry, I didn't quite catch that — what can I get started for you?";
+      return { reply: soft, checkoutUrl, finalPhase };
     }
 
     messages.push({ role: "assistant", content });
@@ -2046,7 +2057,14 @@ Deno.serve(async (req: Request) => {
   // customer immediately. This overrides normal ordering flow.
   const now = new Date();
   const pausedUntil = shop.delivery_paused_until ? new Date(shop.delivery_paused_until) : null;
-  const deliveryIsPaused = shop.delivery_enabled === false || (pausedUntil && pausedUntil > now);
+  // delivery_enabled === false means the shop is PERMANENTLY pickup-only — that is
+  // NOT "delivery paused right now" and must not hijack the order flow (it did: every
+  // first message got the pickup-only pause message instead of taking the order).
+  // Only a future delivery_paused_until (a shop that normally delivers but paused it
+  // temporarily) triggers the pickup-only-right-now message. Permanent pickup-only is
+  // handled by the "DELIVERY AVAILABLE: No" system-prompt field, which declines
+  // delivery requests gracefully while still taking the order.
+  const deliveryIsPaused = !!(pausedUntil && pausedUntil > now);
   if (deliveryIsPaused && cart.phase === "greeting" && !cart.test_mode) {
     const reason = shop.delivery_pause_reason
       ? ` ${shop.delivery_pause_reason}`

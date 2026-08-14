@@ -228,45 +228,125 @@ Grade this conversation against the rubric and return the JSON object.`;
 }
 
 /**
+ * Retry instruction appended to the prompt when the first call failed to
+ * produce parseable JSON. Extremely stern, tight, and treats non-JSON output
+ * as a correctness failure rather than a formatting nit.
+ */
+export const RETRY_INSTRUCTION = `
+‼️ YOUR PREVIOUS REPLY WAS NOT VALID JSON.
+You MUST respond with valid JSON ONLY — no markdown fences, no leading/trailing
+prose, no code blocks, no commentary. Start with "{" and end with "}".
+This is a machine-to-machine interface. Any text outside the JSON object will
+cause a critical failure. Output the JSON and nothing else.
+`;
+
+/**
  * Robustly extract the first balanced top-level JSON object from a model reply
- * (tolerates leading/trailing prose or markdown fences the model may add).
- * Returns the parsed object, or null if none parses.
+ * (tolerates leading/trailing prose, markdown fences, code blocks of any flavor,
+ * and common LLM formatting quirks). Returns the parsed object, or null if none
+ * parses.
+ *
+ * Strategy (each step attempted in order):
+ *   1. Strip ``` fences of any flavor (```json, ```JSON, ```, ~~~, etc.)
+ *   2. Fast-path: try parsing the whole trimmed string
+ *   3. Balanced-brace scan: find the first "{" and its matching "}",
+ *      respecting strings, escapes, and Unicode escapes
+ *   4. If the scan found a balanced object but JSON.parse fails, try common
+ *      repairs: unescape double-escaped newlines, strip trailing commas
  */
 export function parseJudgeJson(text: string): unknown | null {
-  const stripped = text.replace(/^```(?:json)?/i, "").replace(/```\s*$/i, "").trim();
-  // Fast path: whole thing is JSON.
+  // Step 1: strip all code-fence markers (```json, ```, ~~~, etc.)
+  let stripped = text
+    .replace(/^[ \t]*```[a-zA-Z]*\s*\n?/gm, "")
+    .replace(/^[ \t]*~~~[a-zA-Z]*\s*\n?/gm, "")
+    .replace(/```\s*$/gm, "")
+    .replace(/~~~\s*$/gm, "")
+    .trim();
+
+  // Step 2: also handle the case where model wraps output in ```json ... ```
+  // but the opening fence may contain text before it
+  if (stripped.includes("```")) {
+    // Find the last ``` and take everything before it
+    const lastFence = stripped.lastIndexOf("```");
+    if (lastFence > 0) {
+      // Check if there's content after the fence that might be a closing marker
+      const afterFence = stripped.slice(lastFence + 3).trim();
+      if (afterFence === "" || afterFence === "json") {
+        stripped = stripped.slice(0, lastFence).trim();
+      }
+    }
+    // Also remove any opening fence with text before {
+    const firstBrace = stripped.indexOf("{");
+    if (firstBrace > 0) {
+      stripped = stripped.slice(firstBrace);
+    }
+  }
+
+  // Step 3: fast path — whole thing is clean JSON (must be an object)
   try {
-    return JSON.parse(stripped);
+    const fast = JSON.parse(stripped);
+    if (fast && typeof fast === "object" && !Array.isArray(fast)) return fast;
   } catch { /* fall through to balanced scan */ }
-  // Balanced-brace scan: find the first '{' and its matching '}', respecting
-  // strings/escapes, so trailing prose after the object does not break parsing.
+
+  // Step 4: balanced-brace scan. Find the first '{' and its matching '}',
+  // respecting strings (including Unicode escapes like \\uXXXX).
   const start = stripped.indexOf("{");
   if (start < 0) return null;
+
   let depth = 0;
   let inStr = false;
   let esc = false;
+  let unicodeCount = 0;
+  let jsonStr = "";
+  let found = false;
+
   for (let i = start; i < stripped.length; i++) {
     const ch = stripped[i];
     if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
+      // Track Unicode escape sequences inside strings (\\uXXXX)
+      if (esc) {
+        esc = false;
+      } else if (ch === "\\") {
+        esc = true;
+      } else if (ch === '"') {
+        inStr = false;
+      }
       continue;
     }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
       depth--;
       if (depth === 0) {
-        try {
-          return JSON.parse(stripped.slice(start, i + 1));
-        } catch {
-          return null;
-        }
+        jsonStr = stripped.slice(start, i + 1);
+        found = true;
+        break;
       }
     }
   }
-  return null;
+
+  if (!found || depth !== 0) return null;
+
+  // Step 5: try parsing the extracted JSON object
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    // Step 6: repair common LLM JSON formatting errors
+    try {
+      const repaired = jsonStr
+        // Remove trailing commas
+        .replace(/,\s*([}\]])/g, "$1")
+        // Fix single-quoted keys: {'key': → {"key":
+        .replace(/([{,]\s*)'([^']+)'(\s*:)/g, '$1"$2"$3')
+        // Fix single-quoted string values: :'val' → :"val"
+        .replace(/(:\s*)'([^']*)'(\s*[,}\]])/g, '$1"$2"$3');
+      return JSON.parse(repaired);
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**

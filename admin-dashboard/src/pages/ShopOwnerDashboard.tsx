@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Store, DollarSign, MessageSquare, UtensilsCrossed, Settings } from 'lucide-react'
+import { Store, DollarSign, MessageSquare, UtensilsCrossed, Settings, ShieldCheck } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useRole } from '../lib/RoleContext'
+import { useView } from '../lib/ViewContext'
 
 interface Shop {
   id: string
@@ -19,29 +20,64 @@ interface Shop {
  * Super-admins never see this page (they get redirected from /shop-owner to /dashboard).
  */
 export default function ShopOwnerDashboard() {
-  const { tenantId, isShopOwner } = useRole()
+  const { tenantId, isShopOwner, isSuperAdmin } = useRole()
+  const { mode, previewTenantId } = useView()
+
+  // A super-admin in "owner" preview mode views the selected shop's tenant.
+  const previewing = isSuperAdmin && mode === 'owner'
+  const effTenant = previewing ? previewTenantId : tenantId
+  const asOwner = isShopOwner || previewing
 
   const { data: shops, isLoading, error } = useQuery<Shop[]>({
-    queryKey: ['shop-owner-shops', tenantId],
+    queryKey: ['shop-owner-shops', effTenant],
     queryFn: async () => {
-      if (!tenantId) throw new Error('No tenant_id in session')
+      if (!effTenant) throw new Error('No tenant selected')
       const { data, error } = await supabase
         .from('shops')
         .select('id, name, slug, is_paused, timezone, created_at')
-        .eq('tenant_id', tenantId)
+        .eq('tenant_id', effTenant)
         .order('created_at', { ascending: false })
       if (error) throw error
       return data ?? []
     },
-    enabled: !!tenantId && isShopOwner,
+    enabled: !!effTenant && asOwner,
   })
 
-  // Super-admins shouldn't land here — redirect handled by App.tsx route guards.
-  // If somehow they do, show a fallback.
-  if (!isShopOwner) {
+  // Store Readiness: latest QA run per shop (owner-facing confidence signal).
+  const { data: readiness } = useQuery<Record<string, { pct: number | null; passed: number; total: number; at: string }>>({
+    queryKey: ['shop-owner-readiness', effTenant],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('test_runs')
+        .select('shop_id, overall_pass_pct, passed, total, started_at')
+        .order('started_at', { ascending: false })
+      if (error) throw error
+      const latest: Record<string, { pct: number | null; passed: number; total: number; at: string }> = {}
+      for (const r of data ?? []) {
+        if (!latest[r.shop_id]) latest[r.shop_id] = { pct: r.overall_pass_pct, passed: r.passed, total: r.total, at: r.started_at }
+      }
+      return latest
+    },
+    enabled: !!effTenant && asOwner,
+  })
+
+  if (!asOwner) {
     return (
       <div className="p-8 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
+      </div>
+    )
+  }
+
+  // Super-admin previewing but hasn't picked a shop yet.
+  if (previewing && !effTenant) {
+    return (
+      <div className="p-8">
+        <div className="text-center py-16 text-gray-400">
+          <Store className="w-12 h-12 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">Owner preview</p>
+          <p className="text-sm mt-1">Pick a shop in the “View as” selector above to see what that owner sees.</p>
+        </div>
       </div>
     )
   }
@@ -107,6 +143,24 @@ export default function ShopOwnerDashboard() {
                 </span>
               )}
             </div>
+
+            {(() => {
+              const r = readiness?.[shop.id]
+              if (!r) {
+                return (
+                  <div className="flex items-center gap-2 text-xs text-gray-400 mb-3">
+                    <ShieldCheck className="w-4 h-4" /> Store Readiness: not yet tested
+                  </div>
+                )
+              }
+              const ok = (r.pct ?? 0) >= 95
+              return (
+                <div className={`flex items-center gap-2 text-xs font-medium mb-3 ${ok ? 'text-green-700' : 'text-yellow-700'}`}>
+                  <ShieldCheck className="w-4 h-4" />
+                  Store Readiness: {r.pct ?? '—'}% — {r.passed}/{r.total} checks passed
+                </div>
+              )
+            })()}
 
             <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-2">
               <Link

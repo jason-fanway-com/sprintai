@@ -267,29 +267,134 @@
     };
   };
 
-  // 5 ── MENU (upload → review-as-conversation → confirm → DB) ─────────────────
+  // 5 ── MENU (upload PDF/images → AI parse → review → confirm → DB) ───────────
+  // Accepts PDFs and images (JPG/PNG/HEIC/WEBP). CSV is hidden behind an
+  // "advanced" toggle for restaurants with a pre-built canonical CSV.
   RENDERERS.menu = function () {
     elCard.innerHTML = "";
     elCard.appendChild(h(
       '<div>' +
       '<div class="step-h">Your menu</div>' +
-      '<div class="step-desc">Upload your menu as a canonical CSV. We\'ll walk through anything the menu leaves open before it goes live — we never guess a price.</div>' +
-      '<label class="fld"><span>Menu CSV (7-column canonical)</span><input id="f-csv" type="file" accept=".csv"></label>' +
+      '<div class="step-desc">Upload a PDF or photos of your menu. Our AI reads every item, price, and modifier — we never guess a price. We\'ll flag anything that needs your eye before it goes live.</div>' +
+      '<label class="fld file-drop" id="menu-upload-zone"><span>Upload menu (PDF, photo)</span>' +
+      '<input id="f-menu" type="file" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,.webp" multiple>' +
+      '<div id="menu-upload-hint" class="step-desc" style="margin:6px 0 0;font-size:12px">PDF or clear photos from your phone. Multi-page PDFs and multiple image files are fine.</div></label>' +
+      '<div id="menu-upload-progress" style="display:none;margin:12px 0;color:var(--navy);font-size:14px"></div>' +
+      '<p style="margin:8px 0;font-size:13px;color:var(--light)"><a id="btn-advanced-csv" href="#">Advanced: I have a pre-built canonical CSV</a></p>' +
+      '<div id="csv-zone" style="display:none"><label class="fld"><span>Menu CSV (7-column canonical)</span><input id="f-csv" type="file" accept=".csv"></label></div>' +
       '<div id="menu-review"></div>' +
       '<div class="btn-row"><button class="btn btn-ghost" id="bk">← Back</button>' +
       '<button class="btn btn-primary" id="go" disabled>Confirm menu &amp; write to DB →</button></div>' +
       '</div>'
     ));
     document.getElementById("bk").onclick = back;
+
+    // -- File upload (PDF/images) → parse-menu-pdf --------------------------
+    document.getElementById("f-menu").onchange = function (ev) {
+      var files = ev.target.files;
+      if (!files || !files.length) return;
+      uploadMenuFiles(files);
+    };
+
+    // -- Advanced CSV toggle -------------------------------------------------
+    document.getElementById("btn-advanced-csv").onclick = function (e) {
+      e.preventDefault();
+      var csvZone = document.getElementById("csv-zone");
+      csvZone.style.display = csvZone.style.display === "none" ? "block" : "none";
+    };
     document.getElementById("f-csv").onchange = function (ev) {
       var file = ev.target.files[0]; if (!file) return;
       var rd = new FileReader();
       rd.onload = function () { loadMenuCsv(String(rd.result)); };
       rd.readAsText(file);
     };
+
     document.getElementById("go").onclick = confirmMenu;
+
+    // Wire drag-and-drop for the upload zone
+    var zone = document.getElementById("menu-upload-zone");
+    if (zone) {
+      zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("dragover"); });
+      zone.addEventListener("dragleave", function (e) { zone.classList.remove("dragover"); });
+      zone.addEventListener("drop", function (e) {
+        e.preventDefault(); zone.classList.remove("dragover");
+        if (e.dataTransfer && e.dataTransfer.files.length) uploadMenuFiles(e.dataTransfer.files);
+      });
+    }
+
     if (state.menuRows) renderMenuReview();
   };
+
+  // Upload file(s) to parse-menu-pdf, surface pipeline OQs
+  function uploadMenuFiles(files) {
+    var progressEl = document.getElementById("menu-upload-progress");
+    progressEl.style.display = "block";
+    progressEl.textContent = "Reading " + files.length + " file(s)…";
+
+    var fd = new FormData();
+    fd.append("shop_id", state.shop_id);
+    // First file as "file", rest as "files"
+    for (var i = 0; i < files.length; i++) {
+      fd.append(i === 0 ? "file" : "files", files[i]);
+    }
+
+    progressEl.textContent = "Uploading & parsing with AI (this takes ~20–40s for a full menu)…";
+
+    fetch(fnUrl("parse-menu-pdf"), {
+      method: "POST",
+      headers: { "apikey": CFG.ANON_KEY, "Authorization": "Bearer " + CFG.ANON_KEY },
+      body: fd
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        progressEl.style.display = "none";
+        if (data.error) {
+          chatSay("resto", "The parser hit a snag: " + esc(data.error) + ". Try a different file or use the CSV option below.");
+          return;
+        }
+        loadPipelineResult(data);
+      })
+      .catch(function (e) {
+        progressEl.style.display = "none";
+        chatSay("resto", "Couldn't reach the menu parser: " + esc(e.message) + ". Check your connection and try again.");
+      });
+  }
+
+  // Load pipeline output into wizard state + render
+  function loadPipelineResult(data) {
+    state.menuRows = (data.items || []).map(function (r) {
+      return {
+        category: r.category || "", name: r.name || "", size: r.size || "",
+        price: r.price || "", description: r.description || "",
+        prompt_for: r.prompt_for || "", upsell: r.upsell || ""
+      };
+    });
+    state.menuCsvRaw = rowsToCsv(state.menuRows);
+
+    // Build Open Questions from pipeline output
+    var oq = [];
+    (data.open_questions_detail || []).forEach(function (q, idx) {
+      // Determine kind from issue type
+      var kind = "text";
+      if (q.issue === "price_mismatch" || q.issue === "missing_price" || q.issue === "price_format") kind = "price";
+      else if (q.issue === "size_mismatch") kind = "text";
+      else if (q.issue === "missing_item") kind = "missing";
+      oq.push({
+        id: "oq-" + idx, kind: kind, rowIdx: -1,
+        area: q.item_ref || "Menu", question: q.question,
+        issue: q.issue, item_ref: q.item_ref,
+        resolved: false, answer: ""
+      });
+    });
+    state.openQuestions = oq;
+
+    // Update menu source on the state
+    state.menuSource = "pipeline"; // vs "csv"
+    state.menuId = data.menu_id || null;
+    state.contentHash = data.content_hash || null;
+
+    chatStartMenuQuestions();
+    renderMenuReview();
+  }
 
   function parseCsv(text) {
     // Minimal RFC4180-ish parser matching menu-pipeline/core/csv.ts behavior
@@ -320,6 +425,7 @@
     state.menuRows = arr.map(function (r) {
       return { category: r[0] || "", name: r[1] || "", size: r[2] || "", price: r[3] || "", description: r[4] || "", prompt_for: r[5] || "", upsell: r[6] || "" };
     });
+    state.menuSource = "csv";
     // Build Open Questions: the 9 Upcharge-TBD side-sub rows + the standing
     // Jack's questions (cash discount, catering, wings). NEVER invent prices.
     var oq = [];
@@ -349,13 +455,51 @@
     var html = "";
 
     // Open Questions FIRST (lead with what's unresolved).
-    var unresolved = state.openQuestions.filter(function (q) { return !q.resolved; });
-    var resolved = state.openQuestions.filter(function (q) { return q.resolved; });
-    html += '<div style="margin:18px 0 8px;font-weight:700;color:var(--navy)">Let\'s settle ' + unresolved.length + ' open question' + (unresolved.length === 1 ? "" : "s") + ' first</div>';
+    var unresolved = state.openQuestions ? state.openQuestions.filter(function (q) { return !q.resolved; }) : [];
+    var resolved = state.openQuestions ? state.openQuestions.filter(function (q) { return q.resolved; }) : [];
 
-    state.openQuestions.forEach(function (q) {
-      if (q.kind === "upcharge") return; // grouped below
+    if (unresolved.length) {
+      html += '<div style="margin:18px 0 8px;font-weight:700;color:var(--navy)">Let\'s settle ' + unresolved.length + ' open question' + (unresolved.length === 1 ? "" : "s") + ' first</div>';
+    }
+
+    if (state.openQuestions) state.openQuestions.forEach(function (q) {
+      if (q.kind === "upcharge" || q.kind === "price" || q.kind === "text" || q.kind === "missing") return; // grouped below
     });
+
+    // -- Pipeline price-mismatch questions (from parse-menu-pdf) -------------
+    var priceQ = (state.openQuestions || []).filter(function (q) { return q.kind === "price"; });
+    if (priceQ.length) {
+      html += '<div class="oq-block"><h4>AI flagged ' + priceQ.length + ' price question(s)</h4>' +
+        '<div class="oq-q">The parser found conflicting or missing prices on these items. Confirm the correct amount for each.</div>';
+      priceQ.forEach(function (q) {
+        // Try to extract competing prices from the question text
+        var prices = (q.question || "").match(/price=([\d.]+)/g) || [];
+        var options = [];
+        prices.forEach(function (p) { var v = p.replace('price=', ''); if (options.indexOf(v) < 0) options.push(v); });
+        html += '<div class="oq-item"><label>' + esc(q.item_ref || q.area) + '</label>' +
+          '<div style="font-size:12px;color:var(--light);margin-bottom:4px">' + esc(q.question) + '</div>' +
+          '<span>$</span><input type="number" step="0.01" min="0" data-op="' + q.id + '" value="' + (q.resolved ? esc(q.answer) : "") + '" placeholder="0.00">' +
+          (q.resolved ? ' <span class="oq-resolved">✓</span>' : '') + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // -- Pipeline text/missing questions ------------------------------------
+    var textQ = (state.openQuestions || []).filter(function (q) { return q.kind === "text" || q.kind === "missing"; });
+    if (textQ.length) {
+      html += '<div class="oq-block"><h4>AI flagged ' + textQ.length + ' question(s)</h4>';
+      textQ.forEach(function (q) {
+        html += '<div class="oq-item"><label>' + esc(q.item_ref || q.area) + '</label>' +
+          '<div style="font-size:12px;color:var(--light);margin-bottom:4px">' + esc(q.question) + '</div>' +
+          '<div class="btn-row" style="gap:6px">' +
+          '<button class="btn btn-ghost" data-ot="' + q.id + '" value="yes" style="font-size:13px;padding:4px 12px">✓ Yes</button>' +
+          '<button class="btn btn-ghost" data-ot="' + q.id + '" value="no" style="font-size:13px;padding:4px 12px">✗ No</button>' +
+          '<input type="text" data-otext="' + q.id + '" placeholder="Or type a custom answer…" style="font-size:13px;padding:4px 8px">' +
+          '</div>' +
+          (q.resolved ? ' <span class="oq-resolved">✓ answered: ' + esc(q.answer) + '</span>' : '') + '</div>';
+      });
+      html += '</div>';
+    }
 
     // Upcharge group (the 9 side-sub rows).
     var ups = state.openQuestions.filter(function (q) { return q.kind === "upcharge"; });
@@ -416,6 +560,17 @@
     Array.prototype.forEach.call(host.querySelectorAll("[data-oqn]"), function (inp) {
       inp.onchange = function () { resolveNumber(inp.getAttribute("data-oqn"), inp.value); };
     });
+    // wire pipeline price questions
+    Array.prototype.forEach.call(host.querySelectorAll("[data-op]"), function (inp) {
+      inp.onchange = function () { resolvePrice(inp.getAttribute("data-op"), inp.value); };
+    });
+    // wire pipeline text/missing questions (yes/no buttons)
+    Array.prototype.forEach.call(host.querySelectorAll("[data-ot]"), function (btn) {
+      btn.onclick = function () { resolveText(btn.getAttribute("data-ot"), btn.value); };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll("[data-otext]"), function (inp) {
+      inp.onchange = function () { resolveText(inp.getAttribute("data-otext"), inp.value); };
+    });
 
     updateMenuConfirmEnabled();
   }
@@ -433,6 +588,14 @@
   }
   function resolveChoice(id, val) { var q = findOq(id); if (!q) return; q.answer = val; q.resolved = true; afterResolve(q); }
   function resolveNumber(id, val) { var q = findOq(id); if (!q) return; if (val === "" || isNaN(parseInt(val))) { q.resolved = false; } else { q.answer = String(parseInt(val)); q.resolved = true; } afterResolve(q); }
+  function resolvePrice(id, val) { var q = findOq(id); if (!q) return; if (val === "" || isNaN(parseFloat(val))) { q.resolved = false; q.answer = ""; } else { q.answer = parseFloat(val).toFixed(2); q.resolved = true; } afterResolve(q); }
+  function resolveText(id, val) {
+    var q = findOq(id); if (!q) return;
+    if (val === null || val === void 0 || String(val).trim() === "") { q.resolved = false; q.answer = ""; return; }
+    q.answer = String(val).trim();
+    q.resolved = true;
+    afterResolve(q);
+  }
   function findOq(id) { for (var i = 0; i < state.openQuestions.length; i++) if (state.openQuestions[i].id === id) return state.openQuestions[i]; return null; }
 
   function afterResolve(q) {
@@ -466,15 +629,25 @@
       if (q.field) fields[q.field] = (q.kind === "number" ? parseInt(q.answer) : q.answer);
     });
     saveStep("menu", fields).then(function () {
+      if (state.menuSource === "pipeline") {
+        // parse-menu-pdf already committed the menu to DB.
+        chatSay("resto", "Locked it in! " + (state.menuRows ? state.menuRows.length : 0) + " items on your menu. Your assistant can now quote every one of them.");
+        next();
+        return null; // signal to skip the CSV path below
+      }
+      // CSV path: import via API
       return api("import-menu-csv", { shop_id: state.shop_id, csv: csv });
     }).then(function (r) {
-      if (r.json && r.json.ok) {
-        chatSay("resto", "Locked it in! " + (r.json.inserted || 0) + " items written to your menu" + (r.json.no_op ? " (no changes)" : "") + ". Your assistant can now quote every one of them.");
-        next();
-      } else {
-        var msg = (r.json && r.json.error) ? r.json.error : "import failed";
+      if (state.menuSource === "pipeline") return; // already advanced
+      if (!r || (r.json && !r.json.ok)) {
+        var msg = (r && r.json && r.json.error) ? r.json.error : "import failed";
         chatSay("resto", "The menu import pushed back: " + esc(msg) + ". (Usually a price still needs answering.)");
         btn.disabled = false; updateMenuConfirmEnabled();
+        return;
+      }
+      if (r && r.json && r.json.ok) {
+        chatSay("resto", "Locked it in! " + (r.json.inserted || 0) + " items written to your menu" + (r.json.no_op ? " (no changes)" : "") + ". Your assistant can now quote every one of them.");
+        next();
       }
     }).catch(function (e) {
       chatSay("resto", "Couldn't reach the menu importer (" + esc(e.message) + ").");

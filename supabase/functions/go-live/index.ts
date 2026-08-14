@@ -49,23 +49,53 @@ Deno.serve(async (req: Request) => {
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
-  // Menu gate: confirmed csv menu with >=1 active item.
+  // Menu gate: confirmed csv OR pdf menu with ≥1 active item AND owner attestation (§C).
   const { data: menu } = await supabase
-    .from("menus").select("id").eq("shop_id", shopId).eq("source", "csv").maybeSingle();
+    .from("menus").select("id, content_hash").eq("shop_id", shopId)
+    .or("source.eq.csv,source.eq.pdf").order("created_at", { ascending: false }).maybeSingle();
   let activeItems = 0;
+  let menuApproved = false;
+  let menuFlaggedReview = 0;
+  let menuOpenQuestions = 0;
   if (menu?.id) {
     const { count } = await supabase
       .from("menu_items").select("id", { count: "exact", head: true })
       .eq("menu_id", menu.id).eq("active", true);
     activeItems = count ?? 0;
+
+    // §C sign-off: does a valid approval exist for this content_hash?
+    if (menu.content_hash) {
+      const { count: approvalCount } = await supabase
+        .from("menu_approvals").select("id", { count: "exact", head: true })
+        .eq("menu_id", menu.id).eq("content_hash", menu.content_hash);
+      menuApproved = (approvalCount ?? 0) > 0;
+    }
+
+    // Check for flagged-awaiting-review rows
+    const { count: flaggedCount } = await supabase
+      .from("menu_items").select("id", { count: "exact", head: true })
+      .eq("menu_id", menu.id).eq("flag_review", true);
+    menuFlaggedReview = flaggedCount ?? 0;
+
+    // Check open questions count from the menu record
+    const { data: menuRecord } = await supabase
+      .from("menus").select("open_questions").eq("id", menu.id).maybeSingle();
+    const oq = menuRecord?.open_questions;
+    if (Array.isArray(oq)) {
+      menuOpenQuestions = oq.length;
+    } else if (typeof oq === "string") {
+      try { menuOpenQuestions = JSON.parse(oq).length; } catch { menuOpenQuestions = 0; }
+    }
   }
 
   const hoursSet = !!shop.open_hours && typeof shop.open_hours === "object" &&
     Object.keys(shop.open_hours as Record<string, unknown>).length > 0;
 
   const gates = {
-    connect: isShopLive(shop),               // Phase-1: false (correct refusal)
+    connect: isShopLive(shop),
     menu: activeItems > 0,
+    menu_approved: menuApproved || activeItems === 0,  // §C: requires owner attestation
+    menu_clean: menuFlaggedReview === 0,                 // §C: no flagged rows pending
     number: !!shop.phone_number_e164,
     hours: hoursSet,
     subscription: shop.subscription_status === "active",

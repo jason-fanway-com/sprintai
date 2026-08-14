@@ -34,6 +34,7 @@ mkdir -p "$OUT"
 # redirects, and Stripe success/cancel targets in netlify/functions.
 PUBLIC_FILES=(
   "index.html"          # real marketing homepage
+  "how-it-works.html"   # sales explainer (linked from Erin demo kit + funnel)
   "contact.html"        # contact form (action=/thanks)
   "privacy.html"        # legal
   "terms.html"          # legal

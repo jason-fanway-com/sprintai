@@ -33,6 +33,7 @@ import {
   assembleJudgePrompt,
   maxSeverityOf,
   parseJudgeJson,
+  RETRY_INSTRUCTION,
   RUBRIC_VERSION,
   CHECK_SEVERITY,
   type CheckId,
@@ -249,6 +250,47 @@ function coerceFlags(parsed: unknown): EvalFlag[] {
   return out;
 }
 
+/**
+ * Make one LLM API call and return the raw text + token usage.
+ */
+async function judgeApiCall(
+  apiKey: string,
+  system: string,
+  userMessage: string,
+): Promise<{ text: string; inTok: number; outTok: number }> {
+  const res = await fetch(JUDGE_API, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://getsprintai.com",
+      "X-Title":      "SprintAI",
+    },
+    body: JSON.stringify({
+      model: JUDGE_MODEL,
+      max_tokens: 1024,
+      reasoning: { enabled: false },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Judge API ${res.status}: ${t}`);
+  }
+  const data = await res.json();
+  const text: string = (data.content ?? [])
+    .filter((b: { type: string }) => b.type === "text")
+    .map((b: { text: string }) => b.text)
+    .join("")
+    .trim();
+  return {
+    text,
+    inTok: data.usage?.input_tokens ?? 0,
+    outTok: data.usage?.output_tokens ?? 0,
+  };
+}
+
 async function callJudge(
   ground: JudgeGroundTruth,
   transcript: JudgeTranscriptMessage[],
@@ -257,54 +299,44 @@ async function callJudge(
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
   const { system, user } = assembleJudgePrompt(ground, transcript);
 
-  let lastErr: unknown = null;
+  let costCents = 0;
+
+  // ── First call ──
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetch(JUDGE_API, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://getsprintai.com",
-          "X-Title":      "SprintAI",
-        },
-        body: JSON.stringify({
-          model: JUDGE_MODEL,
-          max_tokens: 1024,
-          reasoning: { enabled: false },  // disable thinking blocks — wasted tokens for judge
-          system,
-          messages: [{ role: "user", content: user }],
-        }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        lastErr = new Error(`Judge API ${res.status}: ${t}`);
-        if (res.status >= 500 || res.status === 429) {
-          await sleep(300 * (attempt + 1));
-          continue;
-        }
-        throw lastErr; // non-retryable
-      }
-      const data = await res.json();
-      const text: string = (data.content ?? [])
-        .filter((b: { type: string }) => b.type === "text")
-        .map((b: { text: string }) => b.text)
-        .join("")
-        .trim();
-      const inTok = data.usage?.input_tokens ?? 0;
-      const outTok = data.usage?.output_tokens ?? 0;
-      const costCents = estimateCostCents(inTok, outTok);
+      const { text, inTok, outTok } = await judgeApiCall(apiKey, system, user);
+      costCents += estimateCostCents(inTok, outTok);
 
-      // Parse the JSON object out of the reply (tolerate fences / trailing prose).
       const parsed = parseJudgeJson(text);
-      if (parsed === null) throw new Error("judge output not parseable JSON");
-      return { flags: coerceFlags(parsed), raw: text, costCents };
+      if (parsed !== null) return { flags: coerceFlags(parsed), raw: text, costCents };
+
+      // JSON parse failed — try ONE retry with strict instruction
+      console.log(`[eval-sweep] JSON parse failed, retrying with strict instruction`);
+      await sleep(500);
+
+      const retryUser = user + "\n" + RETRY_INSTRUCTION;
+      const retry = await judgeApiCall(apiKey, system, retryUser);
+      costCents += estimateCostCents(retry.inTok, retry.outTok);
+
+      const retryParsed = parseJudgeJson(retry.text);
+      if (retryParsed !== null) {
+        return { flags: coerceFlags(retryParsed), raw: retry.text, costCents };
+      }
+
+      // Both failed — store original text in error for debugging.
+      throw new Error(`judge output not parseable JSON after retry (sample): ${retry.text.slice(0, 200)}`);
     } catch (e) {
-      lastErr = e;
-      await sleep(300 * (attempt + 1));
+      const msg = (e as Error).message;
+      // Retry on transient API errors (5xx / 429). Non-retryable errors (4xx, non-JSON) bubble up.
+      if (msg.includes("Judge API 5") || msg.includes("Judge API 429")) {
+        await sleep(300 * (attempt + 1));
+        continue;
+      }
+      throw e;
     }
   }
-  throw lastErr ?? new Error("judge call failed");
+
+  throw new Error("judge call failed after retries");
 }
 
 // ─── Candidate selection ─────────────────────────────────────────────────────────
@@ -533,17 +565,14 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepReport> {
   }
 
   // ─── Notify: immediate digest for NEW critical/major; quiet on clean ────────
+  // NOTIFIED_AT CONTRACT: eval-sweep DM's but does NOT set notified_at.
+  // The issue-detector is the single actioner — it creates an issue THEN sets
+  // notified_at. This ensures ZERO flagged evals have notified_at without a
+  // corresponding tracked issue row.
   const digest = buildImmediateDigest(newlyFlaggedRows);
   if (digest) {
     const sendRes = await sendDigest(digest);
     report.digest = { stubbed: sendRes.stubbed, sent: sendRes.sent, lines: digest.lines.length };
-    // Mark these evals notified so we never re-ping them.
-    if (digest.eval_ids.length) {
-      await supabase
-        .from("conversation_evals")
-        .update({ notified_at: new Date().toISOString() })
-        .in("id", digest.eval_ids);
-    }
   } else {
     report.digest = null; // quiet
   }

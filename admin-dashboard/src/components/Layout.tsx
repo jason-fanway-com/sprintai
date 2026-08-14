@@ -1,10 +1,12 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import type { UserRoleInfo } from '../lib/roles'
 import { useRole } from '../lib/RoleContext'
+import { useView } from '../lib/ViewContext'
 
 interface LayoutProps {
   user: User | null
@@ -19,6 +21,7 @@ const superAdminNav = [
   { to: '/tenants', label: 'Tenants', icon: Users },
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Conv Quality', icon: ShieldCheck },
+  { to: '/test-suite', label: 'Test Suite', icon: FlaskConical },
   { to: '/issues', label: 'Issues', icon: AlertTriangle },
   { to: '/shop-chats', label: 'Shop Chats', icon: MessageSquare },
 ]
@@ -37,6 +40,18 @@ export default function Layout({ user, role: _role }: LayoutProps) {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { isSuperAdmin } = useRole()
+  const { mode, previewTenantId, setMode, setPreview } = useView()
+
+  // Shop list for the owner-preview picker (super-admin only; RLS lets admins see all).
+  const { data: allShops } = useQuery<{ id: string; name: string; tenant_id: string }[]>({
+    queryKey: ['all-shops-for-preview'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('shops').select('id, name, tenant_id').order('name')
+      if (error) throw error
+      return data ?? []
+    },
+    enabled: isSuperAdmin,
+  })
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -190,6 +205,38 @@ export default function Layout({ user, role: _role }: LayoutProps) {
 
       {/* ---- MAIN CONTENT ---- */}
       <main className="flex-1 overflow-auto min-h-0 pb-16 lg:pb-0">
+        {/* Super-admin: live Admin ⇄ Owner view toggle (no re-login) */}
+        {isSuperAdmin && (
+          <div className="flex items-center justify-end gap-2 px-4 py-2 border-b border-gray-100 bg-white sticky top-0 z-20">
+            <span className="text-xs text-gray-400">View as:</span>
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+              <button
+                onClick={() => { setMode('admin'); navigate('/dashboard') }}
+                className={mode === 'admin' ? 'bg-brand-600 text-white px-3 py-1' : 'px-3 py-1 text-gray-600 hover:bg-gray-50'}
+              >Admin</button>
+              <button
+                onClick={() => { setMode('owner'); navigate('/shop-owner') }}
+                className={mode === 'owner' ? 'bg-brand-600 text-white px-3 py-1' : 'px-3 py-1 text-gray-600 hover:bg-gray-50'}
+              >Shop Owner</button>
+            </div>
+            {mode === 'owner' && (
+              <select
+                value={previewTenantId ?? ''}
+                onChange={(e) => {
+                  const s = allShops?.find((x) => x.tenant_id === e.target.value)
+                  setPreview(e.target.value || null, s?.name ?? null)
+                  navigate('/shop-owner')
+                }}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white"
+              >
+                <option value="">Select a shop…</option>
+                {allShops?.map((s) => (
+                  <option key={s.id} value={s.tenant_id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
         <Outlet />
       </main>
 
