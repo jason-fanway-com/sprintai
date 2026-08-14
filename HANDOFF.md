@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-10
+Last updated: 2026-08-14
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -80,7 +80,7 @@ sprintai-ordering/
 │   │       ├── test-mode.ts           # Test key allowlist
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–046)
+│   └── migrations/           # SQL migrations (001–052)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -117,11 +117,17 @@ sprintai-ordering/
 6. `supabase/migrations/` — skim 038 (tenant isolation), 039 (delivery flow),
    040 (test mode fixes), 041 (ops-table RLS lock), 042–045 (kitchen-ticket
    idempotency, order-number hardening, audit log, inbound dedup),
-   046 (PII-table RLS forced + admin transcript INSERT gate).
+   046 (PII-table RLS forced + admin transcript INSERT gate),
+   047/048 (issue-detector pg_cron schedule), 050 (7-column menu schema +
+   owner sign-off), 051 (protected-shop guard), 052 (test suite results).
 7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
    double-extract fidelity check (§B), mandatory owner sign-off (§C).
    This is the contract every menu must satisfy before go-live.
-8. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
+8. `docs/specs/2026-08-12-prod-data-safety-and-njb-restore.md` — the 2026-08-09
+   NJB menu-wipe incident and the non-destructive / isolation rules it spawned.
+9. `docs/specs/2026-08-13-shop-conversation-test-suite.md` — the ~100-case
+   per-shop acceptance suite (go-live gate + drift detection).
+10. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
    (super_admin / shop_owner), route guards, shop-scoped dashboards.
 
 ---
@@ -231,6 +237,13 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   bot only reads it. Every menu is validated against the Menu Intake Standard
   (`docs/specs/menu-intake-standard.md`) and requires owner sign-off before
   go-live — Sprint never guesses a price.
+- **Menu intake was destructive by design — now guarded.** `parse-menu-pdf`
+  historically hard-deleted a shop's menus/items before inserting the new
+  parse, with no transaction and no empty-result check. This wiped NJB's real
+  menu in a 2026-08-09 test run. Prevention: `parse-menu-pdf` is being made
+  non-destructive (transaction, verify item count > 0, soft-archive), and
+  migration 051 blocks menu deletes for `protected` shops at the DB layer.
+  See `docs/specs/2026-08-12-prod-data-safety-and-njb-restore.md`.
 
 - **Test mode is real.** When `test_mode=true` on a shop, all charges route to
   Stripe test keys. The test-mode gate (`_shared/test-mode.ts`) allowlists only
@@ -240,6 +253,16 @@ Secrets live in Supabase/Netlify environment settings, never in code.
 - **eval-sweep is completely out-of-band.** It never runs inline during
   ordering. Crash it, kill it, deploy it wrong — the ordering bot is unaffected.
   They share zero code paths and zero table writes.
+- **eval-sweep DMs but does not mark notified.** `eval-sweep` sends the digest
+  for newly-flagged evals but deliberately does NOT set `notified_at`. The
+  `issue-detector` is the single actioner: it creates the tracked issue row,
+  then sets `notified_at`. If a flagged eval has `notified_at` set, it has a
+  corresponding `issues` row — invariant, not convention.
+- **Pickup-only is NOT a delivery pause.** A shop with `delivery_enabled=false`
+  is permanently pickup-only. It is not "paused right now" and must not trigger
+  the pickup-only pause message on every greeting (that bug blocked all
+  pickup-only shops from taking orders). Only a future `delivery_paused_until`
+  triggers the temporary pause message.
 
 ---
 

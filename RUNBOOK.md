@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-09
+Last updated: 2026-08-14
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -161,8 +161,13 @@ Models per function:
 | Function | Schedule | Purpose |
 |----------|----------|---------|
 | `eval-sweep` | Every 5 min (cron) | Judge completed conversations; write eval scores |
-| `issue-detector` | Cron | Detect quality issues from evals; alert via Telegram |
+| `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals; write to issues table; set notified_at on source evals |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
+
+**NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
+`notified_at`. The `issue-detector` is the single actioner — it creates a tracked
+issue row, then sets `notified_at`. This ensures zero flagged evals marked
+notified without a corresponding issue.
 
 ---
 
@@ -200,7 +205,7 @@ Models per function:
 | `train-tenant` | Text paste / document upload → embed | No |
 | `scrape-shop` | Firecrawl + Claude summary → shop_context | No |
 | `import-menu-csv` | CSV menu importer (idempotent, diff-based) | No |
-| `parse-menu-pdf` | PDF/photo menu intake — multi-pass, triple-extract consensus | No |
+| `parse-menu-pdf` | PDF/photo menu intake — multi-pass, triple-extract consensus, Opus model, 7-column canonical output | No |
 
 ### Operations & maintenance
 | Function | Purpose | JWT |
@@ -208,6 +213,7 @@ Models per function:
 | `provision-number` | Auto-buy Twilio number for new shop | No |
 | `toast-order` | Toast POS menu fetch + order placement | No |
 | `daily-reset` | Clear expired specials + delivery pauses | No |
+| `test-parse-judge` | Judge parser robustness test (script, not deployed) | N/A |
 
 ### Quality & monitoring
 | Function | Purpose | JWT |
@@ -238,7 +244,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–046). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–052). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -247,6 +253,12 @@ anon-readable). Migrations `042–045` added kitchen-ticket idempotency, order-
 number assignment hardening, per-send audit logging, and inbound message_sid
 dedup. Migration `046` hardened PII-table RLS — forced RLS on outbound_queue + 
 number_provision_log, and gated admin_chat_transcripts INSERT to super_admin only.
+Migration `047/048` schedules the issue-detector via pg_cron (every 10 min).
+Migration `050` adds the 7-column canonical menu schema (prompt_for, upsell,
+row_type, content_hash, open_questions, validation, owner sign-off). Migration
+`051` adds protected-shop guard (DB-level trigger blocks menu deletes for
+real/demo shops). Migration `052` adds test_runs + test_case_results tables
+for the shop conversation test suite.
 
 ### RLS model
 
@@ -295,6 +307,12 @@ number_provision_log, and gated admin_chat_transcripts INSERT to super_admin onl
 
 9. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
    permanently, observes quiet hours.
+
+10. **Protected shop guard (051)**: Shops flagged `protected=true` (NJB and
+    future demo/live shops) have a DB-level trigger that blocks DELETE on
+    menus/menu_items. Legitimate admin re-imports opt in per-transaction:
+    `SET LOCAL app.allow_protected_delete = 'on'`. This is the data-layer
+    defense against test/QA runs accidentally destroying a real shop's menu.
 
 ---
 

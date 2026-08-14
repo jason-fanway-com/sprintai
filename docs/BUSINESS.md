@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-10
+Last updated: 2026-08-14
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -116,7 +116,8 @@ These are encoded in the architecture, not just in marketing.
 2. **Self-serve for the restaurant.** A shop owner should be able to sign up,
    import their menu, connect payments, and go live in under 30 minutes without
    talking to anyone at SprintAI. The onboarding wizard and automated number
-   provisioning make this possible.
+   provisioning make this possible. Menu intake starts from a PDF or photo —
+   the owner doesn't need to know what a "canonical CSV" is.
 
 3. **AI-native, not AI-wrapped.** The ordering flow is an LLM conversation by
    design, not a form with an AI layer on top. The admin experience is
@@ -127,11 +128,18 @@ These are encoded in the architecture, not just in marketing.
 4. **Safety by construction, not convention.** The outbound guard is a
    structural chokepoint — every customer-facing message must pass through a
    single function with a typed reason. There is no other send path. Default
-   is deny.
+   is deny. The same discipline now guards menus at the data layer: a
+   protected-shop trigger blocks any accidental delete of a real shop's menu.
 
 5. **Build for scale from day one.** Tenant isolation is absolute (RLS, not
    application-level filtering). Every onboarding step is automated. Every
    change that requires per-restaurant manual intervention is flagged as debt.
+
+6. **Honest expectation-setting is a feature.** The product tells the owner
+   plainly it's AI and can drift — then backs that with real, visible evidence:
+   a pre-live acceptance suite, a live per-interaction quality signal, and
+   dated periodic re-tests. Transparency about AI limits is what makes the
+   quality story credible, not a disclaimer to hide behind.
 
 ---
 
@@ -177,6 +185,26 @@ These are encoded in the architecture, not just in marketing.
   sign-off gate — no menu goes live without the restaurant owner confirming
   every price. Supports option groups for item modifications. Bundles (e.g.,
   "dozen bagels" with flavor selection) are built into the tool loop.
+- **Onboarding now starts from a PDF or photo, not a CSV.** The signup wizard
+  takes a menu PDF or phone photos, and `parse-menu-pdf` (running the most
+  capable Opus model, multi-pass with a dedicated modifier-block pass) reads
+  every item, price, and modifier, then surfaces its own "open questions"
+  (conflicting prices, missing items) for the owner to resolve before
+  sign-off. CSV is still available behind an "advanced" toggle. This is the
+  difference between onboarding that feels magical and onboarding that feels
+  like homework.
+- **Owner sign-off is now a hard go-live gate (§C).** A menu can't go live
+  until the owner has confirmed every price and the parse is clean — no
+  flagged rows, no open questions. The ordering bot still can't create or
+  change a menu item; it only reads what the owner approved.
+- **The go-live gate is also the QA story.** The per-shop conversation test
+  suite auto-generates ~100 customer conversations from a shop's own menu,
+  runs them against the bot in isolation, and grades each against a rubric —
+  the shop can't go live until it passes (≥95% overall AND 100% of the
+  critical subset: wrong price, 86 leakage, opt-out ignored, cross-tenant
+  leakage). Shown to the owner as their "Store Readiness" report. The pitch
+  made real: *AI is probabilistic and can drift; we are professionals who are
+  vigilant about it, transparently.*
 
 ---
 
