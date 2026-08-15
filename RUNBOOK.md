@@ -52,7 +52,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–046) |
+| Migrations | `supabase/migrations/` (001–053) |
 
 ---
 
@@ -244,7 +244,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–052). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–053). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -258,7 +258,9 @@ Migration `050` adds the 7-column canonical menu schema (prompt_for, upsell,
 row_type, content_hash, open_questions, validation, owner sign-off). Migration
 `051` adds protected-shop guard (DB-level trigger blocks menu deletes for
 real/demo shops). Migration `052` adds test_runs + test_case_results tables
-for the shop conversation test suite.
+for the shop conversation test suite. Migration `053` adds read policies
+(super_admin full / shop_owner own-tenant SELECT) so the QA suite is visible
+in the admin dashboard with tenant isolation preserved.
 
 ### RLS model
 
@@ -306,7 +308,11 @@ for the shop conversation test suite.
    replaced — any authenticated user could previously inject transcripts.
 
 9. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
-   permanently, observes quiet hours.
+   permanently, observes quiet hours. The public homepage CTA and footer carry
+   the carrier-required message-frequency disclosure ("Message frequency varies
+   by order, typically 3-8 messages per order") — added to clear carrier
+   rejection code 806. Legal pages (contact/terms/privacy) use the canonical
+   `getsprintai.com` mailbox; the retired `getsprintai.net` mailbox is gone.
 
 10. **Protected shop guard (051)**: Shops flagged `protected=true` (NJB and
     future demo/live shops) have a DB-level trigger that blocks DELETE on

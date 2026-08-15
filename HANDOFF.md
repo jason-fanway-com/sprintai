@@ -80,11 +80,13 @@ sprintai-ordering/
 │   │       ├── test-mode.ts           # Test key allowlist
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–052)
+│   └── migrations/           # SQL migrations (001–053)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
 │   └── check-issues.sh       # Issue monitoring helper
+├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
+├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/
 │   └── functions/            # Netlify serverless functions
 │       └── stripe-webhook.js # B2B subscription checkout
@@ -119,7 +121,8 @@ sprintai-ordering/
    idempotency, order-number hardening, audit log, inbound dedup),
    046 (PII-table RLS forced + admin transcript INSERT gate),
    047/048 (issue-detector pg_cron schedule), 050 (7-column menu schema +
-   owner sign-off), 051 (protected-shop guard), 052 (test suite results).
+   owner sign-off), 051 (protected-shop guard), 052 (test suite results),
+   053 (test-suite read RLS).
 7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
    double-extract fidelity check (§B), mandatory owner sign-off (§C).
    This is the contract every menu must satisfy before go-live.
@@ -263,6 +266,15 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   the pickup-only pause message on every greeting (that bug blocked all
   pickup-only shops from taking orders). Only a future `delivery_paused_until`
   triggers the temporary pause message.
+- **The ordering loop only returns when tools are done.** DeepSeek Flash can
+  emit `tool_use` blocks and `stop_reason=end_turn` in the same turn (breakfast
+  sandwiches). The loop now executes any pending tool calls before returning;
+  if the model produces neither tools nor text it degrades to a soft cart
+  read-back instead of the dead-end "I couldn't process that".
+- **10DLC carrier rejection 806 drove the disclosure copy.** The homepage CTA
+  and footer carry the exact message-frequency sentence ("typically 3-8
+  messages per order") carriers require. Legal pages point at `getsprintai.com`;
+  `getsprintai.net` is retired.
 
 ---
 

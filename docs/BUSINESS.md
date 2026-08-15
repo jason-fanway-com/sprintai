@@ -37,6 +37,15 @@ wrong, and costs $0.99 per order.
 SprintAI is an **AI phone order-taker that works over SMS/iMessage and web
 chat.**
 
+The go-to-market motion is now packaged: a mobile **"How it works"** page
+(`how-it-works.html`) walks an owner from sign-up → onboarding → marketing kit
+→ go-live in ~2 weeks at **$99/mo + $0.99/order (paid by the customer)**. A
+per-shop **demo kit** (3 QR codes — text-to-order, the owner's Store Chat,
+and sign-up — plus a scripted walkthrough) lets a SprintAI rep close a live
+demo on a shop's own phone in minutes: order an item, 86 it from Store Chat,
+and watch the bot refuse it in real time. This is the physical embodiment of
+the pitch — *you keep your customers, your margin, and your name on the sale*.
+
 Two user surfaces:
 
 ### For diners (the ordering experience)
@@ -202,9 +211,21 @@ These are encoded in the architecture, not just in marketing.
   runs them against the bot in isolation, and grades each against a rubric —
   the shop can't go live until it passes (≥95% overall AND 100% of the
   critical subset: wrong price, 86 leakage, opt-out ignored, cross-tenant
-  leakage). Shown to the owner as their "Store Readiness" report. The pitch
-  made real: *AI is probabilistic and can drift; we are professionals who are
-  vigilant about it, transparently.*
+  leakage). Shown to the owner as their "Store Readiness" report, with a
+  matching super-admin QA console (test runs, per-case verdicts, model tier,
+  critical failures) behind the login wall. The pitch made real: *AI is
+  probabilistic and can drift; we are professionals who are vigilant about
+  it, transparently.*
+- **Super-admins preview the owner view.** A live Admin⇄Owner toggle lets a
+  SprintAI operator flip the dashboard into a shop owner's exact perspective
+  (own-shop scoping, Store Readiness signal) without logging out or
+  impersonating credentials — supporting demos and support, with role-gating
+  still enforced server-side.
+- **10DLC disclosure is in the funnel.** The homepage CTA and footer carry the
+  carrier-required message-frequency sentence ("typically 3-8 messages per
+  order") so the send path stays compliant and approved numbers stay
+  unblocked. Legal pages canonicalize on `getsprintai.com` (the `getsprintai.net`
+  mailbox is retired).
 
 ---
 
