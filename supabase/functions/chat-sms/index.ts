@@ -9,11 +9,12 @@
  * Persists messages to the messages table and cart state to order_carts.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
+import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,19 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+// ─── Compliance texts (EXACT registered strings from TCR campaign CSMB9HG) ──
+const COMPLIANCE_STOP = "You've been unsubscribed and will receive no further messages from this restaurant. Reply START to opt back in.";
+const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
+const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
+
+// ─── Provider resolution ─────────────────────────────────────────────────────
+function resolveSmsProvider(): "telnyx" | "twilio" {
+  const telnyxKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  return telnyxKey.length > 0 ? "telnyx" : "twilio";
+}
+
+type SmsProvider = ReturnType<typeof resolveSmsProvider>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -280,7 +294,7 @@ const ORDERING_TOOLS = [
 // ─── Effective menu builder ───────────────────────────────────────────────────
 
 async function buildEffectiveMenu(
-  supabase:     ReturnType<typeof createClient>,
+  supabase:     SupabaseClient,
   shopId:       string,
   businessDate: string,
 ): Promise<{ menu: EffectiveMenuItem[]; soldOutNames: string[] }> {
@@ -298,7 +312,7 @@ async function buildEffectiveMenu(
   const { data: items } = await supabase
     .from("menu_items")
     .select("id, name, description, price_cents, category, modifiers_json")
-    .eq("menu_id", menu.id)
+    .eq("menu_id", menu!.id)
     .eq("active", true)
     .order("display_order", { ascending: true });
 
@@ -512,7 +526,7 @@ RULES:
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
-- Process the ENTIRE customer message. If they mention multiple items (e.g. "a dozen bagels and some cream cheese"), acknowledge ALL items and work through each one. Do not ignore part of the request.
+- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
 - DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
@@ -552,7 +566,7 @@ async function executeTool(
   cart:      AnyCartItem[],
   menu:      EffectiveMenuItem[],
   cartId:    string,
-  supabase:  ReturnType<typeof createClient>,
+  supabase:  SupabaseClient,
   shopName:  string,
   testMode:  boolean = false,
   deliveryFeeCents?: number | null,
@@ -606,23 +620,23 @@ async function executeTool(
         }
       }
 
-      const existing = cart.findIndex(i => i.menu_item_id === menu_item_id && JSON.stringify(i.options) === JSON.stringify(inputOptions));
+      const existing = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id && JSON.stringify((i as CartItem).options) === JSON.stringify(inputOptions));
       if (existing >= 0) {
-        cart[existing].quantity += (quantity as number);
-        cart[existing].modifiers = inputMods;
+        (cart[existing] as CartItem).quantity += (quantity as number);
+        (cart[existing] as CartItem).modifiers = inputMods;
       } else {
         cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents, modifiers: inputMods, options: Object.keys(inputOptions).length > 0 ? inputOptions : undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
-      const total = cart.reduce((s, i) => s + i.price_cents * i.quantity, 0);
+      const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
       return { ok: true, result: { added: menuItem.name, quantity, cart_total: `$${(total / 100).toFixed(2)}` }, newPhase: "building" };
     }
 
     case "remove_item": {
       const { menu_item_id } = input as { menu_item_id: string };
-      const idx = cart.findIndex(i => i.menu_item_id === menu_item_id);
+      const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not found in cart." } };
-      const removed = cart[idx].name;
+      const removed = (cart[idx] as CartItem).name;
       cart.splice(idx, 1);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { removed } };
@@ -632,18 +646,18 @@ async function executeTool(
       const { menu_item_id, quantity, modifiers } = input as {
         menu_item_id: string; quantity?: number; modifiers?: string[];
       };
-      const idx = cart.findIndex(i => i.menu_item_id === menu_item_id);
+      const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not in cart." } };
-      if (quantity !== undefined) cart[idx].quantity = quantity;
+      if (quantity !== undefined) (cart[idx] as CartItem).quantity = quantity;
       if (modifiers !== undefined) {
         const menuItem   = menuMap.get(menu_item_id);
         const validMods  = menuItem?.modifiers_json?.map(m => m.name) ?? [];
         const invalidMods = modifiers.filter(m => !validMods.includes(m));
         if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
-        cart[idx].modifiers = modifiers;
+        (cart[idx] as CartItem).modifiers = modifiers;
       }
       await saveCart(supabase, cartId, cart, "building");
-      return { ok: true, result: { modified: cart[idx].name, quantity: cart[idx].quantity } };
+      return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity } };
     }
 
     case "clear_cart": {
@@ -955,7 +969,7 @@ async function executeTool(
 }
 
 async function saveCart(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   cartId:   string,
   cart:     AnyCartItem[],
   phase:    OrderPhase,
@@ -981,7 +995,7 @@ async function runOrderingLoop(
   cart:         AnyCartItem[],
   menu:         EffectiveMenuItem[],
   cartId:       string,
-  supabase:     ReturnType<typeof createClient>,
+  supabase:     SupabaseClient,
   shopName:     string,
   testMode:     boolean = false,
   deliveryFeeCents?: number | null,
@@ -1268,7 +1282,7 @@ function getLocalMinutes(timezone: string): number {
 }
 
 async function saveMessage(
-  supabase:       ReturnType<typeof createClient>,
+  supabase:       SupabaseClient,
   conversationId: string,
   tenantId:       string,
   role:           "customer" | "assistant" | "system",
@@ -1345,8 +1359,144 @@ async function sendSmsViaTwilio(
   }
 }
 
+// ─── Telnyx outbound ────────────────────────────────────────────────────────
+
+async function sendSmsViaTelnyx(
+  supabase:   SupabaseClient,
+  shopId:     string,
+  ctx:        OutboundContext,
+  fromNumber: string,
+  toNumber:   string,
+  message:    string,
+): Promise<void> {
+  const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  if (!apiKey) {
+    console.error("[chat-sms] Telnyx API key not configured");
+    return;
+  }
+
+  const { sent } = await guardedSend({ ...ctx, to: toNumber }, async () => {
+    const res = await fetch("https://api.telnyx.com/v2/messages", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from: fromNumber, to: toNumber, text: message }),
+    });
+
+    if (res.ok) {
+      console.log(`[chat-sms] SMS sent to ${toNumber} via Telnyx`);
+      return;
+    }
+
+    const errText = await res.text();
+    let errCode: string | undefined;
+    let errDetail: string | undefined;
+    try {
+      const errJson = JSON.parse(errText);
+      errCode = errJson?.errors?.[0]?.code;
+      errDetail = errJson?.errors?.[0]?.detail ?? errJson?.errors?.[0]?.title;
+    } catch { /* not JSON */ }
+
+    // Opt-out / blocked detection: Telnyx rejects sends to opted-out numbers.
+    // Known opt-out codes: 40002 (blocked/opted-out), 40003 (messaging profile blocked).
+    // 10036 = campaign not approved (pre-send system/delivery error) — NOT an opt-out.
+    // Do NOT persist opt-out state or close the conversation for 10036.
+    if (classifyTelnyxSendError(errCode) === "transient") {
+      console.warn(
+        `[chat-sms] Telnyx send TRANSIENT DELIVERY ERROR to=${toNumber} ` +
+        `code=${errCode} detail=${errDetail ?? "(none)"} — campaign/system issue, not an opt-out. Conversation stays open.`,
+      );
+      return;
+    }
+    if (classifyTelnyxSendError(errCode) === "opt_out") {
+      console.warn(
+        `[chat-sms] Telnyx send BLOCKED (likely opt-out) to=${toNumber} ` +
+        `code=${errCode} detail=${errDetail ?? "(none)"}`,
+      );
+      // Persist opt-out state: update conversation metadata
+      if (shopId && toNumber) {
+        await persistTelnyxOptOut(supabase, shopId, toNumber, errCode, errDetail);
+      }
+    } else {
+      console.error(`[chat-sms] Telnyx send failed: ${res.status} ${errText}`);
+    }
+  });
+
+  if (!sent) {
+    console.warn(`[chat-sms] OUTBOUND BLOCKED by watchdog (reason=${ctx.reason}); no SMS sent.`);
+  }
+}
+
+/** Persist opt-out state when Telnyx rejects a send to an opted-out number. */
+async function persistTelnyxOptOut(
+  supabase: SupabaseClient,
+  shopId:   string,
+  toNumber: string,
+  errCode:  string | undefined,
+  errDetail: string | undefined,
+): Promise<void> {
+  // Store in the most recent active conversation for this (shop, phone) pair.
+  const key = `telnyx_opt_out:${errCode ?? "unknown"}`;
+  const { data: convs } = await supabase
+    .from("conversations")
+    .select("id, metadata")
+    .eq("tenant_id", shopId)
+    .eq("customer_phone", toNumber)
+    .eq("status", "active")
+    .order("last_message_at", { ascending: false })
+    .limit(1);
+
+  const conv = convs?.[0];
+  if (!conv) {
+    console.warn(`[chat-sms] persistTelnyxOptOut: no active conversation for ${toNumber} in shop ${shopId}`);
+    return;
+  }
+
+  const meta = (conv.metadata ?? {}) as Record<string, unknown>;
+  meta.opted_out = true;
+  meta.opted_out_at = new Date().toISOString();
+  meta.opted_out_reason = `telnyx_reject:${errCode}:${errDetail ?? ""}`;
+  meta[key] = new Date().toISOString();
+
+  const { error } = await supabase
+    .from("conversations")
+    .update({ metadata: meta, status: "resolved" })
+    .eq("id", conv.id);
+
+  if (error) {
+    console.error(`[chat-sms] persistTelnyxOptOut: failed to update conversation ${conv.id}:`, error.message);
+  } else {
+    console.log(`[chat-sms] persistTelnyxOptOut: opted out ${toNumber} shop=${shopId} code=${errCode}`);
+  }
+}
+
+// ─── SMS dispatcher ─────────────────────────────────────────────────────────
+
+/**
+ * Single routing function for all outbound SMS. Routes to Telnyx or Twilio
+ * based on the provider argument. Always wraps in guardedSend (via the
+ * per-provider send functions).
+ */
+async function sendSms(
+  supabase:  SupabaseClient,
+  shopId:    string,
+  ctx:       OutboundContext,
+  provider:  SmsProvider,
+  fromNumber: string,
+  toNumber:   string,
+  message:    string,
+): Promise<void> {
+  if (provider === "telnyx") {
+    await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, message);
+  } else {
+    await sendSmsViaTwilio(ctx, fromNumber, toNumber, message);
+  }
+}
+
 async function handleSystemEvent(
-  supabase:    ReturnType<typeof createClient>,
+  supabase:    SupabaseClient,
   body:        { system_event?: string; conversation_id?: string; order_cart_id?: string },
 ): Promise<Response> {
   const { system_event, conversation_id, order_cart_id } = body;
@@ -1577,11 +1727,11 @@ async function handleSystemEvent(
   };
 
   if (conversation.channel === "sms" && conversation.customer_phone) {
-    // Direct Twilio SMS delivery
+    // Direct SMS delivery via the active provider
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
-      await sendSmsViaTwilio(txnCtx, shop.phone_number_e164, conversation.customer_phone, message);
+      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(), shop.phone_number_e164, conversation.customer_phone, message);
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
     // iMessage bridge: extract real phone from "web:imsg-{identifier}-{sessionid}"
@@ -1641,7 +1791,7 @@ async function handleSystemEvent(
 /** Reset a cart into test mode — DB update + local mutation. Single source of
  *  truth for both the SMS TESTMODE keyword branch and the web `test` flag branch. */
 async function activateTestMode(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   cart:      OrderCart,
 ): Promise<void> {
   const reset = {
@@ -1676,7 +1826,7 @@ Deno.serve(async (req: Request) => {
   );
 
   const contentType = req.headers.get("content-type") ?? "";
-  const isSms       = contentType.includes("application/x-www-form-urlencoded");
+  let isSms         = contentType.includes("application/x-www-form-urlencoded");
 
   let shop:          Shop;
   let customerPhone: string;
@@ -1695,9 +1845,11 @@ Deno.serve(async (req: Request) => {
   // request. Set for the SMS channel below; web channel never calls Twilio.
   let inboundReplyCtx: OutboundContext = { reason: "inbound_reply", inboundAtMs: Date.now() };
   let messageSid: string | undefined; // external message id for dedup
+  let replyProvider: SmsProvider = resolveSmsProvider(); // fallback default
 
   // ── Parse channel ─────────────────────────────────────────────────────────
   if (isSms) {
+    replyProvider = "twilio";
     const body   = await req.text();
     const params = new URLSearchParams(body);
     const toNumber   = params.get("To")   ?? "";
@@ -1710,7 +1862,7 @@ Deno.serve(async (req: Request) => {
     // webhook. The triggering inbound is the request we're handling right now:
     // its id is the Twilio MessageSid (fallback synthesized) and its timestamp
     // is now (we are processing it live, so it is by definition fresh). This
-    // single ctx is passed to every sendSmsViaTwilio call below so the guard can
+    // single ctx is passed to every sendSms call below so the guard can
     // prove freshness; if it were ever invoked outside a live inbound the
     // evidence would be absent and the guard would DENY.
     inboundReplyCtx = {
@@ -1724,15 +1876,15 @@ Deno.serve(async (req: Request) => {
     const upper      = userMessage.toUpperCase().trim();
     const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS.has(upper)) {
-      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.");
+      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_STOP);
       return emptyTwiml();
     }
     if (upper === "HELP") {
-      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.");
+      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_HELP);
       return emptyTwiml();
     }
     if (upper === "START") {
-      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "You are now subscribed. Text us to start an order!");
+      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_START);
       return emptyTwiml();
     }
 
@@ -1741,21 +1893,103 @@ Deno.serve(async (req: Request) => {
       .eq("phone_number_e164", toNumber)
       .single();
     if (!shopData) {
-      console.error("[chat-sms] Shop not found for Twilio number:", toNumber);
-      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
+      console.error("[chat-sms] Shop not found for number:", toNumber);
+      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
       return emptyTwiml();
     }
     shop = shopData as Shop;
     if (shop.is_paused) {
-      await sendSmsViaTwilio(inboundReplyCtx, toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
+      await sendSms(supabase, shop.tenant_id ?? "", inboundReplyCtx, replyProvider, toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
       return emptyTwiml();
     }
     customerPhone = fromNumber;
     sessionId     = `sms:${fromNumber}`;
     channel       = "sms";
   } else {
-    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean; phone?: string; message_sid?: string };
+    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean; phone?: string; message_sid?: string; data?: { event_type?: string; payload?: Record<string, unknown> } };
     try { body = await req.json(); } catch { return jsonError("Invalid JSON body"); }
+
+    // ── Telnyx inbound webhook (JSON, `data.event_type`) ────────────────────
+    // Telnyx POSTs application/json with `data.event_type`. Disambiguate from
+    // the web-chat JSON path BEFORE the web parse. A Telnyx inbound is always
+    // answered over Telnyx (replyProvider mirrors the inbound provider).
+    if (body.data && typeof body.data.event_type === "string") {
+      const telnyxEvent = body.data.event_type;
+      const payload = (body.data.payload ?? {}) as Record<string, unknown>;
+
+      // ── DLR / non-received events: never run order logic ─────────────────
+      if (telnyxEvent !== "message.received") {
+        const msgId = (payload.id as string) ?? "";
+        const from  = (payload.from as { phone_number?: string } | undefined)?.phone_number ?? "";
+        const toArr = (payload.to as Array<{ phone_number?: string }> | undefined) ?? [];
+        const to    = toArr[0]?.phone_number ?? "";
+        console.log(
+          `[chat-sms] Telnyx DLR: event=${telnyxEvent} id=${msgId} ` +
+          `from=${from} to=${to}`,
+        );
+        return jsonResponse({ received: true });
+      }
+
+      // ── message.received → normalize into the SMS flow ───────────────────
+      const fromNumber = (payload.from as { phone_number?: string } | undefined)?.phone_number ?? "";
+      const toArr      = (payload.to as Array<{ phone_number?: string }> | undefined) ?? [];
+      const toNumber   = toArr[0]?.phone_number ?? "";
+      const text       = (payload.text as string) ?? "";
+      const msgId      = (payload.id as string) ?? "";
+
+      if (!fromNumber || !toNumber) {
+        console.error("[chat-sms] Telnyx inbound missing from/to number");
+        return jsonResponse({ received: true });
+      }
+
+      replyProvider = "telnyx";
+      channel       = "sms";
+      isSms         = true;
+      userMessage   = (text ?? "").trim();
+      customerPhone = fromNumber;
+      sessionId     = `sms:${fromNumber}`;
+      messageSid    = msgId || undefined;
+      inboundReplyCtx = {
+        reason: "inbound_reply",
+        to: fromNumber,
+        inboundMessageId: msgId || `inbound-${crypto.randomUUID()}`,
+        inboundAtMs: Date.now(),
+      };
+
+      // STOP / HELP / START keyword handling (same whole-message matching as Twilio).
+      const upper      = userMessage.toUpperCase().trim();
+      const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
+      if (STOP_WORDS.has(upper)) {
+        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_STOP);
+        return jsonResponse({ received: true });
+      }
+      if (upper === "HELP") {
+        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_HELP);
+        return jsonResponse({ received: true });
+      }
+      if (upper === "START") {
+        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_START);
+        return jsonResponse({ received: true });
+      }
+
+      // Shop lookup by `to` number (same as Twilio).
+      const { data: shopData } = await supabase
+        .from("shops").select("*")
+        .eq("phone_number_e164", toNumber)
+        .single();
+      if (!shopData) {
+        console.error("[chat-sms] Shop not found for Telnyx number:", toNumber);
+        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, "Sorry, this number is not configured for ordering.");
+        return jsonResponse({ received: true });
+      }
+      shop = shopData as Shop;
+      if (shop.is_paused) {
+        await sendSms(supabase, shop.tenant_id ?? "", inboundReplyCtx, "telnyx", toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
+        return jsonResponse({ received: true });
+      }
+
+      // Fall through to the shared downstream conversational logic below.
+    } else {
 
     if (body.system_event) {
       return await handleSystemEvent(supabase, body);
@@ -1790,7 +2024,32 @@ Deno.serve(async (req: Request) => {
     if (shop.is_paused) {
       return jsonResponse({ reply: shop.pause_message ?? "We are not accepting orders right now.", cart: [], phase: "greeting", session_id: sessionId });
     }
+
+    // STOP/HELP/START keyword handling (mirrors SMS path at ~L1726).
+    // On the WEB path these keywords must be intercepted BEFORE the LLM
+    // ever runs, so a STOP produces an immediate opt-out with no model reply.
+    const STOP_WORDS_WEB = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
+    if (STOP_WORDS_WEB.has(userMessage.toUpperCase().trim())) {
+      return jsonResponse({
+        reply: "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.",
+        cart: [], phase: "greeting", session_id: sessionId,
+      });
+    }
+    if (userMessage.toUpperCase().trim() === "HELP") {
+      return jsonResponse({
+        reply: "For help with your order, reply with your question. Msg & data rates may apply. Reply STOP to unsubscribe.",
+        cart: [], phase: "greeting", session_id: sessionId,
+      });
+    }
+    if (userMessage.toUpperCase().trim() === "START") {
+      return jsonResponse({
+        reply: "You are now subscribed. Text us to start an order!",
+        cart: [], phase: "greeting", session_id: sessionId,
+      });
+    }
+
     customerPhone = `web:${sessionId}`;
+    }
   }
 
   // ── Find or create conversation ───────────────────────────────────────────
@@ -1838,7 +2097,7 @@ Deno.serve(async (req: Request) => {
     if (convErr || !newConv) {
       console.error("[chat-sms] Failed to create conversation:", convErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
       return jsonError(errMsg, 500);
     }
     conversation = newConv;
@@ -1872,7 +2131,7 @@ Deno.serve(async (req: Request) => {
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
       const errMsg = "Sorry, we had a problem starting your order. Please try again.";
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, errMsg); return emptyTwiml(); }
       return jsonError(errMsg, 500);
     }
     cart = newCart as OrderCart;
@@ -1884,7 +2143,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: [], phase: "expired", session_id: sessionId });
   }
 
@@ -1893,7 +2152,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Your order is confirmed and paid. Thank you!";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   if (cart.phase === "checkout") {
@@ -1908,7 +2167,7 @@ Deno.serve(async (req: Request) => {
       const reply = "No problem! Your order has been cancelled. What would you like to order?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
     }
 
@@ -1922,7 +2181,7 @@ Deno.serve(async (req: Request) => {
       const reply = "Your payment link was sent -- check your texts for it. If something looks wrong, say \"change my order\" to make edits, or \"restart\" to start over.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     }
   }
@@ -1957,7 +2216,7 @@ Deno.serve(async (req: Request) => {
     const reply = "Sorry, our menu is not available right now. Please call us to place an order.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
   }
 
@@ -2016,7 +2275,7 @@ Deno.serve(async (req: Request) => {
       const ack = "You're in test mode 🧪 Order just like it's the real thing — the kitchen's open and this behaves exactly like a live order. At checkout you'll use a test card, and you won't be charged a cent.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", ack);
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, ack); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, ack); return emptyTwiml(); }
       return jsonResponse({ reply: ack, cart: [], phase: "greeting", session_id: sessionId, test_mode: true });
     }
 
@@ -2045,7 +2304,7 @@ Deno.serve(async (req: Request) => {
       const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours — you'll be happy you did!`;
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-      if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
       return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
     }
   }
@@ -2080,7 +2339,7 @@ Deno.serve(async (req: Request) => {
     const pauseMsg = `Quick heads up — we're pickup-only right now.${reason}${resumeTimeStr} Want to put in a pickup order?`;
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", pauseMsg);
-    if (isSms) { await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, pauseMsg); return emptyTwiml(); }
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, pauseMsg); return emptyTwiml(); }
     return jsonResponse({ reply: pauseMsg, cart: [], phase: "greeting", session_id: sessionId });
   }
 
@@ -2222,7 +2481,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (isSms) {
-    await sendSmsViaTwilio(inboundReplyCtx, shop.phone_number_e164!, customerPhone, finalReply);
+    await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, finalReply);
     return emptyTwiml();
   }
   return jsonResponse({
