@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
   // ── Guardrail 1: SUBSCRIPTION-FIRST ────────────────────────────────────────
   if (!shop.subscription_pm_set) {
     return jsonError(
-      "Subscription payment method not set — number provisioning is blocked until the $49/mo subscription is in place (subscription-first guardrail).",
+      "Subscription payment method not set — number provisioning is blocked until the $99/mo subscription is in place (subscription-first guardrail).",
       402,
     );
   }

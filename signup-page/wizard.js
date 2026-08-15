@@ -158,15 +158,15 @@
     };
   };
 
-  // 2 ── SUBSCRIPTION ($49/mo PAY-NOW) ────────────────────────────────────────
+  // 2 ── SUBSCRIPTION ($99/mo PAY-NOW) ────────────────────────────────────────
   RENDERERS.subscription = function () {
     elCard.innerHTML = "";
     elCard.appendChild(h(
       '<div>' +
       '<div class="step-h">Your SprintAI subscription</div>' +
-      '<div class="step-desc">$49/mo — your own number, the ordering assistant, and order tickets. No setup fee.</div>' +
+      '<div class="step-desc">$99/mo — your own number, the ordering assistant, and order tickets. No setup fee.</div>' +
       '<div class="notice warn">Payments aren\'t configured on this environment yet, so we can\'t collect a card here. ' +
-        'In production this is where you\'d add your payment method and the $49 charges immediately (no trial). ' +
+        'In production this is where you\'d add your payment method and the $99 charges immediately (no trial). ' +
         'For this preview we\'ll mark the subscription step so the rest of setup can proceed.</div>' +
       '<div class="notice info">Order go-live is gated on your <strong>payout</strong> account being enabled — never on this subscription. You\'ll never pay then sit idle.</div>' +
       '<div class="btn-row"><button class="btn btn-ghost" id="bk">← Back</button>' +
@@ -951,7 +951,7 @@
   // per-step narration
   var CHAT_INTRO = {
     account: "Hi! I\'m your setup helper. Let\'s get your shop taking text orders. Start by adding your name and email on the left — I\'ll save everything as we go.",
-    subscription: "This is the $49/mo plan: your own number, the ordering assistant, and order tickets. No setup fee. (Payments aren\'t turned on in this preview, so there\'s nothing to enter yet.)",
+    subscription: "This is the $99/mo plan: your own number, the ordering assistant, and order tickets. No setup fee. (Payments aren\'t turned on in this preview, so there\'s nothing to enter yet.)",
     connect: "Next, where your money lands. You connect Stripe and payouts go straight to you — Sprint never holds your cash. Heads up: payments aren\'t configured on this environment yet, so this step is a preview.",
     scrape: "Want me to read your website? I\'ll learn your story so the assistant sounds like you. Hit \u201cRead my site\u201d on the left.",
     menu: "Now the fun part — your menu. Upload your CSV and I\'ll walk through anything it leaves open. I never guess a price; I\'ll ask you.",
