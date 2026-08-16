@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-14
+Last updated: 2026-08-16
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -16,14 +16,15 @@ order is charged via Stripe Connect. A web chat PWA exists as a secondary
 channel. Shop owners manage menus and delivery via an AI-powered admin dashboard.
 
 The stack is Supabase (Postgres + Edge Functions) + Netlify (hosting + proxy) +
-Twilio (SMS) + iMessage bridge (Mac). LLM calls go through OpenRouter.
+Telnyx (SMS + 10DLC) + iMessage bridge (Mac). LLM calls go through OpenRouter.
+Twilio is deprecated — see "SMS / Telnyx" below.
 
 ---
 
 ## Architecture & topology
 
 ```
-Customer SMS → Twilio → webhook → chat-sms edge function
+Customer SMS → Telnyx → webhook → chat-sms edge function
                                       ↕
 Customer web → PWA (shop-chat) → chat-sms edge function
                                       ↕
@@ -107,12 +108,36 @@ New functions: add the entry before deploying.
 
 ## Services & integrations
 
-### SMS / Twilio
+### SMS / Telnyx (live) — Twilio deprecated
 
-- Numbers: `+16109366213`, `+16103792553` (provisioned via Messaging Service `MG76067b4fbbb54eb914c3087f559c2f8b`)
-- A2P status: Sole Prop brand (`BN04b99e0012aa2314c12448ffcd01913f`) is approved but capped at one number. Standard brand (LLC, scalable) registration is in progress — blocked on EIN propagation.
-- Inbound webhook: Twilio points to `chat-sms` edge function.
-- The iMessage bridge on the Mac also handles inbound SMS → `chat-sms` for the primary number (`+14842018054`).
+SprintAI sends and receives SMS through **Telnyx**, not Twilio. Twilio's
+business-profile verification repeatedly rejected the LLC EIN (error 18602)
+and is abandoned as a provider; the same EIN verifies cleanly through Telnyx.
+
+- **10DLC registration: APPROVED** by all seven carriers (AT&T, T-Mobile,
+  Verizon, US Cellular, Interop, ClearSky, Liberty). Brand `BJ8MUGY`
+  (SprintAI LLC), campaign `CSMB9HG` / Telnyx `4b30019f-fc16-9471-9d17-5533e185444c`.
+- **Provider switch:** `resolveSmsProvider()` in `chat-sms` returns `telnyx`
+  when `TELNYX_API_KEY` is set, else `twilio` (kept for rollback).
+  Reply-to-inbound always mirrors the provider the inbound arrived on.
+- **Inbound:** Telnyx messaging-profile webhook POSTs JSON
+  (`data.event_type` = `message.received`) → `chat-sms`. DLR events
+  (`message.sent` / `message.finalized`) are acknowledged and ignored.
+- **Outbound:** `POST https://api.telnyx.com/v2/messages` (Bearer
+  `TELNYX_API_KEY`), `{from, to, text}`, wrapped in `guardedSend` — the
+  outbound guard is never bypassed.
+- **Opt-out:** Telnyx enforces STOP/block at the messaging-profile level. A
+  blocked outbound send is classified by `_shared/telnyx-error.ts`, persisted
+  as opt-out, logged, and the handler returns cleanly (no crash / retry loop).
+- **One messaging profile per shop** is the intended architecture (STOP scoped
+  per shop, not globally). All numbers attach to campaign `CSMB9HG`.
+- The iMessage bridge on the Mac also handles inbound SMS → `chat-sms` for the
+  primary number (`+14842018054`).
+
+Twilio numbers (`+16109366213`, `+16103792553` via Messaging Service
+`MG76067b4fbbb54eb914c3087f559c2f8b`) are legacy; provisioning now runs on
+Telnyx. See `docs/telnyx-integration-runbook.md` (wiring) and
+`docs/10dlc-compliance-obligations.md` (binding behaviour — treat as law).
 
 ### iMessage bridge
 
@@ -225,6 +250,7 @@ notified without a corresponding issue.
 | File | Purpose |
 |------|---------|
 | `outbound-guard.ts` | Structural chokepoint — all customer-facing sends route here |
+| `telnyx-error.ts` | Classifies Telnyx outbound rejections (opt-out/blocked) for graceful handling |
 | `connect.ts` | Stripe Connect helpers, `isShopLive()` gate, service fee constant |
 | `test-mode.ts` | Test-mode Stripe key resolution with allowlist gate |
 | `stripe-financials.ts` | Real Stripe fee lookup + payout reconciliation for financials |
@@ -308,11 +334,17 @@ in the admin dashboard with tenant isolation preserved.
    replaced — any authenticated user could previously inject transcripts.
 
 9. **TCPA / 10DLC**: All messaging respects opt-in, honors STOP immediately and
-   permanently, observes quiet hours. The public homepage CTA and footer carry
-   the carrier-required message-frequency disclosure ("Message frequency varies
-   by order, typically 3-8 messages per order") — added to clear carrier
-   rejection code 806. Legal pages (contact/terms/privacy) use the canonical
-   `getsprintai.com` mailbox; the retired `getsprintai.net` mailbox is gone.
+   permanently, observes quiet hours. The registered campaign (TCR `CSMB9HG`,
+   provider Telnyx) is approved by all seven carriers. STOP/HELP/START use the
+   **exact registered strings** and are matched **whole-message only** —
+   "I want to cancel this order" does NOT opt out. The public homepage CTA and
+   footer carry the carrier-required message-frequency disclosure ("Message
+   frequency varies by order, typically 3-8 messages per order") — added to
+   clear carrier rejection code 806. Legal pages (contact/terms/privacy) use
+   the canonical `getsprintai.com` mailbox and publish the SprintAI LLC legal
+   identity (5620 Cetronia Rd, Allentown, PA 18106); the retired
+   `getsprintai.net` mailbox is gone. See
+   `docs/10dlc-compliance-obligations.md` for the full binding spec.
 
 10. **Protected shop guard (051)**: Shops flagged `protected=true` (NJB and
     future demo/live shops) have a DB-level trigger that blocks DELETE on

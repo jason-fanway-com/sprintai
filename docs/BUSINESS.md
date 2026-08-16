@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-14
+Last updated: 2026-08-16
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -88,7 +88,7 @@ Two user surfaces:
 | Restaurant bears | Stripe processing fees (2.9% + $0.30) |
 | Sprint keeps | The full $0.99 |
 | Customer pays | Food + tax (the $0.99 is invisible to them) |
-| Restaurant subscription | $99/mo (starter), $247/mo (pro), $497/mo (enterprise) |
+| Restaurant subscription | $99/mo (single plan — one offering, one price) |
 
 The $0.99 is applied as a Stripe application fee on every order's direct charge.
 It is never shown as a line item to the diner (disclosed in the checkout
@@ -96,8 +96,8 @@ transition message). The subscription is billed separately via Stripe Billing �
 `stripe-webhook` Netlify function.
 
 At 10 orders/day per restaurant, a shop generates ~$300/mo in service fees +
-$99–497/mo subscription. At 1,000 restaurants averaging 15 orders/day: ~$450K/mo
-in service fees + $150K–$500K/mo subscription. The model works at scale.
+$99/mo subscription. At 1,000 restaurants averaging 15 orders/day: ~$450K/mo
+in service fees + $99K/mo subscription. The model works at scale.
 
 ---
 
@@ -156,9 +156,22 @@ These are encoded in the architecture, not just in marketing.
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
-- **A2P/10DLC:** Sole Prop brand is approved but capped at one phone number.
-  Standard brand (LLC) registration is in progress, blocked on IRS EIN
-  propagation. This is the critical path to scaling beyond a handful of shops.
+- **Telnyx SMS handler is built.** `chat-sms` parses Telnyx inbound webhooks
+  (JSON `message.received`), drives the identical ordering conversation, sends
+  outbound via the Telnyx Messages API through the outbound guard, handles
+  delivery receipts, and implements STOP/HELP/START with the exact
+  TCR-registered strings (whole-message matching — "I want to cancel this
+  order" does NOT opt out). A blocked send is caught, persisted as opt-out, and
+  logged rather than crashing or retry-looping.
+- **Legal identity published.** Footer and terms/privacy carry SprintAI LLC, the
+  mailing address (5620 Cetronia Rd, Allentown, PA 18106), and the canonical
+  `getsprintai.com` support mailbox — one legal entity, one name on the sale.
+- **A2P/10DLC: APPROVED via Telnyx.** The SprintAI LLC brand (`BJ8MUGY`) and
+  campaign (`CSMB9HG`) are approved by all seven carriers (AT&T, T-Mobile,
+  Verizon, US Cellular, Interop, ClearSky, Liberty). Twilio is abandoned — its
+  business-profile verification rejected the EIN four times (error 18602) while
+  the same EIN verifies cleanly through Telnyx. Telnyx is now the live SMS
+  provider and provisioning path, which unblocks scaling beyond a handful of shops.
 - **Stripe Connect:** Express onboarding (Path B) is implemented and verified
   in test mode. OAuth for Standard accounts (Path A) is coded but blocked on
   missing secrets (`STRIPE_CONNECT_CLIENT_ID`, `STRIPE_OAUTH_REDIRECT_URL`).
@@ -231,15 +244,18 @@ These are encoded in the architecture, not just in marketing.
 
 ## What's next (near-term roadmap)
 
-1. **A2P Standard brand** — unblock scaling. The moment the EIN propagates,
-   register the brand, replicate to carriers, activate the campaign.
+1. **Provision live numbers on Telnyx** — the campaign is already approved, so
+   the remaining step is to provision shop numbers, attach them to per-shop
+   messaging profiles, assign them to campaign `CSMB9HG`, and pass the real-
+   handset delivery test before the first shop goes live.
 2. **First real restaurant** — onboard one paying shop with their real menu,
    real Stripe, and real phone number. Validate the end-to-end in production
    with real customers.
 3. **Stripe Connect OAuth secrets** — add the missing keys so Path A (existing
    Stripe merchants) works end-to-end.
-4. **Multi-number scale** — once the Standard brand is approved, provision
-   numbers for multiple shops from the Messaging Service pool.
+4. **Multi-number scale** — the campaign is approved; provision numbers for
+   multiple shops on Telnyx, one messaging profile per shop, all attached to
+   campaign `CSMB9HG`.
 5. **Order routing** — push orders to the restaurant via SMS notification,
    email ticket (Resend, already integrated), and eventually a kitchen display
    or POS integration (Toast API integration exists but is not live).

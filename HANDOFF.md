@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-14
+Last updated: 2026-08-16
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -16,9 +16,10 @@ Connect. No app download, no website — just text. There is also a web chat
 fallback (PWA) and an AI-powered admin dashboard where shop owners manage menus
 and delivery by talking to the system in plain English.
 
-One service fee per order ($0.99). That's the business model. The codebase
-is built from day one to self-serve thousands of restaurants — every onboarding
-step, number provision, and menu import is automated.
+The business model is a flat $99/mo subscription plus a $0.99 service fee per
+order (one offering, one price — no tiers). The codebase is built from day one
+to self-serve thousands of restaurants — every onboarding step, number
+provision, and menu import is automated.
 
 ---
 
@@ -79,6 +80,7 @@ sprintai-ordering/
 │   │       ├── connect.ts             # Stripe helpers + isShopLive() gate
 │   │       ├── test-mode.ts           # Test key allowlist
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
+│   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
 │   └── migrations/           # SQL migrations (001–053)
 ├── scripts/
@@ -139,7 +141,7 @@ sprintai-ordering/
 
 ```
 CUSTOMER TEXTS "I want a dozen bagels"
- → iMessage bridge or Twilio webhook receives it
+ → iMessage bridge or Telnyx webhook receives it
  → chat-sms edge function
    → loads shop config, menu, hours, knowledge base
    → builds system prompt with effective menu + ground truth
@@ -204,7 +206,8 @@ The authoritative list is `.env.example` in the repo root. Key groups:
 - **OpenRouter**: `OPENROUTER_API_KEY` (with `ANTHROPIC_API_KEY` fallback)
 - **Supabase**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`
 - **Stripe**: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_TEST_*`
-- **Twilio**: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
+- **Telnyx (live SMS provider)**: `TELNYX_API_KEY`
+- **Twilio (deprecated)**: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
 - **Resend**: `RESEND_API_KEY` (email receipts)
 - **OpenAI**: `OPENAI_API_KEY` (embeddings for knowledge base)
 - **Firecrawl**: `FIRECRAWL_API_KEY` (website scraping)
@@ -275,6 +278,18 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   and footer carry the exact message-frequency sentence ("typically 3-8
   messages per order") carriers require. Legal pages point at `getsprintai.com`;
   `getsprintai.net` is retired.
+- **SMS now runs on Telnyx, not Twilio.** Twilio's business-profile verification
+  rejected the LLC EIN four times (error 18602). The 10DLC campaign is approved
+  on Telnyx (brand `BJ8MUGY`, campaign `CSMB9HG`) by all seven carriers. `chat-sms`
+  parses Telnyx inbound JSON, sends outbound via the Telnyx Messages API (still
+  through `guardedSend`), handles DLRs, and implements STOP/HELP/START with the
+  exact registered strings. Provider is chosen by `resolveSmsProvider()` — Telnyx
+  when `TELNYX_API_KEY` is set, Twilio behind it for rollback. See
+  `docs/telnyx-integration-runbook.md` and `docs/10dlc-compliance-obligations.md`.
+- **One offering, one price.** SprintAI sells a single $99/mo order-by-text plan
+  plus the $0.99/order fee. The legacy 3-tier "SprintAI Chat" pricing
+  ($99/$247/$497) and the HVAC/chat-product surfaces are purged from the public
+  site and checkout.
 
 ---
 
