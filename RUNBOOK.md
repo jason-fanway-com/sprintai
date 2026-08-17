@@ -53,7 +53,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–053) |
+| Migrations | `supabase/migrations/` (001–055) |
 
 ---
 
@@ -270,7 +270,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–053). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–055). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -286,7 +286,10 @@ row_type, content_hash, open_questions, validation, owner sign-off). Migration
 real/demo shops). Migration `052` adds test_runs + test_case_results tables
 for the shop conversation test suite. Migration `053` adds read policies
 (super_admin full / shop_owner own-tenant SELECT) so the QA suite is visible
-in the admin dashboard with tenant isolation preserved.
+in the admin dashboard with tenant isolation preserved. Migrations `054`/`055`
+add case-fix tracking to the QA suite: `proposed_fix`, `fix_status` (default
+`open`), and `root_cause` columns on `test_case_results`, so the fix loop can
+record remediation and why a case failed.
 
 ### RLS model
 
@@ -357,6 +360,10 @@ in the admin dashboard with tenant isolation preserved.
 ## Monitoring & alerting
 
 - `eval-sweep` generates conversation quality assessments every ~5 minutes.
+  The Judge grades only assistant messages — a diner's prompt-injection attempt
+  is never flagged as an assistant failure. `wrong_total` fires only on an
+  explicit stated total; `invented_item` is narrowly scoped to items truly
+  absent from the menu, its descriptions, and modifiers — fewer false flags.
 - `issue-detector` scans evals for patterns: error spikes, quality decline,
   compliance violations → writes to `issues` table + optional Telegram alerts.
 - iMessage bridge logs to `/tmp/sprintai-imsg-bridge.log`.

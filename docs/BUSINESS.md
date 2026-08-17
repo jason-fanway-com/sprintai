@@ -156,6 +156,11 @@ These are encoded in the architecture, not just in marketing.
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
+- **The order-taker got sharper.** Modifier price changes (e.g. "add cheese
+  +$1") now actually add to the cart total. A multi-item message with one
+  off-menu item adds the valid items instead of rejecting the whole order.
+  Ordering a plain bagel by exact name no longer triggers a cream-cheese
+  upsell. The bot quotes the menu's exact item names and units.
 - **Telnyx SMS handler is built.** `chat-sms` parses Telnyx inbound webhooks
   (JSON `message.received`), drives the identical ordering conversation, sends
   outbound via the Telnyx Messages API through the outbound guard, handles
@@ -220,11 +225,12 @@ These are encoded in the architecture, not just in marketing.
   flagged rows, no open questions. The ordering bot still can't create or
   change a menu item; it only reads what the owner approved.
 - **The go-live gate is also the QA story.** The per-shop conversation test
-  suite auto-generates ~100 customer conversations from a shop's own menu,
-  runs them against the bot in isolation, and grades each against a rubric —
-  the shop can't go live until it passes (≥95% overall AND 100% of the
-  critical subset: wrong price, 86 leakage, opt-out ignored, cross-tenant
-  leakage). Shown to the owner as their "Store Readiness" report, with a
+  suite auto-generates ~100 customer conversations from a shop's own menu —
+  85 scripted single-turn cases plus 15 realistic multi-turn cases where an
+  LLM "customer" plays a persona over several turns — runs them against the
+  bot in isolation, and grades each against a rubric. The shop can't go live
+  until it passes (≥95% overall AND 100% of the critical subset: wrong price,
+  86 leakage, opt-out ignored, cross-tenant leakage). Shown to the owner as their "Store Readiness" report, with a
   matching super-admin QA console (test runs, per-case verdicts, model tier,
   critical failures) behind the login wall. The pitch made real: *AI is
   probabilistic and can drift; we are professionals who are vigilant about

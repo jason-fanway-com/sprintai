@@ -82,7 +82,7 @@ sprintai-ordering/
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–053)
+│   └── migrations/           # SQL migrations (001–055)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -124,7 +124,8 @@ sprintai-ordering/
    046 (PII-table RLS forced + admin transcript INSERT gate),
    047/048 (issue-detector pg_cron schedule), 050 (7-column menu schema +
    owner sign-off), 051 (protected-shop guard), 052 (test suite results),
-   053 (test-suite read RLS).
+   053 (test-suite read RLS), 054/055 (case-fix tracking: proposed_fix,
+   fix_status, root_cause).
 7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
    double-extract fidelity check (§B), mandatory owner sign-off (§C).
    This is the contract every menu must satisfy before go-live.
@@ -132,7 +133,10 @@ sprintai-ordering/
    NJB menu-wipe incident and the non-destructive / isolation rules it spawned.
 9. `docs/specs/2026-08-13-shop-conversation-test-suite.md` — the ~100-case
    per-shop acceptance suite (go-live gate + drift detection).
-10. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
+10. `docs/specs/2026-08-16-multi-turn-conversational-cases.md` — the suite's
+    conversational mode: 15 LLM-driven multi-turn cases per shop (realistic,
+    messy exchanges) judged on the whole transcript, not a single exchange.
+11. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
    (super_admin / shop_owner), route guards, shop-scoped dashboards.
 
 ---
@@ -290,6 +294,18 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   plus the $0.99/order fee. The legacy 3-tier "SprintAI Chat" pricing
   ($99/$247/$497) and the HVAC/chat-product surfaces are purged from the public
   site and checkout.
+- **The QA suite is now multi-turn.** The per-shop acceptance suite added 15
+  conversational cases: an LLM customer-simulator plays a persona across up to
+  6 turns on one `session_id`, and the Judge grades the whole transcript —
+  catching drift, loops, and lost context that scripted single-turn cases can't.
+  The admin nav labels it "Production Readiness". See
+  `docs/specs/2026-08-16-multi-turn-conversational-cases.md`.
+- **The order-taker got sharper.** Modifier price changes (e.g. "add cheese
+  +$1") now actually add to the cart item price (was silently dropped — a money
+  bug). A multi-item message with one off-menu item now adds the valid items
+  instead of rejecting the whole message. Ordering a plain bagel by exact name
+  no longer triggers a cream-cheese upsell; the bot quotes the menu's exact item
+  names and units.
 
 ---
 
