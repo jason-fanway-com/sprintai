@@ -1210,6 +1210,89 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): str
 
 // ─── Deterministic order guards ───────────────────────────────────────────────
 
+// Build a vocabulary set from all menu item names (words > 2 chars, lowercase).
+// Used by menu-grounding guards to detect when the LLM invents portion/container
+// words that don't appear on the actual menu.
+function buildMenuVocabulary(menu: EffectiveMenuItem[]): Set<string> {
+  const vocab = new Set<string>();
+  for (const item of menu) {
+    const words = item.name.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+    for (const w of words) vocab.add(w);
+  }
+  return vocab;
+}
+
+// Guard 1b helper: detects off-menu portion/container words in the reply.
+// Common container/portion words NOT present in the shop's menu vocabulary are
+// flagged when adjacent to words that ARE in the menu vocabulary (meaning the
+// LLM is describing a real item using invented language).
+const OFF_MENU_PORTION_WORDS = [
+  "tub", "pint", "quart", "container", "bucket", "scoop",
+  "jar", "box", "carton", "sack", "baggie", "jug", "vessel", "crock",
+  "bowl", "cup", "glass", "tin", "can", "pot",
+];
+
+function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped: boolean; offWord?: string } {
+  if (!reply || menuVocab.size === 0) return { tripped: false };
+  const words = reply.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const replyWordSet = new Set(words);
+  const hasMenuWord = words.some(w => menuVocab.has(w));
+  if (!hasMenuWord) return { tripped: false };
+  const offWord = words.find(w => OFF_MENU_PORTION_WORDS.includes(w) && !menuVocab.has(w));
+  return offWord ? { tripped: true, offWord } : { tripped: false };
+}
+
+// Guard 2b helper: detects LLM claims about items being in the cart that don't
+// match the authoritative cart state. Returns the claimed item name, or null.
+function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | null {
+  if (!reply) return null;
+
+  // If cart is empty, ANY assertion of cart contents is a hallucination.
+  if (guardCart.length === 0) {
+    if (/\b(?:in\s+(?:your|the)\s+cart|already\s+(?:have|in|added)|you\s+(?:have|got).*(?:in\s+(?:your|the)\s+cart))\b/i.test(reply)) {
+      return "(empty cart)";
+    }
+    return null;
+  }
+
+  // Cart has items — extract what the LLM claims is in the cart and verify.
+  const patterns = [
+    /(?:one\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)(?:\s+is\s+)?(?:already\s+)?in\s+(?:your|the)\s+cart/i,
+    /you\s+(?:already\s+)?have\s+(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)(?:\s+in\s+(?:your|the)\s+cart)?/i,
+    /i['"]?(?:ve|\s+have)\s+(?:already\s+)?(?:got\s+)?(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+(?:in\s+(?:your|the)\s+cart|already)/i,
+  ];
+
+  for (const re of patterns) {
+    const m = reply.match(re);
+    if (!m) continue;
+    const claimed = m[1].replace(/["']/g, '').trim();
+    if (claimed.length < 2) continue;
+    const cartNames = guardCart.map(i =>
+      (i as BundleItem).type === "bundle" ? (i as BundleItem).name : (i as CartItem).name
+    );
+    const found = cartNames.some(n =>
+      n.toLowerCase().includes(claimed.toLowerCase()) ||
+      claimed.toLowerCase().includes(n.toLowerCase())
+    );
+    if (!found) return claimed;
+  }
+
+  return null;
+}
+
+// Guard 3b helper: detects when the model's reply claims an item was added
+// ("added X to your cart") but the cart didn't actually change in this turn.
+function claimsAddedWithoutMutation(reply: string, cartBefore: AnyCartItem[], cartAfter: AnyCartItem[]): boolean {
+  if (!reply) return false;
+  // Quick check: if cart grew, the add was real — no alarm.
+  if (cartAfter.length > cartBefore.length) return false;
+  // If cart contents changed (different items), the add was real.
+  if (JSON.stringify(cartBefore) !== JSON.stringify(cartAfter)) return false;
+  // Cart is identical. Check if reply claims an add happened.
+  return /\b(?:added|i['"]?ve\s+added|i\s+added|put|i['"]?ve\s+put|threw|tossed)\s+(?:a\s+)?.*(?:to\s+(?:your|the)\s+cart|in\s+(?:your|the)\s+cart|for\s+you)\b/i.test(reply) ||
+    /\b(?:got\s+you|got\s+that).*(?:added|in\s+(?:your|the)\s+cart)\b/i.test(reply);
+}
+
 // Guard 1 helper: detects dollar amounts quoted when the cart is empty.
 // Only fires when cart is empty; a non-empty cart quoting its total is fine.
 function claimsTotal(text: string): boolean {
@@ -2446,6 +2529,43 @@ Deno.serve(async (req: Request) => {
   if (guardCart.length === 0 && claimsTotal(reply)) {
     console.warn(`[chat-sms] GUARD 1 (empty-cart total) tripped (conv=${conversation.id}). Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     reply = "I don't have anything in your cart yet. What would you like to order?";
+  }
+
+  // ── Guard 1b: off-menu portion/container words ──────────────────────────
+  // If the model uses a container/portion word ("tub", "pint", etc.) that
+  // doesn't appear in this shop's menu, flag it and replace the reply with
+  // one that uses the menu's real language. Deterministic: vocabulary is built
+  // from actual menu item names.
+  const menuVocab = buildMenuVocabulary(effectiveMenu);
+  const portionCheck = claimsOffMenuPortion(reply, menuVocab);
+  if (portionCheck.tripped) {
+    console.warn(`[chat-sms] GUARD 1b (off-menu portion) tripped (conv=${conversation.id}). Word "${portionCheck.offWord}" not in menu vocab. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+    reply = "Sorry, I described that wrong. What can I get started for you? Let me know and I'll add it right away.";
+  }
+
+  // ── Guard 1c: cart-content hallucination ────────────────────────────────
+  // If the model claims an item is in the cart but the authoritative cart row
+  // doesn't contain that item, suppress the claim. Reuses guardCartRow already
+  // fetched above — no second DB read.
+  if (!portionCheck.tripped) {
+    const hallucinatedItem = claimsItemInCart(reply, guardCart);
+    if (hallucinatedItem) {
+      console.warn(`[chat-sms] GUARD 1c (cart-content hallucination) tripped (conv=${conversation.id}). Claimed "${hallucinatedItem}" in cart but not present. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+      const fallback = guardCart.length > 0
+        ? `I've got ${guardCart.length} item${guardCart.length === 1 ? "" : "s"} in your cart. What else can I add?`
+        : "Your cart is empty. What would you like to order?";
+      reply = fallback;
+    }
+  }
+
+  // ── Guard 1d: narrated add without actual cart mutation ─────────────────
+  // If the model says "added X to your cart" but guardCart is identical to
+  // the pre-loop cartItems, no tool was called — the add was imaginary.
+  if (!portionCheck.tripped && !claimsItemInCart(reply, guardCart)) {
+    if (claimsAddedWithoutMutation(reply, cartItems, guardCart)) {
+      console.warn(`[chat-sms] GUARD 1d (phantom-add) tripped (conv=${conversation.id}). Reply claimed add but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+      reply = "Sorry, I didn't actually add that — let me try again. What would you like?";
+    }
   }
 
   // ── Guard 2: order confirmation + no pickup name → ask for it ──────────
