@@ -179,13 +179,14 @@ const ORDERING_TOOLS = [
   },
   {
     name: "modify_item",
-    description: "Change the quantity or modifiers of a cart item.",
+    description: "Change the quantity, modifiers, or options of a cart item. Use this to swap bread type, add/remove modifiers, change quantity, or update option group selections.",
     input_schema: {
       type: "object",
       properties: {
         menu_item_id: { type: "string" },
         quantity:     { type: "integer", minimum: 1 },
-        modifiers:    { type: "array", items: { type: "string" } },
+        modifiers:    { type: "array", items: { type: "string" }, description: "Full list of modifiers to set (replaces existing)" },
+        options:      { type: "object", description: "Option group selections, e.g. {\"Bread Type\": [\"Everything Bagel\"]}. Keys are group names, values are arrays of chosen names.", additionalProperties: { type: "array", items: { type: "string" } } },
       },
       required: ["menu_item_id"],
     },
@@ -507,7 +508,7 @@ TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliv
 AVAILABLE MENU:
 ${menuStr}
 ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a customer asks, tell them we're temporarily out): ${soldOutNames.join(", ")}\n` : ""}${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these exactly):\n${shop.ai_instructions}\n` : ""}${testModeDirective}
-PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field.
+PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
 ${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}` : ""}
@@ -526,7 +527,7 @@ RULES:
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
-- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items.
+- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
 - DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
@@ -545,7 +546,10 @@ RULES:
 - REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), you MUST ask the customer for their choices BEFORE calling add_item. Example: "What kind of bread -- roll, bagel, or english muffin?" Keep it casual like a real deli counter. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
 - OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
 - OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
-- COMBO ITEMS: Items in the "Bagel With" category (e.g. "Bagel with Plain Cream Cheese", "Bagel with Flavored Cream Cheese") ALREADY INCLUDE the bagel. Do NOT add a standalone bagel AND a "Bagel With" item separately. When a customer says "cinnamon raisin bagel with cream cheese", add ONE item from "Bagel With" (e.g. "Bagel with Plain Cream Cheese" at $3.50) and note the bagel flavor choice. NEVER double-charge by adding a standalone bagel plus a spread item.
+- EXACT-NAME MATCHING: When a customer orders a menu item by its EXACT name (e.g. "Pumpernickel Bagel", "Everything Bagel", "Bagel with Jelly"), acknowledge it and add it immediately. Do NOT ask about cream cheese, butter, or other add-ons that are SEPARATE menu items in the "Bagel With" or "Cream Cheese Spread" categories. A plain bagel is a complete order at its listed price. Only ask about add-ons if the customer explicitly asks for a variation ("with cream cheese") or if the item has modifiers the customer must choose.
+- COMBO ITEMS: Items in the "Bagel With" category (e.g. "Bagel with Plain Cream Cheese", "Bagel with Flavored Cream Cheese", "Bagel with Jelly", "Bagel with Butter") ALREADY INCLUDE the bagel and are COMPLETE standalone items at their listed price. Do NOT add a standalone bagel AND a "Bagel With" item separately. Do NOT ask for a base bagel flavor for "Bagel With" items — just add them directly. When a customer says "cinnamon raisin bagel with cream cheese", add ONE item from "Bagel With" (e.g. "Bagel with Plain Cream Cheese" at $3.50) and note the bagel flavor choice. NEVER double-charge by adding a standalone bagel plus a spread item.
+- BAGEL WITH PRICING: Every "Bagel With" item's listed price is the COMPLETE price for that bagel-and-spread combination, no matter how low the price. "Bagel with Jelly" at $0.75 is a full standalone item — it is NOT an add-on or surcharge. The phrase "(additional charge)" in descriptions is internal menu wording; ignore it for classification. The price column is authoritative: if an item has its own row and price in the menu, it is a complete standalone item. Add it directly — never ask for a base bagel flavor.
+- UPSELL GUARD: When suggesting upsells, ONLY suggest items that exist in the AVAILABLE MENU above. Never invent items or use language not in the menu (do not say "tub", "pint", "side container" unless the menu uses those exact words). Use menu item names exactly as shown.
 - CREAM CHEESE DISAMBIGUATION: This menu has TWO types of cream cheese products. (1) "Bagel With" items -- a single bagel WITH cream cheese already on it. (2) "Cream Cheese Spread (per pound)" -- a full pound of cream cheese to take home. If a customer just says "cream cheese" after ordering bagels, ask ONE time: "Do you want cream cheese on a bagel ($3.50-$4.95) or a pound of cream cheese spread to go ($10.95-$13.95)?" Then REMEMBER their answer. NEVER ask again. If they say "by the pound" or "a pound" at ANY point, they want the Spread. Use add_item immediately. When adding a "Bagel With" item that has cream cheese variants (Plain, Flavored, etc.), if the customer did NOT specify which variant, ask which one they want BEFORE adding. NEVER assume a variant.
 - CONTEXT MEMORY: Pay close attention to what the customer said in previous messages. If they already told you what type/flavor they want, do NOT ask again. If they said "jalapeno cheddar" two messages ago, you KNOW the flavor. Do not lose track.
 - TOASTED PROMPT: After adding a "Bagel With" item (cream cheese bagel) or a breakfast sandwich, if the customer has NOT already mentioned toasting preference, ask: "Want that toasted?" Keep it casual and brief, just like a real bagel shop counter. If they already said "toasted" or "not toasted" in their message, do NOT ask -- just note it. Only ask ONCE per order, not for every item. Do NOT ask about toasting for bundle orders (dozen, half dozen, baker's dozen) or standalone plain bagels -- those are take-home items.
@@ -596,6 +600,12 @@ async function executeTool(
         return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}. Valid options for ${menuItem.name}: ${validMods.join(", ") || "none"}` } };
       }
 
+      // Sum modifier price adjustments
+      const modPriceCents = inputMods.reduce((sum, modName) => {
+        const mod = menuItem.modifiers_json?.find(m => m.name === modName);
+        return sum + (mod?.price_cents ?? 0);
+      }, 0);
+
       // Validate option groups
       const itemGroups = menuItem.option_groups || [];
       const inputOptions = ((input as any).options || {}) as Record<string, string[]>;
@@ -624,8 +634,9 @@ async function executeTool(
       if (existing >= 0) {
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
+        (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents, modifiers: inputMods, options: Object.keys(inputOptions).length > 0 ? inputOptions : undefined });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: Object.keys(inputOptions).length > 0 ? inputOptions : undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -643,8 +654,8 @@ async function executeTool(
     }
 
     case "modify_item": {
-      const { menu_item_id, quantity, modifiers } = input as {
-        menu_item_id: string; quantity?: number; modifiers?: string[];
+      const { menu_item_id, quantity, modifiers, options } = input as {
+        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>;
       };
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not in cart." } };
@@ -655,9 +666,21 @@ async function executeTool(
         const invalidMods = modifiers.filter(m => !validMods.includes(m));
         if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
         (cart[idx] as CartItem).modifiers = modifiers;
+        // Recalculate price with modifier adjustments
+        if (menuItem) {
+          const modPriceCents = modifiers.reduce((sum, modName) => {
+            const mod = menuItem.modifiers_json?.find(m => m.name === modName);
+            return sum + (mod?.price_cents ?? 0);
+          }, 0);
+          const basePrice = menuItem.price_cents;
+          (cart[idx] as CartItem).price_cents = basePrice + modPriceCents;
+        }
+      }
+      if (options !== undefined) {
+        (cart[idx] as CartItem).options = options;
       }
       await saveCart(supabase, cartId, cart, "building");
-      return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity } };
+      return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity, price: (cart[idx] as CartItem).price_cents } };
     }
 
     case "clear_cart": {
@@ -1022,7 +1045,8 @@ async function runOrderingLoop(
       },
       body: JSON.stringify({
         model:      CHAT_MODEL,
-        max_tokens: 512,
+        max_tokens: 2048,
+        reasoning:  { enabled: false },
         system:     systemPrompt,
         messages,
         tools:      ORDERING_TOOLS,
@@ -1182,6 +1206,28 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): str
   }
   // Has items, just missing the pickup name to submit.
   return "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link.";
+}
+
+// ─── Deterministic order guards ───────────────────────────────────────────────
+
+// Guard 1 helper: detects dollar amounts quoted when the cart is empty.
+// Only fires when cart is empty; a non-empty cart quoting its total is fine.
+function claimsTotal(text: string): boolean {
+  if (!text) return false;
+  const norm = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  return (
+    /\$\d+\.?\d*\s*(?:total|plus|each|comes to|would be|will be|is|cost|for that|covers)/i.test(norm) ||
+    /(?:total|subtotal|comes to|that'?s|that is|cost|price)\s*(?:\$|of\s*\$)\s*\d+/i.test(norm) ||
+    /(?:comes to|totals?|brings? your|your total|order total|that'?ll be|that will be)\s*\$?\s*\d+/i.test(norm)
+  );
+}
+
+// Guard 2 helper: detects customer intent to confirm / place the order.
+function impliesOrderConfirmation(text: string): boolean {
+  if (!text) return false;
+  const norm = text.toLowerCase().trim();
+  return /\b(?:yes|yeah|yep|yup|confirm|sure|place (?:the |my |an )?order|check out|checkout|that[' ]s it|that is it|looks good|all good|go ahead|proceed|go for it|do it|send it|pay|ready|done|that[' ]s all|that is all|all set|i'?m ready|i'?m done|good to go|let'?s go|let'?s do it|place it|ring it up|finalize|submit)\b/i.test(norm) ||
+    /^(?:ok|okay|k|kk|fine|perfect|great|awesome|excellent|fantastic|sounds good|good|yes please|do it|let's do this)[.!]?$/i.test(norm);
 }
 
 function twimlResponse(message: string): Response {
@@ -2382,7 +2428,37 @@ Deno.serve(async (req: Request) => {
   let reply       = loopResult.reply;
   let checkoutUrl = loopResult.checkoutUrl;
 
-  // ── POST-TURN PHANTOM-LINK SAFETY NET ────────────────────────────────────
+  // ── POST-TURN DETERMINISTIC GUARDS ────────────────────────────────────────
+  // These three guards intercept LLM output and apply mechanical rules so
+  // checkout completion is never prompt-hoped. They run in order; each can
+  // replace `reply` and stop further processing.
+
+  // Fetch authoritative cart row ONCE for all guards to use.
+  const { data: guardCartRow } = await supabase
+    .from("order_carts").select("cart_json, pickup_name, phase, stripe_checkout_session_id, order_type")
+    .eq("id", cart.id).single();
+  const guardCart: AnyCartItem[] = (guardCartRow?.cart_json as AnyCartItem[]) ?? cartItems;
+
+  // ── Guard 1: suppress ungrounded totals when cart is empty ─────────────
+  // If the model quotes a dollar amount ("$8.99 total") but the cart is
+  // actually empty, replace the reply. The LLM can still add items and quote
+  // prices; this just blocks the phantom-total case.
+  if (guardCart.length === 0 && claimsTotal(reply)) {
+    console.warn(`[chat-sms] GUARD 1 (empty-cart total) tripped (conv=${conversation.id}). Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+    reply = "I don't have anything in your cart yet. What would you like to order?";
+  }
+
+  // ── Guard 2: order confirmation + no pickup name → ask for it ──────────
+  // If the customer confirms they want to place the order AND the cart has
+  // items AND no pickup name is stored, deterministically ask for the name
+  // instead of hoping the LLM remembers the PICKUP NAME RULE.
+  const hasPickupName = !!(guardCartRow?.pickup_name as string | undefined);
+  if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
+    console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
+    reply = "Got it! What name should I put this order under for pickup?";
+  }
+
+  // ── POST-TURN PHANTOM-LINK SAFETY NET (Guard 3) ───────────────────────────
   // INVARIANT: a reply that claims a payment link was sent / the order is
   // placed may ONLY go out if a real Stripe checkout session exists this turn.
   //
@@ -2398,11 +2474,6 @@ Deno.serve(async (req: Request) => {
   if (!checkoutUrl && claimsPaymentSent(reply)) {
     console.warn(`[chat-sms] PHANTOM-LINK GUARD tripped (conv=${conversation.id}, cart=${cart.id}). Model claimed payment without submit_order. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
 
-    // Re-read authoritative cart state (cartItems was mutated in-loop; pickup_name lives on the row).
-    const { data: guardCartRow } = await supabase
-      .from("order_carts").select("cart_json, pickup_name, phase, stripe_checkout_session_id")
-      .eq("id", cart.id).single();
-    const guardCart = (guardCartRow?.cart_json as AnyCartItem[]) ?? cartItems;
     const hasItems = guardCart.length > 0;
     const incompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
 
