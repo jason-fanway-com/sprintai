@@ -511,7 +511,7 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}` : ""}
+${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nWith the $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee, the order total is $${((subtotal + SERVICE_FEE_CENTS) / 100).toFixed(2)} (before any delivery fee or tip). When you state the order total, use THIS number — never quote the subtotal as the final total.` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
@@ -2649,10 +2649,24 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // If checkout was created, override the model's reply entirely — prevents hallucinated confirmations
-  const safeReply = checkoutUrl
-    ? "Payment link sent! Tap it to complete your order. Check your text or email."
-    : reply;
+  // If checkout was created, override the model's reply entirely — prevents hallucinated confirmations.
+  // Deterministically state the fee-inclusive total from the authoritative cart row so the service
+  // fee is always disclosed with the payment link (not left to the model, which may quote subtotal only).
+  let safeReply: string;
+  if (checkoutUrl) {
+    const { data: checkoutCart } = await supabase
+      .from("order_carts")
+      .select("service_fee_cents, total_cents")
+      .eq("id", cart.id).single();
+    const totalCents = (checkoutCart?.total_cents as number | null) ?? null;
+    const feeCents = (checkoutCart?.service_fee_cents as number | null) ?? 0;
+    const totalStr = totalCents != null && totalCents > 0
+      ? ` Your total is $${(totalCents / 100).toFixed(2)}${feeCents > 0 ? ` (includes a $${(feeCents / 100).toFixed(2)} service fee)` : ""}.`
+      : "";
+    safeReply = `Payment link sent!${totalStr} Tap it to complete your order. Check your text or email.`;
+  } else {
+    safeReply = reply;
+  }
 
   await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", safeReply);
 
