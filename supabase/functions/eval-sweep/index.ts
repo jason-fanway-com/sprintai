@@ -175,11 +175,20 @@ export async function loadGroundTruth(
       if (menuRow?.id) {
         const { data: items } = await supabase
           .from("menu_items")
-          .select("name, price_cents, category")
+          .select("name, price_cents, category, description, modifiers_json")
           .eq("menu_id", menuRow.id)
           .eq("active", true)
           .order("display_order", { ascending: true });
-        menu = (items ?? []) as JudgeGroundTruth["menu"];
+        // Enrich with description + modifiers so the judge can verify
+        // bot-offered sub-options (bread choices, meat types, upgrades) are
+        // real menu options — matches the test-suite judge ground truth.
+        menu = (items ?? []).map((i: any) => ({
+          name: i.name,
+          price_cents: i.price_cents,
+          category: i.category,
+          description: i.description,
+          modifiers: i.modifiers_json,
+        })) as JudgeGroundTruth["menu"];
         // Real menu ground truth = an in-tenant shop whose latest menu has >=1
         // active item. Empty/absent menu stays low-confidence.
         menuLoaded = menu.length > 0;
