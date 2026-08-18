@@ -73,6 +73,11 @@ build (`shop-chat/dist/` → `public/chat/`). Nothing from `supabase/`,
 
 ### Admin dashboard (manual deploy)
 
+The admin dashboard serves both super-admins (global operator view) and shop
+owners (tenant-scoped self-serve view). Shared pages (Conversations, Quality,
+Production Readiness, Issues, Shop Chat, Financial Reporting) self-scope via
+`useEffectiveTenant()` — super-admins see all, shop owners see only their own.
+
 ```bash
 cd admin-dashboard
 npm run build
@@ -286,10 +291,11 @@ row_type, content_hash, open_questions, validation, owner sign-off). Migration
 real/demo shops). Migration `052` adds test_runs + test_case_results tables
 for the shop conversation test suite. Migration `053` adds read policies
 (super_admin full / shop_owner own-tenant SELECT) so the QA suite is visible
-in the admin dashboard with tenant isolation preserved. Migrations `054`/`055`
-add case-fix tracking to the QA suite: `proposed_fix`, `fix_status` (default
-`open`), and `root_cause` columns on `test_case_results`, so the fix loop can
-record remediation and why a case failed.
+in the admin dashboard with tenant isolation preserved. Migrations `054`/`055` add case-fix tracking to the QA suite: `proposed_fix`,
+`fix_status` (default `open`), and `root_cause` columns on `test_case_results`.
+A `scripts/test-suite/fix.ts` script auto-generates root-cause + proposed-fix via
+LLM for every failing case; the admin dashboard shows these inline alongside
+transcript + judge findings (two-level drill-down: run → case → detail).
 
 ### RLS model
 

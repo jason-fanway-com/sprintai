@@ -240,6 +240,23 @@ These are encoded in the architecture, not just in marketing.
   (own-shop scoping, Store Readiness signal) without logging out or
   impersonating credentials — supporting demos and support, with role-gating
   still enforced server-side.
+- **Shop owners get a real self-serve dashboard.** The dashboard is no longer
+  admin-only. A shop owner logs in to their own sidebar — At a Glance,
+  Conversations, Quality, Production Readiness, Issues, Chat with your shop,
+  Financial Reporting — the same pages SprintAI admins use, but scoped to their
+  own shop. They check their store's readiness score, read their own
+  conversation-quality signal, and track their own issues without ever emailing
+  a SprintAI employee. One page serves both roles (tenant-scoped at query
+  time), so there is nothing per-restaurant to build or maintain. This is the
+  self-serve model made concrete: the owner is in control, Sprint stays out of
+  the loop.
+- **The QA console now explains itself.** The Production Readiness page drills
+  down from a test run into any failing case and shows the transcript, the
+  judge's findings, the root cause, and a proposed fix (with fix status). A
+  failing critical case can never land with an empty root cause — an LLM
+  triage script auto-generates the diagnosis. This turns the QA suite from a
+  pass/fail report into a working log of what was fixed and why, so the team
+  (and the owner) can see the bot getting sharper over time.
 - **10DLC disclosure is in the funnel.** The homepage CTA and footer carry the
   carrier-required message-frequency sentence ("typically 3-8 messages per
   order") so the send path stays compliant and approved numbers stay

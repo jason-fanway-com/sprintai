@@ -86,7 +86,16 @@ sprintai-ordering/
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
-│   └── check-issues.sh       # Issue monitoring helper
+│   ├── check-issues.sh       # Issue monitoring helper
+│   └── test-suite/           # Per-shop conversation QA suite
+│       ├── run.ts            # CLI driver (generates, runs, judges, fixes, persists)
+│       ├── generator.ts      # Auto-generates menu-derived cases per shop
+│       ├── library.ts        # 15 conversational multi-turn + 16 adversarial cases
+│       ├── runner.ts         # Web/simulated multi-turn driver with safety gate
+│       ├── judge.ts          # Rubric judge — grades full transcripts
+│       ├── scorecard.ts      # Aggregate scoring (≥95% pass, 100% critical)
+│       ├── fix.ts            # LLM root-cause + proposed-fix generator for failures
+│       └── persist.ts        # Writes results to test_runs / test_case_results
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/
@@ -138,6 +147,10 @@ sprintai-ordering/
     messy exchanges) judged on the whole transcript, not a single exchange.
 11. `admin-dashboard/src/lib/roles.ts` — role derivation from app_metadata
    (super_admin / shop_owner), route guards, shop-scoped dashboards.
+12. `admin-dashboard/src/lib/useOwnerTenant.ts` — `useEffectiveTenant()` hook
+    that every owner-facing page uses to self-scope to the correct tenant
+    (owner's own, super-admin's preview, or null = global). This is the shared-
+    dashboard design: one page serves both roles, scoping at query time.
 
 ---
 
@@ -294,18 +307,43 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   plus the $0.99/order fee. The legacy 3-tier "SprintAI Chat" pricing
   ($99/$247/$497) and the HVAC/chat-product surfaces are purged from the public
   site and checkout.
-- **The QA suite is now multi-turn.** The per-shop acceptance suite added 15
-  conversational cases: an LLM customer-simulator plays a persona across up to
-  6 turns on one `session_id`, and the Judge grades the whole transcript —
-  catching drift, loops, and lost context that scripted single-turn cases can't.
-  The admin nav labels it "Production Readiness". See
+- **The QA suite is now multi-turn with inline fix tracking.** The per-shop
+  acceptance suite added 15 conversational cases: an LLM customer-simulator plays
+  a persona across up to 6 turns on one `session_id`, and the Judge grades the
+  whole transcript — catching drift, loops, and lost context that scripted
+  single-turn cases can't. The admin dashboard drills down: run → case →
+  transcript + judge findings + root cause + proposed fix, with fix_status
+  (open/proposed/fixed/harness/test-data/wontfix). An LLM fix script
+  (`scripts/test-suite/fix.ts`) auto-generates root-cause analysis for every
+  failing case. The admin nav labels the page "Production Readiness". See
   `docs/specs/2026-08-16-multi-turn-conversational-cases.md`.
 - **The order-taker got sharper.** Modifier price changes (e.g. "add cheese
   +$1") now actually add to the cart item price (was silently dropped — a money
   bug). A multi-item message with one off-menu item now adds the valid items
-  instead of rejecting the whole message. Ordering a plain bagel by exact name
-  no longer triggers a cream-cheese upsell; the bot quotes the menu's exact item
-  names and units.
+  instead of rejecting the whole message (partial acceptance). Ordering a plain
+  bagel by exact name no longer triggers a cream-cheese upsell; combo items like
+  "Bagel with Jelly" at $0.75 are recognized as complete standalone items at
+  their listed price — the bot never asks for a base bagel flavor. The bot
+  quotes the menu's exact item names and units; the prompt enforces item-name
+  precedence: the AVAILABLE MENU is authoritative over SPECIAL INSTRUCTIONS.
+- **The Judge rubric is sharper with fewer false flags.** `wrong_total` fires
+  only when the assistant explicitly states a dollar total. `invented_item` is
+  narrowly scoped to items genuinely absent from the menu, its descriptions,
+  AND modifiers — clarifying questions, real modifiers, and descriptive
+  ingredients are never flagged. The Judge evaluates only assistant messages;
+  customer prompt-injection attempts are never flagged as assistant failures.
+  The menu-ground-truth format now includes `description` and `modifiers`
+  fields so the Judge can accurately distinguish off-menu items from real
+  add-ons.
+- **The admin dashboard is now shared, not admin-only.** Shop owners get their
+  own nav sidebar (At a Glance, Conversations, Quality, Production Readiness,
+  Issues, Chat with your shop, Financial Reporting) — the same pages super-
+  admins use, but tenant-scoped via `useEffectiveTenant()`. A shop owner can
+  see their own conversation quality, run their own test suite, and track their
+  own issues without SprintAI involvement. This is the self-serve dashboard: an
+  owner doesn't need to ask a SprintAI employee what their store's readiness
+  score is — they check it themselves. The Admin⇄Owner toggle lets super-admins
+  preview any shop's owner perspective for demos and support.
 
 ---
 
