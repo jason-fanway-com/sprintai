@@ -70,7 +70,7 @@ export default function IssueDetail() {
         .from('issues')
         .select('*')
         .eq('id', id)
-        .single()
+        .maybeSingle()
       return data as Issue
     },
   })

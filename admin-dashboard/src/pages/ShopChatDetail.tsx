@@ -83,7 +83,7 @@ export default function ShopChatDetail() {
         .from('admin_chat_transcripts')
         .select('*')
         .eq('id', id)
-        .single()
+        .maybeSingle()
       return data as ChatTranscript
     },
   })
@@ -130,7 +130,10 @@ export default function ShopChatDetail() {
           ))}
         </div>
       ) : !transcript ? (
-        <div className="text-center text-gray-400 py-12">Transcript not found</div>
+        <div className="text-center text-gray-400 py-12">
+          <p className="font-medium">Transcript not available</p>
+          <p className="text-sm mt-1">It may have been removed, or it belongs to another account.</p>
+        </div>
       ) : (
         <div className="space-y-6">
           {/* Chat bubbles */}

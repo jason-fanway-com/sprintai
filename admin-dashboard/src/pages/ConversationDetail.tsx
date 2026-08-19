@@ -23,15 +23,15 @@ interface Conversation {
 export default function ConversationDetail() {
   const { id } = useParams<{ id: string }>()
 
-  const { data: conversation } = useQuery<Conversation>({
+  const { data: conversation, isLoading: convLoading } = useQuery<Conversation | null>({
     queryKey: ['conversation', id],
     queryFn: async () => {
       const { data } = await supabase
         .from('conversations')
         .select('*')
         .eq('id', id)
-        .single()
-      return data as Conversation
+        .maybeSingle()
+      return (data as Conversation) ?? null
     },
   })
 
@@ -47,6 +47,20 @@ export default function ConversationDetail() {
     },
     refetchInterval: 10 * 1000, // refresh every 10s for live view
   })
+
+  if (!convLoading && !conversation) {
+    return (
+      <div className="p-8 max-w-3xl">
+        <Link to="/conversations" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 mb-6">
+          <ArrowLeft className="w-4 h-4" /> Back to Conversations
+        </Link>
+        <div className="text-center text-gray-400 py-16">
+          <p className="font-medium">Conversation not found</p>
+          <p className="text-sm mt-1">It may have been removed, or it belongs to another account.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="p-8 max-w-3xl">
