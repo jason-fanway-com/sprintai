@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-16
+Last updated: 2026-08-19
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -326,15 +326,27 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   their listed price — the bot never asks for a base bagel flavor. The bot
   quotes the menu's exact item names and units; the prompt enforces item-name
   precedence: the AVAILABLE MENU is authoritative over SPECIAL INSTRUCTIONS.
+  The checkout flow now explicitly states the fee-inclusive total from the
+  authoritative `order_carts.total_cents` (incl. $0.99 service fee, delivery,
+  tip) — disclosure is code-driven, not model-hoped.
+- **Deterministic grounding guards are live.** Three code-path intercepts in
+  `chat-sms` prevent LLM hallucination: (1) off-menu portion/container words
+  ("tub", "pint") not in the shop's menu vocabulary are suppressed,
+  (2) claims an item is in the cart when the authoritative cart row disagrees
+  (including empty-cart assertions) are blocked, and (3) "added X to your cart"
+  claims when the cart didn't actually mutate this turn are caught. These are
+  code-path intercepts, not prompt preferences — they fire regardless of what
+  the LLM intended.
 - **The Judge rubric is sharper with fewer false flags.** `wrong_total` fires
   only when the assistant explicitly states a dollar total. `invented_item` is
   narrowly scoped to items genuinely absent from the menu, its descriptions,
   AND modifiers — clarifying questions, real modifiers, and descriptive
   ingredients are never flagged. The Judge evaluates only assistant messages;
   customer prompt-injection attempts are never flagged as assistant failures.
-  The menu-ground-truth format now includes `description` and `modifiers`
-  fields so the Judge can accurately distinguish off-menu items from real
-  add-ons.
+  The menu-ground-truth format (`JudgeGroundTruth.menu`) now carries
+  `description` and `modifiers` fields so the Judge can accurately distinguish
+  off-menu items from real add-ons — and the `$0.99` service fee is incorporated
+  into total-price comparison so legit orders don't false-flag.
 - **The admin dashboard is now shared, not admin-only.** Shop owners get their
   own nav sidebar (At a Glance, Conversations, Quality, Production Readiness,
   Issues, Chat with your shop, Financial Reporting) — the same pages super-

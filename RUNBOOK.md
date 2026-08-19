@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-16
+Last updated: 2026-08-19
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -361,6 +361,16 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     `SET LOCAL app.allow_protected_delete = 'on'`. This is the data-layer
     defense against test/QA runs accidentally destroying a real shop's menu.
 
+11. **Deterministic grounding guards (chat-sms)**: Three code-path intercepts
+    prevent the LLM from hallucinating in ways that prompt rules alone can't
+    stop. Guard 1b: suppress replies inventing off-menu container/portion
+    words ("tub", "pint") not in the shop's menu vocabulary. Guard 1c:
+    suppress claims an item is in the cart when the authoritative cart row
+    disagrees (including empty-cart assertions). Guard 3b: suppress "added X
+    to your cart" claims when the cart didn't actually mutate this turn. These
+    are code-path intercepts, not prompt-preference — they fire deterministically
+    regardless of what the LLM intended.
+
 ---
 
 ## Monitoring & alerting
@@ -370,6 +380,8 @@ transcript + judge findings (two-level drill-down: run → case → detail).
   is never flagged as an assistant failure. `wrong_total` fires only on an
   explicit stated total; `invented_item` is narrowly scoped to items truly
   absent from the menu, its descriptions, and modifiers — fewer false flags.
+  The ground-truth format now carries `description` and `modifiers` per item
+  so the Judge can distinguish off-menu items from real add-ons and ingredients.
 - `issue-detector` scans evals for patterns: error spikes, quality decline,
   compliance violations → writes to `issues` table + optional Telegram alerts.
 - iMessage bridge logs to `/tmp/sprintai-imsg-bridge.log`.
