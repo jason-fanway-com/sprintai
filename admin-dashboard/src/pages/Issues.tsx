@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, AlertCircle, Flag, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useEffectiveTenant } from '../lib/useOwnerTenant'
 
 interface Issue {
   id: string
@@ -47,9 +48,10 @@ export default function Issues() {
   const [page, setPage] = useState(1)
   const [sevFilter, setSevFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('open')
+  const { isOwnerView, effTenant } = useEffectiveTenant()
 
   const { data, isLoading } = useQuery<{ issues: Issue[]; total: number }>({
-    queryKey: ['issues', page, sevFilter, statusFilter],
+    queryKey: ['issues', page, sevFilter, statusFilter, effTenant],
     queryFn: async () => {
       let query = supabase
         .from('issues')
@@ -58,12 +60,14 @@ export default function Issues() {
         .order('detected_at', { ascending: false })
         .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
 
+      if (effTenant) query = query.eq('tenant_id', effTenant)
       if (sevFilter !== 'all') query = query.eq('severity', sevFilter)
       if (statusFilter !== 'all') query = query.eq('status', statusFilter)
 
       const { data, count } = await query
       return { issues: (data ?? []) as Issue[], total: count ?? 0 }
     },
+    enabled: !isOwnerView || !!effTenant,
   })
 
   return (

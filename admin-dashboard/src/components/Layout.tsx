@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
@@ -21,7 +21,7 @@ const superAdminNav = [
   { to: '/tenants', label: 'Tenants', icon: Users },
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Conv Quality', icon: ShieldCheck },
-  { to: '/test-suite', label: 'Test Suite', icon: FlaskConical },
+  { to: '/test-suite', label: 'Production Readiness', icon: FlaskConical },
   { to: '/issues', label: 'Issues', icon: AlertTriangle },
   { to: '/shop-chats', label: 'Shop Chats', icon: MessageSquare },
 ]
@@ -35,12 +35,35 @@ const superAdminBottomNav = [
   { to: '/tenants', label: 'Tenants', icon: Users },
 ]
 
+// Shop-owner left sidebar nav
+const shopOwnerNav = [
+  { to: '/shop-owner', label: 'At a Glance', icon: LayoutDashboard },
+  { to: '/conversations', label: 'Conversation', icon: MessageSquare },
+  { to: '/conversation-quality', label: 'Quality', icon: ShieldCheck },
+  { to: '/test-suite', label: 'Production Readiness', icon: FlaskConical },
+  { to: '/issues', label: 'Issues', icon: AlertTriangle },
+  { to: '/shop-chats', label: 'Chat with your shop', icon: Store },
+  { to: '/financial-reporting', label: 'Financial Reporting', icon: DollarSign },
+]
+
+// Bottom nav for shop owners (mobile)
+const shopOwnerBottomNav = [
+  { to: '/shop-owner', label: 'Glance', icon: LayoutDashboard },
+  { to: '/conversations', label: 'Chats', icon: MessageSquare },
+  { to: '/test-suite', label: 'Readiness', icon: FlaskConical },
+  { to: '/issues', label: 'Issues', icon: AlertTriangle },
+  { to: '/financial-reporting', label: 'Money', icon: DollarSign },
+]
+
 export default function Layout({ user, role: _role }: LayoutProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const { isSuperAdmin } = useRole()
+  const { isSuperAdmin, isShopOwner } = useRole()
   const { mode, previewTenantId, setMode, setPreview } = useView()
+
+  // True when the view should render the shop-owner sidebar (real owner OR super-admin previewing as owner)
+  const isOwnerView = isShopOwner || (isSuperAdmin && mode === 'owner')
 
   // Shop list for the owner-preview picker (super-admin only; RLS lets admins see all).
   const { data: allShops } = useQuery<{ id: string; name: string; tenant_id: string }[]>({
@@ -63,10 +86,12 @@ export default function Layout({ user, role: _role }: LayoutProps) {
     navigate('/login')
   }
 
-  // Shop owners get a minimal nav (no tenant switcher, no command center, etc.)
-  // Their main nav is on the ShopOwnerDashboard tile cards.
-  const sidebarNav = isSuperAdmin ? superAdminNav : []
-  const bottomNav = isSuperAdmin ? superAdminBottomNav : []
+  // ── nav selection ──────────────────────────────────────────────────────────
+  const sidebarNav = isOwnerView ? shopOwnerNav : isSuperAdmin ? superAdminNav : []
+  const bottomNav = isOwnerView ? shopOwnerBottomNav : isSuperAdmin ? superAdminBottomNav : []
+
+  const showSidebar = isSuperAdmin || isOwnerView
+  const showBottomNav = (isSuperAdmin || isOwnerView) && bottomNav.length > 0
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
@@ -75,14 +100,14 @@ export default function Layout({ user, role: _role }: LayoutProps) {
         <div className="flex items-center gap-2">
           <Zap className="w-5 h-5 text-brand-500" />
           <span className="font-bold">SprintAI</span>
-          <span className="text-xs text-gray-400">Admin</span>
+          <span className="text-xs text-gray-400">{isOwnerView ? 'Owner' : 'Admin'}</span>
         </div>
         <div className="flex items-center gap-2">
           {/* Mobile user avatar */}
           <div className="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-medium">
             {user?.email?.[0]?.toUpperCase() ?? 'A'}
           </div>
-          {isSuperAdmin && (
+          {showSidebar && (
             <button
               onClick={() => setSidebarOpen(true)}
               className="p-2 -mr-1 text-gray-300 hover:text-white"
@@ -94,8 +119,8 @@ export default function Layout({ user, role: _role }: LayoutProps) {
         </div>
       </header>
 
-      {/* ---- MOBILE SLIDEOVER SIDEBAR (lg:hidden) — super-admin only ---- */}
-      {sidebarOpen && isSuperAdmin && (
+      {/* ---- MOBILE SLIDEOVER SIDEBAR (lg:hidden) ---- */}
+      {sidebarOpen && showSidebar && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           {/* Backdrop */}
           <div
@@ -149,15 +174,15 @@ export default function Layout({ user, role: _role }: LayoutProps) {
         </div>
       )}
 
-      {/* ---- DESKTOP SIDEBAR (hidden on mobile) — super-admin only ---- */}
-      {isSuperAdmin && (
+      {/* ---- DESKTOP SIDEBAR (hidden on mobile) ---- */}
+      {showSidebar && (
         <aside className="hidden lg:flex w-64 bg-gray-900 text-white flex-col flex-shrink-0">
           {/* Logo */}
           <div className="p-6 border-b border-gray-700">
             <div className="flex items-center gap-2">
               <Zap className="w-6 h-6 text-brand-500" />
               <span className="font-bold text-lg">SprintAI</span>
-              <span className="text-xs text-gray-400 ml-1">Admin</span>
+              <span className="text-xs text-gray-400 ml-1">{isOwnerView ? 'Owner' : 'Admin'}</span>
             </div>
           </div>
 
@@ -189,7 +214,7 @@ export default function Layout({ user, role: _role }: LayoutProps) {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">{user?.email}</p>
-                <p className="text-xs text-gray-400">Admin</p>
+                <p className="text-xs text-gray-400">{isOwnerView ? 'Shop Owner' : 'Admin'}</p>
               </div>
             </div>
             <button
@@ -240,8 +265,8 @@ export default function Layout({ user, role: _role }: LayoutProps) {
         <Outlet />
       </main>
 
-      {/* ---- MOBILE BOTTOM NAV (lg:hidden) — super-admin only ---- */}
-      {isSuperAdmin && bottomNav.length > 0 && (
+      {/* ---- MOBILE BOTTOM NAV (lg:hidden) ---- */}
+      {showBottomNav && (
         <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex items-center justify-around safe-area-bottom z-40">
           {bottomNav.map(({ to, label, icon: Icon }) => {
             const isActive = location.pathname === to || location.pathname.startsWith(to + '/')

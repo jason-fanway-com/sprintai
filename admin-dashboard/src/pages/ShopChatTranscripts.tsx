@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useEffectiveTenant } from '../lib/useOwnerTenant'
 
 interface Shop {
   id: string
@@ -52,17 +53,24 @@ export default function ShopChatTranscripts() {
   const [page, setPage] = useState(1)
   const [shopFilter, setShopFilter] = useState<string>('all')
   const [outcomeFilter, setOutcomeFilter] = useState<string>('all')
+  const { isOwnerView, effTenant } = useEffectiveTenant()
 
   const { data: shops } = useQuery<Shop[]>({
-    queryKey: ['shops-list'],
+    queryKey: ['shops-list', effTenant],
     queryFn: async () => {
-      const { data } = await supabase.from('shops').select('id, name').order('name')
+      let q = supabase.from('shops').select('id, name').order('name')
+      if (effTenant) q = q.eq('tenant_id', effTenant)
+      const { data } = await q
       return (data ?? []) as Shop[]
     },
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shop-chat-transcripts', page, shopFilter, outcomeFilter],
+    queryKey: ['shop-chat-transcripts', page, shopFilter, outcomeFilter, effTenant],
+    // Tenant isolation: in owner view, never run until the owner's shop list has
+    // loaded. Without this gate the query fires once with an empty scope and
+    // transiently reads every tenant's transcripts.
+    enabled: !isOwnerView || (!!effTenant && !!shops && shops.length > 0),
     queryFn: async () => {
       let q = supabase
         .from('admin_chat_transcripts')
@@ -75,6 +83,15 @@ export default function ShopChatTranscripts() {
 
       if (shopFilter !== 'all') q = q.eq('shop_id', shopFilter)
       if (outcomeFilter !== 'all') q = q.eq('outcome', outcomeFilter)
+      // Tenant isolation for owner view: scope to this owner's shops. Hard-stop
+      // if the scope is somehow empty rather than falling through to unscoped.
+      if (effTenant) {
+        const ownerShopIds = shops?.map((s) => s.id) ?? []
+        if (ownerShopIds.length === 0) {
+          return { transcripts: [] as ChatTranscript[], total: 0 }
+        }
+        q = q.in('shop_id', ownerShopIds)
+      }
 
       const { data: rows, count } = await q
       return { transcripts: (rows ?? []) as ChatTranscript[], total: count ?? 0 }
@@ -106,7 +123,7 @@ export default function ShopChatTranscripts() {
           onChange={(e) => { setShopFilter(e.target.value); setPage(1) }}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
         >
-          <option value="all">All shops</option>
+          <option value="all">{isOwnerView ? 'All my shops' : 'All shops'}</option>
           {shops?.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}

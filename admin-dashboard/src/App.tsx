@@ -27,6 +27,7 @@ import IssueDetail from './pages/IssueDetail'
 import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 import ShopOwnerDashboard from './pages/ShopOwnerDashboard'
 import TestSuite from './pages/TestSuite'
+import FinancialReporting from './pages/FinancialReporting'
 
 // ── route guards ────────────────────────────────────────────────────────────
 // Every protected route uses one of these. Navigation links hiding is
@@ -125,6 +126,17 @@ export default function App() {
             }
           />
 
+          {/* ═══ SHARED routes (super-admin + shop owner, each page self-scopes) ═══ */}
+          <Route path="conversations" element={<Conversations />} />
+          <Route path="conversations/:id" element={<ConversationDetail />} />
+          <Route path="conversation-quality" element={<ConversationQuality />} />
+          <Route path="test-suite" element={<TestSuite />} />
+          <Route path="issues" element={<Issues />} />
+          <Route path="issues/:id" element={<IssueDetail />} />
+          <Route path="shop-chats" element={<ShopChatTranscripts />} />
+          <Route path="shop-chats/:id" element={<ShopChatDetail />} />
+          <Route path="financial-reporting" element={<FinancialReporting />} />
+
           {/* ═══ SUPER-ADMIN ONLY ═══ */}
           <Route
             path="dashboard"
@@ -147,30 +159,6 @@ export default function App() {
             element={
               <SuperAdminRoute role={roleInfo}>
                 <TenantDetail />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="conversations"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <Conversations />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="conversations/:id"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <ConversationDetail />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="conversation-quality"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <ConversationQuality />
               </SuperAdminRoute>
             }
           />
@@ -203,46 +191,6 @@ export default function App() {
             element={
               <SuperAdminRoute role={roleInfo}>
                 <ChatTest />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="shop-chats"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <ShopChatTranscripts />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="shop-chats/:id"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <ShopChatDetail />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="test-suite"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <TestSuite />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="issues"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <Issues />
-              </SuperAdminRoute>
-            }
-          />
-          <Route
-            path="issues/:id"
-            element={
-              <SuperAdminRoute role={roleInfo}>
-                <IssueDetail />
               </SuperAdminRoute>
             }
           />

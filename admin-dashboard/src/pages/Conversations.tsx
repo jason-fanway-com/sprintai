@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { MessageSquare, Phone } from 'lucide-react'
 import { adminFetch, supabase } from '../lib/supabase'
+import { useEffectiveTenant } from '../lib/useOwnerTenant'
 
 interface Conversation {
   id: string
@@ -23,21 +24,26 @@ interface ConversationsResponse {
 // For simplicity this loads all conversations directly
 export default function Conversations() {
   const [page, setPage] = useState(1)
+  const { isOwnerView, effTenant } = useEffectiveTenant()
 
   // We need to list conversations across all tenants
   // Admin API exposes /tenants/:id/conversations per tenant
   // For the global view we query via a special admin endpoint
   const { data, isLoading } = useQuery<ConversationsResponse>({
-    queryKey: ['all-conversations', page],
+    queryKey: ['all-conversations', page, effTenant],
     queryFn: async () => {
-      const { data: convs, count } = await supabase
+      let q = supabase
         .from('conversations')
         .select('*, messages(count)', { count: 'exact' })
         .order('last_message_at', { ascending: false })
         .range((page - 1) * 25, page * 25 - 1)
+      if (effTenant) q = q.eq('tenant_id', effTenant)
+
+      const { data: convs, count } = await q
 
       return { conversations: (convs ?? []) as Conversation[], total: count ?? 0 }
     },
+    enabled: !isOwnerView || !!effTenant,
   })
 
   return (

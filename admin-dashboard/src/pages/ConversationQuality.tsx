@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ShieldCheck, ShieldAlert, AlertTriangle, ChevronDown, ChevronRight, Stethoscope } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useEffectiveTenant } from '../lib/useOwnerTenant'
 
 // Conversation Quality panel (Spec 06 §4) — reads conversation_evals written by
 // the async judge worker. READ-ONLY view: clean-vs-flagged counts per tenant,
@@ -94,16 +95,24 @@ export default function ConversationQuality() {
   // Shown by default but de-emphasized; this toggle hides them entirely.
   const [showLowConfidence, setShowLowConfidence] = useState<boolean>(true)
 
+  // Tenant isolation: shop owners (and super-admins previewing as owner) see
+  // ONLY their own tenant's evals. effTenant null = super-admin global view.
+  const { isOwnerView, effTenant } = useEffectiveTenant()
+
+  // In owner view the tenant filter is fixed to the owner's tenant (no dropdown).
+  const activeTenant = isOwnerView ? effTenant : tenantFilter
+
   const { data: tenants } = useQuery<Tenant[]>({
     queryKey: ['cq-tenants'],
     queryFn: async () => {
       const { data } = await supabase.from('tenants').select('id, name').order('name')
       return (data ?? []) as Tenant[]
     },
+    enabled: !isOwnerView,
   })
 
   const { data, isLoading } = useQuery<EvalRow[]>({
-    queryKey: ['conversation-evals', tenantFilter],
+    queryKey: ['conversation-evals', activeTenant],
     queryFn: async () => {
       let q = supabase
         .from('conversation_evals')
@@ -113,7 +122,7 @@ export default function ConversationQuality() {
         .order('confidence', { ascending: true })
         .order('judged_at', { ascending: false })
         .limit(500)
-      if (tenantFilter !== 'all') q = q.eq('tenant_id', tenantFilter)
+      if (activeTenant) q = q.eq('tenant_id', activeTenant)
       const { data } = await q
       // Default 'high' for any legacy row written before the confidence column
       // existed, so the UI never shows undefined.
@@ -122,6 +131,7 @@ export default function ConversationQuality() {
         confidence: (r.confidence ?? 'high') as Confidence,
       }))
     },
+    enabled: !isOwnerView || !!effTenant,
   })
 
   // Collect flagged eval IDs for triage queries
@@ -221,9 +231,10 @@ export default function ConversationQuality() {
             Show low-confidence{lowConfCount > 0 ? ` (${lowConfCount})` : ''}
           </label>
           <select
-            value={tenantFilter}
+            value={activeTenant ?? 'all'}
             onChange={(e) => setTenantFilter(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            disabled={isOwnerView}
           >
             <option value="all">All tenants</option>
             {tenants?.map((t) => (

@@ -1,12 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { FlaskConical, CheckCircle2, XCircle, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
+import { FlaskConical, CheckCircle2, XCircle, ChevronDown, ChevronRight, AlertTriangle, MessageSquare, Gavel, Wrench } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useEffectiveTenant } from '../lib/useOwnerTenant'
 
 /**
  * ADMIN VIEW (SprintAI employee) — global QA console.
  * Every shop's test runs, drill into each case + verdict. Operator framing:
  * raw pass/fail, model tier, critical failures. Super-admin only (route-guarded).
+ *
+ * Two-level drill-down: run → cases → case detail (transcript, judge findings,
+ * proposed fix + fix status).
  */
 
 interface Run {
@@ -24,6 +28,22 @@ interface Run {
   shops: { name: string } | null
 }
 
+interface TranscriptTurn {
+  role: string
+  message?: string
+  reply?: string
+  phase?: string
+  cart?: unknown[]
+}
+
+interface SuccessCriterion {
+  id: string
+  check_id?: string
+  description: string
+}
+
+type FixStatus = 'open' | 'proposed' | 'fixed' | 'harness' | 'test-data' | 'wontfix'
+
 interface CaseResult {
   id: string
   case_id: string
@@ -32,6 +52,38 @@ interface CaseResult {
   passed: boolean | null
   verdict: string | null
   reason: string | null
+  transcript: TranscriptTurn[] | null
+  success_criteria: SuccessCriterion[] | null
+  root_cause: string | null
+  proposed_fix: string | null
+  fix_status: FixStatus | null
+}
+
+const FIX_STATUS_LABELS: Record<FixStatus, string> = {
+  open: 'Open',
+  proposed: 'Proposed',
+  fixed: 'Fixed',
+  harness: 'Harness',
+  'test-data': 'Test data',
+  wontfix: "Won't fix",
+}
+
+function fixStatusClass(s: FixStatus | null) {
+  switch (s) {
+    case 'fixed':
+      return 'bg-green-100 text-green-700'
+    case 'proposed':
+      return 'bg-blue-100 text-blue-700'
+    case 'harness':
+      return 'bg-purple-100 text-purple-700'
+    case 'test-data':
+      return 'bg-amber-100 text-amber-700'
+    case 'wontfix':
+      return 'bg-gray-200 text-gray-600'
+    case 'open':
+    default:
+      return 'bg-gray-100 text-gray-500'
+  }
 }
 
 function pct(n: number | null) {
@@ -47,17 +99,23 @@ function passClass(p: number | null) {
 
 export default function TestSuite() {
   const [openRun, setOpenRun] = useState<string | null>(null)
+  const [openCase, setOpenCase] = useState<string | null>(null)
+  const { isOwnerView, effTenant } = useEffectiveTenant()
 
   const { data: runs, isLoading, error } = useQuery<Run[]>({
-    queryKey: ['test-runs'],
+    queryKey: ['test-runs', effTenant],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from('test_runs')
         .select('*, shops(name)')
         .order('started_at', { ascending: false })
+      // Tenant isolation: shop owners see ONLY their own shop's runs.
+      if (effTenant) q = q.eq('tenant_id', effTenant)
+      const { data, error } = await q
       if (error) throw error
       return (data ?? []) as Run[]
     },
+    enabled: !isOwnerView || !!effTenant,
   })
 
   const { data: cases } = useQuery<CaseResult[]>({
@@ -81,7 +139,7 @@ export default function TestSuite() {
           <FlaskConical className="w-5 h-5 text-brand-600" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Test Suite</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Production Readiness</h1>
           <p className="text-gray-500 text-sm">Conversation QA runs across all shops — pre-live acceptance + drift battery.</p>
         </div>
       </div>
@@ -111,7 +169,10 @@ export default function TestSuite() {
           return (
             <div key={run.id} className="card overflow-hidden">
               <button
-                onClick={() => setOpenRun(isOpen ? null : run.id)}
+                onClick={() => {
+                  setOpenRun(isOpen ? null : run.id)
+                  setOpenCase(null)
+                }}
                 className="w-full flex items-center gap-4 p-4 text-left hover:bg-gray-50 transition-colors"
               >
                 {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -140,23 +201,12 @@ export default function TestSuite() {
                     <span>status: {run.status}</span>
                   </div>
                   {(cases ?? []).map((c) => (
-                    <div key={c.id} className="flex items-start gap-3 px-4 py-3">
-                      {c.passed ? (
-                        <CheckCircle2 className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">{c.case_id}</span>
-                          {c.criticality === 'critical' && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-50 text-red-600">CRITICAL</span>
-                          )}
-                          <span className="text-[10px] text-gray-400">{c.category}</span>
-                        </div>
-                        {c.reason && <p className="text-xs text-gray-500 mt-0.5">{c.reason}</p>}
-                      </div>
-                    </div>
+                    <CaseRow
+                      key={c.id}
+                      c={c}
+                      open={openCase === c.id}
+                      onToggle={() => setOpenCase(openCase === c.id ? null : c.id)}
+                    />
                   ))}
                 </div>
               )}
@@ -164,6 +214,128 @@ export default function TestSuite() {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function CaseRow({ c, open, onToggle }: { c: CaseResult; open: boolean; onToggle: () => void }) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+      >
+        {open ? <ChevronDown className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />}
+        {c.passed ? (
+          <CheckCircle2 className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+        ) : (
+          <XCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-900">{c.case_id}</span>
+            {c.criticality === 'critical' && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-50 text-red-600">CRITICAL</span>
+            )}
+            <span className="text-[10px] text-gray-400">{c.category}</span>
+          </div>
+          {c.reason && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{c.reason}</p>}
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 pl-11 space-y-4">
+          {/* Judge findings */}
+          <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50">
+            <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 mb-2">
+              <Gavel className="w-3.5 h-3.5" /> Judge findings
+              {c.verdict && (
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${c.passed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  {c.verdict}
+                </span>
+              )}
+            </div>
+            {c.reason ? (
+              <p className="text-xs text-gray-700">{c.reason}</p>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No findings recorded.</p>
+            )}
+
+            {c.success_criteria && c.success_criteria.length > 0 && (
+              <div className="mt-3">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Success criteria</p>
+                <ul className="space-y-1">
+                  {c.success_criteria.map((crit) => (
+                    <li key={crit.id} className="text-xs text-gray-600 flex gap-1.5">
+                      <span className="text-gray-400">•</span>
+                      <span>{crit.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Root cause + proposed fix + status */}
+          <div className="border border-gray-100 rounded-lg p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 mb-2">
+              <Wrench className="w-3.5 h-3.5" /> Remediation
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${fixStatusClass(c.fix_status)}`}>
+                {c.fix_status ? FIX_STATUS_LABELS[c.fix_status] ?? c.fix_status : 'pending'}
+              </span>
+            </div>
+            {c.root_cause ? (
+              <div className="mb-2">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Root cause</p>
+                <p className="text-xs text-gray-800 whitespace-pre-wrap">{c.root_cause}</p>
+              </div>
+            ) : (
+              c.passed ? (
+                <p className="text-xs text-gray-400 italic">Passed — no remediation needed.</p>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No root cause recorded.</p>
+              )
+            )}
+            {c.proposed_fix ? (
+              <div>
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Proposed fix</p>
+                <p className="text-xs text-gray-700 whitespace-pre-wrap">{c.proposed_fix}</p>
+              </div>
+            ) : (
+              !c.passed && <p className="text-xs text-gray-400 italic">No fix proposed yet.</p>
+            )}
+          </div>
+
+          {/* Transcript */}
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 mb-2">
+              <MessageSquare className="w-3.5 h-3.5" /> Transcript
+            </div>
+            {c.transcript && c.transcript.length > 0 ? (
+              <div className="space-y-2">
+                {c.transcript.map((t, i) => (
+                  <div key={i} className="text-xs">
+                    {t.message != null && t.message !== '' && (
+                      <div className="flex gap-2">
+                        <span className="text-[10px] font-semibold uppercase text-gray-400 w-14 flex-shrink-0 mt-0.5">customer</span>
+                        <span className="text-gray-800 bg-gray-100 rounded px-2 py-1">{t.message}</span>
+                      </div>
+                    )}
+                    {t.reply != null && t.reply !== '' && (
+                      <div className="flex gap-2 mt-1">
+                        <span className="text-[10px] font-semibold uppercase text-brand-500 w-14 flex-shrink-0 mt-0.5">assistant</span>
+                        <span className="text-gray-700 bg-brand-50 rounded px-2 py-1">{t.reply}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No transcript recorded.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
