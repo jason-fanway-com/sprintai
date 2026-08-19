@@ -20,8 +20,16 @@ function getDefaultRange(): { from: string; to: string } {
 
 type RangePreset = "today" | "week" | "month" | "custom";
 
-export default function ShopFinancialsPage() {
-  const { id } = useParams<{ id: string }>();
+interface ShopFinancialsPageProps {
+  /** When provided, scope to this shop instead of the URL param (owner embed). */
+  shopId?: string;
+  /** Hide the "Back to Shop" link + drop the outer padding wrapper (embedded use). */
+  embedded?: boolean;
+}
+
+export default function ShopFinancialsPage({ shopId, embedded }: ShopFinancialsPageProps = {}) {
+  const params = useParams<{ id: string }>();
+  const id = shopId ?? params.id;
   const [preset, setPreset] = useState<RangePreset>("month");
   const [customRange, setCustomRange] = useState(getDefaultRange());
 
@@ -76,19 +84,21 @@ export default function ShopFinancialsPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl mx-auto">
+    <div className={embedded ? "" : "p-4 sm:p-8 max-w-6xl mx-auto"}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
-          <Link
-            to={`/shops/${id}`}
-            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-1"
-          >
-            <ArrowLeft className="w-3 h-3" />
-            Back to Shop
-          </Link>
+          {!embedded && (
+            <Link
+              to={`/shops/${id}`}
+              className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-1"
+            >
+              <ArrowLeft className="w-3 h-3" />
+              Back to Shop
+            </Link>
+          )}
           <h1 className="text-xl font-bold text-gray-900">
-            Financials{shop ? `: ${shop.name}` : ""}
+            {embedded ? "Financial Reporting" : `Financials${shop ? `: ${shop.name}` : ""}`}
           </h1>
         </div>
         <ExportButton shopId={id} dateRange={dateRange} />
