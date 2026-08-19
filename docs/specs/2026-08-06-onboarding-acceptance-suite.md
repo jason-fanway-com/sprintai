@@ -1,6 +1,6 @@
 # Onboarding Acceptance Test Suite (Go-Live Gate)
 Date: 2026-08-06
-Status: draft
+Status: planned — awaiting Jason go/sequencing (updated 2026-08-19)
 
 ## Problem
 Today a shop can be made live to a customer without any automated proof it behaves correctly — right totals, honors 86, refuses out-of-radius delivery, no test-mode or cross-tenant leak. At one shop a human can eyeball it. At thousands, human QA per shop does not scale and off-vision. Without an automated gate, we either ship unverified shops (quality/liability risk) or keep a human in every onboarding (scaling debt). We need onboarding to end in a machine-run pass/fail gate so a shop only reaches the customer after it demonstrably works.
@@ -47,3 +47,45 @@ Today a shop can be made live to a customer without any automated proof it behav
 - FORK B — RESOLVED (Jason, 2026-08-06): on fail = auto-diagnose + notify + retry, human review as exception (not pure hard-block).
 - FORK C — RESOLVED (Jason, 2026-08-06): radius v1 = straight-line haversine circle. BUT geocoding is a NET-NEW dependency: no geocoding key exists in secrets, .env.example, or any edge function today. BUILD PREREQUISITE — provision a geocoding provider + key (recommend Google Maps Geocoding API; pay-per-use, ~free at low volume, cost scales with orders) before implementation. Needs Jason (credential + billing).
 - REMAINING: Token/latency budget cap for running ~100 conversations per shop at onboarding — set at build time.
+
+## Implementation plan + pre-mortem (added 2026-08-19)
+
+**Prerequisite status:** geocoding credential RESOLVED — `GOOGLE_MAPS_API_KEY` is live in
+Supabase secrets (verified 2026-08-19). No code references it yet; no `lat/lng/radius` columns
+on `shops`; no geocode edge fn; no chat address qualifier. All net-new.
+
+### Build slices (sequenced; each gated by Melvin before the next)
+1. **Geocoding + delivery radius** (backlog 3e984e99, PREREQUISITE)
+   - Migration: `shops.origin_lat`, `origin_lng`, `delivery_radius_miles`, geocode timestamp.
+   - Geocode-on-save: edge fn calls Google Geocoding when a shop address is saved; stores lat/lng.
+   - Onboarding/setup field for `delivery_radius_miles`.
+   - Chat qualifier in `chat-sms`: geocode customer address → haversine → in/out; geocode failure
+     fails SAFE (refuse/hand off). **This changes live customer-bot behavior → Melvin + care.**
+2. **Test-case generator** — data-driven from shop menu/hours/delivery/radius; code-computed
+   expected outcomes (LLM only phrases scenarios); ≥100 rows for delivery shops, pickup-only set
+   otherwise; every case has category + MUST/SHOULD tier + expected outcome. New `test_case` table.
+3. **Melvin harness + gate** — run all cases vs `chat-sms` in TEST MODE, parallel background job;
+   per-case verdict = deterministic assertions + reuse `conversation_evals` judge for tone; compute
+   PASS (100% MUST + ≥90% SHOULD); write `shops.go_live_status`; block customer reach unless PASS.
+4. **Fail path + notify** — plain-English diagnosis, notify Sprint + owner, re-run after config fix.
+
+### Pre-mortem — why this fails, and the mitigation
+1. **Live-chat regression from the radius qualifier.** Adding a geocode gate to `chat-sms` could
+   refuse valid orders or add latency to every delivery chat. → Ship slice 1 behind a per-shop flag;
+   Melvin regression-tests the existing NJB/demo flows before enabling; fail-safe = refuse only on
+   clear out-of-radius, hand off (not hard-refuse) on geocode error.
+2. **Cost/latency blowup running ~100 conversations per shop.** At scale this is real money and slow
+   onboarding. → Hard token/latency budget cap per run; parallel background job (onboarding UX never
+   blocks); cheap model tier for generation, judge only on SHOULD/tone cases.
+3. **Flaky gate erodes trust.** A non-deterministic judge failing MUST cases blocks good shops. →
+   MUST cases use CODE assertions only (totals, radius, 86, no test-mode/cross-tenant leak); LLM
+   judge confined to SHOULD/tone where a miss doesn't block go-live.
+4. **Geocoding bill / quota.** Per-address geocoding on every delivery chat could run up cost. →
+   Cache shop origin once at save; cache customer-address geocodes; monitor volume; Google free tier
+   covers low volume.
+5. **Scope creep into drive-time polygons / fees.** → Explicitly out of scope (v1 = haversine circle).
+
+### Decision needed from Jason
+This is a multi-part build touching the live customer bot + go-live gating; it is post-demo per
+scope. Two asks: (a) go-ahead to spend on the full build, and (b) confirm sequencing — build slice 1
+(radius) now, or hold the whole thing until after the NJB demo lands. Status → **planned, awaiting go**.
