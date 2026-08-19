@@ -45,7 +45,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 - The `sprintai-dev` site is git auto-deploy from `main` (build: `npm install && bash scripts/build-public-site.sh`, publish: `public/`).
 - The admin site is **manual deploy** — see "Admin dashboard deploy" below.
 - The `/admin` and `/admin/*` routes on `getsprintai.com` are Netlify proxy rewrites to `sprintai-chat-admin.netlify.app/admin` — the admin source NEVER reaches the root origin.
-- The admin SPA uses `<BrowserRouter basename="/dashboard">`. The deploy-root `_redirects` serves both `/admin/*` (landing at getsprintai.com/admin) and `/dashboard/*` (internal SPA routes), each rewriting to their respective `index.html`.
+- The admin SPA uses `base: "/admin/"` (vite.config.ts) and `<BrowserRouter basename="/admin">` (src/main.tsx). The deploy-root `_redirects` serves `/admin/*` → `/admin/index.html` (SPA fallback; real asset files served first). Verified live 2026-08-19.
 
 ### Supabase project
 
@@ -81,21 +81,21 @@ Production Readiness, Issues, Shop Chat, Financial Reporting) self-scope via
 ```bash
 cd admin-dashboard
 npm run build
-# Vite outputs to dist/ (base="/dashboard/")
-# Copy dist/ contents to deploy-root/admin/ (the proxy route at getsprintai.com/admin)
-cp -r dist/* deploy-root/admin/
-# Deploy to the SEPARATE site:
-netlify deploy --dir admin-dashboard/deploy-root --site sprintai-chat-admin
-# If good:
-netlify deploy --dir admin-dashboard/deploy-root --site sprintai-chat-admin --prod
+# Vite outputs to dist/ (base="/admin/")
+# Sync dist into deploy-root/admin/ (the proxy route at getsprintai.com/admin)
+rm -rf deploy-root/admin/assets && cp -r dist/. deploy-root/admin/
+# Deploy to the SEPARATE site. NOTE: --site by NAME fails ("Not Found");
+# use the site ID e757a50b-e321-400a-91e2-7854e2b0eca0.
+netlify deploy --dir admin-dashboard/deploy-root --site e757a50b-e321-400a-91e2-7854e2b0eca0 --prod
 ```
 
-After deploy, verify: `curl -s https://getsprintai.com/admin/ | head -20` should
-return the admin SPA HTML (proxied from `sprintai-chat-admin`).
+After deploy, verify the FRONT DOOR (not the origin) serves the new JS hash:
+`curl -s https://getsprintai.com/admin/ | grep -o 'assets/index-[^"]*\.js'`
+should match the hash in `admin-dashboard/dist/index.html`.
 
-The live SPA is at `getsprintai.com/admin`; internally it routes under
-`/dashboard/` (Vite `base` + `<BrowserRouter basename>`). The
-`deploy-root/_redirects` has separate rewrites for both path prefixes.
+The live SPA is at `getsprintai.com/admin`; Vite `base` and `<BrowserRouter
+basename>` are BOTH `/admin/`. `deploy-root/_redirects` rewrites `/admin/*` →
+`/admin/index.html` (SPA fallback; Netlify serves real asset files first).
 
 ### Supabase edge functions
 
@@ -404,9 +404,9 @@ transcript + judge findings (two-level drill-down: run → case → detail).
 
 ### Admin dashboard blank page
 - Confirm `sprintai-chat-admin` site has the latest deploy.
-- Confirm `deploy-root/_redirects` has both `/admin/*` and `/dashboard/*` rewrites.
-- Check `admin-dashboard/vite.config.ts` has `base: "/dashboard/"`.
-- The live URL is `getsprintai.com/admin`; the SPA internally routes under `/dashboard/`.
+- Confirm `deploy-root/_redirects` has the `/admin/*` → `/admin/index.html` rewrite.
+- Check `admin-dashboard/vite.config.ts` has `base: "/admin/"` and `src/main.tsx` `basename="/admin"`.
+- The live URL is `getsprintai.com/admin`; the SPA routes under `/admin/`.
 
 ### Edge function deploy fails
 - `supabase functions deploy <name>` — check `supabase/config.toml` has the
