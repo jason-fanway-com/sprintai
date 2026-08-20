@@ -998,6 +998,20 @@ async function saveCart(
   cart:     AnyCartItem[],
   phase:    OrderPhase,
 ): Promise<void> {
+  // ── Guard C: phase="checkout" only after a Stripe session exists ──────
+  // No code path may set phase to checkout unless submit_order has already
+  // created a real Stripe checkout session. Downgrade to "review" otherwise.
+  let resolvedPhase = phase;
+  if (phase === "checkout") {
+    const { data: row } = await supabase
+      .from("order_carts").select("stripe_checkout_session_id")
+      .eq("id", cartId).single();
+    if (!row?.stripe_checkout_session_id) {
+      console.warn(`[chat-sms] GUARD C (saveCart): blocked phase="checkout" — no Stripe session exists for cart=${cartId}. Downgrading to "review".`);
+      resolvedPhase = "review";
+    }
+  }
+
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
       return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
@@ -1006,7 +1020,7 @@ async function saveCart(
     return s + r.price_cents * r.quantity;
   }, 0);
   await supabase.from("order_carts")
-    .update({ cart_json: cart, phase, subtotal_cents: subtotal, total_cents: subtotal })
+    .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal })
     .eq("id", cartId);
 }
 
