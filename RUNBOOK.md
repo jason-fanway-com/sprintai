@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -75,8 +75,12 @@ build (`shop-chat/dist/` → `public/chat/`). Nothing from `supabase/`,
 
 The admin dashboard serves both super-admins (global operator view) and shop
 owners (tenant-scoped self-serve view). Shared pages (Conversations, Quality,
-Production Readiness, Issues, Shop Chat, Financial Reporting) self-scope via
-`useEffectiveTenant()` — super-admins see all, shop owners see only their own.
+Production Readiness, Issues, Shop Chat, Financial Reporting, At a Glance)
+self-scope via `useEffectiveTenant()` — super-admins see all, shop owners see
+only their own. **At a Glance** is the owner's landing page: today's revenue,
+Store Health ring (checkout completion × conversation quality × store readiness),
+KPI row with prior-period deltas, revenue tiles across time ranges, top sellers
+vs no-sales items, last 5 conversations — all tenant-scoped.
 
 ```bash
 cd admin-dashboard
@@ -370,6 +374,16 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     to your cart" claims when the cart didn't actually mutate this turn. These
     are code-path intercepts, not prompt-preference — they fire deterministically
     regardless of what the LLM intended.
+
+12. **Customer-question precedence (chat-sms)**: The bot answers direct
+    customer questions (e.g. "do you have gluten-free bagels?") before
+    advancing the order, even when the question is mixed with declines or
+    order-completion signals. Category-level declines (e.g. asking for a
+    category the shop doesn't carry) get a clean "we don't carry that" without
+    pushing the conversation. Repeated questions get a fresh answer — the bot
+    never ignores a customer question to shortcut to "what else can I add?".
+    This is a prompt-rule in system-prompt CRITICAL tier, enforced alongside
+    the deterministic grounding guards above.
 
 ---
 

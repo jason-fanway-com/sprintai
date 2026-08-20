@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -209,8 +209,9 @@ logic is embedded in the `add_to_cart` and `show_cart` tools.
   assembles the allowlist into `public/`.
 - **Admin dashboard**: `npm run build` in `admin-dashboard/`, copy `dist/` to
   `deploy-root/admin/`, then `netlify deploy --dir deploy-root --site
-  sprintai-chat-admin`. The SPA uses `<BrowserRouter basename="/dashboard">`;
-  `deploy-root/_redirects` has separate rewrites for `/admin/*` and `/dashboard/*`.
+  sprintai-chat-admin`. The SPA uses `<BrowserRouter basename="/admin">`
+  (vite.config.ts `base: "/admin/"`); `deploy-root/_redirects` serves `/admin/*`
+  → `/admin/index.html` (SPA fallback). Verified live 2026-08-19.
 - **Edge functions**: `supabase functions deploy <name>`.
 - **Commit format**: functional prefix (`feat:`, `fix:`, `docs:`, `chore:`).
 
@@ -239,8 +240,8 @@ Secrets live in Supabase/Netlify environment settings, never in code.
 - **The admin dashboard is a separate Netlify site.** It's not in the public
   build. It deploys manually. The proxy in `netlify.toml` routes
   `getsprintai.com/admin` → `sprintai-chat-admin.netlify.app/admin`. The SPA
-  uses `<BrowserRouter basename="/dashboard">`. The deploy-root `_redirects`
-  now serves both `/admin/*` and `/dashboard/*` (internal SPA routes).
+  uses `<BrowserRouter basename="/admin">` (vite.config.ts `base: "/admin/"`);
+  `deploy-root/_redirects` serves `/admin/*` → `/admin/index.html` (SPA fallback).
 - **Role-gating is in the JWT.** Users have `role` (super_admin / shop_owner)
   and `tenant_id` in `app_metadata`. The frontend (`roles.ts`, `RoleContext`)
   reads these and guards routes. Shop owners see only their shop, super_admins
@@ -286,6 +287,28 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   the pickup-only pause message on every greeting (that bug blocked all
   pickup-only shops from taking orders). Only a future `delivery_paused_until`
   triggers the temporary pause message.
+- **The ordering bot now answers direct customer questions regardless of context.**
+  If a customer asks "do you have gluten-free bagels?" while also declining to
+  order more, the bot answers the question before advancing. Questions mixed with
+  declines or order-completion signals are still answered. Category-level
+  declines (e.g. "do you have coffee?" when the shop doesn't carry it) get a
+  clean "we don't carry that" response. Repeated questions still get a fresh
+  answer — the bot never ignores a customer question to push the order forward.
+- **The At a Glance dashboard ships real business data.** Owner landing page
+  shows today's revenue, a Store Health ring (blend of checkout completion,
+  conversation quality, store readiness), KPI row with prior-period deltas,
+  revenue tiles across time ranges, top sellers vs no-sales items, and the last
+  5 conversations — all tenant-scoped via `useEffectiveTenant()`.
+- **Financial Reporting is live for shop owners.** The full shop-financials
+  page (ledger with real Stripe fees, KPIs, revenue chart, payout
+  reconciliation, QuickBooks CSV export) renders owner-scoped at
+  `/financial-reporting` without code duplication — the same page component
+  serves both super-admin (`/shop/:id/financials`) and owner views.
+- **Owner detail pages show real not-found states, not blank screens.**
+  ConversationDetail, IssueDetail, and ShopChatDetail now render a clear
+  "not found — may belong to another account" message instead of a white
+  shell when an RLS-blocked record is accessed. `.single()` → `.maybeSingle()`
+  to prevent zero-row error objects.
 - **The ordering loop only returns when tools are done.** DeepSeek Flash can
   emit `tool_use` blocks and `stop_reason=end_turn` in the same turn (breakfast
   sandwiches). The loop now executes any pending tool calls before returning;
