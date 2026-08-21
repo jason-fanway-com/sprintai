@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -365,15 +365,18 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     `SET LOCAL app.allow_protected_delete = 'on'`. This is the data-layer
     defense against test/QA runs accidentally destroying a real shop's menu.
 
-11. **Deterministic grounding guards (chat-sms)**: Three code-path intercepts
+11. **Deterministic grounding guards (chat-sms)**: Four code-path intercepts
     prevent the LLM from hallucinating in ways that prompt rules alone can't
     stop. Guard 1b: suppress replies inventing off-menu container/portion
     words ("tub", "pint") not in the shop's menu vocabulary. Guard 1c:
     suppress claims an item is in the cart when the authoritative cart row
     disagrees (including empty-cart assertions). Guard 3b: suppress "added X
-    to your cart" claims when the cart didn't actually mutate this turn. These
-    are code-path intercepts, not prompt-preference — they fire deterministically
-    regardless of what the LLM intended.
+    to your cart" claims when the cart didn't actually mutate this turn. Guard
+    C: block `phase=checkout` in `saveCart` when no Stripe checkout session
+    exists — downgrades to `review`. No code path may land a cart in
+    `checkout` phase unless `submit_order` already created a real Stripe
+    session. These are code-path intercepts, not prompt-preference — they fire
+    deterministically regardless of what the LLM intended.
 
 12. **Customer-question precedence (chat-sms)**: The bot answers direct
     customer questions (e.g. "do you have gluten-free bagels?") before

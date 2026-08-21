@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -352,14 +352,16 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   The checkout flow now explicitly states the fee-inclusive total from the
   authoritative `order_carts.total_cents` (incl. $0.99 service fee, delivery,
   tip) — disclosure is code-driven, not model-hoped.
-- **Deterministic grounding guards are live.** Three code-path intercepts in
+- **Deterministic grounding guards are live.** Four code-path intercepts in
   `chat-sms` prevent LLM hallucination: (1) off-menu portion/container words
   ("tub", "pint") not in the shop's menu vocabulary are suppressed,
   (2) claims an item is in the cart when the authoritative cart row disagrees
-  (including empty-cart assertions) are blocked, and (3) "added X to your cart"
-  claims when the cart didn't actually mutate this turn are caught. These are
-  code-path intercepts, not prompt preferences — they fire regardless of what
-  the LLM intended.
+  (including empty-cart assertions) are blocked, (3) "added X to your cart"
+  claims when the cart didn't actually mutate this turn are caught, and
+  (4) a cart cannot be saved with `phase=checkout` unless a Stripe checkout
+  session already exists — downgraded to `review` if not. These are code-path
+  intercepts, not prompt preferences — they fire regardless of what the LLM
+  intended.
 - **The Judge rubric is sharper with fewer false flags.** `wrong_total` fires
   only when the assistant explicitly states a dollar total. `invented_item` is
   narrowly scoped to items genuinely absent from the menu, its descriptions,

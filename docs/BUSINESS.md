@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -160,11 +160,13 @@ These are encoded in the architecture, not just in marketing.
   +$1") now actually add to the cart total. A multi-item message with one
   off-menu item adds the valid items instead of rejecting the whole order.
   Ordering a plain bagel by exact name no longer triggers a cream-cheese
-  upsell. The bot quotes the menu's exact item names and units. Three
+  upsell. The bot quotes the menu's exact item names and units. Four
   deterministic grounding guards now intercept hallucinations before they
   reach the customer: off-menu container words ("tub", "pint"), false
-  cart-contents claims, and phantom "added to cart" confirmations are
-  caught by code-path rules, not just prompted preferences. The checkout
+  cart-contents claims, phantom "added to cart" confirmations, and a
+  phase=checkout guard that prevents a cart from entering checkout without
+  a real Stripe session — all caught by code-path rules, not just prompted
+  preferences. The checkout
   flow now explicitly discloses the fee-inclusive total (subtotal + $0.99
   service fee + delivery + tip) from the authoritative order total —
   disclosure is code-driven, not model-hoped. Customer questions now take
