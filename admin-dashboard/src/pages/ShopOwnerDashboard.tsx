@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
@@ -142,7 +142,7 @@ function HealthRing({ score }: { score: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 export default function ShopOwnerDashboard() {
   const { tenantId, isShopOwner, isSuperAdmin } = useRole()
-  const { mode, previewTenantId } = useView()
+  const { mode, previewTenantId, setMode } = useView()
   const [period, setPeriod] = useState<Period>('today')
 
   const previewing = isSuperAdmin && mode === 'owner'
@@ -325,6 +325,12 @@ export default function ShopOwnerDashboard() {
 
     return { completion, topSellers, deadItems, qualityPct, health, drivers }
   }, [carts, menuItems, quality, readiness])
+
+  // ── Auto-enable owner preview for super-admins landing on this route ────
+  useEffect(() => {
+    if (isSuperAdmin && mode !== 'owner') setMode('owner')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperAdmin])
 
   // ── Guards ───────────────────────────────────────────────────────────────
   if (!asOwner) {
