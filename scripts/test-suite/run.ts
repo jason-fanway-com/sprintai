@@ -147,7 +147,7 @@ for (let i = 0; i < casesToRun.length; i++) {
     const judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
     totalJudgeCost += judge.costCents;
     const status = judge.passed ? "PASS" : "FAIL";
-    console.log(`  → ${status} | ${judge.criteria.filter(c => c.passed).length}/${judge.criteria.length} criteria | cost $${judge.costCents.toFixed(4)}`);
+    console.log(`  → ${status} | ${judge.criteria.filter(c => c.passed).length}/${judge.criteria.length} criteria | cost $${(judge.costCents / 100).toFixed(4)}`);
 
     if (!judge.passed) {
       for (const c of judge.criteria.filter(c => !c.passed)) {
@@ -204,7 +204,7 @@ if (fixFailures > 0) {
 
 const scorecard = buildScorecard(scored);
 console.log(formatScorecard(scorecard, genResult.shop.name));
-console.log(`\nTotal judge cost: $${totalJudgeCost.toFixed(4)}`);
+console.log(`\nTotal judge cost: $${(totalJudgeCost / 100).toFixed(4)}`);
 
 // ── Persist ────────────────────────────────────────────────────────────────
 
