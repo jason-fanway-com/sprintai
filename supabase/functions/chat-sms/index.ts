@@ -1242,9 +1242,9 @@ function buildMenuVocabulary(menu: EffectiveMenuItem[]): Set<string> {
 // flagged when adjacent to words that ARE in the menu vocabulary (meaning the
 // LLM is describing a real item using invented language).
 const OFF_MENU_PORTION_WORDS = [
-  "tub", "pint", "quart", "container", "bucket", "scoop",
-  "jar", "box", "carton", "sack", "baggie", "jug", "vessel", "crock",
-  "bowl", "cup", "glass", "tin", "can", "pot",
+  "tub", "pint", "quart", "scoop",
+  "jar", "carton", "baggie", "jug", "crock",
+  "bowl", "container",
 ];
 
 function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped: boolean; offWord?: string } {
