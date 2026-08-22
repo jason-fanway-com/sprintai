@@ -1258,6 +1258,53 @@ function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped:
   return offWord ? { tripped: true, offWord } : { tripped: false };
 }
 
+// Guard 1e helper: detects when the reply offers a format/size upgrade
+// (e.g. "upgrade to a flagel or wrap") for an item that does NOT list that
+// modifier. Deterministic: modifier availability comes from each item's
+// modifiers_json. Only trips when the reply names an item AND offers a
+// modifier that item genuinely lacks — so it cannot fire on legitimate offers.
+function offersUngroundedUpgrade(
+  reply: string,
+  menu: EffectiveMenuItem[],
+): { tripped: boolean; term?: string } {
+  if (!reply) return { tripped: false };
+  const lower = reply.toLowerCase();
+
+  // Map distinctive modifier word -> full item names (lowercased) that HAVE it.
+  const STOP = new Set(["upgrade","plain","wheat","white","small","large","choose","select","option","extra","side","with","your"]);
+  const termToItems = new Map<string, string[]>();
+  for (const item of menu) {
+    const nm = item.name.toLowerCase();
+    for (const mod of item.modifiers_json ?? []) {
+      for (const w of mod.name.toLowerCase().split(/[^a-z]+/).filter(x => x.length >= 4)) {
+        if (STOP.has(w)) continue;
+        const arr = termToItems.get(w) ?? [];
+        arr.push(nm);
+        termToItems.set(w, arr);
+      }
+    }
+  }
+  if (termToItems.size === 0) return { tripped: false };
+
+  // Which menu items are named in the reply?
+  const namedItems = menu
+    .filter(it => lower.includes(it.name.toLowerCase()))
+    .map(it => it.name.toLowerCase());
+  if (namedItems.length === 0) return { tripped: false }; // can't attribute → no trip
+
+  // Look for upgrade-offer phrasing followed by a guarded modifier term.
+  const offerRe = /(?:upgrade to|make it|want it (?:on|as)|on a|as a|swap (?:it )?(?:to|for))\s+(?:a |an )?([a-z]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = offerRe.exec(lower)) !== null) {
+    const term = m[1];
+    const owners = termToItems.get(term);
+    if (!owners) continue; // not a real menu modifier term → ignore
+    const grounded = namedItems.some(n => owners.includes(n));
+    if (!grounded) return { tripped: true, term };
+  }
+  return { tripped: false };
+}
+
 // Guard 2b helper: detects LLM claims about items being in the cart that don't
 // match the authoritative cart state. Returns the claimed item name, or null.
 function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | null {
@@ -2557,6 +2604,27 @@ Deno.serve(async (req: Request) => {
   if (portionCheck.tripped) {
     console.warn(`[chat-sms] GUARD 1b (off-menu portion) tripped (conv=${conversation.id}). Word "${portionCheck.offWord}" not in menu vocab. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     reply = "Sorry, I described that wrong. What can I get started for you? Let me know and I'll add it right away.";
+  }
+
+  // ── Guard 1e: ungrounded modifier/format upsell ─────────────────────────
+  // If the reply offers an upgrade (flagel/wrap/etc.) for a named item that
+  // does not list that modifier, strip the offending sentence(s) and keep the
+  // rest so the item is still acknowledged. Deterministic: modifier
+  // availability comes from each item's modifiers_json.
+  if (!portionCheck.tripped) {
+    const upgradeCheck = offersUngroundedUpgrade(reply, effectiveMenu);
+    if (upgradeCheck.tripped && upgradeCheck.term) {
+      console.warn(`[chat-sms] GUARD 1e (ungrounded upgrade) tripped (conv=${conversation.id}). Offered "${upgradeCheck.term}" for an item that lacks it. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+      const term = upgradeCheck.term;
+      const offerSentence = new RegExp(`(upgrade to|make it|want it (?:on|as)|on a|as a|swap)[^.!?]*\\b${term}\\b`, "i");
+      const kept = reply
+        .split(/(?<=[.!?\n])\s+/)
+        .filter(s => !offerSentence.test(s.toLowerCase()))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      reply = kept.length >= 15 ? kept : "Let me get that started for you! What else can I get you?";
+    }
   }
 
   // ── Guard 1c: cart-content hallucination ────────────────────────────────
