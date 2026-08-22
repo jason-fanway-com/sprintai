@@ -144,6 +144,10 @@ function checkoutFlow(items: MenuItemRow[], offset: number, counter: number): Te
       { role: "customer", message: `I'll take a ${item.name}` },
       { role: "customer", message: "yes" },
       { role: "customer", message: "checkout" },
+      // A pickup order requires a name; a real customer provides one when asked.
+      // Without this turn the bot can never reach checkout (it must not invent a name),
+      // making the case unwinnable — this supplies the name the bot correctly requires.
+      { role: "customer", message: "Jason" },
     ],
     success_criteria: [
       { id: "reaches_checkout", description: "Bot reaches checkout phase", check_id: "order_not_completed" },
