@@ -24,7 +24,7 @@ const MAX_RETRIES = 8;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":  "*",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -520,11 +520,13 @@ RULES:
 - Never add items not in the available menu
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
-- When cart has items and customer says they are done or asks to check out, show a brief summary and ask for confirmation
+- When cart has items and customer says they are done or asks to check out, reply with the TOTAL and ask for pickup name. Do NOT restate every item in the cart — they just built it, they know what's in it. Example: "That comes to $11.49. What name for pickup?"
+- When confirming before submit_order, reply "$11.49 total. Confirm?" — not the full itemised receipt
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
-- Be friendly but concise
+- Be friendly but concise — every character over 160 costs a segment
 - SERVICE FEE: A $0.99 service fee is added to every order at checkout. When transitioning to checkout (asking for pickup name), always disclose the fee clearly. Example: "Your total comes to $10.50 plus a $0.99 service fee, so $11.49 total. What name should I put this under for pickup?" Always include the service fee in any total or order summary. Never quote only the subtotal as the final price.
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
+- SAFE WORDS: At every decision point where a customer might want to abandon or change something, offer CHANGE to modify or RESTART to begin again. NEVER use the word "cancel" in a prompt or instruction — if a customer cancels, offer CHANGE or RESTART as the alternative.
 - CUSTOMER QUESTIONS (CRITICAL): ALWAYS answer a direct question from the customer explicitly before or alongside advancing the order. If they ask whether you carry an item or category (e.g. "do you have coffee?", "any hot drinks?", "got lattes?"), answer plainly — "We don't carry coffee, sorry" — no matter how many times they've already asked. A question is NEVER an order-completion signal. If the customer asks a question and also says they're done, declines something, or lists more items, answer the question FIRST, then handle the rest. NEVER reply with "what else can I add?" or ask for the pickup name while an unanswered question is on the table. If the customer asks about an entire category you don't carry (coffee, hot drinks, desserts), decline the category clearly (e.g. "We don't carry any coffee or hot drinks — just bagels and sandwiches") — don't fixate on one item.
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
@@ -843,10 +845,21 @@ async function executeTool(
         phase: "checkout",
       }).eq("id", cartId);
 
+      // Short branded link: pay.getsprintai.com/o/<code> → 302 → Supabase → 302 → Stripe
+      // Stripe URL is the fallback path when DNS/DB/provisioning chain fails.
+      const shortCode = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+      supabase.from("pay_links").insert({
+        cart_id:    cartId,
+        short_code: shortCode,
+        stripe_url: session.url!,
+      }).then(({ error }) => {
+        if (error) console.error("[chat-sms] Failed to insert pay_link:", error);
+      });
+      const shortUrl = `https://pay.getsprintai.com/o/${shortCode}`;
       return {
         ok:          true,
-        result:      { checkout_url: session.url, message: "Payment link created. Tell the customer there's one last step: they need to tap the payment link to pay and confirm their order. Do NOT say the order is confirmed or ready. Do NOT say thank you or goodbye yet. Payment is still pending." },
-        checkoutUrl: session.url ?? undefined,
+        result:      { checkout_url: shortUrl, message: "Payment link created. Tell the customer there's one last step: they need to tap the payment link to pay and confirm their order. Do NOT say the order is confirmed or ready. Do NOT say thank you or goodbye yet. Payment is still pending." },
+        checkoutUrl: shortUrl,
         newPhase:    "checkout",
       };
     }
@@ -1607,9 +1620,10 @@ async function sendSmsViaTelnyx(
         `[chat-sms] Telnyx send BLOCKED (likely opt-out) to=${toNumber} ` +
         `code=${errCode} detail=${errDetail ?? "(none)"}`,
       );
-      // Persist opt-out state: update conversation metadata
+      // Persist opt-out state: update conversation metadata + durable table
       if (shopId && toNumber) {
         await persistTelnyxOptOut(supabase, shopId, toNumber, errCode, errDetail);
+        await upsertOptOut(supabase, shopId, toNumber, `telnyx_reject:${errCode ?? "unknown"}`);
       }
     } else {
       console.error(`[chat-sms] Telnyx send failed: ${res.status} ${errText}`);
@@ -1661,6 +1675,85 @@ async function persistTelnyxOptOut(
     console.error(`[chat-sms] persistTelnyxOptOut: failed to update conversation ${conv.id}:`, error.message);
   } else {
     console.log(`[chat-sms] persistTelnyxOptOut: opted out ${toNumber} shop=${shopId} code=${errCode}`);
+  }
+}
+
+/**
+ * Upsert into sms_opt_outs — durable per-(phone, tenant) opt-out.
+ * Called from: proactive STOP handlers, Telnyx rejection path, and web STOP.
+ *
+ * The UNIQUE constraint on (tenant_id, customer_phone) makes this idempotent.
+ * opted_back_at is only cleared when the customer texts START — see the START
+ * handler which calls upsertOptOut with reason="start".
+ */
+async function upsertOptOut(
+  supabase: SupabaseClient,
+  tenantId:  string,
+  phone:     string,
+  reason:    string, // "proactive_stop", "telnyx_reject:40002", "start"
+): Promise<void> {
+  if (!tenantId || !phone) return;
+
+  try {
+    if (reason === "start") {
+      // Customer texted START — mark as opted back in.
+      const { error } = await supabase
+        .from("sms_opt_outs")
+        .update({ opted_back_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId)
+        .eq("customer_phone", phone)
+        .is("opted_back_at", null);
+      if (error) {
+        console.error(`[chat-sms] upsertOptOut START failed for ${phone} shop=${tenantId}:`, error.message);
+      } else {
+        console.log(`[chat-sms] upsertOptOut START: ${phone} shop=${tenantId}`);
+      }
+    } else {
+      // Opt-out: UPSERT to handle repeat STOPs or Telnyx-reject after proactive STOP.
+      const { error } = await supabase
+        .from("sms_opt_outs")
+        .upsert({
+          tenant_id:        tenantId,
+          customer_phone:   phone,
+          opted_out_at:     new Date().toISOString(),
+          opted_out_reason: reason,
+          opted_back_at:    null,
+          updated_at:       new Date().toISOString(),
+        }, { onConflict: "tenant_id, customer_phone" });
+      if (error) {
+        console.error(`[chat-sms] upsertOptOut failed for ${phone} shop=${tenantId}:`, error.message);
+      } else {
+        console.log(`[chat-sms] upsertOptOut: ${phone} shop=${tenantId} reason=${reason}`);
+      }
+    }
+  } catch (e) {
+    // Non-fatal: the STOP reply still goes out, and Telnyx has its own enforcement.
+    console.error(`[chat-sms] upsertOptOut error for ${phone}:`, e);
+  }
+}
+
+/** Check whether a (phone, tenant) pair is currently opted out. */
+async function isOptedOut(
+  supabase: SupabaseClient,
+  tenantId: string,
+  phone:    string,
+): Promise<boolean> {
+  if (!tenantId || !phone) return false;
+  try {
+    const { data, error } = await supabase
+      .from("sms_opt_outs")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("customer_phone", phone)
+      .is("opted_back_at", null)
+      .maybeSingle();
+    if (error) {
+      console.error(`[chat-sms] isOptedOut query error for ${phone}:`, error.message);
+      return false; // Fail open — let Telnyx be the backstop.
+    }
+    return !!data;
+  } catch {
+    return false;
   }
 }
 
@@ -2069,6 +2162,9 @@ Deno.serve(async (req: Request) => {
     const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS.has(upper)) {
       await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_STOP);
+      // Persist opt-out before returning (non-fatal; Telnyx is the backstop).
+      const { data: stopShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
+      if (stopShop?.tenant_id) await upsertOptOut(supabase, stopShop.tenant_id, fromNumber, "proactive_stop");
       return emptyTwiml();
     }
     if (upper === "HELP") {
@@ -2077,6 +2173,8 @@ Deno.serve(async (req: Request) => {
     }
     if (upper === "START") {
       await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_START);
+      const { data: startShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
+      if (startShop?.tenant_id) await upsertOptOut(supabase, startShop.tenant_id, fromNumber, "start");
       return emptyTwiml();
     }
 
@@ -2153,6 +2251,9 @@ Deno.serve(async (req: Request) => {
       const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
       if (STOP_WORDS.has(upper)) {
         await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_STOP);
+        // Persist opt-out before returning (non-fatal; Telnyx is the backstop).
+        const { data: tStopShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
+        if (tStopShop?.tenant_id) await upsertOptOut(supabase, tStopShop.tenant_id, fromNumber, "proactive_stop");
         return jsonResponse({ received: true });
       }
       if (upper === "HELP") {
@@ -2161,6 +2262,8 @@ Deno.serve(async (req: Request) => {
       }
       if (upper === "START") {
         await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_START);
+        const { data: tStartShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
+        if (tStartShop?.tenant_id) await upsertOptOut(supabase, tStartShop.tenant_id, fromNumber, "start");
         return jsonResponse({ received: true });
       }
 
@@ -2273,6 +2376,29 @@ Deno.serve(async (req: Request) => {
 
   const isFirstMessage = !conversation;
 
+  // Lifetime first contact: has this (consumer, shop) pair EVER had a conversation?
+  // Keyed on (tenant_id, customer_phone), not per-session — a returning customer is not
+  // a new first contact, even after months. Used to decide whether to strip the
+  // compliance footer ("Msg & data rates...") from the reply.
+  //
+  // If the current conversation already exists (within 24h window), it is trivially
+  // not a first contact. If this is a new conversation, query whether any prior
+  // conversations exist for this pair.
+  let isLifetimeFirstContact = true;
+  if (isSms && customerPhone) {
+    if (conversation) {
+      // Existing active conversation — definitely not first contact.
+      isLifetimeFirstContact = false;
+    } else {
+      const { count } = await supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", shop.tenant_id)
+        .eq("customer_phone", customerPhone);
+      isLifetimeFirstContact = count === 0;
+    }
+  }
+
   if (!conversation) {
     const metadata = userPhone ? { phone: userPhone } : {};
     const { data: newConv, error: convErr } = await supabase
@@ -2349,14 +2475,14 @@ Deno.serve(async (req: Request) => {
   }
   if (cart.phase === "checkout") {
     const upper = userMessage.toUpperCase().trim();
-    const wantsRestart = /\b(RESTART|START OVER|CANCEL|NEW ORDER)\b/.test(upper);
+    const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
     const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
 
     if (wantsRestart) {
       // Clear cart and start fresh
       cart.cart_json = [];
       await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0 }).eq("id", cart.id);
-      const reply = "No problem! Your order has been cancelled. What would you like to order?";
+      const reply = "No problem! Starting fresh. What would you like to order?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -2370,7 +2496,21 @@ Deno.serve(async (req: Request) => {
       // Fall through to the LLM loop below so it can process the change request
     } else {
       // Default: remind about payment but offer options
-      const reply = "Your payment link was sent -- check your texts for it. If something looks wrong, say \"change my order\" to make edits, or \"restart\" to start over.";
+      // If this is a repeated status check (same message as last bot message),
+      // shorten the reply to avoid duplicate segments consuming the budget.
+      const { data: lastBotMsg } = await supabase
+        .from("messages")
+        .select("content")
+        .eq("conversation_id", conversation.id)
+        .eq("sender", "assistant")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const isRepeatCheck = lastBotMsg &&
+        lastBotMsg.content && (lastBotMsg.content as string).includes("payment link was sent");
+      const reply = isRepeatCheck
+        ? "Payment still pending — tap the link we sent to finish. Reply CHANGE to edit or RESTART to start over."
+        : "Your payment link was sent — check your texts for it. Reply CHANGE to edit your order or RESTART to start over.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -2760,6 +2900,21 @@ Deno.serve(async (req: Request) => {
 
   // Strip markdown for clean SMS/text output
   let finalReply = stripMarkdown(safeReply);
+
+  // Strip the compliance footer on all but the lifetime first contact.
+  // The disclosure ("Msg & data rates...") is REQUIRED on the first outbound
+  // reply ever to this (consumer, shop) pair. On subsequent contacts it is
+  // dead weight — it costs segments and adds nothing for a returning customer.
+  if (!isLifetimeFirstContact) {
+    finalReply = finalReply
+      .replace(/\.?\s*Msg[& ]+data rates may apply\.?\s*/gi, "")
+      .replace(/\.?\s*Reply HELP for help(,)?( or| &) STOP to (unsubscribe|opt out|stop)\.?\s*/gi, "")
+      .replace(/\.?\s*Reply STOP to (unsubscribe|opt out|stop)\.?\s*/gi, "")
+      .replace(/\.?\s*Text HELP for help\.?\s*/gi, "")
+      .replace(/\.?\s*Text STOP to cancel\.?\s*/gi, "")
+      .replace(/\n{2,}/g, "\n")  // collapse double newlines
+      .trim();
+  }
 
   // Append payment URL if present and not already in the reply
   if (checkoutUrl && !finalReply.includes(checkoutUrl)) {
