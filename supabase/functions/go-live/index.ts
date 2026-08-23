@@ -45,7 +45,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, status, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status")
+    .select("id, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -91,14 +91,21 @@ Deno.serve(async (req: Request) => {
   const hoursSet = !!shop.open_hours && typeof shop.open_hours === "object" &&
     Object.keys(shop.open_hours as Record<string, unknown>).length > 0;
 
+  const isTest = shop.is_test === true;
+  const hasStripe = isShopLive(shop);
+
+  // EIN gate: required for non-test shops only.
+  const hasEin = isTest || !!shop.ein;
+
   const gates = {
-    connect: isShopLive(shop),
+    connect: hasStripe,
     menu: activeItems > 0,
     menu_approved: menuApproved || activeItems === 0,  // §C: requires owner attestation
     menu_clean: menuFlaggedReview === 0,                 // §C: no flagged rows pending
     number: !!shop.phone_number_e164,
     hours: hoursSet,
     subscription: shop.subscription_status === "active",
+    ein: hasEin,
   };
 
   const blocked_by = Object.entries(gates).filter(([, ok]) => !ok).map(([k]) => k);
@@ -115,7 +122,7 @@ Deno.serve(async (req: Request) => {
 
   // All gates pass → flip live.
   const { error: upErr } = await supabase
-    .from("shops").update({ status: "active", is_paused: false, onboarding_step: "done", updated_at: new Date().toISOString() })
+    .from("shops").update({ is_paused: false, onboarding_step: "done", updated_at: new Date().toISOString() })
     .eq("id", shopId);
   if (upErr) return jsonError("Failed to flip live: " + upErr.message, 500);
 

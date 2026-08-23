@@ -33,6 +33,15 @@
 # request to the external admin site at request time. Auth still happens on the
 # admin app (Supabase login) — the proxy exposes nothing that login doesn't.
 # The admin SPA is built with base="/admin/" and BrowserRouter basename="/admin".
+# Proxy pay.getsprintai.com/o/* → Supabase pay-redirect function (302s to Stripe)
+# Uses 302 (not 200 proxy) because the target itself 302s to Stripe —
+# a proxy would hide the Stripe redirect from the handset.
+[[redirects]]
+  from = "/o/*"
+  to = "https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/pay-redirect/o/:splat"
+  status = 302
+  force = true
+
 [[redirects]]
   from = "/admin"
   to = "https://sprintai-chat-admin.netlify.app/admin"

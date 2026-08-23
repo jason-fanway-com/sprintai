@@ -140,36 +140,92 @@ async function scrapePage(url: string, apiKey: string, includeRaw = false): Prom
 
 const CONTEXT_PROMPT = `You are extracting useful context about a restaurant from their website. Summarize the following into a concise paragraph (under 500 words) that an AI ordering assistant would need to answer customer questions. Include: owner names, how long they have been in business, location details (address, cross streets, parking), hours if mentioned, whether they do catering, any dietary accommodations (gluten-free, vegan options), notable menu specialties, history/story, seating (indoor/outdoor/counter), and any policies (cash only, minimum order, delivery radius). Only include facts explicitly stated on the website. Do not invent information.`;
 
-/** Extract open hours from scraped text with prioritized patterns.
- *  Handles "open seven days a week, from 10:00 AM to 10:00 PM" format. */
-function extractOpenHours(summaryText: string, pages: string[], results: string[], structured: string): string | null {
-  const combined = [summaryText, structured, ...results].join("\n");
+const HOURS_PROMPT = `Extract the restaurant's weekly hours from the following website content. Return ONLY a JSON object with day keys (mon, tue, wed, thu, fri, sat, sun). Each day is an object with "closed" (boolean), "open" (HH:MM 24h format), and "close" (HH:MM 24h format).
 
-  // Pattern 1: "open seven days a week... from HH:MM AM to HH:MM PM"
-  const sevenDay = combined.match(/open\s+seven\s+days?\s+(?:a\s+)?week[^.]*?(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?:to|–|-)\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
-  if (sevenDay) return "Mon–Sun: " + sevenDay[1].trim();
+Rules:
+- If a day is explicitly listed as closed or no hours are mentioned for it, set closed:true.
+- Convert all times to 24-hour format (e.g. "10:00 AM" → "10:00", "10:00 PM" → "22:00").
+- If hours are given as a single range for all 7 days (e.g. "open seven days a week, 10 AM to 10 PM"), apply that range to all 7 days with closed:false.
+- If no hours can be found at all, return all days as closed:true.
+- Never guess or invent hours. Only use explicitly stated information.
+- Return valid JSON only, no other text.`;
 
-  // Pattern 2: "Sunday through Saturday, from 10:00 AM to 10:00 PM"
-  const through = combined.match(/(?:Sunday|Monday)\s+through\s+(?:Saturday|Sunday)[^.]*?(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?:to|–|-)\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
-  if (through) return through[0].trim().substring(0, 512);
+const MENU_EXTRACT_PROMPT = `Extract the restaurant's menu items from the following website content. Return ONLY a JSON object with an "items" array. Each item has: "name" (string, required), "price_cents" (integer, price in cents — e.g. $14.99 = 1499), "category" (string), and "description" (string).
 
-  // Pattern 3: Day range "Mon-Fri 10am-10pm"
-  const dayRange = combined.match(/(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*[-–]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)/i);
-  if (dayRange) return dayRange[0].trim().substring(0, 512);
+Rules:
+- Only include items with a clear, explicitly-stated price. Never guess a price.
+- If a price range is given (e.g. "$12-$18"), skip that item.
+- Standardize category names (Pizza, Appetizers, Salads, Pasta, Desserts, Drinks, etc.).
+- Include at most 50 items.
+- Return valid JSON only, no other text.`;
 
-  // Pattern 4: "Hours:" label
-  const hoursLabel = combined.match(/Hours?[:\s]+([^\n]{10,200}?(?:AM|PM|am|pm)[^\n]*)/i);
-  if (hoursLabel) return hoursLabel[1].trim().substring(0, 512);
+/** Extract structured open hours via OpenRouter (Phase 5).
+ *  Returns a flat-object shape: { mon: { closed, open, close }, ... }. */
+async function extractOpenHours(
+  combinedText: string,
+  openRouterKey: string,
+  anthropicKey: string
+): Promise<Record<string, { closed: boolean; open: string; close: string }> | null> {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openRouterKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: openRouterKey ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6",
+        max_tokens: 512,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: HOURS_PROMPT + "\n\n" + combinedText.substring(0, 40_000) }],
+      }),
+    });
+    if (!res.ok) {
+      console.error("[scrape-shop] LLM hours extraction failed:", res.status);
+      return null;
+    }
+    const data = await res.json();
+    const raw = (data?.choices?.[0]?.message?.content ?? "").trim();
+    return JSON.parse(raw) as Record<string, { closed: boolean; open: string; close: string }>;
+  } catch (err) {
+    console.error("[scrape-shop] LLM hours extraction error:", err);
+    return null;
+  }
+}
 
-  // Pattern 5: JSON-LD openingHours
-  const jsonLd = combined.match(/openingHours["':\s]+([\w\s,\-]+(?:AM|PM|am|pm)[\w\s,\-]*)/i);
-  if (jsonLd) return jsonLd[1].trim().substring(0, 512);
-
-  // Pattern 6: Multiple AM/PM ranges = likely hours
-  const ranges = combined.match(/(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*[-–to]+\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/gi);
-  if (ranges && ranges.length >= 2) return ranges.slice(0, 4).join(", ");
-
-  return null;
+/** Extract menu items via OpenRouter (Phase 5b).
+ *  Returns an array of { name, price_cents, category, description }. */
+async function extractMenuItems(
+  combinedText: string,
+  openRouterKey: string,
+  anthropicKey: string
+): Promise<Array<{ name: string; price_cents: number; category: string; description: string }> | null> {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openRouterKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: openRouterKey ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6",
+        max_tokens: 4096,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 40_000) }],
+      }),
+    });
+    if (!res.ok) {
+      console.error("[scrape-shop] LLM menu extraction failed:", res.status);
+      return null;
+    }
+    const data = await res.json();
+    const raw = (data?.choices?.[0]?.message?.content ?? "").trim();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.items) ? parsed.items : null;
+  } catch (err) {
+    console.error("[scrape-shop] LLM menu extraction error:", err);
+    return null;
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -329,9 +385,10 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Failed to summarize content" }, 500);
   }
 
-  // Extract structured fields from the crawl
-  const openHours = extractOpenHours(context, pages, results, structuredContext);
+  // Extract structured hours (Phase 5) and menu items (Phase 5b) via LLM
+  const openHours = await extractOpenHours(combinedText, openRouterKey, anthropicKey);
   const menuLinkUrls = pages.filter(u => /menu|food|drink|order/i.test(u));
+  const menuItemsRaw = await extractMenuItems(combinedText, openRouterKey, anthropicKey);
 
   const updatePayload: Record<string, unknown> = {
     shop_context: context,
@@ -349,6 +406,41 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Failed to save context to database" }, 500);
   }
 
+  // Phase 5b: Auto-populate menu items (idempotent: only if menu is empty)
+  let menuInserted = 0;
+  if (menuItemsRaw && menuItemsRaw.length > 0) {
+    // Get the shop's menu_id
+    const { data: menuData } = await supabase
+      .from("menus").select("id").eq("shop_id", shop_id).maybeSingle();
+    
+    if (menuData) {
+      // Check if menu already has items (idempotent: never overwrite owner-edited)
+      const { count } = await supabase
+        .from("menu_items").select("id", { count: "exact", head: true }).eq("menu_id", menuData.id);
+      
+      if (!count || count === 0) {
+        const rows = menuItemsRaw.map((it, idx) => ({
+          menu_id: menuData.id,
+          name: it.name,
+          price_cents: it.price_cents || 0,
+          category: it.category || "",
+          description: it.description || "",
+          display_order: idx,
+          active: true,
+          is_available: true,
+          owner_edited: false,
+        }));
+        
+        const { error: insertErr } = await supabase.from("menu_items").insert(rows);
+        if (insertErr) {
+          console.error("[scrape-shop] Menu insert failed:", insertErr);
+        } else {
+          menuInserted = rows.length;
+        }
+      }
+    }
+  }
+
   return jsonResponse({
     ok: true,
     pages_discovered: pages.length,
@@ -356,6 +448,8 @@ Deno.serve(async (req: Request) => {
     context,
     open_hours: openHours,
     menu_links: menuLinkUrls,
+    menu_items_extracted: menuItemsRaw?.length ?? 0,
+    menu_items_inserted: menuInserted,
   });
   } catch (err) {
     console.error("[scrape-shop] Unhandled crawl error:", err);

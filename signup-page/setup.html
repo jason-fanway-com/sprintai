@@ -245,6 +245,19 @@
     }
     .upload-progress.show { display: block; }
 
+    /* Hours editor (7-day) */
+    .hours-editor { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .hours-editor td { padding: 6px 8px; vertical-align: middle; }
+    .hours-editor .day-label { font-weight: 600; color: var(--navy); width: 100px; }
+    .hours-editor .day-label.closed-day { color: var(--muted); }
+    .hours-editor select { font-size: 13px; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r); background: #fff; color: var(--ink); min-width: 110px; }
+    .hours-editor select:disabled { opacity: 0.4; background: var(--bg); }
+    .hours-editor input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); }
+    .hours-editor .closed-col { width: 60px; text-align: center; }
+    .hours-editor .closed-col label { font-size: 12px; color: var(--muted); cursor: pointer; }
+    .copy-hours-btn { font-size: 12px; color: var(--brand); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; margin-top: 8px; }
+    .copy-hours-btn:hover { color: var(--navy); }
+
     /* Menu grid */
     .menu-grid-section { margin-bottom: 20px; }
     .menu-grid-header {
@@ -512,8 +525,11 @@
       <textarea id="aiInstructions" placeholder="e.g. Always offer garlic knots with pizza. We're cash-friendly. No deliveries after 9pm."></textarea>
     </label>
     <label class="fld">
-      <span>Open hours (as shown to customers)</span>
-      <input type="text" id="openHours" placeholder="e.g. Mon–Sun: 10:00 AM – 10:00 PM" />
+      <span>Open hours</span>
+      <table class="hours-editor" id="openHoursEditor">
+        <tbody id="openHoursBody"></tbody>
+      </table>
+      <button type="button" class="copy-hours-btn" id="copyOpenToDelivery">Copy open hours to delivery →</button>
     </label>
   </div>
 
@@ -539,7 +555,9 @@
       </label>
       <label class="fld">
         <span>Delivery hours</span>
-        <textarea id="deliveryHours" rows="3" placeholder="e.g. Mon–Thu: 11am–9pm, Fri–Sat: 11am–10pm, Sun: 12pm–8pm"></textarea>
+        <table class="hours-editor" id="deliveryHoursEditor">
+          <tbody id="deliveryHoursBody"></tbody>
+        </table>
         <div class="hint">If different from your regular open hours. Leave blank to use open hours.</div>
       </label>
     </div>
@@ -628,7 +646,9 @@
     token: null,
     menuItems: [],
     menuDirty: false,
-    stripeConnected: false
+    stripeConnected: false,
+    openHours: {},
+    deliveryHours: {}
   };
 
   // ── UI helpers ────────────────────────────────────────────────────────────
@@ -659,6 +679,111 @@
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
     });
   }
+
+  // ── Hours Editors (7-day structured) ──────────────────────────────────────
+  var DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  var DAY_NAMES = { sun: 'Sunday', mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday' };
+
+  // Build time options: 12:00 AM through 11:30 PM in 30-min increments
+  function timeOptions(selected) {
+    var html = '';
+    for (var h = 0; h < 24; h++) {
+      for (var m = 0; m < 60; m += 30) {
+        var val = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+        var sel = val === selected ? ' selected' : '';
+        html += '<option value="' + val + '"' + sel + '>' + format12h(val) + '</option>';
+      }
+    }
+    return html;
+  }
+
+  function format12h(t24) {
+    var parts = t24.split(':');
+    var h = parseInt(parts[0]), m = parseInt(parts[1]);
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12 || 12;
+    return h12 + ':' + String(m).padStart(2, '0') + ' ' + ampm;
+  }
+
+  // Normalize DB open_hours/delivery_hours into flat object
+  function parseStoredHours(data) {
+    if (!data || typeof data !== 'object') return {};
+    var result = {};
+    for (var i = 0; i < DAYS.length; i++) {
+      var d = DAYS[i];
+      var w = data[d];
+      if (Array.isArray(w) && w.length > 0) {
+        result[d] = { closed: false, open: w[0].open, close: w[0].close };
+      } else if (w && typeof w === 'object' && !Array.isArray(w)) {
+        result[d] = { closed: !!w.closed, open: w.open || '09:00', close: w.close || '21:00' };
+      } else {
+        result[d] = { closed: false, open: '09:00', close: '21:00' };
+      }
+    }
+    return result;
+  }
+
+  function renderHoursEditor(bodyId, hours, isDelivery) {
+    var html = '';
+    for (var i = 0; i < DAYS.length; i++) {
+      var d = DAYS[i];
+      var h = hours[d] || { closed: false, open: '09:00', close: '21:00' };
+      var closed = h.closed;
+      html += '<tr class="hours-row" data-day="' + d + '">' +
+        '<td class="day-label' + (closed ? ' closed-day' : '') + '">' + DAY_NAMES[d] + '</td>' +
+        '<td class="closed-col"><label><input type="checkbox" class="hours-closed" data-day="' + d + '"' + (closed ? ' checked' : '') + '> Closed</label></td>' +
+        '<td><select class="hours-open" data-day="' + d + '"' + (closed ? ' disabled' : '') + '>' + timeOptions(h.open || '09:00') + '</select></td>' +
+        '<td><span style="color:var(--muted);font-size:13px;">to</span></td>' +
+        '<td><select class="hours-close" data-day="' + d + '"' + (closed ? ' disabled' : '') + '>' + timeOptions(h.close || '21:00') + '</select></td>' +
+        '</tr>';
+    }
+    document.getElementById(bodyId).innerHTML = html;
+
+    // Wire closed checkboxes
+    var closedCbs = document.querySelectorAll('#' + bodyId + ' .hours-closed');
+    for (var j = 0; j < closedCbs.length; j++) {
+      closedCbs[j].onchange = (function (bodyId) {
+        return function () {
+          var day = this.getAttribute('data-day');
+          var row = document.querySelector('#' + bodyId + ' tr[data-day="' + day + '"]');
+          var openSel = row.querySelector('.hours-open');
+          var closeSel = row.querySelector('.hours-close');
+          var label = row.querySelector('.day-label');
+          if (this.checked) {
+            openSel.disabled = true;
+            closeSel.disabled = true;
+            label.classList.add('closed-day');
+          } else {
+            openSel.disabled = false;
+            closeSel.disabled = false;
+            label.classList.remove('closed-day');
+          }
+        };
+      })(bodyId);
+    }
+  }
+
+  // Read editor table back into structured object
+  function collectHours(bodyId) {
+    var result = {};
+    var rows = document.querySelectorAll('#' + bodyId + ' .hours-row');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var day = r.getAttribute('data-day');
+      var closed = r.querySelector('.hours-closed').checked;
+      var open = r.querySelector('.hours-open').value;
+      var close = r.querySelector('.hours-close').value;
+      result[day] = { closed: closed, open: open, close: close };
+    }
+    return result;
+  }
+
+  // "Copy open hours to delivery" button
+  document.getElementById("copyOpenToDelivery").onclick = function () {
+    state.deliveryHours = JSON.parse(JSON.stringify(state.openHours));
+    renderHoursEditor("deliveryHoursBody", state.deliveryHours, true);
+    showToast("Delivery hours set to match open hours.");
+  };
 
   // ── Boot: resume by token ─────────────────────────────────────────────────
   function boot() {
@@ -710,7 +835,10 @@
 
     // Pre-fill fields from shop
     if (s.ai_instructions) document.getElementById("aiInstructions").value = s.ai_instructions;
-    if (s.open_hours) document.getElementById("openHours").value = s.open_hours;
+    state.openHours = parseStoredHours(s.open_hours);
+    state.deliveryHours = parseStoredHours(s.delivery_hours);
+    renderHoursEditor("openHoursBody", state.openHours, false);
+    renderHoursEditor("deliveryHoursBody", state.deliveryHours, true);
 
     // Menu links
     var linkFields = document.querySelectorAll(".menu-link-field");
@@ -730,9 +858,6 @@
     };
     if (s.delivery_fee_cents) {
       document.getElementById("deliveryFee").value = (s.delivery_fee_cents / 100).toFixed(2);
-    }
-    if (s.delivery_hours) {
-      document.getElementById("deliveryHours").value = s.delivery_hours;
     }
 
     // EIN label gating
@@ -775,7 +900,23 @@
   function showCrawlDone(s) {
     document.getElementById("crawlDone").style.display = "block";
     if (s.about) document.getElementById("crawlAbout").textContent = s.about;
-    if (s.open_hours) document.getElementById("crawlHours").innerHTML = '<strong>Hours:</strong> ' + esc(s.open_hours);
+    if (s.open_hours && typeof s.open_hours === 'object' && Object.keys(s.open_hours).length > 0) {
+      var days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      var dayNames = { sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat' };
+      var lines = [];
+      for (var i = 0; i < days.length; i++) {
+        var d = days[i];
+        var w = s.open_hours[d];
+        if (!w) continue;
+        if (Array.isArray(w)) {
+          var times = w.map(function(win) { return win.open + '-' + win.close; }).join(', ');
+          if (times) lines.push(dayNames[d] + ': ' + times);
+        } else if (typeof w === 'object') {
+          if (!w.closed && w.open && w.close) lines.push(dayNames[d] + ': ' + w.open + '-' + w.close);
+        }
+      }
+      document.getElementById("crawlHours").innerHTML = '<strong>Hours:</strong> ' + (lines.length ? esc(lines.join(', ')) : 'Not available');
+    }
     if (s.menu_links && s.menu_links.length) {
       var links = s.menu_links.map(function (l) { return '<a href="' + esc(l) + '" target="_blank" style="color:var(--brand);">' + esc(l) + '</a>'; });
       document.getElementById("crawlLinks").innerHTML = '<strong>Online menu pages found:</strong> ' + links.join(', ');
@@ -1024,10 +1165,10 @@
 
     var fields = {
       ai_instructions: document.getElementById("aiInstructions").value.trim(),
-      open_hours: document.getElementById("openHours").value.trim(),
+      open_hours: collectHours("openHoursBody"),
       menu_links: menuLinks,
       delivery_enabled: document.getElementById("deliveryEnabled").checked,
-      delivery_hours: document.getElementById("deliveryHours").value.trim(),
+      delivery_hours: collectHours("deliveryHoursBody"),
       delivery_fee_cents: Math.round((parseFloat(document.getElementById("deliveryFee").value) || 0) * 100)
     };
     if (einVal) fields.ein = einVal;

@@ -109,7 +109,7 @@ interface Shop {
   tenant_id:               string;
   phone_number_e164:       string | null;
   reply_from_e164:         string | null;
-  open_hours:              Record<string, Array<{ open: string; close: string }>>;
+  open_hours:              Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
   timezone:                string;
   email_ticket_recipient:  string | null;
   is_paused:               boolean;
@@ -406,7 +406,7 @@ function buildSystemPrompt(
   testMode?: boolean,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
-  const hours = shop.open_hours?.[today] ?? [];
+  const hours = dayWindows(shop.open_hours?.[today]);
   const hoursStr = hours.length > 0
     ? hours.map((h: { open: string; close: string }) => `${h.open}-${h.close}`).join(", ")
     : "Hours not specified";
@@ -1451,6 +1451,16 @@ function getCurrentTime(timezone: string): string {
   }
 }
 
+// Normalize open_hours for a day into an array of {open,close} windows.
+// Handles both the new flat-object shape (Phase 5) and the legacy array shape.
+function dayWindows(dayHours: { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }> | undefined | null): Array<{ open: string; close: string }> {
+  if (!dayHours) return [];
+  if (Array.isArray(dayHours)) return dayHours;
+  // Flat-object shape: { closed, open, close }
+  if (dayHours.closed || !dayHours.open || !dayHours.close) return [];
+  return [{ open: dayHours.open, close: dayHours.close }];
+}
+
 // Day-of-week KEY (mon/tue/...) in the SHOP'S local timezone. Using
 // new Date().getDay() returns the SERVER (UTC) day, which can be wrong near
 // midnight — e.g. 11:30pm Sun in America/New_York is already Mon in UTC, so the
@@ -1830,7 +1840,7 @@ async function handleSystemEvent(
       : "";
 
     const today    = getBusinessDayKey(shop.timezone);
-    const hours    = shop.open_hours?.[today] ?? [];
+    const hours    = dayWindows(shop.open_hours?.[today]);
     const fmt12Confirm = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
     const hoursStr = hours.length > 0
       ? hours.map((h: { open: string; close: string }) => `${fmt12Confirm(h.open)}-${fmt12Confirm(h.close)}`).join(", ")
@@ -2557,7 +2567,7 @@ Deno.serve(async (req: Request) => {
     // Day-of-week and current time are both computed in the SHOP'S timezone so
     // the lookup is correct near midnight (see getBusinessDayKey/getLocalMinutes).
     const todayKey = getBusinessDayKey(shop.timezone);
-    const todayHours = shop.open_hours?.[todayKey] ?? [];
+    const todayHours = dayWindows(shop.open_hours?.[todayKey]);
     const nowMins = getLocalMinutes(shop.timezone);
 
     // Check if current time falls within any open window (handles multi-window
@@ -2630,14 +2640,26 @@ Deno.serve(async (req: Request) => {
       cart.phase = "greeting";
       cart.notes = null;
     }
-    if (!isOpen && todayHours.length > 0 && !cart.test_mode) {
+    if (!isOpen && !cart.test_mode) {
       const fmt12 = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
-      const hoursDisplay = todayHours.map((h: { open: string; close: string }) => `${fmt12(h.open)}-${fmt12(h.close)}`).join(", ");
-      const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours — you'll be happy you did!`;
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
-      return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
+      const dayConf = shop.open_hours?.[todayKey];
+      // Distinguish: explicitly closed (closed:true) vs. outside windows vs. unconfigured
+      const isClosedAllDay = dayConf && typeof dayConf === "object" && !Array.isArray(dayConf) && dayConf.closed === true;
+      if (isClosedAllDay) {
+        const closedMsg = `Hey! The kitchen is closed today. We'll be back during regular hours — check back soon!`;
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
+      }
+      if (todayHours.length > 0) {
+        const hoursDisplay = todayHours.map((h: { open: string; close: string }) => `${fmt12(h.open)}-${fmt12(h.close)}`).join(", ");
+        const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours — you'll be happy you did!`;
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
+      }
     }
   }
 

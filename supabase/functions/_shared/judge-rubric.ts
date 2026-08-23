@@ -176,7 +176,7 @@ a flag you are confident is a real failure.
 export interface JudgeGroundTruth {
   shop_name: string;
   timezone: string;
-  open_hours: Record<string, Array<{ open: string; close: string }>>;
+  open_hours: Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
   menu: Array<{ name: string; price_cents: number; category?: string | null; description?: string | null; modifiers?: Array<{ name: string; price_cents: number }> | null }>;
   /** True iff a real Stripe checkout session exists for this conversation. */
   has_checkout_session: boolean;
@@ -213,12 +213,17 @@ export function assembleJudgePrompt(
 
   const hoursLines = Object.keys(ground.open_hours || {}).length
     ? Object.entries(ground.open_hours)
-        .map(
-          ([day, wins]) =>
-            `  - ${day}: ${
-              (wins || []).map((w) => `${w.open}-${w.close}`).join(", ") || "closed"
-            }`,
-        )
+        .map(([day, wins]) => {
+          if (Array.isArray(wins)) {
+            return `  - ${day}: ${(wins || []).map((w: { open: string; close: string }) => `${w.open}-${w.close}`).join(", ") || "closed"}`;
+          }
+          if (wins && typeof wins === 'object') {
+            const obj = wins as { closed?: boolean; open?: string; close?: string };
+            if (obj.closed || !obj.open || !obj.close) return `  - ${day}: closed`;
+            return `  - ${day}: ${obj.open}-${obj.close}`;
+          }
+          return `  - ${day}: closed`;
+        })
         .join("\n")
     : "  (no hours on file)";
 

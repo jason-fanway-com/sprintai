@@ -4,39 +4,212 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Get your shop live | SprintAI</title>
-  <meta name="description" content="Set up SMS ordering for your restaurant in a few guided steps. Keep your customers, keep your margin." />
+  <meta name="description" content="Set up SMS ordering for your restaurant in 30 seconds. Keep your customers, keep your margin." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400;1,9..144,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
   <style>
-  /* :root tokens copied VERBATIM from index.html (DESIGN-TOKENS.md) */
-  :root {
-    --brand: #E8521A;
-    --brand-hover: #C94412;
-    --brand-light: #FEF3EE;
-    --brand-mid: #FBDACC;
-    --cream: #FFFDF9;
-    --warm: #FFF8F3;
-    --navy: #17212E;
-    --ink: #2A3540;
-    --muted: #687585;
-    --light: #96A5B4;
-    --border: #E6ECF2;
-    --border-warm: #EDE3DA;
-    --green: #16A34A;
-    --green-light: #F0FDF4;
-    --green-border: #BBF7D0;
-    --font-d: 'Fraunces', Georgia, serif;
-    --font-b: 'DM Sans', system-ui, sans-serif;
-    --r: 14px;
-    --r-sm: 8px;
-    --r-lg: 20px;
-  }
+    :root {
+      --brand: #E8521A;
+      --brand-hover: #C94412;
+      --cream: #FFFDF9;
+      --navy: #17212E;
+      --ink: #2A3540;
+      --muted: #687585;
+      --light: #96A5B4;
+      --border: #E6ECF2;
+      --green: #16A34A;
+      --font-d: 'Fraunces', Georgia, serif;
+      --font-b: 'DM Sans', system-ui, sans-serif;
+      --r: 14px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-b);
+      background: var(--cream);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .logo-mark {
+      width: 36px; height: 36px;
+      background: var(--brand);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-mark-inner { font-size: 18px; }
+    .logo-text {
+      font-family: var(--font-d);
+      font-weight: 800;
+      font-size: 20px;
+      color: var(--navy);
+    }
+    .nav-links { display: none; }
+
+    /* Mobile-first card */
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 20px;
+    }
+    .signup-card {
+      width: 100%;
+      max-width: 420px;
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+      padding: 32px 28px;
+    }
+    .signup-eyebrow {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--brand);
+      margin-bottom: 8px;
+    }
+    .signup-title {
+      font-family: var(--font-d);
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--navy);
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .signup-sub {
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 28px;
+    }
+    .fld {
+      display: block;
+      margin-bottom: 18px;
+    }
+    .fld span {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--navy);
+      margin-bottom: 6px;
+    }
+    .fld input {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 16px;
+      font-family: var(--font-b);
+      border: 1.5px solid var(--border);
+      border-radius: var(--r);
+      background: #fff;
+      color: var(--ink);
+      transition: border-color 0.15s;
+    }
+    .fld input:focus {
+      outline: none;
+      border-color: var(--brand);
+    }
+    .fld input::placeholder { color: var(--light); }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-b);
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: var(--r);
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+      padding: 14px 24px;
+    }
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      width: 100%;
+    }
+    .btn-primary:hover { background: var(--brand-hover); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .error-msg {
+      display: none;
+      color: var(--brand);
+      font-size: 13px;
+      padding: 10px 14px;
+      background: #FEF3EE;
+      border-radius: var(--r);
+      margin-bottom: 16px;
+    }
+    .error-msg.show { display: block; }
+
+    /* Success state */
+    .success-box {
+      display: none;
+      text-align: center;
+    }
+    .success-box.show { display: block; }
+    .success-icon { font-size: 48px; margin-bottom: 12px; }
+    .success-box h2 {
+      font-family: var(--font-d);
+      font-size: 22px;
+      color: var(--navy);
+      margin-bottom: 8px;
+    }
+    .success-box p {
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .setup-link-box {
+      background: #FEF3EE;
+      border-radius: var(--r);
+      padding: 14px;
+      font-size: 14px;
+      color: var(--brand);
+      word-break: break-all;
+      margin-bottom: 16px;
+    }
+    .setup-link-box a { color: var(--brand); text-decoration: underline; }
+
+    footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 12px;
+      color: var(--light);
+    }
+    footer a { color: var(--light); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    @media (min-width: 600px) {
+      .signup-card { padding: 40px 36px; }
+      .signup-title { font-size: 28px; }
+      .nav-links {
+        display: flex;
+        list-style: none;
+        gap: 24px;
+        font-size: 14px;
+      }
+      .nav-links a { text-decoration: none; color: var(--muted); }
+      .nav-links a:hover { color: var(--navy); }
+    }
   </style>
-  <link rel="stylesheet" href="wizard.css" />
 </head>
 <body>
 
-<!-- NAV (reused verbatim from index.html) -->
 <nav>
   <a class="logo" href="/index.html">
     <div class="logo-mark"><div class="logo-mark-inner">🍕</div></div>
@@ -48,71 +221,136 @@
     <li><a href="/index.html#pricing">Pricing</a></li>
     <li><a href="/index.html#faq">FAQ</a></li>
   </ul>
-  <div class="nav-right">
-    <span id="resume-badge" class="saved-pill" style="display:none">✓ progress saved</span>
-  </div>
 </nav>
 
-<div class="wizard-wrap">
-  <div class="wizard-head">
-    <div class="wizard-eyebrow">Guided setup</div>
-    <h1 class="wizard-title">Let's get your shop taking orders</h1>
-    <div class="wizard-sub">A few steps and a number of your own. We'll walk you through it on the right — just like the texts your customers will send.</div>
+<main>
+  <div class="signup-card" id="signupCard">
+    <div class="signup-eyebrow">Get started in 30 seconds</div>
+    <h1 class="signup-title">Your shop, your number, your customers</h1>
+    <p class="signup-sub">Text ordering without the app. We'll email you a link to finish setup at your desk.</p>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <label class="fld">
+      <span>Restaurant name</span>
+      <input type="text" id="f-name" placeholder="Jack's Slice" autocomplete="organization" inputmode="text" />
+    </label>
+    <label class="fld">
+      <span>Your name</span>
+      <input type="text" id="f-owner" placeholder="Jack Smith" autocomplete="name" inputmode="text" />
+    </label>
+    <label class="fld">
+      <span>Email</span>
+      <input type="email" id="f-email" placeholder="owner@jacksslice.com" autocomplete="email" inputmode="email" />
+    </label>
+    <label class="fld">
+      <span>Website <em style="font-weight:400;color:var(--light)">(optional)</em></span>
+      <input type="url" id="f-url" placeholder="https://jacksslice.com" autocomplete="url" inputmode="url" />
+    </label>
+
+    <button class="btn btn-primary" id="submitBtn">Create my shop →</button>
   </div>
 
-  <div class="steps-rail" id="stepsRail"></div>
-
-  <div class="panels">
-    <!-- LEFT: step content (source of truth — completable alone) -->
-    <div class="left-col">
-      <div class="step-card" id="stepCard"><!-- rendered by wizard.js --></div>
+  <div class="success-box" id="successBox">
+    <div class="success-icon">🎉</div>
+    <h2>You're in!</h2>
+    <p>We sent a setup link to your email. Finish uploading your menu at your desk.</p>
+    <div class="setup-link-box">
+      <strong>Your setup link:</strong><br />
+      <a id="setupLink" href="#" target="_blank"></a>
     </div>
-
-    <!-- RIGHT: the homepage phone, running the scripted guided-onboarding chat -->
-    <div class="phone-col">
-      <div class="phone-outer">
-        <div class="phone-frame">
-          <div class="phone-screen">
-            <div class="phone-header">
-              <div class="ph-back">‹</div>
-              <div class="ph-avatar">🍕</div>
-              <div>
-                <div class="ph-name">SprintAI setup</div>
-                <div class="ph-sub">Your guided helper</div>
-              </div>
-            </div>
-            <div class="msgs-viewport">
-              <div class="msgs-scroll" id="chatScroll">
-                <div class="msgs-inner" id="chatMsgs">
-                  <div class="time-lbl">Setup chat</div>
-                  <div class="typing-bub" id="chatTyping"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>
-                </div>
-              </div>
-            </div>
-            <div class="phone-input-bar">
-              <input class="input-pill" id="chatInput" placeholder="Reply to your helper…" autocomplete="off" />
-              <button class="send-btn" id="chatSend">↑</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="phone-cap">This is the same SMS experience your customers will use.</div>
-    </div>
+    <p style="font-size:13px;color:var(--light);">Bookmark this — you'll need it to finish setup.</p>
   </div>
-</div>
+</main>
 
-<!-- FOOTER (reused from index.html) -->
 <footer>
-  <div class="footer-bottom">
-    <div>© 2026 SprintAI · Bethlehem, PA · Serving shops in PA &amp; NJ</div>
-    <div style="display:flex;gap:20px;">
-      <a href="/privacy.html">Privacy Policy</a>
-      <a href="/terms.html">Terms of Service</a>
-      <a href="#">TCPA Compliance</a>
-    </div>
+  <div>© 2026 SprintAI · Bethlehem, PA</div>
+  <div style="margin-top:4px;display:flex;gap:16px;justify-content:center;">
+    <a href="/privacy.html">Privacy</a>
+    <a href="/terms.html">Terms</a>
   </div>
 </footer>
 
-<script src="wizard.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var CFG = window.SPRINT_CONFIG || {
+    SUPABASE_URL: "https://rvdqfxtrskxekfkqnegx.supabase.co",
+    ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NDg2ODksImV4cCI6MjA5MDMyNDY4OX0.5SOW_FX92dIw_zgbqF7HO2SM5ueQC3YPaAexKCFAv3E"
+  };
+  function fnUrl(name) { return CFG.SUPABASE_URL + "/functions/v1/" + name; }
+
+  function showError(msg) {
+    var el = document.getElementById("errorMsg");
+    el.textContent = msg;
+    el.classList.add("show");
+  }
+  function clearError() {
+    var el = document.getElementById("errorMsg");
+    el.classList.remove("show");
+  }
+
+  document.getElementById("submitBtn").onclick = function () {
+    clearError();
+    var name = document.getElementById("f-name").value.trim();
+    var ownerName = document.getElementById("f-owner").value.trim();
+    var email = document.getElementById("f-email").value.trim();
+    var website = document.getElementById("f-url").value.trim();
+
+    if (!name) { showError("Enter your restaurant name."); return; }
+    if (!ownerName) { showError("Enter your name."); return; }
+    if (!email) { showError("Enter your email so we can send the setup link."); return; }
+    // Basic email validation
+    if (!/\S+@\S+\.\S+/.test(email)) { showError("That doesn't look like a valid email."); return; }
+
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+
+    fetch(fnUrl("onboarding-save"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": CFG.ANON_KEY,
+        "Authorization": "Bearer " + CFG.ANON_KEY
+      },
+      body: JSON.stringify({
+        action: "create",
+        account: {
+          name: name,
+          owner_name: ownerName,
+          email: email,
+          website_url: website,
+          timezone: "America/New_York"
+        }
+      })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.error) {
+        showError(data.error);
+        btn.disabled = false;
+        btn.textContent = "Create my shop →";
+        return;
+      }
+
+      // Show success
+      document.getElementById("signupCard").style.display = "none";
+      document.getElementById("successBox").classList.add("show");
+      var setupLink = document.getElementById("setupLink");
+      setupLink.href = data.setup_url;
+      setupLink.textContent = data.setup_url;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    })
+    .catch(function (e) {
+      showError("Something went wrong. Check your connection and try again.");
+      btn.disabled = false;
+      btn.textContent = "Create my shop →";
+    });
+  };
+})();
+</script>
+
 </body>
 </html>
