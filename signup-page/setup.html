@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Finish setup | SprintAI</title>
+  <meta name="description" content="Upload your menu and set your shop live." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --brand: #E8521A;
+      --brand-hover: #C94412;
+      --brand-light: #FEF3EE;
+      --cream: #FFFDF9;
+      --navy: #17212E;
+      --ink: #2A3540;
+      --muted: #687585;
+      --light: #96A5B4;
+      --border: #E6ECF2;
+      --green: #16A34A;
+      --green-light: #F0FDF4;
+      --green-border: #BBF7D0;
+      --yellow: #CA8A04;
+      --yellow-light: #FEFCE8;
+      --red: #DC2626;
+      --font-d: 'Fraunces', Georgia, serif;
+      --font-b: 'DM Sans', system-ui, sans-serif;
+      --r: 14px;
+      --r-sm: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-b);
+      background: var(--cream);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 32px;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .logo-mark {
+      width: 36px; height: 36px;
+      background: var(--brand);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-mark-inner { font-size: 18px; }
+    .logo-text { font-family: var(--font-d); font-weight: 800; font-size: 20px; color: var(--navy); }
+
+    main {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 24px 24px 60px;
+    }
+    h1 { font-family: var(--font-d); font-size: 28px; font-weight: 800; color: var(--navy); margin-bottom: 8px; }
+    .sub { font-size: 15px; color: var(--muted); margin-bottom: 32px; line-height: 1.5; }
+
+    /* Loading / error states */
+    .state-box {
+      text-align: center;
+      padding: 48px 24px;
+    }
+    .state-box .icon { font-size: 40px; margin-bottom: 12px; }
+    .state-box h2 { font-family: var(--font-d); font-size: 20px; color: var(--navy); margin-bottom: 8px; }
+    .state-box p { font-size: 15px; color: var(--muted); }
+
+    .loading .dot-pulse::after {
+      content: '';
+      animation: dots 1.4s infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
+    }
+
+    /* Sections */
+    .section {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+      padding: 28px;
+      margin-bottom: 20px;
+    }
+    .section-h {
+      font-family: var(--font-d);
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--navy);
+      margin-bottom: 8px;
+    }
+    .section-desc {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .shop-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--brand);
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      background: var(--brand-light);
+      border-radius: var(--r);
+    }
+
+    /* Form fields */
+    .fld {
+      display: block;
+      margin-bottom: 16px;
+    }
+    .fld span {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--navy);
+      margin-bottom: 6px;
+    }
+    .fld input, .fld textarea, .fld select {
+      width: 100%;
+      padding: 11px 14px;
+      font-size: 15px;
+      font-family: var(--font-b);
+      border: 1.5px solid var(--border);
+      border-radius: var(--r);
+      background: #fff;
+      color: var(--ink);
+      transition: border-color 0.15s;
+    }
+    .fld textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+    .fld input:focus, .fld textarea:focus, .fld select:focus {
+      outline: none;
+      border-color: var(--brand);
+    }
+    .fld input::placeholder, .fld textarea::placeholder { color: var(--light); }
+    .hint { font-size: 12px; color: var(--light); margin-top: 4px; }
+    .fld.inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .fld.inline span { margin-bottom: 0; white-space: nowrap; }
+
+    /* Toggle switch */
+    .toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--border);
+      border-radius: 24px;
+      transition: background 0.2s;
+    }
+    .toggle .slider::before {
+      content: "";
+      position: absolute;
+      height: 18px; width: 18px;
+      left: 3px; bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle input:checked + .slider { background: var(--green); }
+    .toggle input:checked + .slider::before { transform: translateX(20px); }
+    .toggle-label { font-size: 14px; font-weight: 600; color: var(--navy); }
+    .toggle-hint { font-size: 13px; color: var(--muted); margin-left: 56px; margin-top: -6px; margin-bottom: 12px; }
+
+    /* File upload zone */
+    .file-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--r);
+      padding: 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      margin-bottom: 16px;
+    }
+    .file-zone:hover, .file-zone.dragover { border-color: var(--brand); background: var(--brand-light); }
+    .file-zone .upload-icon { font-size: 36px; margin-bottom: 8px; }
+    .file-zone .upload-text { font-size: 15px; color: var(--navy); font-weight: 600; }
+    .file-zone .upload-hint { font-size: 13px; color: var(--muted); }
+    .file-zone input[type=file] { display: none; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-b);
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: var(--r);
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+      padding: 12px 24px;
+      gap: 6px;
+    }
+    .btn-primary { background: var(--brand); color: #fff; }
+    .btn-primary:hover { background: var(--brand-hover); }
+    .btn-ghost {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--navy);
+    }
+    .btn-ghost:hover { border-color: var(--brand); color: var(--brand); }
+    .btn-secondary { background: var(--navy); color: #fff; }
+    .btn-sm { padding: 6px 14px; font-size: 13px; }
+    .btn-danger { background: var(--red); color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
+
+    /* Upload progress */
+    .upload-progress {
+      display: none;
+      font-size: 14px;
+      color: var(--navy);
+      margin-bottom: 12px;
+      padding: 10px 14px;
+      background: var(--brand-light);
+      border-radius: var(--r);
+    }
+    .upload-progress.show { display: block; }
+
+    /* Menu grid */
+    .menu-grid-section { margin-bottom: 20px; }
+    .menu-grid-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .menu-grid-header h3 { font-size: 15px; font-weight: 600; color: var(--navy); }
+    .menu-grid-table {
+      width: 100%;
+      font-size: 13px;
+      border-collapse: collapse;
+      margin-bottom: 12px;
+    }
+    .menu-grid-table th {
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .menu-grid-table td {
+      padding: 4px 4px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .menu-grid-table input {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 13px;
+      font-family: var(--font-b);
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+    }
+    .menu-grid-table input:focus { outline: none; border-color: var(--brand); }
+    .menu-grid-table .col-cat { width: 18%; }
+    .menu-grid-table .col-name { width: 25%; }
+    .menu-grid-table .col-price { width: 14%; }
+    .menu-grid-table .col-desc { width: 30%; }
+    .menu-grid-table .col-action { width: 8%; text-align: center; }
+    .menu-grid-table .remove-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--light);
+      padding: 2px 6px;
+    }
+    .menu-grid-table .remove-btn:hover { color: var(--red); }
+    .menu-empty-msg {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    /* What to Expect */
+    .expect-list {
+      list-style: none;
+      padding: 0;
+    }
+    .expect-list li {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--ink);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      line-height: 1.5;
+    }
+    .expect-list li:last-child { border-bottom: none; }
+    .expect-list .step-num {
+      flex-shrink: 0;
+      width: 24px; height: 24px;
+      background: var(--brand-light);
+      color: var(--brand);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      margin-top: 1px;
+    }
+    .qr-wrap {
+      text-align: center;
+      margin-top: 16px;
+      padding: 16px;
+      background: var(--brand-light);
+      border-radius: var(--r);
+    }
+    .qr-wrap img { max-width: 160px; height: auto; }
+    .qr-wrap p { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+    /* Connected status */
+    .badge-ok {
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--green);
+      background: var(--green-light);
+      border: 1px solid var(--green-border);
+      border-radius: 20px;
+      padding: 3px 10px;
+    }
+    .badge-warn {
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--yellow);
+      background: var(--yellow-light);
+      border-radius: 20px;
+      padding: 3px 10px;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--navy);
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: var(--r);
+      font-size: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: transform 0.3s, opacity 0.3s;
+      z-index: 100;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 12px;
+      color: var(--light);
+      border-top: 1px solid var(--border);
+    }
+
+    @media (max-width: 640px) {
+      .section { padding: 20px 16px; }
+      h1 { font-size: 22px; }
+      .section-h { font-size: 17px; }
+      .btn-row { flex-direction: column; }
+      .btn-row .btn { width: 100%; }
+      .menu-grid-table { font-size: 12px; }
+      .menu-grid-table input { font-size: 12px; padding: 5px 6px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a class="logo" href="/index.html">
+    <div class="logo-mark"><div class="logo-mark-inner">🍕</div></div>
+    <span class="logo-text">SprintAI</span>
+  </a>
+</nav>
+
+<!-- Loading state -->
+<main id="loading">
+  <div class="state-box loading">
+    <div class="icon">⏳</div>
+    <h2>Loading your shop<span class="dot-pulse"></span></h2>
+    <p>Pulling up your account so you can finish setup.</p>
+  </div>
+</main>
+
+<!-- Error state -->
+<main id="error" style="display:none">
+  <div class="state-box">
+    <div class="icon">🔍</div>
+    <h2>Setup link not found</h2>
+    <p id="errorMsg">This link doesn't match any shop. It may have expired or been used already.</p>
+    <div class="btn-row" style="justify-content:center;margin-top:24px;">
+      <a href="/signup-page/index.html" class="btn btn-primary">Create a new shop →</a>
+    </div>
+  </div>
+</main>
+
+<!-- Setup form -->
+<main id="setup" style="display:none">
+  <h1>Finish setting up your shop</h1>
+  <p class="sub">Upload your menu, set your delivery options, and tell your assistant how to behave. Takes about 5 minutes.</p>
+  <div class="shop-name" id="shopName"></div>
+
+  <!-- Crawl status -->
+  <div class="section" id="crawlSection" style="display:none">
+    <div class="section-h">🌐 Website review</div>
+    <div class="section-desc">We scanned your website while you signed up. Here's what we found.</div>
+    <div id="crawlPending" style="display:none;color:var(--muted);font-size:14px;">⏳ Scanning your website… this usually takes 10–30 seconds.</div>
+    <div id="crawlFailed" style="display:none;color:#DC2626;font-size:14px;">⚠️ Couldn't scan your website. You can still continue — just add details below.</div>
+    <div id="crawlDone" style="display:none">
+      <div id="crawlAbout" style="font-size:14px;color:var(--ink);margin-bottom:12px;line-height:1.5;"></div>
+      <div id="crawlHours" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
+      <div id="crawlLinks" style="font-size:13px;color:var(--muted);"></div>
+    </div>
+  </div>
+
+  <!-- SECTION 1: Menu Upload + Editable Grid (4a) -->
+  <div class="section">
+    <div class="section-h">📋 Your menu</div>
+    <div class="section-desc">Upload a PDF or photos — our AI reads every item and price. Then review, edit, and add anything it missed. We never guess prices.</div>
+
+    <div class="upload-progress" id="uploadProgress"></div>
+
+    <div class="file-zone" id="fileZone">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text">Upload menu (PDF or photo)</div>
+      <div class="upload-hint">PDF, JPG, PNG, HEIC, WebP — drag & drop or click</div>
+      <input type="file" id="menuFile" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,.webp" multiple />
+    </div>
+
+    <!-- Editable menu grid -->
+    <div class="menu-grid-section" id="menuGridSection" style="display:none">
+      <div class="menu-grid-header">
+        <h3 id="menuItemCount">Menu items</h3>
+        <button class="btn btn-ghost btn-sm" id="addItemBtn">+ Add item</button>
+      </div>
+      <div id="menuEmptyMsg" class="menu-empty-msg" style="display:none">
+        No menu items yet. Upload a menu above or click <strong>+ Add item</strong> to start.
+      </div>
+      <table class="menu-grid-table" id="menuGridTable">
+        <thead>
+          <tr>
+            <th class="col-cat">Category</th>
+            <th class="col-name">Name</th>
+            <th class="col-price">Price ($)</th>
+            <th class="col-desc">Description</th>
+            <th class="col-action"></th>
+          </tr>
+        </thead>
+        <tbody id="menuGridBody"></tbody>
+      </table>
+      <button class="btn btn-primary btn-sm" id="saveMenuBtn" disabled>Save menu changes</button>
+      <span class="badge-ok" id="menuSavedBadge" style="display:none;margin-left:10px;">Menu saved ✓</span>
+    </div>
+  </div>
+
+  <!-- SECTION 2: Menu Links (for online menu pages) -->
+  <div class="section">
+    <div class="section-h">🔗 Online menu links</div>
+    <div class="section-desc">If you have online menus (Toast, Square, website), add them so your assistant can reference them for pricing and specials.</div>
+    <div id="menuLinksContainer">
+      <label class="fld"><span>Menu link 1</span><input type="url" class="menu-link-field" placeholder="https://www.toasttab.com/your-restaurant" /></label>
+      <label class="fld"><span>Menu link 2</span><input type="url" class="menu-link-field" placeholder="https://www.your-restaurant.com/menu" /></label>
+      <label class="fld"><span>Menu link 3</span><input type="url" class="menu-link-field" placeholder="" /></label>
+      <label class="fld"><span>Menu link 4</span><input type="url" class="menu-link-field" placeholder="" /></label>
+    </div>
+  </div>
+
+  <!-- SECTION 3: Special Instructions -->
+  <div class="section">
+    <div class="section-h">📝 Special instructions</div>
+    <div class="section-desc">Plain-English rules for your assistant. It can never override safety or opt-out rules.</div>
+    <label class="fld">
+      <span>Tell your assistant how to behave</span>
+      <textarea id="aiInstructions" placeholder="e.g. Always offer garlic knots with pizza. We're cash-friendly. No deliveries after 9pm."></textarea>
+    </label>
+    <label class="fld">
+      <span>Open hours (as shown to customers)</span>
+      <input type="text" id="openHours" placeholder="e.g. Mon–Sun: 10:00 AM – 10:00 PM" />
+    </label>
+  </div>
+
+  <!-- SECTION 4: Delivery (4d) -->
+  <div class="section">
+    <div class="section-h">🚗 Delivery options</div>
+    <div class="section-desc">Control whether and when customers can order delivery from your shop.</div>
+
+    <div class="toggle-wrap">
+      <label class="toggle">
+        <input type="checkbox" id="deliveryEnabled" />
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label">Enable delivery orders</span>
+    </div>
+    <div class="toggle-hint">When off, customers can only place pickup orders.</div>
+
+    <div id="deliveryOptions" style="display:none">
+      <label class="fld">
+        <span>Delivery fee</span>
+        <input type="number" id="deliveryFee" placeholder="0.00" step="0.01" min="0" />
+        <div class="hint">Amount in dollars (e.g. 3.99). Set to 0 for free delivery.</div>
+      </label>
+      <label class="fld">
+        <span>Delivery hours</span>
+        <textarea id="deliveryHours" rows="3" placeholder="e.g. Mon–Thu: 11am–9pm, Fri–Sat: 11am–10pm, Sun: 12pm–8pm"></textarea>
+        <div class="hint">If different from your regular open hours. Leave blank to use open hours.</div>
+      </label>
+    </div>
+  </div>
+
+  <!-- SECTION 5: Go Live (4b) -->
+  <div class="section">
+    <div class="section-h">🚀 Go live</div>
+    <div class="section-desc">Provide your EIN for tax reporting and connect Stripe for payouts. <strong>Test/demo shops can bypass both.</strong></div>
+
+    <label class="fld">
+      <span id="einLabel">EIN (for tax reporting) <em style="font-weight:400;color:var(--light);">— required for real shops</em></span>
+      <input type="text" id="ein" placeholder="XX-XXXXXXX" autocomplete="off" />
+    </label>
+
+    <div class="btn-row" style="margin-top:0">
+      <button class="btn btn-primary" id="connectStripeBtn" disabled>Connect Stripe payout account</button>
+      <span class="badge-warn" id="stripeStatus" style="display:none">Not connected</span>
+      <span class="badge-ok" id="stripeOk" style="display:none">Stripe connected ✓</span>
+    </div>
+    <div class="hint" style="margin-top:8px;">You'll be redirected to Stripe to complete onboarding securely. Sprint never collects your bank details or SSN.</div>
+  </div>
+
+  <!-- SECTION 6: What to Expect (4c) -->
+  <div class="section">
+    <div class="section-h">✨ What to expect next</div>
+    <div class="section-desc">Here's how your shop goes from setup to taking orders.</div>
+    <ol class="expect-list">
+      <li>
+        <span class="step-num">1</span>
+        <span><strong>We review your setup</strong> — Usually within one business day. We make sure your menu, hours, and delivery settings look right.</span>
+      </li>
+      <li>
+        <span class="step-num">2</span>
+        <span><strong>Your shop goes live</strong> — Customers can start ordering through your SprintAI shop link. You'll get order notifications by text or email.</span>
+      </li>
+      <li>
+        <span class="step-num">3</span>
+        <span><strong>You get a management console</strong> — Update your menu, change hours, mark items as 86'd, or toggle delivery off — all from your phone or computer.</span>
+      </li>
+    </ol>
+    <div class="qr-wrap" id="qrWrap" style="display:none">
+      <p style="font-weight:600;color:var(--navy);">📱 Quick-access your shop chat</p>
+      <img id="qrImage" src="" alt="QR code for shop chat" />
+      <p>Scan with your phone to chat with your assistant. Text <code>86 pepperoni</code> to remove an item, or <code>turn off delivery</code> to pause orders.<br><em>(SMS link active once your shop number is provisioned. Until then, use the admin console below.)</em></p>
+    </div>
+  </div>
+
+  <!-- Save / Finish -->
+  <div class="btn-row" style="justify-content: flex-end;">
+    <a id="goToShopBtn" class="btn btn-secondary" style="display:none" href="https://getsprintai.com/admin/shop-owner" target="_blank">Go to my Shop →</a>
+    <span class="badge-ok" id="saveBadge" style="display:none">✓ Saved</span>
+    <button class="btn btn-primary" id="saveBtn">Save & finish →</button>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<footer>
+  <div>© 2026 SprintAI · Bethlehem, PA</div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var CFG = window.SPRINT_CONFIG || {
+    SUPABASE_URL: "https://rvdqfxtrskxekfkqnegx.supabase.co",
+    ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NDg2ODksImV4cCI6MjA5MDMyNDY4OX0.5SOW_FX92dIw_zgbqF7HO2SM5ueQC3YPaAexKCFAv3E"
+  };
+  function fnUrl(name) { return CFG.SUPABASE_URL + "/functions/v1/" + name; }
+  function api(name, body) {
+    return fetch(fnUrl(name), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": CFG.ANON_KEY,
+        "Authorization": "Bearer " + CFG.ANON_KEY
+      },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, json: j }; }); });
+  }
+
+  var state = {
+    shop: null,
+    token: null,
+    menuItems: [],
+    menuDirty: false,
+    stripeConnected: false
+  };
+
+  // ── UI helpers ────────────────────────────────────────────────────────────
+  function showLoading() {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("error").style.display = "none";
+    document.getElementById("setup").style.display = "none";
+  }
+  function showError(msg) {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("error").style.display = "block";
+    document.getElementById("setup").style.display = "none";
+    document.getElementById("errorMsg").textContent = msg || "This link doesn't match any shop.";
+  }
+  function showSetup() {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("error").style.display = "none";
+    document.getElementById("setup").style.display = "block";
+  }
+  function showToast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(function () { t.classList.remove("show"); }, 2500);
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
+    });
+  }
+
+  // ── Boot: resume by token ─────────────────────────────────────────────────
+  function boot() {
+    var qp = new URLSearchParams(location.search);
+    var token = qp.get("t");
+    if (!token) {
+      showError("No setup token in the URL. Check your welcome email for the correct link.");
+      return;
+    }
+    state.token = token;
+
+    api("onboarding-save", { action: "resume", token: token })
+      .then(function (r) {
+        if (!r.json || !r.json.shop) {
+          showError("We couldn't find your shop. The link may be invalid or expired.");
+          return;
+        }
+        state.shop = r.json.shop;
+        loadMenuItems().then(function () { render(); });
+      })
+      .catch(function () {
+        showError("Something went wrong loading your shop. Check your connection and try again.");
+      });
+  }
+
+  function loadMenuItems() {
+    return api("onboarding-save", { action: "get_menu", shop_id: state.shop.id })
+      .then(function (r) {
+        if (r.json && r.json.items) {
+          state.menuItems = r.json.items.map(function (it) {
+            return {
+              id: it.id || null,
+              category: it.category || "",
+              name: it.name || "",
+              price_cents: it.price_cents || 0,
+              description: it.description || ""
+            };
+          });
+        }
+      })
+      .catch(function () { /* leave menuItems as [] */ });
+  }
+
+  function render() {
+    showSetup();
+    var s = state.shop || {};
+    var isTest = s.is_test === true;
+    document.getElementById("shopName").textContent = "Welcome back, " + (s.owner_name || s.name || "Shop owner") + " — " + (s.name || "");
+
+    // Pre-fill fields from shop
+    if (s.ai_instructions) document.getElementById("aiInstructions").value = s.ai_instructions;
+    if (s.open_hours) document.getElementById("openHours").value = s.open_hours;
+
+    // Menu links
+    var linkFields = document.querySelectorAll(".menu-link-field");
+    if (s.menu_links && s.menu_links.length) {
+      for (var i = 0; i < linkFields.length && i < s.menu_links.length; i++) {
+        linkFields[i].value = s.menu_links[i];
+      }
+    }
+
+    // Delivery (4d)
+    if (s.delivery_enabled) {
+      document.getElementById("deliveryEnabled").checked = true;
+      document.getElementById("deliveryOptions").style.display = "block";
+    }
+    document.getElementById("deliveryEnabled").onchange = function () {
+      document.getElementById("deliveryOptions").style.display = this.checked ? "block" : "none";
+    };
+    if (s.delivery_fee_cents) {
+      document.getElementById("deliveryFee").value = (s.delivery_fee_cents / 100).toFixed(2);
+    }
+    if (s.delivery_hours) {
+      document.getElementById("deliveryHours").value = s.delivery_hours;
+    }
+
+    // EIN label gating
+    var einLabel = document.getElementById("einLabel");
+    if (einLabel) {
+      einLabel.innerHTML = isTest
+        ? 'EIN <em style="font-weight:400;color:var(--light);">— optional for test shops</em>'
+        : 'EIN (for tax reporting) <em style="font-weight:400;color:#DC2626;">— required</em>';
+    }
+
+    if (!isTest) {
+      document.getElementById("stripeStatus").style.display = "inline-flex";
+      document.getElementById("stripeStatus").textContent = "Required";
+    }
+
+    // Crawl status
+    if (s.crawl_status) {
+      document.getElementById("crawlSection").style.display = "block";
+      if (s.crawl_status === "pending" || s.crawl_status === "running") {
+        document.getElementById("crawlPending").style.display = "block";
+        startCrawlPolling(s.id);
+      } else if (s.crawl_status === "failed") {
+        document.getElementById("crawlFailed").style.display = "block";
+        if (s.crawl_error) document.getElementById("crawlFailed").textContent += " " + s.crawl_error;
+      } else if (s.crawl_status === "done") {
+        showCrawlDone(s);
+      }
+    }
+
+    // Stripe connect button
+    document.getElementById("connectStripeBtn").disabled = false;
+
+    // Menu grid
+    renderMenuGrid();
+
+    // QR code
+    renderQrCode(s);
+  }
+
+  function showCrawlDone(s) {
+    document.getElementById("crawlDone").style.display = "block";
+    if (s.about) document.getElementById("crawlAbout").textContent = s.about;
+    if (s.open_hours) document.getElementById("crawlHours").innerHTML = '<strong>Hours:</strong> ' + esc(s.open_hours);
+    if (s.menu_links && s.menu_links.length) {
+      var links = s.menu_links.map(function (l) { return '<a href="' + esc(l) + '" target="_blank" style="color:var(--brand);">' + esc(l) + '</a>'; });
+      document.getElementById("crawlLinks").innerHTML = '<strong>Online menu pages found:</strong> ' + links.join(', ');
+    }
+  }
+
+  function startCrawlPolling(shopId) {
+    var attempts = 0;
+    var maxAttempts = 30;
+    var check = function () {
+      attempts++;
+      api("onboarding-save", { action: "resume", shop_id: shopId }).then(function (r) {
+        if (r.json && r.json.shop) {
+          var cs = r.json.shop.crawl_status;
+          if (cs === "done") {
+            document.getElementById("crawlPending").style.display = "none";
+            showCrawlDone(r.json.shop);
+            return;
+          } else if (cs === "failed") {
+            document.getElementById("crawlPending").style.display = "none";
+            document.getElementById("crawlFailed").style.display = "block";
+            return;
+          }
+        }
+        if (attempts < maxAttempts) setTimeout(check, 5000);
+      }).catch(function () {
+        if (attempts < maxAttempts) setTimeout(check, 5000);
+      });
+    };
+    setTimeout(check, 3000);
+  }
+
+  // ── QR Code (4c) ──────────────────────────────────────────────────────────
+  function renderQrCode(s) {
+    var shopId = s.id;
+    if (!shopId) return;
+    // Target: shop SMS if provisioned, else owner admin dashboard
+    // For now: link to admin console; can swap to sms: link once provision-number is live
+    var qrTarget = "https://getsprintai.com/admin/shop-owner?shop=" + encodeURIComponent(shopId);
+    var qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(qrTarget);
+    var qrWrap = document.getElementById("qrWrap");
+    qrWrap.style.display = "block";
+    document.getElementById("qrImage").src = qrUrl;
+  }
+
+  // ── File upload zone ──────────────────────────────────────────────────────
+  var fileZone = document.getElementById("fileZone");
+  var fileInput = document.getElementById("menuFile");
+
+  fileZone.onclick = function () { fileInput.click(); };
+  fileZone.addEventListener("dragover", function (e) { e.preventDefault(); fileZone.classList.add("dragover"); });
+  fileZone.addEventListener("dragleave", function () { fileZone.classList.remove("dragover"); });
+  fileZone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    fileZone.classList.remove("dragover");
+    if (e.dataTransfer && e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  });
+  fileInput.onchange = function () { if (this.files.length) uploadFiles(this.files); };
+
+  function uploadFiles(files) {
+    var progressEl = document.getElementById("uploadProgress");
+    progressEl.textContent = "Reading " + files.length + " file(s)…";
+    progressEl.classList.add("show");
+
+    var fd = new FormData();
+    fd.append("shop_id", state.shop.id);
+    for (var i = 0; i < files.length; i++) {
+      fd.append(i === 0 ? "file" : "files", files[i]);
+    }
+
+    progressEl.textContent = "Parsing menu with AI (this takes ~20–40s for a full menu)…";
+
+    fetch(fnUrl("parse-menu-pdf"), {
+      method: "POST",
+      headers: { "apikey": CFG.ANON_KEY, "Authorization": "Bearer " + CFG.ANON_KEY },
+      body: fd
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      progressEl.classList.remove("show");
+      if (data.error) {
+        showToast("Menu parse failed: " + data.error);
+        return;
+      }
+      // Merge parsed items into menuItems (append, don't replace)
+      var parsed = (data.items || []).map(function (r) {
+        return {
+          id: null,
+          category: r.category || "",
+          name: r.name || "",
+          price_cents: Math.round((parseFloat(r.price) || 0) * 100),
+          description: r.description || ""
+        };
+      });
+      // Merge: if an item with same name exists, skip; otherwise append
+      var existingNames = {};
+      state.menuItems.forEach(function (it) { existingNames[it.name.toLowerCase().trim()] = true; });
+      parsed.forEach(function (it) {
+        if (!existingNames[it.name.toLowerCase().trim()]) {
+          state.menuItems.push(it);
+        }
+      });
+      state.menuDirty = true;
+      renderMenuGrid();
+      showToast("Parsed " + parsed.length + " items from your menu. Review and edit below.");
+    })
+    .catch(function (e) {
+      progressEl.classList.remove("show");
+      showToast("Couldn't reach the menu parser: " + e.message);
+    });
+  }
+
+  // ── Editable Menu Grid (4a) ───────────────────────────────────────────────
+  document.getElementById("menuGridSection").style.display = "block";
+
+  function renderMenuGrid() {
+    var body = document.getElementById("menuGridBody");
+    var count = state.menuItems.length;
+    document.getElementById("menuItemCount").textContent = "Menu items (" + count + ")";
+    document.getElementById("menuEmptyMsg").style.display = count === 0 ? "block" : "none";
+    document.getElementById("menuGridTable").style.display = count === 0 ? "none" : "";
+
+    var html = "";
+    for (var i = 0; i < state.menuItems.length; i++) {
+      var it = state.menuItems[i];
+      var price = it.price_cents ? (it.price_cents / 100).toFixed(2) : "";
+      html += '<tr data-idx="' + i + '">' +
+        '<td><input type="text" class="menu-cat" value="' + esc(it.category) + '" placeholder="Appetizers" /></td>' +
+        '<td><input type="text" class="menu-name" value="' + esc(it.name) + '" placeholder="Item name" /></td>' +
+        '<td><input type="text" class="menu-price" value="' + esc(price) + '" placeholder="0.00" /></td>' +
+        '<td><input type="text" class="menu-desc" value="' + esc(it.description) + '" placeholder="Optional" /></td>' +
+        '<td style="text-align:center"><button class="remove-btn" data-idx="' + i + '" title="Remove">✕</button></td>' +
+        '</tr>';
+    }
+    body.innerHTML = html;
+
+    // Wire input changes → mark dirty
+    var inputs = body.querySelectorAll("input");
+    for (var j = 0; j < inputs.length; j++) {
+      inputs[j].oninput = function () { markMenuDirty(); };
+    }
+    // Wire remove buttons
+    var removes = body.querySelectorAll(".remove-btn");
+    for (var k = 0; k < removes.length; k++) {
+      removes[k].onclick = function () {
+        var idx = parseInt(this.getAttribute("data-idx"));
+        state.menuItems.splice(idx, 1);
+        state.menuDirty = true;
+        renderMenuGrid();
+      };
+    }
+  }
+
+  function markMenuDirty() {
+    state.menuDirty = true;
+    document.getElementById("saveMenuBtn").disabled = false;
+    document.getElementById("menuSavedBadge").style.display = "none";
+  }
+
+  function collectMenuGrid() {
+    var rows = document.querySelectorAll("#menuGridBody tr");
+    state.menuItems = [];
+    for (var i = 0; i < rows.length; i++) {
+      var cat = rows[i].querySelector(".menu-cat");
+      var name = rows[i].querySelector(".menu-name");
+      var price = rows[i].querySelector(".menu-price");
+      var desc = rows[i].querySelector(".menu-desc");
+      var priceVal = parseFloat((price && price.value) || "0");
+      state.menuItems.push({
+        id: null, // upsert by category+name
+        category: (cat && cat.value || "").trim(),
+        name: (name && name.value || "").trim(),
+        price_cents: isNaN(priceVal) ? 0 : Math.round(priceVal * 100),
+        description: (desc && desc.value || "").trim()
+      });
+    }
+  }
+
+  document.getElementById("addItemBtn").onclick = function () {
+    state.menuItems.push({ id: null, category: "", name: "", price_cents: 0, description: "" });
+    state.menuDirty = true;
+    renderMenuGrid();
+  };
+
+  document.getElementById("saveMenuBtn").onclick = function () {
+    collectMenuGrid();
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Saving menu…";
+
+    api("onboarding-save", {
+      action: "save_menu",
+      shop_id: state.shop.id,
+      items: state.menuItems
+    })
+    .then(function (r) {
+      if (r.json && r.json.ok) {
+        state.menuDirty = false;
+        document.getElementById("menuSavedBadge").style.display = "inline-flex";
+        btn.textContent = "Save menu changes";
+        btn.disabled = false;
+        showToast("Menu saved!");
+      } else {
+        showToast("Menu save failed: " + ((r.json && r.json.error) || "unknown"));
+        btn.disabled = false;
+        btn.textContent = "Save menu changes";
+      }
+    })
+    .catch(function (e) {
+      showToast("Couldn't save menu: " + e.message);
+      btn.disabled = false;
+      btn.textContent = "Save menu changes";
+    });
+  };
+
+  // ── Save (everything else) ────────────────────────────────────────────────
+  document.getElementById("saveBtn").onclick = function () {
+    var btn = this;
+    var isTest = state.shop && state.shop.is_test === true;
+
+    if (state.menuDirty) {
+      showToast("Please save your menu changes first.");
+      return;
+    }
+
+    var einVal = document.getElementById("ein").value.trim();
+    if (!isTest && !einVal) {
+      showToast("Please enter your EIN before saving.");
+      return;
+    }
+    if (!isTest && !state.stripeConnected) {
+      showToast("Please connect Stripe before saving. (Test shops can skip this.)");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+
+    // Collect menu links
+    var linkFields = document.querySelectorAll(".menu-link-field");
+    var menuLinks = [];
+    for (var i = 0; i < linkFields.length; i++) {
+      var v = linkFields[i].value.trim();
+      if (v) menuLinks.push(v);
+    }
+
+    var fields = {
+      ai_instructions: document.getElementById("aiInstructions").value.trim(),
+      open_hours: document.getElementById("openHours").value.trim(),
+      menu_links: menuLinks,
+      delivery_enabled: document.getElementById("deliveryEnabled").checked,
+      delivery_hours: document.getElementById("deliveryHours").value.trim(),
+      delivery_fee_cents: Math.round((parseFloat(document.getElementById("deliveryFee").value) || 0) * 100)
+    };
+    if (einVal) fields.ein = einVal;
+
+    api("onboarding-save", {
+      action: "save",
+      shop_id: state.shop.id,
+      onboarding_step: "setup",
+      fields: fields
+    })
+    .then(function (r) {
+      if (r.json && r.json.ok) {
+        showToast("Saved! 🎉");
+        document.getElementById("saveBadge").style.display = "inline-flex";
+        document.getElementById("goToShopBtn").style.display = "inline-flex";
+        btn.textContent = "All done ✓";
+      } else {
+        showToast("Save failed: " + ((r.json && r.json.error) || "unknown"));
+        btn.disabled = false;
+        btn.textContent = "Save & finish →";
+      }
+    })
+    .catch(function (e) {
+      showToast("Couldn't save: " + e.message);
+      btn.disabled = false;
+      btn.textContent = "Save & finish →";
+    });
+  };
+
+  // ── Stripe Connect (4b — hosted onboarding link) ──────────────────────────
+  document.getElementById("connectStripeBtn").onclick = function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Connecting…";
+
+    // Return to setup page after Stripe onboarding
+    var returnUrl = location.href.split("?")[0] + "?t=" + encodeURIComponent(state.token) + "&stripe=done";
+
+    api("connect-create-express", {
+      shop_id: state.shop.id,
+      return_url: returnUrl,
+      refresh_url: location.href.split("?")[0] + "?t=" + encodeURIComponent(state.token) + "&stripe=reauth"
+    })
+    .then(function (r) {
+      if (r.json && r.json.url) {
+        // Store that we initiated onboarding
+        document.getElementById("stripeStatus").style.display = "none";
+        document.getElementById("stripeOk").style.display = "inline-flex";
+        document.getElementById("stripeOk").textContent = "Stripe connected ✓";
+        state.stripeConnected = true;
+        btn.textContent = "Reconnect Stripe";
+        btn.disabled = false;
+        // Open hosted onboarding in new tab
+        window.open(r.json.url, "_blank");
+        showToast("Stripe onboarding opened in a new tab. Come back here when you're done.");
+      } else if (r.json && r.json.error) {
+        showToast("Stripe: " + r.json.error);
+        btn.disabled = false;
+        btn.textContent = "Connect Stripe payout account";
+      } else {
+        showToast("Stripe not configured yet — test mode OK");
+        btn.disabled = false;
+        btn.textContent = "Connect Stripe payout account";
+      }
+    })
+    .catch(function () {
+      showToast("Couldn't reach Stripe Connect.");
+      btn.disabled = false;
+      btn.textContent = "Connect Stripe payout account";
+    });
+  };
+
+  // Handle stripe=done in URL (user returned from Stripe onboarding)
+  if (location.search.indexOf("stripe=done") !== -1) {
+    setTimeout(function () { showToast("Welcome back! Stripe onboarding should be complete."); }, 1000);
+  }
+
+  boot();
+})();
+</script>
+
+</body>
+</html>

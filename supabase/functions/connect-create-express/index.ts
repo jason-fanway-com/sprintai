@@ -2,29 +2,19 @@
  * SprintAI connect-create-express Edge Function (Spec 01, Path B)
  *
  * POST /functions/v1/connect-create-express
- * Body: { shop_id }
+ * Body: { shop_id, return_url?, refresh_url? }
  *
- * Creates an EXPRESS connected account for a restaurant new to Stripe and
- * returns an embedded-onboarding Account Session client secret for the wizard
- * to mount <ConnectAccountOnboarding /> (component name verified §10.2).
+ * Creates an EXPRESS connected account and returns a HOSTED onboarding link
+ * (accountLinks.create) — never embedded. Restaurant completes onboarding on
+ * Stripe's hosted flow; Stripe redirects back to return_url.
  *
  * DIRECT-CHARGE MODEL (Jason 2026-06-20):
- *   We create the account with `type: 'express'`. Stripe assigns this account
- *   the fee-payer behavior `application_express`, under which — for DIRECT
- *   charges — the CONNECTED ACCOUNT (restaurant) bears Stripe processing fees
- *   and dispute fees (verified against
- *   docs.stripe.com/connect/direct-charges-fee-payer-behavior, table row
- *   "application_express": Stripe payment processing fees = Connected Account,
- *   Dispute fees = Connected Account). Sprint keeps the full flat $0.99
- *   application fee whole on each direct charge.
+ *   type='express' → fee-payer behavior 'application_express'. On DIRECT
+ *   charges the CONNECTED ACCOUNT (restaurant) bears processing + dispute fees.
+ *   Sprint keeps the full flat $0.99 application fee.
  *
- *   ⚠️ DO NOT set controller.fees.payer='account' on an express-dashboard
- *   account — Stripe REJECTS it: "When stripe_dashboard[type]=express, your
- *   platform must collect fees and be liable for negative balances or refunds
- *   and chargebacks." (verified empirically 2026-06-20). The express account
- *   type already gives us the restaurant-bears-fees economics for DIRECT
- *   charges via application_express, so we use type='express' and do not
- *   override the controller.
+ *   ⚠️ DO NOT set controller.fees.payer='account' on an express account —
+ *   Stripe REJECTS it (verified empirically 2026-06-20).
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
@@ -46,10 +36,14 @@ Deno.serve(async (req: Request) => {
   const stripeKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
   if (!stripeKey) return jsonError("Stripe not configured", 500);
 
-  let body: { shop_id?: string };
+  let body: { shop_id?: string; return_url?: string; refresh_url?: string };
   try { body = await req.json(); } catch { return jsonError("Invalid JSON"); }
   const shopId = body.shop_id;
   if (!shopId) return jsonError("shop_id is required");
+
+  // Default return/refresh URLs (setup page overrides with its own origin)
+  const returnUrl = body.return_url ?? "https://getsprintai.com/admin/shop-owner";
+  const refreshUrl = body.refresh_url ?? "https://getsprintai.com/admin/shop-owner?reauth=true";
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -57,7 +51,6 @@ Deno.serve(async (req: Request) => {
     { auth: { persistSession: false } },
   );
 
-  // Load the shop for prefill + idempotency.
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
     .select("id, name, email_ticket_recipient, stripe_connected_account_id, connect_account_type")
@@ -69,19 +62,20 @@ Deno.serve(async (req: Request) => {
   const stripe = makeStripe(stripeKey);
 
   try {
-    // Idempotency: reuse an existing express account for this shop if present.
     let accountId = shop.stripe_connected_account_id as string | null;
 
     if (!accountId) {
       const account = await stripe.accounts.create({
-        type: "express", // => fees_payer 'application_express' (restaurant bears processing+disputes on DIRECT charges)
+        type: "express",
         country: "US",
         email: shop.email_ticket_recipient ?? undefined,
-        business_type: undefined, // collected in embedded onboarding
+        business_type: undefined,
         business_profile: {
           mcc: RESTAURANT_MCC,
-          name: shop.name ?? undefined,
+          name: (shop.name ?? "").trim() || undefined,
         },
+        // Prefill company name for hosted onboarding
+        company: { name: (shop.name ?? "").trim() || undefined },
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
@@ -104,19 +98,19 @@ Deno.serve(async (req: Request) => {
       console.log(`[connect-create-express] Reusing existing account ${accountId} for shop ${shopId}`);
     }
 
-    // Create an embedded-onboarding Account Session (§10.2 verified).
-    const session = await stripe.accountSessions.create({
+    // HOSTED onboarding link (never embedded — prevents collecting bank/SSN/identity)
+    const link = await stripe.accountLinks.create({
       account: accountId,
-      components: {
-        account_onboarding: { enabled: true },
-      },
+      type: "account_onboarding",
+      return_url: returnUrl,
+      refresh_url: refreshUrl,
     });
 
     return jsonResponse({
       account_id: accountId,
-      client_secret: session.client_secret,
-      // Front end (spec 05) mounts via @stripe/connect-js loadConnectAndInitialize
-      // + <ConnectAccountOnboarding />, fetching this client_secret.
+      url: link.url,
+      return_url: returnUrl,
+      onboarding_started_at: new Date().toISOString(),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

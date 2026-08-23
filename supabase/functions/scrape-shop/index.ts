@@ -140,6 +140,38 @@ async function scrapePage(url: string, apiKey: string, includeRaw = false): Prom
 
 const CONTEXT_PROMPT = `You are extracting useful context about a restaurant from their website. Summarize the following into a concise paragraph (under 500 words) that an AI ordering assistant would need to answer customer questions. Include: owner names, how long they have been in business, location details (address, cross streets, parking), hours if mentioned, whether they do catering, any dietary accommodations (gluten-free, vegan options), notable menu specialties, history/story, seating (indoor/outdoor/counter), and any policies (cash only, minimum order, delivery radius). Only include facts explicitly stated on the website. Do not invent information.`;
 
+/** Extract open hours from scraped text with prioritized patterns.
+ *  Handles "open seven days a week, from 10:00 AM to 10:00 PM" format. */
+function extractOpenHours(summaryText: string, pages: string[], results: string[], structured: string): string | null {
+  const combined = [summaryText, structured, ...results].join("\n");
+
+  // Pattern 1: "open seven days a week... from HH:MM AM to HH:MM PM"
+  const sevenDay = combined.match(/open\s+seven\s+days?\s+(?:a\s+)?week[^.]*?(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?:to|–|-)\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
+  if (sevenDay) return "Mon–Sun: " + sevenDay[1].trim();
+
+  // Pattern 2: "Sunday through Saturday, from 10:00 AM to 10:00 PM"
+  const through = combined.match(/(?:Sunday|Monday)\s+through\s+(?:Saturday|Sunday)[^.]*?(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?:to|–|-)\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
+  if (through) return through[0].trim().substring(0, 512);
+
+  // Pattern 3: Day range "Mon-Fri 10am-10pm"
+  const dayRange = combined.match(/(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*[-–]\s*(mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]*?\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*[-–]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)/i);
+  if (dayRange) return dayRange[0].trim().substring(0, 512);
+
+  // Pattern 4: "Hours:" label
+  const hoursLabel = combined.match(/Hours?[:\s]+([^\n]{10,200}?(?:AM|PM|am|pm)[^\n]*)/i);
+  if (hoursLabel) return hoursLabel[1].trim().substring(0, 512);
+
+  // Pattern 5: JSON-LD openingHours
+  const jsonLd = combined.match(/openingHours["':\s]+([\w\s,\-]+(?:AM|PM|am|pm)[\w\s,\-]*)/i);
+  if (jsonLd) return jsonLd[1].trim().substring(0, 512);
+
+  // Pattern 6: Multiple AM/PM ranges = likely hours
+  const ranges = combined.match(/(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*[-–to]+\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/gi);
+  if (ranges && ranges.length >= 2) return ranges.slice(0, 4).join(", ");
+
+  return null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -159,15 +191,39 @@ Deno.serve(async (req: Request) => {
   );
 
   const { data: shop, error: shopErr } = await supabase
-    .from("shops").select("id, website_url").eq("id", shop_id).single();
+    .from("shops").select("id, website_url, crawl_status, updated_at").eq("id", shop_id).single();
 
   if (shopErr || !shop)  return jsonResponse({ error: "Shop not found" }, 404);
   if (!shop.website_url) return jsonResponse({ error: "Shop has no website_url set" }, 400);
 
+  // Idempotency: never double-crawl. If already done, skip. If pending/running
+  // and the shop was updated in the last 10 minutes, skip — another invocation
+  // is either working or just finished setting it.
+  if (shop.crawl_status === "done") {
+    console.log(`[scrape-shop] Shop ${shop_id} already crawled — skipping`);
+    return jsonResponse({ ok: true, skipped: true, reason: "already_crawled" });
+  }
+  if (shop.crawl_status === "running") {
+    const updatedMs = new Date(shop.updated_at ?? 0).getTime();
+    if (Date.now() - updatedMs < 10 * 60_000) {
+      console.log(`[scrape-shop] Shop ${shop_id} is already being crawled — skipping`);
+      return jsonResponse({ ok: true, skipped: true, reason: "crawl_in_progress" });
+    }
+  }
+  if (shop.crawl_status === "pending") {
+    const updatedMs = new Date(shop.updated_at ?? 0).getTime();
+    if (Date.now() - updatedMs < 10 * 60_000) {
+      console.log(`[scrape-shop] Shop ${shop_id} pending (set ${Math.round((Date.now() - updatedMs) / 1000)}s ago) — allowing, may be stale`);
+    }
+  }
+
+  // Mark running so concurrent invocations bail out.
+  await supabase.from("shops").update({ crawl_status: "running" }).eq("id", shop_id);
+
   const firecrawlKey = Deno.env.get("FIRECRAWL_API_KEY") ?? "";
   if (!firecrawlKey) return jsonResponse({ error: "FIRECRAWL_API_KEY not configured" }, 500);
 
-  // Step 1: Discover pages via /map
+  try {
   let pages: string[];
   try {
     const allLinks = await discoverPages(shop.website_url, firecrawlKey);
@@ -175,8 +231,12 @@ Deno.serve(async (req: Request) => {
     console.log(`[scrape-shop] Discovered ${allLinks.length} links, scraping top ${pages.length}`);
   } catch (err) {
     console.error("[scrape-shop] Firecrawl /map error:", err);
-    // Fallback: just scrape the homepage
-    pages = [shop.website_url];
+    const errMsg = err instanceof Error ? err.message : String(err);
+    await supabase.from("shops").update({
+      crawl_status: "failed",
+      crawl_error: ("Map failed: " + errMsg).substring(0, 1024),
+    }).eq("id", shop_id);
+    return jsonResponse({ error: "Firecrawl /map failed" }, 500);
   }
 
   // Step 2: Scrape each page via /scrape (synchronous, ~0.5s each)
@@ -199,50 +259,90 @@ Deno.serve(async (req: Request) => {
   const combinedText = results.join("\n\n---\n\n").substring(0, MAX_COMBINED_CHARS);
 
   if (!combinedText.trim()) {
+    await supabase.from("shops").update({ crawl_status: "failed", crawl_error: "No readable text found on website" }).eq("id", shop_id);
     return jsonResponse({ error: "No readable text found on website" }, 422);
   }
 
   console.log(`[scrape-shop] Scraped ${results.length} pages, ${combinedText.length} chars total`);
 
-  // Step 3: Summarize with Claude Sonnet
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-  if (!apiKey) return jsonResponse({ error: "ANTHROPIC_API_KEY not configured" }, 500);
-
-  let claudeRes: Response;
-  try {
-    claudeRes = await fetch(CLAUDE_API, {
-      method:  "POST",
-      headers: {
-        "x-api-key":         apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
-      },
-      body: JSON.stringify({
-        model:      SONNET_MODEL,
-        max_tokens: 1024,
-        messages: [
-          { role: "user", content: `${CONTEXT_PROMPT}\n\n${combinedText}` },
-        ],
-      }),
-    });
-  } catch (err) {
-    console.error("[scrape-shop] Claude API fetch error:", err);
-    return jsonResponse({ error: "Failed to reach Claude API" }, 500);
+  // Step 3: Summarize. Prefer OpenRouter (same working path as chat-sms /
+  // parse-menu-pdf); fall back to Anthropic direct only if OpenRouter is unset.
+  const openRouterKey = Deno.env.get("OPENROUTER_API_KEY") ?? "";
+  const anthropicKey  = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+  if (!openRouterKey && !anthropicKey) {
+    return jsonResponse({ error: "No LLM key configured (OPENROUTER_API_KEY / ANTHROPIC_API_KEY)" }, 500);
   }
 
-  if (!claudeRes.ok) {
-    const errText = await claudeRes.text();
-    console.error("[scrape-shop] Claude API error:", claudeRes.status, errText);
+  const prompt = `${CONTEXT_PROMPT}\n\n${combinedText}`;
+  let context = "";
+  let llmErr = "";
+
+  try {
+    if (openRouterKey) {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method:  "POST",
+        headers: {
+          "Authorization": `Bearer ${openRouterKey}`,
+          "Content-Type":  "application/json",
+        },
+        body: JSON.stringify({
+          model:      "anthropic/claude-sonnet-4-6",
+          max_tokens: 1024,
+          messages:   [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!res.ok) {
+        llmErr = `OpenRouter error: ${res.status} ${(await res.text()).slice(0, 200)}`;
+      } else {
+        const data = await res.json();
+        context = (data?.choices?.[0]?.message?.content ?? "").trim();
+      }
+    } else {
+      const res = await fetch(CLAUDE_API, {
+        method:  "POST",
+        headers: {
+          "x-api-key":         anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "content-type":      "application/json",
+        },
+        body: JSON.stringify({
+          model:      SONNET_MODEL,
+          max_tokens: 1024,
+          messages:   [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!res.ok) {
+        llmErr = `Claude API error: ${res.status}`;
+      } else {
+        const data: { content: Array<{ type: string; text?: string }> } = await res.json();
+        context = (data.content.find(b => b.type === "text")?.text ?? "").trim();
+      }
+    }
+  } catch (err) {
+    llmErr = `LLM fetch error: ${(err as Error).message}`;
+  }
+
+  if (!context) {
+    const detail = llmErr || "No summary generated";
+    console.error("[scrape-shop] summarize failed:", detail);
+    await supabase.from("shops").update({ crawl_status: "failed", crawl_error: detail }).eq("id", shop_id);
     return jsonResponse({ error: "Failed to summarize content" }, 500);
   }
 
-  const claudeData: { content: Array<{ type: string; text?: string }> } = await claudeRes.json();
-  const context = claudeData.content.find(b => b.type === "text")?.text?.trim() ?? "";
+  // Extract structured fields from the crawl
+  const openHours = extractOpenHours(context, pages, results, structuredContext);
+  const menuLinkUrls = pages.filter(u => /menu|food|drink|order/i.test(u));
 
-  if (!context) return jsonResponse({ error: "No summary generated" }, 500);
+  const updatePayload: Record<string, unknown> = {
+    shop_context: context,
+    about: context,
+    crawl_status: "done",
+    menu_links: menuLinkUrls,
+  };
+  if (openHours) updatePayload.open_hours = openHours;
 
   const { error: updateErr } = await supabase
-    .from("shops").update({ shop_context: context }).eq("id", shop_id);
+    .from("shops").update(updatePayload).eq("id", shop_id);
 
   if (updateErr) {
     console.error("[scrape-shop] Failed to save context:", updateErr);
@@ -254,5 +354,16 @@ Deno.serve(async (req: Request) => {
     pages_discovered: pages.length,
     pages_scraped: results.length,
     context,
+    open_hours: openHours,
+    menu_links: menuLinkUrls,
   });
+  } catch (err) {
+    console.error("[scrape-shop] Unhandled crawl error:", err);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    await supabase.from("shops").update({
+      crawl_status: "failed",
+      crawl_error: errMsg.substring(0, 1024),
+    }).eq("id", shop_id);
+    return jsonResponse({ error: "Crawl failed: " + errMsg }, 500);
+  }
 });
