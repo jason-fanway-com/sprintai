@@ -73,15 +73,25 @@ Deno.serve(async (req: Request) => {
     if (!name) return jsonError("Restaurant name is required");
     if (!email) return jsonError("Email is required");
 
+    // Slug base (tenants.slug and shops.slug are both NOT NULL + unique).
+    const baseSlug = slugify(name) || "shop";
+
+    // Unique tenant slug.
+    let tenantSlug = baseSlug;
+    for (let i = 0; i < 50; i++) {
+      const { data: clash } = await supabase.from("tenants").select("id").eq("slug", tenantSlug).maybeSingle();
+      if (!clash) break;
+      tenantSlug = `${baseSlug}-${i + 2}`;
+    }
+
     // A tenant is the billing/identity parent of a shop (shops.tenant_id NOT NULL).
     const { data: tenant, error: tErr } = await supabase
       .from("tenants")
-      .insert({ name, status: "onboarding", onboarding_status: "pending" })
+      .insert({ name, slug: tenantSlug, status: "onboarding", onboarding_status: "pending" })
       .select("id").single();
     if (tErr || !tenant) return jsonError("Failed to create tenant: " + (tErr?.message ?? "unknown"), 500);
 
-    // Unique slug.
-    let baseSlug = slugify(name);
+    // Unique shop slug.
     let slug = baseSlug;
     for (let i = 0; i < 50; i++) {
       const { data: clash } = await supabase.from("shops").select("id").eq("slug", slug).maybeSingle();
@@ -99,7 +109,6 @@ Deno.serve(async (req: Request) => {
         website_url: account.website_url ?? null,
         timezone: account.timezone || "America/New_York",
         email_ticket_recipient: email,
-        status: "onboarding",
         onboarding_step: "account",
         is_paused: true,
       })
@@ -134,7 +143,7 @@ Deno.serve(async (req: Request) => {
   if (action === "resume") {
     const shopId = body.shop_id ? String(body.shop_id) : "";
     const email = body.email ? String(body.email) : "";
-    let q = supabase.from("shops").select("*").eq("status", "onboarding");
+    let q = supabase.from("shops").select("*");
     if (shopId) q = q.eq("id", shopId);
     else if (email) q = q.eq("email_ticket_recipient", email);
     else return jsonError("shop_id or email is required");
