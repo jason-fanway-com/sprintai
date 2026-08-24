@@ -108,6 +108,30 @@ Key invariant: on any path other than "qualified + in-zone," the code must **not
 - Confirm via DB that `order_carts.delivery_address` is **null/unchanged** after every non-qualified attempt.
 - Shop with null radius → unchanged (no check).
 
+## REVISION 2 — 2026-08-24 — coords REQUIRED for a delivery shop to go live (Jason)
+
+A delivery-enabled shop must have coordinates to complete onboarding. Enforce at the go-live gate, and make it enforceable (not a dead-end) by geocoding the shop's own address as the reliable source.
+
+**File:** `supabase/functions/go-live/index.ts`.
+
+1. **Backfill coords before the gate.** If `shop.delivery_enabled === true` AND (`shop.latitude` is null OR `shop.longitude` is null):
+   - Geocode the shop's own address via `GOOGLE_MAPS_API_KEY` (Google Geocoding API). Use `shop.formatted_address` if present, else compose from the shop's address fields.
+   - Qualified result (`status === "OK"`, `results[0].partial_match !== true`, `location_type` ∈ {`ROOFTOP`,`RANGE_INTERPOLATED`}) → persist `latitude`/`longitude` to the `shops` row and use them.
+   - Not qualified / geocode fails → leave coords null (the gate below will block with a clear message).
+
+2. **Add a `delivery_geo` gate** to the `gates` object:
+   `delivery_geo: shop.delivery_enabled ? (shop.latitude != null && shop.longitude != null) : true`
+   When it blocks, the message must be actionable: e.g. "Go-live refused: we couldn't locate your shop on the map — check that your street address is correct so we can set your delivery area." (Non-delivery shops are unaffected — gate is `true`.)
+
+3. **Defense-in-depth in chat-sms** (`supabase/functions/chat-sms/index.ts`): if a shop has `delivery_enabled === true` but is missing coords (or the geo key is absent), delivery must **refuse** (offer pickup) rather than fall through and accept blind. This kills the fail-open path Melvin flagged even if a bad row ever reaches production. Do not change the configured happy path.
+
+### Acceptance (Melvin, live)
+- Delivery shop with coords → `delivery_geo` passes, go-live proceeds (other gates permitting).
+- Delivery shop, coords null, valid address → go-live backfills coords from the address, then passes.
+- Delivery shop, coords null, un-geocodable address → go-live **refused** with the actionable message; status not flipped live.
+- Non-delivery shop → `delivery_geo` gate is `true`, no effect.
+- chat-sms: a delivery-enabled shop with coords forced null → delivery **refused** (pickup offered), no address written.
+
 ## Out of scope (v1)
 - Drive-time / road distance, polygon zones, ZIP allowlists.
 - Persistent geocode cache table (in-request caching only).

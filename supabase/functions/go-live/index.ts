@@ -45,7 +45,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status")
+    .select("id, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -97,8 +97,68 @@ Deno.serve(async (req: Request) => {
   // EIN gate: required for non-test shops only.
   const hasEin = isTest || !!shop.ein;
 
+  // ── Geocode shop's own address if delivery_enabled and coords missing ──
+  // Runs before the gates object so the delivery_geo gate sees current coords.
+  if (shop.delivery_enabled && (shop.latitude == null || shop.longitude == null)) {
+    const address = typeof shop.formatted_address === "string" && shop.formatted_address.trim()
+      ? shop.formatted_address.trim()
+      : null;
+    if (address) {
+      const geoKey = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
+      if (geoKey) {
+        const addrQuery = encodeURIComponent(address);
+        const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${addrQuery}&key=${geoKey}`;
+        type GeoResult = {
+          status: string;
+          results: Array<{
+            geometry: { location: { lat: number; lng: number }; location_type?: string };
+            partial_match?: boolean;
+          }>;
+        };
+        let geoJson: GeoResult | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 8000);
+            const geoRes = await fetch(geoUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+            if (geoRes.status >= 500) throw new Error(`HTTP ${geoRes.status}`);
+            geoJson = await geoRes.json() as GeoResult;
+            break;
+          } catch {
+            if (attempt === 0) continue;
+          }
+        }
+        if (geoJson && geoJson.status === "OK" && geoJson.results.length > 0) {
+          const top = geoJson.results[0];
+          const qualified = top.partial_match !== true &&
+            (top.geometry.location_type === "ROOFTOP" || top.geometry.location_type === "RANGE_INTERPOLATED");
+          if (qualified) {
+            const loc = top.geometry.location;
+            shop.latitude = loc.lat;
+            shop.longitude = loc.lng;
+            await supabase.from("shops").update({
+              latitude: loc.lat,
+              longitude: loc.lng,
+              updated_at: new Date().toISOString(),
+            }).eq("id", shopId);
+            console.log(`[go-live] Auto-geocoded shop ${shopId}: lat=${loc.lat} lng=${loc.lng}`);
+          } else if (geoJson.status === "OK") {
+            console.warn(`[go-live] Geocode result for shop ${shopId} was not qualified ` +
+              `(partial_match=${top.partial_match}, location_type=${top.geometry.location_type}) — coords left null`);
+          }
+        }
+      } else {
+        console.warn(`[go-live] GOOGLE_MAPS_API_KEY not set — cannot auto-geocode shop ${shopId}`);
+      }
+    } else {
+      console.warn(`[go-live] Delivery-enabled shop ${shopId} has no formatted_address — cannot auto-geocode`);
+    }
+  }
+
   const gates = {
     connect: hasStripe,
+    delivery_geo: shop.delivery_enabled ? (shop.latitude != null && shop.longitude != null) : true,
     menu: activeItems > 0,
     menu_approved: menuApproved || activeItems === 0,  // §C: requires owner attestation
     menu_clean: menuFlaggedReview === 0,                 // §C: no flagged rows pending
@@ -116,7 +176,9 @@ Deno.serve(async (req: Request) => {
       message:
         blocked_by.includes("connect")
           ? "Go-live refused: Stripe Connect is not enabled yet (charges_enabled false). This is the expected Phase-1 gate — the shop cannot take live orders until payouts are configured."
-          : "Go-live refused: " + blocked_by.join(", "),
+          : blocked_by.includes("delivery_geo")
+            ? "Go-live refused: Delivery is enabled but shop coordinates are missing. Ensure the shop address is set (formatted_address) and try again — the system will auto-geocode it."
+            : "Go-live refused: " + blocked_by.join(", "),
     });
   }
 

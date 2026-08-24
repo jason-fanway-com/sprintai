@@ -407,6 +407,7 @@ function buildSystemPrompt(
   deliveryFeeCents?: number | null,
   deliveryEnabled?: boolean,
   testMode?: boolean,
+  deliveryGeoAvailable?: boolean,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = dayWindows(shop.open_hours?.[today]);
@@ -494,9 +495,15 @@ function buildSystemPrompt(
     ? `\nDELIVERY FEE: $${(deliveryFeeCents / 100).toFixed(2)} (added at checkout)`
     : "";
 
-  const deliveryAvail = deliveryEnabled === true
-    ? `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`
-    : `\nDELIVERY AVAILABLE: No — this shop is pickup only. Never offer delivery.`;
+  const deliveryAvail = (() => {
+    if (deliveryEnabled !== true) {
+      return `\nDELIVERY AVAILABLE: No — this shop is pickup only. Never offer delivery.`;
+    }
+    if (deliveryGeoAvailable === false) {
+      return `\nDELIVERY AVAILABLE: No — delivery is temporarily unavailable while we finalize our delivery zone. Please order for pickup only. Never offer delivery.`;
+    }
+    return `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`;
+  })();
 
   const testModeDirective = testMode
     ? `\nTEST MODE: Ignore all business-hours restrictions — allow ordering at any time. Do NOT refuse orders based on the current time or TODAY'S HOURS.`
@@ -2809,8 +2816,16 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Defense-in-depth: refuse delivery when coords are missing ────────────
+  // If the shop has delivery_enabled but no geo coordinates, delivery cannot
+  // function (the set_delivery_address tool needs coords for the zone check).
+  // Tell the LLM delivery is unavailable; never fall through to delivery.
+  const deliveryGeoAvailable = shop.delivery_enabled === true
+    ? (shop.latitude != null && shop.longitude != null)
+    : false;
+
   // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode);
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable);
   const cartItems    = [...cart.cart_json];
 
   const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
