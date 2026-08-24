@@ -68,13 +68,34 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId])
 
-  // Poll for payment status changes while in checkout phase
+  // Poll for payment status changes — only when a checkout link is active
   useEffect(() => {
+    // Gate: only poll when a payment is actually pending
     if (phase !== 'checkout') return
+    if (!checkoutUrl) return
 
+    const IDLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
     pollStartTimeRef.current = new Date().toISOString()
     let convId: string | null = null
     let stopped = false
+    let intervalId: ReturnType<typeof setInterval> | null = null
+    let idleTimeoutId: ReturnType<typeof setTimeout> | null = null
+    let visibilityHandler: (() => void) | null = null
+
+    const cleanup = () => {
+      stopped = true
+      if (intervalId !== null) { clearInterval(intervalId); intervalId = null }
+      if (idleTimeoutId !== null) { clearTimeout(idleTimeoutId); idleTimeoutId = null }
+      if (visibilityHandler !== null) {
+        document.removeEventListener('visibilitychange', visibilityHandler)
+        visibilityHandler = null
+      }
+    }
+
+    const resetIdleTimer = () => {
+      if (idleTimeoutId !== null) clearTimeout(idleTimeoutId)
+      idleTimeoutId = setTimeout(() => { cleanup() }, IDLE_TIMEOUT_MS)
+    }
 
     const poll = async () => {
       if (stopped) return
@@ -99,9 +120,13 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
           .single()
         if (!cartData) return
 
+        // Reset idle timer on every successful poll
+        resetIdleTimer()
+
         if (cartData.phase === 'confirmed') {
-          stopped = true
+          cleanup()
           setPhase('confirmed')
+          setCheckoutUrl(null)
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: 'Payment received! Your order is confirmed.',
@@ -125,8 +150,9 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
             ])
           }
         } else if (cartData.phase === 'expired') {
-          stopped = true
+          cleanup()
           setPhase('expired')
+          setCheckoutUrl(null)
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: 'Payment link expired. Say restart to try again.',
@@ -138,12 +164,26 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
       }
     }
 
-    const intervalId = setInterval(poll, 3000)
-    return () => {
-      stopped = true
-      clearInterval(intervalId)
+    // Pause polling when tab is hidden; resume when visible
+    visibilityHandler = () => {
+      if (document.hidden) {
+        if (intervalId !== null) { clearInterval(intervalId); intervalId = null }
+        if (idleTimeoutId !== null) { clearTimeout(idleTimeoutId); idleTimeoutId = null }
+      } else {
+        if (!stopped && intervalId === null) {
+          intervalId = setInterval(poll, 5000)
+          resetIdleTimer()
+        }
+      }
     }
-  }, [phase, sessionId])
+    document.addEventListener('visibilitychange', visibilityHandler)
+
+    // Start polling at 5s cadence
+    intervalId = setInterval(poll, 5000)
+    resetIdleTimer()
+
+    return cleanup
+  }, [phase, checkoutUrl, sessionId])
 
   const sendMessage = async () => {
     if (!inputValue.trim() || isLoading) return
