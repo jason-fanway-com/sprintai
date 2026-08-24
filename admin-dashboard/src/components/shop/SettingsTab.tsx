@@ -12,6 +12,7 @@ interface Shop {
   toast_client_id?: string | null
   toast_client_secret?: string | null
   toast_location_guid?: string | null
+  delivery_radius_mi?: number | null
 }
 
 interface SettingsTabProps {
@@ -101,6 +102,22 @@ export default function SettingsTab({
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Shop ID</label>
             <p className="text-xs font-mono text-gray-400">{shop.id}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Delivery Radius (miles)</label>
+            {editingShop ? (
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                value={(shopForm.delivery_radius_mi ?? '') as string | number}
+                onChange={e => onFormChange('delivery_radius_mi' as keyof Shop, e.target.value ? parseFloat(e.target.value) : null)}
+                placeholder="e.g. 5"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            ) : (
+              <p className="text-sm text-gray-700">{shop.delivery_radius_mi != null ? `${shop.delivery_radius_mi} mi` : <span className="text-gray-300">Not set — no zone check</span>}</p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Merchant PIN</label>

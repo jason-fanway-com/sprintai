@@ -27,6 +27,9 @@ interface Shop {
   toast_client_id: string | null
   toast_client_secret: string | null
   toast_location_guid: string | null
+  latitude: number | null
+  longitude: number | null
+  delivery_radius_mi: number | null
 }
 
 interface MenuItem {
@@ -162,6 +165,7 @@ export default function ShopDetail() {
         toast_client_id: shopForm.toast_client_id ?? null,
         toast_client_secret: shopForm.toast_client_secret ?? null,
         toast_location_guid: shopForm.toast_location_guid ?? null,
+        delivery_radius_mi: shopForm.delivery_radius_mi ?? null,
       }).eq('id', id!)
       if (error) throw error
     },

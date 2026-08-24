@@ -1010,35 +1010,65 @@ async function executeTool(
         update.delivery_fee_cents = deliveryFeeCents;
       }
 
-      // ── Geocode + haversine zone check ────────────
+      // ── Geocode + haversine zone check (FAIL CLOSED) ────────────
+      // Set the delivery address ONLY when the geocode is positively qualified
+      // (street-level ROOFTOP/RANGE_INTERPOLATED, non-partial) AND in-zone.
+      // Every other path returns without writing order_carts.
       if (shopGeo && shopGeo.lat != null && shopGeo.lng != null && shopGeo.radiusMi > 0) {
         const geoKey = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
         if (geoKey) {
-          try {
-            const addrQuery = encodeURIComponent(formatted);
-            const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${addrQuery}&key=${geoKey}`;
-            const geoRes = await fetch(geoUrl);
-            const geoJson = await geoRes.json() as { status: string; results: Array<{ geometry: { location: { lat: number; lng: number } }; partial_match?: boolean }> };
+          const addrQuery = encodeURIComponent(formatted);
+          const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${addrQuery}&key=${geoKey}`;
+          type GeoResult = {
+            status: string;
+            results: Array<{
+              geometry: { location: { lat: number; lng: number }; location_type?: string };
+              partial_match?: boolean;
+            }>;
+          };
 
-            if (geoJson.status === "OK" && geoJson.results.length > 0) {
-              const loc = geoJson.results[0].geometry.location;
-              const distance = haversineMiles(shopGeo.lat, shopGeo.lng, loc.lat, loc.lng);
-              const partialMatch = geoJson.results[0].partial_match === true;
-
-              if (distance > shopGeo.radiusMi) {
-                return { ok: true, result: { message: `We're sorry, but ${formatted} is outside our delivery area (${distance.toFixed(1)} mi away; we deliver up to ${shopGeo.radiusMi.toFixed(1)} mi).` }, newPhase: "greeting" };
+          // Geocode with one retry on transient failure (throw / HTTP 5xx / timeout).
+          let geoJson: GeoResult | null = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const ctrl = new AbortController();
+              const timer = setTimeout(() => ctrl.abort(), 8000);
+              const geoRes = await fetch(geoUrl, { signal: ctrl.signal });
+              clearTimeout(timer);
+              if (geoRes.status >= 500) {
+                throw new Error(`geocode HTTP ${geoRes.status}`);
               }
-              if (partialMatch) {
-                return { ok: true, result: { message: `We couldn't confirm ${formatted} exactly, but it appears to be within our delivery area. Proceeding, but delivery time estimates may vary.` }, newPhase: "building" };
-              }
-            } else {
-              // Geocoding failed — let it through with a warning
-              return { ok: true, result: { message: `We couldn't verify your delivery address (${formatted}) right now. Proceeding, but a staff member may contact you to confirm.` }, newPhase: "building" };
+              geoJson = await geoRes.json() as GeoResult;
+              break;
+            } catch (_err) {
+              if (attempt === 0) continue;
+              return { ok: true, result: { message: `We can't confirm delivery addresses right now. Please try again shortly, or switch to pickup and we'll have it ready for you.` }, newPhase: "building" };
             }
-          } catch (_err) {
-            // Network error — let it through
-            return { ok: true, result: { message: `We couldn't check your address (${formatted}) right now. Proceeding, but a staff member may contact you to confirm.` }, newPhase: "building" };
           }
+
+          if (!geoJson) {
+            return { ok: true, result: { message: `We can't confirm delivery addresses right now. Please try again shortly, or switch to pickup and we'll have it ready for you.` }, newPhase: "building" };
+          }
+
+          const top = geoJson.results[0];
+          const qualified = geoJson.status === "OK" &&
+            geoJson.results.length > 0 &&
+            top.partial_match !== true &&
+            (top.geometry.location_type === "ROOFTOP" || top.geometry.location_type === "RANGE_INTERPOLATED");
+
+          if (!qualified) {
+            // partial match / centroid-only / ZERO_RESULTS / any non-OK status → fail closed
+            return { ok: true, result: { message: `We couldn't confirm ${formatted} as a deliverable address. Please double-check the street number and ZIP, or switch to pickup and we'll have it ready for you.` }, newPhase: "building" };
+          }
+
+          const loc = top.geometry.location;
+          const distance = haversineMiles(shopGeo.lat, shopGeo.lng, loc.lat, loc.lng);
+
+          if (distance > shopGeo.radiusMi) {
+            return { ok: true, result: { message: `We're sorry, but ${formatted} is outside our delivery area (${distance.toFixed(1)} mi away; we deliver up to ${shopGeo.radiusMi.toFixed(1)} mi). Would you like to switch to pickup instead?` }, newPhase: "greeting" };
+          }
+
+          // qualified + in-zone → fall through to set the address below
         }
       }
 

@@ -30,7 +30,7 @@ const ALLOWED_FIELDS = new Set<string>([
   "subscription_status", "subscription_pm_set", "stripe_subscription_id",
   // Phase 2–4 onboarding fields
   "owner_name", "ein", "is_test", "menu_links", "special_instructions",
-  "delivery_enabled", "delivery_hours", "delivery_fee_cents",
+  "delivery_enabled", "delivery_hours", "delivery_fee_cents", "delivery_radius_mi",
 ]);
 
 function slugify(s: string): string {
@@ -174,6 +174,11 @@ Deno.serve(async (req: Request) => {
     const update: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) {
       if (ALLOWED_FIELDS.has(k)) update[k] = v;
+    }
+    // Coerce delivery_radius_mi: empty/negative → null
+    if ("delivery_radius_mi" in update) {
+      const dr = Number(update.delivery_radius_mi);
+      update.delivery_radius_mi = (isNaN(dr) || dr < 0) ? null : dr;
     }
     if (body.onboarding_step) update.onboarding_step = String(body.onboarding_step);
     update.updated_at = new Date().toISOString();

@@ -119,6 +119,7 @@ Deno.serve(async (req: Request) => {
     "rating",
     "userRatingCount",
     "businessStatus",
+    "location",
   ];
 
   try {
@@ -150,6 +151,9 @@ Deno.serve(async (req: Request) => {
     };
 
     // ── Merge into shops ────────────────────────────────────────────
+    const lat = detailJson?.location?.latitude ?? null;
+    const lng = detailJson?.location?.longitude ?? null;
+
     const { error: updateErr } = await supabase
       .from("shops")
       .update({
@@ -158,6 +162,8 @@ Deno.serve(async (req: Request) => {
         google_rating: result.rating,
         google_review_count: result.userRatingCount,
         business_status: result.businessStatus || null,
+        latitude: lat,
+        longitude: lng,
       })
       .eq("id", shop_id);
 

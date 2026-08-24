@@ -570,6 +570,11 @@
         </table>
         <div class="hint">If different from your regular open hours. Leave blank to use open hours.</div>
       </label>
+      <label class="fld">
+        <span>Delivery radius (miles)</span>
+        <input type="number" id="deliveryRadius" placeholder="5" step="0.1" min="0" />
+        <div class="hint">How far from the restaurant you'll deliver. Leave blank for no zone check.</div>
+      </label>
     </div>
   </div>
 
@@ -868,6 +873,9 @@
     };
     if (s.delivery_fee_cents) {
       document.getElementById("deliveryFee").value = (s.delivery_fee_cents / 100).toFixed(2);
+    }
+    if (s.delivery_radius_mi) {
+      document.getElementById("deliveryRadius").value = s.delivery_radius_mi;
     }
 
     // EIN label gating
@@ -1193,7 +1201,8 @@
       menu_links: menuLinks,
       delivery_enabled: document.getElementById("deliveryEnabled").checked,
       delivery_hours: collectHours("deliveryHoursBody"),
-      delivery_fee_cents: Math.round((parseFloat(document.getElementById("deliveryFee").value) || 0) * 100)
+      delivery_fee_cents: Math.round((parseFloat(document.getElementById("deliveryFee").value) || 0) * 100),
+      delivery_radius_mi: parseFloat(document.getElementById("deliveryRadius").value) || null
     };
     if (einVal) fields.ein = einVal;
 
