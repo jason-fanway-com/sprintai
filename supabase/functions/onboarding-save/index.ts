@@ -119,6 +119,8 @@ Deno.serve(async (req: Request) => {
 
     // Kick async website crawl (non-blocking)
     const _scrape = kickScrape(shop.id, shop.website_url ?? null, Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
+    // Kick async Google Places lookup (non-blocking, Phase 6)
+    const _places = kickPlaces(shop.id, name, Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
 
     const resendKey = Deno.env.get("RESEND_API_KEY");
     const setupUrl = `https://getsprintai.com/signup-page/setup.html?t=${shop.onboarding_token}`;
@@ -349,7 +351,7 @@ function isTestEmail(email: string): boolean {
   return domains.some(d => d.startsWith("@") ? e.endsWith(d) : e === d);
 }
 
-/** Kick an async scrape in the background — fire-and-forget, never blocks create. */
+/** Kick an async website scrape in the background — fire-and-forget, never blocks create. */
 async function kickScrape(shopId: string, websiteUrl: string | null, supabaseUrl: string, serviceKey: string) {
   if (!websiteUrl) return;
   try {
@@ -357,6 +359,17 @@ async function kickScrape(shopId: string, websiteUrl: string | null, supabaseUrl
       method: "POST",
       headers: { "Content-Type": "application/json", "apikey": serviceKey, "Authorization": `Bearer ${serviceKey}` },
       body: JSON.stringify({ shop_id: shopId }),
+    });
+  } catch (_) { /* fire-and-forget */ }
+}
+
+/** Kick an async Google Places lookup in the background — fire-and-forget, never blocks create. */
+async function kickPlaces(shopId: string, shopName: string, supabaseUrl: string, serviceKey: string) {
+  try {
+    await fetch(`${supabaseUrl}/functions/v1/google-places-lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": serviceKey, "Authorization": `Bearer ${serviceKey}` },
+      body: JSON.stringify({ shop_id: shopId, name: shopName }),
     });
   } catch (_) { /* fire-and-forget */ }
 }

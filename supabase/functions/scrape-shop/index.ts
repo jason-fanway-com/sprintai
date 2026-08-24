@@ -10,7 +10,7 @@ const CLAUDE_API   = "https://api.anthropic.com/v1/messages";
 const SONNET_MODEL = "claude-sonnet-4-6";
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v1";
 const MAX_PAGES = 8;
-const MAX_COMBINED_CHARS = 50_000;
+const MAX_COMBINED_CHARS = 60_000;
 
 /** Extract JSON-LD structured data from raw HTML */
 function extractStructuredData(html: string): string {
@@ -156,7 +156,7 @@ Rules:
 - Only include items with a clear, explicitly-stated price. Never guess a price.
 - If a price range is given (e.g. "$12-$18"), skip that item.
 - Standardize category names (Pizza, Appetizers, Salads, Pasta, Desserts, Drinks, etc.).
-- Include at most 50 items.
+- Include ALL menu items with a stated price — do not stop early. Restaurants often have 100+ items; capture every one. Hard cap at most 300 items.
 - Return valid JSON only, no other text.`;
 
 /** Extract structured open hours via OpenRouter (Phase 5).
@@ -209,9 +209,9 @@ async function extractMenuItems(
       },
       body: JSON.stringify({
         model: openRouterKey ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6",
-        max_tokens: 4096,
+        max_tokens: 8_000,
         response_format: { type: "json_object" },
-        messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 40_000) }],
+        messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 55_000) }],
       }),
     });
     if (!res.ok) {

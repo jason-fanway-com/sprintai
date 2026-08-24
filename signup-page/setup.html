@@ -451,6 +451,16 @@
   <p class="sub">Upload your menu, set your delivery options, and tell your assistant how to behave. Takes about 5 minutes.</p>
   <div class="shop-name" id="shopName"></div>
 
+  <!-- Google Business Profile lookup (Phase 6) -->
+  <div class="section" id="googleSection" style="display:none">
+    <div class="section-h">📍 Confirmed business info</div>
+    <div class="section-desc">We found your business on Google Maps. Please confirm these details are correct.</div>
+    <div id="googleInfo" style="font-size:14px;color:var(--ink);line-height:1.7;">
+      <div id="googleAddress" style="display:none;"><strong>Address:</strong> <span id="googleAddressText"></span></div>
+      <div id="googleRating" style="display:none;"><strong>Google rating:</strong> <span id="googleRatingText"></span> ★ (<span id="googleReviewCount"></span> reviews)</div>
+    </div>
+  </div>
+
   <!-- Crawl status -->
   <div class="section" id="crawlSection" style="display:none">
     <div class="section-h">🌐 Website review</div>
@@ -871,6 +881,20 @@
     if (!isTest) {
       document.getElementById("stripeStatus").style.display = "inline-flex";
       document.getElementById("stripeStatus").textContent = "Required";
+    }
+
+    // Google Places data (Phase 6)
+    if (s.formatted_address || s.google_rating) {
+      document.getElementById("googleSection").style.display = "block";
+      if (s.formatted_address) {
+        document.getElementById("googleAddress").style.display = "block";
+        document.getElementById("googleAddressText").textContent = s.formatted_address;
+      }
+      if (s.google_rating) {
+        document.getElementById("googleRating").style.display = "block";
+        document.getElementById("googleRatingText").textContent = s.google_rating;
+        document.getElementById("googleReviewCount").textContent = s.google_review_count || 0;
+      }
     }
 
     // Crawl status
