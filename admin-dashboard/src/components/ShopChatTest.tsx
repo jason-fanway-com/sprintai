@@ -19,6 +19,8 @@ interface CartItem {
 interface Props {
   shopId: string
   shopName: string
+  /** When true, behaves as test mode regardless of ?test=1 URL param */
+  forceTest?: boolean
 }
 
 function makeStorageKey(shopId: string) {
@@ -44,7 +46,7 @@ function getOrCreateSessionId(shopId: string): string {
   return id
 }
 
-export default function ShopChatTest({ shopId, shopName }: Props) {
+export default function ShopChatTest({ shopId, shopName, forceTest = false }: Props) {
   const [messages, setMessages]       = useState<ChatMessage[]>([])
   const [inputValue, setInputValue]   = useState('')
   const [isLoading, setIsLoading]     = useState(false)
@@ -164,7 +166,7 @@ export default function ShopChatTest({ shopId, shopName }: Props) {
           shop_id:    shopId,
           message:    userMsg,
           session_id: sessionId,
-          ...(WEB_TEST_MODE ? { test: true } : {}),
+          ...(forceTest || WEB_TEST_MODE ? { test: true } : {}),
         }),
       })
 

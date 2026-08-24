@@ -9,6 +9,7 @@ import {
 import { supabase, getAuthHeaders } from '../lib/supabase'
 import { useRole } from '../lib/RoleContext'
 import { useView } from '../lib/ViewContext'
+import ShopChatTest from '../components/ShopChatTest'
 
 const SHOP_FINANCIALS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/shop-financials`
 
@@ -386,7 +387,11 @@ export default function ShopOwnerDashboard() {
   const selPrev = sel?.prev
 
   return (
-    <div className="p-6 md:p-8 max-w-6xl mx-auto space-y-6">
+    <div className="p-6 md:p-8 max-w-[1400px] mx-auto">
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* LEFT: At a Glance (~2/3) */}
+        <div className="flex-1 min-w-0 space-y-6">
+
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -551,8 +556,8 @@ export default function ShopOwnerDashboard() {
         )}
       </div>
 
-      {/* Quick actions */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Quick actions */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Link to={`/shops/${shop.id}`} className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-100 rounded-xl text-sm text-gray-700 hover:shadow-sm transition-shadow">
           <UtensilsCrossed className="w-4 h-4 text-gray-400" /> Menu
         </Link>
@@ -562,9 +567,33 @@ export default function ShopOwnerDashboard() {
         <Link to="/shop-chats" className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-100 rounded-xl text-sm text-gray-700 hover:shadow-sm transition-shadow">
           <MessageSquare className="w-4 h-4 text-gray-400" /> Chat with your shop
         </Link>
-        <Link to={`/shop/${shop.id}/financials`} className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-100 rounded-xl text-sm font-medium text-brand-600 hover:shadow-sm transition-shadow">
-          <DollarSign className="w-4 h-4" /> Financials
-        </Link>
+          <Link to={`/shop/${shop.id}/financials`} className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-100 rounded-xl text-sm font-medium text-brand-600 hover:shadow-sm transition-shadow">
+            <DollarSign className="w-4 h-4" /> Financials
+          </Link>
+        </div>
+
+        </div>
+        {/* END LEFT */}
+
+        {/* RIGHT: Test Chat Panel (~1/3) */}
+        <div className="w-full lg:w-[340px] flex-shrink-0">
+          <div className="bg-white rounded-2xl border border-amber-200 shadow-sm overflow-hidden lg:sticky lg:top-6">
+            <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-amber-600" />
+              <span className="text-sm font-semibold text-amber-800">Test your assistant</span>
+            </div>
+            <div className="px-4 py-2 bg-amber-50/50 border-b border-amber-100">
+              <p className="text-xs text-amber-700">
+                Test mode — orders placed here are practice, not real.
+              </p>
+            </div>
+            <div className="flex justify-center py-4">
+              <ShopChatTest shopId={shop.id} shopName={shop.name} forceTest />
+            </div>
+          </div>
+        </div>
+        {/* END RIGHT */}
+
       </div>
     </div>
   )
