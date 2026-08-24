@@ -1217,6 +1217,7 @@
         showToast("Saved! 🎉");
         document.getElementById("saveBadge").style.display = "inline-flex";
         document.getElementById("goToShopBtn").style.display = "inline-flex";
+        document.getElementById("goToShopBtn").href = "https://getsprintai.com/admin/shop-owner?shop=" + encodeURIComponent(state.shop.id);
         btn.textContent = "All done ✓";
       } else {
         showToast("Save failed: " + ((r.json && r.json.error) || "unknown"));

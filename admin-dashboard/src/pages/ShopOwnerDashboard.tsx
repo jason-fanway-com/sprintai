@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Store, DollarSign, MessageSquare, UtensilsCrossed, Settings,
   TrendingUp, TrendingDown, ShoppingBag, Activity, CheckCircle2,
@@ -142,7 +142,8 @@ function HealthRing({ score }: { score: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 export default function ShopOwnerDashboard() {
   const { tenantId, isShopOwner, isSuperAdmin } = useRole()
-  const { mode, previewTenantId, setMode } = useView()
+  const { mode, previewTenantId, setMode, setPreview } = useView()
+  const [searchParams] = useSearchParams()
   const [period, setPeriod] = useState<Period>('today')
 
   const previewing = isSuperAdmin && mode === 'owner'
@@ -331,6 +332,28 @@ export default function ShopOwnerDashboard() {
     if (isSuperAdmin && mode !== 'owner') setMode('owner')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin])
+
+  // ── Deep-link from signup "Go to my Shop" (reads ?shop= param) ─────────
+  useEffect(() => {
+    const shopParam = searchParams.get('shop')
+    if (!shopParam) return
+    setShopId(shopParam)
+    // For super-admins previewing, resolve the shop's tenant so the tenant-scoped
+    // query fires with the correct effTenant.
+    if (isSuperAdmin) {
+      supabase
+        .from('shops')
+        .select('id, tenant_id, name')
+        .eq('id', shopParam)
+        .single()
+        .then(({ data, error }) => {
+          if (error || !data) return
+          setPreview(data.tenant_id, data.name ?? null)
+          if (mode !== 'owner') setMode('owner')
+        })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, isSuperAdmin])
 
   // ── Guards ───────────────────────────────────────────────────────────────
   if (!asOwner) {
