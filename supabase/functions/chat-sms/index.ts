@@ -120,6 +120,9 @@ interface Shop {
   delivery_fee_cents:       number | null;
   shop_context:            string | null;
   ai_instructions:         string | null;
+  latitude:                 number | null;
+  longitude:                number | null;
+  delivery_radius_mi:       number | null;
 }
 
 interface OrderCart {
@@ -532,7 +535,8 @@ RULES:
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
-- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way (e.g. "Can you deliver?", "Do you deliver?", "Do you guys do delivery?"), answer with a clear YES and offer to take their address. Example: "Yes, we deliver! What's your address?" Do not deflect or say pickup-only. Once they confirm they want delivery, call set_order_type("delivery"), then collect the delivery address (street, apt/unit, city, state, zip). Once the address is set, offer an optional driver tip. Do NOT ask for delivery address for pickup orders. Only assume pickup after the customer knows delivery is available and either ignores it or says they want pickup.
+- EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your VERY FIRST response (before taking any food items) MUST ask whether the customer wants pickup or delivery. Example: "Hi! Are you ordering for pickup or delivery today?" If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead. If they say "pickup" or start listing items without answering the question, default to pickup and proceed normally. This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question.
+- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way, answer with a clear YES and offer to take their address. Once they confirm delivery, call set_order_type("delivery"), then collect the address. Once the address is set and accepted, offer an optional driver tip. Do NOT ask for delivery address for pickup orders.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
 - DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
 - SANDWICH MAPPING: "Bacon egg and cheese" = BOBO Sandwich (Bacon). "Sausage egg and cheese" = SOBO Sandwich. "Ham egg and cheese" = HOBO Sandwich. "Pork roll egg and cheese" = PROBO Sandwich. "Turkey bacon egg and cheese" = TBOBO Sandwich. These all come on a bagel by default. If a customer asks for one of these, add the matching item immediately. Do NOT say "I don't see that on the menu."
@@ -566,6 +570,19 @@ PHASE BEHAVIOR:
 - expired: Their payment link expired. Ask if they want to restart.${expiredNote}${complianceNote}`;
 }
 
+// ─── Haversine distance in miles ────────────────────────────────────────────
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3958.8; // Earth radius in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
 async function executeTool(
@@ -578,6 +595,7 @@ async function executeTool(
   shopName:  string,
   testMode:  boolean = false,
   deliveryFeeCents?: number | null,
+  shopGeo?: { lat: number; lng: number; radiusMi: number } | null,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -991,6 +1009,39 @@ async function executeTool(
       if (deliveryFeeCents && deliveryFeeCents > 0) {
         update.delivery_fee_cents = deliveryFeeCents;
       }
+
+      // ── Geocode + haversine zone check ────────────
+      if (shopGeo && shopGeo.lat != null && shopGeo.lng != null && shopGeo.radiusMi > 0) {
+        const geoKey = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
+        if (geoKey) {
+          try {
+            const addrQuery = encodeURIComponent(formatted);
+            const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${addrQuery}&key=${geoKey}`;
+            const geoRes = await fetch(geoUrl);
+            const geoJson = await geoRes.json() as { status: string; results: Array<{ geometry: { location: { lat: number; lng: number } }; partial_match?: boolean }> };
+
+            if (geoJson.status === "OK" && geoJson.results.length > 0) {
+              const loc = geoJson.results[0].geometry.location;
+              const distance = haversineMiles(shopGeo.lat, shopGeo.lng, loc.lat, loc.lng);
+              const partialMatch = geoJson.results[0].partial_match === true;
+
+              if (distance > shopGeo.radiusMi) {
+                return { ok: true, result: { message: `We're sorry, but ${formatted} is outside our delivery area (${distance.toFixed(1)} mi away; we deliver up to ${shopGeo.radiusMi.toFixed(1)} mi).` }, newPhase: "greeting" };
+              }
+              if (partialMatch) {
+                return { ok: true, result: { message: `We couldn't confirm ${formatted} exactly, but it appears to be within our delivery area. Proceeding, but delivery time estimates may vary.` }, newPhase: "building" };
+              }
+            } else {
+              // Geocoding failed — let it through with a warning
+              return { ok: true, result: { message: `We couldn't verify your delivery address (${formatted}) right now. Proceeding, but a staff member may contact you to confirm.` }, newPhase: "building" };
+            }
+          } catch (_err) {
+            // Network error — let it through
+            return { ok: true, result: { message: `We couldn't check your address (${formatted}) right now. Proceeding, but a staff member may contact you to confirm.` }, newPhase: "building" };
+          }
+        }
+      }
+
       await supabase.from("order_carts").update(update).eq("id", cartId);
       return { ok: true, result: { message: `Delivery address set: ${formatted}` }, newPhase: "building" };
     }
@@ -1051,6 +1102,7 @@ async function runOrderingLoop(
   shopName:     string,
   testMode:     boolean = false,
   deliveryFeeCents?: number | null,
+  shopGeo?:      { lat: number; lng: number; radiusMi: number } | null,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
@@ -1123,6 +1175,7 @@ async function runOrderingLoop(
         shopName,
         testMode,
         deliveryFeeCents,
+        shopGeo ?? null,
       );
       if (result.checkoutUrl) checkoutUrl = result.checkoutUrl;
       if (result.newPhase)    finalPhase  = result.newPhase;
@@ -2730,8 +2783,12 @@ Deno.serve(async (req: Request) => {
   const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode);
   const cartItems    = [...cart.cart_json];
 
+  const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
+    ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
+    : null;
+
   const loopResult = await runOrderingLoop(
-    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents,
+    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo,
   );
   let reply       = loopResult.reply;
   let checkoutUrl = loopResult.checkoutUrl;
