@@ -24,13 +24,8 @@
 
     <key>ProgramArguments</key>
     <array>
-      <string>/opt/homebrew/bin/deno</string>
-      <string>run</string>
-      <string>--allow-net</string>
-      <string>--allow-env</string>
-      <string>--allow-read</string>
-      <string>--allow-write</string>
-      <string>worker.ts</string>
+      <string>/bin/bash</string>
+      <string>/Users/joestrazza/sprintai-ordering/scripts/test-suite/run-worker.sh</string>
     </array>
 
     <key>EnvironmentVariables</key>
