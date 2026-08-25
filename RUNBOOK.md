@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-21
+Last updated: 2026-08-25
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -41,6 +41,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |---------|-------------|----------|---------|
 | Public + shop chat | `sprintai-dev` | `getsprintai.com` | Marketing pages, `public/chat/` (shop-chat PWA) |
 | Admin dashboard | `sprintai-chat-admin` | `getsprintai.com/admin` | Login-gated admin SPA |
+| Payment short links | `sprintai-dev` (alias) | `pay.getsprintai.com` | `/o/*` → 302 → Supabase `pay-redirect` → Stripe |
 
 - The `sprintai-dev` site is git auto-deploy from `main` (build: `npm install && bash scripts/build-public-site.sh`, publish: `public/`).
 - The admin site is **manual deploy** — see "Admin dashboard deploy" below.
@@ -53,7 +54,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–055) |
+| Migrations | `supabase/migrations/` (001–064) |
 
 ---
 
@@ -80,7 +81,9 @@ self-scope via `useEffectiveTenant()` — super-admins see all, shop owners see
 only their own. **At a Glance** is the owner's landing page: today's revenue,
 Store Health ring (checkout completion × conversation quality × store readiness),
 KPI row with prior-period deltas, revenue tiles across time ranges, top sellers
-vs no-sales items, last 5 conversations — all tenant-scoped.
+vs no-sales items, last 5 conversations — all tenant-scoped. It also embeds a
+live test-chat sandbox (the `ShopChatTest` panel forced into test mode) so an
+owner can fire practice orders with no real charge immediately.
 
 ```bash
 cd admin-dashboard
@@ -117,6 +120,14 @@ New functions: add the entry before deploying.
 
 ## Services & integrations
 
+### Payments — short branded links
+
+Checkout links are shortened to `https://pay.getsprintai.com/o/<8-char-hex>`
+before emission. The raw Stripe URL (~612 chars, 4-5 SMS segments) is archived
+in `pay_links.stripe_url` as a fallback. The `pay-redirect` edge function
+resolves the code to the Stripe URL and issues a 302. No public URL shorteners
+are used — carriers block them.
+
 ### SMS / Telnyx (live) — Twilio deprecated
 
 SprintAI sends and receives SMS through **Telnyx**, not Twilio. Twilio's
@@ -144,8 +155,10 @@ and is abandoned as a provider; the same EIN verifies cleanly through Telnyx.
   primary number (`+14842018054`).
 
 Twilio numbers (`+16109366213`, `+16103792553` via Messaging Service
-`MG76067b4fbbb54eb914c3087f559c2f8b`) are legacy; provisioning now runs on
-Telnyx. See `docs/telnyx-integration-runbook.md` (wiring) and
+`MG76067b4fbbb54eb914c3087f559c2f8b`) are legacy. The existing
+`provision-number` edge function still targets Twilio (Phase 1 test mode).
+Telnyx provisioning is planned but NOT yet built — the Telnyx runbook
+contains the provisioning step sequence as a spec, not as implemented code. See `docs/telnyx-integration-runbook.md` (wiring) and
 `docs/10dlc-compliance-obligations.md` (binding behaviour — treat as law).
 
 ### iMessage bridge
@@ -156,11 +169,27 @@ Runs on the Mac via launchd: `~/Library/LaunchAgents/com.sprintai.imsg-bridge.pl
 The bridge polls Messages.app for incoming SMS destined for `+14842018054`,
 forwards them to the `chat-sms` edge function, and sends the LLM reply back via
 `imsg send`. It enforces a 15-minute message age freshness gate and tracks
-processed message IDs to prevent replay.
+processed message IDs to prevent replay. Poll interval is 8s
+(`POLL_INTERVAL`, env-overridable — raised from 2s to cut Messages.app churn).
 
 Logs: `/tmp/sprintai-imsg-bridge.log`
 PID file: `/tmp/sprintai-imsg-bridge.pid`
 Processed IDs: `~/.sprintai-bridge/processed-ids.txt`
+
+### Test-run worker (onboarding QA)
+
+Location: `scripts/test-suite/worker.ts` (Deno), launched via
+`scripts/test-suite/run-worker.sh` → launchd
+`com.sprintai.test-run-worker.plist` (mirrors the imsg-bridge job).
+
+Onboarding menu save enqueues a `test_run_queue` row (reason `onboarding`).
+The worker polls for the oldest `pending` row, marks it `running`, runs the full
+test-suite pipeline (generate → run → judge → scorecard → persist), and writes a
+real `test_runs` row + `test_case_results`. Success → `done`; failure → `error`
+(terminal — no poison-loop; manual requeue). Idle poll interval default 15s
+(`WORKER_POLL_INTERVAL`). `run-worker.sh` sources `~/.openclaw/.secrets` first —
+launchd does not inherit shell env, so the worker reads empty keys and error-
+loops without it.
 
 ### Payments (Stripe Connect)
 
@@ -190,6 +219,23 @@ Models per function:
 - `admin-chat`: `CHAT_MODEL` env (same)
 - `eval-sweep`: `JUDGE_MODEL` env (default flash)
 
+### Segment economics
+
+The business model assumes 8 SMS segments/order. Above ~8.8, the $0.99 service
+fee doesn't cover SMS cost. Every prompt change is a cost decision. Measure with:
+```bash
+deno run --allow-net --allow-env scripts/test-suite/segment-count.ts --live <shop_id>
+```
+See `BUILD-NOTES-payment-links-compliance-segments.md`.
+
+### Netlify rewrites — payment short links
+
+`pay.getsprintai.com` is a domain alias on site `sprintai-dev` with a DNS
+CNAME `pay` → `sprintai-dev.netlify.app`. The `/o/*` rewrite (302, forced)
+routes to `https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/pay-redirect/o/:splat`.
+The `pay-redirect` function uses service-role key to read `pay_links` (anon key
+cannot access it). The old GoDaddy Commerce Poynt CNAME was deleted.
+
 ### Scheduled jobs
 
 | Function | Schedule | Purpose |
@@ -212,6 +258,7 @@ notified without a corresponding issue.
 |----------|---------|-----|
 | `chat-sms` | Core ordering state machine (SMS + web chat) | No |
 | `create-checkout` | Stripe Checkout Session (direct charge) | No |
+| `pay-redirect` | Look up `pay_links` short code and 302 to Stripe | No |
 
 ### Admin / shop owner
 | Function | Purpose | JWT |
@@ -237,7 +284,10 @@ notified without a corresponding issue.
 |----------|---------|-----|
 | `onboard-tenant` | Scrape website, chunk, embed → knowledge base | No |
 | `train-tenant` | Text paste / document upload → embed | No |
-| `scrape-shop` | Firecrawl + Claude summary → shop_context | No |
+| `scrape-shop` | Firecrawl + Claude summary → shop_context + structured hours/menu | No |
+| `extract-menu-items` | LLM menu-item extraction (async after scrape-shop) | No |
+| `google-places-lookup` | Google Places enrichment — authoritative address/hours/rating/coords | No |
+| `generate-test-cases` | Generate + enqueue onboarding test run (test_run_queue) | No |
 | `import-menu-csv` | CSV menu importer (idempotent, diff-based) | No |
 | `parse-menu-pdf` | PDF/photo menu intake — multi-pass, triple-extract consensus, Opus model, 7-column canonical output | No |
 
@@ -279,7 +329,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–055). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–064). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -300,6 +350,14 @@ in the admin dashboard with tenant isolation preserved. Migrations `054`/`055` a
 A `scripts/test-suite/fix.ts` script auto-generates root-cause + proposed-fix via
 LLM for every failing case; the admin dashboard shows these inline alongside
 transcript + judge findings (two-level drill-down: run → case → detail).
+Migration `056` adds `sms_opt_outs` (per-phone/tenant opt-out state).
+Migrations `057`–`059` add onboarding fields (owner_name, onboarding_token,
+ein, is_test, crawl fields). Migration `060` adds `delivery_hours`; `061`
+normalizes `open_hours`/`delivery_hours` to a structured per-day object shape.
+Migration `062` adds Google Places fields (google_place_id, formatted_address,
+rating, review_count). Migration `063` adds shop `latitude`/`longitude`/
+`delivery_radius_mi` for the fail-closed delivery zone. Migration `064` adds
+`test_run_queue` for the async onboarding test-run worker.
 
 ### RLS model
 
@@ -351,13 +409,19 @@ transcript + judge findings (two-level drill-down: run → case → detail).
    provider Telnyx) is approved by all seven carriers. STOP/HELP/START use the
    **exact registered strings** and are matched **whole-message only** —
    "I want to cancel this order" does NOT opt out. The public homepage CTA and
-   footer carry the carrier-required message-frequency disclosure ("Message
-   frequency varies by order, typically 3-8 messages per order") — added to
-   clear carrier rejection code 806. Legal pages (contact/terms/privacy) use
-   the canonical `getsprintai.com` mailbox and publish the SprintAI LLC legal
-   identity (5620 Cetronia Rd, Allentown, PA 18106); the retired
-   `getsprintai.net` mailbox is gone. See
-   `docs/10dlc-compliance-obligations.md` for the full binding spec.
+   footer carry the carrier-required message-frequency disclosure — added to
+   clear carrier rejection code 806. Legal pages use the canonical
+   `getsprintai.com` mailbox and publish the SprintAI LLC legal identity
+   (5620 Cetronia Rd, Allentown, PA 18106); the retired `getsprintai.net`
+   mailbox is gone. See `docs/10dlc-compliance-obligations.md` for the full
+   binding spec.
+
+   **CANCEL is a registered opt-out keyword enforced by Telnyx at platform
+   level — the word is banned from all system prompts and bot replies.**
+   The bot offers CHANGE or RESTART at abandon-or-modify points instead.
+   Opt-out state is durably persisted in `sms_opt_outs` (migration 056)
+   with `upsertOptOut()` called from all STOP/START handlers and the Telnyx
+   send-rejection path.
 
 10. **Protected shop guard (051)**: Shops flagged `protected=true` (NJB and
     future demo/live shops) have a DB-level trigger that blocks DELETE on
@@ -365,7 +429,16 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     `SET LOCAL app.allow_protected_delete = 'on'`. This is the data-layer
     defense against test/QA runs accidentally destroying a real shop's menu.
 
-11. **Deterministic grounding guards (chat-sms)**: Four code-path intercepts
+11. **EIN required — no sole proprietors**: EIN is a hard gate in onboarding.
+    No alternate path (no SSN, no skip). Permanent decision by Jason.
+
+12. **First-contact compliance disclosure is code-driven, not prompt-driven.**
+    The 10DLC-required footer ("Msg & data rates...") is injected ONLY on the
+    lifetime first contact per (consumer phone, shop) pair — keyed on
+    `conversations`, not session expiry. On every subsequent reply it is
+    stripped by regex before send (~183 chars saved per reply).
+
+13. **Deterministic grounding guards (chat-sms)**: Four code-path intercepts
     prevent the LLM from hallucinating in ways that prompt rules alone can't
     stop. Guard 1b: suppress replies inventing off-menu container/portion
     words ("tub", "pint") not in the shop's menu vocabulary. Guard 1c:
@@ -378,7 +451,7 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     session. These are code-path intercepts, not prompt-preference — they fire
     deterministically regardless of what the LLM intended.
 
-12. **Customer-question precedence (chat-sms)**: The bot answers direct
+14. **Customer-question precedence (chat-sms)**: The bot answers direct
     customer questions (e.g. "do you have gluten-free bagels?") before
     advancing the order, even when the question is mixed with declines or
     order-completion signals. Category-level declines (e.g. asking for a
@@ -387,6 +460,27 @@ transcript + judge findings (two-level drill-down: run → case → detail).
     never ignores a customer question to shortcut to "what else can I add?".
     This is a prompt-rule in system-prompt CRITICAL tier, enforced alongside
     the deterministic grounding guards above.
+
+15. **CartOps integrity (chat-sms)**: `cart_json` is the single source of
+    truth. A bare tip reply never mutates items (no spurious `add_item`);
+    quantity corrections ("just one") write back to `cart_json` and persist
+    BEFORE any reply; every quoted total is computed from `cart_json`
+    (subtotal + $0.99 fee + delivery + tip). The invariant
+    `quoted_total == charged_total == sum(cart_json) + fees` is enforced — the
+    bot never states a total that differs from the real cart, and no path lets
+    an LLM-supplied number reach Stripe. An adversarial CartOps battery
+    (`scripts/test-suite/cart-ops.ts`) asserts these invariants at 100%.
+
+16. **Delivery zone is fail-closed (chat-sms + go-live)**: A delivery address
+    is accepted only when geocoded as a positively-qualified, in-zone street
+    match (`status=OK`, `partial_match !== true`, `location_type` ∈
+    {ROOFTOP, RANGE_INTERPOLATED}, distance ≤ `delivery_radius_mi`). Any other
+    outcome — out-of-zone, centroid-only (`APPROXIMATE`/`GEOMETRIC_CENTER`),
+    `ZERO_RESULTS`, non-OK, or a transient geocode failure (one retry) — does
+    NOT write the address; the customer is warmly offered pickup. Shops with no
+    coords or null radius are unchanged (no check). A delivery-enabled shop
+    without coordinates cannot go live (`delivery_geo` gate); go-live backfills
+    coords from the shop's own address so the gate is enforceable, not a dead end.
 
 ---
 

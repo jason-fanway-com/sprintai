@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-21
+Last updated: 2026-08-25
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -64,6 +64,7 @@ sprintai-ordering/
 │   │   ├── admin-api/        # REST API for dashboard
 │   │   ├── admin-chat/       # Conversational admin
 │   │   ├── create-checkout/  # Stripe Checkout (direct charge)
+│   │   ├── pay-redirect/     # Short-branded pay.getsprintai.com → Stripe 302 redirect
 │   │   ├── stripe-webhook/   # Billing events → tenant lifecycle
 │   │   ├── eval-sweep/       # Conversation quality judge
 │   │   ├── issue-detector/   # Issue detection from evals
@@ -82,7 +83,7 @@ sprintai-ordering/
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–055)
+│   └── migrations/           # SQL migrations (001–064)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -95,7 +96,9 @@ sprintai-ordering/
 │       ├── judge.ts          # Rubric judge — grades full transcripts
 │       ├── scorecard.ts      # Aggregate scoring (≥95% pass, 100% critical)
 │       ├── fix.ts            # LLM root-cause + proposed-fix generator for failures
-│       └── persist.ts        # Writes results to test_runs / test_case_results
+│       ├── persist.ts        # Writes results to test_runs / test_case_results
+│       ├── cart-ops.ts       # Adversarial CartOps battery (100% gate)
+│       └── worker.ts         # launchd worker — drains test_run_queue (onboarding QA)
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/
@@ -134,7 +137,10 @@ sprintai-ordering/
    047/048 (issue-detector pg_cron schedule), 050 (7-column menu schema +
    owner sign-off), 051 (protected-shop guard), 052 (test suite results),
    053 (test-suite read RLS), 054/055 (case-fix tracking: proposed_fix,
-   fix_status, root_cause).
+   fix_status, root_cause), 056 (sms_opt_outs), 057–059 (onboarding fields:
+   owner_name/onboarding_token/ein/is_test/crawl), 060–061 (delivery_hours +
+   structured hours normalization), 062 (Google Places fields),
+   063 (delivery radius + geo), 064 (test_run_queue for the onboarding worker).
 7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
    double-extract fidelity check (§B), mandatory owner sign-off (§C).
    This is the contract every menu must satisfy before go-live.
@@ -151,6 +157,22 @@ sprintai-ordering/
     that every owner-facing page uses to self-scope to the correct tenant
     (owner's own, super-admin's preview, or null = global). This is the shared-
     dashboard design: one page serves both roles, scoping at query time.
+
+---
+
+## Short branded payment links
+
+`checkout_order` in chat-sms creates a Stripe Checkout Session, then generates
+an 8-char hex short code, inserts a row into `pay_links`
+(`{cart_id, short_code, stripe_url}`), and emits
+`https://pay.getsprintai.com/o/<code>` as the `checkoutUrl` instead of the raw
+612-char Stripe URL. The `pay-redirect` edge function (public, no-JWT) looks up
+the code and 302s to Stripe. The raw Stripe URL is stored in `pay_links` as a
+fallback. The `/o/*` → function rewrite is in `netlify.toml`.
+
+**Why:** (1) Raw Stripe URL = 4-5 SMS segments; branded link = 35 chars.
+(2) The 10DLC campaign samples show `pay.getsprintai.com` — production traffic
+must match what carriers approved. No public URL shorteners.
 
 ---
 
@@ -235,6 +257,19 @@ Secrets live in Supabase/Netlify environment settings, never in code.
 
 ---
 
+## Segment economics are structural, not aspirational
+
+The business model assumes 8 SMS segments/order. Above ~8.8, the $0.99 service
+fee doesn't cover SMS cost. Real conversations measured 14-16 segments before the
+reductions shipped 2026-08-22. Every chat-sms prompt change or reply format
+decision is a segment-cost decision. Measure with:
+```bash
+deno run --allow-net --allow-env scripts/test-suite/segment-count.ts --live <shop_id>
+```
+See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
+
+---
+
 ## Things that will surprise you
 
 - **The admin dashboard is a separate Netlify site.** It's not in the public
@@ -304,20 +339,39 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   reconciliation, QuickBooks CSV export) renders owner-scoped at
   `/financial-reporting` without code duplication — the same page component
   serves both super-admin (`/shop/:id/financials`) and owner views.
-- **Owner detail pages show real not-found states, not blank screens.**
+- **The word "cancel" is banned from all system prompts and bot replies.**
+  CANCEL is a registered 10DLC opt-out keyword enforced by Telnyx at platform
+  level — a customer typing it alone opts them out of the entire program.
+  SprintAI cannot intercept it. At every abandon-or-modify point, the bot offers
+  CHANGE or RESTART. The checkout restart regex no longer includes CANCEL.
+- **Compliance disclosure is code-driven, not prompt-driven.** The first-contact
+  footer ("Msg & data rates may apply...") now appears ONLY on the lifetime first
+  contact per (consumer, shop) pair — keyed on `conversations`, not session
+  expiry. On every subsequent reply it's stripped by regex (~183 chars saved per
+  reply on return sessions).
+- **`sms_opt_outs` table** durably records per-(phone, tenant) opt-out state.
+  `upsertOptOut()` is called from all STOP/START handlers and the Telnyx
+  send-rejection path. Telnyx is the authoritative enforcer; this is the
+  application-level record. START clears `opted_back_at` without deleting the row.
+- **EIN is a hard gate.** SprintAI does not sell to sole proprietors. A merchant
+  without an EIN fails out of signup cleanly — no alternate path. Permanent
+  decision by Jason.
+- **Telnyx brand/campaign is frozen** until the solutions engineer call resolves
+  ISV mechanics. Brand BJ8MUGY verified; campaign CSMB9HG shows TELNYX_FAILED
+  despite all 7 carriers approving at TCR level. Do not modify either.
+  Each merchant will ultimately need its own brand + campaign (registry policy).
+- **Owner detail pages show real not-found states**
   ConversationDetail, IssueDetail, and ShopChatDetail now render a clear
   "not found — may belong to another account" message instead of a white
   shell when an RLS-blocked record is accessed. `.single()` → `.maybeSingle()`
   to prevent zero-row error objects.
 - **The ordering loop only returns when tools are done.** DeepSeek Flash can
-  emit `tool_use` blocks and `stop_reason=end_turn` in the same turn (breakfast
-  sandwiches). The loop now executes any pending tool calls before returning;
-  if the model produces neither tools nor text it degrades to a soft cart
-  read-back instead of the dead-end "I couldn't process that".
+  emit `tool_use` blocks and `stop_reason=end_turn` in the same turn. The loop
+  executes any pending tool calls before returning; if nothing is produced it
+  degrades to a soft cart read-back.
 - **10DLC carrier rejection 806 drove the disclosure copy.** The homepage CTA
-  and footer carry the exact message-frequency sentence ("typically 3-8
-  messages per order") carriers require. Legal pages point at `getsprintai.com`;
-  `getsprintai.net` is retired.
+  and footer carry the exact message-frequency sentence carriers require. Legal
+  pages point at `getsprintai.com`; `getsprintai.net` is retired.
 - **SMS now runs on Telnyx, not Twilio.** Twilio's business-profile verification
   rejected the LLC EIN four times (error 18602). The 10DLC campaign is approved
   on Telnyx (brand `BJ8MUGY`, campaign `CSMB9HG`) by all seven carriers. `chat-sms`
@@ -362,6 +416,39 @@ Secrets live in Supabase/Netlify environment settings, never in code.
   session already exists — downgraded to `review` if not. These are code-path
   intercepts, not prompt preferences — they fire regardless of what the LLM
   intended.
+- **CartOps integrity — `cart_json` is the single source of truth.** A bare
+  tip reply never mutates items (the LLM spuriously calling `add_item` on a
+  tip turn was the bug); quantity corrections ("just one") write back to
+  `cart_json` and persist BEFORE any reply; every quoted total is computed from
+  `cart_json` (subtotal + $0.99 fee + delivery + tip). The invariant
+  `quoted_total == charged_total == sum(cart_json) + fees` holds — no path lets
+  an LLM-supplied number reach Stripe. Backed by an adversarial CartOps battery
+  (`scripts/test-suite/cart-ops.ts`) that runs per shop at 100%.
+- **Delivery zone is fail-closed.** A delivery address is accepted only as a
+  positively-qualified, in-zone street match (`status=OK`, `partial_match !==
+  true`, `location_type` ∈ {ROOFTOP, RANGE_INTERPOLATED}, distance ≤
+  `delivery_radius_mi`). Centroid-only (`APPROXIMATE`/`GEOMETRIC_CENTER`),
+  `ZERO_RESULTS`, non-OK, and transient geocode failures (one retry) all refuse
+  the address and offer pickup — never a guessed delivery. A delivery-enabled
+  shop without coordinates can't go live (`delivery_geo` gate); go-live
+  backfills coords from the shop's own address so the gate is enforceable.
+- **Onboarding now creates a real Production Readiness run.** Saving a menu at
+  onboarding enqueues a `test_run_queue` row; a launchd worker
+  (`scripts/test-suite/worker.ts`) drains it and runs the full generate → run →
+  judge → scorecard → persist pipeline, writing a real `test_runs` row +
+  `test_case_results` the owner sees in Production Readiness. Fire-and-forget
+  from setup.html — a failure never blocks menu save. `run-worker.sh` sources
+  `~/.openclaw/.secrets` first (launchd doesn't inherit shell env).
+- **Google Places is a real onboarding step.** `onboarding-save` fires
+  `google-places-lookup` when the shop's address is known (not at create, when
+  only the name existed) and `google_place_id` is still null — idempotent,
+  fire-and-forget. Places enriches the shop with authoritative
+  `formatted_address`, hours, rating/review_count, and `latitude`/`longitude`
+  (the coords the delivery zone depends on).
+- **At a Glance embeds a live test-chat sandbox.** The owner landing page shows
+  glance tiles on the left ~2/3 and a `ShopChatTest` panel on the right ~1/3,
+  forced into test mode (`forceTest`) — an owner fires practice orders with no
+  real charge immediately. Same component, embedded; no new chat widget.
 - **The Judge rubric is sharper with fewer false flags.** `wrong_total` fires
   only when the assistant explicitly states a dollar total. `invented_item` is
   narrowly scoped to items genuinely absent from the menu, its descriptions,

@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-21
+Last updated: 2026-08-25
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -276,6 +276,38 @@ These are encoded in the architecture, not just in marketing.
   order") so the send path stays compliant and approved numbers stay
   unblocked. Legal pages canonicalize on `getsprintai.com` (the `getsprintai.net`
   mailbox is retired).
+- **CartOps integrity is enforced at the code level.** `cart_json` is the
+  single source of truth for a live order: a bare tip reply never mutates
+  items, quantity corrections write back to the cart before any reply, and
+  every quoted total is computed from `cart_json` (subtotal + $0.99 fee +
+  delivery + tip). The invariant `quoted_total == charged_total ==
+  sum(cart_json) + fees` holds, so an LLM-supplied number can never reach
+  Stripe. An adversarial CartOps battery (`scripts/test-suite/cart-ops.ts`)
+  asserts these invariants per shop at 100%.
+- **Delivery is fail-closed.** A delivery address is accepted only as a
+  positively-qualified, in-zone street match (Google `status=OK`,
+  `partial_match !== true`, `location_type` ∈ {ROOFTOP,
+  RANGE_INTERPOLATED}, distance ≤ `delivery_radius_mi`). Centroid-only,
+  `ZERO_RESULTS`, and transient geocode failures refuse the address and offer
+  pickup — the bot never guesses a delivery. A delivery-enabled shop without
+  coordinates can't go live (`delivery_geo` gate); go-live backfills coords
+  from the shop's own address.
+- **Google Places is a real onboarding step.** When the shop's address is
+  known, `onboarding-save` fires `google-places-lookup` to enrich the shop
+  with authoritative `formatted_address`, hours, rating/review_count, and
+  coordinates — idempotent and fire-and-forget.
+- **Onboarding now produces a real Production Readiness run.** Saving a menu
+  enqueues a `test_run_queue` row; a launchd worker drains it and runs the
+  full generate → run → judge → scorecard → persist pipeline, so the owner's
+  Store Readiness report is real and current without any SprintAI employee
+  touching it. Menu cap raised 50 → 300 items.
+- **At a Glance embeds a live test-chat sandbox.** The owner landing page
+  shows the glance tiles plus a `ShopChatTest` panel forced into test mode —
+  an owner fires practice orders with no real charge immediately.
+- **Short branded payment links.** Checkout emits
+  `https://pay.getsprintai.com/o/<code>` (35 chars) instead of the raw
+  612-char Stripe URL, so the pay link is a single SMS segment and matches
+  what the 10DLC campaign samples show carriers approved.
 
 ---
 
