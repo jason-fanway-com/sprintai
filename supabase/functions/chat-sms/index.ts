@@ -481,7 +481,9 @@ function buildSystemPrompt(
 
   const orderTypeInfo = orderTypeStr === "delivery"
     ? `\nORDER TYPE: Delivery`
-    : `\nORDER TYPE: Pickup`;
+    : orderTypeStr === "pickup"
+      ? `\nORDER TYPE: Pickup`
+      : `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`;
 
   const deliveryInfo = deliveryAddress
     ? `\nDELIVERY ADDRESS: ${(deliveryAddress as Record<string,unknown>).formatted || JSON.stringify(deliveryAddress)}`
@@ -521,7 +523,7 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nWith the $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee, the order total is $${((subtotal + SERVICE_FEE_CENTS) / 100).toFixed(2)} (before any delivery fee or tip). When you state the order total, use THIS number — never quote the subtotal as the final total.` : ""}
+${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)}. When you state the order total, use THIS number — never quote the subtotal as the final total.` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
@@ -542,7 +544,7 @@ RULES:
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
-- EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your VERY FIRST response (before taking any food items) MUST ask whether the customer wants pickup or delivery. Example: "Hi! Are you ordering for pickup or delivery today?" If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead. If they say "pickup" or start listing items without answering the question, default to pickup and proceed normally. This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question.
+- EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your first response MUST ask whether the customer wants pickup or delivery. CRITICAL EXCEPTION: if the customer's FIRST message already names recognizable menu item(s), you MUST call add_item for those items AND ask pickup/delivery IN THE SAME RESPONSE. Both things — item in cart + delivery question — must happen in one turn. Example: "Got it — one Special Stromboli added. Are you ordering pickup or delivery today?" Do NOT silently default to pickup when items were named; the customer must be asked. Only if the customer explicitly says "pickup" (or ignores the delivery question twice while continuing to order) may you default to pickup and proceed. If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything else. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead (the item stays in the cart — do NOT remove it). This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question.
 - DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way, answer with a clear YES and offer to take their address. Once they confirm delivery, call set_order_type("delivery"), then collect the address. Once the address is set and accepted, offer an optional driver tip. Do NOT ask for delivery address for pickup orders.
 - ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
 - DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
@@ -659,13 +661,18 @@ async function executeTool(
         }
       }
 
-      const existing = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id && JSON.stringify((i as CartItem).options) === JSON.stringify(inputOptions));
+      // Dedup: normalize empty options to undefined for comparison
+      const normalizedOptions = Object.keys(inputOptions).length > 0 ? inputOptions : undefined;
+      const existing = cart.findIndex(i =>
+        (i as CartItem).menu_item_id === menu_item_id &&
+        JSON.stringify((i as CartItem).options ?? undefined) === JSON.stringify(normalizedOptions)
+      );
       if (existing >= 0) {
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
         (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: Object.keys(inputOptions).length > 0 ? inputOptions : undefined });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -1101,8 +1108,12 @@ async function saveCart(
   phase:    OrderPhase,
 ): Promise<void> {
   // ── Guard C: phase="checkout" only after a Stripe session exists ──────
-  // No code path may set phase to checkout unless submit_order has already
-  // created a real Stripe checkout session. Downgrade to "review" otherwise.
+  // INVARIANT (Fix 4 — Checkout backstop): No code path may set phase to
+  // "checkout" unless submit_order has already created a real Stripe
+  // checkout session on this row. The cart stays in "building" until a
+  // Stripe session ID is present. This is the definitive gate — every path
+  // through the system that attempts phase="checkout" is funneled through
+  // saveCart, and saveCart enforces this. There is no bypass.
   let resolvedPhase = phase;
   if (phase === "checkout") {
     const { data: row } = await supabase
@@ -1140,6 +1151,7 @@ async function runOrderingLoop(
   testMode:     boolean = false,
   deliveryFeeCents?: number | null,
   shopGeo?:      { lat: number; lng: number; radiusMi: number } | null,
+  correctionApplied?: boolean,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
@@ -1152,7 +1164,79 @@ async function runOrderingLoop(
   let checkoutUrl: string | undefined;
   let finalPhase:  OrderPhase | undefined;
 
+  // ── Fix 1 & 2: Deterministic pre-loop guards ──────────────────────────
+  //
+  // Fix 2: Correction short-circuit — if the caller already applied a
+  // correction (set qty→1 or removed last item), skip the LLM and return
+  // a confirmation with the actual cart state.
+  if (correctionApplied) {
+    const subtotal = cart.reduce((s, i) => {
+      if ((i as BundleItem).type === "bundle") return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+      const r = i as CartItem;
+      return s + r.price_cents * r.quantity;
+    }, 0);
+    const cartTotal = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (cart.reduce((s, i) => { const r = (i as any); return s + (r.driver_tip_cents ?? 0); }, 0));
+    // We need to read driver_tip from the DB row — use the cart's tip from the caller
+    // For now: compute total from cart items + fee + delivery. Tip will be added when loaded.
+    const totalWithoutTip = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0);
+    if (cart.length === 0) {
+      return { reply: "Your cart is empty. What would you like to order?", finalPhase: "building" };
+    }
+    const itemList = cart.map(i => {
+      const r = i as CartItem;
+      return `${r.quantity}x ${r.name}`;
+    }).join(", ");
+    return {
+      reply: `Updated! Your cart: ${itemList} — $${(totalWithoutTip / 100).toFixed(2)} (includes $0.99 service fee). Add anything else?`,
+      finalPhase: "building",
+    };
+  }
+
+  // Fix 1: Detect bare-tip reply — when the prior assistant turn offered a
+  // driver tip and the user replied with a bare tip amount, this is a tip-only
+  // turn. Capture the prior assistant's last message to check.
+  let tipSuppressAddItem = false;
+  {
+    const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+    const offeredTip = lastAssistant && typeof lastAssistant.content === "string"
+      && /\b(?:tip|driver tip)\b/i.test(lastAssistant.content)
+      && /\$(?:1|2|3|5)\b/i.test(lastAssistant.content);
+    const userMsg = userMessage.trim();
+    const isBareTip = offeredTip && (
+      /^\$?\s*(1|2|3|5)\s*$/.test(userMsg) ||
+      /^(no tip|no thanks|skip|none|pass|no)\s*$/i.test(userMsg)
+    );
+    if (isBareTip) {
+      tipSuppressAddItem = true;
+      console.log(`[chat-sms] GUARD: bare-tip reply detected, suppressing add_item this turn (conv msg="${userMsg}")`);
+    }
+  }
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // ── Fix 1 tip shortcut: bare tip reply skips the LLM ─────────────────
+    // When the user responds to a tip offer, call set_driver_tip directly
+    // and return. No LLM inference needed — and no risk of add_item hallucination.
+    if (tipSuppressAddItem && attempt === 0) {
+      const userMsg = userMessage.trim();
+      const tipMatch = userMsg.match(/\$?\s*([0-9]+)/);
+      const tipArg = tipMatch ? parseInt(tipMatch[1], 10) : 0;
+      if (tipArg > 0) {
+        const tipResult = await executeTool(
+          "set_driver_tip", { tip_cents: tipArg * 100 }, cart, menu, cartId, supabase, shopName, testMode,
+          deliveryFeeCents ?? null, shopGeo ?? null,
+        );
+        if (tipResult.ok) {
+          return { reply: `Got it — $${tipArg.toFixed(2)} driver tip added. Let me confirm your order. What name for pickup?`, finalPhase: "building" };
+        }
+        console.warn(`[chat-sms] Tip shortcut: set_driver_tip failed, falling through to LLM`);
+      } else {
+        // User declined tip — proceed without calling tool (tip already $0)
+        return { reply: "No problem — no tip added. Let me confirm your order. What name for pickup?", finalPhase: "building" };
+      }
+
+      // Fall through to normal LLM path if tip tool fails
+    }
+
     const res = await fetch(CHAT_API, {
       method:  "POST",
       headers: {
@@ -1202,6 +1286,20 @@ async function runOrderingLoop(
 
     const toolResults: ContentBlock[] = [];
     for (const toolBlock of toolBlocks) {
+      // ── Fix 1: Tip turn must never mutate items ─────────────────────────
+      // When the user is responding to a tip offer, skip add_item — the LLM
+      // may spuriously "add" the same item to confirm the order. The tip tool
+      // (set_driver_tip) still runs normally.
+      if (tipSuppressAddItem && toolBlock.name === "add_item") {
+        console.warn(`[chat-sms] GUARD: suppressed add_item during tip turn (attempted ID=${toolBlock.input?.menu_item_id})`);
+        toolResults.push({
+          type:        "tool_result",
+          tool_use_id: toolBlock.id!,
+          content:     JSON.stringify({ ok: false, error: "Cannot add items while confirming tip — prior tip offer is being resolved." }),
+        });
+        continue;
+      }
+
       const result = await executeTool(
         toolBlock.name!,
         toolBlock.input! as Record<string, unknown>,
@@ -1468,6 +1566,30 @@ function claimsTotal(text: string): boolean {
     /\$\d+\.?\d*\s*(?:total|plus|each|comes to|would be|will be|is|cost|for that|covers)/i.test(norm) ||
     /(?:total|subtotal|comes to|that'?s|that is|cost|price)\s*(?:\$|of\s*\$)\s*\d+/i.test(norm) ||
     /(?:comes to|totals?|brings? your|your total|order total|that'?ll be|that will be)\s*\$?\s*\d+/i.test(norm)
+  );
+}
+
+// Helper: extract dollar amounts from text (returns array of cents)
+function extractDollarCents(text: string): number[] {
+  const matches = text.matchAll(/\$(\d+(?:\.\d{2})?)/g);
+  const cents: number[] = [];
+  for (const m of matches) {
+    cents.push(Math.round(parseFloat(m[1]) * 100));
+  }
+  return cents;
+}
+
+// Helper: detects "fixed it", "removed that", "that's one now", etc.
+// when the model narrates a correction but no cart mutation occurred.
+function claimsCorrectedWithoutMutation(reply: string, cartBefore: AnyCartItem[], cartAfter: AnyCartItem[]): boolean {
+  if (!reply) return false;
+  // If the cart actually changed, the correction was real
+  if (JSON.stringify(cartBefore) !== JSON.stringify(cartAfter)) return false;
+  const norm = reply.toLowerCase();
+  return (
+    /\b(?:fixed|corrected|updated|changed|adjusted|removed|took\s+(?:that|it)\s+off|took\s+(?:that|it)\s+out)\b/i.test(norm) ||
+    /\b(?:just\s+one|only\s+one|1x|one\s+(?:left|now|total)|that'?s\s+one)\b/i.test(norm) &&
+    /\b(?:want|wanted|said|asked|meant|need|needed)\b/i.test(norm)
   );
 }
 
@@ -2824,30 +2946,103 @@ Deno.serve(async (req: Request) => {
     ? (shop.latitude != null && shop.longitude != null)
     : false;
 
-  // ── Run ordering loop ─────────────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable);
+  // ── Deterministic correction handler (Fix 2: Corrections must write back) ──
+  // Before the LLM ever runs, detect correction intent in the user message
+  // and directly mutate the cart. "just want one" / "make it one" / "remove one"
+  // must update cart_json AND persist BEFORE any summary is shown.
   const cartItems    = [...cart.cart_json];
+  let correctionApplied = false;
+  {
+    const norm = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const isCorrection = cartItems.length > 0 && (
+      /^(just want one|make it one|just one|only one|one is fine|just 1|make it 1|one of those|one of them|just the one|actually just one|actually one)$/i.test(norm) ||
+      /^(i just want|i only want|i want just|ill take just|ill take one|ill have just|i just need|i wanted just|i meant just|give me just|let me get just)\s+(one|1)$/i.test(norm) ||
+      /^(remove one|remove that|remove it|take it off|take that off|no thanks|never mind|nevermind|scratch that|forget that)$/i.test(norm) ||
+      /^(remove the|remove my|drop the|drop my|take off the|take off my)\s+.+$/i.test(norm)
+    );
+    if (isCorrection) {
+      const isRemove = /^(remove|drop|take off|scratch|forget|no thanks|never ?mind)\b/i.test(norm);
+      if (isRemove && cartItems.length > 0) {
+        // Remove the last item from the cart
+        const lastItem = cartItems[cartItems.length - 1];
+        const mid = (lastItem as CartItem).menu_item_id;
+        if (mid) {
+          await executeTool("remove_item", { menu_item_id: mid }, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
+          correctionApplied = true;
+          console.log(`[chat-sms] Correction (remove): removed "${(lastItem as CartItem).name}" from cart (conv=${conversation.id})`);
+        }
+      } else {
+        // Reduce last item to quantity 1
+        const lastItem = cartItems[cartItems.length - 1];
+        const mid = (lastItem as CartItem).menu_item_id;
+        if (mid) {
+          const qty = (lastItem as CartItem).quantity;
+          if (qty > 1) {
+            await executeTool("modify_item", { menu_item_id: mid, quantity: 1 }, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
+            correctionApplied = true;
+            console.log(`[chat-sms] Correction (set_qty=1): set "${(lastItem as CartItem).name}" qty 1 (was ${qty}) (conv=${conversation.id})`);
+          }
+        }
+      }
+      // Reload cart from DB so the LLM sees the corrected state
+      if (correctionApplied) {
+        const { data: correctedCart } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+        if (correctedCart) {
+          cart.cart_json = (correctedCart.cart_json as AnyCartItem[]);
+          cart.phase = (correctedCart.phase as OrderPhase) || "building";
+        }
+      }
+    }
+  }
+
+  // ── Run ordering loop ─────────────────────────────────────────────────────
+  // Rebuild system prompt with potentially corrected cart
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable);
 
   const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
     : null;
 
   const loopResult = await runOrderingLoop(
-    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo,
+    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
   );
   let reply       = loopResult.reply;
   let checkoutUrl = loopResult.checkoutUrl;
+
+  // Snapshot pre-loop order_type before DB reload (guard 2b uses it).
+  const orderTypePreLoop = cart.order_type ?? null;
+
+  // Reload in-memory cart from DB after ordering loop mutations.
+  // Guards below use in-memory state; stale data causes false positives.
+  const { data: freshCart } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+  if (freshCart) {
+    cart.cart_json = (freshCart.cart_json as AnyCartItem[]);
+    cart.order_type = (freshCart.order_type as string) || null;
+    cart.phase = (freshCart.phase as string) || "greeting";
+  }
 
   // ── POST-TURN DETERMINISTIC GUARDS ────────────────────────────────────────
   // These three guards intercept LLM output and apply mechanical rules so
   // checkout completion is never prompt-hoped. They run in order; each can
   // replace `reply` and stop further processing.
 
-  // Fetch authoritative cart row ONCE for all guards to use.
+  // Fetch order-level metadata for guards (pickup_name, checkout session, etc).
   const { data: guardCartRow } = await supabase
-    .from("order_carts").select("cart_json, pickup_name, phase, stripe_checkout_session_id, order_type")
+    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_fee_cents, driver_tip_cents")
     .eq("id", cart.id).single();
-  const guardCart: AnyCartItem[] = (guardCartRow?.cart_json as AnyCartItem[]) ?? cartItems;
+  const guardCart: AnyCartItem[] = cart.cart_json as AnyCartItem[];
+
+  // Deterministic cart total (used by hallucinated-total guard)
+  const guardCartSubtotal = guardCart.reduce((s, i) => {
+    if ((i as BundleItem).type === "bundle") {
+      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+    }
+    const r = i as CartItem;
+    return s + r.price_cents * r.quantity;
+  }, 0);
+  const guardDeliveryFee = (guardCartRow?.delivery_fee_cents as number) || 0;
+  const guardDriverTip = (guardCartRow?.driver_tip_cents as number) || 0;
+  const guardRealTotalCents = guardCartSubtotal + SERVICE_FEE_CENTS + guardDeliveryFee + guardDriverTip;
 
   // ── Guard 1: suppress ungrounded totals when cart is empty ─────────────
   // If the model quotes a dollar amount ("$8.99 total") but the cart is
@@ -2916,6 +3111,23 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 1f: narrated correction without cart mutation ────────────────
+  // If the model says "fixed it, 1x" / "removed that" / "updated to just one"
+  // but the cart didn't change, replace the reply with the real cart state.
+  if (!portionCheck.tripped && claimsCorrectedWithoutMutation(reply, cartItems, guardCart)) {
+    console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+    if (guardCart.length === 0) {
+      reply = "Your cart is empty. What would you like to order?";
+    } else {
+      const itemList = guardCart.map(i => {
+        const r = i as CartItem;
+        return `${r.quantity}x ${r.name}`;
+      }).join(", ");
+      const realTotal = `$${(guardRealTotalCents / 100).toFixed(2)}`;
+      reply = `Your cart: ${itemList} — ${realTotal} total. What else can I add?`;
+    }
+  }
+
   // ── Guard 2: order confirmation + no pickup name → ask for it ──────────
   // If the customer confirms they want to place the order AND the cart has
   // items AND no pickup name is stored, deterministically ask for the name
@@ -2924,6 +3136,63 @@ Deno.serve(async (req: Request) => {
   if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
     reply = "Got it! What name should I put this order under for pickup?";
+  }
+
+  // ── Guard 2c: hallucinated total ──────────────────────────────────────
+  // If the model quotes a dollar total that doesn't match the real cart
+  // total (subtotal + service fee + delivery fee + tip), replace the reply
+  // with one that states the actual computed total from cart_json.
+  // The payment link amount IS the real total, and the bot must never
+  // quote a different number.
+  if (guardCart.length > 0 && !checkoutUrl) {
+    const quotedCents = extractDollarCents(reply);
+    // Only check when the reply quotes a single total-ish dollar amount
+    // and the cart has items. Look for the LAST dollar amount as it's
+    // typically the total.
+    if (quotedCents.length > 0) {
+      const lastQuoted = quotedCents[quotedCents.length - 1];
+      // Allow ±$0.01 rounding difference
+      if (Math.abs(lastQuoted - guardRealTotalCents) > 1) {
+        console.warn(`[chat-sms] GUARD 2c (hallucinated-total) tripped (conv=${conversation.id}). Quoted ${lastQuoted}¢ vs real ${guardRealTotalCents}¢. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+        const realTotalStr = `$${(guardRealTotalCents / 100).toFixed(2)}`;
+        const itemList = guardCart.map(i => {
+          const r = i as CartItem;
+          return `${r.quantity}x ${r.name}`;
+        }).join(", ");
+        reply = `Your cart: ${itemList} — ${realTotalStr} total (includes $0.99 service fee). What else can I add?`;
+      }
+    }
+  }
+
+  // ── Guard 2b: DELIVERY-GATE INJECTION ────────────────────────────────
+  // Runs LAST so other guards don't overwrite it. When delivery is enabled,
+  // order_type is unknown (was null pre-loop), and the reply doesn't already
+  // mention pickup/delivery, inject the question. Also revert silently-set
+  // order_type so the customer's NEXT turn actually gates.
+  const guardDeliveryEnabled = shop?.delivery_enabled === true;
+  const guardOrderTypeBefore = orderTypePreLoop;
+  const guardOrderTypeAfter  = guardCartRow?.order_type ?? null;
+  const guardReplyHadPickupDelivery = /pickup.*delivery|delivery.*pickup|all set for (?:pickup|delivery)|switching to (?:pickup|delivery)|(?:pickup|delivery) order/i.test(reply);
+
+  // Only fire when order_type was NOT already known coming into this turn.
+  // If the customer already chose (e.g., "delivery") earlier, skip.
+  // Also skip if the customer's message THIS turn contains pickup/delivery
+  // (they're answering the question).
+  const userSaidPickupDelivery = /\b(?:pickup|delivery)\b/i.test(userMessage);
+  const needsDeliveryGate = guardDeliveryEnabled && !checkoutUrl &&
+    guardCart.length > 0 && !guardReplyHadPickupDelivery && !guardOrderTypeBefore &&
+    !userSaidPickupDelivery;
+
+  if (needsDeliveryGate) {
+    // LLM silently set order_type (pickup or delivery) via tool call
+    // without asking the customer — revert so next turn still gates.
+    if (guardOrderTypeAfter) {
+      await supabase.from("order_carts").update({ order_type: null }).eq("id", cart.id);
+      cart.order_type = null;
+      console.log(`[chat-sms] GUARD 2b reverted silently-set order_type "${guardOrderTypeAfter}" (conv=${conversation.id})`);
+    }
+    reply = reply.trimEnd().replace(/[.!?]+$/, "") + ". Pickup or delivery today?";
+    console.log(`[chat-sms] GUARD 2b (delivery-gate) injected question (conv=${conversation.id})`);
   }
 
   // ── POST-TURN PHANTOM-LINK SAFETY NET (Guard 3) ───────────────────────────
