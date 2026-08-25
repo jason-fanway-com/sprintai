@@ -2348,6 +2348,7 @@ Deno.serve(async (req: Request) => {
   // test_mode=true on the cart, hours-gating bypassed, success_url ->
   // /order-success-test. The normal customer flow never sends this flag.
   let requestTestMode = false;
+  let forceClosed = false;
   // STRUCTURAL OUTBOUND WATCHDOG: ctx for every synchronous SMS reply in this
   // request. Set for the SMS channel below; web channel never calls Twilio.
   let inboundReplyCtx: OutboundContext = { reason: "inbound_reply", inboundAtMs: Date.now() };
@@ -2418,7 +2419,7 @@ Deno.serve(async (req: Request) => {
     sessionId     = `sms:${fromNumber}`;
     channel       = "sms";
   } else {
-    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean; phone?: string; message_sid?: string; data?: { event_type?: string; payload?: Record<string, unknown> } };
+    let body: { shop_id?: string; message?: string; session_id?: string; system_event?: string; conversation_id?: string; order_cart_id?: string; test?: boolean; test_hours?: string; phone?: string; message_sid?: string; data?: { event_type?: string; payload?: Record<string, unknown> } };
     try { body = await req.json(); } catch { return jsonError("Invalid JSON body"); }
 
     // ── Telnyx inbound webhook (JSON, `data.event_type`) ────────────────────
@@ -2532,7 +2533,13 @@ Deno.serve(async (req: Request) => {
       const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
       const isLive = supabaseKey.startsWith("sk_live_");
       const url = new URL(req.url);
-      requestTestMode = isLive ? false : (body.test === true || url.searchParams.get("test") === "1");
+      const testHoursVal = body.test_hours ?? url.searchParams.get("test_hours");
+      // "open" implies as-if-open — included in requestTestMode.
+      requestTestMode = isLive ? false : (
+        body.test === true || testHoursVal === "open" || url.searchParams.get("test") === "1"
+      );
+      // forceClosed: deterministically force the closed branch. Never honored on live keys.
+      forceClosed = !isLive && testHoursVal === "closed";
     }
     const { data: shopData } = await supabase
       .from("shops").select("*").eq("id", shop_id).single();
@@ -2791,6 +2798,7 @@ Deno.serve(async (req: Request) => {
       const closeMins = closeH * 60 + closeM;
       return nowMins >= openMins && nowMins < closeMins;
     });
+    const effectiveOpen = forceClosed ? false : isOpen;
 
     // Test mode is activated either by the customer-typed TESTMODE keyword
     // (any channel) OR by a WEB request carrying the gated `test` flag
@@ -2852,7 +2860,7 @@ Deno.serve(async (req: Request) => {
       cart.phase = "greeting";
       cart.notes = null;
     }
-    if (!isOpen && !cart.test_mode) {
+    if (!effectiveOpen && !cart.test_mode) {
       const fmt12 = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
       const dayConf = shop.open_hours?.[todayKey];
       // Distinguish: explicitly closed (closed:true) vs. outside windows vs. unconfigured

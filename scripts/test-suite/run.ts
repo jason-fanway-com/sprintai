@@ -20,6 +20,8 @@ import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
 import { persistResults } from "./persist.ts";
 import { generateRootCauseFix } from "./fix.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal, type CartOpsVerification } from "./cart-ops.ts";
+import { verifyHoursClosed } from "./hours-closed.ts";
 
 // ── Config from env ────────────────────────────────────────────────────────
 
@@ -68,7 +70,8 @@ console.log(
   `Shop: ${genResult.shop.name} (tenant: ${genResult.shop.tenant_id}) | ` +
   `Menu items: ${genResult.menuItemCount} | ` +
   `Cases: ${genResult.derivedCount} menu-derived + ${genResult.libraryCount} library + ` +
-  `${genResult.conversationalCount} conversational = ${genResult.cases.length} total`,
+  `${genResult.cartOpsCount} CartOps + ${genResult.conversationalCount} conversational = ${genResult.cases.length} total`,
+    `Including ${genResult.hoursClosedCount} hours-closed `,
 );
 
 console.log(`\n═══ TEST CASES ═══`);
@@ -144,8 +147,46 @@ for (let i = 0; i < casesToRun.length; i++) {
 
     // 2. Judge the result
     console.log(`  → judging...`);
-    const judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
+    let judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
     totalJudgeCost += judge.costCents;
+
+    // 3. CartOps HARD programmatic verification (replaces LLM judge for cart-ops cases)
+    let cartOpsVerify: CartOpsVerification | null = null;
+    if (tc.category === "cart-ops") {
+      cartOpsVerify = verifyCartOpsInvariants(run);
+      console.log(`  → CartOps invariants: ${cartOpsVerify.passed ? "PASS" : "FAIL"} (${cartOpsVerify.invariants.filter((i) => i.passed).length}/${cartOpsVerify.invariants.length})`);
+      for (const inv of cartOpsVerify.invariants) {
+        const mark = inv.passed ? "✓" : "✗";
+        console.log(`      ${mark} ${inv.id}: ${inv.detail}`);
+      }
+      if (!cartOpsVerify.passed) {
+        judge = { ...judge, passed: false };
+      }
+    }
+
+    // 4. Hours-closed HARD programmatic verification (replaces LLM judge)
+    if (tc.category === "hours-closed") {
+      const hoursVerify = verifyHoursClosed(run);
+      console.log(`  → Hours-closed invariants: ${hoursVerify.passed ? "PASS" : "FAIL"} (${hoursVerify.invariants.filter((i) => i.passed).length}/${hoursVerify.invariants.length})`);
+      for (const inv of hoursVerify.invariants) {
+        const mark = inv.passed ? "✓" : "✗";
+        console.log(`      ${mark} ${inv.id}: ${inv.detail}`);
+      }
+      if (!hoursVerify.passed) {
+        judge = { ...judge, passed: false };
+      }
+    }
+
+    // 5. Stated-total deterministic override (kills judge arithmetic false-positives for menu-derived cases)
+    const expectedCents = (tc as any).expectedItemCents as number | undefined;
+    if (expectedCents !== undefined) {
+      const totalOverride = verifyStatedTotal(run, expectedCents);
+      if (totalOverride) {
+        console.log(`  → Stated-total override: ${totalOverride.passed ? "FORCE PASS" : "FORCE FAIL"} — ${totalOverride.detail}`);
+        judge = { ...judge, passed: totalOverride.passed };
+      }
+    }
+
     const status = judge.passed ? "PASS" : "FAIL";
     console.log(`  → ${status} | ${judge.criteria.filter(c => c.passed).length}/${judge.criteria.length} criteria | cost $${(judge.costCents / 100).toFixed(4)}`);
 

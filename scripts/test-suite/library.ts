@@ -43,6 +43,10 @@ export interface TestCase {
   success_criteria: SuccessCriterion[];
   /** Meta: whether this case expects a checkout URL to be generated. */
   expects_checkout?: boolean;
+  /** Test hours mode: "open" (default) or "closed". */
+  hoursMode?: "open" | "closed";
+  /** Expected item subtotal in cents for deterministic total-verification override (menu-derived cases only). */
+  expectedItemCents?: number;
 }
 
 export interface ConversationalCase {
@@ -64,6 +68,8 @@ export interface ConversationalCase {
   seed_message?: string;
   /** What the judge must verify against the full transcript. */
   success_criteria: SuccessCriterion[];
+  /** Test hours mode: "open" (default) or "closed". */
+  hoursMode?: "open" | "closed";
 }
 
 /** Union type carried through the runner/judge/scorecard pipeline. */

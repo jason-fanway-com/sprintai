@@ -25,6 +25,8 @@ import { generateCases } from "./generator.ts";
 import { runCase } from "./runner.ts";
 import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal } from "./cart-ops.ts";
+import { verifyHoursClosed } from "./hours-closed.ts";
 import { persistResults } from "./persist.ts";
 import { generateRootCauseFix } from "./fix.ts";
 
@@ -117,7 +119,7 @@ while (true) {
         shopId,
       });
       console.log(
-        `worker [${queueId}]: ${genResult.derivedCount} derived + ${genResult.libraryCount} library + ${genResult.conversationalCount} conversational = ${genResult.cases.length} total`,
+        `worker [${queueId}]: ${genResult.derivedCount} derived + ${genResult.libraryCount} library + ${genResult.cartOpsCount} CartOps + ${genResult.hoursClosedCount} hours-closed + ${genResult.conversationalCount} conversational = ${genResult.cases.length} total`,
       );
 
       // 2. Run + judge + fix
@@ -127,7 +129,37 @@ while (true) {
         console.log(`worker [${queueId}]: [${i + 1}/${genResult.cases.length}] ${tc.id}`);
 
         const run = await runCase(runConfig, shopId, tc);
-        const judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
+        let judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
+
+        // CartOps HARD programmatic verification (overrides LLM judge for cart-ops)
+        if (tc.category === "cart-ops") {
+          const verify = verifyCartOpsInvariants(run);
+          console.log(`worker [${queueId}]:   CartOps invariants ${verify.passed ? "PASS" : "FAIL"} (${verify.invariants.filter((x) => x.passed).length}/${verify.invariants.length})`);
+          for (const inv of verify.invariants.filter((x) => !x.passed)) {
+            console.log(`worker [${queueId}]:     ✗ ${inv.id}: ${inv.detail}`);
+          }
+          if (!verify.passed) judge = { ...judge, passed: false };
+        }
+
+        // Hours-closed HARD programmatic verification (overrides LLM judge)
+        if (tc.category === "hours-closed") {
+          const verify = verifyHoursClosed(run);
+          console.log(`worker [${queueId}]:   Hours-closed invariants ${verify.passed ? "PASS" : "FAIL"} (${verify.invariants.filter((x) => x.passed).length}/${verify.invariants.length})`);
+          for (const inv of verify.invariants.filter((x) => !x.passed)) {
+            console.log(`worker [${queueId}]:     ✗ ${inv.id}: ${inv.detail}`);
+          }
+          if (!verify.passed) judge = { ...judge, passed: false };
+        }
+
+        // Stated-total deterministic override (kills judge arithmetic false-positives)
+        const expectedCents = (tc as any).expectedItemCents as number | undefined;
+        if (expectedCents !== undefined) {
+          const totalOverride = verifyStatedTotal(run, expectedCents);
+          if (totalOverride) {
+            console.log(`worker [${queueId}]:   Stated-total override: ${totalOverride.passed ? "FORCE PASS" : "FORCE FAIL"} — ${totalOverride.detail}`);
+            judge = { ...judge, passed: totalOverride.passed };
+          }
+        }
 
         let fix = null;
         if (!judge.passed) {
