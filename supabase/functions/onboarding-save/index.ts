@@ -188,6 +188,20 @@ Deno.serve(async (req: Request) => {
       .select("*").single();
     if (error || !shop) return jsonError("Save failed: " + (error?.message ?? "shop not found"), 404);
 
+    // ── Kick Google Places if address is known (async, non-blocking) ──────────
+    if (!shop.google_place_id) {
+      const addrHint = shop.formatted_address || composeAddress(fields);
+      if (addrHint) {
+        kickPlaces(
+          shop.id,
+          (shop.name ?? "") as string,
+          Deno.env.get("SUPABASE_URL") ?? "",
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+          addrHint,
+        );
+      }
+    }
+
     return jsonResponse({ ok: true, shop: redact(shop) });
   }
 
@@ -368,15 +382,36 @@ async function kickScrape(shopId: string, websiteUrl: string | null, supabaseUrl
   } catch (_) { /* fire-and-forget */ }
 }
 
-/** Kick an async Google Places lookup in the background — fire-and-forget, never blocks create. */
-async function kickPlaces(shopId: string, shopName: string, supabaseUrl: string, serviceKey: string) {
+/** Kick an async Google Places lookup in the background — fire-and-forget, never blocks. */
+async function kickPlaces(shopId: string, shopName: string, supabaseUrl: string, serviceKey: string, addressHint?: string) {
   try {
-    await fetch(`${supabaseUrl}/functions/v1/google-places-lookup`, {
+    const pbody: Record<string, string> = { shop_id: shopId, name: shopName };
+    if (addressHint) pbody.address_hint = addressHint;
+    console.log(`[kickPlaces] firing for ${shopId} name=${shopName} hint=${addressHint || "(none)"}`);
+    const res = await fetch(`${supabaseUrl}/functions/v1/google-places-lookup`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "apikey": serviceKey, "Authorization": `Bearer ${serviceKey}` },
-      body: JSON.stringify({ shop_id: shopId, name: shopName }),
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
+      body: JSON.stringify(pbody),
     });
-  } catch (_) { /* fire-and-forget */ }
+    const text = await res.text();
+    console.log(`[kickPlaces] response ${res.status}: ${text.slice(0, 500)}`);
+  } catch (e: unknown) {
+    console.error(`[kickPlaces] exception: ${String(e)}`);
+  }
+}
+
+/** Compose an address string from discrete street/city/state/zip fields. Returns null if no parts. */
+function composeAddress(fields: Record<string, unknown>): string | null {
+  const parts: string[] = [];
+  const street = String(fields.street || "").trim();
+  const city = String(fields.city || "").trim();
+  const state = String(fields.state || "").trim();
+  const zip = String(fields.zip || "").trim();
+  if (street) parts.push(street);
+  if (city) parts.push(city);
+  if (state) parts.push(state);
+  if (zip) parts.push(zip);
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 /** Branded welcome email HTML for self-serve signup. */

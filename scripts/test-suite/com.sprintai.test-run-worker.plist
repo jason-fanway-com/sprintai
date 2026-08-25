@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.sprintai.test-run-worker</string>
+
+    <key>Comment</key>
+    <string>Polls test_run_queue and executes the full test suite pipeline (generate → run → judge → fix → persist).</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ExitTimeOut</key>
+    <integer>20</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joestrazza/sprintai-ordering/scripts/test-suite</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/opt/homebrew/bin/deno</string>
+      <string>run</string>
+      <string>--allow-net</string>
+      <string>--allow-env</string>
+      <string>--allow-read</string>
+      <string>--allow-write</string>
+      <string>worker.ts</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>/Users/joestrazza</string>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardInPath</key>
+    <string>/dev/null</string>
+    <key>StandardOutPath</key>
+    <string>/Users/joestrazza/Library/Logs/sprintai/test-run-worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joestrazza/Library/Logs/sprintai/test-run-worker.log</string>
+  </dict>
+</plist>

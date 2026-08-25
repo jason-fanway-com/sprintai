@@ -1151,6 +1151,7 @@
         btn.textContent = "Save menu changes";
         btn.disabled = false;
         showToast("Menu saved!");
+        fireTestGen();
       } else {
         showToast("Menu save failed: " + ((r.json && r.json.error) || "unknown"));
         btn.disabled = false;
@@ -1163,6 +1164,19 @@
       btn.textContent = "Save menu changes";
     });
   };
+
+  // ── Test suite generation (fire-and-forget after menu save) ──────────────
+  function fireTestGen() {
+    fetch(fnUrl("generate-test-cases"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": CFG.ANON_KEY,
+        "Authorization": "Bearer " + CFG.ANON_KEY
+      },
+      body: JSON.stringify({ shop_id: state.shop.id })
+    }).catch(function () { /* fire-and-forget: don't block the wizard */ });
+  }
 
   // ── Save (everything else) ────────────────────────────────────────────────
   document.getElementById("saveBtn").onclick = function () {

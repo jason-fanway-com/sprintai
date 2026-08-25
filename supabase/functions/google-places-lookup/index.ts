@@ -33,7 +33,10 @@ interface PlaceResult {
 Deno.serve(async (req: Request) => {
   // ── Auth ──────────────────────────────────────────────────────────
   const auth = req.headers.get("authorization");
-  if (auth !== `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`) {
+  const expectedKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const internalSecret = Deno.env.get("INTERNAL_FUNCTION_SECRET") ?? "";
+  const bearerKey = auth?.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (bearerKey !== expectedKey && bearerKey !== internalSecret) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
@@ -123,7 +126,7 @@ Deno.serve(async (req: Request) => {
   ];
 
   try {
-    const dr = await fetch(`${PLACES_API_BASE}/${placeId}`, {
+    const dr = await fetch(`${PLACES_API_BASE}/places/${placeId}`, {
       method: "GET",
       headers: {
         "X-Goog-Api-Key": API_KEY,

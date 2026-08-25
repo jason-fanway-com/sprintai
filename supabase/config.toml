@@ -68,3 +68,6 @@ verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC ses
 
 [functions.issue-detector]
 verify_jwt = false  # Scheduled sweep; invoked with service-role key, not by end users
+
+[functions.pay-redirect]
+verify_jwt = false  # Public short-link redirect; no JWT needed
