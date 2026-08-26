@@ -152,17 +152,26 @@ function isSwap(msg: string): boolean {
 
 /** Find the largest dollar amount in text near "total" language. */
 function findQuotedTotal(text: string): { cents: number; raw: string } | null {
-  // Pattern 1: "total is $X.XX" / "total: $X.XX"
-  let m = text.match(/(?:total|comes? to|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)\D*\$?(\d+[.,]\d{2})/i);
+  // Strip the service-fee mention FIRST so "$8.98 total (includes $0.99 service
+  // fee)" can never let the $0.99 be mistaken for the grand total.
+  const cleaned = text
+    .replace(/\([^)]*service fee[^)]*\)/gi, "")
+    .replace(/(?:\+\s*|includes?\s+)?\$0[.,]\d{2}\s*(?:service\s+)?fee/gi, "");
+  // Pattern 1: amount immediately BEFORE the word total — "$8.98 total", "$8.98 due"
+  let m = cleaned.match(/\$(\d+[.,]\d{2})\s*(?:total|due|to pay|owed?)/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
-  // Pattern 2: "Subtotal: $X.XX + $0.99 service fee"
-  m = text.match(/(?:subtotal|items? total)[:\s]*\$(\d+[.,]\d{2})/i);
+  // Pattern 2: "Subtotal: $X.XX ( + $0.99 service fee )" → add the fee back
+  m = cleaned.match(/(?:subtotal|items? total)[:\s]*\$(\d+[.,]\d{2})/i);
   if (m) {
     const sub = Math.round(parseFloat(m[1].replace(",", "")) * 100);
     return { cents: sub + 99, raw: `subtotal ${m[0]} + $0.99 fee` };
   }
-  // Pattern 3: Checkout link text with amount
-  m = text.match(/(?:pay|charge|amount)[:\s]*\$(\d+[.,]\d{2})/i);
+  // Pattern 3: keyword BEFORE amount — "total is $X.XX", "comes to $X.XX".
+  //   \btotal\b so it never matches inside "Subtotal" (handled above).
+  m = cleaned.match(/(?:\btotal\b|comes? to|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)\D*\$?(\d+[.,]\d{2})/i);
+  if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
+  // Pattern 4: Checkout link text with amount
+  m = cleaned.match(/(?:pay|charge|amount)[:\s]*\$(\d+[.,]\d{2})/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
   return null;
 }
