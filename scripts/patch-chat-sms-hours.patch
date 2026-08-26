@@ -1,0 +1,101 @@
+*** Begin Patch ***
+Fix chat-sms hours handling for new flat-object shape (migration 061)
+
+1. Add normalizeHours helper to handle both old array and new flat-object shapes
+2. Update Shop interface open_hours type
+3. Update all three hours-reading locations
+4. Update judge-rubric.ts for same compatibility
+
+--- a/supabase/functions/chat-sms/index.ts
++++ b/supabase/functions/chat-sms/index.ts
+@@ -108,7 +108,7 @@ interface Shop {
+   phone_number_e164:       string | null;
+   reply_from_e164:         string | null;
+-  open_hours:              Record<string, Array<{ open: string; close: string }>>;
++  open_hours:              Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
+   timezone:                string;
+   email_ticket_recipient:  string | null;
+   is_paused:               boolean;
+@@ -405,7 +405,26 @@ function buildSystemPrompt(
+ ): string {
++  // normalizeHours: handles BOTH the old array-of-windows shape
++  // [{open,close}] AND the post-061 flat-object shape {closed,open,close}.
++  // Returns a clean Array<{open,close}> for downstream code that expects
++  // .length and .map.
++  function normalizeHours(dayHours: unknown): Array<{ open: string; close: string }> {
++    if (!dayHours) return [];
++    if (Array.isArray(dayHours)) {
++      return (dayHours as Array<{ open?: string; close?: string }>)
++        .filter(w => w.open && w.close)
++        .map(w => ({ open: w.open!, close: w.close! }));
++    }
++    if (typeof dayHours === 'object') {
++      const obj = dayHours as Record<string, unknown>;
++      if (!obj.closed && obj.open && obj.close) {
++        return [{ open: String(obj.open), close: String(obj.close) }];
++      }
++      return [];
++    }
++    return [];
++  }
++
+   const today = getBusinessDayKey(shop.timezone);
+-  const hours = shop.open_hours?.[today] ?? [];
++  const hours = normalizeHours(shop.open_hours?.[today]);
+   const hoursStr = hours.length > 0
+@@ -1830,7 +1849,7 @@ async function handleSystemEvents(
+     const today    = getBusinessDayKey(shop.timezone);
+-    const hours    = shop.open_hours?.[today] ?? [];
++    const hours    = normalizeHours(shop.open_hours?.[today]);
+     const fmt12Confirm = (t: string) => { const [h, m] = t.split(":").map(Number); const ampm = h >= 12 ? "p.m." : "a.m."; const h12 = h % 12 || 12; return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2,"0")} ${ampm}`; };
+@@ -2557,13 +2576,13 @@ async function handleInbound(
+     const todayKey = getBusinessDayKey(shop.timezone);
+-    const todayHours = shop.open_hours?.[todayKey] ?? [];
++    const todayHours = normalizeHours(shop.open_hours?.[todayKey]);
+     const nowMins = getLocalMinutes(shop.timezone);
+ 
+     // Check if current time falls within any open window (handles multi-window
+     // days, e.g. lunch + dinner, since open_hours[day] is an array).
+-    const isOpen = todayHours.some((window: { open: string; close: string }) => {
++    const isOpen = todayHours.length > 0 && todayHours.some((window: { open: string; close: string }) => {
+       const [openH, openM] = window.open.split(":").map(Number);
+
+--- a/supabase/functions/_shared/judge-rubric.ts
++++ b/supabase/functions/_shared/judge-rubric.ts
+@@ -176,7 +176,7 @@ export interface GroundTruth {
+   // Shop facts
+-  open_hours: Record<string, Array<{ open: string; close: string }>>;
++  open_hours: Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
+   shop_context?: string;
+   timezone?: string;
+@@ -211,15 +211,35 @@ export function buildGroundTruthBlock(ground: GroundTruth): string {
+ 
+   // Hours
+-  const hoursLines = Object.keys(ground.open_hours || {}).length
+-    ? Object.entries(ground.open_hours)
++  const hoursLines = (() => {
++    const entries = Object.entries(ground.open_hours || {});
++    if (!entries.length) return "  (no hours on file)";
++    return entries
+       .map(([day, windows]) => {
+-        const times = windows.map(w => `${w.open}-${w.close}`).join(", ");
++        // Handle both old array shape and new flat-object shape
++        if (Array.isArray(windows)) {
++          if (!windows.length) return `  ${day}: closed`;
++          const times = windows.map((w: { open: string; close: string }) => `${w.open}-${w.close}`).join(", ");
+           return `  ${day}: ${times}`;
++        }
++        if (typeof windows === 'object' && windows !== null) {
++          const obj = windows as { closed?: boolean; open?: string; close?: string };
++          if (obj.closed) return `  ${day}: closed`;
++          if (obj.open && obj.close) return `  ${day}: ${obj.open}-${obj.close}`;
++          return `  ${day}: closed`;
++        }
++        return `  ${day}: (unknown format)`;
+       })
+-      .join("\n")
+-    : "  (no hours on file)";
++      .join("\n");
++  })();
+   const hoursBlock = `SHOP HOURS (${ground.timezone ?? "America/New_York"} timezone):\n${hoursLines}`;
+*** End Patch ***

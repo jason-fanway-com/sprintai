@@ -90,18 +90,28 @@ async function sendMessage(
   shopId: string,
   message: string,
   sessionId: string,
+  hoursMode?: "open" | "closed",
 ): Promise<{ reply: string | null; cart?: unknown; phase?: string }> {
+  // ── Build the request body ───────────────────────────────────────────
+  const requestBody: Record<string, unknown> = {
+    shop_id: shopId,
+    message,
+    session_id: sessionId,
+    test: true,
+  };
+  if (hoursMode === "closed") {
+    requestBody.test_hours = "closed";
+    // Remove `test: true` so the forceClosed branch takes priority.
+    delete requestBody.test;
+  }
+
   const res = await fetch(chatFunctionUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${supabaseKey}`,
     },
-    body: JSON.stringify({
-      shop_id: shopId,
-      message,
-      session_id: sessionId,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!res.ok) {
@@ -136,9 +146,9 @@ export async function runCase(
   testCase: AnyCase,
 ): Promise<RunResult> {
   if (isConversationalCase(testCase)) {
-    return runConversationalCase(config, shopId, testCase);
+    return runConversationalCase(config, shopId, testCase, testCase.hoursMode);
   }
-  return runScriptedCase(config, shopId, testCase);
+  return runScriptedCase(config, shopId, testCase, testCase.hoursMode);
 }
 
 /**
@@ -148,6 +158,7 @@ async function runScriptedCase(
   config: RunnerConfig,
   shopId: string,
   testCase: TestCase,
+  hoursMode?: "open" | "closed",
 ): Promise<RunResult> {
   const supabase = createClient(config.supabaseUrl, config.serviceRoleKey, {
     auth: { persistSession: false },
@@ -169,6 +180,7 @@ async function runScriptedCase(
         shopId,
         turn.message,
         sessionId,
+        hoursMode,
       );
 
       transcript.push({
@@ -216,6 +228,7 @@ async function runConversationalCase(
   config: RunnerConfig,
   shopId: string,
   testCase: ConversationalCase,
+  hoursMode?: "open" | "closed",
 ): Promise<RunResult> {
   const supabase = createClient(config.supabaseUrl, config.serviceRoleKey, {
     auth: { persistSession: false },
@@ -254,6 +267,7 @@ async function runConversationalCase(
         shopId,
         message,
         sessionId,
+        hoursMode,
       );
 
       transcript.push({

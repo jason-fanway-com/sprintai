@@ -632,6 +632,8 @@
       if (state.menuSource === "pipeline") {
         // parse-menu-pdf already committed the menu to DB.
         chatSay("resto", "Locked it in! " + (state.menuRows ? state.menuRows.length : 0) + " items on your menu. Your assistant can now quote every one of them.");
+        // Fire-and-forget: generate test cases from the committed menu.
+        fireTestGen();
         next();
         return null; // signal to skip the CSV path below
       }
@@ -647,12 +649,26 @@
       }
       if (r && r.json && r.json.ok) {
         chatSay("resto", "Locked it in! " + (r.json.inserted || 0) + " items written to your menu" + (r.json.no_op ? " (no changes)" : "") + ". Your assistant can now quote every one of them.");
+        // Fire-and-forget: generate test cases from the imported menu.
+        fireTestGen();
         next();
       }
     }).catch(function (e) {
       chatSay("resto", "Couldn't reach the menu importer (" + esc(e.message) + ").");
       btn.disabled = false; updateMenuConfirmEnabled();
     });
+  }
+
+  // ── fire-and-forget test case generation ───────────────────────────────────
+  // Called after menu is committed to DB. Non-blocking — the wizard never
+  // waits for this and the shop never sees errors from it.
+  function fireTestGen() {
+    if (!state.shop_id) return;
+    fetch(fnUrl("generate-test-cases"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + CFG.ANON_KEY },
+      body: JSON.stringify({ shop_id: state.shop_id }),
+    }).catch(function () { /* silent — fire and forget */ });
   }
 
   // 6 ── SPECIAL INSTRUCTIONS ──────────────────────────────────────────────────
