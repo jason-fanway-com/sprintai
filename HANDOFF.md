@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -97,7 +97,8 @@ sprintai-ordering/
 │       ├── scorecard.ts      # Aggregate scoring (≥95% pass, 100% critical)
 │       ├── fix.ts            # LLM root-cause + proposed-fix generator for failures
 │       ├── persist.ts        # Writes results to test_runs / test_case_results
-│       ├── cart-ops.ts       # Adversarial CartOps battery (100% gate)
+│       ├── cart-ops.ts       # Shop-aware CartOps battery (100% gate, real menu)
+│       ├── hours-closed.ts   # Deterministic closed-hours gate case
 │       └── worker.ts         # launchd worker — drains test_run_queue (onboarding QA)
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
@@ -423,7 +424,16 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   `cart_json` (subtotal + $0.99 fee + delivery + tip). The invariant
   `quoted_total == charged_total == sum(cart_json) + fees` holds — no path lets
   an LLM-supplied number reach Stripe. Backed by an adversarial CartOps battery
-  (`scripts/test-suite/cart-ops.ts`) that runs per shop at 100%.
+  (`scripts/test-suite/cart-ops.ts`) that runs per shop at 100%. The battery
+  is shop-aware — cases are built from the shop's real menu items — and total
+  checks use an `expectedItemCents` override so they're deterministic, not
+  judge arithmetic.
+- **The closed-hours gate is deterministically tested.** `chat-sms` accepts a
+  gated `test_hours=open|closed` param (never honored on live keys) that
+  forces the closed branch via `effectiveOpen`; the suite's `hours-closed`
+  critical case verifies the bot refuses with a "kitchen is closed" message,
+  no cart, no payment link — proving per shop that the bot never takes an
+  order the kitchen can't fulfill.
 - **Delivery zone is fail-closed.** A delivery address is accepted only as a
   positively-qualified, in-zone street match (`status=OK`, `partial_match !==
   true`, `location_type` ∈ {ROOFTOP, RANGE_INTERPOLATED}, distance ≤

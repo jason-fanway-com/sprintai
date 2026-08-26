@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -283,7 +283,14 @@ These are encoded in the architecture, not just in marketing.
   delivery + tip). The invariant `quoted_total == charged_total ==
   sum(cart_json) + fees` holds, so an LLM-supplied number can never reach
   Stripe. An adversarial CartOps battery (`scripts/test-suite/cart-ops.ts`)
-  asserts these invariants per shop at 100%.
+  asserts these invariants per shop at 100% — and the battery is shop-aware,
+  building its cases from the shop's real menu rather than hardcoded
+  references, so the same QA runs for restaurant #1 and #10,000.
+- **The QA suite proves the bot won't take an order the kitchen can't fill.**
+  A deterministic `hours-closed` case forces the "kitchen is closed" branch
+  and verifies the bot refuses with a closed message, no cart, and no payment
+  link. It runs automatically at onboarding, so an owner can trust — without
+  any SprintAI employee checking — that the bot respects their hours.
 - **Delivery is fail-closed.** A delivery address is accepted only as a
   positively-qualified, in-zone street match (Google `status=OK`,
   `partial_match !== true`, `location_type` ∈ {ROOFTOP,

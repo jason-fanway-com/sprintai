@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -185,7 +185,11 @@ Location: `scripts/test-suite/worker.ts` (Deno), launched via
 Onboarding menu save enqueues a `test_run_queue` row (reason `onboarding`).
 The worker polls for the oldest `pending` row, marks it `running`, runs the full
 test-suite pipeline (generate → run → judge → scorecard → persist), and writes a
-real `test_runs` row + `test_case_results`. Success → `done`; failure → `error`
+real `test_runs` row + `test_case_results`. The generated suite includes a
+deterministic `hours-closed` critical case (driven by a `test_hours=closed`
+param on chat-sms that forces the closed branch through `effectiveOpen` —
+never honored on live keys) and a shop-aware CartOps battery built from the
+shop's real menu items, not hardcoded references. Success → `done`; failure → `error`
 (terminal — no poison-loop; manual requeue). Idle poll interval default 15s
 (`WORKER_POLL_INTERVAL`). `run-worker.sh` sources `~/.openclaw/.secrets` first —
 launchd does not inherit shell env, so the worker reads empty keys and error-
@@ -469,7 +473,18 @@ rating, review_count). Migration `063` adds shop `latitude`/`longitude`/
     `quoted_total == charged_total == sum(cart_json) + fees` is enforced — the
     bot never states a total that differs from the real cart, and no path lets
     an LLM-supplied number reach Stripe. An adversarial CartOps battery
-    (`scripts/test-suite/cart-ops.ts`) asserts these invariants at 100%.
+    (`scripts/test-suite/cart-ops.ts`) asserts these invariants at 100%. The
+    battery is shop-aware — `buildCartOpsCases` builds cases from the shop's
+    real menu items — and carries an `expectedItemCents` override so total
+    checks are deterministic, not judge arithmetic.
+
+17. **Closed-hours gate is deterministically tested.** `chat-sms` accepts a
+    gated `test_hours=open|closed` param (web/test only, never on live keys)
+    that forces the closed branch through `effectiveOpen`. The suite's
+    `hours-closed` critical case (`scripts/test-suite/hours-closed.ts`)
+    verifies the bot refuses with a "kitchen is closed" message, produces no
+    cart, and generates no payment link — proving per shop, automatically,
+    that the bot never takes an order the kitchen can't fulfill.
 
 16. **Delivery zone is fail-closed (chat-sms + go-live)**: A delivery address
     is accepted only when geocoded as a positively-qualified, in-zone street
