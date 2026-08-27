@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -358,9 +358,16 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   without an EIN fails out of signup cleanly — no alternate path. Permanent
   decision by Jason.
 - **Telnyx brand/campaign is frozen** until the solutions engineer call resolves
-  ISV mechanics. Brand BJ8MUGY verified; campaign CSMB9HG shows TELNYX_FAILED
-  despite all 7 carriers approving at TCR level. Do not modify either.
+  ISV mechanics. Brand BJ8MUGY verified; campaign CSMB9HG is TCR_ACCEPTED with
+  all 7 carriers reporting APPROVED, but `failureReasons` still carries the 806
+  CTA rejection and `isTMobileRegistered` reads false — unresolved until the
+  delivery test proves whether 806 is stale. Do not modify the campaign.
   Each merchant will ultimately need its own brand + campaign (registry policy).
+- **First delivery test is a hard go-live gate.** Before any shop goes live, the
+  Telnyx provisioning + delivery test (`sprintai-telnyx-provisioning-test.md`,
+  8-step real-handset script) must pass — it is the ground-truth check that the
+  campaign actually delivers, since the API's 806 `failureReasons` flag may be a
+  stale historical field rather than a live rejection.
 - **Owner detail pages show real not-found states**
   ConversationDetail, IssueDetail, and ShopChatDetail now render a clear
   "not found — may belong to another account" message instead of a white

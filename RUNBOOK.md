@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -160,6 +160,12 @@ Twilio numbers (`+16109366213`, `+16103792553` via Messaging Service
 Telnyx provisioning is planned but NOT yet built — the Telnyx runbook
 contains the provisioning step sequence as a spec, not as implemented code. See `docs/telnyx-integration-runbook.md` (wiring) and
 `docs/10dlc-compliance-obligations.md` (binding behaviour — treat as law).
+The required first-delivery test (8-step real-handset script, in
+`sprintai-telnyx-provisioning-test.md`) is the go/no-go gate before the first
+shop goes live — message delivery is ground truth for whether the 806
+`failureReasons` flag is stale or live. Root-level
+`sprintai-telnyx-integration-runbook.md` and `sprintai-10dlc-compliance-handoff.md`
+duplicate the `docs/` copies; the `docs/` files are canonical.
 
 ### iMessage bridge
 

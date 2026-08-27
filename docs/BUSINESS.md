@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -320,10 +320,13 @@ These are encoded in the architecture, not just in marketing.
 
 ## What's next (near-term roadmap)
 
-1. **Provision live numbers on Telnyx** — the campaign is already approved, so
-   the remaining step is to provision shop numbers, attach them to per-shop
-   messaging profiles, assign them to campaign `CSMB9HG`, and pass the real-
-   handset delivery test before the first shop goes live.
+1. **Provision live numbers on Telnyx** — the campaign is already approved at
+   TCR, so the remaining step is to provision shop numbers, attach them to
+   per-shop messaging profiles, assign them to campaign `CSMB9HG`, and pass the
+   real-handset delivery test (`sprintai-telnyx-provisioning-test.md`) before the
+   first shop goes live. That test is the ground-truth gate: the campaign record
+   still carries an 806 CTA rejection in `failureReasons` that may be stale, and
+   message delivery is the only way to prove the campaign is actually clear.
 2. **First real restaurant** — onboard one paying shop with their real menu,
    real Stripe, and real phone number. Validate the end-to-end in production
    with real customers.
