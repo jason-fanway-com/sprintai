@@ -211,10 +211,16 @@ export interface StatedTotalResult {
  * Parses the bot's stated dollar TOTAL from the final relevant assistant
  * messages and compares it to expectedItemCents + feeCents.
  *
+ * PASS-ONLY: this override may only RESCUE a case the LLM judge failed on
+ * arithmetic false-positives. It must never force-FAIL a case the judge
+ * passed — the fixture-derived expectedItemCents is unreliable for mutated
+ * carts, substitutions, and intermediate totals, so a mismatch here does NOT
+ * prove a bot error. Real total errors are caught by CartOps Invariant 1
+ * (quoted_total_matches_cart), which compares against the actual cart_json.
+ *
  * Returns:
  *   { passed: true, detail }  — stated total matches expected (force pass)
- *   { passed: false, detail } — stated total ≠ expected (real error, force fail)
- *   null                      — no explicit total stated (keep LLM verdict)
+ *   null                      — mismatch OR no total stated (keep LLM verdict)
  */
 export function verifyStatedTotal(
   run: RunResult,
@@ -238,10 +244,9 @@ export function verifyStatedTotal(
           detail: `Stated total $${(quoted.cents / 100).toFixed(2)} matches expected $${(expected / 100).toFixed(2)} (items $${(expectedItemCents / 100).toFixed(2)} + $${(feeCents / 100).toFixed(2)} fee)`,
         };
       }
-      return {
-        passed: false,
-        detail: `Stated total $${(quoted.cents / 100).toFixed(2)} does NOT match expected $${(expected / 100).toFixed(2)} (items $${(expectedItemCents / 100).toFixed(2)} + $${(feeCents / 100).toFixed(2)} fee)`,
-      };
+      // Mismatch: do NOT force-fail. Fixture math is unreliable; defer to the
+      // LLM judge and CartOps Invariant 1 (cart_json truth). Pass-only override.
+      return null;
     }
   }
 
