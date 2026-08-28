@@ -264,6 +264,33 @@ try {
   console.log(`  Run ID: ${persistResult.runId}`);
   console.log(`  test_runs: 1 row inserted`);
   console.log(`  test_case_results: ${scored.length} rows inserted`);
+
+  // Segment summary: mean segments per checkout-completing conversation.
+  const checkerOut = scored.filter((s) =>
+    s.run.transcript.some((t) => t.phase === "checkout")
+  );
+  if (checkerOut.length > 0) {
+    // Small inline SMS segment counter (same GSM-7 logic as persist.ts).
+    const gsm7 = new Set(
+      "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà".split("")
+    );
+    const gsm7Ext = new Set("|^{}[]~\\€");
+    const segs = (t: string) => {
+      if (!t) return 0;
+      const isG = [...t].every((c) => gsm7.has(c) || gsm7Ext.has(c));
+      if (isG) { const ch = [...t].reduce((n, c) => n + (gsm7Ext.has(c) ? 2 : 1), 0); return ch <= 160 ? 1 : 1 + Math.ceil((ch - 160) / 153); }
+      return t.length <= 70 ? 1 : 1 + Math.ceil((t.length - 70) / 67);
+    };
+    let total = 0;
+    for (const s of checkerOut) {
+      for (const t of s.run.transcript) {
+        if (t.role === "customer" && t.reply) total += segs(t.reply);
+      }
+    }
+    console.log(`  📊 SMS segments: ${checkerOut.length} checkout cases, mean ${Math.round(total / checkerOut.length)} segments/order`);
+  } else {
+    console.log(`  ⚠ No checkout cases in this run — 0 segment data points`);
+  }
 } catch (e) {
   console.error(`  Persist failed: ${(e as Error).message}`);
 }

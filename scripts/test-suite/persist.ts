@@ -10,6 +10,51 @@ import type { Scorecard } from "./scorecard.ts";
 import type { RunResult } from "./runner.ts";
 import type { FixResult } from "./fix.ts";
 
+// ── GSM-7 segment counting (inline — same logic as segment-count.ts) ──────
+const GSM7_BASIC = new Set(
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+    .split(""),
+);
+const GSM7_EXTENDED = new Set("|^{}[]~\\€");
+
+function isGsm7(text: string): boolean {
+  for (const ch of text) {
+    if (!GSM7_BASIC.has(ch) && !GSM7_EXTENDED.has(ch)) return false;
+  }
+  return true;
+}
+
+function gsm7CharCount(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    count += GSM7_EXTENDED.has(ch) ? 2 : 1;
+  }
+  return count;
+}
+
+function segmentCount(text: string): number {
+  if (text.length === 0) return 0;
+  if (isGsm7(text)) {
+    const chars = gsm7CharCount(text);
+    return chars <= 160 ? 1 : 1 + Math.ceil((chars - 160) / 153);
+  }
+  return text.length <= 70 ? 1 : 1 + Math.ceil((text.length - 70) / 67);
+}
+
+function totalBotSegments(transcript: Array<{ role: string; reply?: string | null; phase?: string }>): number {
+  let segs = 0;
+  for (const turn of transcript) {
+    if (turn.role === "customer" && turn.reply) {
+      segs += segmentCount(turn.reply);
+    }
+  }
+  return segs;
+}
+
+function conversationReachedCheckout(transcript: Array<{ role: string; reply?: string | null; phase?: string }>): boolean {
+  return transcript.some((t) => t.phase === "checkout");
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface PersistInput {
@@ -129,6 +174,8 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       root_cause: rootCause,
       proposed_fix: proposedFix,
       fix_status: fixStatus,
+      bot_segments: totalBotSegments(s.run.transcript),
+      reached_checkout: conversationReachedCheckout(s.run.transcript),
     };
   });
 

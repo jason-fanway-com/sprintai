@@ -636,6 +636,9 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
   // Checkout flows
   pushCase(derivedCases, checkoutFlow(orderPool, 0, ctr++));
   pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(orderPool.length / 3), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(orderPool.length / 2), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(2 * orderPool.length / 3), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(3 * orderPool.length / 4), ctr++));
 
   // Greeting + order
   pushCase(derivedCases, greetingThenOrder(orderPool, 0, ctr++));
