@@ -184,6 +184,13 @@ Processed IDs: `~/.sprintai-bridge/processed-ids.txt`
 
 ### Test-run worker (onboarding QA)
 
+**Scorer is FROZEN at `SCORER_VERSION = 1` (2026-08-28).** Do not change scoring
+logic (invariants, judge weighting, pass/fail thresholds) without bumping the
+version and recording why here. CartOps deterministic invariants are
+authoritative over the LLM judge — a cart that satisfies the invariants
+force-passes. Freezing the ruler is what stops run-to-run score bounce; changing
+it silently reintroduces it.
+
 Location: `scripts/test-suite/worker.ts` (Deno), launched via
 `scripts/test-suite/run-worker.sh` → launchd
 `com.sprintai.test-run-worker.plist` (mirrors the imsg-bridge job).

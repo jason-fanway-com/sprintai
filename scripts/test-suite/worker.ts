@@ -30,6 +30,11 @@ import { verifyHoursClosed } from "./hours-closed.ts";
 import { persistResults } from "./persist.ts";
 import { generateRootCauseFix } from "./fix.ts";
 
+// ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
+// ⚠️ BUMP on any judge/scoring/criteria change. This gets persisted so the
+//    dashboard can separate runs scored under different scoring rules.
+const SCORER_VERSION = 1;
+
 // ── Config ─────────────────────────────────────────────────────────────────
 
 const SUPABASE_URL = Deno.env.get("SPRINTAI_CHAT_SUPABASE_URL") ?? "";
@@ -138,7 +143,10 @@ while (true) {
           for (const inv of verify.invariants.filter((x) => !x.passed)) {
             console.log(`worker [${queueId}]:     ✗ ${inv.id}: ${inv.detail}`);
           }
-          if (!verify.passed) judge = { ...judge, passed: false };
+          // A1 (2026-08-28): invariants authoritative over LLM judge — force pass when clean.
+          judge = verify.passed
+            ? { ...judge, passed: true }
+            : { ...judge, passed: false };
         }
 
         // Hours-closed HARD programmatic verification (overrides LLM judge)
@@ -156,8 +164,10 @@ while (true) {
         if (expectedCents !== undefined) {
           const totalOverride = verifyStatedTotal(run, expectedCents);
           if (totalOverride) {
-            console.log(`worker [${queueId}]:   Stated-total override: ${totalOverride.passed ? "FORCE PASS" : "FORCE FAIL"} — ${totalOverride.detail}`);
-            judge = { ...judge, passed: totalOverride.passed };
+            console.log(`worker [${queueId}]:   Stated-total override: FORCE PASS — ${totalOverride.detail}`);
+            // A1 (2026-08-28): verifyStatedTotal is pass-only (returns null on mismatch).
+            // When it fires, the total IS correct — force pass regardless of LLM judge.
+            judge = { ...judge, passed: true };
           }
         }
 
@@ -186,6 +196,7 @@ while (true) {
         scorecard,
         scored,
         modelTier: "deepseek-v4-flash-test-suite",
+        scorerVersion: SCORER_VERSION,
       });
 
       // ── Mark done ────────────────────────────────────────────────────

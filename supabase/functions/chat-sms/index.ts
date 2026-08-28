@@ -523,7 +523,7 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)}. When you state the order total, use THIS number — never quote the subtotal as the final total.` : ""}
+${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)}. When you state the order total, use THIS number exactly — do NOT compute or recalculate it yourself. Quote it verbatim. Never quote the subtotal as the final total.` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
@@ -538,6 +538,7 @@ RULES:
 - Be friendly but concise — every character over 160 costs a segment
 - SERVICE FEE: A $0.99 service fee is added to every order at checkout. When transitioning to checkout (asking for pickup name), always disclose the fee clearly. Example: "Your total comes to $10.50 plus a $0.99 service fee, so $11.49 total. What name should I put this under for pickup?" Always include the service fee in any total or order summary. Never quote only the subtotal as the final price.
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
+- CLEAR_CART RESTRICTION (CRITICAL): NEVER call clear_cart unless the customer explicitly asks to cancel, restart, or start a new order. Words like "also", "add another", "and a", "can I also get", "let me also", "I also want" are ADDITIVE — they mean ADD to the existing cart, not replace it. Calling clear_cart when the customer asks to add more items will DESTROY their existing order. Only call clear_cart for explicit cancel/restart messages.
 - SAFE WORDS: At every decision point where a customer might want to abandon or change something, offer CHANGE to modify or RESTART to begin again. NEVER use the word "cancel" in a prompt or instruction — if a customer cancels, offer CHANGE or RESTART as the alternative.
 - CUSTOMER QUESTIONS (CRITICAL): ALWAYS answer a direct question from the customer explicitly before or alongside advancing the order. If they ask whether you carry an item or category (e.g. "do you have coffee?", "any hot drinks?", "got lattes?"), answer plainly — "We don't carry coffee, sorry" — no matter how many times they've already asked. A question is NEVER an order-completion signal. If the customer asks a question and also says they're done, declines something, or lists more items, answer the question FIRST, then handle the rest. NEVER reply with "what else can I add?" or ask for the pickup name while an unanswered question is on the table. If the customer asks about an entire category you don't carry (coffee, hot drinks, desserts), decline the category clearly (e.g. "We don't carry any coffee or hot drinks — just bagels and sandwiches") — don't fixate on one item.
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
@@ -736,6 +737,11 @@ async function executeTool(
         return { ok: false, result: { error: `Cannot submit. Bundle "${incompleteBundle.name}" is still in progress (${filled} of ${incompleteBundle.target} selected). Finish or cancel the bundle first.` } };
       }
       const { pickup_name } = input as { pickup_name?: string };
+      // C1 (2026-08-28): Deterministic hard gate — pickup_name is required for submit_order.
+      // No name → reject. LLM must collect name before submitting.
+      if (!pickup_name || pickup_name.trim().length === 0) {
+        return { ok: false, result: { error: "Cannot submit order. A pickup name is required — ask the customer for their name first." } };
+      }
       await saveCart(supabase, cartId, cart, "review");
       if (pickup_name) {
         await supabase.from("order_carts").update({ pickup_name }).eq("id", cartId);
@@ -790,6 +796,12 @@ async function executeTool(
         .eq("id", cartId).single();
       const orderNotes = cartRow?.notes || "";
       const orderType = (cartRow?.order_type as string) || "pickup";
+
+      // C1 (2026-08-28): No fulfillment mode → reject submit_order.
+      // LLM must call set_order_type before submitting.
+      if (!cartRow?.order_type) {
+        return { ok: false, result: { error: "Cannot submit order. Please confirm pickup or delivery first." } };
+      }
       const deliveryAddress = cartRow?.delivery_address as Record<string, unknown> | null;
       const deliveryFeeCents = (cartRow?.delivery_fee_cents as number) || 0;
       const driverTipCents = (cartRow?.driver_tip_cents as number) || 0;
@@ -1296,6 +1308,21 @@ async function runOrderingLoop(
           type:        "tool_result",
           tool_use_id: toolBlock.id!,
           content:     JSON.stringify({ ok: false, error: "Cannot add items while confirming tip — prior tip offer is being resolved." }),
+        });
+        continue;
+      }
+
+      // ── B3 (2026-08-28): Clear-cart + add-item in same turn = REPLACE, not ADD ─
+      // When the LLM clears then adds, it's trying to replace the cart content
+      // instead of mutating. Corrections should use modify_item/remove_item,
+      // not a destroy-then-rebuild. Suppress clear_cart and let add_item proceed.
+      if (toolBlock.name === "clear_cart" && cart.length > 0 &&
+          toolBlocks.some((tb: { name?: string }) => tb.name === "add_item")) {
+        console.warn(`[chat-sms] GUARD: suppressed clear_cart — add_item present in same turn (cart has ${cart.length} items, likely a replace-not-add mistake)`);
+        toolResults.push({
+          type:        "tool_result",
+          tool_use_id: toolBlock.id!,
+          content:     JSON.stringify({ ok: false, error: "Cannot clear the cart when adding items. Use modify_item or remove_item to update existing items instead." }),
         });
         continue;
       }

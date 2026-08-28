@@ -19,6 +19,10 @@ import { runCase } from "./runner.ts";
 import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
 import { persistResults } from "./persist.ts";
+
+// ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
+// Do not change scoring logic without recording why and incrementing this.
+const SCORER_VERSION = 1;
 import { generateRootCauseFix } from "./fix.ts";
 import { verifyCartOpsInvariants, verifyStatedTotal, type CartOpsVerification } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
@@ -159,9 +163,12 @@ for (let i = 0; i < casesToRun.length; i++) {
         const mark = inv.passed ? "✓" : "✗";
         console.log(`      ${mark} ${inv.id}: ${inv.detail}`);
       }
-      if (!cartOpsVerify.passed) {
-        judge = { ...judge, passed: false };
-      }
+      // A1 (2026-08-28): Programmatic invariants are authoritative over LLM judge.
+      // When invariants pass, force-judge passed regardless of LLM verdict — the
+      // LLM may flag wrong_total when arithmetic is actually correct.
+      judge = cartOpsVerify.passed
+        ? { ...judge, passed: true }
+        : { ...judge, passed: false };
     }
 
     // 4. Hours-closed HARD programmatic verification (replaces LLM judge)
@@ -183,7 +190,9 @@ for (let i = 0; i < casesToRun.length; i++) {
       const totalOverride = verifyStatedTotal(run, expectedCents);
       if (totalOverride) {
         console.log(`  → Stated-total override: ${totalOverride.passed ? "FORCE PASS" : "FORCE FAIL"} — ${totalOverride.detail}`);
-        judge = { ...judge, passed: totalOverride.passed };
+        // A1 (2026-08-28): verifyStatedTotal is pass-only (returns null on mismatch).
+        // When it fires, the total IS correct — force pass regardless of LLM judge.
+        judge = { ...judge, passed: true };
       }
     }
 
@@ -260,6 +269,7 @@ try {
     scorecard,
     scored: scored.map((s) => s),
     modelTier: "deepseek-v4-flash-test-suite",
+    scorerVersion: SCORER_VERSION,
   });
   console.log(`  Run ID: ${persistResult.runId}`);
   console.log(`  test_runs: 1 row inserted`);

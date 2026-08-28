@@ -66,6 +66,7 @@ export interface PersistInput {
   scorecard: Scorecard;
   scored: Array<{ testCase: AnyCase; judge: JudgeResult; run: RunResult; fix?: FixResult | null }>;
   modelTier: string;
+  scorerVersion: number;
 }
 
 export interface PersistResult {
@@ -104,6 +105,7 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       category_subscores: categorySubscores,
       critical_failures: input.scorecard.criticalFailures,
       status: "completed",
+      scorer_version: input.scorerVersion,
       notes: `Test suite run against ${input.shopName}`,
     })
     .select("id")
