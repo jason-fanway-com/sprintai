@@ -2,7 +2,7 @@
 
 **For:** the SprintAI OpenClaw agent that builds and maintains SprintAI / getsprintai.com
 **From:** Jason (via Claude, Mac side)
-**Date:** 2026-08-14
+**Date:** 2026-08-28 (updated after Telnyx SE call with Chris — corrections to ISV model, throughput, and send-gate)
 **Status of registration:** APPROVED by all carriers
 
 ---
@@ -13,7 +13,37 @@ SprintAI's A2P 10DLC campaign is registered and approved with TCR and all seven 
 
 **Treat this file as a spec, not guidance.**
 
-## The registration
+## ⚠️ 2026-08-28 CORRECTIONS (Chris, Telnyx SE)
+
+### Correction 1: No ISV/reseller re-registration needed
+"there is no real reseller or ISV tag on 10DLC currently — right now it's the same for everyone." The `isReseller: false` and `brandRelationship: BASIC_ACCOUNT` fields on brand BJ8MUGY are irrelevant. Do not change them. The prior ISV re-registration freeze is lifted — there is nothing to fix.
+
+### Correction 2: Throughput is per-campaign, not pooled
+T-Mobile: 2,000 segments/day **per campaign** (not platform-wide). AT&T: 240 TPM **per campaign**. At ~300-400 orders/month per shop, 20-30x headroom. External brand vetting to raise T-Mobile tier is unnecessary.
+
+### Correction 3: The send gate is mapping status, NOT campaignStatus
+`campaignStatus` and `operationStatus` both read APPROVED while sends were blocked for a week. The authoritative check:
+```
+GET /v2/10dlc/phone_number_campaigns/{phoneNumber}
+```
+Both `tmobileNumberMappingStatus` AND `nonTmobileNumberMappingStatus` must return `ADDED`. Anything else = do not send. Build this as the provisioning gate.
+
+## The registration model (per-merchant)
+
+```
+Telnyx ACCOUNT (SprintAI, the ISV layer — gets no 10DLC approval)
+  └── BRAND per merchant (requires that merchant's EIN)
+        └── CAMPAIGN per brand (CUSTOMER_CARE)
+              └── NUMBER assigned to campaign → carrier approval per number
+```
+
+Timings: brand ~2 hours, campaign 48-72 hours, carrier mapping per number ~minutes to 2 hours (the real bottleneck).
+
+Demo numbers: use SprintAI's own brand (BJ8MUGY) with disclosure "demo by SprintAI" in message text + a demo page on getsprintai.com. Do not impersonate a real shop without disclosure — TCR detects it.
+
+Per-merchant CTA pages at `getsprintai.com/<shop-slug>` are CONFIRMED ALLOWED.
+
+## The SprintAI registration
 
 | Field | Value |
 |---|---|
@@ -24,8 +54,8 @@ SprintAI's A2P 10DLC campaign is registered and approved with TCR and all seven 
 | Telnyx Campaign ID | `4b30019f-fc16-9471-9d17-5533e185444c` |
 | Use case | CUSTOMER_CARE |
 | Carrier status | AT&T, T-Mobile, Verizon, US Cellular, Interop, ClearSky, Liberty — all APPROVED |
-| AT&T throughput | 240 TPM |
-| T-Mobile brand tier | LOW (daily volume cap) |
+| AT&T throughput | 240 TPM per campaign |
+| T-Mobile throughput | 2,000 segments/day per campaign |
 | Renewal | 2026-11-13 |
 
 ---
@@ -57,7 +87,7 @@ Declared: inbound message = opt-in for order-related replies only; no numbers pu
 - **Consent is per shop.** Opt-in state keyed on (consumer number, shop).
 - **Order-related content only** — menu, order building, payment links, confirmations, pickup/status. NOT promotions, win-backs, "we miss you", loyalty, review requests, upsells.
 
-> ⚠️ **ARCHITECTURAL CONFLICT — resolve before building provisioning.** Telnyx opt-out blocks are scoped to the **messaging profile**, not the number. Shared profile → STOP to one shop blocks every shop. Intended fix: **one messaging profile per shop** (free, independent of TCR campaign; numbers still attach to `CSMB9HG`). Verify multiple profiles can share one campaign before building; else escalate.
+> ⚠️ **ARCHITECTURAL CONSTRAINT — one messaging profile per shop.** Telnyx opt-out blocks are scoped to the **messaging profile**, not the number. Shared profile → STOP to one shop blocks every shop. Profiles are free; numbers from many profiles can attach to the same campaign. One profile per shop is the required architecture.
 
 Existing repo guards (`BUILD-NOTES-kill-unsolicited-outbound.md`, `BUILD-NOTES-outbound-watchdog.md`) — verify they enforce per-shop consent scoping and opt-out persistence.
 
@@ -86,6 +116,8 @@ Carriers approved these four. Production traffic must be recognisably the same k
 
 Constraint is on **category** (order-taking, confirmation, payment, status), not wording. Any new category of outbound = a registration change, not a feature.
 
+**For per-merchant campaigns:** submit the maximum 5 sample messages, be elaborate. Reviewers want the spirit of the traffic, not literal matching. Include opt-out language in at least one sample.
+
 ## 5. Declared content types
 
 | Declared | Value | Meaning |
@@ -101,15 +133,16 @@ Use branded domain `pay.getsprintai.com`. No public shorteners.
 
 ## 6. Number provisioning
 
-- Every sending number assigned to campaign `CSMB9HG` (unassigned = filtered).
+- Every sending number assigned to a campaign (unassigned = filtered).
 - `numberPool` true → one number per shop is the registered architecture.
 - A shop's number must only ever send for that shop.
+- **Send gate:** after assignment, poll `GET /v2/10dlc/phone_number_campaigns/{phoneNumber}` until both `tmobileNumberMappingStatus` AND `nonTmobileNumberMappingStatus` = `ADDED`. Number is not live until both read ADDED.
 
 ## 7. Scaling limits
 
-- T-Mobile brand tier LOW caps daily volume. Fine for pilot; real constraint as shops grow.
-- Raising needs external brand vetting (~$40 via Telnyx). Do not initiate — flag to Jason near cap.
-- AT&T 240 TPM shared across the campaign — queue and pace.
+- T-Mobile: 2,000 segments/day per campaign — 20-30x headroom at pilot volumes.
+- AT&T: 240 TPM per campaign — queue and pace.
+- Per-merchant campaigns mean scaling limits are per-shop, not platform-wide.
 
 ## 8. Changes that require re-registration (escalate to Jason first)
 
@@ -130,6 +163,9 @@ The CTA at https://getsprintai.com is quoted verbatim in the filing. Carriers re
 
 **First MNO submission was rejected (code 806) solely because element 4 was missing.** Any edit risks re-rejection of a live campaign. Treat both homepage disclosure blocks as compliance-critical code.
 
+### Per-merchant CTA pages
+Each merchant gets a CTA page at `getsprintai.com/<shop-slug>` with the same 6 elements, branded to that merchant. These are part of the per-merchant campaign registration — carriers verify them.
+
 ## 9. Verification checklist (before first send, and after any messaging-logic change)
 
 - [ ] Each of STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT halts messaging and returns the opt-out confirmation.
@@ -141,13 +177,15 @@ The CTA at https://getsprintai.com is quoted verbatim in the filing. Carriers re
 - [ ] START and UNSTOP resume service.
 - [ ] First reply to a new number contains rates disclosure + HELP + STOP.
 - [ ] No code path can send to a number with no prior inbound message.
-- [ ] All sending numbers assigned to campaign `CSMB9HG`.
+- [ ] All sending numbers assigned to a campaign.
+- [ ] `tmobileNumberMappingStatus` AND `nonTmobileNumberMappingStatus` both `ADDED` for each sending number before first send.
 - [ ] No public URL shorteners in outbound.
 - [ ] Live homepage contains all six CTA elements: `curl -s https://getsprintai.com/ | grep -c 'Message frequency varies by order'` → 2
+- [ ] Per-merchant CTA page at `getsprintai.com/<shop-slug>` contains all six CTA elements.
 
 ---
 
 ## Open items (Jason)
 
-- `isTMobileRegistered` reads `false` while T-Mobile shows APPROVED. Confirm it flips before first production send.
+- Campaign CSMB9HG failed number assignment (error 10036). Can be converted to a testing campaign. Production flow uses per-merchant brands/campaigns.
 - Twilio remains blocked at business-profile verification — Telnyx is the working path.
