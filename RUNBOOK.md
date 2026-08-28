@@ -481,8 +481,11 @@ rating, review_count). Migration `063` adds shop `latitude`/`longitude`/
     an LLM-supplied number reach Stripe. An adversarial CartOps battery
     (`scripts/test-suite/cart-ops.ts`) asserts these invariants at 100%. The
     battery is shop-aware — `buildCartOpsCases` builds cases from the shop's
-    real menu items — and carries an `expectedItemCents` override so total
-    checks are deterministic, not judge arithmetic.
+    real menu items. Total integrity is deterministic via Invariant 1
+    (`quoted_total_matches_cart`, compared against actual `cart_json`), never
+    judge arithmetic. The separate `expectedItemCents` stated-total override
+    is rescue-only: it force-passes on a match but defers to the judge on a
+    mismatch, since fixture-guessed totals can't prove a bot error.
 
 17. **Closed-hours gate is deterministically tested.** `chat-sms` accepts a
     gated `test_hours=open|closed` param (web/test only, never on live keys)

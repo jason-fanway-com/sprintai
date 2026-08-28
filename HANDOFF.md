@@ -432,9 +432,12 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   `quoted_total == charged_total == sum(cart_json) + fees` holds — no path lets
   an LLM-supplied number reach Stripe. Backed by an adversarial CartOps battery
   (`scripts/test-suite/cart-ops.ts`) that runs per shop at 100%. The battery
-  is shop-aware — cases are built from the shop's real menu items — and total
-  checks use an `expectedItemCents` override so they're deterministic, not
-  judge arithmetic.
+  is shop-aware — cases are built from the shop's real menu items. Total
+  integrity is deterministic via CartOps Invariant 1
+  (`quoted_total_matches_cart`, compared against actual `cart_json`), never
+  judge arithmetic. The separate `expectedItemCents` stated-total override is
+  rescue-only: it force-passes on a match but defers to the judge on a
+  mismatch, since fixture-guessed totals can't prove a bot error.
 - **The closed-hours gate is deterministically tested.** `chat-sms` accepts a
   gated `test_hours=open|closed` param (never honored on live keys) that
   forces the closed branch via `effectiveOpen`; the suite's `hours-closed`
