@@ -1312,6 +1312,28 @@ async function runOrderingLoop(
         continue;
       }
 
+      // ── E1 (2026-08-29): Cross-turn clear_cart guard ────────────────
+      // Extends B3 to the free-form conversational path: the model sometimes
+      // calls clear_cart when the user says something additive like "and also",
+      // "and a", etc. — even when no add_item is in the same turn. This catches
+      // the cross-turn case that the same-turn B3 guard misses. Suppress
+      // clear_cart when: (a) user message is additive AND (b) cart has items.
+      // Explicit "start over"/"cancel everything" still clears normally.
+      if (toolBlock.name === "clear_cart" && cart.length > 0) {
+        const e1msg = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const isExplicitRestart = /^(start over|restart|cancel (?:everything|all|the order|it all)|new order|clear (?:the cart|it all|everything)|reset|wipe (?:the cart|it|everything))[!.]?$/i.test(e1msg);
+        const isAdditive = /\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(e1msg);
+        if (isAdditive && !isExplicitRestart) {
+          console.warn(`[chat-sms] E1 GUARD: suppressed clear_cart — additive user intent (conv=${conversation.id}, cart has ${cart.length} items). Message: ${JSON.stringify(userMessage).slice(0, 120)}`);
+          toolResults.push({
+            type:        "tool_result",
+            tool_use_id: toolBlock.id!,
+            content:     JSON.stringify({ ok: false, error: "Cannot clear the cart when the customer is adding more items. Use modify_item or remove_item to change existing items." }),
+          });
+          continue;
+        }
+      }
+
       // ── B3 (2026-08-28): Clear-cart + add-item in same turn = REPLACE, not ADD ─
       // When the LLM clears then adds, it's trying to replace the cart content
       // instead of mutating. Corrections should use modify_item/remove_item,
@@ -1484,6 +1506,61 @@ function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped:
   if (!hasMenuWord) return { tripped: false };
   const offWord = words.find(w => OFF_MENU_PORTION_WORDS.includes(w) && !menuVocab.has(w));
   return offWord ? { tripped: true, offWord } : { tripped: false };
+}
+
+// ─── F1 (2026-08-29): Menu-item hallucination detection ───────────────────
+// Maps canonical lowercased menu names to display names, including last-word
+// variants for customer shorthand (e.g. "stromboli" → "Special Stromboli").
+function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const item of menu) {
+    const full = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    names.set(full, item.name);
+    names.set(item.id.toLowerCase(), item.name);
+    const parts = full.split(' ').filter(w => w.length >= 3);
+    if (parts.length > 1) {
+      const lastName = parts[parts.length - 1];
+      if (!names.has(lastName)) names.set(lastName, item.name);
+    }
+  }
+  return names;
+}
+
+function claimsOffMenuItem(
+  reply: string,
+  menuItemNames: Map<string, string>,
+  guardCart: AnyCartItem[],
+): string | null {
+  if (!reply || menuItemNames.size === 0) return null;
+  const lowerReply = reply.toLowerCase();
+  const cartItemNames = guardCart.map(i =>
+    (i as BundleItem).type === "bundle" ? (i as BundleItem).name.toLowerCase() : (i as CartItem).name.toLowerCase()
+  );
+  const STOP = new Set(["change","restart","pickup","delivery","your","order","cart","total",
+    "subtotal","service","fee","tip","driver","name","phone","number","address"]);
+
+  const claimPatterns = [
+    /(?:we\s+have|i\s+(?:can\s+)?(?:add|offer|recommend)|how\s+about|would\s+you\s+like|try\s+our|we\s+(?:carry|offer))\s+(?:a|an|some|the)?\s+([\w\s&'-]{3,40}?)(?:\s+for|\s+to|\s+at|\s*$|[.!?])/gi,
+    /added\s+(?:a|an|some|the)?\s+([\w\s&'-]{3,40}?)\s+to\s+(?:your\s+)?cart/gi,
+    /([\w\s&'-]{3,30}?)\s+(?:is|are)\s+\$\d/gi,
+  ];
+
+  for (const re of claimPatterns) {
+    re.lastIndex = 0;
+    for (let m = re.exec(reply); m !== null; m = re.exec(reply)) {
+      let claimed = m[1].toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (claimed.length < 3 || STOP.has(claimed)) continue;
+      if (cartItemNames.some(n => n.includes(claimed) || claimed.includes(n))) continue;
+      const menuMatch = [...menuItemNames.keys()].find(k =>
+        k.includes(claimed) || claimed.includes(k)
+      );
+      if (!menuMatch) {
+        console.warn(`[chat-sms] F1 claimsOffMenuItem: claimed "${claimed}" not found in menu`);
+        return claimed;
+      }
+    }
+  }
+  return null;
 }
 
 // Guard 1e helper: detects when the reply offers a format/size upgrade
@@ -3121,6 +3198,19 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 1g (F1; 2026-08-29): Menu-item hallucination ──────────────────
+  // Detects when the reply claims/offers a menu item that doesn't exist on the
+  // shop's actual menu. Runs after portion/upgrade checks. Falls back to honest
+  // cart summary when tripped.
+  if (!portionCheck.tripped) {
+    const menuItemNames = buildMenuItemNames(effectiveMenu);
+    const offMenuItem = claimsOffMenuItem(reply, menuItemNames, guardCart);
+    if (offMenuItem) {
+      console.warn(`[chat-sms] GUARD 1g (menu-item hallucination) tripped (conv=${conversation.id}). Claimed "${offMenuItem}" not in menu. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+      reply = honestFallbackReply(guardCart);
+    }
+  }
+
   // ── Guard 1c: cart-content hallucination ────────────────────────────────
   // If the model claims an item is in the cart but the authoritative cart row
   // doesn't contain that item, suppress the claim. Reuses guardCartRow already
@@ -3195,6 +3285,28 @@ Deno.serve(async (req: Request) => {
           return `${r.quantity}x ${r.name}`;
         }).join(", ");
         reply = `Your cart: ${itemList} — ${realTotalStr} total (includes $0.99 service fee). What else can I add?`;
+      }
+    }
+  }
+
+  // ── D1 (2026-08-29): CHECKOUT COMPLETION DRIVER ───────────────────
+  // When cart is submittable (items + no incomplete bundle + order_type known +
+  // name known) AND the customer signals checkout intent, FORCE submit_order
+  // to create the real Stripe session. Stops the "what else?" / pickup-
+  // delivery re-ask loop after a checkout signal. Reuses submit_order's own
+  // C1 gate for safety (requires pickup_name + order_type). Runs between Guards 2c and 2b.
+  if (!checkoutUrl && guardCart.length > 0 && hasPickupName && orderTypePreLoop) {
+    const hasIncompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
+    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage)) {
+      console.log(`[chat-sms] D1 checkout-completion-driver firing (conv=${conversation.id}, cart=${cart.id}, name="${guardCartRow?.pickup_name}", order_type=${orderTypePreLoop})`);
+      const submitInput: Record<string, unknown> = { pickup_name: guardCartRow?.pickup_name };
+      const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
+      if (submitResult.ok && submitResult.checkoutUrl) {
+        checkoutUrl = submitResult.checkoutUrl;
+        reply = "All set! Here's your payment link — tap to finish your order: " + submitResult.checkoutUrl;
+      } else {
+        console.warn(`[chat-sms] D1 submit_order failed: ${JSON.stringify(submitResult.result).slice(0, 200)}`);
+        reply = "Almost there — let me just confirm your order details first. One moment!";
       }
     }
   }
@@ -3298,6 +3410,26 @@ Deno.serve(async (req: Request) => {
       // HONEST FALLBACK: cannot submit — ask for what's missing, claim nothing.
       reply = honestFallbackReply(guardCart, !!incompleteBundle);
       console.warn(`[chat-sms] PHANTOM-LINK GUARD: cannot submit (hasItems=${hasItems}, incompleteBundle=${!!incompleteBundle}, pickupName=${!!pickupName}). Sent honest fallback.`);
+    }
+  }
+
+  // ── D2 (2026-08-29): Kill pickup/delivery re-ask when mode is known ──
+  // Once order_type is set, strip any lingering pickup/delivery question from
+  // the reply so the LLM doesn't loop re-asking a question already answered.
+  const orderTypeAfterGuard = guardCartRow?.order_type ?? null;
+  if (orderTypeAfterGuard && !checkoutUrl && guardCart.length > 0) {
+    // Strip pickup/delivery questions — case-insensitive, multiline-aware
+    const beforeLen = reply.length;
+    reply = reply
+      .replace(/\?.*?(?:pickup|delivery).*?\?/gi, '')
+      .replace(/Pickup or delivery today\?/gi, '')
+      .replace(/Are you (?:ordering )?(?:for )?(?:pickup|delivery)\?/gi, '')
+      .replace(/Would you like (?:pickup|delivery)\?/gi, '')
+      .replace(/\s+\n\s+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (reply.length < beforeLen) {
+      console.log(`[chat-sms] D2 (re-ask-killer) stripped pickup/delivery re-ask from reply (conv=${conversation.id})`);
     }
   }
 
