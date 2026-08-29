@@ -43,6 +43,18 @@
   force = true
 
 [[redirects]]
+  from = "/demo/jasons-pizza"
+  to = "/demo/marios-pizza"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/demo/jasons-pizza/*"
+  to = "/demo/marios-pizza/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
   from = "/admin"
   to = "https://sprintai-chat-admin.netlify.app/admin"
   status = 200
