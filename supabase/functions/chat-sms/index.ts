@@ -3107,6 +3107,47 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── C2 (2026-08-29): Pre-LLM name→submit shortcut ──────────────────────
+  // When the last assistant message asked for a pickup name and the customer's
+  // next message is a short name, bypass the LLM entirely and call submit_order
+  // directly. This prevents LLM hallucination (re-adding items, wrong totals)
+  // on the name turn. The system prompt's PICKUP NAME RULE is unreliable.
+  let nameSubmitCheckoutUrl: string | undefined;
+  {
+    const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
+      ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
+      : null;
+    if (cartItems.length > 0 && !(cart as any).pickup_name) {
+      const trimmed = userMessage.trim();
+      const looksLikeName = /^[A-Z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;
+      const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+      const askedForName = typeof lastAssistant?.content === "string"
+        && /\bname\b/i.test(lastAssistant.content)
+        && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for/i.test(lastAssistant.content);
+      if (looksLikeName && askedForName) {
+        const orderType = cart.order_type;
+        const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
+        if (orderType && !hasIncompleteBundle) {
+          console.log(`[chat-sms] C2 pre-LLM name→submit shortcut firing (conv=${conversation.id}, name="${trimmed}", cart=${cart.id})`);
+          const submitInput: Record<string, unknown> = { pickup_name: trimmed };
+          const submitResult = await executeTool("submit_order", submitInput, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
+          if (submitResult.ok && submitResult.checkoutUrl) {
+            nameSubmitCheckoutUrl = submitResult.checkoutUrl;
+            // Reload cart so post-turn code sees the updated state (pickup_name, phase, Stripe session)
+            const { data: reloaded } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+            if (reloaded) {
+              cart.cart_json = (reloaded.cart_json as AnyCartItem[]);
+              cart.phase = (reloaded.phase as string) || "checkout";
+              (cart as any).pickup_name = trimmed;
+            }
+          } else {
+            console.warn(`[chat-sms] C2 submit_order failed: ${JSON.stringify(submitResult.result).slice(0, 200)}. Falling through to LLM.`);
+          }
+        }
+      }
+    }
+  }
+
   // ── Run ordering loop ─────────────────────────────────────────────────────
   // Rebuild system prompt with potentially corrected cart
   const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable);
@@ -3115,11 +3156,18 @@ Deno.serve(async (req: Request) => {
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
     : null;
 
-  const loopResult = await runOrderingLoop(
-    systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
-  );
-  let reply       = loopResult.reply;
-  let checkoutUrl = loopResult.checkoutUrl;
+  let reply: string;
+  let checkoutUrl: string | undefined;
+  if (nameSubmitCheckoutUrl) {
+    reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
+    checkoutUrl = nameSubmitCheckoutUrl;
+  } else {
+    const loopResult = await runOrderingLoop(
+      systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
+    );
+    reply = loopResult.reply;
+    checkoutUrl = loopResult.checkoutUrl;
+  }
 
   // Snapshot pre-loop order_type before DB reload (guard 2b uses it).
   const orderTypePreLoop = cart.order_type ?? null;
