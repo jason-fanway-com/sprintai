@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jason's Pizza — A SprintAI Demo</title>
+<meta name="description" content="Jason's Pizza, Allentown, PA. Order by text. A SprintAI demo — order pizza the easy way.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{--brand:#E8521A;--brand-hover:#C94412;--brand-light:#FEF3EE;--cream:#FFFDF9;--navy:#17212E;--ink:#2A3540;--muted:#687585;--border:#E6ECF2;--font-d:'Fraunces',Georgia,serif;--font-b:'DM Sans',system-ui,sans-serif;--r:14px;--r-lg:20px}
+html{scroll-behavior:smooth}
+body{font-family:var(--font-b);background:var(--cream);color:var(--ink);line-height:1.6}
+a{color:var(--brand);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Hero ── */
+.hero{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;text-align:center;padding:80px 24px 64px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")}
+.hero .badge{display:inline-block;background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.85);font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:6px 16px;border-radius:99px;margin-bottom:24px;border:1px solid rgba(255,255,255,0.15)}
+.hero h1{font-family:var(--font-d);font-size:clamp(36px,7vw,64px);font-weight:800;line-height:1.1;margin-bottom:16px}
+.hero h1 span{color:var(--brand)}
+.hero p.sub{font-size:clamp(16px,2.5vw,20px);color:rgba(255,255,255,0.7);max-width:520px;margin:0 auto 32px}
+.hero .location{font-size:15px;color:rgba(255,255,255,0.5);margin-bottom:8px}
+.hero .location svg{vertical-align:-2px;margin-right:4px}
+
+/* ── CTA Card ── */
+.cta-card{background:#fff;border-radius:var(--r-lg);padding:40px 32px;max-width:520px;margin:-40px auto 0;position:relative;z-index:2;box-shadow:0 4px 24px rgba(0,0,0,0.08),0 1px 3px rgba(0,0,0,0.04);border:1px solid var(--border)}
+.cta-card h2{font-family:var(--font-d);font-size:24px;margin-bottom:8px;color:var(--navy)}
+.cta-card .phone-link{display:flex;align-items:center;gap:12px;background:var(--brand-light);border:2px solid var(--brand);border-radius:var(--r);padding:16px 20px;margin:20px 0;font-size:22px;font-weight:700;color:var(--brand);transition:all .15s;letter-spacing:.02em}
+.cta-card .phone-link:hover{background:var(--brand);color:#fff;text-decoration:none}
+.cta-card .phone-link:hover .copy-hint{color:rgba(255,255,255,0.7)}
+.cta-card .phone-link svg{flex-shrink:0}
+.cta-card .copy-hint{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:2px}
+.cta-card .qr-wrap{text-align:center;margin:24px 0 8px}
+.cta-card .qr-wrap img{width:160px;height:160px;border-radius:8px;border:1px solid var(--border)}
+.cta-card .qr-wrap p{font-size:12px;color:var(--muted);margin-top:8px}
+
+/* ── Disclosure ── */
+.disclosure{font-size:12px;color:var(--muted);line-height:1.5;padding:16px;background:#f8fafb;border-radius:var(--r);margin-top:20px}
+.disclosure strong{color:var(--ink)}
+
+/* ── How it works ── */
+.how{max-width:900px;margin:64px auto;padding:0 24px}
+.how h2{font-family:var(--font-d);font-size:32px;text-align:center;margin-bottom:40px;color:var(--navy)}
+.how .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:32px}
+.how .step{text-align:center}
+.how .step .num{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:var(--brand);color:#fff;font-family:var(--font-d);font-size:22px;font-weight:700;margin-bottom:12px}
+.how .step h3{font-family:var(--font-d);font-size:18px;margin-bottom:6px}
+.how .step p{font-size:14px;color:var(--muted)}
+
+/* ── Menu Preview ── */
+.menu{max-width:900px;margin:0 auto 64px;padding:0 24px}
+.menu h2{font-family:var(--font-d);font-size:32px;text-align:center;margin-bottom:32px;color:var(--navy)}
+.menu h3{font-family:var(--font-d);font-size:18px;color:var(--brand);margin:24px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--brand-light)}
+.menu table{width:100%;border-collapse:collapse}
+.menu td{padding:8px 0;font-size:15px;border-bottom:1px solid var(--border)}
+.menu td+td{text-align:right;font-weight:600;white-space:nowrap;color:var(--navy)}
+.menu .note{font-size:12px;color:var(--muted);text-align:center;margin-top:24px;font-style:italic}
+
+/* ── Footer ── */
+footer{text-align:center;padding:40px 24px;border-top:1px solid var(--border);font-size:13px;color:var(--muted)}
+footer a{color:var(--muted)}
+footer .sep{color:var(--border);margin:0 8px}
+</style>
+</head>
+<body>
+
+<!-- ── Hero ── -->
+<section class="hero">
+  <div class="badge">A SprintAI Demo</div>
+  <h1>Jason's <span>Pizza</span></h1>
+  <p class="sub">Family-style pizza in Allentown, PA. Now you can order by text — like texting a friend.</p>
+  <p class="location">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+    Allentown, PA 18106
+  </p>
+</section>
+
+<!-- ── CTA Card ── -->
+<div class="cta-card">
+  <h2>📱 Text to Order</h2>
+  <p style="color:var(--muted);font-size:15px">Send any message to start ordering. We'll walk you through the menu — just like texting a friend.</p>
+
+  <a href="sms:+16107358315?body=I'd%20like%20to%20order" class="phone-link" id="phone-link">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+    <div>
+      (610) 735-8315
+      <span class="copy-hint">Tap to text on mobile · Copy/paste on desktop</span>
+    </div>
+  </a>
+
+  <div class="qr-wrap">
+    <p style="font-weight:600;font-size:14px;color:var(--navy);margin-bottom:8px">Or scan to start:</p>
+    <!-- QR: sms:+16107358315?body=Order -->
+    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 29 29' shape-rendering='crispEdges'%3E%3Cpath fill='%2317212e' d='M0 0h29v29H0z'/%3E%3Cpath fill='%23fff' d='M2 2h7v1H3v1H2zm16 0h1v1h-1zm3 0h1v1h-1zm3 0h3v3h-1V4h-1V3h-1zm-6 1h1v1h-1zm3 0h1v1h-1zm3 0h1v1h-1zM2 3h1v1H2zm16 0h1v1h-1zm3 0h1v1h-1zm6 0h1v1h-1zm-24 1h1v1H2zm3 0h1v5H5zm8 0h1v1h-1zm2 0h1v1h-1zm4 0h1v1h-1zm2 0h1v1h-1zm4 0h1v1h-1zM2 5h1v3H2zm6 0h1v1H8zm8 0h1v1h-1zm2 0h1v1h-1zm4 0h1v1h-1zm2 0h1v1h-1zm4 0h1v3h-1zm-24 1h1v1H2zm5 0h1v1H7zm2 0h1v1H9zm6 0h1v1h-1zm2 0h1v1h-1zm4 0h1v1h-1zm2 0h1v1h-1zm7 0h1v1h-1zM3 7h1v2H3zm4 0h5v1H7zm11 0h1v1h-1zm3 0h1v1h-1zm6 0h1v2h-1zM2 8h1v1H2zm5 0h7v1H7zm15 0h3v1h-3zm4 0h2v1h-2zm-27 1h1v1H2zm5 0h7v1H7zm12 0h1v1h-1zm3 0h1v1h-1zm6 0h1v1h-1zM2 10h3v1H2zm3 0h1v1H5zm2 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 11h1v1H2zm5 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 12h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 13h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm9 0h1v1h-1zm3 0h1v1h-1zm6 0h1v1h-1zM2 14h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 15h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm6 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 16h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h3v1h-3zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 17h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm6 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm6 0h1v1h-1zM2 18h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zM2 19h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm6 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm6 0h1v1h-1zM2 20h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm1 0h1v1h-1zm-27 1h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h3v1h-1v1h-1v1h-1zm6 0h1v1h-1zm2 0h1v1h-1zm2 0h3v1h-3zm1 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 22h3v1h-1v1H2zm3 0h1v1H5zm2 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 23h1v1H2zm5 0h1v1H7zm2 0h1v1H9zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 24h7v1h-1v1H2zm4 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 25h1v1H2zm3 0h1v1H5zm8 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm6 0h1v1h-1zM2 26h1v1H2zm10 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zM2 27h1v1H2zm3 0h3v1H5zm2 0h1v1H7zm2 0h5v1H9zm7 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h3v1h-3z'/%3E%3C/svg%3E" alt="QR code to text Jason's Pizza" width="160" height="160">
+    <p>Point your phone camera at the QR code</p>
+  </div>
+
+  <!-- ── TCPA / 10DLC Disclosure ── -->
+  <div class="disclosure">
+    <strong>By texting this number, you consent to receive order-related SMS messages from Jason's Pizza (a SprintAI demo restaurant).</strong> Message frequency varies by order, typically 3–8 messages per order. Message and data rates may apply. Text HELP for help. Text STOP to cancel at any time. Your phone number is used only for order communication and is never shared, sold, or used for marketing. <a href="https://getsprintai.com/privacy">Privacy policy</a> · <a href="https://getsprintai.com/terms">Terms of service</a>. This is a <strong>SprintAI</strong> demonstration — learn more at <a href="https://getsprintai.com">getsprintai.com</a>.
+  </div>
+</div>
+
+<!-- ── How It Works ── -->
+<section class="how">
+  <h2>How Text Ordering Works</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <h3>Text the Number</h3>
+      <p>Send any message to get started. We reply instantly — no app, no website.</p>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <h3>Place Your Order</h3>
+      <p>Tell us what you want. We'll confirm items, sizes, and the total. Add toppings, swap sides — just like talking to a person.</p>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <h3>Pay &amp; Pick Up</h3>
+      <p>Get a secure payment link. Pay in seconds. We'll text when it's ready.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Menu ── -->
+<section class="menu">
+  <h2>Our Menu</h2>
+  <h3>Pizzas</h3>
+  <table>
+    <tr><td>Cheese Pizza</td><td>Small $12 · Large $18</td></tr>
+    <tr><td>Pepperoni Pizza</td><td>Small $14 · Large $20</td></tr>
+    <tr><td>Sicilian Pizza</td><td>Large $24</td></tr>
+    <tr><td>Grandma Pizza</td><td>Large $24</td></tr>
+  </table>
+  <h3>Sides &amp; Extras</h3>
+  <table>
+    <tr><td>Garlic Knots (6)</td><td>$5</td></tr>
+    <tr><td>Mozzarella Sticks (6)</td><td>$7</td></tr>
+    <tr><td>French Fries</td><td>$4</td></tr>
+    <tr><td>Side of Marinara</td><td>$2</td></tr>
+  </table>
+  <p class="note">Full menu with toppings, wings, and specials available when you text. Prices subject to change.</p>
+</section>
+
+<!-- ── Footer ── -->
+<footer>
+  <p><strong>Jason's Pizza</strong> — a <a href="https://getsprintai.com">SprintAI</a> demo restaurant</p>
+  <p>Allentown, PA 18106</p>
+  <p style="margin-top:12px">
+    <a href="https://getsprintai.com">SprintAI</a>
+    <span class="sep">·</span>
+    <a href="https://getsprintai.com/privacy">Privacy</a>
+    <span class="sep">·</span>
+    <a href="https://getsprintai.com/terms">Terms</a>
+  </p>
+  <p style="margin-top:8px;font-size:11px">&copy; 2026 SprintAI LLC. Demo only — not a real restaurant.</p>
+</footer>
+
+</body>
+</html>

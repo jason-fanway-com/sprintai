@@ -74,6 +74,7 @@ PUBLIC_DIRS=(
   "signup-page"
   "checkout"
   "welcome"
+  "demo"
 )
 
 # shop-chat/dist/ is copied to public/chat/ (built above)
