@@ -214,15 +214,19 @@ export function assembleJudgePrompt(
   const hoursLines = Object.keys(ground.open_hours || {}).length
     ? Object.entries(ground.open_hours)
         .map(([day, wins]) => {
-          if (Array.isArray(wins)) {
-            return `  - ${day}: ${(wins || []).map((w: { open: string; close: string }) => `${w.open}-${w.close}`).join(", ") || "closed"}`;
-          }
-          if (wins && typeof wins === 'object') {
-            const obj = wins as { closed?: boolean; open?: string; close?: string };
-            if (obj.closed || !obj.open || !obj.close) return `  - ${day}: closed`;
-            return `  - ${day}: ${obj.open}-${obj.close}`;
-          }
-          return `  - ${day}: closed`;
+          // Normalize to a guaranteed array to avoid runtime explosions
+          // when wins is a truthy non-array (e.g. a bare object that slips
+          // past Array.isArray in certain Deno runtimes).
+          const windows: Array<{ open: string; close: string }> = (() => {
+            if (Array.isArray(wins)) return wins;
+            if (wins && typeof wins === 'object') {
+              const obj = wins as { closed?: boolean; open?: string; close?: string };
+              if (!obj.closed && obj.open && obj.close) return [{ open: obj.open, close: obj.close }];
+            }
+            return [];
+          })();
+          if (windows.length === 0) return `  - ${day}: closed`;
+          return `  - ${day}: ${windows.map((w) => `${w.open}-${w.close}`).join(", ")}`;
         })
         .join("\n")
     : "  (no hours on file)";
