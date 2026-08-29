@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-27
+Last updated: 2026-08-29
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -307,7 +307,10 @@ These are encoded in the architecture, not just in marketing.
   enqueues a `test_run_queue` row; a launchd worker drains it and runs the
   full generate → run → judge → scorecard → persist pipeline, so the owner's
   Store Readiness report is real and current without any SprintAI employee
-  touching it. Menu cap raised 50 → 300 items.
+  touching it. The suite auto-generates 5 checkout-flow cases (raised from 2)
+  for a more reliable sample. SMS segment counts (`bot_segments`) and
+  checkout reach are auto-tracked on every case — no separate segment-count
+  run needed. Menu cap raised 50 → 300 items.
 - **At a Glance embeds a live test-chat sandbox.** The owner landing page
   shows the glance tiles plus a `ShopChatTest` panel forced into test mode —
   an owner fires practice orders with no real charge immediately.
@@ -315,6 +318,17 @@ These are encoded in the architecture, not just in marketing.
   `https://pay.getsprintai.com/o/<code>` (35 chars) instead of the raw
   612-char Stripe URL, so the pay link is a single SMS segment and matches
   what the 10DLC campaign samples show carriers approved.
+- **Scorer is version-frozen (v1).** CartOps deterministic invariants are
+  authoritative over the LLM judge — a cart that satisfies the invariants
+  force-passes. `scorer_version` is recorded on every test run so the
+  dashboard can separate results scored under different rules. Changing
+  scoring logic requires a version bump; freeze stops run-to-run score
+  bounce.
+- **Cart + checkout guards are deterministic.** `pickup_name` and `order_type`
+  are hard gates before `submit_order`; a cart can't enter `phase=checkout`
+  without a real Stripe session (downgraded to `review` if not). Off-menu
+  item detection is shop-agnostic — the same guard works for bagel shop #1
+  and pizza shop #10,000.
 
 ---
 

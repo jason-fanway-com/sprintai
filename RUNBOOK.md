@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-27
+Last updated: 2026-08-29
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -151,6 +151,13 @@ and is abandoned as a provider; the same EIN verifies cleanly through Telnyx.
   as opt-out, logged, and the handler returns cleanly (no crash / retry loop).
 - **One messaging profile per shop** is the intended architecture (STOP scoped
   per shop, not globally). All numbers attach to campaign `CSMB9HG`.
+  **ISV/reseller re-registration is NOT needed** (confirmed by Chris, Telnyx SE,
+  2026-08-28). Throughput is per-campaign (2K seg/day T-Mobile, 240 TPM AT&T),
+  not pooled. The send gate is mapping status (both ADDED), not
+  campaignStatus/operationStatus. Per-merchant CTA pages at
+  `getsprintai.com/<slug>` CONFIRMED. Demo numbers: SprintAI brand + disclosure,
+  no DBA needed. Mock brands/campaigns documented for free API testing.
+  Build queue: manual first 1–2 shops, then automate provisioning + polling.
 - The iMessage bridge on the Mac also handles inbound SMS → `chat-sms` for the
   primary number (`+14842018054`).
 
@@ -239,7 +246,11 @@ Models per function:
 ### Segment economics
 
 The business model assumes 8 SMS segments/order. Above ~8.8, the $0.99 service
-fee doesn't cover SMS cost. Every prompt change is a cost decision. Measure with:
+fee doesn't cover SMS cost. Every prompt change is a cost decision. Segment
+count is **auto-tracked on every QA suite run** (persist.ts computes
+`bot_segments` + `reached_checkout` per case; the run summary prints mean
+segments per checkout-completing order). For ad-hoc measurement against a live
+shop:
 ```bash
 deno run --allow-net --allow-env scripts/test-suite/segment-count.ts --live <shop_id>
 ```
@@ -346,7 +357,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–064). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–066). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -374,7 +385,10 @@ normalizes `open_hours`/`delivery_hours` to a structured per-day object shape.
 Migration `062` adds Google Places fields (google_place_id, formatted_address,
 rating, review_count). Migration `063` adds shop `latitude`/`longitude`/
 `delivery_radius_mi` for the fail-closed delivery zone. Migration `064` adds
-`test_run_queue` for the async onboarding test-run worker.
+`test_run_queue` for the async onboarding test-run worker. Migration `065` adds
+`bot_segments` + `reached_checkout` to `test_case_results` for automatic SMS
+segment tracking on every QA run. Migration `066` adds `scorer_version` so the
+dashboard can separate runs scored under different scoring rules.
 
 ### RLS model
 

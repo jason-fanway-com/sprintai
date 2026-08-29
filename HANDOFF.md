@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-27
+Last updated: 2026-08-29
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -83,7 +83,7 @@ sprintai-ordering/
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–064)
+│   └── migrations/           # SQL migrations (001–066)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -141,7 +141,9 @@ sprintai-ordering/
    fix_status, root_cause), 056 (sms_opt_outs), 057–059 (onboarding fields:
    owner_name/onboarding_token/ein/is_test/crawl), 060–061 (delivery_hours +
    structured hours normalization), 062 (Google Places fields),
-   063 (delivery radius + geo), 064 (test_run_queue for the onboarding worker).
+   063 (delivery radius + geo), 064 (test_run_queue),
+   065 (bot_segments + reached_checkout for auto segment tracking),
+   066 (scorer_version for freeze-gated scoring).
 7. `docs/specs/menu-intake-standard.md` — canonical schema, QA validator (§A),
    double-extract fidelity check (§B), mandatory owner sign-off (§C).
    This is the contract every menu must satisfy before go-live.
@@ -263,7 +265,10 @@ Secrets live in Supabase/Netlify environment settings, never in code.
 The business model assumes 8 SMS segments/order. Above ~8.8, the $0.99 service
 fee doesn't cover SMS cost. Real conversations measured 14-16 segments before the
 reductions shipped 2026-08-22. Every chat-sms prompt change or reply format
-decision is a segment-cost decision. Measure with:
+decision is a segment-cost decision. Segment count is now **auto-tracked on every
+QA suite run** — `persist.ts` computes `bot_segments` per case and the run summary
+prints mean segments per checkout-completing order, so the `segment-count.ts`
+standalone script is only needed for ad-hoc spot-checks:
 ```bash
 deno run --allow-net --allow-env scripts/test-suite/segment-count.ts --live <shop_id>
 ```
@@ -357,12 +362,7 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
 - **EIN is a hard gate.** SprintAI does not sell to sole proprietors. A merchant
   without an EIN fails out of signup cleanly — no alternate path. Permanent
   decision by Jason.
-- **Telnyx brand/campaign is frozen** until the solutions engineer call resolves
-  ISV mechanics. Brand BJ8MUGY verified; campaign CSMB9HG is TCR_ACCEPTED with
-  all 7 carriers reporting APPROVED, but `failureReasons` still carries the 806
-  CTA rejection and `isTMobileRegistered` reads false — unresolved until the
-  delivery test proves whether 806 is stale. Do not modify the campaign.
-  Each merchant will ultimately need its own brand + campaign (registry policy).
+- **Telnyx brand/campaign is live and approved** (all 7 carriers). Brand BJ8MUGY verified; campaign CSMB9HG is TCR_ACCEPTED. ISV/reseller re-registration is NOT needed (per Chris, SE, 2026-08-28 call). Throughput is per-campaign (2K seg/day T-Mobile, 240 TPM AT&T), not pooled. The send gate is mapping status (both ADDED), not campaignStatus/operationStatus. The per-merchant model: brand → campaign → number, with per-merchant CTA pages at `getsprintai.com/<slug>`. Demo numbers use SprintAI brand + disclosure; no DBA needed. Mock brands/campaigns documented for free API testing. `failureReasons` still carries an 806 CTA rejection that may be stale — the first-delivery test is the ground-truth gate. Do not modify the campaign.
 - **First delivery test is a hard go-live gate.** Before any shop goes live, the
   Telnyx provisioning + delivery test (`sprintai-telnyx-provisioning-test.md`,
   8-step real-handset script) must pass — it is the ground-truth check that the
