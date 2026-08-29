@@ -430,14 +430,15 @@ function buildSystemPrompt(
         const r = i as CartItem;
         const mods = r.modifiers?.length > 0 ? ` [${r.modifiers.join(", ")}]` : "";
         const opts = r.options ? ` [${Object.entries(r.options).map(([_k, v]) => v.join(', ')).join(', ')}]` : "";
-        return `${r.quantity}x ${r.name}${mods}${opts} - $${((r.price_cents * r.quantity) / 100).toFixed(2)}`;
+        const qty = r.quantity || 1;
+        return `${qty}x ${r.name}${mods}${opts} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
       return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
     }
     const r = i as CartItem;
-    return s + r.price_cents * r.quantity;
+    return s + (r.price_cents * (r.quantity || 1));
   }, 0);
 
   const menuByCategory: Record<string, EffectiveMenuItem[]> = {};
@@ -790,7 +791,7 @@ async function executeTool(
       const subtotal = cart.reduce((s, i) => {
         if ((i as BundleItem).type === "bundle") return s + (i as BundleItem).price_cents;
         const r = i as CartItem;
-        return s + r.price_cents * r.quantity;
+        return s + (r.price_cents * (r.quantity || 1));
       }, 0);
       await supabase.from("order_carts").update({ subtotal_cents: subtotal }).eq("id", cartId);
 
@@ -1183,7 +1184,7 @@ async function saveCart(
       return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
     }
     const r = i as CartItem;
-    return s + r.price_cents * r.quantity;
+    return s + (r.price_cents * (r.quantity || 1));
   }, 0);
   await supabase.from("order_carts")
     .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal })
@@ -1226,7 +1227,7 @@ async function runOrderingLoop(
     const subtotal = cart.reduce((s, i) => {
       if ((i as BundleItem).type === "bundle") return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
       const r = i as CartItem;
-      return s + r.price_cents * r.quantity;
+      return s + (r.price_cents * (r.quantity || 1));
     }, 0);
     const cartTotal = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (cart.reduce((s, i) => { const r = (i as any); return s + (r.driver_tip_cents ?? 0); }, 0));
     // We need to read driver_tip from the DB row — use the cart's tip from the caller
@@ -1237,7 +1238,7 @@ async function runOrderingLoop(
     }
     const itemList = cart.map(i => {
       const r = i as CartItem;
-      return `${r.quantity}x ${r.name}`;
+      return `${(r.quantity || 1)}x ${r.name}`;
     }).join(", ");
     return {
       reply: `Updated! Your cart: ${itemList} — $${(totalWithoutTip / 100).toFixed(2)} (includes $0.99 service fee). Add anything else?`,
@@ -2185,7 +2186,7 @@ async function handleSystemEvent(
     const items = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
       if ((i as BundleItem).type === "bundle") return (i as BundleItem).name;
       const r = i as CartItem;
-      return `${r.quantity}x ${r.name}`;
+      return `${(r.quantity || 1)}x ${r.name}`;
     }).join(", ");
     const subtotal   = ((cartRow.subtotal_cents ?? 0) / 100).toFixed(2);
     const serviceFee  = ((cartRow.service_fee_cents ?? 0) / 100).toFixed(2);
@@ -2274,12 +2275,12 @@ async function handleSystemEvent(
               return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
             }
             const r = i as CartItem;
-            const linePrice = r.price_cents != null ? `$${((r.price_cents * r.quantity) / 100).toFixed(2)}` : "";
+            const linePrice = r.price_cents != null ? `$${(((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
             const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
             const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
             const detail = [...new Set([...mods, ...opts])].join(", ");
             const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
-            return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
+            return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity || 1}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
           }).join("");
           const emailHtml = `<!DOCTYPE html>
 <html>
@@ -3239,7 +3240,7 @@ Deno.serve(async (req: Request) => {
       return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
     }
     const r = i as CartItem;
-    return s + r.price_cents * r.quantity;
+    return s + (r.price_cents * (r.quantity || 1));
   }, 0);
   const guardDeliveryFee = (guardCartRow?.delivery_fee_cents as number) || 0;
   const guardDriverTip = (guardCartRow?.driver_tip_cents as number) || 0;
@@ -3335,7 +3336,7 @@ Deno.serve(async (req: Request) => {
     } else {
       const itemList = guardCart.map(i => {
         const r = i as CartItem;
-        return `${r.quantity}x ${r.name}`;
+        return `${(r.quantity || 1)}x ${r.name}`;
       }).join(", ");
       const realTotal = `$${(guardRealTotalCents / 100).toFixed(2)}`;
       reply = `Your cart: ${itemList} — ${realTotal} total. What else can I add?`;
@@ -3371,7 +3372,7 @@ Deno.serve(async (req: Request) => {
         const realTotalStr = `$${(guardRealTotalCents / 100).toFixed(2)}`;
         const itemList = guardCart.map(i => {
           const r = i as CartItem;
-          return `${r.quantity}x ${r.name}`;
+          return `${(r.quantity || 1)}x ${r.name}`;
         }).join(", ");
         reply = `Your cart: ${itemList} — ${realTotalStr} total (includes $0.99 service fee). What else can I add?`;
       }
