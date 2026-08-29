@@ -116,6 +116,13 @@ function cartsEquivalent(a: CartItemLike[] | undefined | null, b: CartItemLike[]
 
 function isQuestion(msg: string): boolean {
   const t = msg.trim();
+  // Additive order intent is NOT a question: "can I also add X?", "and a Y?",
+  // "actually, can I get Z?" are ORDER additions that legitimately mutate the
+  // cart. Classifying them as questions would trip the no_mutation_on_non_order
+  // invariant and false-fail valid add-then-add flows.
+  if (/\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(t)) {
+    return false;
+  }
   return t.endsWith("?") || /\b(what|when|how|where|why|who|do you|are you|can you|is there|does|could you|would you)\b/i.test(t);
 }
 

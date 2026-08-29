@@ -626,7 +626,32 @@ async function executeTool(
         return { ok: false, result: { error: `Item ID "${menu_item_id}" not found in the available menu. Use an exact ID from the menu list.` } };
       }
       const validMods    = menuItem.modifiers_json?.map(m => m.name) ?? [];
-      const inputMods    = (modifiers as string[]);
+      let inputMods      = (modifiers as string[]).slice();
+
+      // Validate option groups
+      const itemGroups = menuItem.option_groups || [];
+      const rawOptions = ((input as any).options || {}) as Record<string, string[]>;
+
+      // ── Normalize modifiers misrouted into `options` ──────────────────
+      // The menu renders modifiers_json under "Modifiers: ...", but the model
+      // occasionally passes an upgrade (e.g. "Upgrade to Flagel") as an option
+      // group key instead of the `modifiers` array. Route any option key/value
+      // that matches a real modifier name (and is NOT a real option group) into
+      // the modifiers array so its price is summed. Otherwise the price silently
+      // omits the upgrade (existential pricing bug).
+      const modifierNames = new Set(validMods);
+      const groupNames = new Set(itemGroups.map(g => g.name));
+      const inputOptions: Record<string, string[]> = {};
+      for (const [key, vals] of Object.entries(rawOptions)) {
+        if (modifierNames.has(key) && !groupNames.has(key)) {
+          for (const v of vals) {
+            if (modifierNames.has(v) && !inputMods.includes(v)) inputMods.push(v);
+          }
+        } else {
+          inputOptions[key] = vals;
+        }
+      }
+
       const invalidMods  = inputMods.filter(m => !validMods.includes(m));
       if (invalidMods.length > 0) {
         return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}. Valid options for ${menuItem.name}: ${validMods.join(", ") || "none"}` } };
@@ -638,9 +663,6 @@ async function executeTool(
         return sum + (mod?.price_cents ?? 0);
       }, 0);
 
-      // Validate option groups
-      const itemGroups = menuItem.option_groups || [];
-      const inputOptions = ((input as any).options || {}) as Record<string, string[]>;
       let extraCents = 0;
 
       for (const group of itemGroups) {
@@ -697,24 +719,43 @@ async function executeTool(
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not in cart." } };
       if (quantity !== undefined) (cart[idx] as CartItem).quantity = quantity;
-      if (modifiers !== undefined) {
-        const menuItem   = menuMap.get(menu_item_id);
-        const validMods  = menuItem?.modifiers_json?.map(m => m.name) ?? [];
-        const invalidMods = modifiers.filter(m => !validMods.includes(m));
-        if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
-        (cart[idx] as CartItem).modifiers = modifiers;
-        // Recalculate price with modifier adjustments
-        if (menuItem) {
-          const modPriceCents = modifiers.reduce((sum, modName) => {
-            const mod = menuItem.modifiers_json?.find(m => m.name === modName);
-            return sum + (mod?.price_cents ?? 0);
-          }, 0);
-          const basePrice = menuItem.price_cents;
-          (cart[idx] as CartItem).price_cents = basePrice + modPriceCents;
-        }
-      }
+      const menuItem = menuMap.get(menu_item_id);
+      const validMods = menuItem?.modifiers_json?.map(m => m.name) ?? [];
+      const modifierNames = new Set(validMods);
+      let newModifiers = (modifiers ?? (cart[idx] as CartItem).modifiers ?? []).slice();
+      let newOptions = options ?? (cart[idx] as CartItem).options;
       if (options !== undefined) {
-        (cart[idx] as CartItem).options = options;
+        const groupNames = new Set((menuItem?.option_groups || []).map(g => g.name));
+        const cleaned: Record<string, string[]> = {};
+        for (const [key, vals] of Object.entries(options)) {
+          if (modifierNames.has(key) && !groupNames.has(key)) {
+            for (const v of vals) {
+              if (modifierNames.has(v) && !newModifiers.includes(v)) newModifiers.push(v);
+            }
+          } else {
+            cleaned[key] = vals;
+          }
+        }
+        newOptions = Object.keys(cleaned).length > 0 ? cleaned : undefined;
+      }
+      const invalidMods = newModifiers.filter(m => !validMods.includes(m));
+      if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
+      (cart[idx] as CartItem).modifiers = newModifiers;
+      if (newOptions !== undefined) (cart[idx] as CartItem).options = newOptions;
+      if (menuItem) {
+        let extraCents = 0;
+        for (const group of (menuItem.option_groups || [])) {
+          const selections = (newOptions?.[group.name] ?? []);
+          for (const sel of selections) {
+            const choice = group.choices.find(c => c.name.toLowerCase() === sel.toLowerCase());
+            if (choice) extraCents += choice.price_cents;
+          }
+        }
+        const modPriceCents = newModifiers.reduce((sum, modName) => {
+          const mod = menuItem.modifiers_json?.find(m => m.name === modName);
+          return sum + (mod?.price_cents ?? 0);
+        }, 0);
+        (cart[idx] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
       }
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity, price: (cart[idx] as CartItem).price_cents } };
