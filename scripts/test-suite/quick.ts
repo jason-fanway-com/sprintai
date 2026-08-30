@@ -82,21 +82,24 @@ function expectedTotalCents(cart: CartItemLike[] | undefined | null, deliveryFee
 }
 
 function findQuotedTotal(text: string): { cents: number; raw: string } | null {
+  // Explicit "total"-anchored patterns. Allow connectors (is/of/comes to/=/:)
+  // between the keyword and the amount so "your total is $12.99" matches.
   const patterns = [
-    /\$?(\d+\.\d{2})\s*(?:total|checkout|due)/i,
-    /(?:total|checkout|due)[:\s]*\$?(\d+\.\d{2})/i,
-    /\$(\d+\.\d{2})/g,
+    /(?:total|checkout|due|comes? to|grand total)[^$\d]{0,12}\$?(\d+\.\d{2})/i,
+    /\$?(\d+\.\d{2})[^$\d]{0,6}(?:total|checkout|due)/i,
   ];
-  // Try explicit total patterns first
-  for (const p of patterns.slice(0, 2)) {
+  for (const p of patterns) {
     const m = text.match(p);
     if (m) return { cents: Math.round(parseFloat(m[1]) * 100), raw: m[0] };
   }
-  // Fallback: find the last dollar amount (heuristic)
+  // Fallback: pick the LARGEST dollar amount (the checkout total is >= the
+  // $0.99 fee / any single line), not the last one. Grabbing "last" wrongly
+  // captured the trailing "$0.99 service fee" mention as the quote.
   const allDollars = [...text.matchAll(/\$(\d+\.\d{2})/g)];
   if (allDollars.length > 0) {
-    const last = allDollars[allDollars.length - 1];
-    return { cents: Math.round(parseFloat(last[1]) * 100), raw: last[0] };
+    const max = allDollars.reduce((a, b) =>
+      parseFloat(b[1]) > parseFloat(a[1]) ? b : a);
+    return { cents: Math.round(parseFloat(max[1]) * 100), raw: max[0] };
   }
   return null;
 }
