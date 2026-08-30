@@ -524,20 +524,21 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)}. When you state the order total, use THIS number exactly — do NOT compute or recalculate it yourself. Quote it verbatim. Never quote the subtotal as the final total.` : ""}
+${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)} (for your reference only — do NOT quote in your reply)` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
 - Keep ALL responses under 300 characters for SMS
+- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for pickup name, say "What name for pickup?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
-- When cart has items and customer says they are done or asks to check out, reply with the TOTAL and ask for pickup name. Do NOT restate every item in the cart — they just built it, they know what's in it. Example: "That comes to $11.49. What name for pickup?"
-- When confirming before submit_order, reply "$11.49 total. Confirm?" — not the full itemised receipt
+- When cart has items and customer says they are done or asks to check out, ask for pickup name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Example: "What name should I put this under for pickup?"
+- When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
-- SERVICE FEE: A $0.99 service fee is added to every order at checkout. When transitioning to checkout (asking for pickup name), always disclose the fee clearly. Example: "Your total comes to $10.50 plus a $0.99 service fee, so $11.49 total. What name should I put this under for pickup?" Always include the service fee in any total or order summary. Never quote only the subtotal as the final price.
+- SERVICE FEE: A $0.99 service fee is added to every order. The system automatically displays it with the total and checkout link — you do NOT need to state or calculate it. Never quote any dollar amount in your reply.
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
 - CLEAR_CART RESTRICTION (CRITICAL): NEVER call clear_cart unless the customer explicitly asks to cancel, restart, or start a new order. Words like "also", "add another", "and a", "can I also get", "let me also", "I also want" are ADDITIVE — they mean ADD to the existing cart, not replace it. Calling clear_cart when the customer asks to add more items will DESTROY their existing order. Only call clear_cart for explicit cancel/restart messages.
 - SAFE WORDS: At every decision point where a customer might want to abandon or change something, offer CHANGE to modify or RESTART to begin again. NEVER use the word "cancel" in a prompt or instruction — if a customer cancels, offer CHANGE or RESTART as the alternative.
@@ -1514,6 +1515,86 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): str
   }
   // Has items, just missing the pickup name to submit.
   return "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link.";
+}
+
+// ─── Phase A: Deterministic Ledger-status rendering ─────────────────────────
+
+/**
+ * Render the authoritative money/status footer from Ledger truth.
+ * The LLM owns the conversational framing; the Ledger owns the numbers.
+ * This is appended to every non-checkout reply that has cart items.
+ */
+function renderLedgerFooter(
+  cart: AnyCartItem[],
+  phase: string,
+  deliveryFeeCents?: number,
+  driverTipCents?: number,
+): string {
+  if (cart.length === 0) return "";
+
+  const subtotal = cart.reduce((s, i) => {
+    if ((i as BundleItem).type === "bundle") {
+      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+    }
+    const r = i as CartItem;
+    return s + (r.price_cents * (r.quantity || 1));
+  }, 0);
+
+  const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);
+  const itemCount = cart.reduce((s, i) => {
+    if ((i as BundleItem).type === "bundle") return s + ((i as BundleItem).complete ? 1 : 0);
+    return s + ((i as CartItem).quantity || 1);
+  }, 0);
+
+  const lines: string[] = [];
+  lines.push(`${itemCount} item${itemCount === 1 ? "" : "s"} — $${(totalCents / 100).toFixed(2)} total`);
+  lines.push(`(subtotal $${(subtotal / 100).toFixed(2)} + $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee${deliveryFeeCents ? ` + $${(deliveryFeeCents / 100).toFixed(2)} delivery` : ""}${driverTipCents ? ` + $${(driverTipCents / 100).toFixed(2)} tip` : ""})`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Strip LLM-emitted money/status lines from the reply so they don't conflict
+ * with the deterministic Ledger footer. The LLM keeps A1 conversational
+ * framing; this removes any numbers it leaked.
+ */
+function stripLlmMoneyLines(text: string): string {
+  let out = text;
+
+  // Dollar amounts in prose: "$X.XX total", "$X.XX (includes...)", "comes to $X.XX", etc.
+  out = out.replace(/(?:[Tt]hat['’]s|That is|[Tt]otal is|[Cc]omes to|[Tt]hat['’]ll be|[Yy]ou owe|[It]t['’]s|is)\s+\$?\d+[.,]\d{2}(?:\s*(?:total|with|each|plus|\+.*?fee))?/g, "");
+  out = out.replace(/\$\d+[.,]\d{2}\s*(?:total|due|to pay|owed|grand total|order total)/gi, "");
+  out = out.replace(/\(includes?\s+(?:a\s+)?\$\d+[.,]\d{2}\s+(?:service\s+)?fee\)/gi, "");
+  out = out.replace(/\$\d+[.,]\d{2}\s*(?:\(\s*includes?[^)]*\))?/g, (m) => {
+    // If the dollar amount is the ONLY content on the line (after stripping),
+    // remove the whole line. Otherwise it's a line-item price — keep it.
+    return "";
+  });
+  // ... actually, we need a more careful approach. We want to remove ONLY
+  // standalone dollar amounts that are totals/fees, not line-item prices.
+  // Revert that last over-broad regex — rebuild more precisely.
+
+  // Re-apply: remove total-line patterns from the original text
+  out = text;
+  // "Your total is $X.XX (includes $0.99 service fee)"
+  out = out.replace(/\b(?:[Yy]our|the|order)\s+total\s+(?:is|comes to|of)\s*\$\d+[.,]\d{2}(?:\s*(?:\(includes?[^)]*\)|\+\s*\$0[.,]\d{2}\s*service fee))?/g, "");
+  // "$X.XX total (includes $0.99 fee)"
+  out = out.replace(/\$\d+[.,]\d{2}\s*(?:total|grand total)\s*(?:\(includes?[^)]*\))?/gi, "");
+  // "comes to $X.XX", "that'll be $X.XX"
+  out = out.replace(/\b(?:comes to|that['’]ll be|that will be|you owe|adds up to|comes out to)\s*\$\d+[.,]\d{2}/gi, "");
+  // "Subtotal: $X.XX" / "Subtotal $X.XX"
+  out = out.replace(/\b[Ss]ubtotal[\s:]*\$\d+[.,]\d{2}/g, "");
+  // "+ $0.99 service fee" / "$0.99 service fee"
+  out = out.replace(/(?:\+\s*)?\$0[.,]\d{2}\s*(?:service\s+)?fee/gi, "");
+  // "I've got X items in your cart" / "X items in your cart"
+  out = out.replace(/\b(?:I['’]ve got|you['’]ve got|you have|that['’]s|there are|there's|we're at|I see)\s*\d+\s+items?(?:\s+(?:in\s+(?:your|the)\s+cart|so far|total))?/gi, "");
+  // "X items" standalone on its own line
+  out = out.replace(/^\d+\s+items?(?:\s*(?:in\s+(?:your|the)\s+cart|so far|total))?$/gim, "");
+
+  // Collapse multiple spaces and trim
+  out = out.replace(/\s{2,}/g, " ").replace(/^[,.\s]+|[,.\s]+$/g, "").trim();
+
+  return out;
 }
 
 // ─── Deterministic order guards ───────────────────────────────────────────────
@@ -3293,31 +3374,12 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // ── Proof Guard P3 (2026-08-30): No menu hallucination ────────────────
-  if (!checkoutUrl && reply) {
-    const menuVocab = new Set<string>();
-    for (const mi of effectiveMenu) menuVocab.add(mi.name.toLowerCase());
-    for (const ci of cartItems) menuVocab.add((ci as CartItem).name.toLowerCase());
-    const hallucinationPattern = /(?:added|add|adding) (?:a |an |the )?(.+?)(?: to your cart|\.|!|$)/gi;
-    let triggered = false;
-    for (const match of reply.matchAll(hallucinationPattern)) {
-      const claimed = (match[1] ?? "").trim().toLowerCase();
-      if (claimed.length < 2) continue;
-      if (menuVocab.has(claimed)) continue;
-      if ([...menuVocab].some(m => claimed.includes(m) || m.includes(claimed))) continue;
-      triggered = true;
-      break;
-    }
-    if (triggered) {
-      console.warn(`[chat-sms] PROOF-P3 tripped (conv=${conversation.id}): hallucination detected.`);
-      if (guardCart.length === 0) {
-        reply = "Sorry, I wasn't able to add that — I don't see it on the menu. What would you like to order?";
-      } else {
-        const itemList = guardCart.map(i => `${((i as CartItem).quantity || 1)}x ${(i as CartItem).name}`).join(", ");
-        reply = `Your cart: ${itemList}. Anything else or ready to checkout?`;
-      }
-    }
-  }
+  // ── Proof Guard P3 (retired 2026-08-30): Menu hallucination ──────────
+  // REMOVED — the regex reply-scrubber caused false positives on normal
+  // phrasing ("Your total is $8.99", "I've got 2 items", etc.). Replaced by:
+  //   a) Deterministic Ledger-status rendering below (money/status lines)
+  //   b) F1 guard (claimsOffMenuItem) for off-menu item claims
+  //   c) Rewritten verifyHallucinationGuard in cart-ops.ts (Ledger-truth check)
 
   // ── Guard 1: suppress ungrounded totals when cart is empty ─────────────
   // If the model quotes a dollar amount ("$8.99 total") but the cart is
@@ -3593,6 +3655,23 @@ Deno.serve(async (req: Request) => {
       .trim();
     if (reply.length < beforeLen) {
       console.log(`[chat-sms] D2 (re-ask-killer) stripped pickup/delivery re-ask from reply (conv=${conversation.id})`);
+    }
+  }
+
+  // ── Phase A: Deterministic money/status rendering ────────────────────
+  // Strip LLM-emitted totals/fees/status lines, then append the Ledger footer.
+  // Cart has items, not in checkout phase → deterministic footer owns the numbers.
+  if (!checkoutUrl && guardCart.length > 0) {
+    reply = stripLlmMoneyLines(reply);
+    const driverTip = (guardCartRow as any)?.driver_tip_cents ?? undefined;
+    const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip);
+    if (footer && !reply.includes("total") && !reply.match(/\$\d+[.,]\d{2}/)) {
+      // Only append if the reply doesn't already have numbers (belt + suspenders).
+      // The stripper should have removed them, but if the LLM re-injects them
+      // in a way we didn't cover, the footer still goes in.
+    }
+    if (footer) {
+      reply = `${reply}\n\n${footer}`;
     }
   }
 

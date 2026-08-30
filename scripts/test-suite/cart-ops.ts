@@ -268,54 +268,152 @@ export function verifyStatedTotal(
 /**
  * Verify no bot reply mentions a menu item name that does not exist in the
  * shop's actual menu. This catches the bot fabricating items.
+ * 
+ * Phase A (2026-08-30): Rewritten to check against Ledger truth (effective
+ * menu) instead of the old "capital word + $" heuristic. The old heuristic
+ * produced ~18 false positives on boilerplate like "Your total is $8.99",
+ * "I've got 2 items", "$0.99 service fee", and pickup-name prompts.
+ * 
+ * Strategy:
+ *   1. Build a normalized lookup of all menu item names.
+ *   2. Extract every candidate phrase from each bot reply that looks like
+ *      it COULD be claiming an item (sentence segments, not raw regex).
+ *   3. Each candidate that matches a menu item is a PASS.
+ *   4. Each candidate that does NOT match and is NOT a known boilerplate
+ *      pattern (totals, fees, item counts, phase prompts, checkout language)
+ *      is a FAIL — the bot invented a menu item.
+ *   5. "Your total is $8.99" passes because it contains no menu-item-like
+ *      noun phrases that fail the menu lookup.
+ */
+/**
+ * Phase A (2026-08-30): Rewritten to check against Ledger truth (effective
+ * menu) instead of the old "capital word + $" heuristic. The old heuristic
+ * produced ~18 false positives on boilerplate like "Your total is $8.99",
+ * "I've got 2 items", "$0.99 service fee", and pickup-name prompts.
+ * 
+ * Strategy (claim-first):
+ *   1. Build a normalized lookup of all menu item names.
+ *   2. Scan each reply for PRODUCT CLAIM patterns — sentences that appear
+ *      to name a specific item the bot is selling/adding/offering:
+ *      "1x ItemName", "ItemName added", "ItemName - $X", "added a ItemName".
+ *   3. Each claim's item name is validated against the menu.
+ *   4. If no claim pattern is found at all, the reply PASSES — it's
+ *      boilerplate conversation (totals, fees, counts, pickup prompts).
+ *   5. "Your total is $8.99" passes because it contains no product claim.
  */
 export function verifyHallucinationGuard(
   run: RunResult,
   shopMenuNames: Set<string>,
 ): InvariantResult {
-  // Build a regex from known menu names (normalized: lowercase, trimmed)
-  // For each bot reply, check if any dollar amount is associated with a
-  // name not in the shop menu.
-  const unknownMentions: string[] = [];
+  // Normalize menu names for matching
+  const menuNorm = new Map<string, string>(); // normalized → original
+  for (const name of shopMenuNames) {
+    menuNorm.set(name.toLowerCase().replace(/\s+/g, " ").trim(), name);
+  }
+
+  const nonItemWords = new Set([
+    "item", "items", "order", "orders", "cart", "total", "subtotal",
+    "name", "text", "texts", "tip", "fee", "fees",
+  ]);
+
+  const unknownClaims: string[] = [];
 
   for (const turn of run.transcript) {
     const reply = turn.reply ?? "";
     if (!reply) continue;
 
-    // Extract potential item names: look for patterns like
-    //   "Item Name - $X.XX"
-    // or standalone capitalized names adjacent to prices
-    const itemLines = reply.matchAll(/([A-Z][A-Za-z\s'&-]{3,40})(?:\s*[-–]\s*\$?\d+\.?\d*|\s+\$?\d+\.?\d*)/g);
-    for (const m of itemLines) {
-      const name = m[1].trim();
-      const normalized = name.toLowerCase().replace(/\s+/g, " ");
-      // Check against known menu names (case-insensitive)
-      const found = [...shopMenuNames].some((mn) =>
-        mn.toLowerCase().replace(/\s+/g, " ") === normalized
-      );
-      if (!found) {
-        unknownMentions.push(`${name} (turn: "${reply.slice(0, 80)}...")`);
+    let m: RegExpMatchArray | null;
+
+    // ── Pattern 1a: "1x ItemName" or "2x Everything Bagel" ──
+    const qtyPrefPat = /(\d+)\s*x\s+([A-Z][A-Za-z\s'&.()/-]{5,60}?)(?:\s+(?:added|to|for|and|,|\.|$|\())/g;
+    while ((m = qtyPrefPat.exec(reply)) !== null) {
+      const claimedName = m[2].trim().toLowerCase().replace(/\s+/g, " ");
+      if (nonItemWords.has(claimedName)) continue;
+      if (!menuNameCheck(claimedName, menuNorm)) {
+        unknownClaims.push(`"${m[2].trim()}" claimed via "Nx Item": "${reply.slice(0, 80)}..."`);
+      }
+    }
+
+    // ── Pattern 1b: "added a ItemName" / "added ItemName" ──
+    const addPat = /added\s+(?:a\s+)?([A-Z][A-Za-z\s'&.()/-]{4,60}?)(?:\s+(?:to\b|and\b|\bfor\b|at\b|,|\.|$|\$))/gi;
+    while ((m = addPat.exec(reply)) !== null) {
+      const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
+      if (nonItemWords.has(claimedName)) continue;
+      if (!menuNameCheck(claimedName, menuNorm)) {
+        unknownClaims.push(`"${m[1].trim()}" claimed via "added X": "${reply.slice(0, 80)}..."`);
+      }
+    }
+
+    // ── Pattern 1c: "got it — X ItemName" / "got it, X ItemName" ──
+    const gotPat = /(?:got it|gotcha|you got it|sure thing)[!.,\s—-]+(?:(?:\d+x?\s+)|(?:\ba\s+))?([A-Z][A-Za-z\s'&.()/-]{4,60}?)(?:\s+(?:added|is|coming|will|for|and|,|\.|$|at|\$))/gi;
+    while ((m = gotPat.exec(reply)) !== null) {
+      const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
+      if (nonItemWords.has(claimedName)) continue;
+      if (!menuNameCheck(claimedName, menuNorm)) {
+        unknownClaims.push(`"${m[1].trim()}" claimed via "got it X": "${reply.slice(0, 80)}..."`);
+      }
+    }
+
+    // ── Pattern 2: price-line item "ItemName - $X.XX" ──
+    const pricePat = /([A-Z][A-Za-z\s'&.()/-]{5,60}?)\s*[-–—]\s*\$?\d+[.,]\d{2}/g;
+    while ((m = pricePat.exec(reply)) !== null) {
+      const raw = m[1].trim();
+      const claimedName = raw.toLowerCase().replace(/\s+/g, " ");
+      if (nonItemWords.has(claimedName)) continue;
+      if (/^(total|subtotal|your total|order total|grand total|delivery|service fee|tip|comes|that|including|plus)/i.test(claimedName)) continue;
+      if (!menuNameCheck(claimedName, menuNorm)) {
+        unknownClaims.push(`"${raw}" claimed via price-line: "${reply.slice(0, 80)}..."`);
+      }
+    }
+
+    // ── Pattern 3: "here's your order: 1x ItemA, 1x ItemB" ──
+    const herePat = /(?:here'?s|here is)\s+(?:your\s+)?order\s*:?\s*([^.?!]+)/gi;
+    while ((m = herePat.exec(reply)) !== null) {
+      const list = m[1];
+      const segments = list.split(/(?:,\s*|\s+and\s+)/i);
+      for (const seg of segments) {
+        const qm = seg.match(/^\s*(?:\d+x?\s+)?([A-Z][A-Za-z\s'&.()/-]{4,60}?)\s*(?:-.*)?$/);
+        if (qm) {
+          const claimedName = qm[1].trim().toLowerCase().replace(/\s+/g, " ");
+          if (claimedName.length < 4) continue;
+          if (nonItemWords.has(claimedName)) continue;
+          if (!menuNameCheck(claimedName, menuNorm)) {
+            unknownClaims.push(`"${qm[1].trim()}" claimed via order-list: "${reply.slice(0, 80)}..."`);
+          }
+        }
       }
     }
   }
 
-  if (unknownMentions.length > 0) {
+  if (unknownClaims.length > 0) {
     return {
       id: "hallucination_guard",
-      description: "No bot reply mentions an item name not in the shop menu",
+      description: "No bot reply claims a menu item NOT on the effective menu (Ledger-truth check)",
       passed: false,
-      detail: `Hallucinated items detected: ${unknownMentions.join("; ")}`,
+      detail: `Hallucinated items detected: ${unknownClaims.join("; ")}`,
     };
   }
 
   return {
     id: "hallucination_guard",
-    description: "No bot reply mentions an item name not in the shop menu",
+    description: "No bot reply claims a menu item NOT on the effective menu (Ledger-truth check)",
     passed: true,
     detail: "No hallucinated item names detected in bot replies",
   };
 }
 
+/** Check if a normalized claimed item name matches any menu entry. */
+function menuNameCheck(claimed: string, menuNorm: Map<string, string>): boolean {
+  if (menuNorm.has(claimed)) return true;
+  for (const mn of menuNorm.keys()) {
+    if (claimed.includes(mn) || mn.includes(claimed)) return true;
+  }
+  for (const mn of menuNorm.keys()) {
+    const mnWords = mn.split(/\s+/);
+    if (mnWords.length >= 2 && mnWords.every(w => claimed.includes(w))) return true;
+  }
+  return false;
+}
 // ── Cart Persistence Verifier (P2) ──────────────────────────────────────
 
 /**
