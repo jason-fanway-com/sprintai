@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -73,7 +73,7 @@ sprintai-ordering/
 │   │   ├── import-menu-csv/  # CSV menu importer
 │   │   ├── connect-*/        # Stripe Connect onboarding
 │   │   ├── go-live/          # All-or-nothing go-live gate
-│   │   ├── provision-number/ # Auto-buy Twilio number
+│   │   ├── provision-number/ # Auto-buy Telnyx number
 │   │   ├── merchant-auth/    # PIN auth for sold-out manager
 │   │   ├── shop-financials/  # Shop financial reporting (KPIs, ledger, payouts)
 │   │   └── _shared/          # Shared libraries
@@ -190,7 +190,7 @@ CUSTOMER TEXTS "I want a dozen bagels"
    → calls OpenRouter (DeepSeek Flash) with tool definitions
    → LLM returns structured tool calls or plain text
    → each tool call is validated, executed, guarded
-   → send reply via SMS (through outbound-guard → Twilio or imsg)
+   → send reply via SMS (through outbound-guard → Telnyx or imsg)
  → conversation stored: messages + conversation row
  → when order placed: order_cart + cart_items created
  → checkout: create-checkout → Stripe Session → payment capture
@@ -414,16 +414,33 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   The checkout flow now explicitly states the fee-inclusive total from the
   authoritative `order_carts.total_cents` (incl. $0.99 service fee, delivery,
   tip) — disclosure is code-driven, not model-hoped.
-- **Deterministic grounding guards are live.** Four code-path intercepts in
-  `chat-sms` prevent LLM hallucination: (1) off-menu portion/container words
-  ("tub", "pint") not in the shop's menu vocabulary are suppressed,
-  (2) claims an item is in the cart when the authoritative cart row disagrees
-  (including empty-cart assertions) are blocked, (3) "added X to your cart"
-  claims when the cart didn't actually mutate this turn are caught, and
-  (4) a cart cannot be saved with `phase=checkout` unless a Stripe checkout
-  session already exists — downgraded to `review` if not. These are code-path
-  intercepts, not prompt preferences — they fire regardless of what the LLM
-  intended.
+- **Deterministic grounding guards are live.** Ten code-path intercepts in
+  `chat-sms` prevent LLM hallucination:
+  - Guard 1b: off-menu portion/container words ("tub", "pint") not in the
+    shop's menu vocabulary are suppressed.
+  - Guard 1c: claims an item is in the cart when the authoritative cart row
+    disagrees (including empty-cart assertions) are blocked.
+  - Guard 1g (post-turn menu hallucination): `claimsOffMenuItem` helper
+    checks if the model invented items not on the shop's actual menu;
+    falls back to honest cart summary.
+  - Guard 3b: "added X to your cart" claims when the cart didn't actually
+    mutate this turn are caught.
+  - Guard C: cart cannot be saved with `phase=checkout` unless a Stripe
+    checkout session already exists — downgraded to `review`.
+  - D1 (checkout-completion driver): when cart is submittable and user
+    signals checkout intent, deterministically calls `submit_order` to
+    create a real Stripe session — prevents "what else?" / re-ask loops.
+  - D2 (kill re-ask): when `order_type` is already set, strip lingering
+    pickup/delivery questions from the reply.
+  - E1 (cross-turn `clear_cart` guard): suppress `clear_cart` when user
+    message has additive intent (also, and a, etc.) and cart has items.
+  - C2 (name→submit shortcut): when last assistant message asked for pickup
+    name and the customer's next message looks like a short name and cart
+    is submittable, bypass LLM entirely and call `submit_order` directly —
+    prevents LLM hallucination (doubling cart via spurious `add_item`) on
+    the pickup-name turn.
+  These are code-path intercepts, not prompt preferences — they fire
+  regardless of what the LLM intended.
 - **CartOps integrity — `cart_json` is the single source of truth.** A bare
   tip reply never mutates items (the LLM spuriously calling `add_item` on a
   tip turn was the bug); quantity corrections ("just one") write back to

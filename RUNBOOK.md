@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -158,14 +158,18 @@ and is abandoned as a provider; the same EIN verifies cleanly through Telnyx.
   `getsprintai.com/<slug>` CONFIRMED. Demo numbers: SprintAI brand + disclosure,
   no DBA needed. Mock brands/campaigns documented for free API testing.
   Build queue: manual first 1–2 shops, then automate provisioning + polling.
+  **provision-number is now built on Telnyx** (rewritten 2026-08-29):
+  searches available numbers via `national_destination_code` + sms+voice,
+  orders the number, creates a per-shop messaging profile (webhook → chat-sms),
+  assigns the number to the profile, and persists shop/telnyx columns.
+  Number-to-campaign assignment is separate (requires TNSP approval).
 - The iMessage bridge on the Mac also handles inbound SMS → `chat-sms` for the
   primary number (`+14842018054`).
 
 Twilio numbers (`+16109366213`, `+16103792553` via Messaging Service
 `MG76067b4fbbb54eb914c3087f559c2f8b`) are legacy. The existing
-`provision-number` edge function still targets Twilio (Phase 1 test mode).
-Telnyx provisioning is planned but NOT yet built — the Telnyx runbook
-contains the provisioning step sequence as a spec, not as implemented code. See `docs/telnyx-integration-runbook.md` (wiring) and
+`provision-number` is rewritten to Telnyx (v2 API, 2026-08-29).
+The old Twilio version is retired. See `docs/telnyx-integration-runbook.md` (wiring) and
 `docs/10dlc-compliance-obligations.md` (binding behaviour — treat as law).
 The required first-delivery test (8-step real-handset script, in
 `sprintai-telnyx-provisioning-test.md`) is the go/no-go gate before the first
@@ -322,7 +326,7 @@ notified without a corresponding issue.
 ### Operations & maintenance
 | Function | Purpose | JWT |
 |----------|---------|-----|
-| `provision-number` | Auto-buy Twilio number for new shop | No |
+| `provision-number` | Auto-buy Telnyx number for new shop (v2 API) | No |
 | `toast-order` | Toast POS menu fetch + order placement | No |
 | `daily-reset` | Clear expired specials + delivery pauses | No |
 | `test-parse-judge` | Judge parser robustness test (script, not deployed) | N/A |
@@ -357,7 +361,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–066). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–069). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -388,7 +392,13 @@ rating, review_count). Migration `063` adds shop `latitude`/`longitude`/
 `test_run_queue` for the async onboarding test-run worker. Migration `065` adds
 `bot_segments` + `reached_checkout` to `test_case_results` for automatic SMS
 segment tracking on every QA run. Migration `066` adds `scorer_version` so the
-dashboard can separate runs scored under different scoring rules.
+dashboard can separate runs scored under different scoring rules. Migration `068`
+adds `telnyx_number_id`, `telnyx_messaging_profile_id`, and
+`telnyx_messaging_phone_number` to `shops` and `number_provision_log` for the
+Telnyx provisioning rewrite. Migration `069` adds the `merchant_registration`
+state machine (`registration_status`, `registration_deadline`, `submitted_at`)
+and `merchant_business_info` table (EIN, business_type, ownership_details) for
+Phase 2 merchant identity verification.
 
 ### RLS model
 
@@ -469,17 +479,33 @@ dashboard can separate runs scored under different scoring rules.
     `conversations`, not session expiry. On every subsequent reply it is
     stripped by regex before send (~183 chars saved per reply).
 
-13. **Deterministic grounding guards (chat-sms)**: Four code-path intercepts
+13. **Deterministic grounding guards (chat-sms)**: Code-path intercepts
     prevent the LLM from hallucinating in ways that prompt rules alone can't
-    stop. Guard 1b: suppress replies inventing off-menu container/portion
-    words ("tub", "pint") not in the shop's menu vocabulary. Guard 1c:
-    suppress claims an item is in the cart when the authoritative cart row
-    disagrees (including empty-cart assertions). Guard 3b: suppress "added X
-    to your cart" claims when the cart didn't actually mutate this turn. Guard
-    C: block `phase=checkout` in `saveCart` when no Stripe checkout session
-    exists — downgrades to `review`. No code path may land a cart in
-    `checkout` phase unless `submit_order` already created a real Stripe
-    session. These are code-path intercepts, not prompt-preference — they fire
+    stop.
+    - Guard 1b: suppress replies inventing off-menu container/portion
+      words ("tub", "pint") not in the shop's menu vocabulary.
+    - Guard 1c: suppress claims an item is in the cart when the authoritative
+      cart row disagrees (including empty-cart assertions).
+    - Guard 1g (post-turn menu hallucination): `claimsOffMenuItem` helper
+      checks if the model invented or offered items not on the shop's actual
+      menu; falls back to honest cart summary.
+    - Guard 3b: suppress "added X to your cart" claims when the cart
+      didn't actually mutate this turn.
+    - Guard C: block `phase=checkout` in `saveCart` when no Stripe checkout
+      session exists — downgrades to `review`.
+    - D1 (checkout-completion driver): when cart is submittable and user
+      signals checkout intent, deterministically calls `submit_order` to
+      create a real Stripe session — prevents "what else?" / re-ask loops.
+    - D2 (kill re-ask): when `order_type` is already set, strip lingering
+      pickup/delivery questions from the reply.
+    - E1 (cross-turn `clear_cart` guard): suppress `clear_cart` when user
+      message has additive intent (also, and a, etc.) and cart has items.
+    - C2 (name→submit shortcut): when the last assistant message asked for
+      pickup name and the customer's next message looks like a short name
+      and the cart is submittable, bypass LLM entirely and call
+      `submit_order` directly — prevents LLM hallucination (doubling cart
+      via spurious `add_item`) on the pickup-name turn.
+    These are code-path intercepts, not prompt-preference — they fire
     deterministically regardless of what the LLM intended.
 
 14. **Customer-question precedence (chat-sms)**: The bot answers direct
