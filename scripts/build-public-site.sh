@@ -39,6 +39,7 @@ PUBLIC_FILES=(
   "privacy.html"        # legal
   "terms.html"          # legal
   "thanks.html"         # contact form redirect target (/thanks)
+  "vitos-demo.html"     # Erin sales demo page: Vito's Pizza walkthrough
   "order-success.html"       # order confirmation page (real orders)
   "order-success-test.html"  # order confirmation page (test-mode orders; diner-bot success_url target)
 )
