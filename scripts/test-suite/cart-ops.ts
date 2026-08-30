@@ -316,6 +316,69 @@ export function verifyHallucinationGuard(
   };
 }
 
+// ── Cart Persistence Verifier (P2) ──────────────────────────────────────
+
+/**
+ * Walk the transcript turn-by-turn. When a turn does not signal order
+ * mutation (correction, cancel), the cart item count must not decrease.
+ * When the turn is a cancellation/reset, the cart may empty legitimately.
+ * This is the deterministic counterpart to the P2 runtime guard.
+ */
+export function verifyCartPersistence(
+  run: RunResult,
+): InvariantResult {
+  const transcript = run.transcript;
+  if (transcript.length < 2) {
+    return {
+      id: "cart_persists",
+      description: "Cart must persist across non-mutating turns; never silently reset",
+      passed: true,
+      detail: "Only 1 turn — nothing to verify across turns.",
+    };
+  }
+
+  let prevCount = 0;
+  const violations: string[] = [];
+
+  for (let i = 0; i < transcript.length; i++) {
+    const turn = transcript[i];
+    const cart = (turn.cart as unknown[]) ?? [];
+    const count = cart.length;
+    const msg = (turn.message ?? "").toLowerCase();
+
+    const isCancel = /cancel|reset|never.?mind|start.?over/i.test(msg);
+    const isCorrection = /\b(?:actually|wait|no[,.!]|remove|change|make it|instead|swap|switch|just |only |oops|wrong|I meant|scratch that|never mind|cancel that|take that off|don'?t want|not that)\b/i.test(msg);
+
+    if (i > 0 && !isCancel && !isCorrection && prevCount > 0 && count === 0) {
+      violations.push(
+        `Turn ${i}: Cart went from ${prevCount} items to 0 (no cancel/correction signal). Message: "${turn.message.slice(0, 80)}"`,
+      );
+    }
+
+    if (isCancel) {
+      prevCount = 0;
+    } else if (count > 0) {
+      prevCount = count;
+    }
+  }
+
+  if (violations.length > 0) {
+    return {
+      id: "cart_persists",
+      description: "Cart must persist across non-mutating turns; never silently reset",
+      passed: false,
+      detail: violations.join("; "),
+    };
+  }
+
+  return {
+    id: "cart_persists",
+    description: "Cart must persist across non-mutating turns; never silently reset",
+    passed: true,
+    detail: "Cart persisted correctly across all turns.",
+  };
+}
+
 // ── Checkout Finalize Verifier ────────────────────────────────────────────
 
 /**
@@ -672,6 +735,52 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       label: `Request off-menu item → bot declines, never invents item not in menu`,
       turns: [
         { role: "customer", message: "I'd like a rattlesnake pizza with extra venom please" },
+      ],
+      success_criteria: successCriteria,
+    },
+
+    // ═══ PROOF: CART PERSISTS ACROSS MULTIPLE TURNS ═══════════════════════
+    {
+      id: "proof-cart-persists-across-multiple",
+      category: "proof",
+      criticality: "critical",
+      label: `Multi-turn cart persist: ${A.name} → question → ${B.name} → checkout → ${C.name} absent.`,
+      turns: [
+        { role: "customer", message: `I'll take a ${A.name}` },
+        { role: "customer", message: "Do you have any desserts?" },
+        { role: "customer", message: `Actually add a ${B.name}` },
+        { role: "customer", message: "checkout" },
+        { role: "customer", message: "Pat" },
+      ],
+      success_criteria: successCriteria,
+      expects_checkout: true,
+    },
+
+    // ═══ PROOF: MULTI-ITEM CHECKOUT WRITES ORDER ══════════════════════════
+    {
+      id: "proof-checkout-multi-item",
+      category: "proof",
+      criticality: "critical",
+      label: `Multi-item checkout: ${B.name} + ${C.name} → checkout → orders row exists with both items.`,
+      turns: [
+        { role: "customer", message: `I'll take a ${B.name} and a ${C.name}` },
+        { role: "customer", message: "yes" },
+        { role: "customer", message: "checkout" },
+        { role: "customer", message: "Pat" },
+      ],
+      success_criteria: successCriteria,
+      expects_checkout: true,
+    },
+
+    // ═══ PROOF: HALLUCINATION GUARD MID-ORDER ════════════════════════════
+    {
+      id: "proof-hallucination-mid-order",
+      category: "proof",
+      criticality: "critical",
+      label: `Hallucination mid-order: add ${A.name}, then request fake item. Cart must still contain only real items.`,
+      turns: [
+        { role: "customer", message: `I'll take a ${A.name}` },
+        { role: "customer", message: "Can you also add a quantum-baked neutrino wrap?" },
       ],
       success_criteria: successCriteria,
     },

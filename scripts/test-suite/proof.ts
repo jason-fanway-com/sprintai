@@ -26,6 +26,7 @@ import {
   verifyStatedTotal,
   verifyCheckoutFinalize,
   verifyHallucinationGuard,
+  verifyCartPersistence,
 } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
 
@@ -189,6 +190,15 @@ for (let i = 0; i < cases.length; i++) {
     if (!hg.passed) {
       passed = false;
       reason = `hallucination-guard: ${hg.detail}`;
+    }
+  }
+
+  // Cart persistence guard (P2): all cases
+  if (passed) {
+    const cp = verifyCartPersistence(run);
+    if (!cp.passed) {
+      passed = false;
+      reason = `cart-persistence: ${cp.detail}`;
     }
   }
 

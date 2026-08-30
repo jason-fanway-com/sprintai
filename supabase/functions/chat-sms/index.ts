@@ -3104,7 +3104,7 @@ Deno.serve(async (req: Request) => {
   // Before the LLM ever runs, detect correction intent in the user message
   // and directly mutate the cart. "just want one" / "make it one" / "remove one"
   // must update cart_json AND persist BEFORE any summary is shown.
-  const cartItems    = [...cart.cart_json];
+  let cartItems    = [...cart.cart_json];
   let correctionApplied = false;
   {
     const norm = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -3146,6 +3146,11 @@ Deno.serve(async (req: Request) => {
           cart.phase = (correctedCart.phase as OrderPhase) || "building";
         }
       }
+    }
+    // Re-snapshot after any deterministic corrections so the P2 guard
+    // restores the post-correction truth, not the pre-correction stale copy.
+    if (correctionApplied) {
+      cartItems = [...cart.cart_json];
     }
   }
 
