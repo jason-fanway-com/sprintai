@@ -3246,6 +3246,74 @@ Deno.serve(async (req: Request) => {
   const guardDriverTip = (guardCartRow?.driver_tip_cents as number) || 0;
   const guardRealTotalCents = guardCartSubtotal + SERVICE_FEE_CENTS + guardDeliveryFee + guardDriverTip;
 
+  // ═══ PROOF PHASE 1: DETERMINISTIC ACCEPTANCE GUARDS ════════════════════
+  // These three guards are the hard gate — each has a corresponding proof case.
+
+  // ── Proof Guard P1 (2026-08-30): Checkout finalize always writes order ──
+  if (!checkoutUrl && cart.phase === "checkout" && !(guardCartRow?.stripe_checkout_session_id as string | null)) {
+    const claimsConfirmation = /(?:order (?:placed|confirmed|received|is in)|all set|you're all set|thanks for (?:your )?order)/i.test(reply);
+    if (claimsConfirmation) {
+      console.warn(`[chat-sms] PROOF-P1 tripped (conv=${conversation.id}): phase=checkout but no stripe_checkout_session_id.`);
+      const hasItems = guardCart.length > 0;
+      const incompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
+      const pickupName = (guardCartRow?.pickup_name as string | undefined) || undefined;
+      if (hasItems && !incompleteBundle && pickupName) {
+        try {
+          const forced = await executeTool("submit_order", { pickup_name: pickupName }, [...guardCart], effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
+          if (forced.ok && forced.checkoutUrl) {
+            checkoutUrl = forced.checkoutUrl;
+            console.log(`[chat-sms] PROOF-P1 recovered: forced submit_order (cart=${cart.id}).`);
+          } else {
+            reply = honestFallbackReply(guardCart);
+          }
+        } catch (_e) {
+          reply = honestFallbackReply(guardCart);
+        }
+      } else {
+        reply = honestFallbackReply(guardCart, !!incompleteBundle);
+      }
+    }
+  }
+
+  // ── Proof Guard P2 (2026-08-30): Cart must persist across turns ────
+  if (!checkoutUrl) {
+    const userMsgLower = userMessage.toLowerCase();
+    const isCancelSignal = /cancel|reset|never.?mind|start.?over|forget (?:it|the whole|everything)/i.test(userMsgLower);
+    if (cartItems.length > 0 && guardCart.length === 0 && !isCancelSignal) {
+      console.warn(`[chat-sms] PROOF-P2 tripped (conv=${conversation.id}): cart wiped from ${cartItems.length} items to 0 without cancel signal. Restoring.`);
+      cart.cart_json = [...cartItems];
+      await supabase.from("order_carts").update({ cart_json: JSON.stringify(cartItems) }).eq("id", cart.id);
+      const itemList = cartItems.map(i => `${((i as CartItem).quantity || 1)}x ${(i as CartItem).name}`).join(", ");
+      reply = `Your cart: ${itemList}. Anything else or ready to checkout?`;
+    }
+  }
+
+  // ── Proof Guard P3 (2026-08-30): No menu hallucination ────────────────
+  if (!checkoutUrl && reply) {
+    const menuVocab = new Set<string>();
+    for (const mi of effectiveMenu) menuVocab.add(mi.name.toLowerCase());
+    for (const ci of cartItems) menuVocab.add((ci as CartItem).name.toLowerCase());
+    const hallucinationPattern = /(?:added|add|adding) (?:a |an |the )?(.+?)(?: to your cart|\.|!|$)/gi;
+    let triggered = false;
+    for (const match of reply.matchAll(hallucinationPattern)) {
+      const claimed = (match[1] ?? "").trim().toLowerCase();
+      if (claimed.length < 2) continue;
+      if (menuVocab.has(claimed)) continue;
+      if ([...menuVocab].some(m => claimed.includes(m) || m.includes(claimed))) continue;
+      triggered = true;
+      break;
+    }
+    if (triggered) {
+      console.warn(`[chat-sms] PROOF-P3 tripped (conv=${conversation.id}): hallucination detected.`);
+      if (guardCart.length === 0) {
+        reply = "Sorry, I wasn't able to add that — I don't see it on the menu. What would you like to order?";
+      } else {
+        const itemList = guardCart.map(i => `${((i as CartItem).quantity || 1)}x ${(i as CartItem).name}`).join(", ");
+        reply = `Your cart: ${itemList}. Anything else or ready to checkout?`;
+      }
+    }
+  }
+
   // ── Guard 1: suppress ungrounded totals when cart is empty ─────────────
   // If the model quotes a dollar amount ("$8.99 total") but the cart is
   // actually empty, replace the reply. The LLM can still add items and quote

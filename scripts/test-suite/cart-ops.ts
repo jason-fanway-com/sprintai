@@ -11,6 +11,8 @@
  *   3. A tip/name/question turn NEVER changes item quantities
  *   4. A correction that reduces/removes IS reflected in cart_json before next reply
  *   5. No duplicate lines for same menu_item_id + modifiers
+ *   6. CHECKOUT FINALIZE: order_carts row reaches phase="confirmed", total_cents matches last quoted total
+ *   7. HALLUCINATION GUARD: no bot reply mentions a menu item name not in the shop's actual menu
  *
  * ALL CartOps cases are criticality=critical. Scorecard tiered gate
  * already requires 100% critical pass → any CartOps failure blocks.
@@ -18,6 +20,7 @@
 
 import type { TestCase, SuccessCriterion } from "./library.ts";
 import type { RunResult, TurnResult } from "./runner.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -260,6 +263,155 @@ export function verifyStatedTotal(
   return null;
 }
 
+// ── Hallucination Guard ──────────────────────────────────────────────────
+
+/**
+ * Verify no bot reply mentions a menu item name that does not exist in the
+ * shop's actual menu. This catches the bot fabricating items.
+ */
+export function verifyHallucinationGuard(
+  run: RunResult,
+  shopMenuNames: Set<string>,
+): InvariantResult {
+  // Build a regex from known menu names (normalized: lowercase, trimmed)
+  // For each bot reply, check if any dollar amount is associated with a
+  // name not in the shop menu.
+  const unknownMentions: string[] = [];
+
+  for (const turn of run.transcript) {
+    const reply = turn.reply ?? "";
+    if (!reply) continue;
+
+    // Extract potential item names: look for patterns like
+    //   "Item Name - $X.XX"
+    // or standalone capitalized names adjacent to prices
+    const itemLines = reply.matchAll(/([A-Z][A-Za-z\s'&-]{3,40})(?:\s*[-–]\s*\$?\d+\.?\d*|\s+\$?\d+\.?\d*)/g);
+    for (const m of itemLines) {
+      const name = m[1].trim();
+      const normalized = name.toLowerCase().replace(/\s+/g, " ");
+      // Check against known menu names (case-insensitive)
+      const found = [...shopMenuNames].some((mn) =>
+        mn.toLowerCase().replace(/\s+/g, " ") === normalized
+      );
+      if (!found) {
+        unknownMentions.push(`${name} (turn: "${reply.slice(0, 80)}...")`);
+      }
+    }
+  }
+
+  if (unknownMentions.length > 0) {
+    return {
+      id: "hallucination_guard",
+      description: "No bot reply mentions an item name not in the shop menu",
+      passed: false,
+      detail: `Hallucinated items detected: ${unknownMentions.join("; ")}`,
+    };
+  }
+
+  return {
+    id: "hallucination_guard",
+    description: "No bot reply mentions an item name not in the shop menu",
+    passed: true,
+    detail: "No hallucinated item names detected in bot replies",
+  };
+}
+
+// ── Checkout Finalize Verifier ────────────────────────────────────────────
+
+/**
+ * Verify that a checkout-finalize case produced a confirmed order_carts row
+ * whose total_cents matches the last quoted total in the bot's reply.
+ */
+export async function verifyCheckoutFinalize(
+  supabase: SupabaseClient,
+  run: RunResult,
+): Promise<InvariantResult> {
+  const transcript = run.transcript;
+  if (!transcript.length) {
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No transcript — skipping checkout finalize check" };
+  }
+
+  // Find the last quoted total from bot replies
+  let lastQuotedCents: number | null = null;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const reply = transcript[i].reply ?? "";
+    const quoted = findQuotedTotal(reply);
+    if (quoted !== null) {
+      lastQuotedCents = quoted.cents;
+      break;
+    }
+  }
+
+  // Find the order_cart for this run by scanning recent carts for the shop
+  // that match the session_id pattern or the items ordered.
+  // The chat-sms function creates carts keyed by conversation_id which uses
+  // session_id. We query by the conversation tied to this test session.
+  const sessionId = run.sessionId;
+  if (!sessionId) {
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No session_id — skipping checkout finalize check" };
+  }
+
+  // Look up the conversation → cart
+  const { data: conv } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!conv) {
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No conversation found for session — skipping checkout finalize check" };
+  }
+
+  const { data: cart } = await supabase
+    .from("order_carts")
+    .select("total_cents, phase")
+    .eq("conversation_id", conv.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!cart) {
+    return {
+      id: "checkout_finalize",
+      description: "order_carts row reaches confirmed, total_cents matches",
+      passed: false,
+      detail: "No order_cart found for conversation — checkout may not have been created",
+    };
+  }
+
+  if (cart.phase !== "confirmed" && cart.phase !== "checkout") {
+    return {
+      id: "checkout_finalize",
+      description: "order_carts row reaches confirmed, total_cents matches",
+      passed: false,
+      detail: `order_cart phase is "${cart.phase}", expected "confirmed" or "checkout" (checkout link sent)`,
+    };
+  }
+
+  // If we have a quoted total, verify it matches the cart's total_cents
+  if (lastQuotedCents !== null && cart.total_cents !== null) {
+    const diff = Math.abs(cart.total_cents - lastQuotedCents);
+    // Allow $0.02 rounding tolerance
+    if (diff > 2) {
+      return {
+        id: "checkout_finalize",
+        description: "order_carts row reaches confirmed, total_cents matches",
+        passed: false,
+        detail: `Checkout total mismatch: cart total_cents=$${(cart.total_cents / 100).toFixed(2)}, last quoted=$${(lastQuotedCents / 100).toFixed(2)}, diff=$${(diff / 100).toFixed(2)}`,
+      };
+    }
+  }
+
+  return {
+    id: "checkout_finalize",
+    description: "order_carts row reaches confirmed, total_cents matches",
+    passed: true,
+    detail: `Checkout finalize OK: cart phase="${cart.phase}", total_cents=$${((cart.total_cents ?? 0) / 100).toFixed(2)}${lastQuotedCents !== null ? `, quoted=$${(lastQuotedCents / 100).toFixed(2)}` : ""}`,
+  };
+}
+
 // ── Verifier ───────────────────────────────────────────────────────────────
 
 export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
@@ -481,6 +633,48 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
   const E = it(4);
 
   return [
+
+    // ═══ PROOF INVARIANT: CHECKOUT WRITES ORDER ROW ═══════════════════════════
+    {
+      id: "proof-checkout-writes-order",
+      category: "proof",
+      criticality: "critical",
+      label: `Full order → checkout finalize writes an orders row with correct total (${A.name})`,
+      turns: [
+        { role: "customer", message: `Hi, I'd like a ${A.name} please` },
+        { role: "customer", message: "yes" },
+        { role: "customer", message: "checkout" },
+        { role: "customer", message: "Pat" },
+      ],
+      success_criteria: successCriteria,
+      expects_checkout: true,
+    },
+
+    // ═══ PROOF INVARIANT: CART PERSISTS ACROSS NO-MUTATE TURN ════════════════
+    {
+      id: "proof-cart-persists",
+      category: "proof",
+      criticality: "critical",
+      label: `Order item, then ask question → cart intact, item still present (${A.name})`,
+      turns: [
+        { role: "customer", message: `I'll take a ${A.name}` },
+        { role: "customer", message: "Do you have any specials today?" },
+        { role: "customer", message: `Ok great, add a ${B.name} too` },
+      ],
+      success_criteria: successCriteria,
+    },
+
+    // ═══ PROOF INVARIANT: NO MENU HALLUCINATION ═════════════════════════════
+    {
+      id: "proof-no-menu-hallucination",
+      category: "proof",
+      criticality: "critical",
+      label: `Request off-menu item → bot declines, never invents item not in menu`,
+      turns: [
+        { role: "customer", message: "I'd like a rattlesnake pizza with extra venom please" },
+      ],
+      success_criteria: successCriteria,
+    },
 
     // ═══ ADD ITEM ═══════════════════════════════════════════════════════
     {

@@ -78,11 +78,62 @@ function enforceSafetyGate(shop: { id: string; name: string; protected: boolean;
   }
 }
 
+// ── Timeout & retry harness ────────────────────────────────────────────────
+
+const DEFAULT_TURN_TIMEOUT_MS = 30_000;
+const DEFAULT_RETRIES = 2;
+const RETRY_BACKOFF_MS = 2_000;
+
+/** Promise-based timeout that rejects after `ms` with a specific message. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`harness-timeout: exceeded ${ms}ms`)), ms);
+    promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+/** Sleep helper for backoff. */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Wrap a fetch call with timeout + retries + backoff. */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_TURN_TIMEOUT_MS,
+  retries = DEFAULT_RETRIES,
+): Promise<Response> {
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const fetchInit = { ...init, signal };
+      const res: Response = await withTimeout(
+        fetch(url, fetchInit),
+        timeoutMs,
+      );
+      // Abort controller cleanup (resolve the race, not strictly needed but clean).
+      return res;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      if (attempt < retries) {
+        const backoff = RETRY_BACKOFF_MS * (attempt + 1);
+        console.warn(`  [retry] attempt ${attempt + 1}/${retries} after ${backoff}ms: ${lastErr.message.slice(0, 120)}`);
+        await sleep(backoff);
+      }
+    }
+  }
+  throw lastErr!;
+}
+
 // ── Bot Driver ─────────────────────────────────────────────────────────────
 
 /**
  * Send a web-chat message and get the JSON reply. Uses the SAME contract as
  * the admin chat-test: POST {shop_id, message, session_id} → {reply, cart, phase, session_id}.
+ *
+ * HARDENED (Proof Phase 1): 30s timeout + 2 retries with backoff per turn.
+ * No single turn can hang the run. Timeout is surfaced as "harness-timeout".
  */
 async function sendMessage(
   chatFunctionUrl: string,
@@ -105,7 +156,7 @@ async function sendMessage(
     delete requestBody.test;
   }
 
-  const res = await fetch(chatFunctionUrl, {
+  const res = await fetchWithRetry(chatFunctionUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -128,6 +179,100 @@ async function sendMessage(
 
   const data = await res.json();
   return data;
+}
+
+// ── Retry + Timeout Wrapper ────────────────────────────────────────────────
+
+const PROOF_TURN_TIMEOUT_MS = parseInt(Deno.env.get("PROOF_TURN_TIMEOUT_MS") ?? "30000", 10);
+const PROOF_MAX_RETRIES = 2;
+
+/**
+ * Wraps sendMessage with timeout + retry with backoff.
+ * On timeout after all retries, throws "harness-timeout" so the caller can
+ * mark the case FAILED and continue the run.
+ */
+async function sendMessageWithRetry(
+  chatFunctionUrl: string,
+  supabaseKey: string,
+  shopId: string,
+  message: string,
+  sessionId: string,
+  hoursMode?: "open" | "closed",
+  turnLabel?: string,
+): Promise<{ reply: string | null; cart?: unknown; phase?: string }> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= PROOF_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROOF_TURN_TIMEOUT_MS);
+
+    try {
+      const requestBody: Record<string, unknown> = {
+        shop_id: shopId,
+        message,
+        session_id: sessionId,
+        test: true,
+      };
+      if (hoursMode === "closed") {
+        requestBody.test_hours = "closed";
+        delete requestBody.test;
+      }
+
+      const res = await fetch(chatFunctionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`chat-sms returned ${res.status}: ${text.slice(0, 500)}`);
+      }
+
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("text/xml") || ct.includes("application/xml")) {
+        throw new Error("chat-sms returned TwiML (SMS path) — web-chat-test path unexpected");
+      }
+
+      const data = await res.json();
+      return data;
+    } catch (e) {
+      clearTimeout(timeoutId);
+      lastError = e instanceof Error ? e : new Error(String(e));
+
+      const isTimeout = e instanceof DOMException && e.name === "AbortError";
+      const label = turnLabel ? ` [${turnLabel}]` : "";
+
+      if (isTimeout) {
+        if (attempt < PROOF_MAX_RETRIES) {
+          const backoffMs = 1000 * (attempt + 1);
+          console.log(`  ⚠ turn${label} timed out (${PROOF_TURN_TIMEOUT_MS}ms), retry ${attempt + 1}/${PROOF_MAX_RETRIES} in ${backoffMs}ms...`);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        console.log(`  ✗ turn${label} timed out after ${PROOF_MAX_RETRIES + 1} attempts (${PROOF_TURN_TIMEOUT_MS}ms each)`);
+        throw new Error(`harness-timeout: turn${label} timed out after ${PROOF_MAX_RETRIES + 1} attempts`);
+      }
+
+      // Non-timeout errors: retry once, then give up
+      if (attempt < PROOF_MAX_RETRIES) {
+        const backoffMs = 1000 * (attempt + 1);
+        console.log(`  ⚠ turn${label} failed: ${lastError.message.slice(0, 80)}, retry ${attempt + 1}/${PROOF_MAX_RETRIES} in ${backoffMs}ms...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
+      }
+
+      throw lastError;
+    }
+  }
+
+  throw lastError ?? new Error("harness-timeout: unknown error");
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -172,15 +317,18 @@ async function runScriptedCase(
   const sessionId = `test-suite-${crypto.randomUUID()}`;
   const transcript: TurnResult[] = [];
 
-  for (const turn of testCase.turns) {
+  for (let ti = 0; ti < testCase.turns.length; ti++) {
+    const turn = testCase.turns[ti];
+    const turnLabel = `${testCase.id}:turn${ti + 1}/${testCase.turns.length}`;
     try {
-      const result = await sendMessage(
+      const result = await sendMessageWithRetry(
         config.chatFunctionUrl,
         config.serviceRoleKey,
         shopId,
         turn.message,
         sessionId,
         hoursMode,
+        turnLabel,
       );
 
       transcript.push({
@@ -191,17 +339,18 @@ async function runScriptedCase(
         phase: result.phase,
       });
     } catch (e) {
+      const errMsg = (e as Error).message;
       transcript.push({
         role: turn.role,
         message: turn.message,
-        reply: `[ERROR: ${(e as Error).message}]`,
+        reply: `[ERROR: ${errMsg}]`,
       });
       return {
         caseId: testCase.id,
         shopId,
         transcript,
         sessionId,
-        error: (e as Error).message,
+        error: errMsg,
       };
     }
   }
@@ -260,14 +409,16 @@ async function runConversationalCase(
     `(start a conversation as ${testCase.persona}, working toward: ${testCase.goal})`;
 
   for (let turn = 0; turn < testCase.max_turns; turn++) {
+    const turnLabel = `${testCase.id}:turn${turn + 1}/${testCase.max_turns}`;
     try {
-      const result = await sendMessage(
+      const result = await sendMessageWithRetry(
         config.chatFunctionUrl,
         config.serviceRoleKey,
         shopId,
         message,
         sessionId,
         hoursMode,
+        turnLabel,
       );
 
       transcript.push({
