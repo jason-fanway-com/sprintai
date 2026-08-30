@@ -260,6 +260,15 @@ deno run --allow-net --allow-env scripts/test-suite/segment-count.ts --live <sho
 ```
 See `BUILD-NOTES-payment-links-compliance-segments.md`.
 
+### Quick test runner
+
+```bash
+deno run --allow-net --allow-env scripts/test-suite/quick.ts
+```
+Runs ~25 fast, deterministic cases (21 CartOps + 1 hours-closed + 3 menu-checkout)
+against the deployed function on the live TEST shop. No LLM judge, no persist.
+~2–4 min. Exits 1 if any critical case fails.
+
 ### Netlify rewrites — payment short links
 
 `pay.getsprintai.com` is a domain alias on site `sprintai-dev` with a DNS
