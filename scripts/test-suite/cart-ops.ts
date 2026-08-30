@@ -412,9 +412,26 @@ const QUESTION_LEADERS = new Set([
   "would", "could", "can", "do", "does", "did", "are", "is", "was",
   "may", "should", "shall", "will", "your", "any",
 ]);
-function isQuestionOrFragment(claimed: string): boolean {
-  const first = claimed.split(/\s+/)[0] ?? "";
-  return QUESTION_LEADERS.has(first);
+
+/** Acknowledgement/discourse words that the bot uses after "got it —"
+ * to acknowledge/modify the user's request. These are NOT item claims. */
+const ACKNOWLEDGMENT_LEADERS = new Set([
+  "no", "noted", "noting", "yes", "okay", "ok", "sure",
+  "also", "and", "anything", "nothing",
+]);
+
+export function isQuestionOrFragment(claimed: string): boolean {
+  const words = claimed.split(/\s+/);
+  const first = words[0] ?? "";
+  // Question-leader words
+  if (QUESTION_LEADERS.has(first)) return true;
+  // Acknowledgement/discourse phrases ("noted provolone", "no toasting")
+  if (ACKNOWLEDGMENT_LEADERS.has(first)) return true;
+  // Sentence punctuation mid-string — real item names never contain these
+  if (/[.?!]/.test(claimed)) return true;
+  // Word count > 4 — real item names are ≤4 words ("no toasting. Anything else I can add" = 7)
+  if (words.length > 4) return true;
+  return false;
 }
 
 /** Check if a normalized claimed item name matches any menu entry. */
