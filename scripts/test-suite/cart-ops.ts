@@ -428,15 +428,35 @@ function menuNameCheck(claimed: string, menuNorm: Map<string, string>): boolean 
     if (mnWords.length >= 2 && mnWords.every(w => claimed.includes(w))) return true;
   }
   // Distinctive-token match: the bot may abbreviate a real item ("Cina-Sug
-  // Loukoumades" for "Cinnamon Sugar Loukoumades"). If the claim shares a
-  // distinctive token (len >= 6) with any menu name, treat as real. A fully
-  // invented item (e.g. "Lobster Roll", "Pterodactyl Wing") shares no such
+  // Loukoumades" for "Cinnamon Sugar Loukoumades" or "BOBO" for "BOBO
+  // Sandwich"). If the claim shares a distinctive token with any menu name,
+  // treat as real. A fully invented item (e.g. "Lobster Roll") shares no such
   // token and is still correctly flagged.
-  const claimedTokens = new Set(claimed.split(/[\s-]+/).filter(w => w.length >= 6));
-  if (claimedTokens.size > 0) {
-    for (const mn of menuNorm.keys()) {
-      for (const w of mn.split(/[\s-]+/)) {
-        if (w.length >= 6 && claimedTokens.has(w)) return true;
+  //
+  // Strategy: strip stop words, then:
+  //   - tokens >= 6 chars match anywhere in the menu item (original rule).
+  //   - tokens 3-5 chars use prefix matching against the first TWO meaningful
+  //     menu tokens ("bobo" → "BOBO Sandwich", "ec" → "EC Everything").
+  //   - short alphanumeric tokens also match menu-item initials ("bec" →
+  //     Bacon Egg Cheese), so patrons' casual acronyms resolve correctly.
+  // Skip tokens < 3 chars to avoid false positives on "ny", "ec", etc.
+  const STOP_WORDS = new Set([
+    "the","a","an","and","or","of","in","on","it","is","my","to",
+    "for","with","its","at","by","from","as",
+  ]);
+  const claimedTokens = claimed.split(/[\s-]+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+  if (claimedTokens.length === 0) return false;
+  for (const mn of menuNorm.keys()) {
+    const mnTokens = mn.split(/[\s-]+/).filter(w => !STOP_WORDS.has(w));
+    for (const ct of claimedTokens) {
+      const limit = ct.length >= 6 ? mnTokens.length : Math.min(2, mnTokens.length);
+      for (let i = 0; i < limit; i++) {
+        if (mnTokens[i].startsWith(ct)) return true;
+      }
+      // Acronym match ("bec" → Bacon Egg Cheese)
+      if (ct.length >= 3 && ct.length <= 5 && /^[a-z]+$/.test(ct) && mnTokens.length >= 2) {
+        const initials = mnTokens.map(w => w[0] ?? "").join("");
+        if (initials === ct) return true;
       }
     }
   }

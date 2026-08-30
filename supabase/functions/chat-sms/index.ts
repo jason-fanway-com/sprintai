@@ -1362,9 +1362,14 @@ async function runOrderingLoop(
       // the cross-turn case that the same-turn B3 guard misses. Suppress
       // clear_cart when: (a) user message is additive AND (b) cart has items.
       // Explicit "start over"/"cancel everything" still clears normally.
+      // ── E1 FIX (2026-09-01): Broaden isExplicitRestart to catch messages
+      // that CONTAIN a cancel/restart phrase (e.g. "Actually, cancel my order")
+      // — the anchored ^…$ pattern missed these. The broader check uses a
+      // second non-anchored regex so "actually" + "cancel my order" passes.
       if (toolBlock.name === "clear_cart" && cart.length > 0) {
         const e1msg = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        const isExplicitRestart = /^(start over|restart|cancel (?:everything|all|the order|it all)|new order|clear (?:the cart|it all|everything)|reset|wipe (?:the cart|it|everything))[!.]?$/i.test(e1msg);
+        const isExplicitRestart = /^(start over|restart|cancel (?:everything|all|the order|it all|my order)|new order|clear (?:the cart|it all|everything)|reset|wipe (?:the cart|it|everything))[!.]?$/i.test(e1msg)
+          || /\b(?:cancel\s+(?:my\s+)?order|cancel\s+(?:everything|all|it\s+all)|forget\s+(?:it|the whole|everything)|start\s+over|wipe\s+(?:the\s+)?(?:cart|it|everything|all))\b/i.test(e1msg);
         const isAdditive = /\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(e1msg);
         if (isAdditive && !isExplicitRestart) {
           console.warn(`[chat-sms] E1 GUARD: suppressed clear_cart — additive user intent (conv=${conversation.id}, cart has ${cart.length} items). Message: ${JSON.stringify(userMessage).slice(0, 120)}`);
