@@ -345,10 +345,12 @@ export function verifyHallucinationGuard(
     }
 
     // ── Pattern 1c: "got it — X ItemName" / "got it, X ItemName" ──
-    const gotPat = /(?:got it|gotcha|you got it|sure thing)[!.,\s—-]+(?:(?:\d+x?\s+)|(?:\ba\s+))?([A-Z][A-Za-z\s'&.()/-]{4,60}?)(?:\s+(?:added|is|coming|will|for|and|,|\.|$|at|\$))/gi;
+    const gotPat = /(?:got it|gotcha|you got it|sure thing)[!.,\s—-]+(?:(?:\d+x?\s+)|(?:\ba\s+)|(?:\bone\s+))?([A-Z][A-Za-z\s'&.()/-]{4,60}?)(?:\s+(?:added|is|coming|will|for|and|,|\.|$|at|\$))/gi;
     while ((m = gotPat.exec(reply)) !== null) {
       const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
+      // Skip question/sentence fragments captured after "got it —" (not item claims)
+      if (isQuestionOrFragment(claimedName)) continue;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${m[1].trim()}" claimed via "got it X": "${reply.slice(0, 80)}..."`);
       }
@@ -402,6 +404,19 @@ export function verifyHallucinationGuard(
   };
 }
 
+/** Leading interrogatives / helper verbs that mark a captured phrase as a
+ * question or sentence fragment, not an item claim (e.g. "What name should
+ * I put this order under"). */
+const QUESTION_LEADERS = new Set([
+  "what", "where", "when", "how", "which", "who", "why", "whose",
+  "would", "could", "can", "do", "does", "did", "are", "is", "was",
+  "may", "should", "shall", "will", "your", "any",
+]);
+function isQuestionOrFragment(claimed: string): boolean {
+  const first = claimed.split(/\s+/)[0] ?? "";
+  return QUESTION_LEADERS.has(first);
+}
+
 /** Check if a normalized claimed item name matches any menu entry. */
 function menuNameCheck(claimed: string, menuNorm: Map<string, string>): boolean {
   if (menuNorm.has(claimed)) return true;
@@ -411,6 +426,19 @@ function menuNameCheck(claimed: string, menuNorm: Map<string, string>): boolean 
   for (const mn of menuNorm.keys()) {
     const mnWords = mn.split(/\s+/);
     if (mnWords.length >= 2 && mnWords.every(w => claimed.includes(w))) return true;
+  }
+  // Distinctive-token match: the bot may abbreviate a real item ("Cina-Sug
+  // Loukoumades" for "Cinnamon Sugar Loukoumades"). If the claim shares a
+  // distinctive token (len >= 6) with any menu name, treat as real. A fully
+  // invented item (e.g. "Lobster Roll", "Pterodactyl Wing") shares no such
+  // token and is still correctly flagged.
+  const claimedTokens = new Set(claimed.split(/[\s-]+/).filter(w => w.length >= 6));
+  if (claimedTokens.size > 0) {
+    for (const mn of menuNorm.keys()) {
+      for (const w of mn.split(/[\s-]+/)) {
+        if (w.length >= 6 && claimedTokens.has(w)) return true;
+      }
+    }
   }
   return false;
 }
