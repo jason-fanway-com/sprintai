@@ -828,7 +828,7 @@ async function executeTool(
               description: r.modifiers?.length > 0 ? r.modifiers.join(", ") : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(', ')}`).join('; ') : undefined),
             },
           },
-          quantity: r.quantity,
+          quantity: r.quantity || 1,
         };
       });
 
@@ -2275,7 +2275,7 @@ async function handleSystemEvent(
               return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
             }
             const r = i as CartItem;
-            const linePrice = r.price_cents != null ? `$${(((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
+            const linePrice = r.price_cents != null ? `$${((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
             const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
             const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
             const detail = [...new Set([...mods, ...opts])].join(", ");
