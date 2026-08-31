@@ -88,6 +88,7 @@ interface CartItem {
   price_cents:  number;
   modifiers:    string[];
   options?:     Record<string, string[]>;
+  pending_options?: string[];  // option group names not yet chosen (required groups with no selection)
 }
 
 interface BundleItem {
@@ -562,7 +563,7 @@ RULES:
 - Never state the number of available flavors or menu items. If asked what flavors are available, just list them without counting.
 - NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
 - NEVER ask "are you ordering individual bagels or a bundle?" If the customer already said "a dozen" or you started a bundle, they are ordering a bundle. Period.
-- REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), you MUST ask the customer for their choices BEFORE calling add_item. Example: "What kind of bread -- roll, bagel, or english muffin?" Keep it casual like a real deli counter. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
+- REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), call add_item IMMEDIATELY for the item — even if you don't yet know the required option. The system will accept the item and store the missing option as pending. In the SAME reply, casually ask the customer for the missing choice(s) — e.g. "What kind of meat on that gyro — beef or chicken?" The item is already in the cart at its base price; the option surcharge applies once chosen. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
 - OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
 - OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
 - EXACT-NAME MATCHING: When a customer orders a menu item by its EXACT name (e.g. "Pumpernickel Bagel", "Everything Bagel", "Bagel with Jelly"), acknowledge it and add it immediately. Do NOT ask about cream cheese, butter, or other add-ons that are SEPARATE menu items in the "Bagel With" or "Cream Cheese Spread" categories. A plain bagel is a complete order at its listed price. Only ask about add-ons if the customer explicitly asks for a variation ("with cream cheese") or if the item has modifiers the customer must choose.
@@ -666,12 +667,15 @@ async function executeTool(
       }, 0);
 
       let extraCents = 0;
+      const pending: string[] = [];
 
       for (const group of itemGroups) {
         const selections = inputOptions[group.name] || [];
         if (group.required && selections.length === 0) {
-          const choiceNames = group.choices.map(c => c.name).join(', ');
-          return { ok: false, result: { error: `"${group.name}" is required for ${menuItem.name}. Options: ${choiceNames}. Ask the customer which they want.` } };
+          // Required option not yet chosen — mark pending instead of rejecting.
+          // Item enters cart at base price; surcharge applies when option is resolved.
+          pending.push(group.name);
+          continue;
         }
         if (selections.length > group.max_select) {
           return { ok: false, result: { error: `"${group.name}" allows max ${group.max_select} selection(s), got ${selections.length}.` } };
@@ -688,6 +692,7 @@ async function executeTool(
 
       // Dedup: normalize empty options to undefined for comparison
       const normalizedOptions = Object.keys(inputOptions).length > 0 ? inputOptions : undefined;
+      // Match on menu_item_id + options; merge pending_options when stacking quantity
       const existing = cart.findIndex(i =>
         (i as CartItem).menu_item_id === menu_item_id &&
         JSON.stringify((i as CartItem).options ?? undefined) === JSON.stringify(normalizedOptions)
@@ -696,8 +701,14 @@ async function executeTool(
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
         (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
+        // Merge pending_options — resolve any that now have selections
+        const existingPending = (cart[existing] as CartItem).pending_options || [];
+        const mergedPending = [...new Set([...existingPending, ...pending])].filter(
+          p => !(inputOptions[p] && inputOptions[p].length > 0)
+        );
+        (cart[existing] as CartItem).pending_options = mergedPending.length > 0 ? mergedPending : undefined;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -758,6 +769,11 @@ async function executeTool(
           return sum + (mod?.price_cents ?? 0);
         }, 0);
         (cart[idx] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
+        // Recompute pending_options: any required group still without a selection stays pending
+        const newPending = (menuItem.option_groups || [])
+          .filter(g => g.required && (!newOptions || !newOptions[g.name] || newOptions[g.name].length === 0))
+          .map(g => g.name);
+        (cart[idx] as CartItem).pending_options = newPending.length > 0 ? newPending : undefined;
       }
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity, price: (cart[idx] as CartItem).price_cents } };
@@ -778,6 +794,19 @@ async function executeTool(
       if (incompleteBundle) {
         const filled = incompleteBundle.selections.reduce((s, sel) => s + sel.quantity, 0);
         return { ok: false, result: { error: `Cannot submit. Bundle "${incompleteBundle.name}" is still in progress (${filled} of ${incompleteBundle.target} selected). Finish or cancel the bundle first.` } };
+      }
+      // Cart-population fix: reject submit_order if any item has unresolved required options.
+      // Deterministic — no LLM loop. The error message names the item + missing option groups
+      // so the bot asks once and the customer resolves with modify_item.
+      const itemsWithPending = cart
+        .filter(i => (i as CartItem).pending_options && (i as CartItem).pending_options!.length > 0)
+        .map(i => {
+          const r = i as CartItem;
+          const missing = r.pending_options!.join(', ');
+          return `${r.name} (needs: ${missing})`;
+        });
+      if (itemsWithPending.length > 0) {
+        return { ok: false, result: { error: `Cannot submit yet — these items still need options chosen: ${itemsWithPending.join('; ')}. Ask the customer for each missing option, then use modify_item to set them.` } };
       }
       const { pickup_name } = input as { pickup_name?: string };
       // C1 (2026-08-28): Deterministic hard gate — pickup_name is required for submit_order.
