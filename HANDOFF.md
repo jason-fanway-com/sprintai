@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -83,24 +83,31 @@ sprintai-ordering/
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
 │   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–066)
+│   └── migrations/           # SQL migrations (001–069)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
 │   ├── check-issues.sh       # Issue monitoring helper
+│   ├── create-qa-twin.py     # Clone any shop as QA twin for Proof testing
+│   ├── create-vitos-pizza-demo.py  # Create Vito's Pizza demo from Jack's Slice CSV
 │   └── test-suite/           # Per-shop conversation QA suite
 │       ├── run.ts            # CLI driver (generates, runs, judges, fixes, persists)
 │       ├── generator.ts      # Auto-generates menu-derived cases per shop
 │       ├── library.ts        # 15 conversational multi-turn + 16 adversarial cases
-│       ├── runner.ts         # Web/simulated multi-turn driver with safety gate
+│       ├── runner.ts         # Web/simulated multi-turn driver with timeout+retry
 │       ├── judge.ts          # Rubric judge — grades full transcripts
 │       ├── scorecard.ts      # Aggregate scoring (≥95% pass, 100% critical)
 │       ├── fix.ts            # LLM root-cause + proposed-fix generator for failures
 │       ├── persist.ts        # Writes results to test_runs / test_case_results
-│       ├── cart-ops.ts       # Shop-aware CartOps battery (100% gate, real menu)
+│       ├── cart-ops.ts       # Shop-aware CartOps battery + Proof invariants (P1/P2/P3)
 │       ├── hours-closed.ts   # Deterministic closed-hours gate case
+│       ├── proof.ts          # Deterministic acceptance engine (100% gate)
+│       ├── quick.ts          # Fast 25-case deterministic runner (~2–4 min)
+│       ├── alias-unit.ts     # Alias resolution regression coverage
+│       ├── verify-cycle-4.ts # Cycle 4 verification suite
 │       └── worker.ts         # launchd worker — drains test_run_queue (onboarding QA)
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
+├── vitos-demo.html            # Vito's Pizza demo page (self-serve, QR-coded)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/
 │   └── functions/            # Netlify serverless functions
@@ -160,6 +167,16 @@ sprintai-ordering/
     that every owner-facing page uses to self-scope to the correct tenant
     (owner's own, super-admin's preview, or null = global). This is the shared-
     dashboard design: one page serves both roles, scoping at query time.
+13. `scripts/test-suite/proof.ts` — deterministic acceptance engine. Per-shop
+    battery of real order conversations graded by code invariants only (never
+    an LLM judging an LLM). 100% pass or the shop does not go live.
+14. `scripts/create-qa-twin.py` — clone any shop as an unprotected, phone-less,
+    is_test=true twin for safe Proof testing. Uses import-menu-csv for identical
+    menu. Idempotent.
+15. `docs/specs/2026-08-30-proof-acceptance-engine.md` — Proof architecture and
+    acceptance criteria.
+16. `docs/specs/2026-08-30-orderbrain-deterministic-render.md` — OrderBrain
+    Phase A: money/status lines code-rendered from Ledger, never LLM prose.
 
 ---
 

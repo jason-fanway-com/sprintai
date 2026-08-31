@@ -43,6 +43,10 @@ export interface TestCase {
   success_criteria: SuccessCriterion[];
   /** Meta: whether this case expects a checkout URL to be generated. */
   expects_checkout?: boolean;
+  /** Test hours mode: "open" (default) or "closed". */
+  hoursMode?: "open" | "closed";
+  /** Expected item subtotal in cents for deterministic total-verification override (menu-derived cases only). */
+  expectedItemCents?: number;
 }
 
 export interface ConversationalCase {
@@ -64,6 +68,8 @@ export interface ConversationalCase {
   seed_message?: string;
   /** What the judge must verify against the full transcript. */
   success_criteria: SuccessCriterion[];
+  /** Test hours mode: "open" (default) or "closed". */
+  hoursMode?: "open" | "closed";
 }
 
 /** Union type carried through the runner/judge/scorecard pipeline. */
@@ -504,14 +510,14 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     category: "conversational",
     criticality: "normal",
     label: "Off-menu special request declined gracefully",
-    persona: "Customer with a very specific craving that this bagel shop can't fulfill. You want sushi.",
-    goal: "Ask for a California roll. Bot should politely decline, suggest bagels/sandwiches instead. Accept the suggestion and order a BLT ($8.95).",
+    persona: "Customer with a very specific craving that this shop can't fulfill. You want something the shop definitely doesn't make.",
+    goal: "Ask for sushi (California roll). Bot should politely decline and suggest something from the real menu. Accept one of the bot's suggestions and order it.",
     max_turns: 4,
     seed_message: "Do you guys make California rolls?",
     success_criteria: [
-      { id: "polite_no", description: "Bot politely says no, doesn't invent sushi", check_id: "invented_item" },
-      { id: "offers_alternatives", description: "Bot suggests items from the real menu", check_id: "missed_upsell" },
-      { id: "order_proceeds_after", description: "Customer orders a BLT after the redirect", check_id: "order_not_completed" },
+      { id: "polite_no", description: "Bot politely says no, doesn't invent a California roll", check_id: "invented_item" },
+      { id: "offers_alternatives", description: "Bot suggests items from the real menu (not a bland 'no')", check_id: "cold_tone" },
+      { id: "order_proceeds_after", description: "Customer can order something after the redirect", check_id: "order_not_completed" },
     ],
   },
   {

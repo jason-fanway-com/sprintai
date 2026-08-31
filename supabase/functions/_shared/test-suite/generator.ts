@@ -11,7 +11,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { LIBRARY_CASES, CONVERSATIONAL_CASES, type TestCase, type ConversationalCase, type AnyCase, type Turn, type SuccessCriterion } from "./library.ts";
-// NOTE: this is the edge-function copy at _shared/test-suite/library.ts
+import { buildCartOpsCases } from "./cart-ops.ts";
+import { HOURS_CLOSED_CASES } from "./hours-closed.ts";
 
 // ── DB Types ────────────────────────────────────────────────────────────────
 
@@ -78,11 +79,13 @@ function singleItem(items: MenuItemRow[], offset: number, counter: number): Test
       { id: "item_recognized", description: `Bot recognizes "${item.name}"`, check_id: "invented_item" },
       { id: "correct_price", description: `Bot acknowledges ${price}`, check_id: "wrong_total" },
     ],
+    expectedItemCents: item.price_cents,
   };
 }
 
 function twoItems(items: MenuItemRow[], offset: number, counter: number): TestCase {
   const [a, b] = pickItems(items, 2, offset);
+  const sum = a.price_cents + b.price_cents;
   const total = priceTotal(a.price_cents, b.price_cents);
   return {
     id: `menu-two-${counter}`,
@@ -94,11 +97,13 @@ function twoItems(items: MenuItemRow[], offset: number, counter: number): TestCa
       { id: "both_recognized", description: `Bot recognizes both items`, check_id: "ignored_modifier" },
       { id: "correct_total", description: `Total ~${total} plus service fee`, check_id: "wrong_total" },
     ],
+    expectedItemCents: sum,
   };
 }
 
 function threeItems(items: MenuItemRow[], offset: number, counter: number): TestCase {
   const [a, b, c] = pickItems(items, 3, offset);
+  const sum = a.price_cents + b.price_cents + c.price_cents;
   const total = priceTotal(a.price_cents, b.price_cents, c.price_cents);
   return {
     id: `menu-three-${counter}`,
@@ -110,6 +115,7 @@ function threeItems(items: MenuItemRow[], offset: number, counter: number): Test
       { id: "all_recognized", description: `Bot recognizes all 3 items`, check_id: "lost_cart" },
       { id: "correct_total", description: `Total ~${total} plus service fee`, check_id: "wrong_total" },
     ],
+    expectedItemCents: sum,
   };
 }
 
@@ -120,6 +126,7 @@ function withModifier(items: MenuItemRow[], offset: number, counter: number): Te
   const item = modItems[offset % modItems.length];
   const mods = item.modifiers_json!;
   const mod = mods[offset % mods.length];
+  const sum = item.price_cents + mod.price_cents;
   const total = priceTotal(item.price_cents, mod.price_cents);
   return {
     id: `menu-modifier-${counter}`,
@@ -131,6 +138,7 @@ function withModifier(items: MenuItemRow[], offset: number, counter: number): Te
       { id: "modifier_applied", description: `Bot recognizes modifier "${mod.name}"`, check_id: "ignored_modifier" },
       { id: "correct_price", description: `Total reflects base + modifier`, check_id: "wrong_total" },
     ],
+    expectedItemCents: sum,
   };
 }
 
@@ -155,6 +163,7 @@ function checkoutFlow(items: MenuItemRow[], offset: number, counter: number): Te
       { id: "no_wrong_price", description: "Price is correct", check_id: "wrong_total" },
     ],
     expects_checkout: true,
+    expectedItemCents: item.price_cents,
   };
 }
 
@@ -531,8 +540,10 @@ export interface GenerateCasesResult {
   shop: { id: string; name: string; tenant_id: string };
   menuItemCount: number;
   libraryCount: number;
+  cartOpsCount: number;
   conversationalCount: number;
   derivedCount: number;
+  hoursClosedCount: number;
 }
 
 /** Optional helper to avoid duplicates while building */
@@ -564,12 +575,14 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
 
   if (!menu) {
     return {
-      cases: [...LIBRARY_CASES, ...CONVERSATIONAL_CASES],
+      cases: [...LIBRARY_CASES, ...buildCartOpsCases([]), ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
       shop: { id: shop.id, name: shop.name, tenant_id: shop.tenant_id },
       menuItemCount: 0,
       libraryCount: LIBRARY_CASES.length,
+      cartOpsCount: 0,
       conversationalCount: CONVERSATIONAL_CASES.length,
       derivedCount: 0,
+      hoursClosedCount: HOURS_CLOSED_CASES.length,
     };
   }
 
@@ -623,6 +636,9 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
   // Checkout flows
   pushCase(derivedCases, checkoutFlow(orderPool, 0, ctr++));
   pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(orderPool.length / 3), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(orderPool.length / 2), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(2 * orderPool.length / 3), ctr++));
+  pushCase(derivedCases, checkoutFlow(orderPool, Math.floor(3 * orderPool.length / 4), ctr++));
 
   // Greeting + order
   pushCase(derivedCases, greetingThenOrder(orderPool, 0, ctr++));
@@ -674,12 +690,17 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
     fillCtr++;
   }
 
+  // ═══ CartOps cases (shop-aware, built from real menu items) ══════════
+  const cartOpsCases = buildCartOpsCases(activeItems);
+
   return {
-    cases: [...derivedCases, ...LIBRARY_CASES, ...CONVERSATIONAL_CASES],
+    cases: [...derivedCases, ...LIBRARY_CASES, ...cartOpsCases, ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
     shop: { id: shop.id, name: shop.name, tenant_id: shop.tenant_id },
     menuItemCount: activeItems.length,
     libraryCount: LIBRARY_CASES.length,
+    cartOpsCount: cartOpsCases.length,
     conversationalCount: CONVERSATIONAL_CASES.length,
     derivedCount: derivedCases.length,
+    hoursClosedCount: HOURS_CLOSED_CASES.length,
   };
 }
