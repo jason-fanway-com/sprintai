@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -71,6 +71,30 @@ build (`shop-chat/dist/` → `public/chat/`). Nothing from `supabase/`,
 `admin-dashboard/`, `_proof/`, or `specs/` reaches the public origin.
 
 **To deploy the public site:** push to `main`. Done.
+
+#### When a build is skipped by the ignore rule
+
+A commit that touches ONLY paths that never reach the root origin
+(`*.md`, `docs/`, `_proof/`, `admin-dashboard/`, `supabase/`, `*.htmltext`)
+is skipped by `scripts/netlify-ignore-build.sh` (declared as
+`ignore =` in `[build]`). The Netlify deploy log shows the ignore
+command output — a skip prints `"only off-origin paths changed —
+skipping build"` and lists the changed files. A build prints
+`"<file> can affect the origin — building"`. No deploy notification
+is sent for skipped builds.
+
+**To force a build** for a commit that would normally be skipped:
+- Include a file that IS on the origin (e.g. add a comment to
+  `index.html`).
+- Or trigger a manual deploy from Netlify's dashboard (Retry
+  deploy → Clear cache and deploy — this clears `CACHED_COMMIT_REF`,
+  which forces the script to build because it can't determine what
+  changed).
+- Or push to a branch and open a deploy preview (previews always
+  build).
+
+See `BUILD-NOTES-netlify-build-credits.md` for the full rationale
+and the off-origin path list.
 
 ### Admin dashboard (manual deploy)
 
@@ -219,6 +243,38 @@ shop's real menu items, not hardcoded references. Success → `done`; failure �
 launchd does not inherit shell env, so the worker reads empty keys and error-
 loops without it.
 
+### Proof acceptance engine (deterministic go-live gate)
+
+The Proof engine (`scripts/test-suite/proof.ts <shop_id>`) is a **parallel**,
+**deterministic** acceptance path separate from the LLM-judged suite. It runs
+a battery of real order conversations against a shop's own menu and grades
+every case with code-based invariants only — **never an LLM judging an LLM.**
+Cart state, totals, checkout finalization, and menu grounding are all verified
+deterministically from `cart_json` and the database. Exit 0 iff 100% pass.
+
+Proof is the pre-launch guarantee: an owner gets Proofed before go-live and the
+report shows that every money-path case passed against their exact menu.
+
+Key files: `proof.ts` (entrypoint), `cart-ops.ts` (Proof invariants P1/P2/P3,
+claim-first hallucination guard, verifyCartPersistence), `runner.ts` (hardened
+with 30s/turn timeout + 2 retries + backoff — never hangs the whole run).
+An LLM fix script (`fix.ts`) auto-generates root-cause analysis for failures.
+Spec: `docs/specs/2026-08-30-proof-acceptance-engine.md`.
+
+### QA-twin creator
+
+`scripts/create-qa-twin.py` clones any shop as an unprotected, phone-less,
+is_test=true twin for Proof suite testing — same menu (imported via
+import-menu-csv Edge Function), separate tenant, no risk to the real shop.
+Idempotent: if the twin exists it reports status and exits 0.
+
+```bash
+python3 scripts/create-qa-twin.py <source_slug> <twin_slug> <twin_name> [menu_csv_path]
+```
+
+First use: Vito's Pizza QA twin (`vitos-pizza-qa`), 128 cases generated, all
+passed safety-gate rejection.
+
 ### Payments (Stripe Connect)
 
 Model: **Direct charges** on the restaurant's connected account. Sprint takes a
@@ -267,7 +323,9 @@ deno run --allow-net --allow-env scripts/test-suite/quick.ts
 ```
 Runs ~25 fast, deterministic cases (21 CartOps + 1 hours-closed + 3 menu-checkout)
 against the deployed function on the live TEST shop. No LLM judge, no persist.
-~2–4 min. Exits 1 if any critical case fails.
+~2–4 min. Exits 1 if any critical case fails. Money amounts are parsed via
+`findQuotedTotal` with connector-tolerant regex and largest-amount fallback to
+avoid the $0.99 service fee misread.
 
 ### Netlify rewrites — payment short links
 
@@ -346,6 +404,17 @@ notified without a corresponding issue.
 | `eval-sweep` | Conversation Judge — automated quality scoring | No |
 | `issue-detector` | Issue detection from evals (3 severity tiers) | No |
 
+### Testing & QA
+| Script | Purpose |
+|--------|---------|
+| `test-suite/quick.ts` | 25 fast deterministic cases (no LLM judge, no persist, ~2–4 min) |
+| `test-suite/proof.ts` | Deterministic acceptance engine — 100% pass or shop doesn't go live |
+| `test-suite/cart-ops.ts` | Adversarial CartOps battery + Proof invariants (shop-aware, real menu) |
+| `test-suite/fix.ts` | LLM root-cause + proposed-fix generator for failing cases |
+| `test-suite/worker.ts` | launchd worker — drains `test_run_queue` (onboarding QA) |
+| `create-qa-twin.py` | Clone any shop as unprotected/phone-less twin for safe Proof testing |
+| `create-vitos-pizza-demo.py` | Create Vito's Pizza demo shop from Jack's Slice CSV |
+
 ### Shared libraries (`_shared/`)
 | File | Purpose |
 |------|---------|
@@ -357,6 +426,7 @@ notified without a corresponding issue.
 | `judge-rubric.ts` | Conversation Judge rubric (single source of truth) |
 | `judge-notify.ts` | Judge digest → Telegram notification |
 | `judge-autofix.ts` | Auto-fix seam (OFF by default) |
+| `telnyx.ts` | Telnyx API helpers, messaging profile creation, number assignment |
 
 ---
 
@@ -509,13 +579,36 @@ Phase 2 merchant identity verification.
       pickup/delivery questions from the reply.
     - E1 (cross-turn `clear_cart` guard): suppress `clear_cart` when user
       message has additive intent (also, and a, etc.) and cart has items.
+      Also recognizes restart intent anywhere in the message (not just
+      anchored ^...$) — e.g. "Actually, cancel my order" clears the cart
+      even when the leading word is additive.
     - C2 (name→submit shortcut): when the last assistant message asked for
       pickup name and the customer's next message looks like a short name
       and the cart is submittable, bypass LLM entirely and call
       `submit_order` directly — prevents LLM hallucination (doubling cart
       via spurious `add_item`) on the pickup-name turn.
+    - P1 (checkout-writes-order): force `submit_order` when cart is
+      submittable and the model signals checkout intent — the server writes
+      the `orders` row, server recomputes total, never the model.
+    - P2 (cart-persistence): if the cart silently resets mid-conversation
+      (model hallucinates a clear), restore `cart_json` from the pre-turn
+      snapshot. The guard re-snapshots after correction blocks so the
+      restored state is post-correction truth, not stale pre-correction.
+    - P3 (no-menu-hallucination): strip LLM-prose mentions of items not
+      on the shop's actual menu. Now backed by claim-first detection —
+      scans replies for product-claim patterns and validates against
+      the effective menu, with distinctive-token fuzzy matching, question-
+      word exclusion, and ack-leader filtering to avoid false positives.
     These are code-path intercepts, not prompt-preference — they fire
     deterministically regardless of what the LLM intended.
+
+    **OrderBrain Phase A — deterministic Ledger render (2026-08-30).**
+    Money and status lines (subtotal, fee, total, item count, checkout status)
+    are now code-rendered from Ledger state rather than emitted as free-form
+    LLM prose. `renderLedgerFooter()` appends the deterministic lines;
+    `stripLlmMoneyLines()` removes any model-generated duplicates. The LLM
+    handles conversation only — the Ledger owns every number the customer
+    sees. Spec: `docs/specs/2026-08-30-orderbrain-deterministic-render.md`.
 
 14. **Customer-question precedence (chat-sms)**: The bot answers direct
     customer questions (e.g. "do you have gluten-free bagels?") before

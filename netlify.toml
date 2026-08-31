@@ -7,8 +7,24 @@
   publish   = "public"
   functions = "netlify/functions"
 
+  # Skip the build entirely when a commit touches only paths that never reach
+  # the origin (build notes, docs/, _proof/, supabase/ functions,
+  # admin-dashboard/ — the last two deploy elsewhere). exit 0 = skip.
+  # Measured against Aug 19–31: 33 of 67 commits would have skipped.
+  # The script fails OPEN — any doubt and it builds.
+  ignore = "bash scripts/netlify-ignore-build.sh"
+
 [functions]
   node_bundler = "esbuild"
+
+# Cache the shop-chat PWA's dependencies between builds. Netlify only
+# auto-caches node_modules at the base directory, so the nested
+# `cd shop-chat && npm install` in build-public-site.sh currently pays for a
+# cold React + Vite + Tailwind install on EVERY build.
+[[plugins]]
+  package = "netlify-plugin-cache"
+  [plugins.inputs]
+    paths = ["shop-chat/node_modules"]
 
 # Redirect /webhook → Netlify function (cleaner URL for Stripe dashboard)
 [[redirects]]
