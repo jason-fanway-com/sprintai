@@ -600,10 +600,24 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
   // are NOT valid standalone orders — the bot correctly treats them as add-ons
   // requiring a base item. Exclude them from single/multi-item happy-path
   // cases so we don't generate cases the product is right to decline.
+  //
+  // Fix 520 (2026-09-01): Also exclude items whose names match a free modifier
+  // ($0 price) on another item — those are add-ons, not orderable standalones.
+  // "Ranch" is the motivating example: it's a $0 modifier, not a standalone menu item.
+  const freeModifierNames = new Set<string>();
+  for (const item of activeItems) {
+    for (const m of (item.modifiers_json ?? [])) {
+      if (!m.price_cents || m.price_cents === 0) {
+        freeModifierNames.add(m.name.toLowerCase().trim());
+      }
+    }
+  }
   const orderableItems = activeItems.filter((i) => {
     const cat = (i.category ?? "").toLowerCase();
     if (cat === "extras & add-ins" || cat === "sides") return false;
     if (/additional topping\/sauce\/filling/i.test(i.name)) return false;
+    // Exclude items that are free modifiers on other items (like "Ranch")
+    if (freeModifierNames.has(i.name.toLowerCase().trim())) return false;
     return true;
   });
   // Fall back to all items if filtering emptied the pool (tiny menus).

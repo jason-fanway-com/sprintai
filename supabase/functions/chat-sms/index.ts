@@ -448,9 +448,23 @@ function buildSystemPrompt(
     if (!menuByCategory[cat]) menuByCategory[cat] = [];
     menuByCategory[cat].push(item);
   }
+  // Detect same-name across categories for disambiguation in prompt.
+  const nameAppearances = new Map<string, number>();
+  for (const [, items] of Object.entries(menuByCategory)) {
+    for (const item of items) {
+      const norm = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      nameAppearances.set(norm, (nameAppearances.get(norm) || 0) + 1);
+    }
+  }
+  const duplicatedNames = new Set([...nameAppearances.entries()].filter(([,c]) => c > 1).map(([n]) => n));
+
   const menuStr = Object.entries(menuByCategory)
     .map(([cat, items]) => {
       const rows = items.map(item => {
+        const norm = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+        const label = duplicatedNames.has(norm)
+          ? `${item.name} (${cat})`
+          : item.name;
         const price = `$${(item.price_cents / 100).toFixed(2)}`;
         const desc  = item.description ? ` - ${item.description}` : "";
         const groups = item.option_groups || [];
@@ -459,10 +473,10 @@ function buildSystemPrompt(
             const reqLabel = g.required ? `required, pick ${g.max_select > 1 ? g.min_select + '-' + g.max_select : '1'}` : `optional${g.max_select > 1 ? ', pick up to ' + g.max_select : ''}`;
             return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
           }).join('\n');
-          return `  ID:${item.id} | ${item.name} ${price}${desc}\n${groupLines}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
         } else {
           const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
-          return `  ID:${item.id} | ${item.name} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}`;
         }
       }).join("\n");
       return `${cat}:\n${rows}`;
@@ -1454,6 +1468,16 @@ async function runOrderingLoop(
           finalPhase,
         };
       }
+      // Fix 1 (2026-09-01): After submit_order creates a real checkout session,
+      // return the real payment link deterministically — never let the LLM type a
+      // link or claim payment without including the actual session URL.
+      if (toolBlock.name === "submit_order" && checkoutUrl) {
+        return {
+          reply:      `All set! Here's your payment link — tap to finish your order: ${checkoutUrl}`,
+          checkoutUrl,
+          finalPhase: finalPhase || "checkout",
+        };
+      }
     }
     messages.push({ role: "user", content: toolResults });
   }
@@ -1670,10 +1694,37 @@ function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped:
 // variants for customer shorthand (e.g. "stromboli" → "Special Stromboli").
 function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
+
+  // Pass 1: detect duplicate canonical names across different rows (same name,
+  // different id → same-name collision). The set push pattern ensures we know
+  // which names need category disambiguation BEFORE building the map.
+  const nameCount = new Map<string, number>();
   for (const item of menu) {
     const full = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-    names.set(full, item.name);
+    nameCount.set(full, (nameCount.get(full) || 0) + 1);
+  }
+  const duplicateNames = new Set(
+    [...nameCount.entries()].filter(([, c]) => c > 1).map(([n]) => n),
+  );
+
+  for (const item of menu) {
+    const full = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const catShort = (item.category ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Always register by ID (unique).
     names.set(item.id.toLowerCase(), item.name);
+
+    if (duplicateNames.has(full)) {
+      // Qualify with category to avoid overwrites: "tuna (salads)" vs "tuna (wraps)".
+      const qualified = `${full} (${catShort})`;
+      names.set(qualified, item.name);
+      // Also register the unqualified name so broad queries still find SOMETHING,
+      // but only for the FIRST item (others are only reachable via qualified).
+      if (!names.has(full)) names.set(full, item.name);
+    } else {
+      names.set(full, item.name);
+    }
+
     const parts = full.split(' ').filter(w => w.length >= 3);
     if (parts.length > 1) {
       const lastName = parts[parts.length - 1];
