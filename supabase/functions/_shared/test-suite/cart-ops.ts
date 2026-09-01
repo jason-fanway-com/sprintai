@@ -215,52 +215,54 @@ export interface StatedTotalResult {
 }
 
 /**
- * Deterministic total-verification override that kills judge arithmetic
- * false-positives permanently while keeping REAL total errors flagged.
+ * Deterministic stated-total verifier — compares the bot's quoted total
+ * against the server cart (cart_json-derived subtotal + $0.99 fee).
  *
- * Parses the bot's stated dollar TOTAL from the final relevant assistant
- * messages and compares it to expectedItemCents + feeCents.
+ * v2 (2026-09-01): Now compares against the authoritative cart_json (server
+ * cart) rather than the fixture-derived expectedItemCents.  A stated total
+ * that contradicts the server cart is a FAIL — this function can now fail
+ * cases, where the v1 version could only rescue.
  *
- * PASS-ONLY: this override may only RESCUE a case the LLM judge failed on
- * arithmetic false-positives. It must never force-FAIL a case the judge
- * passed — the fixture-derived expectedItemCents is unreliable for mutated
- * carts, substitutions, and intermediate totals, so a mismatch here does NOT
- * prove a bot error. Real total errors are caught by CartOps Invariant 1
- * (quoted_total_matches_cart), which compares against the actual cart_json.
+ * 0¢ tolerance: quoted total must exactly equal cart-derived total.
  *
- * Returns:
- *   { passed: true, detail }  — stated total matches expected (force pass)
- *   null                      — mismatch OR no total stated (keep LLM verdict)
+ * Returns StatedTotalResult (always non-null — never silently defers).
  */
-export function verifyStatedTotal(
-  run: RunResult,
-  expectedItemCents: number,
-  feeCents = 99,
-): StatedTotalResult | null {
+export function verifyStatedTotal(run: RunResult): StatedTotalResult {
   const transcript = run.transcript;
-  if (!transcript.length) return null;
+  if (!transcript.length) {
+    return { passed: true, detail: "No transcript — skipping stated-total check" };
+  }
 
-  // Scan assistant replies in reverse for a quoted total
+  // Scan assistant replies in reverse for a quoted total with corresponding cart
   for (let i = transcript.length - 1; i >= 0; i--) {
     const turn = transcript[i];
     const reply = turn.reply ?? "";
     if (!reply) continue;
     const quoted = findQuotedTotal(reply);
     if (quoted !== null) {
-      const expected = expectedItemCents + feeCents;
-      if (Math.abs(quoted.cents - expected) <= 2) {
+      const cart = (turn.cart as CartItemLike[] | undefined) ?? [];
+      if (cart.length === 0) {
         return {
-          passed: true,
-          detail: `Stated total $${(quoted.cents / 100).toFixed(2)} matches expected $${(expected / 100).toFixed(2)} (items $${(expectedItemCents / 100).toFixed(2)} + $${(feeCents / 100).toFixed(2)} fee)`,
+          passed: false,
+          detail: `Bot quoted total $${(quoted.cents / 100).toFixed(2)} but cart is empty`,
         };
       }
-      // Mismatch: do NOT force-fail. Fixture math is unreliable; defer to the
-      // LLM judge and CartOps Invariant 1 (cart_json truth). Pass-only override.
-      return null;
+      const expected = expectedTotalCents(cart);
+      if (quoted.cents === expected) {
+        return {
+          passed: true,
+          detail: `Stated total $${(quoted.cents / 100).toFixed(2)} matches cart-derived total $${(expected / 100).toFixed(2)} (subtotal $${(cartSubtotalCents(cart) / 100).toFixed(2)} + $0.99 fee)`,
+        };
+      }
+      return {
+        passed: false,
+        detail: `Stated total $${(quoted.cents / 100).toFixed(2)} ≠ cart-derived total $${(expected / 100).toFixed(2)} (diff $${((quoted.cents - expected) / 100).toFixed(2)})`,
+      };
     }
   }
 
-  return null;
+  // No quoted total found — nothing to verify against
+  return { passed: true, detail: "No stated total to verify against cart" };
 }
 
 // ── Hallucination Guard ──────────────────────────────────────────────────

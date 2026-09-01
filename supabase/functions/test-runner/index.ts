@@ -22,12 +22,13 @@ import { verifyCartOpsInvariants, verifyStatedTotal } from "../_shared/test-suit
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
 import { persistResults } from "../_shared/test-suite/persist.ts";
 import { generateRootCauseFix } from "../_shared/test-suite/fix.ts";
+import { verifyCheckoutFinalize } from "../_shared/test-suite/cart-ops.ts";
 import type { AnyCase } from "../_shared/test-suite/library.ts";
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
 const BATCH_SIZE = 2;
-const SCORER_VERSION = 1;
+const SCORER_VERSION = 2;
 const PROJECT_REF = "rvdqfxtrskxekfkqnegx";
 const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
 
@@ -126,32 +127,52 @@ Deno.serve(async (_req: Request) => {
       }
       let judgeResult = await judgeCase(judgeConfig, runResult, tc, { id: shop.id, name: shop.name });
 
-      // ── Programmatic overrides (same as worker.ts) ──────────────────
+      // ── Programmatic overrides (capability dispatch) ──────────────────
 
-      // CartOps HARD verification — overrides LLM judge
-      if (tc.category === "cart-ops") {
-        const verify = verifyCartOpsInvariants(runResult);
-        console.log(`  CartOps invariants ${verify.passed ? "PASS" : "FAIL"} (${verify.invariants.filter((x) => x.passed).length}/${verify.invariants.length})`);
-        judgeResult = verify.passed
-          ? { ...judgeResult, passed: true }
-          : { ...judgeResult, passed: false };
+      const expectedItemCents = "expectedItemCents" in tc ? (tc as { expectedItemCents?: number }).expectedItemCents : undefined;
+      const expectsCheckout = "expects_checkout" in tc ? (tc as { expects_checkout?: boolean }).expects_checkout === true : false;
+      const hoursMode = "hoursMode" in tc ? (tc as { hoursMode?: string }).hoursMode : undefined;
+      const hasCart = (runResult.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
+
+      // CartOps invariants (all 5) — apply whenever server cart was produced
+      if (hasCart) {
+        const cartOpsVerify = verifyCartOpsInvariants(runResult);
+        for (const inv of cartOpsVerify.invariants) {
+          console.log(`  CartOps ${inv.id}: ${inv.passed ? "PASS" : "FAIL"}`);
+        }
+        if (!cartOpsVerify.passed) {
+          console.log(`  CartOps invariants FAIL`);
+          judgeResult = { ...judgeResult, passed: false };
+        }
+      }
+
+      // Totals: grade whenever expectedItemCents > 0 OR server cart exists
+      if ((expectedItemCents ?? 0) > 0 || hasCart) {
+        const totalCheck = verifyStatedTotal(runResult);
+        if (!totalCheck.passed) {
+          console.log(`  Stated-total FAIL: ${totalCheck.detail}`);
+          judgeResult = { ...judgeResult, passed: false };
+        } else {
+          console.log(`  Stated-total PASS`);
+        }
+      }
+
+      // Checkout-finalize: whenever expects_checkout === true
+      if (expectsCheckout) {
+        const checkoutCheck = await verifyCheckoutFinalize(supabase as any, runResult);
+        if (!checkoutCheck.passed) {
+          console.log(`  Checkout-finalize FAIL: ${checkoutCheck.detail}`);
+          judgeResult = { ...judgeResult, passed: false };
+        } else {
+          console.log(`  Checkout-finalize PASS`);
+        }
       }
 
       // Hours-closed HARD verification
-      if (tc.category === "hours-closed") {
+      if (hoursMode === "closed") {
         const verify = verifyHoursClosed(runResult);
         console.log(`  Hours-closed invariants ${verify.passed ? "PASS" : "FAIL"}`);
         if (!verify.passed) judgeResult = { ...judgeResult, passed: false };
-      }
-
-      // Stated-total deterministic override
-      const expectedCents = "expectedItemCents" in tc ? (tc as { expectedItemCents?: number }).expectedItemCents : undefined;
-      if (expectedCents !== undefined) {
-        const totalOverride = verifyStatedTotal(runResult, expectedCents);
-        if (totalOverride) {
-          console.log(`  Stated-total override: FORCE PASS — ${totalOverride.detail}`);
-          judgeResult = { ...judgeResult, passed: true };
-        }
       }
 
       let fix = null;

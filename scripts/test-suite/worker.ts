@@ -33,7 +33,7 @@ import { generateRootCauseFix } from "./fix.ts";
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // ⚠️ BUMP on any judge/scoring/criteria change. This gets persisted so the
 //    dashboard can separate runs scored under different scoring rules.
-const SCORER_VERSION = 1;
+const SCORER_VERSION = 2;
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
@@ -159,16 +159,11 @@ while (true) {
           if (!verify.passed) judge = { ...judge, passed: false };
         }
 
-        // Stated-total deterministic override (kills judge arithmetic false-positives)
-        const expectedCents = (tc as any).expectedItemCents as number | undefined;
-        if (expectedCents !== undefined) {
-          const totalOverride = verifyStatedTotal(run, expectedCents);
-          if (totalOverride) {
-            console.log(`worker [${queueId}]:   Stated-total override: FORCE PASS — ${totalOverride.detail}`);
-            // A1 (2026-08-28): verifyStatedTotal is pass-only (returns null on mismatch).
-            // When it fires, the total IS correct — force pass regardless of LLM judge.
-            judge = { ...judge, passed: true };
-          }
+        // Stated-total programmatic verification (now fail-able)
+        const totalCheck = verifyStatedTotal(run);
+        console.log(`worker [${queueId}]:   Stated-total: ${totalCheck.passed ? "PASS" : "FAIL"} — ${totalCheck.detail}`);
+        if (!totalCheck.passed) {
+          judge = { ...judge, passed: false };
         }
 
         let fix = null;

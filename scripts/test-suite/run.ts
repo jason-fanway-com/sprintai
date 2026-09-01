@@ -22,7 +22,7 @@ import { persistResults } from "./persist.ts";
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // Do not change scoring logic without recording why and incrementing this.
-const SCORER_VERSION = 1;
+const SCORER_VERSION = 2;
 import { generateRootCauseFix } from "./fix.ts";
 import { verifyCartOpsInvariants, verifyStatedTotal, type CartOpsVerification } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
@@ -184,16 +184,11 @@ for (let i = 0; i < casesToRun.length; i++) {
       }
     }
 
-    // 5. Stated-total deterministic override (kills judge arithmetic false-positives for menu-derived cases)
-    const expectedCents = (tc as any).expectedItemCents as number | undefined;
-    if (expectedCents !== undefined) {
-      const totalOverride = verifyStatedTotal(run, expectedCents);
-      if (totalOverride) {
-        console.log(`  → Stated-total override: ${totalOverride.passed ? "FORCE PASS" : "FORCE FAIL"} — ${totalOverride.detail}`);
-        // A1 (2026-08-28): verifyStatedTotal is pass-only (returns null on mismatch).
-        // When it fires, the total IS correct — force pass regardless of LLM judge.
-        judge = { ...judge, passed: true };
-      }
+    // 5. Stated-total programmatic verification (now fail-able, 1-arg)
+    const totalCheck = verifyStatedTotal(run);
+    console.log(`  → Stated-total: ${totalCheck.passed ? "PASS" : "FAIL"} — ${totalCheck.detail}`);
+    if (!totalCheck.passed) {
+      judge = { ...judge, passed: false };
     }
 
     const status = judge.passed ? "PASS" : "FAIL";

@@ -98,6 +98,7 @@ const menuNames = await (async () => {
 const results: ProofCaseResult[] = [];
 let passCount = 0;
 let failCount = 0;
+let noMoneyInvariantCount = 0;
 
 for (let i = 0; i < cases.length; i++) {
   const c = cases[i];
@@ -130,14 +131,16 @@ for (let i = 0; i < cases.length; i++) {
     continue;
   }
 
-  // ── Grade deterministically ──────────────────────────────────────────
-  const category = isConversationalCase(c) ? "conversational" : (c as TestCase).category ?? "";
+  // ── Grade deterministically (capability dispatch — no category gating) ──
   const expectsCheckout = !isConversationalCase(c) && (c as TestCase).expects_checkout === true;
   const hoursMode = !isConversationalCase(c) ? (c as TestCase).hoursMode : undefined;
   const expectedItemCents = (!isConversationalCase(c) ? (c as TestCase).expectedItemCents : undefined) ?? 0;
+  const hasCart = (run.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
 
   let passed = true;
   let reason = "";
+  const appliedInvariants: string[] = [];
+  let moneyInvariantApplied = false;
 
   // If run had an error (harness-timeout, etc.)
   if (run.error) {
@@ -145,28 +148,47 @@ for (let i = 0; i < cases.length; i++) {
     reason = run.error;
   }
 
-  // CartOps cases: apply hard programmatic invariants
-  if (category === "cart-ops" && passed) {
-    const v = verifyCartOpsInvariants(run);
-    if (!v.passed) {
-      passed = false;
-      const failedInvariants = v.invariants.filter((inv) => !inv.passed);
-      reason = failedInvariants.map((inv) => inv.detail).join("; ");
+  // CartOps invariants (all 5: total, displayed items, no-mutation, correction, duplicates)
+  // Apply whenever server cart was produced — not only on category cart-ops
+  if (passed && hasCart) {
+    moneyInvariantApplied = true;
+    const cartOps = verifyCartOpsInvariants(run);
+    for (const inv of cartOps.invariants) {
+      appliedInvariants.push(`cartops:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
     }
-
-    // Checkout finalize invariant
-    if (passed && expectsCheckout) {
-      const checkoutCheck = await verifyCheckoutFinalize(supabase, run);
-      if (!checkoutCheck.passed) {
-        passed = false;
-        reason = `checkout-finalize: ${checkoutCheck.detail}`;
-      }
+    if (!cartOps.passed) {
+      passed = false;
+      const failed = cartOps.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
+      reason = `cartops: ${failed.join("; ")}`;
     }
   }
 
-  // Hours-closed cases
-  if (hoursMode === "closed" && passed) {
+  // Totals: grade whenever expectedItemCents > 0 OR server cart exists
+  if (passed && (expectedItemCents > 0 || hasCart)) {
+    moneyInvariantApplied = true;
+    const totalCheck = verifyStatedTotal(run);
+    appliedInvariants.push(`stated-total:${totalCheck.passed ? "PASS" : "FAIL"}`);
+    if (!totalCheck.passed) {
+      passed = false;
+      reason = `stated-total: ${totalCheck.detail}`;
+    }
+  }
+
+  // Checkout-finalize: whenever expects_checkout === true (regardless of category)
+  if (passed && expectsCheckout) {
+    moneyInvariantApplied = true;
+    const checkoutCheck = await verifyCheckoutFinalize(supabase, run);
+    appliedInvariants.push(`checkout-finalize:${checkoutCheck.passed ? "PASS" : "FAIL"}`);
+    if (!checkoutCheck.passed) {
+      passed = false;
+      reason = `checkout-finalize: ${checkoutCheck.detail}`;
+    }
+  }
+
+  // Hours-closed: when hoursMode === "closed"
+  if (passed && hoursMode === "closed") {
     const hc = verifyHoursClosed(run);
+    appliedInvariants.push(`hours-closed:${hc.passed ? "PASS" : "FAIL"}`);
     if (!hc.passed) {
       passed = false;
       const failed = hc.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
@@ -174,40 +196,36 @@ for (let i = 0; i < cases.length; i++) {
     }
   }
 
-  // Stated total check (pass-only override for menu-derived cases)
-  if (passed && !category && expectedItemCents > 0) {
-    const statedCheck = verifyStatedTotal(run, expectedItemCents);
-    // Pass-only: if stated total matches, good. If null/mismatch, do NOT fail — defer to LLM.
-    // But for proof, we note it.
-    if (statedCheck?.passed) {
-      // OK
-    }
-  }
-
   // Hallucination guard: all cases
   if (passed) {
     const hg = verifyHallucinationGuard(run, menuNames);
+    appliedInvariants.push(`hallucination-guard:${hg.passed ? "PASS" : "FAIL"}`);
     if (!hg.passed) {
       passed = false;
       reason = `hallucination-guard: ${hg.detail}`;
     }
   }
 
-  // Cart persistence guard (P2): all cases
+  // Cart persistence guard: all cases
   if (passed) {
     const cp = verifyCartPersistence(run);
+    appliedInvariants.push(`cart-persistence:${cp.passed ? "PASS" : "FAIL"}`);
     if (!cp.passed) {
       passed = false;
       reason = `cart-persistence: ${cp.detail}`;
     }
   }
 
+  if (!moneyInvariantApplied) {
+    noMoneyInvariantCount++;
+  }
+
   if (passed) {
     passCount++;
-    console.log(`  ✓ PASS ${c.id}`);
+    console.log(`  ✓ PASS ${c.id}  [${appliedInvariants.join(", ")}]`);
   } else {
     failCount++;
-    console.log(`  ✗ FAIL ${c.id}: ${reason.slice(0, 120)}`);
+    console.log(`  ✗ FAIL ${c.id}: ${reason.slice(0, 120)}  [${appliedInvariants.join(", ")}]`);
   }
 
   results.push({ caseId: c.id, passed, reason, label });
@@ -217,6 +235,9 @@ for (let i = 0; i < cases.length; i++) {
 const total = results.length;
 console.log("");
 console.log(`PROOF: ${passCount}/${total} pass`);
+if (noMoneyInvariantCount > 0) {
+  console.log(`Cases with no money invariant applied: ${noMoneyInvariantCount}`);
+}
 if (failCount > 0) {
   console.log(`Failures:`);
   for (const r of results.filter((r) => !r.passed)) {

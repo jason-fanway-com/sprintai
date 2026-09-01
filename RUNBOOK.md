@@ -219,12 +219,13 @@ Processed IDs: `~/.sprintai-bridge/processed-ids.txt`
 
 ### Test-run worker (onboarding QA)
 
-**Scorer is FROZEN at `SCORER_VERSION = 1` (2026-08-28).** Do not change scoring
-logic (invariants, judge weighting, pass/fail thresholds) without bumping the
-version and recording why here. CartOps deterministic invariants are
-authoritative over the LLM judge — a cart that satisfies the invariants
-force-passes. Freezing the ruler is what stops run-to-run score bounce; changing
-it silently reintroduces it.
+**Scorer is FROZEN at `SCORER_VERSION = 2` (2026-09-01).**
+Bumped 1 → 2 per specs 1 (proof grading coverage) and 2 (single-grader):
+category-string dispatch replaced with capability dispatch so all money
+invariants (totals, checkout-finalize) run on every case where they apply,
+not just `cart-ops`-category cases; `verifyStatedTotal` can now fail.
+Do not change scoring logic (invariants, judge weighting, pass/fail
+thresholds) without bumping the version and recording why here.
 
 Location: `scripts/test-suite/worker.ts` (Deno), launched via
 `scripts/test-suite/run-worker.sh` → launchd
