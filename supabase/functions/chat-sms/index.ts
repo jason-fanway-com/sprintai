@@ -3114,7 +3114,7 @@ Deno.serve(async (req: Request) => {
     if (lastExpired) priorLinkExpired = true;
     const { data: newCart, error: cartErr } = await supabase
       .from("order_carts")
-      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [], test_mode: false })
+      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [], test_mode: false, order_type: shop.delivery_enabled ? null : "pickup" })
       .select("*").single();
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
@@ -3469,7 +3469,19 @@ Deno.serve(async (req: Request) => {
       if (looksLikeName && askedForName) {
         const orderType = cart.order_type;
         const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
-        if (orderType && !hasIncompleteBundle) {
+        // C2 deadlock breaker (2026-09-01): For delivery-enabled shops, the customer
+        // may reach the name turn without ever saying "pickup" or "delivery". The
+        // system prompt allows defaulting to pickup after ignoring the question twice.
+        // Without this, order_type stays null → C2 skips → LLM hallucinates on the
+        // name turn; Guard 2b actively reverts any silently-set order_type, making
+        // recovery impossible. Default to pickup here so submit_order's C1 gate passes.
+        const effectiveOrderType = orderType || "pickup";
+        if (!orderType) {
+          console.log(`[chat-sms] C2 defaulting order_type to "pickup" (was null, conv=${conversation.id})`);
+          await supabase.from("order_carts").update({ order_type: "pickup" }).eq("id", cart.id);
+          cart.order_type = "pickup";
+        }
+        if (!hasIncompleteBundle) {
           console.log(`[chat-sms] C2 pre-LLM name→submit shortcut firing (conv=${conversation.id}, name="${trimmed}", cart=${cart.id})`);
           const submitInput: Record<string, unknown> = { pickup_name: trimmed };
           const submitResult = await executeTool("submit_order", submitInput, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
@@ -3891,6 +3903,14 @@ Deno.serve(async (req: Request) => {
       console.log(`[chat-sms] PHANTOM-LINK GUARD: session already existed (cart=${cart.id}); sent existing-link reminder, no new session.`);
     } else if (hasItems && !incompleteBundle && pickupName) {
       // RECOVER: force the real submit_order path deterministically.
+      // Mirror C2's deadlock breaker: if order_type is null (delivery shop where
+      // customer never said pickup/delivery), default to pickup so submit_order's
+      // C1 gate passes.
+      if (!guardOrderTypeAfter) {
+        console.log(`[chat-sms] PHANTOM-LINK GUARD defaulting order_type to "pickup" (was null, conv=${conversation.id})`);
+        await supabase.from("order_carts").update({ order_type: "pickup" }).eq("id", cart.id);
+        cart.order_type = "pickup";
+      }
       try {
         const forced = await executeTool(
           "submit_order",
