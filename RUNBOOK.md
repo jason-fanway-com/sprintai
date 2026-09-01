@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -341,6 +341,7 @@ cannot access it). The old GoDaddy Commerce Poynt CNAME was deleted.
 |----------|----------|---------|
 | `eval-sweep` | Every 5 min (cron) | Judge completed conversations; write eval scores |
 | `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals; write to issues table; set notified_at on source evals |
+| `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 
 **NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
@@ -412,6 +413,7 @@ notified without a corresponding issue.
 | `test-suite/cart-ops.ts` | Adversarial CartOps battery + Proof invariants (shop-aware, real menu) |
 | `test-suite/fix.ts` | LLM root-cause + proposed-fix generator for failing cases |
 | `test-suite/worker.ts` | launchd worker — drains `test_run_queue` (onboarding QA) |
+| `test-runner/` | **Edge function** — pg_cron-driven autonomous runner; polls queue every 60s, checkpoints per-case, scores incrementally. Runs the same test suite as `worker.ts` but server-side, no Mac dependency. |
 | `create-qa-twin.py` | Clone any shop as unprotected/phone-less twin for safe Proof testing |
 | `create-vitos-pizza-demo.py` | Create Vito's Pizza demo shop from Jack's Slice CSV |
 
@@ -427,6 +429,7 @@ notified without a corresponding issue.
 | `judge-notify.ts` | Judge digest → Telegram notification |
 | `judge-autofix.ts` | Auto-fix seam (OFF by default) |
 | `telnyx.ts` | Telnyx API helpers, messaging profile creation, number assignment |
+| `test-suite/` | Shared test-suite library (generator, runner, judge, scorecard, persist, cart-ops, hours-closed, fix, library) — used by both `test-runner` edge function and `scripts/test-suite/` CLI |
 
 ---
 
@@ -440,7 +443,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–069). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–070). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -599,6 +602,13 @@ Phase 2 merchant identity verification.
       scans replies for product-claim patterns and validates against
       the effective menu, with distinctive-token fuzzy matching, question-
       word exclusion, and ack-leader filtering to avoid false positives.
+    - Guard F (fake-checkout gate): after `submit_order` returns a real
+      checkoutUrl, the reply is deterministically replaced with the real
+      payment link — the model can never emit a hallucinated "order placed"
+      confirmation. Guard 3 remains as the post-turn backstop.
+    - Item disambiguation: `buildMenuItemNames()` detects duplicate canonical
+      names and qualifies them by category (e.g. "tuna (salads)" vs "tuna
+      (wraps)") so the LLM can distinguish same-named items.
     These are code-path intercepts, not prompt-preference — they fire
     deterministically regardless of what the LLM intended.
 
@@ -619,6 +629,15 @@ Phase 2 merchant identity verification.
     never ignores a customer question to shortcut to "what else can I add?".
     This is a prompt-rule in system-prompt CRITICAL tier, enforced alongside
     the deterministic grounding guards above.
+
+16. **Cart-population — required options no longer drop items (chat-sms).**
+    Multi-item messages where one item has a required modifier option (e.g.
+    "Shrimp Scampi and a Pierogie") no longer silently drop the optioned item.
+    `add_item` collects missing required groups into `pending_options[]` on the
+    cart item — base price is charged now, surcharge applied on `modify_item`
+    when the customer picks. `submit_order` deterministically rejects checkout
+    if any item still has pending options, ensuring the customer always resolves
+    required choices before paying.
 
 15. **CartOps integrity (chat-sms)**: `cart_json` is the single source of
     truth. A bare tip reply never mutates items (no spurious `add_item`);

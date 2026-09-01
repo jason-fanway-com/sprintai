@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-08-29
+Last updated: 2026-09-01
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -165,8 +165,9 @@ These are encoded in the architecture, not just in marketing.
   reach the customer: off-menu container words ("tub", "pint"), false
   cart-contents claims, phantom "added to cart" confirmations, and a
   phase=checkout guard that prevents a cart from entering checkout without
-  a real Stripe session — all caught by code-path rules, not just prompted
-  preferences. The checkout
+  a real Stripe session, and a fake-checkout guard that deterministically
+  replaces a post-`submit_order` reply with the real checkoutUrl — all
+  caught by code-path rules, not just prompted preferences. The checkout
   flow now explicitly discloses the fee-inclusive total (subtotal + $0.99
   service fee + delivery + tip) from the authoritative order total —
   disclosure is code-driven, not model-hoped. Customer questions now take
@@ -175,6 +176,15 @@ These are encoded in the architecture, not just in marketing.
   they're mixed with declines. Category-level declines (asking for a category
   the shop doesn't carry) get a clean "we don't carry that." The bot never
   ignores a question to shortcut the order.
+- **Same-name items are disambiguated by category.** Duplicate canonical names
+  (e.g. "tuna" in salads vs wraps) are qualified by category suffix in the
+  system prompt — the LLM, which previously couldn't tell them apart, now
+  distinguishes "tuna (salads)" from "tuna (wraps)" in multi-step orders.
+- **Multi-item cart-population never silently drops items.** When one item in a
+  multi-item message has a required modifier, it no longer causes the model to
+  pretend it never saw that item. The item enters the cart with
+  `pending_options[]` — base charged now, surcharge on resolution, checkout
+  rejected until all resolved.
 - **Telnyx SMS handler is built.** `chat-sms` parses Telnyx inbound webhooks
   (JSON `message.received`), drives the identical ordering conversation, sends
   outbound via the Telnyx Messages API through the outbound guard, handles
@@ -191,6 +201,12 @@ These are encoded in the architecture, not just in marketing.
   business-profile verification rejected the EIN four times (error 18602) while
   the same EIN verifies cleanly through Telnyx. Telnyx is now the live SMS
   provider and provisioning path, which unblocks scaling beyond a handful of shops.
+- **Telnyx provisioning is automated (v2 API).** `provision-telnyx-number` uses
+  the v2 Telnyx API to create per-shop messaging profiles, assign them to
+  campaign `CSMB9HG`, and provision numbers with a single call. Each shop gets
+  its own messaging profile for deliverability isolation — one shop's reputation
+  never damages another's. Migration 069 adds the merchant registration state
+  machine and business info table to the provisioning pipeline.
 - **Stripe Connect:** Express onboarding (Path B) is implemented and verified
   in test mode. OAuth for Standard accounts (Path A) is coded but blocked on
   missing secrets (`STRIPE_CONNECT_CLIENT_ID`, `STRIPE_OAUTH_REDIRECT_URL`).
@@ -226,6 +242,10 @@ These are encoded in the architecture, not just in marketing.
   sign-off gate — no menu goes live without the restaurant owner confirming
   every price. Supports option groups for item modifications. Bundles (e.g.,
   "dozen bagels" with flavor selection) are built into the tool loop.
+  **Option data is now persisted on import** — `import-menu-csv` and the menu
+  pipeline's `import-plan.ts` no longer silently drop `prompt_for`, `upsell`,
+  and `modifiers_json`. The bot previously invented phantom required choices
+  because it had no real option data.
 - **Onboarding now starts from a PDF or photo, not a CSV.** The signup wizard
   takes a menu PDF or phone photos, and `parse-menu-pdf` (running the most
   capable Opus model, multi-pass with a dedicated modifier-block pass) reads
@@ -307,7 +327,9 @@ These are encoded in the architecture, not just in marketing.
   enqueues a `test_run_queue` row; a launchd worker drains it and runs the
   full generate → run → judge → scorecard → persist pipeline, so the owner's
   Store Readiness report is real and current without any SprintAI employee
-  touching it. The suite auto-generates 5 checkout-flow cases (raised from 2)
+  touching it. **A server-side test-runner** (pg_cron edge function, every
+  60s) now runs the same battery autonomously in Supabase — the primary QA
+  loop no longer depends on a Mac or launchd. The suite auto-generates 5 checkout-flow cases (raised from 2)
   for a more reliable sample. SMS segment counts (`bot_segments`) and
   checkout reach are auto-tracked on every case — no separate segment-count
   run needed. Menu cap raised 50 → 300 items.
@@ -334,13 +356,13 @@ These are encoded in the architecture, not just in marketing.
 
 ## What's next (near-term roadmap)
 
-1. **Provision live numbers on Telnyx** — the campaign is already approved at
-   TCR, so the remaining step is to provision shop numbers, attach them to
-   per-shop messaging profiles, assign them to campaign `CSMB9HG`, and pass the
-   real-handset delivery test (`sprintai-telnyx-provisioning-test.md`) before the
-   first shop goes live. That test is the ground-truth gate: the campaign record
-   still carries an 806 CTA rejection in `failureReasons` that may be stale, and
-   message delivery is the only way to prove the campaign is actually clear.
+1. **Provision live numbers on Telnyx** — provisioning is now automated on the
+   v2 API (per-shop messaging profile + campaign assignment in a single call).
+   The remaining step is to pass the real-handset delivery test
+   (`sprintai-telnyx-provisioning-test.md`) before the first shop goes live.
+   That test is the ground-truth gate: the campaign record still carries an 806
+   CTA rejection in `failureReasons` that may be stale, and message delivery is
+   the only way to prove the campaign is actually clear.
 2. **First real restaurant** — onboard one paying shop with their real menu,
    real Stripe, and real phone number. Validate the end-to-end in production
    with real customers.

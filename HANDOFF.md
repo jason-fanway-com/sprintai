@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -76,14 +76,17 @@ sprintai-ordering/
 │   │   ├── provision-number/ # Auto-buy Telnyx number
 │   │   ├── merchant-auth/    # PIN auth for sold-out manager
 │   │   ├── shop-financials/  # Shop financial reporting (KPIs, ledger, payouts)
+│   │   ├── test-runner/       # Autonomous acceptance suite (pg_cron, server-side)
 │   │   └── _shared/          # Shared libraries
 │   │       ├── outbound-guard.ts      # THE chokepoint — every send goes here
 │   │       ├── connect.ts             # Stripe helpers + isShopLive() gate
 │   │       ├── test-mode.ts           # Test key allowlist
 │   │       ├── stripe-financials.ts   # Real Stripe fees + payout reconciliation
 │   │       ├── telnyx-error.ts        # Classify Telnyx opt-out/blocked rejections
-│   │       └── judge-*.ts             # Evaluator rubric + notify + autofix
-│   └── migrations/           # SQL migrations (001–069)
+│   │       ├── judge-*.ts             # Evaluator rubric + notify + autofix
+│   │       └── test-suite/            # Shared test library: generator, runner, judge,
+│   │                                  # scorecard, persist, cart-ops, hours-closed, fix
+│   └── migrations/           # SQL migrations (001–070)
 ├── scripts/
 │   ├── imsg-bridge.sh        # iMessage bridge (runs on the Mac)
 │   ├── build-public-site.sh  # Allowlist build for public origin
@@ -177,6 +180,10 @@ sprintai-ordering/
     acceptance criteria.
 16. `docs/specs/2026-08-30-orderbrain-deterministic-render.md` — OrderBrain
     Phase A: money/status lines code-rendered from Ledger, never LLM prose.
+17. `supabase/functions/test-runner/index.ts` — pg_cron-driven autonomous
+    acceptance suite. Server-side, no Mac/launchd dependency. Same test
+    battery (Proof + CartOps) as the launchd worker, but runs in Supabase
+    on a 60s cron tick with per-case checkpointing.
 
 ---
 
@@ -345,6 +352,25 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   the pickup-only pause message on every greeting (that bug blocked all
   pickup-only shops from taking orders). Only a future `delivery_paused_until`
   triggers the temporary pause message.
+- **Cart-population: required options no longer drop items.** Multi-item
+  messages where one item has a required modifier no longer silently drop the
+  optioned item. Items enter the cart with `pending_options[]` — base charged
+  now, surcharge on resolution, checkout rejected until all resolved.
+- **Fake-checkout gate is deterministic.** After `submit_order` returns a real
+  checkoutUrl, the reply is replaced with the real payment link — the model can
+  never emit a hallucinated "order placed" confirmation.
+- **Same-name items are disambiguated by category.** Duplicate canonical names
+  (e.g. "tuna" in salads vs wraps) are qualified by category suffix in the
+  system prompt so the LLM can tell them apart.
+- **Menu importer now persists option data.** `import-menu-csv` (and the menu
+  pipeline's `import-plan.ts`) no longer silently drop `prompt_for`, `upsell`,
+  and `modifiers_json` on import — the bot previously invented phantom required
+  choices because it had no real option data.
+- **The QA suite runs autonomously server-side.** `test-runner` edge function
+  (pg_cron, every 60s) drains `test_run_queue` and runs the full Proof/CartOps
+  battery with per-case checkpointing and incremental scoring — no Mac/launchd
+  dependency for the primary QA loop. The launchd worker (`worker.ts`) is the
+  local fallback.
 - **The ordering bot now answers direct customer questions regardless of context.**
   If a customer asks "do you have gluten-free bagels?" while also declining to
   order more, the bot answers the question before advancing. Questions mixed with
