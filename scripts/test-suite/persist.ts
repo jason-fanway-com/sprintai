@@ -100,6 +100,7 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       overall_pass_pct: input.scorecard.overallPassPct,
       proof_pass_pct: input.scorecard.proofPassPct,
       quality_pass_pct: input.scorecard.qualityPassPct,
+      ungraded_count: input.scorecard.proofUngraded,
       category_subscores: categorySubscores,
       critical_failures: input.scorecard.criticalFailures,
       status: "completed",

@@ -121,11 +121,11 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
     if (s.qualityPassed === true) qualityPass++;
     else qualityFail++;
   }
-  const proofPassPct = (proofPass + proofFail + proofUngraded) > 0 ? (proofPass / (proofPass + proofFail + proofUngraded)) * 100 : 0;
+  const proofPassPct = (proofPass + proofFail) > 0 ? (proofPass / (proofPass + proofFail)) * 100 : 0;
   const qualityPassPct = (qualityPass + qualityFail) > 0 ? (qualityPass / (qualityPass + qualityFail)) * 100 : 0;
 
   // ── Tiered gate: proof ≥95% AND 100% critical ────────────────────────
-  const tieredPass = proofPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0;
+  const tieredPass = proofPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0 && proofUngraded === 0;
 
   return {
     total,
@@ -148,8 +148,7 @@ export function formatScorecard(sc: Scorecard, shopName: string): string {
   const lines: string[] = [];
   lines.push(`\n═══ TEST SUITE SCORECARD — ${shopName} ═══`);
   lines.push(`Total: ${sc.total} | Passed: ${sc.passed} | Failed: ${sc.failed} | Ungraded: ${sc.proofUngraded}`);
-  lines.push(`Overall (proof gate): ${sc.overallPassPct.toFixed(1)}%`);
-  lines.push(`Quality (judge advisory): ${sc.qualityPassPct.toFixed(1)}%`);
+  lines.push(`Proof ${sc.passed}/${sc.passed + sc.failed} graded = ${sc.proofPassPct.toFixed(1)}%  |  ${sc.proofUngraded} ungraded  |  Quality ${sc.qualityPassPct.toFixed(1)}%`);
   lines.push(`Critical pass: ${sc.criticalPassed}/${sc.criticalTotal} (${sc.criticalPassPct.toFixed(1)}%)`);
   lines.push(``);
   lines.push(`Category subscores:`);
