@@ -189,25 +189,32 @@ Deno.serve(async (_req: Request) => {
       const expectsCheckout = "expects_checkout" in tc ? (tc as { expects_checkout?: boolean }).expects_checkout === true : false;
       const hoursMode = "hoursMode" in tc ? (tc as { hoursMode?: string }).hoursMode : undefined;
       const hasCart = (runResult.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
+      const appliedInvariants: string[] = [];
+      const detReasons: string[] = [];
 
       // CartOps invariants (all 5) — apply whenever server cart was produced
       if (hasCart) {
         const cartOpsVerify = verifyCartOpsInvariants(runResult);
         for (const inv of cartOpsVerify.invariants) {
           console.log(`  CartOps ${inv.id}: ${inv.passed ? "PASS" : "FAIL"}`);
+          appliedInvariants.push(`cartops:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
         }
         if (!cartOpsVerify.passed) {
           console.log(`  CartOps invariants FAIL`);
           judgeResult = { ...judgeResult, passed: false };
+          const failed = cartOpsVerify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
+          detReasons.push(`cartops: ${failed.join("; ")}`);
         }
       }
 
       // Totals: grade whenever expectedItemCents > 0 OR server cart exists
       if ((expectedItemCents ?? 0) > 0 || hasCart) {
         const totalCheck = verifyStatedTotal(runResult);
+        appliedInvariants.push(`stated-total:${totalCheck.passed ? "PASS" : "FAIL"}`);
         if (!totalCheck.passed) {
           console.log(`  Stated-total FAIL: ${totalCheck.detail}`);
           judgeResult = { ...judgeResult, passed: false };
+          detReasons.push(`stated-total: ${totalCheck.detail}`);
         } else {
           console.log(`  Stated-total PASS`);
         }
@@ -216,9 +223,11 @@ Deno.serve(async (_req: Request) => {
       // Checkout-finalize: whenever expects_checkout === true
       if (expectsCheckout) {
         const checkoutCheck = await verifyCheckoutFinalize(supabase as any, runResult);
+        appliedInvariants.push(`checkout-finalize:${checkoutCheck.passed ? "PASS" : "FAIL"}`);
         if (!checkoutCheck.passed) {
           console.log(`  Checkout-finalize FAIL: ${checkoutCheck.detail}`);
           judgeResult = { ...judgeResult, passed: false };
+          detReasons.push(`checkout-finalize: ${checkoutCheck.detail}`);
         } else {
           console.log(`  Checkout-finalize PASS`);
         }
@@ -227,15 +236,29 @@ Deno.serve(async (_req: Request) => {
       // Hours-closed HARD verification
       if (hoursMode === "closed") {
         const verify = verifyHoursClosed(runResult);
+        for (const inv of verify.invariants) {
+          appliedInvariants.push(`hours-closed:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
+        }
         console.log(`  Hours-closed invariants ${verify.passed ? "PASS" : "FAIL"}`);
-        if (!verify.passed) judgeResult = { ...judgeResult, passed: false };
+        if (!verify.passed) {
+          judgeResult = { ...judgeResult, passed: false };
+          const failed = verify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
+          detReasons.push(`hours-closed: ${failed.join("; ")}`);
+        }
       }
 
       // fix-gen is NOT called in the scoring loop — it lives in a separate
       // post-run pass (or on-demand when a human opens a failing case in the
       // dashboard).  An LLM call per failing case in the cron tick was the
       // throughput bottleneck (0.03 cases/min with v2's higher fail rate).
-      scored.push({ testCase: tc, judge: judgeResult, run: runResult, fix: null });
+      scored.push({
+        testCase: tc,
+        judge: judgeResult,
+        run: runResult,
+        fix: null,
+        appliedInvariants,
+        deterministicReason: detReasons.join("; "),
+      });
 
       // Persist progress after each case (crash-safe checkpoint)
       await supabase.from("test_run_queue").update({

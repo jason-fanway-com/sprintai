@@ -4,11 +4,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import type { AnyCase } from "./library.ts";
-import type { JudgeResult } from "./judge.ts";
-import type { Scorecard } from "./scorecard.ts";
-import type { RunResult } from "./runner.ts";
-import type { FixResult } from "./fix.ts";
+import type { Scorecard, ScoredCase } from "./scorecard.ts";
 
 // ── GSM-7 segment counting (inline — same logic as segment-count.ts) ──────
 const GSM7_BASIC = new Set(
@@ -64,7 +60,7 @@ export interface PersistInput {
   tenantId: string;
   shopName: string;
   scorecard: Scorecard;
-  scored: Array<{ testCase: AnyCase; judge: JudgeResult; run: RunResult; fix?: FixResult | null }>;
+  scored: ScoredCase[];
   modelTier: string;
   scorerVersion: number;
 }
@@ -160,6 +156,20 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
         : (rootCause || proposedFix ? "proposed" : "open");
     }
 
+    // Build reason additively: deterministic invariants first, judge prose second.
+    const detReason = s.deterministicReason;
+    const judgeProse = s.judge.criteria
+      .filter((c) => !c.passed)
+      .map((c) => c.reason)
+      .join("; ");
+    let reason = "";
+    if (detReason) {
+      reason = `deterministic: ${detReason}`;
+      if (judgeProse) reason += ` | judge: ${judgeProse}`;
+    } else {
+      reason = judgeProse;
+    }
+
     return {
       run_id: runId,
       case_id: s.testCase.id,
@@ -169,10 +179,8 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       success_criteria: JSON.parse(JSON.stringify(s.testCase.success_criteria)),
       passed: s.judge.passed,
       verdict: s.judge.verdict,
-      reason: s.judge.criteria
-        .filter((c) => !c.passed)
-        .map((c) => c.reason)
-        .join("; "),
+      reason,
+      applied_invariants: s.appliedInvariants ?? [],
       root_cause: rootCause,
       proposed_fix: proposedFix,
       fix_status: fixStatus,

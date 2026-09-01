@@ -39,6 +39,10 @@ export interface ScoredCase {
   judge: JudgeResult;
   run: RunResult;
   fix?: FixResult | null;
+  /** Programmatic invariants applied to this case (e.g. "cartops:total:PASS"). */
+  appliedInvariants?: string[];
+  /** Human-readable detail from deterministic invariant failures. */
+  deterministicReason?: string;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
