@@ -98,6 +98,8 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       passed: input.scorecard.passed,
       failed: input.scorecard.failed,
       overall_pass_pct: input.scorecard.overallPassPct,
+      proof_pass_pct: input.scorecard.proofPassPct,
+      quality_pass_pct: input.scorecard.qualityPassPct,
       category_subscores: categorySubscores,
       critical_failures: input.scorecard.criticalFailures,
       status: "completed",
@@ -137,11 +139,19 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
   const rows = input.scored.map((s) => {
     const priorStatus = priorStatuses.get(s.testCase.id) ?? null;
 
+    // proof_passed = the gate value (deterministic invariants).
+    // Three-state: true=materially passed, false=materially failed, null=ungraded.
+    const proofPassed = s.proofPassed === undefined ? true : s.proofPassed;
+    // passed boolean (DB column): null proof → null, otherwise proofPassed
+    const passedBool = proofPassed === null ? null : proofPassed;
+    // quality_passed = LLM judge advisory
+    const qualityPassed = s.qualityPassed === undefined ? s.judge.passed : s.qualityPassed;
+
     let fixStatus: string | null = null;
     let rootCause: string | null = null;
     let proposedFix: string | null = null;
 
-    if (s.judge.passed) {
+    if (proofPassed === true) {
       // Passing case. If it previously had an open/proposed fix, mark fixed.
       if (priorStatus === "open" || priorStatus === "proposed") {
         fixStatus = "fixed";
@@ -177,7 +187,9 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       criticality: s.testCase.criticality,
       transcript: JSON.parse(JSON.stringify(s.run.transcript)),
       success_criteria: JSON.parse(JSON.stringify(s.testCase.success_criteria)),
-      passed: s.judge.passed,
+      passed: passedBool,
+      proof_passed: proofPassed,
+      quality_passed: qualityPassed,
       verdict: s.judge.verdict,
       reason,
       applied_invariants: s.appliedInvariants ?? [],

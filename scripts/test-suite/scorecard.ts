@@ -32,6 +32,12 @@ export interface Scorecard {
   criticalPassPct: number;
   /** Tiered pass gate. */
   tieredPass: boolean;
+  /** Proof gate: deterministic invariants only. */
+  proofPassPct: number;
+  /** Proof: count of ungraded cases (null proofPassed). */
+  proofUngraded: number;
+  /** Advisory: LLM judge verdict only. */
+  qualityPassPct: number;
 }
 
 export interface ScoredCase {
@@ -39,6 +45,16 @@ export interface ScoredCase {
   judge: JudgeResult;
   run: RunResult;
   fix?: FixResult | null;
+  /** Programmatic invariants applied to this case (e.g. "cartops:total:PASS"). */
+  appliedInvariants?: string[];
+  /** Human-readable detail from deterministic invariant failures. */
+  deterministicReason?: string;
+  /** Deterministic gate pass (invariants only, no judge).
+   *  true = materially evaluated and passed, false = failed,
+   *  null = no invariants applied (ungraded). */
+  proofPassed?: boolean | null;
+  /** LLM judge advisory verdict. */
+  qualityPassed?: boolean;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -56,28 +72,30 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
     if (!categories[cat]) categories[cat] = { total: 0, passed: 0, failed: 0, passPct: 0 };
     categories[cat].total++;
 
-    const isPassed = s.judge.passed;
-    if (isPassed) {
+    // Three-state: true=materially passed, false=materially failed, null/undefined=ungraded/legacy
+    if (s.proofPassed === true || s.proofPassed === undefined) {
       passed++;
       categories[cat].passed++;
-    } else {
+    } else if (s.proofPassed === false) {
       categories[cat].failed++;
     }
+    // null → ungraded: counted in total but not in passed or failed
 
     if (s.testCase.criticality === "critical") {
       criticalTotal++;
-      if (isPassed) {
+      if (s.proofPassed === true || s.proofPassed === undefined) {
         criticalPassed++;
-      } else {
+      } else if (s.proofPassed === false) {
         criticalFailures.push({
           caseId: s.testCase.id,
           label: s.testCase.label,
-          reason: s.judge.criteria
+          reason: s.deterministicReason || s.judge.criteria
             .filter((c) => !c.passed)
             .map((c) => c.reason)
             .join("; ") || "no criteria passed",
         });
       }
+      // null critical → ungraded, not a failure
     }
   }
 
@@ -89,28 +107,49 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
   const overallPassPct = total > 0 ? (passed / total) * 100 : 0;
   const criticalPassPct = criticalTotal > 0 ? (criticalPassed / criticalTotal) * 100 : 100;
 
-  // ── Tiered gate: overall ≥95% AND 100% critical ────────────────────────
-  const tieredPass = overallPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0;
+  // ── Split scores: proof (gate, deterministic) and quality (advisory, LLM judge) ──
+  let proofPass = 0;
+  let proofFail = 0;
+  let proofUngraded = 0;
+  let qualityPass = 0;
+  let qualityFail = 0;
+  for (const s of scored) {
+    if (s.proofPassed === true) proofPass++;
+    else if (s.proofPassed === false) proofFail++;
+    else if (s.proofPassed === null) proofUngraded++;
+    else proofPass++; // undefined legacy
+    if (s.qualityPassed === true) qualityPass++;
+    else qualityFail++;
+  }
+  const proofPassPct = (proofPass + proofFail + proofUngraded) > 0 ? (proofPass / (proofPass + proofFail + proofUngraded)) * 100 : 0;
+  const qualityPassPct = (qualityPass + qualityFail) > 0 ? (qualityPass / (qualityPass + qualityFail)) * 100 : 0;
+
+  // ── Tiered gate: proof ≥95% AND 100% critical ────────────────────────
+  const tieredPass = proofPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0;
 
   return {
     total,
-    passed,
-    failed: total - passed,
-    overallPassPct,
+    passed: proofPass,
+    failed: proofFail,
+    overallPassPct: proofPassPct,
     categories,
     criticalFailures,
     criticalTotal,
     criticalPassed,
     criticalPassPct,
     tieredPass,
+    proofPassPct,
+    proofUngraded,
+    qualityPassPct,
   };
 }
 
 export function formatScorecard(sc: Scorecard, shopName: string): string {
   const lines: string[] = [];
   lines.push(`\n═══ TEST SUITE SCORECARD — ${shopName} ═══`);
-  lines.push(`Total: ${sc.total} | Passed: ${sc.passed} | Failed: ${sc.failed}`);
-  lines.push(`Overall pass: ${sc.overallPassPct.toFixed(1)}%`);
+  lines.push(`Total: ${sc.total} | Passed: ${sc.passed} | Failed: ${sc.failed} | Ungraded: ${sc.proofUngraded}`);
+  lines.push(`Overall (proof gate): ${sc.overallPassPct.toFixed(1)}%`);
+  lines.push(`Quality (judge advisory): ${sc.qualityPassPct.toFixed(1)}%`);
   lines.push(`Critical pass: ${sc.criticalPassed}/${sc.criticalTotal} (${sc.criticalPassPct.toFixed(1)}%)`);
   lines.push(``);
   lines.push(`Category subscores:`);
@@ -129,9 +168,9 @@ export function formatScorecard(sc: Scorecard, shopName: string): string {
     lines.push(`No critical failures.`);
   }
   lines.push(``);
-  lines.push(`TIERED PASS: ${sc.tieredPass ? "✅ PASS" : "❌ FAIL"}`);
+  lines.push(`TIERED PASS (proof gate): ${sc.tieredPass ? "✅ PASS" : "❌ FAIL"}`);
   if (!sc.tieredPass && sc.overallPassPct >= 95) {
-    lines.push(`  (Overall ≥95% met, but critical subset failed — averaging did NOT hide it.)`);
+    lines.push(`  (Proof ≥95% met, but critical subset failed — averaging did NOT hide it.)`);
   }
   return lines.join("\n");
 }

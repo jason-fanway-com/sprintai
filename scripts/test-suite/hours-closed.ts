@@ -53,6 +53,8 @@ interface InvariantResult {
   id: string;
   passed: boolean;
   detail: string;
+  /** true when materially evaluated; false when trivially passed with nothing to check. */
+  applied: boolean;
 }
 
 interface HoursClosedVerification {
@@ -92,9 +94,9 @@ export function verifyHoursClosed(run: RunResult): HoursClosedVerification {
       caseId: run.caseId,
       passed: false,
       invariants: [
-        { id: "closed_message_present", passed: false, detail: "No transcript" },
-        { id: "cart_empty", passed: false, detail: "No transcript" },
-        { id: "no_payment_link", passed: false, detail: "No transcript" },
+        { id: "closed_message_present", passed: false, detail: "No transcript", applied: false },
+        { id: "cart_empty", passed: false, detail: "No transcript", applied: false },
+        { id: "no_payment_link", passed: false, detail: "No transcript", applied: false },
       ],
     };
   }
@@ -123,6 +125,7 @@ export function verifyHoursClosed(run: RunResult): HoursClosedVerification {
     detail: closedMatch
       ? `Bot returned a closed message: "${combinedReply.slice(0, 120)}"`
       : `No closed pattern matched in bot replies: "${combinedReply.slice(0, 200)}"`,
+    applied: true,
   });
 
   // INVARIANT 2: cart is empty
@@ -132,6 +135,7 @@ export function verifyHoursClosed(run: RunResult): HoursClosedVerification {
     detail: cartEverNonEmpty
       ? "Cart was not empty — bot added items when shop should be closed"
       : "Cart remained empty (correct for closed shop)",
+    applied: true,
   });
 
   // INVARIANT 3: no payment/checkout link
@@ -142,6 +146,7 @@ export function verifyHoursClosed(run: RunResult): HoursClosedVerification {
     detail: checkoutMatch
       ? `Payment/checkout link found in reply when shop should be closed: "${combinedReply.slice(0, 200)}"`
       : "No payment link found (correct for closed shop)",
+    applied: true,
   });
 
   const passed = closedMatch && !cartEverNonEmpty && !checkoutMatch;

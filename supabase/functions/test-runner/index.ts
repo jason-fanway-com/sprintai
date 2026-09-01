@@ -18,12 +18,11 @@ import { generateCases } from "../_shared/test-suite/generator.ts";
 import { runCase } from "../_shared/test-suite/runner.ts";
 import { judgeCase } from "../_shared/test-suite/judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "../_shared/test-suite/scorecard.ts";
-import { verifyCartOpsInvariants, verifyStatedTotal } from "../_shared/test-suite/cart-ops.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence } from "../_shared/test-suite/cart-ops.ts";
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
 import { persistResults } from "../_shared/test-suite/persist.ts";
 // fix.ts NOT imported here — root-cause generation is a SEPARATE
 // post-run/on-demand concern, never called inline in the scoring loop.
-import { verifyCheckoutFinalize } from "../_shared/test-suite/cart-ops.ts";
 import type { AnyCase } from "../_shared/test-suite/library.ts";
 
 // ── Config ─────────────────────────────────────────────────────────────────
@@ -157,6 +156,9 @@ Deno.serve(async (_req: Request) => {
     // 3. Process this batch
     const endIdx = Math.min(caseIdx + BATCH_SIZE, totalCases);
 
+    // Load menu names once per tick for hallucination guard
+    const menuNames = await loadMenuNames(supabase, shopId);
+
     const runConfig = {
       supabaseUrl,
       serviceRoleKey,
@@ -181,9 +183,12 @@ Deno.serve(async (_req: Request) => {
       if (!shop) {
         shop = { id: shopId, name: shopName, tenant_id: tenantId };
       }
-      let judgeResult = await judgeCase(judgeConfig, runResult, tc, { id: shop.id, name: shop.name });
 
-      // ── Programmatic overrides (capability dispatch) ──────────────────
+      // ── LLM judge (advisory only — does NOT gate pass/fail) ───────────
+      const judgeResult = await judgeCase(judgeConfig, runResult, tc, { id: shop.id, name: shop.name });
+      const qualityPassed = judgeResult.passed;
+
+      // ── Deterministic invariants (THE gate — capability dispatch) ─────
 
       const expectedItemCents = "expectedItemCents" in tc ? (tc as { expectedItemCents?: number }).expectedItemCents : undefined;
       const expectsCheckout = "expects_checkout" in tc ? (tc as { expects_checkout?: boolean }).expects_checkout === true : false;
@@ -191,17 +196,22 @@ Deno.serve(async (_req: Request) => {
       const hasCart = (runResult.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
       const appliedInvariants: string[] = [];
       const detReasons: string[] = [];
+      let detPassed = true;
+      let anyInvariantApplied = false;
 
       // CartOps invariants (all 5) — apply whenever server cart was produced
       if (hasCart) {
         const cartOpsVerify = verifyCartOpsInvariants(runResult);
+        let anyCartOpsApplied = false;
         for (const inv of cartOpsVerify.invariants) {
-          console.log(`  CartOps ${inv.id}: ${inv.passed ? "PASS" : "FAIL"}`);
+          console.log(`  CartOps ${inv.id}: ${inv.passed ? "PASS" : "FAIL"}${inv.applied ? "" : " (trivial)"}`);
           appliedInvariants.push(`cartops:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
+          if (inv.applied) anyCartOpsApplied = true;
         }
+        if (anyCartOpsApplied) anyInvariantApplied = true;
         if (!cartOpsVerify.passed) {
           console.log(`  CartOps invariants FAIL`);
-          judgeResult = { ...judgeResult, passed: false };
+          detPassed = false;
           const failed = cartOpsVerify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
           detReasons.push(`cartops: ${failed.join("; ")}`);
         }
@@ -211,9 +221,10 @@ Deno.serve(async (_req: Request) => {
       if ((expectedItemCents ?? 0) > 0 || hasCart) {
         const totalCheck = verifyStatedTotal(runResult);
         appliedInvariants.push(`stated-total:${totalCheck.passed ? "PASS" : "FAIL"}`);
+        if (totalCheck.applied) anyInvariantApplied = true;
         if (!totalCheck.passed) {
           console.log(`  Stated-total FAIL: ${totalCheck.detail}`);
-          judgeResult = { ...judgeResult, passed: false };
+          detPassed = false;
           detReasons.push(`stated-total: ${totalCheck.detail}`);
         } else {
           console.log(`  Stated-total PASS`);
@@ -224,9 +235,10 @@ Deno.serve(async (_req: Request) => {
       if (expectsCheckout) {
         const checkoutCheck = await verifyCheckoutFinalize(supabase as any, runResult);
         appliedInvariants.push(`checkout-finalize:${checkoutCheck.passed ? "PASS" : "FAIL"}`);
+        if (checkoutCheck.applied) anyInvariantApplied = true;
         if (!checkoutCheck.passed) {
           console.log(`  Checkout-finalize FAIL: ${checkoutCheck.detail}`);
-          judgeResult = { ...judgeResult, passed: false };
+          detPassed = false;
           detReasons.push(`checkout-finalize: ${checkoutCheck.detail}`);
         } else {
           console.log(`  Checkout-finalize PASS`);
@@ -236,15 +248,52 @@ Deno.serve(async (_req: Request) => {
       // Hours-closed HARD verification
       if (hoursMode === "closed") {
         const verify = verifyHoursClosed(runResult);
+        let anyHoursApplied = false;
         for (const inv of verify.invariants) {
           appliedInvariants.push(`hours-closed:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
+          if (inv.applied) anyHoursApplied = true;
         }
+        if (anyHoursApplied) anyInvariantApplied = true;
         console.log(`  Hours-closed invariants ${verify.passed ? "PASS" : "FAIL"}`);
         if (!verify.passed) {
-          judgeResult = { ...judgeResult, passed: false };
+          detPassed = false;
           const failed = verify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
           detReasons.push(`hours-closed: ${failed.join("; ")}`);
         }
+      }
+
+      // Hallucination guard: all cases (when menu names available)
+      if (menuNames.size > 0) {
+        const hg = verifyHallucinationGuard(runResult, menuNames);
+        appliedInvariants.push(`hallucination-guard:${hg.passed ? "PASS" : "FAIL"}`);
+        if (hg.applied) anyInvariantApplied = true;
+        if (!hg.passed) {
+          console.log(`  Hallucination-guard FAIL: ${hg.detail.slice(0, 120)}`);
+          detPassed = false;
+          detReasons.push(`hallucination-guard: ${hg.detail}`);
+        } else {
+          console.log(`  Hallucination-guard PASS`);
+        }
+      }
+
+      // Cart persistence: all cases with ≥2 turns
+      {
+        const cp = verifyCartPersistence(runResult);
+        appliedInvariants.push(`cart-persistence:${cp.passed ? "PASS" : "FAIL"}`);
+        if (cp.applied) anyInvariantApplied = true;
+        if (!cp.passed) {
+          console.log(`  Cart-persistence FAIL: ${cp.detail.slice(0, 120)}`);
+          detPassed = false;
+          detReasons.push(`cart-persistence: ${cp.detail}`);
+        } else {
+          console.log(`  Cart-persistence PASS`);
+        }
+      }
+
+      // proof_passed: three-state — true/false when invariants were applied, null when ungraded
+      const proofPassed: boolean | null = anyInvariantApplied ? detPassed : null;
+      if (!anyInvariantApplied) {
+        appliedInvariants.push("no-invariant-applied");
       }
 
       // fix-gen is NOT called in the scoring loop — it lives in a separate
@@ -258,6 +307,8 @@ Deno.serve(async (_req: Request) => {
         fix: null,
         appliedInvariants,
         deterministicReason: detReasons.join("; "),
+        proofPassed,
+        qualityPassed,
       });
 
       // Persist progress after each case (crash-safe checkpoint)
@@ -267,8 +318,29 @@ Deno.serve(async (_req: Request) => {
       }).eq("id", jobId);
     }
 
-    // 4. All done? Persist summary
+    // 4. All done? Persist summary (with orphan-persist guard)
     if (endIdx >= totalCases) {
+      // Guard 1: already persisted (test_run_id set by a prior tick)
+      if ((job as any).test_run_id) {
+        console.log(`test-runner [${jobId}]: already persisted (test_run_id=${(job as any).test_run_id}), skipping`);
+        return Response.json({ status: "already-completed", runId: (job as any).test_run_id });
+      }
+
+      // Guard 2: conditional claim — atomically transition to 'persisting'.
+      // If 0 rows affected, another tick already owns completion.
+      const { data: claimed } = await supabase
+        .from("test_run_queue")
+        .update({ status: "persisting" })
+        .eq("id", jobId)
+        .eq("status", "running")
+        .select("id")
+        .single();
+
+      if (!claimed) {
+        console.log(`test-runner [${jobId}]: another tick already owns completion, skipping`);
+        return Response.json({ status: "already-persisting" });
+      }
+
       console.log(`test-runner [${jobId}]: all ${totalCases} cases complete, persisting summary`);
 
       const scorecard = buildScorecard(scored as ScoredCase[]);
@@ -350,4 +422,20 @@ function jsonErr(status: number, message: string) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+async function loadMenuNames(supabase: any, shopId: string): Promise<Set<string>> {
+  const { data: menus } = await supabase
+    .from("menus")
+    .select("id")
+    .eq("shop_id", shopId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (!menus?.length) return new Set<string>();
+  const { data: items } = await supabase
+    .from("menu_items")
+    .select("name")
+    .eq("menu_id", menus[0].id)
+    .eq("active", true);
+  return new Set<string>((items ?? []).map((i: { name: string }) => i.name));
 }

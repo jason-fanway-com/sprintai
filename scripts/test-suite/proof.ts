@@ -1,19 +1,22 @@
 #!/usr/bin/env deno run --allow-net --allow-env --allow-read
 /**
- * proof.ts — Deterministic Acceptance Engine (Phase 1a)
+ * proof.ts — LOCAL DEV TOOL ONLY — NOT the production gate.
+ *
+ * The authoritative production grader is supabase/functions/test-runner/index.ts
+ * (the server-side edge function triggered by pg_cron). This CLI exists for
+ * interactive / diagnostic use during development and debugging.
+ *
+ * BOTH proof.ts and test-runner import the SAME verifiers from
+ * _shared/test-suite/cart-ops.ts (verifyCartOpsInvariants, verifyStatedTotal,
+ * verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence)
+ * and _shared/test-suite/hours-closed.ts (verifyHoursClosed). They MUST produce
+ * identical proof_pass results for the same shop at the same commit. Any
+ * divergence is a bug in the import contract, not an acceptable variance.
  *
  * Usage: deno run --allow-net --allow-env --allow-read scripts/test-suite/proof.ts <shop_id>
  *        deno run --allow-net --allow-env --allow-read scripts/test-suite/proof.ts <shop_id> --timeout-test
  *
- * Runs every generated case against the LIVE chat-sms edge function for a
- * single shop. Grades EVERY case with DETERMINISTIC invariants ONLY — no LLM
- * judge anywhere in this file.
- *
  * Final line: "PROOF: N/N pass"  |  exit 0 iff 100% pass, else exit 1.
- *
- * --timeout-test: point chat-sms URL at a bad host to prove the timeout/retry
- *                 path works (that case is marked harness-timeout, others
- *                 unaffected).
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

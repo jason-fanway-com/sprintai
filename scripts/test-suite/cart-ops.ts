@@ -29,6 +29,8 @@ export interface InvariantResult {
   description: string;
   passed: boolean;
   detail: string;
+  /** true when materially evaluated (claims examined / cart tracked); false when trivially passed with nothing to check. */
+  applied: boolean;
 }
 
 export interface CartOpsVerification {
@@ -212,6 +214,8 @@ function extractClaimedItems(text: string): string[] {
 export interface StatedTotalResult {
   passed: boolean;
   detail: string;
+  /** true when a total was actually compared against the cart; false when there was nothing to verify. */
+  applied: boolean;
 }
 
 /**
@@ -230,7 +234,7 @@ export interface StatedTotalResult {
 export function verifyStatedTotal(run: RunResult): StatedTotalResult {
   const transcript = run.transcript;
   if (!transcript.length) {
-    return { passed: true, detail: "No transcript — skipping stated-total check" };
+    return { passed: true, detail: "No transcript — skipping stated-total check", applied: false };
   }
 
   // Scan assistant replies in reverse for a quoted total with corresponding cart
@@ -245,6 +249,7 @@ export function verifyStatedTotal(run: RunResult): StatedTotalResult {
         return {
           passed: false,
           detail: `Bot quoted total $${(quoted.cents / 100).toFixed(2)} but cart is empty`,
+          applied: true,
         };
       }
       const expected = expectedTotalCents(cart);
@@ -252,17 +257,19 @@ export function verifyStatedTotal(run: RunResult): StatedTotalResult {
         return {
           passed: true,
           detail: `Stated total $${(quoted.cents / 100).toFixed(2)} matches cart-derived total $${(expected / 100).toFixed(2)} (subtotal $${(cartSubtotalCents(cart) / 100).toFixed(2)} + $0.99 fee)`,
+          applied: true,
         };
       }
       return {
         passed: false,
         detail: `Stated total $${(quoted.cents / 100).toFixed(2)} ≠ cart-derived total $${(expected / 100).toFixed(2)} (diff $${((quoted.cents - expected) / 100).toFixed(2)})`,
+        applied: true,
       };
     }
   }
 
   // No quoted total found — nothing to verify against
-  return { passed: true, detail: "No stated total to verify against cart" };
+  return { passed: true, detail: "No stated total to verify against cart", applied: false };
 }
 
 // ── Hallucination Guard ──────────────────────────────────────────────────
@@ -318,6 +325,7 @@ export function verifyHallucinationGuard(
     "name", "text", "texts", "tip", "fee", "fees",
   ]);
 
+  let claimCount = 0;
   const unknownClaims: string[] = [];
 
   for (const turn of run.transcript) {
@@ -331,6 +339,7 @@ export function verifyHallucinationGuard(
     while ((m = qtyPrefPat.exec(reply)) !== null) {
       const claimedName = m[2].trim().toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
+      claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${m[2].trim()}" claimed via "Nx Item": "${reply.slice(0, 80)}..."`);
       }
@@ -341,6 +350,7 @@ export function verifyHallucinationGuard(
     while ((m = addPat.exec(reply)) !== null) {
       const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
+      claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${m[1].trim()}" claimed via "added X": "${reply.slice(0, 80)}..."`);
       }
@@ -353,6 +363,7 @@ export function verifyHallucinationGuard(
       if (nonItemWords.has(claimedName)) continue;
       // Skip question/sentence fragments captured after "got it —" (not item claims)
       if (isQuestionOrFragment(claimedName)) continue;
+      claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${m[1].trim()}" claimed via "got it X": "${reply.slice(0, 80)}..."`);
       }
@@ -365,6 +376,7 @@ export function verifyHallucinationGuard(
       const claimedName = raw.toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
       if (/^(total|subtotal|your total|order total|grand total|delivery|service fee|tip|comes|that|including|plus)/i.test(claimedName)) continue;
+      claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${raw}" claimed via price-line: "${reply.slice(0, 80)}..."`);
       }
@@ -381,6 +393,7 @@ export function verifyHallucinationGuard(
           const claimedName = qm[1].trim().toLowerCase().replace(/\s+/g, " ");
           if (claimedName.length < 4) continue;
           if (nonItemWords.has(claimedName)) continue;
+          claimCount++;
           if (!menuNameCheck(claimedName, menuNorm)) {
             unknownClaims.push(`"${qm[1].trim()}" claimed via order-list: "${reply.slice(0, 80)}..."`);
           }
@@ -395,6 +408,7 @@ export function verifyHallucinationGuard(
       description: "No bot reply claims a menu item NOT on the effective menu (Ledger-truth check)",
       passed: false,
       detail: `Hallucinated items detected: ${unknownClaims.join("; ")}`,
+      applied: claimCount > 0,
     };
   }
 
@@ -403,6 +417,7 @@ export function verifyHallucinationGuard(
     description: "No bot reply claims a menu item NOT on the effective menu (Ledger-truth check)",
     passed: true,
     detail: "No hallucinated item names detected in bot replies",
+    applied: claimCount > 0,
   };
 }
 
@@ -499,10 +514,12 @@ export function verifyCartPersistence(
       description: "Cart must persist across non-mutating turns; never silently reset",
       passed: true,
       detail: "Only 1 turn — nothing to verify across turns.",
+      applied: false,
     };
   }
 
   let prevCount = 0;
+  let cartEverNonEmpty = false;
   const violations: string[] = [];
 
   for (let i = 0; i < transcript.length; i++) {
@@ -524,6 +541,7 @@ export function verifyCartPersistence(
       prevCount = 0;
     } else if (count > 0) {
       prevCount = count;
+      cartEverNonEmpty = true;
     }
   }
 
@@ -533,6 +551,7 @@ export function verifyCartPersistence(
       description: "Cart must persist across non-mutating turns; never silently reset",
       passed: false,
       detail: violations.join("; "),
+      applied: cartEverNonEmpty,
     };
   }
 
@@ -541,6 +560,7 @@ export function verifyCartPersistence(
     description: "Cart must persist across non-mutating turns; never silently reset",
     passed: true,
     detail: "Cart persisted correctly across all turns.",
+    applied: cartEverNonEmpty,
   };
 }
 
@@ -556,7 +576,7 @@ export async function verifyCheckoutFinalize(
 ): Promise<InvariantResult> {
   const transcript = run.transcript;
   if (!transcript.length) {
-    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No transcript — skipping checkout finalize check" };
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No transcript — skipping checkout finalize check", applied: false };
   }
 
   // Find the last quoted total from bot replies
@@ -576,7 +596,7 @@ export async function verifyCheckoutFinalize(
   // session_id. We query by the conversation tied to this test session.
   const sessionId = run.sessionId;
   if (!sessionId) {
-    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No session_id — skipping checkout finalize check" };
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No session_id — skipping checkout finalize check", applied: false };
   }
 
   // Look up the conversation → cart
@@ -589,7 +609,7 @@ export async function verifyCheckoutFinalize(
     .maybeSingle();
 
   if (!conv) {
-    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No conversation found for session — skipping checkout finalize check" };
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No conversation found for session — skipping checkout finalize check", applied: false };
   }
 
   const { data: cart } = await supabase
@@ -606,6 +626,7 @@ export async function verifyCheckoutFinalize(
       description: "order_carts row reaches confirmed, total_cents matches",
       passed: false,
       detail: "No order_cart found for conversation — checkout may not have been created",
+      applied: true,
     };
   }
 
@@ -615,6 +636,7 @@ export async function verifyCheckoutFinalize(
       description: "order_carts row reaches confirmed, total_cents matches",
       passed: false,
       detail: `order_cart phase is "${cart.phase}", expected "confirmed" or "checkout" (checkout link sent)`,
+      applied: true,
     };
   }
 
@@ -628,6 +650,7 @@ export async function verifyCheckoutFinalize(
         description: "order_carts row reaches confirmed, total_cents matches",
         passed: false,
         detail: `Checkout total mismatch: cart total_cents=$${(cart.total_cents / 100).toFixed(2)}, last quoted=$${(lastQuotedCents / 100).toFixed(2)}, diff=$${(diff / 100).toFixed(2)}`,
+        applied: true,
       };
     }
   }
@@ -637,6 +660,7 @@ export async function verifyCheckoutFinalize(
     description: "order_carts row reaches confirmed, total_cents matches",
     passed: true,
     detail: `Checkout finalize OK: cart phase="${cart.phase}", total_cents=$${((cart.total_cents ?? 0) / 100).toFixed(2)}${lastQuotedCents !== null ? `, quoted=$${(lastQuotedCents / 100).toFixed(2)}` : ""}`,
+    applied: true,
   };
 }
 
@@ -779,6 +803,7 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
       description: "Quoted total equals sum(cart_json line totals) + $0.99 service fee",
       passed: quotedTotalOk,
       detail: quotedTotalOk ? "Quoted total matches computed cart total" : quotedTotalDetail,
+      applied: true,
     });
   }
 
@@ -789,6 +814,7 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
       description: "Every displayed item in summary exists in cart_json at same qty",
       passed: displayedItemsOk,
       detail: displayedItemsOk ? "All displayed items found in cart_json" : displayedItemsDetail,
+      applied: true,
     });
   }
 
@@ -798,6 +824,7 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
     description: "Tip/name/question turns never change item quantities",
     passed: noMutationViolations.length === 0,
     detail: noMutationViolations.length === 0 ? "No non-order mutations detected" : noMutationViolations.join("; "),
+    applied: true,
   });
 
   // Invariant 4: correction_reflected
@@ -806,6 +833,7 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
     description: "Corrections that reduce/remove are reflected in cart_json",
     passed: correctionViolations.length === 0,
     detail: correctionViolations.length === 0 ? "All corrections reflected in cart" : correctionViolations.join("; "),
+    applied: true,
   });
 
   // Invariant 5: no_duplicate_lines
@@ -814,6 +842,7 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
     description: "No duplicate lines for same menu_item_id + modifiers",
     passed: noDupesPassed,
     detail: noDupesPassed ? "No duplicate cart lines" : noDupesDetail,
+    applied: true,
   });
 
   return {
