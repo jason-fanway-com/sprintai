@@ -48,6 +48,9 @@ export interface DesiredItem {
   sizeLabel: string;
   displayOrder: number;
   groups: DesiredGroup[];
+  promptFor: string;   // raw CSV prompt_for column (semicolon-joined)
+  upsell: string;     // raw CSV upsell column (semicolon-joined)
+  modifiersJson: Array<{ name: string; price_cents: number }> | null; // flatden modifier list for chat-sms
 }
 
 export interface ImportPlan {
@@ -208,6 +211,20 @@ export function buildImportPlan(rows: CanonicalRow[], menuName: string): ImportP
       }
     }
 
+    // Flatten all modifier choices across all groups into modifiers_json shape
+    // chat-sms reads this for fuzzy modifier matching (e.g. "with butter").
+    const modSeen = new Set<string>();
+    const modifiersJson: Array<{ name: string; price_cents: number }> = [];
+    for (const g of groups) {
+      for (const c of g.choices) {
+        const key = c.name.toLowerCase().trim();
+        if (!modSeen.has(key)) {
+          modSeen.add(key);
+          modifiersJson.push({ name: c.name, price_cents: c.priceCents });
+        }
+      }
+    }
+
     items.push({
       importKey: itemKey,
       name: fullName,
@@ -217,6 +234,9 @@ export function buildImportPlan(rows: CanonicalRow[], menuName: string): ImportP
       sizeLabel,
       displayOrder: idx,
       groups,
+      promptFor: r.prompt_for.trim(),
+      upsell: r.upsell.trim(),
+      modifiersJson: modifiersJson.length > 0 ? modifiersJson : null,
     });
   });
 

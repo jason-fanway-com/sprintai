@@ -149,6 +149,9 @@ async function upsertItem(
     size_label: d.sizeLabel || null,
     import_key: d.importKey,
     display_order: d.displayOrder,
+    prompt_for: d.promptFor || null,
+    upsell: d.upsell || null,
+    modifiers_json: d.modifiersJson ?? null,
     active: true,
     is_available: true,
   };
