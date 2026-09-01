@@ -21,7 +21,8 @@ import { buildScorecard, formatScorecard, type ScoredCase } from "../_shared/tes
 import { verifyCartOpsInvariants, verifyStatedTotal } from "../_shared/test-suite/cart-ops.ts";
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
 import { persistResults } from "../_shared/test-suite/persist.ts";
-import { generateRootCauseFix } from "../_shared/test-suite/fix.ts";
+// fix.ts NOT imported here — root-cause generation is a SEPARATE
+// post-run/on-demand concern, never called inline in the scoring loop.
 import { verifyCheckoutFinalize } from "../_shared/test-suite/cart-ops.ts";
 import type { AnyCase } from "../_shared/test-suite/library.ts";
 
@@ -76,6 +77,66 @@ Deno.serve(async (_req: Request) => {
       });
 
       cases = genResult.cases;
+
+      // ── P1: case_filter + max_cases — deterministic subset for smoke runs ──
+      const caseFilter: string[] | undefined = (job as any).case_filter;
+      const maxCasesRaw: unknown = (job as any).max_cases;
+      const preCount = cases.length;
+
+      // ── case_filter (loud-fail contract) — applied FIRST on full generated set ──
+      if (caseFilter != null) {
+        if (!Array.isArray(caseFilter) || caseFilter.length === 0) {
+          console.warn(
+            `test-runner [${jobId}]: case_filter=${JSON.stringify(caseFilter)} INVALID — must be a non-empty array. ` +
+            `Filter NOT applied. ${cases.length} cases will run.`,
+          );
+        } else {
+          const filterSet = new Set(caseFilter);
+          const postFilter = cases.filter((c) => filterSet.has(c.id));
+          if (postFilter.length === 0) {
+            console.warn(
+              `test-runner [${jobId}]: case_filter matched ZERO of ${cases.length} cases — filter is stale or wrong. ` +
+              `Falling through to full run.`,
+            );
+          } else if (postFilter.length === cases.length) {
+            console.warn(
+              `test-runner [${jobId}]: case_filter is a NO-OP — all ${cases.length} cases matched. Running full suite.`,
+            );
+          } else {
+            cases = postFilter;
+            console.log(
+              `test-runner [${jobId}]: case_filter applied: ${cases.length} of ${preCount} matched`,
+            );
+          }
+        }
+      }
+
+      // ── max_cases (loud-fail contract) — applied SECOND on filtered result ──
+      let maxCases: number | undefined;
+      if (maxCasesRaw != null) {
+        if (typeof maxCasesRaw === "number" && Number.isInteger(maxCasesRaw) && maxCasesRaw > 0) {
+          maxCases = maxCasesRaw;
+        } else {
+          console.warn(
+            `test-runner [${jobId}]: max_cases=${JSON.stringify(maxCasesRaw)} INVALID — must be a positive integer, ` +
+            `got ${typeof maxCasesRaw}. Cap NOT applied. ${cases.length} cases will run.`,
+          );
+        }
+
+        if (typeof maxCases === "number" && maxCases >= cases.length) {
+          console.warn(
+            `test-runner [${jobId}]: max_cases=${maxCases} has NO EFFECT — >= total cases (${cases.length}). Running full suite.`,
+          );
+        }
+      }
+
+      if (typeof maxCases === "number" && maxCases < cases.length) {
+        cases = cases.slice(0, maxCases);
+        console.log(
+          `test-runner [${jobId}]: max_cases=${maxCases} cap applied (${preCount} -> ${cases.length})`,
+        );
+      }
+
       totalCases = cases.length;
       shopName = genResult.shop.name;
       shop = { id: genResult.shop.id, name: genResult.shop.name, tenant_id: genResult.shop.tenant_id };
@@ -109,11 +170,6 @@ Deno.serve(async (_req: Request) => {
       supabaseUrl,
       serviceRoleKey,
     };
-    const fixConfig = {
-      fixApiKey: anthropicKey,
-      fixModel: "deepseek/deepseek-v4-flash",
-    };
-
     for (let i = caseIdx; i < endIdx; i++) {
       const tc = cases[i] as AnyCase;
       const tcId = tc.id;
@@ -175,16 +231,11 @@ Deno.serve(async (_req: Request) => {
         if (!verify.passed) judgeResult = { ...judgeResult, passed: false };
       }
 
-      let fix = null;
-      if (!judgeResult.passed) {
-        try {
-          fix = await generateRootCauseFix(fixConfig, runResult, tc, judgeResult);
-        } catch (e) {
-          console.log(`  fix gen failed for ${tcId}: ${(e as Error).message}`);
-        }
-      }
-
-      scored.push({ testCase: tc, judge: judgeResult, run: runResult, fix });
+      // fix-gen is NOT called in the scoring loop — it lives in a separate
+      // post-run pass (or on-demand when a human opens a failing case in the
+      // dashboard).  An LLM call per failing case in the cron tick was the
+      // throughput bottleneck (0.03 cases/min with v2's higher fail rate).
+      scored.push({ testCase: tc, judge: judgeResult, run: runResult, fix: null });
 
       // Persist progress after each case (crash-safe checkpoint)
       await supabase.from("test_run_queue").update({
