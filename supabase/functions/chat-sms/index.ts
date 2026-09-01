@@ -3704,70 +3704,72 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // ── Guard 4 v2: Under-populated cart → ASK, never auto-add ──────────
+  // ── Guard 4 v3: Multi-item silent drop → ASK, never auto-add ───────
   // Jason's hard rule (2026-09-01): the cart must NEVER auto-add an item.
-  // When the LLM is closing the order but the customer referenced menu items
-  // that aren't in the cart, we APPEND a single warm upsell/ask line to the
-  // reply. We never call add_item, never mutate cart_json.
   //
-  // Detection: isClosingReply(reply) — the reply looks like a close/summary.
-  // Then cross-reference conversation history against menu items to find
-  // what the customer named but isn't in the cart.
+  // V2 only fired on closing replies — but the LLM silently drops items
+  // from multi-item ordering messages ("Shrimp Scampi and a Pierogie" →
+  // only adds one) when it replies with a non-closing prompt like "What
+  // else can I add?" This guard catches those drops.
   //
-  // SAFEGUARDS (same as v1):
-  //   a) Only fires when reply IS closing.
-  //   b) Prior-turn messages scanned only if they contain ordering
-  //      conjunctions ("and", "also", "plus"). Pure questions excluded.
-  //   c) Match is against real menu items only (buildMenuItemNames).
-  //   d) Bidirectional substring cart-match ("Shrimp Scampi" must not appear
-  //      in any cart item).
-  //   e) NEW: Negation filter — items in negated phrases ("no pepperoni",
-  //      "remove the fries", "don't want the coke") are suppressed entirely.
-  //   f) Narrowing-order guard — "just"/"only"/"that's it"/"remove" in the
-  //      current message suppresses prior-history scanning.
+  // TWO DETECTION MODES:
+  //   MODE A (closing reply): Same as v2 — cross-reference ALL history
+  //     against the cart. Catches items referenced across multiple turns.
+  //   MODE B (non-closing, multi-item current message): Scan ONLY the
+  //     current message when it contains ordering conjunctions ("and",
+  //     "also", "plus", "with") AND is not a question. Catches the LLM
+  //     adding only 1 of N items in a single turn.
+  //
+  // Both modes: never call add_item, never mutate cart_json. Only append
+  // an upsell ask line.
+  //
+  // SAFEGUARDS:
+  //   a) Match is against real menu items only (buildMenuItemNames).
+  //   b) Bidirectional substring cart-match.
+  //   c) Negation filter — items in negated phrases suppressed.
+  //   d) Narrowing-order guard — "just"/"only"/"remove" suppresses
+  //      prior-history scanning.
+  //   e) MODE B: Only scans single-turn ordering messages (not questions).
   //
   // HONEST LIMITS:
   //   - If the customer uses phrasing the menu-name scanner doesn't match,
   //     the guard won't fire.
-  //   - If the reply is NOT closing, this guard won't catch it.
-  //   - Prefer under-asking to nagging. A false ask is annoying; a false add
-  //     is money. We err on the side of silence.
-  if (!checkoutUrl && guardCart.length > 0 && isClosingReply(reply)) {
-    const menuItemNames = buildMenuItemNames(effectiveMenu);
-    // If the customer's current message narrows/limits the order
-    // ("just X", "only X", "that's it", "nothing else"), skip
-    // prior-message scanning to avoid asking about items the customer
-    // explicitly dropped.
-    const currentNarrowsOrder = /\b(?:just|only|that['\u2019]s it|that is it|nothing else|no(?:thing)? more|i don['\u2019]t want|i don['\u2019]t need|skip|drop|remove|actually (?:just|only)|scratch|never ?mind|narrow(?:ing)?|let['\u2019]s (?:just|only)|i['\u2019]ll (?:just|only) (?:get|have|take|do)|make it (?:just|only)|that['\u2019]s enough|that['\u2019]s fine)\b/i.test(userMessage.toLowerCase());
-    const historyToScan = currentNarrowsOrder
-      ? [{ role: "user" as const, content: userMessage }]
-      : [{ role: "user" as const, content: userMessage },
-         ...history.filter(h => h.role === "user")];
-    let referenced = extractCustomerReferencedItems(
-      historyToScan,
-      menuItemNames,
-    );
-    // Negation filter: remove items that appear inside a negated phrase
-    // in the current message ("no pepperoni pizza", "don't want fries").
-    referenced = filterNegatedItems(referenced, userMessage);
-    if (referenced.size === 0) {
-      // All detected items were negated — nothing to ask about.
-    } else {
-      const missing = findMissingCartItems(referenced, guardCart);
-      if (missing.length > 0) {
-        console.warn(`[chat-sms] GUARD 4 v2 (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-        // Build a single warm upsell/ask line. Never mutate cart_json.
-        // Never call executeTool("add_item", ...).
-        let upsellLine: string;
-        if (missing.length === 1) {
-          upsellLine = `Want me to add the ${missing[0].toLowerCase()} too, or are you all set?`;
-        } else {
-          const list = missing.map((n, i) => i === missing.length - 1 ? `and ${n.toLowerCase()}` : n.toLowerCase()).join(', ');
-          upsellLine = `Did you also want ${list}, or good to go?`;
+  //   - Prefer under-asking to nagging.
+  if (!checkoutUrl && guardCart.length > 0) {
+    const replyIsClosing = isClosingReply(reply);
+
+    // MODE B: Non-closing multi-item current message → scan current msg only.
+    const msgHasOrderConj = /\b(?:and|also|plus|with|too|as well)\b/i.test(userMessage.trim());
+    const msgIsQuestion = /^(?:do you|do ya|can you|can i|could you|could i|is there|are there|what|how|where|when|who|why|tell me|do y'all|do ya'll)\b/i.test(userMessage.trim());
+    const multiItemInCurrentMsg = msgHasOrderConj && !msgIsQuestion;
+
+    if (replyIsClosing || multiItemInCurrentMsg) {
+      const menuItemNames = buildMenuItemNames(effectiveMenu);
+      const currentNarrowsOrder = /\b(?:just|only|that['\u2019]s it|that is it|nothing else|no(?:thing)? more|i don['\u2019]t want|i don['\u2019]t need|skip|drop|remove|actually (?:just|only)|scratch|never ?mind|narrow(?:ing)?|let['\u2019]s (?:just|only)|i['\u2019]ll (?:just|only) (?:get|have|take|do)|make it (?:just|only)|that['\u2019]s enough|that['\u2019]s fine)\b/i.test(userMessage.toLowerCase());
+      // MODE B: only scan current message. MODE A (closing): scan history.
+      const historyToScan = (!replyIsClosing || currentNarrowsOrder)
+        ? [{ role: "user" as const, content: userMessage }]
+        : [{ role: "user" as const, content: userMessage },
+           ...history.filter(h => h.role === "user")];
+      let referenced = extractCustomerReferencedItems(
+        historyToScan,
+        menuItemNames,
+      );
+      referenced = filterNegatedItems(referenced, userMessage);
+      if (referenced.size > 0) {
+        const missing = findMissingCartItems(referenced, guardCart);
+        if (missing.length > 0) {
+          const mode = replyIsClosing ? "v2-closing" : "v3-multi-item";
+          console.warn(`[chat-sms] GUARD 4 ${mode} (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+          let upsellLine: string;
+          if (missing.length === 1) {
+            upsellLine = `Want me to add the ${missing[0].toLowerCase()} too, or are you all set?`;
+          } else {
+            const list = missing.map((n, i) => i === missing.length - 1 ? `and ${n.toLowerCase()}` : n.toLowerCase()).join(', ');
+            upsellLine = `Did you also want ${list}, or good to go?`;
+          }
+          reply = `${reply}\n\n${upsellLine}`;
         }
-        // Append the upsell line to the existing reply — keep the LLM's
-        // natural tone and make the ask feel like part of the conversation.
-        reply = `${reply}\n\n${upsellLine}`;
       }
     }
   }
