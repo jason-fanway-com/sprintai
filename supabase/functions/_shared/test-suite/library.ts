@@ -74,6 +74,8 @@ export interface ConversationalCase {
   success_criteria: SuccessCriterion[];
   /** Test hours mode: "open" (default) or "closed". */
   hoursMode?: "open" | "closed";
+  /** Assert the cart shrinks by at least one item during the conversation. */
+  expectCartShrink?: boolean;
 }
 
 /** Union type carried through the runner/judge/scorecard pipeline. */
@@ -353,6 +355,11 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     label: "Change mind — cancel one item after adding multiple",
     persona: "Customer who tends to over-order, then scales back. Add two items, then cancel one.",
     goal: "Start by ordering a sesame bagel with butter and a grilled cheese. Then decide you don't want the grilled cheese and remove it. Keep the sesame bagel with butter.",
+    // Customer genuinely removes an item → cart shrinks. Declare it so the
+    // correction_reflected invariant asserts the shrink instead of flagging it
+    // as lost_cart. Seed orders both items at once ([]→[2]→[1]), so the only
+    // populated cart-pair is the shrink. (INSTRUCTION-05 P2)
+    expectCartShrink: true,
     max_turns: 5,
     seed_message: "Hey, I want a sesame bagel with butter and a grilled cheese",
     success_criteria: [
