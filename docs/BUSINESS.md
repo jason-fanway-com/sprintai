@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -160,10 +160,12 @@ These are encoded in the architecture, not just in marketing.
   +$1") now actually add to the cart total. A multi-item message with one
   off-menu item adds the valid items instead of rejecting the whole order.
   Ordering a plain bagel by exact name no longer triggers a cream-cheese
-  upsell. The bot quotes the menu's exact item names and units. Four
+  upsell. The bot quotes the menu's exact item names and units. Eleven
   deterministic grounding guards now intercept hallucinations before they
   reach the customer: off-menu container words ("tub", "pint"), false
-  cart-contents claims, phantom "added to cart" confirmations, and a
+  cart-contents claims, phantom "added to cart" confirmations, under-populated
+  cart detection after multi-item messages (Guard 4 v2/v3: detects silently
+  dropped items and asks, never auto-adds), and a
   phase=checkout guard that prevents a cart from entering checkout without
   a real Stripe session, and a fake-checkout guard that deterministically
   replaces a post-`submit_order` reply with the real checkoutUrl — all
@@ -340,14 +342,11 @@ These are encoded in the architecture, not just in marketing.
   `https://pay.getsprintai.com/o/<code>` (35 chars) instead of the raw
   612-char Stripe URL, so the pay link is a single SMS segment and matches
   what the 10DLC campaign samples show carriers approved.
-- **Scorer is version-frozen (v1).** CartOps deterministic invariants are
-  authoritative over the LLM judge — a cart that satisfies the invariants
-  force-passes. `scorer_version` is recorded on every test run so the
-  dashboard can separate results scored under different rules. Changing
-  scoring logic requires a version bump; freeze stops run-to-run score
-  bounce.
+- **Scorer is version-frozen (SCORER_VERSION=3).** Proof scoring is split: `proof_score` (deterministic invariants, three-state — passed/failed/ungraded, graded-only pass%) and `quality_score` (advisory — LLM judge demoted, can flag issues but cannot fail a Proof-valid case). `proofUngraded > 0` is a hard gate. Every case records `applied_invariants[]` for audibility. Smoke mode supports `max_cases` + `case_filter` for capped deterministic subsets.
 - **Cart + checkout guards are deterministic.** `pickup_name` and `order_type`
-  are hard gates before `submit_order`; a cart can't enter `phase=checkout`
+  are hard gates before `submit_order`; `order_type` defaults to 'pickup' on
+  cart creation for delivery-disabled shops so pickup-only shops never deadlock.
+  A cart can't enter `phase=checkout`
   without a real Stripe session (downgraded to `review` if not). Off-menu
   item detection is shop-agnostic — the same guard works for bagel shop #1
   and pizza shop #10,000.

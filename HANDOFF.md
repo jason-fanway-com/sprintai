@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -369,8 +369,12 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
 - **The QA suite runs autonomously server-side.** `test-runner` edge function
   (pg_cron, every 60s) drains `test_run_queue` and runs the full Proof/CartOps
   battery with per-case checkpointing and incremental scoring — no Mac/launchd
-  dependency for the primary QA loop. The launchd worker (`worker.ts`) is the
-  local fallback.
+  dependency for the primary QA loop. Supports smoke mode (`max_cases` +
+  `case_filter` for capped deterministic subset), split proof/quality scoring
+  (SCORER_VERSION=3: LLM judge demoted to advisory, three-state proof with
+  null=ungraded, graded-only `proof_pass_pct`, `proofUngraded > 0` hard gate),
+  and `applied_invariants` reason-recording. The launchd worker (`worker.ts`)
+  is the local fallback.
 - **The ordering bot now answers direct customer questions regardless of context.**
   If a customer asks "do you have gluten-free bagels?" while also declining to
   order more, the bot answers the question before advancing. Questions mixed with
@@ -457,7 +461,7 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   The checkout flow now explicitly states the fee-inclusive total from the
   authoritative `order_carts.total_cents` (incl. $0.99 service fee, delivery,
   tip) — disclosure is code-driven, not model-hoped.
-- **Deterministic grounding guards are live.** Ten code-path intercepts in
+- **Deterministic grounding guards are live.** Eleven code-path intercepts in
   `chat-sms` prevent LLM hallucination:
   - Guard 1b: off-menu portion/container words ("tub", "pint") not in the
     shop's menu vocabulary are suppressed.
@@ -482,8 +486,19 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
     is submittable, bypass LLM entirely and call `submit_order` directly —
     prevents LLM hallucination (doubling cart via spurious `add_item`) on
     the pickup-name turn.
+  - Guard 4 v2/v3 (under-populated cart backstop): when the LLM silently
+    drops items from the cart on multi-item messages, the guard appends
+    one warm upsell/ask line ("Want me to add the shrimp scampi too?").
+    V2 fires on closing replies; V3 catches drops on non-closing replies
+    where the current message contains ordering conjunctions. Hard rule:
+    cart NEVER auto-adds — upsell/ask only.
   These are code-path intercepts, not prompt preferences — they fire
   regardless of what the LLM intended.
+- **order_type is set on cart creation.** Cart insert sets `order_type`:
+  'pickup' for delivery-disabled shops, null for delivery-enabled ones.
+  The C2 name-turn deadlock breaker and phantom-link guard both default to
+  pickup when still null — pickup-only shops can no longer deadlock on
+  `submit_order`'s C1 gate.
 - **CartOps integrity — `cart_json` is the single source of truth.** A bare
   tip reply never mutates items (the LLM spuriously calling `add_item` on a
   tip turn was the bug); quantity corrections ("just one") write back to

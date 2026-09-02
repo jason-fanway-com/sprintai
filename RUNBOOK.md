@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -219,11 +219,11 @@ Processed IDs: `~/.sprintai-bridge/processed-ids.txt`
 
 ### Test-run worker (onboarding QA)
 
-**Scorer is FROZEN at `SCORER_VERSION = 2` (2026-09-01).**
-Bumped 1 → 2 per specs 1 (proof grading coverage) and 2 (single-grader):
-category-string dispatch replaced with capability dispatch so all money
-invariants (totals, checkout-finalize) run on every case where they apply,
-not just `cart-ops`-category cases; `verifyStatedTotal` can now fail.
+**Scorer is FROZEN at `SCORER_VERSION = 3` (2026-09-02).**
+Bumped 1 → 2 for specs 1 (proof grading coverage: capability dispatch, verifyStatedTotal can fail)
+and 2 (single-grader). Bumped 2 → 3 for instruction-02: `proof_score` / `quality_score` split
+(judge demoted to advisory), proof three-state (null = ungraded, not pass),
+material-application detection, and `applied_invariants` reason-recording.
 Do not change scoring logic (invariants, judge weighting, pass/fail
 thresholds) without bumping the version and recording why here.
 
@@ -255,6 +255,23 @@ deterministically from `cart_json` and the database. Exit 0 iff 100% pass.
 
 Proof is the pre-launch guarantee: an owner gets Proofed before go-live and the
 report shows that every money-path case passed against their exact menu.
+
+Scoring is split into two signals (spec2, SCORER_VERSION=3):
+- **proof_score** (deterministic): invariants applied per case —
+  `proofPassed` is three-state: true (materially passed), false (materially
+  failed), null (ungraded — no invariants ran). `proof_pass_pct` is computed
+  over graded cases only, and `proofUngraded > 0` is a hard gate (every case
+  that can carry invariants must be graded).
+- **quality_score** (advisory): LLM judge is demoted to advisory — it can
+  flag issues but cannot fail a Proof-valid case.
+
+Smoke mode: `max_cases` + `case_filter` on the queue row cap a run to a
+deterministic subset (filter-first, then cap). The fix-gen path is off on
+capped/smoke runs.
+
+Reason-recording: every case result carries `applied_invariants[]` — the
+names of the exact invariants that ran — so a case with `proofPassed=null`
+is auditable (no invariants applied = deliberately ungraded, not a bug).
 
 Key files: `proof.ts` (entrypoint), `cart-ops.ts` (Proof invariants P1/P2/P3,
 claim-first hallucination guard, verifyCartPersistence), `runner.ts` (hardened
@@ -444,7 +461,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–070). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–077). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -621,7 +638,17 @@ Phase 2 merchant identity verification.
     handles conversation only — the Ledger owns every number the customer
     sees. Spec: `docs/specs/2026-08-30-orderbrain-deterministic-render.md`.
 
-14. **Customer-question precedence (chat-sms)**: The bot answers direct
+14. **Guard 4 v2/v3 — under-populated cart asks, never auto-adds (chat-sms).**
+    V2: when a closing reply claims the cart has fewer items than the
+    conversation history supports, the bot appends one warm upsell/ask line —
+    cart is never mutated. V3: catches multi-item silent drops on non-closing
+    replies where ordering conjunctions ("and", "also", "plus", "with") in the
+    current message suggest multiple items but the cart got only one. MODE B
+    scans the current message for menu items and appends an upsell ask line if
+    any referenced items are missing from the post-LLM cart. Hard rule (Jason
+    2026-09-01): cart NEVER auto-adds; upsell/ask only.
+
+15. **Customer-question precedence (chat-sms)**: The bot answers direct
     customer questions (e.g. "do you have gluten-free bagels?") before
     advancing the order, even when the question is mixed with declines or
     order-completion signals. Category-level declines (e.g. asking for a
@@ -631,7 +658,14 @@ Phase 2 merchant identity verification.
     This is a prompt-rule in system-prompt CRITICAL tier, enforced alongside
     the deterministic grounding guards above.
 
-16. **Cart-population — required options no longer drop items (chat-sms).**
+16. **order_type defaulted on cart insert (chat-sms).** Cart creation now sets
+    `order_type`: 'pickup' for delivery-disabled shops, null for
+    delivery-enabled shops. The C2 name-turn deadlock breaker and phantom-link
+    guard both default to pickup when `order_type` is still null, ensuring
+    `submit_order`'s C1 gate (order_type must be set) can't deadlock a
+    pickup-only shop.
+
+17. **Cart-population — required options no longer drop items (chat-sms).**
     Multi-item messages where one item has a required modifier option (e.g.
     "Shrimp Scampi and a Pierogie") no longer silently drop the optioned item.
     `add_item` collects missing required groups into `pending_options[]` on the
@@ -640,7 +674,7 @@ Phase 2 merchant identity verification.
     if any item still has pending options, ensuring the customer always resolves
     required choices before paying.
 
-15. **CartOps integrity (chat-sms)**: `cart_json` is the single source of
+18. **CartOps integrity (chat-sms)**: `cart_json` is the single source of
     truth. A bare tip reply never mutates items (no spurious `add_item`);
     quantity corrections ("just one") write back to `cart_json` and persist
     BEFORE any reply; every quoted total is computed from `cart_json`
@@ -656,7 +690,7 @@ Phase 2 merchant identity verification.
     is rescue-only: it force-passes on a match but defers to the judge on a
     mismatch, since fixture-guessed totals can't prove a bot error.
 
-17. **Closed-hours gate is deterministically tested.** `chat-sms` accepts a
+19. **Closed-hours gate is deterministically tested.** `chat-sms` accepts a
     gated `test_hours=open|closed` param (web/test only, never on live keys)
     that forces the closed branch through `effectiveOpen`. The suite's
     `hours-closed` critical case (`scripts/test-suite/hours-closed.ts`)
@@ -664,7 +698,7 @@ Phase 2 merchant identity verification.
     cart, and generates no payment link — proving per shop, automatically,
     that the bot never takes an order the kitchen can't fulfill.
 
-16. **Delivery zone is fail-closed (chat-sms + go-live)**: A delivery address
+20. **Delivery zone is fail-closed (chat-sms + go-live)**: A delivery address
     is accepted only when geocoded as a positively-qualified, in-zone street
     match (`status=OK`, `partial_match !== true`, `location_type` ∈
     {ROOFTOP, RANGE_INTERPOLATED}, distance ≤ `delivery_radius_mi`). Any other
