@@ -69,5 +69,11 @@ verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC ses
 [functions.issue-detector]
 verify_jwt = false  # Scheduled sweep; invoked with service-role key, not by end users
 
+[functions.test-runner]
+verify_jwt = false  # Proof queue drainer; invoked by scheduled sweep with service-role
+                    # key, ignores req body, drains test_run_queue. MUST stay false —
+                    # a CLI redeploy defaulting this to true 401s every cron tick and
+                    # freezes the running job (incident 2026-09-02, Vito stuck at 4/128).
+
 [functions.pay-redirect]
 verify_jwt = false  # Public short-link redirect; no JWT needed
