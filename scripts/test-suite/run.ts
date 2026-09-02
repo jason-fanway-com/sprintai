@@ -19,12 +19,13 @@ import { runCase } from "./runner.ts";
 import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
 import { persistResults } from "./persist.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // Do not change scoring logic without recording why and incrementing this.
 const SCORER_VERSION = 3;
 import { generateRootCauseFix } from "./fix.ts";
-import { verifyCartOpsInvariants, verifyStatedTotal, type CartOpsVerification } from "./cart-ops.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
 
 // ── Config from env ────────────────────────────────────────────────────────
@@ -154,53 +155,122 @@ for (let i = 0; i < casesToRun.length; i++) {
     let judge = await judgeCase(judgeConfig, run, tc, genResult.shop);
     totalJudgeCost += judge.costCents;
 
-    // 3. CartOps HARD programmatic verification (replaces LLM judge for cart-ops cases)
-    let cartOpsVerify: CartOpsVerification | null = null;
-    if (tc.category === "cart-ops") {
-      cartOpsVerify = verifyCartOpsInvariants(run);
-      console.log(`  → CartOps invariants: ${cartOpsVerify.passed ? "PASS" : "FAIL"} (${cartOpsVerify.invariants.filter((i) => i.passed).length}/${cartOpsVerify.invariants.length})`);
-      for (const inv of cartOpsVerify.invariants) {
-        const mark = inv.passed ? "✓" : "✗";
-        console.log(`      ${mark} ${inv.id}: ${inv.detail}`);
-      }
-      // A1 (2026-08-28): Programmatic invariants are authoritative over LLM judge.
-      // When invariants pass, force-judge passed regardless of LLM verdict — the
-      // LLM may flag wrong_total when arithmetic is actually correct.
-      judge = cartOpsVerify.passed
-        ? { ...judge, passed: true }
-        : { ...judge, passed: false };
-    }
-
-    // 4. Hours-closed HARD programmatic verification (replaces LLM judge)
-    if (tc.category === "hours-closed") {
-      const hoursVerify = verifyHoursClosed(run);
-      console.log(`  → Hours-closed invariants: ${hoursVerify.passed ? "PASS" : "FAIL"} (${hoursVerify.invariants.filter((i) => i.passed).length}/${hoursVerify.invariants.length})`);
-      for (const inv of hoursVerify.invariants) {
-        const mark = inv.passed ? "✓" : "✗";
-        console.log(`      ${mark} ${inv.id}: ${inv.detail}`);
-      }
-      if (!hoursVerify.passed) {
-        judge = { ...judge, passed: false };
-      }
-    }
-
-    // 5. Stated-total programmatic verification (now fail-able, 1-arg)
+    // 3. Stated-total pre-check (console only)
     const totalCheck = verifyStatedTotal(run);
-    console.log(`  → Stated-total: ${totalCheck.passed ? "PASS" : "FAIL"} — ${totalCheck.detail}`);
-    if (!totalCheck.passed) {
-      judge = { ...judge, passed: false };
-    }
+    console.log(`  → Stated-total pre-check: ${totalCheck.passed ? "PASS" : "FAIL"} — ${totalCheck.detail}`);
 
-    const status = judge.passed ? "PASS" : "FAIL";
-    console.log(`  → ${status} | ${judge.criteria.filter(c => c.passed).length}/${judge.criteria.length} criteria | cost $${(judge.costCents / 100).toFixed(4)}`);
+    // ── v3 three-state scoring (mirrors edge function dispatch) ──────────
+    const qualityPassed = judge.passed;
+    const expectedItemCents = "expectedItemCents" in tc ? (tc as any).expectedItemCents : undefined;
+    const expectsCheckout = "expects_checkout" in tc ? (tc as any).expects_checkout === true : false;
+    const hoursMode = "hoursMode" in tc ? (tc as any).hoursMode : undefined;
+    const hasCart = (run.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
+    const appliedInvariants: string[] = [];
+    const detReasons: string[] = [];
+    let detPassed = true;
+    let anyInvariantApplied = false;
 
-    if (!judge.passed) {
-      for (const c of judge.criteria.filter(c => !c.passed)) {
-        console.log(`      ✗ ${c.id}: ${c.reason || "no reason"}`);
+    // CartOps — apply whenever server cart was produced
+    if (hasCart) {
+      const cartOpsVerify = verifyCartOpsInvariants(run);
+      let anyCartOpsApplied = false;
+      for (const inv of cartOpsVerify.invariants) {
+        appliedInvariants.push(`cartops:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
+        if (inv.applied) anyCartOpsApplied = true;
+      }
+      if (anyCartOpsApplied) anyInvariantApplied = true;
+      if (!cartOpsVerify.passed) {
+        detPassed = false;
+        const failed = cartOpsVerify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
+        detReasons.push(`cartops: ${failed.join("; ")}`);
       }
     }
 
-    scored.push({ testCase: tc, judge, run });
+    // Totals
+    if ((expectedItemCents ?? 0) > 0 || hasCart) {
+      appliedInvariants.push(`stated-total:${totalCheck.passed ? "PASS" : "FAIL"}`);
+      if (totalCheck.applied) anyInvariantApplied = true;
+      if (!totalCheck.passed) {
+        detPassed = false;
+        detReasons.push(`stated-total: ${totalCheck.detail}`);
+      }
+    }
+
+    // Checkout-finalize
+    if (expectsCheckout) {
+      const supabaseCheckout = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+      const checkoutCheck = await verifyCheckoutFinalize(supabaseCheckout as any, run);
+      appliedInvariants.push(`checkout-finalize:${checkoutCheck.passed ? "PASS" : "FAIL"}`);
+      if (checkoutCheck.applied) anyInvariantApplied = true;
+      if (!checkoutCheck.passed) {
+        detPassed = false;
+        detReasons.push(`checkout-finalize: ${checkoutCheck.detail}`);
+      }
+    }
+
+    // Hours-closed HARD verification
+    if (hoursMode === "closed") {
+      const hoursVerify = verifyHoursClosed(run);
+      let anyHoursApplied = false;
+      for (const inv of hoursVerify.invariants) {
+        appliedInvariants.push(`hours-closed:${inv.id}:${inv.passed ? "PASS" : "FAIL"}`);
+        if (inv.applied) anyHoursApplied = true;
+      }
+      if (anyHoursApplied) anyInvariantApplied = true;
+      if (!hoursVerify.passed) {
+        detPassed = false;
+        const failed = hoursVerify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
+        detReasons.push(`hours-closed: ${failed.join("; ")}`);
+      }
+    }
+
+    // Hallucination guard
+    {
+      const menuNames = await loadMenuNames(shopId);
+      if (menuNames.size > 0) {
+        const hg = verifyHallucinationGuard(run, menuNames);
+        appliedInvariants.push(`hallucination-guard:${hg.passed ? "PASS" : "FAIL"}`);
+        if (hg.applied) anyInvariantApplied = true;
+        if (!hg.passed) {
+          detPassed = false;
+          detReasons.push(`hallucination-guard: ${hg.detail}`);
+        }
+      }
+    }
+
+    // Cart persistence
+    {
+      const cp = verifyCartPersistence(run);
+      appliedInvariants.push(`cart-persistence:${cp.passed ? "PASS" : "FAIL"}`);
+      if (cp.applied) anyInvariantApplied = true;
+      if (!cp.passed) {
+        detPassed = false;
+        detReasons.push(`cart-persistence: ${cp.detail}`);
+      }
+    }
+
+    const proofPassed: boolean | null = anyInvariantApplied ? detPassed : null;
+    if (!anyInvariantApplied) {
+      appliedInvariants.push("no-invariant-applied");
+    }
+
+    const status = detPassed ? "PASS" : "FAIL";
+    const gradedLabel = anyInvariantApplied ? "" : " (ungraded)";
+    console.log(`  → Proof ${status}${gradedLabel} | Quality ${qualityPassed ? "PASS" : "FAIL"} | ${judge.criteria.filter(c => c.passed).length}/${judge.criteria.length} criteria | cost $${(judge.costCents / 100).toFixed(4)}`);
+
+    if (!detPassed) {
+      for (const r of detReasons) {
+        console.log(`      ✗ ${r}`);
+      }
+    }
+
+    scored.push({
+      testCase: tc, judge, run,
+      appliedInvariants,
+      deterministicReason: detReasons.join("; "),
+      proofPassed,
+      qualityPassed,
+    });
   } catch (e) {
     console.log(`  → CRASH: ${(e as Error).message}`);
     // Insert a synthetic failure
@@ -212,13 +282,19 @@ for (let i = 0; i < casesToRun.length; i++) {
       error: (e as Error).message,
     };
     const judge = await judgeCase(judgeConfig, fakeRun, tc, genResult.shop);
-    scored.push({ testCase: tc, judge, run: fakeRun });
+    scored.push({
+      testCase: tc, judge, run: fakeRun,
+      appliedInvariants: ["no-invariant-applied"],
+      deterministicReason: "",
+      proofPassed: null,
+      qualityPassed: false,
+    });
   }
 }
 
 // ── Fix loop: root cause + proposed fix for every FAILING case ────────────
 // Criticals first (they must never be left empty).
-const failedScored = scored.filter((s) => !s.judge.passed);
+const failedScored = scored.filter((s) => s.proofPassed === false);
 failedScored.sort((a, b) => {
   const rank = (c: string) => (c === "critical" ? 0 : 1);
   return rank(a.testCase.criticality) - rank(b.testCase.criticality);
@@ -301,3 +377,21 @@ try {
 }
 
 console.log("\n=== TEST SUITE COMPLETE ===");
+
+// ── Helper: load menu names for hallucination guard ─────────────────────
+async function loadMenuNames(shopId: string): Promise<Set<string>> {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+  const { data: menus } = await supabase
+    .from("menus")
+    .select("id")
+    .eq("shop_id", shopId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (!menus?.length) return new Set<string>();
+  const { data: items } = await supabase
+    .from("menu_items")
+    .select("name")
+    .eq("menu_id", menus[0].id)
+    .eq("active", true);
+  return new Set<string>((items ?? []).map((i: { name: string }) => i.name));
+}

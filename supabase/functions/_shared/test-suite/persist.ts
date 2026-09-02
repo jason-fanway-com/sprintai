@@ -69,9 +69,31 @@ export interface PersistResult {
   runId: string;
 }
 
+// ── Guards ───────────────────────────────────────────────────────────────
+
+/**
+ * Every scored case must carry a populated three-state proofPassed
+ * (true | false | null). `undefined` means the scoring path never ran the v3
+ * invariant dispatch — persisting it silently counted as PASS and produced a
+ * false 128/128 green (2026-09-02 NJB run 2deb0599). Fail loud BEFORE inserting
+ * any row so we never orphan a run row on bad data.
+ */
+export function assertValidProofData(scored: ScoredCase[]): void {
+  const bad = scored.find((s) => s.proofPassed === undefined);
+  if (bad) {
+    throw new Error(
+      `persist.ts: proofPassed is undefined for case ${bad.testCase.id} — ` +
+      `v3 scoring fields were never populated. The caller is not producing valid v3 data.`,
+    );
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export async function persistResults(input: PersistInput): Promise<PersistResult> {
+  // Fail loud on invalid v3 data before any DB write (see assertValidProofData).
+  assertValidProofData(input.scored);
+
   const supabase = createClient(input.supabaseUrl, input.serviceRoleKey, {
     auth: { persistSession: false },
   });
@@ -142,7 +164,16 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
 
     // proof_passed = the gate value (deterministic invariants).
     // Three-state: true=materially passed, false=materially failed, null=ungraded.
-    const proofPassed = s.proofPassed === undefined ? true : s.proofPassed;
+    // SAFETY: proofPassed === undefined means the scoring path never populated
+    // v3 fields (CLI run.ts lacks the invariant dispatch that the edge function has).
+    // Treating undefined as pass silently produced false greens (2026-09-02 NJB 2deb0599).
+    if (s.proofPassed === undefined) {
+      throw new Error(
+        `persist.ts: proofPassed is undefined for case ${s.testCase.id} — ` +
+        `v3 scoring fields were never populated. The caller is not producing valid v3 data.`,
+      );
+    }
+    const proofPassed: boolean | null = s.proofPassed;
     // passed boolean (DB column): null proof → null, otherwise proofPassed
     const passedBool = proofPassed === null ? null : proofPassed;
     // quality_passed = LLM judge advisory

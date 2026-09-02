@@ -72,8 +72,8 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
     if (!categories[cat]) categories[cat] = { total: 0, passed: 0, failed: 0, passPct: 0 };
     categories[cat].total++;
 
-    // Three-state: true=materially passed, false=materially failed, null/undefined=ungraded/legacy
-    if (s.proofPassed === true || s.proofPassed === undefined) {
+    // Three-state: true=materially passed, false=materially failed, null/undefined=ungraded
+    if (s.proofPassed === true) {
       passed++;
       categories[cat].passed++;
     } else if (s.proofPassed === false) {
@@ -83,7 +83,7 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
 
     if (s.testCase.criticality === "critical") {
       criticalTotal++;
-      if (s.proofPassed === true || s.proofPassed === undefined) {
+      if (s.proofPassed === true) {
         criticalPassed++;
       } else if (s.proofPassed === false) {
         criticalFailures.push({
@@ -117,7 +117,7 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
     if (s.proofPassed === true) proofPass++;
     else if (s.proofPassed === false) proofFail++;
     else if (s.proofPassed === null) proofUngraded++;
-    else proofPass++; // undefined legacy
+    else proofUngraded++; // undefined = no v3 fields populated (e.g. CLI run.ts)
     if (s.qualityPassed === true) qualityPass++;
     else qualityFail++;
   }
