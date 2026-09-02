@@ -162,9 +162,16 @@ function findQuotedTotal(text: string): { cents: number; raw: string } | null {
     const sub = Math.round(parseFloat(m[1].replace(",", "")) * 100);
     return { cents: sub + 99, raw: `subtotal ${m[0]} + $0.99 fee` };
   }
-  // Pattern 3: keyword BEFORE amount — "total is $X.XX", "comes to $X.XX".
+  // Pattern 3: total-claim keyword IMMEDIATELY BEFORE amount — "total is $X.XX",
+  // "comes to $X.XX". Two guards against false positives (2026-09-02):
+  //   1. \bcomes? to\b — word boundaries so it never matches "come to" inside
+  //      "Welcome to Vito's Pizza" (greeting, not a total claim).
+  //   2. \D{0,15} — the amount must sit adjacent to the keyword. Real totals
+  //      read "total is $X" / "comes to $X" (gap ≤ ~8). A price quoted inside a
+  //      disambiguation question or options list ("did you mean the Greek Salad
+  //      ($10.99)?") is ~40 chars from any greeting keyword and is NOT a total.
   //   \btotal\b so it never matches inside "Subtotal" (handled above).
-  m = cleaned.match(/(?:\btotal\b|comes? to|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)\D*\$?(\d+[.,]\d{2})/i);
+  m = cleaned.match(/(?:\btotal\b|\bcomes? to\b|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)\D{0,15}\$?(\d+[.,]\d{2})/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
   // Pattern 4: Checkout link text with amount
   m = cleaned.match(/(?:pay|charge|amount)[:\s]*\$(\d+[.,]\d{2})/i);

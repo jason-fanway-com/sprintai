@@ -106,3 +106,27 @@ If the real hallucination no longer fails, the fix is too broad — stop.
 - `deno check` (or repo's typecheck) passes on changed files — show exit 0.
 - Commit message carries the (a)/(b)/(c) proof from guardrail 3 for each fix.
 - No diff outside the harness file list. Confirm `git diff --stat` touches only harness files.
+
+---
+
+## KNOWN-ACCEPTED FALSE POSITIVES — do not chase (Jason decision, 2026-09-02)
+
+Four deterministic-invariant false positives are **ACCEPTED as-is**. They are not bugs to fix.
+Do not re-open them, do not "improve" the invariant to catch them, do not rediscover them in a
+month and start churning. 98% with four documented, stable false positives is a better gate than
+one we keep destabilizing.
+
+**Root cause (all four, same disease):** the invariant is doing natural-language inference.
+Every attempt to fix a case in this class has produced a NEW false positive elsewhere. The class
+is net-negative to touch.
+
+| # | Shop / case | Invariant | What it misreads |
+|---|---|---|---|
+| 1 | Vito 510 | `stated-total` | reads a price inside a *clarifying question* as a quoted total |
+| 2 | Vito 517 | `stated-total` | same — price in a clarifying question treated as quote |
+| 3 | NJB `conv-multi-with-off-menu` | `correction_reflected` | misclassifies the correction turn |
+| 4 | NJB `conv-upsell-accepted` | `correction_reflected` | misclassifies the upsell-accept turn |
+
+**Rule:** if a change would flip any of these four, that change is out of scope — stop.
+Any new work on `stated-total` / `correction_reflected` must first prove it does NOT re-touch
+these cases. Gate is 98% with these four known-accepted.
