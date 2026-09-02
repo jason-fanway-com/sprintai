@@ -15,6 +15,7 @@ import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts"
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
+import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1856,18 +1857,8 @@ function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | nul
   return null;
 }
 
-// Guard 3b helper: detects when the model's reply claims an item was added
-// ("added X to your cart") but the cart didn't actually change in this turn.
-function claimsAddedWithoutMutation(reply: string, cartBefore: AnyCartItem[], cartAfter: AnyCartItem[]): boolean {
-  if (!reply) return false;
-  // Quick check: if cart grew, the add was real — no alarm.
-  if (cartAfter.length > cartBefore.length) return false;
-  // If cart contents changed (different items), the add was real.
-  if (JSON.stringify(cartBefore) !== JSON.stringify(cartAfter)) return false;
-  // Cart is identical. Check if reply claims an add happened.
-  return /\b(?:added|i['"]?ve\s+added|i\s+added|put|i['"]?ve\s+put|threw|tossed)\s+(?:a\s+)?.*(?:to\s+(?:your|the)\s+cart|in\s+(?:your|the)\s+cart|for\s+you)\b/i.test(reply) ||
-    /\b(?:got\s+you|got\s+that).*(?:added|in\s+(?:your|the)\s+cart)\b/i.test(reply);
-}
+// Guard 1d helper `claimsAddedWithoutMutation` lives in ./phantom-add-guard.ts
+// (pure + unit-tested; see guard-phantom-add.test.ts). Imported at top of file.
 
 // Guard 1 helper: detects dollar amounts quoted when the cart is empty.
 // Only fires when cart is empty; a non-empty cart quoting its total is fine.
