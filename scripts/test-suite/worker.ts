@@ -33,7 +33,7 @@ import { generateRootCauseFix } from "./fix.ts";
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // ⚠️ BUMP on any judge/scoring/criteria change. This gets persisted so the
 //    dashboard can separate runs scored under different scoring rules.
-const SCORER_VERSION = 2;
+const SCORER_VERSION = 3;
 
 // ── Config ─────────────────────────────────────────────────────────────────
 

@@ -31,6 +31,8 @@ export interface RunResult {
   transcript: TurnResult[];
   sessionId: string;
   error?: string;
+  /** True when the case fixture declares that this case's correction turn genuinely expects cart shrink. */
+  expectCartShrink?: boolean;
 }
 
 export interface RunnerConfig {
@@ -316,6 +318,7 @@ async function runScriptedCase(
   // ── Run each turn ──────────────────────────────────────────────────────
   const sessionId = `test-suite-${crypto.randomUUID()}`;
   const transcript: TurnResult[] = [];
+  const expectCartShrink = (testCase as any).expectCartShrink === true;
 
   for (let ti = 0; ti < testCase.turns.length; ti++) {
     const turn = testCase.turns[ti];
@@ -350,6 +353,7 @@ async function runScriptedCase(
         shopId,
         transcript,
         sessionId,
+        expectCartShrink,
         error: errMsg,
       };
     }
@@ -360,6 +364,7 @@ async function runScriptedCase(
     shopId,
     transcript,
     sessionId,
+    expectCartShrink,
   };
 }
 

@@ -33,6 +33,22 @@ const cases: Assertion[] = [
     claimed: "Anything else I can add",
     expect: true, // word count >4 → skip
   },
+  // ── FIX B: pronoun/determiner stoplist ──
+  {
+    label: "FP3: 'those to your cart. Want anything else'",
+    claimed: "those to your cart. Want anything else",
+    expect: true, // "those" (pronoun stoplist) + "your cart" (boundary marker) → skip
+  },
+  {
+    label: "FP4: 'them to your order'",
+    claimed: "them to your order",
+    expect: true, // "them" (pronoun stoplist) → skip
+  },
+  {
+    label: "FP5: 'that comes to $12.50'",
+    claimed: "that comes to $12.50",
+    expect: true, // "that" (determiner stoplist) → skip
+  },
   // ── REAL ITEM CLAIMS (should return FALSE = NOT fragment = flag them) ──
   {
     label: "Real: 'Lobster Roll added'",
@@ -43,6 +59,12 @@ const cases: Assertion[] = [
     label: "Real: 'Chicken Cutlet'",
     claimed: "Chicken Cutlet",
     expect: false, // short item name → flag (if not in menu)
+  },
+  // ── FIX B: real hallucination still fails ──
+  {
+    label: "Real: 'Rattlesnake Pizza added'",
+    claimed: "Rattlesnake Pizza added",
+    expect: false, // NOT a fragment → still flagged as hallucination
   },
   // ── LEGIT ITEMS (should return FALSE = NOT fragment = but menuNameCheck passes) ──
   {

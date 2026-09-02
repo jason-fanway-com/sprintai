@@ -22,7 +22,7 @@ import { persistResults } from "./persist.ts";
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // Do not change scoring logic without recording why and incrementing this.
-const SCORER_VERSION = 2;
+const SCORER_VERSION = 3;
 import { generateRootCauseFix } from "./fix.ts";
 import { verifyCartOpsInvariants, verifyStatedTotal, type CartOpsVerification } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";

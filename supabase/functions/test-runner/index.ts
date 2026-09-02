@@ -28,7 +28,7 @@ import type { AnyCase } from "../_shared/test-suite/library.ts";
 // ── Config ─────────────────────────────────────────────────────────────────
 
 const BATCH_SIZE = 2;
-const SCORER_VERSION = 2;
+const SCORER_VERSION = 3;
 const PROJECT_REF = "rvdqfxtrskxekfkqnegx";
 const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
 

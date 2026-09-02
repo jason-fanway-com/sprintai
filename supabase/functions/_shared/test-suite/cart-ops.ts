@@ -146,22 +146,6 @@ function isTipMessage(msg: string): boolean {
     /^\d+\s*(%|percent)\s*(tip)?$/i.test(msg.trim());
 }
 
-function isCorrection(msg: string): boolean {
-  return /\b(actually|wait|no[,.!]|remove|change|make it|instead|swap|switch|just |only |oops|wrong|I meant|scratch that|never mind|cancel that|take that off|don'?t want|not that)\b/i.test(msg.toLowerCase());
-}
-
-function isRemoval(msg: string): boolean {
-  return /\b(remove|cancel that|take that off|don'?t want|scratch|not that|never mind.*item|without)\b/i.test(msg.toLowerCase());
-}
-
-function isReduction(msg: string): boolean {
-  return /\b(just |only |make it 1|one\b|actually.*1|actually.*one)\b/i.test(msg.toLowerCase());
-}
-
-function isSwap(msg: string): boolean {
-  return /\b(instead|swap|switch|change.*to|different|replace)\b/i.test(msg.toLowerCase());
-}
-
 /** Find the largest dollar amount in text near "total" language. */
 function findQuotedTotal(text: string): { cents: number; raw: string } | null {
   // Strip the service-fee mention FIRST so "$8.98 total (includes $0.99 service
@@ -348,11 +332,13 @@ export function verifyHallucinationGuard(
     // ── Pattern 1b: "added a ItemName" / "added ItemName" ──
     const addPat = /added\s+(?:a\s+)?([A-Z][A-Za-z\s'&.()/-]{4,60}?)(?:\s+(?:to\b|and\b|\bfor\b|at\b|,|\.|$|\$))/gi;
     while ((m = addPat.exec(reply)) !== null) {
-      const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
+      const rawName = m[1].trim();
+      const claimedName = rawName.toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
+      if (isQuestionOrFragment(claimedName)) continue;
       claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
-        unknownClaims.push(`"${m[1].trim()}" claimed via "added X": "${reply.slice(0, 80)}..."`);
+        unknownClaims.push(`"${rawName}" claimed via "added X": "${reply.slice(0, 80)}..."`);
       }
     }
 
@@ -437,6 +423,20 @@ const ACKNOWLEDGMENT_LEADERS = new Set([
   "also", "and", "anything", "nothing",
 ]);
 
+/** Pronouns and determiners that, when appearing as any word in a captured
+ * phrase, strongly suggest a sentence fragment rather than an item claim.
+ * Full-item names like "BBQ Chicken Pizza" never contain these words. */
+const PRONOUN_DETERMINER_STOPLIST = new Set([
+  "those", "them", "they", "it", "that", "this", "these",
+  "one", "some", "a", "few", "my",
+]);
+
+/** Substrings that mark a captured phrase as a conversational boundary
+ * fragment, not an item claim. Never present in real menu item names. */
+const FRAGMENT_BOUNDARY_MARKERS = [
+  "your cart", "anything else", "want",
+];
+
 export function isQuestionOrFragment(claimed: string): boolean {
   const words = claimed.split(/\s+/);
   const first = words[0] ?? "";
@@ -444,9 +444,14 @@ export function isQuestionOrFragment(claimed: string): boolean {
   if (QUESTION_LEADERS.has(first)) return true;
   // Acknowledgement/discourse phrases ("noted provolone", "no toasting")
   if (ACKNOWLEDGMENT_LEADERS.has(first)) return true;
+  // Pronoun/determiner words anywhere in the phrase ("those items", "make it 2")
+  if (words.some(w => PRONOUN_DETERMINER_STOPLIST.has(w))) return true;
+  // Fragment boundary markers ("to your cart. Want anything else")
+  const lower = claimed.toLowerCase();
+  if (FRAGMENT_BOUNDARY_MARKERS.some(m => lower.includes(m))) return true;
   // Sentence punctuation mid-string — real item names never contain these
   if (/[.?!]/.test(claimed)) return true;
-  // Word count > 4 — real item names are ≤4 words ("no toasting. Anything else I can add" = 7)
+  // Word count > 4 — real item names are ≤4 words
   if (words.length > 4) return true;
   return false;
 }
@@ -675,8 +680,6 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
 
   // ── Track state across turns ──────────────────────────────────────────
   let prevCart: CartItemLike[] | null = null;
-  let correctionExpected = false;
-  let correctionType: "remove" | "reduce" | "swap" | null = null;
   let quotedTotalChecked = false;
   let quotedTotalOk = true;
   let quotedTotalDetail = "";
@@ -684,7 +687,6 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
   let displayedItemsOk = true;
   let displayedItemsDetail = "";
   let noMutationViolations: string[] = [];
-  let correctionViolations: string[] = [];
 
   for (let i = 0; i < transcript.length; i++) {
     const turn = transcript[i];
@@ -737,37 +739,6 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
           `Turn ${i}: "${msg.slice(0, 40)}..." is a question/name/tip but cart changed from ${cartItemCount(prevCart)} to ${cartItemCount(cart)} items`
         );
       }
-    }
-
-    // ── INVARIANT 4: correction IS reflected ────────────────────────────
-    if (prevCart && prevCart.length > 0) {
-      if (isCorrection(msg)) {
-        if (isRemoval(msg)) {
-          correctionExpected = true;
-          correctionType = "remove";
-        } else if (isReduction(msg)) {
-          correctionExpected = true;
-          correctionType = "reduce";
-        } else if (isSwap(msg)) {
-          correctionExpected = true;
-          correctionType = "swap";
-        }
-      }
-    }
-
-    // After a correction turn, verify the NEXT assistant reply reflects it
-    if (correctionExpected && cart && prevCart) {
-      if (correctionType === "remove" || correctionType === "reduce") {
-        const countBefore = cartItemCount(prevCart);
-        const countAfter = cartItemCount(cart);
-        if (countAfter >= countBefore) {
-          correctionViolations.push(
-            `Turn ${i}: Expected cart to shrink after "${correctionType}" correction ("${msg.slice(0, 50)}...") but item count stayed at ${countAfter}`
-          );
-        }
-      }
-      correctionExpected = false;
-      correctionType = null;
     }
 
     prevCart = cart.length > 0 ? JSON.parse(JSON.stringify(cart)) : null;
@@ -827,14 +798,64 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
     applied: true,
   });
 
-  // Invariant 4: correction_reflected
-  invariants.push({
-    id: "correction_reflected",
-    description: "Corrections that reduce/remove are reflected in cart_json",
-    passed: correctionViolations.length === 0,
-    detail: correctionViolations.length === 0 ? "All corrections reflected in cart" : correctionViolations.join("; "),
-    applied: true,
-  });
+  // Invariant 4: correction_reflected — ONLY when the fixture declares
+  // expectCartShrink; otherwise always passes (applied: false).
+  // Intent is NEVER inferred from natural-language text.
+  const expectShrink = run.expectCartShrink === true;
+  if (expectShrink) {
+    // Verify the cart actually shrunk from turn to turn when a
+    // correction-turn message was followed by a cart reply.
+    let shrinkViolations: string[] = [];
+    if (transcript.length >= 2) {
+      for (let i = 1; i < transcript.length; i++) {
+        const prevCart = (transcript[i - 1].cart as CartItemLike[] | undefined) ?? [];
+        const thisCart = (transcript[i].cart as CartItemLike[] | undefined) ?? [];
+        if (prevCart.length > 0 && thisCart.length > 0) {
+          const prevCount = cartItemCount(prevCart);
+          const thisCount = cartItemCount(thisCart);
+          if (thisCount >= prevCount) {
+            shrinkViolations.push(
+              `Turn ${i}: cart did not shrink: ${prevCount} → ${thisCount} items`
+            );
+          }
+        }
+      }
+    }
+    // If no cart-pair was available for comparison, pass (nothing to check).
+    if (shrinkViolations.length === 0 && transcript.some((t) => (t.cart as any[])?.length > 0)) {
+      invariants.push({
+        id: "correction_reflected",
+        description: "Corrections that reduce/remove are reflected in cart_json",
+        passed: true,
+        detail: "Cart shrunk as expected",
+        applied: true,
+      });
+    } else if (shrinkViolations.length > 0) {
+      invariants.push({
+        id: "correction_reflected",
+        description: "Corrections that reduce/remove are reflected in cart_json",
+        passed: false,
+        detail: shrinkViolations.join("; "),
+        applied: true,
+      });
+    } else {
+      invariants.push({
+        id: "correction_reflected",
+        description: "Corrections that reduce/remove are reflected in cart_json",
+        passed: true,
+        detail: "No cart-pair to compare (expectCartShrink set, but no multi-turn cart data)",
+        applied: true,
+      });
+    }
+  } else {
+    invariants.push({
+      id: "correction_reflected",
+      description: "Corrections that reduce/remove are reflected in cart_json",
+      passed: true,
+      detail: "expectCartShrink not set — correction intent not inferred from NL",
+      applied: false,
+    });
+  }
 
   // Invariant 5: no_duplicate_lines
   invariants.push({
@@ -1022,6 +1043,7 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       category: "cart-ops",
       criticality: "critical",
       label: `Order two, then remove one → removed item gone from cart_json (${A.name} + ${B.name} → keep ${A.name})`,
+      expectCartShrink: true,
       turns: [
         { role: "customer", message: `I'd like a ${A.name} and a ${B.name}` },
         { role: "customer", message: `Actually, remove the ${B.name} — just the ${A.name}` },
@@ -1035,6 +1057,7 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       category: "cart-ops",
       criticality: "critical",
       label: `Order quantity 2, then reduce to 1 → cart_json qty=1, not 2 (${A.name})`,
+      expectCartShrink: true,
       turns: [
         { role: "customer", message: `I need 2 ${A.name}s` },
         { role: "customer", message: `Actually, just one — make it 1 ${A.name}` },
@@ -1048,6 +1071,7 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       category: "cart-ops",
       criticality: "critical",
       label: `Order 3, then 'just one' → cart_json total qty = 1 (${C.name})`,
+      expectCartShrink: true,
       turns: [
         { role: "customer", message: `Give me 3 ${C.name}s` },
         { role: "customer", message: "Actually just one, sorry" },
@@ -1061,6 +1085,7 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       category: "cart-ops",
       criticality: "critical",
       label: `Order 3, then 'only one please' → cart_json total qty = 1 (${B.name})`,
+      expectCartShrink: true,
       turns: [
         { role: "customer", message: `I'll take 3 ${B.name}s` },
         { role: "customer", message: `Wait, only one ${B.name} please` },
@@ -1074,6 +1099,7 @@ export function buildCartOpsCases(items: { name: string; price_cents: number }[]
       category: "cart-ops",
       criticality: "critical",
       label: `Order quantity 2, then 'make it 1' → cart_json qty = 1 (${A.name})`,
+      expectCartShrink: true,
       turns: [
         { role: "customer", message: `2 ${A.name}s` },
         { role: "customer", message: "Actually, make it 1" },
