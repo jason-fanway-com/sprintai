@@ -30,6 +30,9 @@ import {
   verifyCheckoutFinalize,
   verifyHallucinationGuard,
   verifyCartPersistence,
+  verifyNoWrongPriceCharge,
+  verifyTenantIsolationNoLeak,
+  verifyStopOptOutHonored,
 } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
 
@@ -81,6 +84,7 @@ console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOps
 console.log("");
 
 // Build shop menu name set for hallucination guard
+let shopMenuId = "";
 const menuNames = await (async () => {
   const { data: menus } = await supabase
     .from("menus")
@@ -89,6 +93,7 @@ const menuNames = await (async () => {
     .order("created_at", { ascending: false })
     .limit(1);
   if (!menus?.length) return new Set<string>();
+  shopMenuId = menus[0].id;
   const { data: items } = await supabase
     .from("menu_items")
     .select("name")
@@ -216,6 +221,42 @@ for (let i = 0; i < cases.length; i++) {
     if (!cp.passed) {
       passed = false;
       reason = `cart-persistence: ${cp.detail}`;
+    }
+  }
+
+  // ── P3 Safety Invariants ──────────────────────────────────────────
+
+  // P3.1 No wrong price charge — gate on case ids that involve pricing quotes
+  if (passed && c.id && /price|checkout|total|cartops-/.test(c.id)) {
+    moneyInvariantApplied = true;
+    const nwpc = await verifyNoWrongPriceCharge(c as any, run, shopMenuId, supabase);
+    appliedInvariants.push(`no-wrong-price-charge:${nwpc.passed ? "PASS" : "FAIL"}`);
+    if (!nwpc.passed) {
+      passed = false;
+      reason = `no-wrong-price-charge: ${nwpc.detail}`;
+    }
+  }
+
+  // P3.2 Tenant isolation — all non-empty replies
+  if (passed) {
+    const ti = await verifyTenantIsolationNoLeak(
+      c as any, run, (shop as any).tenant_id ?? "", shopMenuId, supabase,
+    );
+    appliedInvariants.push(`tenant-isolation:${ti.passed ? "PASS" : "FAIL"}`);
+    if (!ti.passed) {
+      passed = false;
+      reason = `tenant-isolation: ${ti.detail}`;
+    }
+  }
+
+  // P3.3 STOP opt-out — only when a turn contains STOP
+  const hasStopTurn = run.transcript?.some((t: any) => (t.message ?? "").trim().toUpperCase() === "STOP");
+  if (passed && hasStopTurn) {
+    const so = await verifyStopOptOutHonored(c as any, run, supabase);
+    appliedInvariants.push(`stop-opt-out:${so.passed ? "PASS" : "FAIL"}`);
+    if (!so.passed) {
+      passed = false;
+      reason = `stop-opt-out: ${so.detail}`;
     }
   }
 

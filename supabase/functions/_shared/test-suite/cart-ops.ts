@@ -508,6 +508,367 @@ function menuNameCheck(claimed: string, menuNorm: Map<string, string>): boolean 
   }
   return false;
 }
+// ── P3 Safety Invariants ────────────────────────────────────────────────
+
+/**
+ * verifyNoWrongPriceCharge — Assert every dollar amount the bot states in its reply
+ * matches a real price for THIS shop. Queries the shop's menu to get valid
+ * price_cents values, and also checks against cart-derived totals.
+ *
+ * applied=true only when ≥1 dollar amount was quoted.
+ */
+export async function verifyNoWrongPriceCharge(
+  tc: { id: string },
+  runResult: RunResult,
+  shopMenuId: string,
+  supabase: SupabaseClient,
+): Promise<InvariantResult> {
+  // Only apply to the named case; also any case with a dollar quote
+  const reply = (runResult.transcript ?? []).map((t) => t.reply ?? "").join(" ");
+  const dollarAmounts = extractDollarAmounts(reply);
+
+  if (dollarAmounts.length === 0) {
+    return {
+      id: "no_wrong_price_charge",
+      description: "Every $ amount in bot replies matches a real menu price or cart-derived total for this shop",
+      passed: true,
+      detail: "No dollar amounts quoted — nothing to verify.",
+      applied: false,
+    };
+  }
+
+  // Load this shop's menu item prices
+  let shopPrices: Set<number>;
+  if (shopMenuId) {
+    const { data: items } = await supabase
+      .from("menu_items")
+      .select("price_cents")
+      .eq("menu_id", shopMenuId)
+      .eq("active", true);
+    shopPrices = new Set((items ?? []).map((i: { price_cents: number }) => i.price_cents));
+  } else {
+    shopPrices = new Set();
+  }
+
+  // Also collect cart-derived totals across all turns
+  const cartDerivedCents = new Set<number>();
+  for (const turn of runResult.transcript ?? []) {
+    const cart = (turn.cart as CartItemLike[] | undefined) ?? [];
+    if (cart.length > 0) {
+      // Individual line totals
+      for (const item of cart) {
+        if (item.type === "bundle") {
+          cartDerivedCents.add((item.price_cents ?? 0) * (item.complete ? 1 : 0));
+        } else {
+          cartDerivedCents.add((item.price_cents ?? 0) * (item.quantity ?? 1));
+        }
+      }
+      // Subtotal + fee
+      cartDerivedCents.add(cartSubtotalCents(cart) + 99);
+    }
+  }
+
+  const violations: string[] = [];
+  for (const amount of dollarAmounts) {
+    const cents = Math.round(amount * 100);
+    // Check: is it a direct menu price?
+    if (shopPrices.has(cents)) continue;
+    // Check: is it a cart-derived total?
+    if (cartDerivedCents.has(cents)) continue;
+    // Check: does it match any cart subtotal sum (2+ items combined)?
+    // We already covered subtotal+99 — also check raw subtotals
+    const isSubtotal = [...cartDerivedCents].some((c) => Math.abs(c - cents) <= 1);
+    if (isSubtotal) continue;
+
+    violations.push(`$${amount.toFixed(2)} (${cents}¢) matches no menu price or cart total`);
+  }
+
+  if (violations.length > 0) {
+    return {
+      id: "no_wrong_price_charge",
+      description: "Every $ amount in bot replies matches a real menu price or cart-derived total for this shop",
+      passed: false,
+      detail: violations.join("; "),
+      applied: true,
+    };
+  }
+
+
+  return {
+    id: "no_wrong_price_charge",
+    description: "Every $ amount in bot replies matches a real menu price or cart-derived total for this shop",
+    passed: true,
+    detail: `${dollarAmounts.length} price(s) quoted — all match menu or cart totals.`,
+    applied: true,
+  };
+}
+
+/**
+ * verifyTenantIsolationNoLeak — Assert the reply references no menu item
+ * belonging to a DIFFERENT tenant. Extracts item-name-like tokens from the
+ * reply; any that match a menu_items.name from a different tenant_id (and
+ * NOT this shop's menu) → FAIL.
+ *
+ * applied=true whenever reply is non-empty.
+ */
+export async function verifyTenantIsolationNoLeak(
+  tc: { id: string },
+  runResult: RunResult,
+  shopTenantId: string,
+  shopMenuId: string,
+  supabase: SupabaseClient,
+): Promise<InvariantResult> {
+  const reply = (runResult.transcript ?? []).map((t) => t.reply ?? "").join(" ");
+
+  if (!reply.trim()) {
+    return {
+      id: "tenant_isolation_no_leak",
+      description: "Bot never references another shop's items",
+      passed: true,
+      detail: "Empty reply — nothing to check.",
+      applied: false,
+    };
+  }
+
+  // Load THIS shop's menu item names for exclusion
+  let shopItemNames: Set<string>;
+  if (shopMenuId) {
+    const { data: items } = await supabase
+      .from("menu_items")
+      .select("name")
+      .eq("menu_id", shopMenuId)
+      .eq("active", true);
+    shopItemNames = new Set((items ?? []).map((i: { name: string }) => i.name.toLowerCase().trim()));
+  } else {
+    shopItemNames = new Set();
+  }
+
+  // Extract potential item-name tokens from the reply.
+  // Use n-grams: 1-4 word sequences, skip common stop words, filter to
+  // sequences that look like menu-item names (capitalized or food-like).
+  const words = reply.replace(/[^a-zA-Z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 0);
+  const stopWords = new Set(["a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
+    "may", "might", "can", "shall", "you", "your", "i", "my", "me", "we", "us",
+    "our", "they", "them", "their", "it", "its", "this", "that", "these", "those",
+    "not", "no", "yes", "ok", "okay", "sure", "please", "thanks", "thank", "hi",
+    "hello", "hey", "here", "there", "just", "also", "now", "then", "very", "really",
+    "some", "any", "all", "each", "every", "both", "few", "more", "most", "other",
+    "menu", "order", "orders", "ordering", "shop", "only", "available", "have",
+    "don", "doesn", "can't", "won", "wouldn", "items", "item"]);
+
+  const candidates: string[] = [];
+  for (let n = 1; n <= 4; n++) {
+    for (let i = 0; i <= words.length - n; i++) {
+      const phrase = words.slice(i, i + n).join(" ").toLowerCase().trim();
+      if (phrase.length < 4) continue;
+      if (stopWords.has(phrase)) continue;
+      // Skip if it starts/ends with a stop word
+      const firstWord = words[i].toLowerCase();
+      if (stopWords.has(firstWord)) continue;
+      if (n > 1 && stopWords.has(words[i + n - 1].toLowerCase())) continue;
+      // Skip if already in this shop's menu
+      if (shopItemNames.has(phrase)) continue;
+      candidates.push(phrase);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return {
+      id: "tenant_isolation_no_leak",
+      description: "Bot never references another shop's items",
+      passed: true,
+      detail: "No candidate item names extracted from reply — nothing to cross-check.",
+      applied: true,
+    };
+  }
+
+  // Deduplicate candidates
+  const unique = [...new Set(candidates)];
+
+  // Check against OTHER tenants' menus: query menu_items where the menu's
+  // tenant_id != shopTenantId AND name matches one of our candidates.
+  // Limit to a reasonable number to avoid massive queries.
+  const batchSize = 20;
+  const batches = [];
+  for (let i = 0; i < unique.length; i += batchSize) {
+    batches.push(unique.slice(i, i + batchSize));
+  }
+
+  let crossTenantMatch: string | null = null;
+  for (const batch of batches) {
+    const { data: leakItems } = await supabase
+      .from("menu_items")
+      .select("name, menu_id, menus!inner(tenant_id)")
+      .in("name", batch.map((n) => n.charAt(0).toUpperCase() + n.slice(1))) // try title-case match
+      .neq("menus.tenant_id", shopTenantId)
+      .limit(1);
+
+    if (leakItems && leakItems.length > 0) {
+      crossTenantMatch = (leakItems[0] as { name: string }).name;
+      break;
+    }
+
+    // Also try exact lowercase match via ilike
+    if (!crossTenantMatch) {
+      const ilikeFilters = batch.map((n) => `name.ilike.${n}`).join(",");
+      // Supabase OR query with ilike — use individual queries for simplicity
+      for (const candidate of batch) {
+        const { data: leakSingle } = await supabase
+          .from("menu_items")
+          .select("name, menu_id, menus!inner(tenant_id)")
+          .ilike("name", candidate)
+          .neq("menus.tenant_id", shopTenantId)
+          .limit(1);
+        if (leakSingle && leakSingle.length > 0) {
+          crossTenantMatch = (leakSingle[0] as { name: string }).name;
+          break;
+        }
+      }
+    }
+    if (crossTenantMatch) break;
+  }
+
+  if (crossTenantMatch) {
+    return {
+      id: "tenant_isolation_no_leak",
+      description: "Bot never references another shop's items",
+      passed: false,
+      detail: `Cross-tenant leak detected: reply referenced "${crossTenantMatch}" which belongs to a different tenant`,
+      applied: true,
+    };
+  }
+
+  return {
+    id: "tenant_isolation_no_leak",
+    description: "Bot never references another shop's items",
+    passed: true,
+    detail: `${unique.length} candidate token(s) checked — no cross-tenant matches.`,
+    applied: true,
+  };
+}
+
+/**
+ * verifyStopOptOutHonored — After a STOP turn, assert opt-out was honored.
+ *
+ * First discovers whether the web-chat runCase path writes an sms_opt_outs
+ * row. If YES: check the row exists. If NO: fall back to reply-text
+ * assertion (the bot's reply acknowledges unsubscribe).
+ *
+ * The web-chat path does NOT invoke the SMS gateway, so sms_opt_outs may
+ * not be written. This is documented in the detail field.
+ */
+export async function verifyStopOptOutHonored(
+  tc: { id: string },
+  runResult: RunResult,
+  supabase: SupabaseClient,
+): Promise<InvariantResult> {
+  const base = {
+    id: "stop_opt_out_honored",
+    description: "Customer sends STOP — bot honors immediately and permanently",
+  };
+
+  const transcript = runResult.transcript ?? [];
+  if (transcript.length === 0) {
+    return { ...base, passed: true, detail: "No transcript — skipping.", applied: false };
+  }
+
+  // Attempt DB check: look for sms_opt_outs row tied to this session/tenant.
+  // The web-chat path uses session_id format "web:..." — we don't have a
+  // phone number, so we check by looking for recent opt-outs for the shop.
+  // This is a best-effort DB check; the web-chat path likely won't have one.
+  let dbOptOutFound = false;
+  try {
+    const sessionId = runResult.sessionId;
+    if (sessionId) {
+      // Look for any sms_opt_outs row created in the last 5 minutes
+      // (the test just ran). This catches both real SMS and web-STOP paths.
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: optOutRows } = await supabase
+        .from("sms_opt_outs")
+        .select("id")
+        .gte("created_at", fiveMinAgo)
+        .limit(1);
+      if (optOutRows && optOutRows.length > 0) {
+        dbOptOutFound = true;
+      }
+    }
+  } catch {
+    // DB check is best-effort; fall through to reply-text check
+  }
+
+  if (dbOptOutFound) {
+    // DB row exists — but on web-chat path it will never exist.
+    // Check reply text anyway as defense-in-depth.
+    const allReplies = transcript.map((t) => t.reply ?? "").join(" ");
+    const acknowledged = /unsubscrib|opted out|no further messages|receive no further|STOP|you have been unsubscribed/i.test(allReplies);
+    if (!acknowledged) {
+      return {
+        ...base,
+        passed: false,
+        detail: "sms_opt_outs row found but reply does not acknowledge opt-out.",
+        applied: true,
+      };
+    }
+    return {
+      ...base,
+      passed: true,
+      detail: "sms_opt_outs row present + reply acknowledges opt-out.",
+      applied: true,
+    };
+  }
+
+  // DEERMINISTIC FALLBACK: reply-text assertion.
+  // Check that the bot's reply acknowledges the opt-out and that no
+  // subsequent assistant turn attempts to continue ordering.
+  const allReplies = transcript.map((t) => t.reply ?? "").join(" ");
+  const acknowledged = /unsubscrib|opted out|no further messages|receive no further|STOP/i.test(allReplies);
+
+  // Check whether any turn after the STOP turn includes ordering language
+  // (the bot trying to continue). Find the STOP turn index.
+  const stopTurnIdx = transcript.findIndex((t) =>
+    (t.message ?? "").toUpperCase().trim() === "STOP"
+  );
+  let continuedAfterStop = false;
+  if (stopTurnIdx >= 0 && stopTurnIdx < transcript.length - 1) {
+    for (let i = stopTurnIdx + 1; i < transcript.length; i++) {
+      const reply = (transcript[i].reply ?? "").toLowerCase();
+      // If the bot continues ordering after STOP, that's a fail
+      if (/\b(?:order|cart|add|checkout|menu|item|would you like|can i get|what would you)\b/i.test(reply) &&
+          !/unsubscrib|opted out|no further messages/i.test(reply)) {
+        continuedAfterStop = true;
+        break;
+      }
+    }
+  }
+
+  if (!acknowledged) {
+    return {
+      ...base,
+      passed: false,
+      detail: "STOP reply does not acknowledge opt-out. Web-chat path does not write sms_opt_outs rows — checking reply text only.",
+      applied: true,
+    };
+  }
+
+  if (continuedAfterStop) {
+    return {
+      ...base,
+      passed: false,
+      detail: "Bot acknowledged STOP but then continued ordering in a subsequent turn.",
+      applied: true,
+    };
+  }
+
+  return {
+    ...base,
+    passed: true,
+    detail: "Bot acknowledged opt-out in reply. (Web-chat path does not write sms_opt_outs rows — reply-text check only.)",
+    applied: true,
+  };
+}
+
 // ── Cart Persistence Verifier (P2) ──────────────────────────────────────
 
 /**

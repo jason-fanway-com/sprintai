@@ -74,6 +74,8 @@ export interface ConversationalCase {
   success_criteria: SuccessCriterion[];
   /** Test hours mode: "open" (default) or "closed". */
   hoursMode?: "open" | "closed";
+  /** Assert the cart shrinks by at least one item during the conversation. */
+  expectCartShrink?: boolean;
 }
 
 /** Union type carried through the runner/judge/scorecard pipeline. */

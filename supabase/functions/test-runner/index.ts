@@ -18,7 +18,7 @@ import { generateCases } from "../_shared/test-suite/generator.ts";
 import { runCase } from "../_shared/test-suite/runner.ts";
 import { judgeCase } from "../_shared/test-suite/judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "../_shared/test-suite/scorecard.ts";
-import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence } from "../_shared/test-suite/cart-ops.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence, verifyNoWrongPriceCharge, verifyTenantIsolationNoLeak, verifyStopOptOutHonored } from "../_shared/test-suite/cart-ops.ts";
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
 import { persistResults } from "../_shared/test-suite/persist.ts";
 // fix.ts NOT imported here — root-cause generation is a SEPARATE
@@ -156,8 +156,8 @@ Deno.serve(async (_req: Request) => {
     // 3. Process this batch
     const endIdx = Math.min(caseIdx + BATCH_SIZE, totalCases);
 
-    // Load menu names once per tick for hallucination guard
-    const menuNames = await loadMenuNames(supabase, shopId);
+    // Load menu names once per tick for hallucination guard + P3 invariants
+    const { menuNames, menuId: shopMenuId } = await loadMenuNames(supabase, shopId);
 
     const runConfig = {
       supabaseUrl,
@@ -287,6 +287,54 @@ Deno.serve(async (_req: Request) => {
           detReasons.push(`cart-persistence: ${cp.detail}`);
         } else {
           console.log(`  Cart-persistence PASS`);
+        }
+      }
+
+      // ── P3 Safety Invariants ──────────────────────────────────────────
+
+      // P3.1 No wrong price charge — only when case involves pricing
+      if (detPassed && tcId && /price|checkout|total|cartops-/.test(tcId)) {
+        const nwpc = await verifyNoWrongPriceCharge(tc as any, runResult, shopMenuId, supabase as any);
+        appliedInvariants.push(`no-wrong-price-charge:${nwpc.passed ? "PASS" : "FAIL"}`);
+        if (nwpc.applied) anyInvariantApplied = true;
+        if (!nwpc.passed) {
+          console.log(`  No-wrong-price-charge FAIL: ${nwpc.detail.slice(0, 120)}`);
+          detPassed = false;
+          detReasons.push(`no-wrong-price-charge: ${nwpc.detail}`);
+        } else if (nwpc.applied) {
+          console.log(`  No-wrong-price-charge PASS`);
+        }
+      }
+
+      // P3.2 Tenant isolation — all non-empty replies
+      if (detPassed) {
+        const ti = await verifyTenantIsolationNoLeak(
+          tc as any, runResult,
+          (shop as any).tenant_id ?? "", shopMenuId, supabase as any,
+        );
+        appliedInvariants.push(`tenant-isolation:${ti.passed ? "PASS" : "FAIL"}`);
+        if (ti.applied) anyInvariantApplied = true;
+        if (!ti.passed) {
+          console.log(`  Tenant-isolation FAIL: ${ti.detail.slice(0, 120)}`);
+          detPassed = false;
+          detReasons.push(`tenant-isolation: ${ti.detail}`);
+        } else if (ti.applied) {
+          console.log(`  Tenant-isolation PASS`);
+        }
+      }
+
+      // P3.3 STOP opt-out — only when a turn contains STOP
+      const hasStopTurn = runResult.transcript?.some((t: any) => (t.message ?? "").trim().toUpperCase() === "STOP");
+      if (detPassed && hasStopTurn) {
+        const so = await verifyStopOptOutHonored(tc as any, runResult, supabase as any);
+        appliedInvariants.push(`stop-opt-out:${so.passed ? "PASS" : "FAIL"}`);
+        if (so.applied) anyInvariantApplied = true;
+        if (!so.passed) {
+          console.log(`  Stop-opt-out FAIL: ${so.detail.slice(0, 120)}`);
+          detPassed = false;
+          detReasons.push(`stop-opt-out: ${so.detail}`);
+        } else {
+          console.log(`  Stop-opt-out PASS`);
         }
       }
 
@@ -424,18 +472,19 @@ function jsonErr(status: number, message: string) {
   });
 }
 
-async function loadMenuNames(supabase: any, shopId: string): Promise<Set<string>> {
+async function loadMenuNames(supabase: any, shopId: string): Promise<{ menuNames: Set<string>; menuId: string }> {
   const { data: menus } = await supabase
     .from("menus")
     .select("id")
     .eq("shop_id", shopId)
     .order("created_at", { ascending: false })
     .limit(1);
-  if (!menus?.length) return new Set<string>();
+  if (!menus?.length) return { menuNames: new Set<string>(), menuId: "" };
+  const menuId = menus[0].id;
   const { data: items } = await supabase
     .from("menu_items")
     .select("name")
-    .eq("menu_id", menus[0].id)
+    .eq("menu_id", menuId)
     .eq("active", true);
-  return new Set<string>((items ?? []).map((i: { name: string }) => i.name));
+  return { menuNames: new Set<string>((items ?? []).map((i: { name: string }) => i.name)), menuId };
 }
