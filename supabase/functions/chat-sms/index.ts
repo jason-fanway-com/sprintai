@@ -2268,6 +2268,88 @@ async function sendSmsViaTelnyx(
         `[chat-sms] Telnyx send TRANSIENT DELIVERY ERROR to=${toNumber} ` +
         `code=${errCode} detail=${errDetail ?? "(none)"} — campaign/system issue, not an opt-out. Conversation stays open.`,
       );
+
+      // 10036 escalation: non-test shops that hit 10036 have structurally
+      // undeliverable A2P traffic. Raise a critical issue so Command Center
+      // surfaces it prominently.
+      if (errCode === "10036" && shopId) {
+        const { data: shopInfo } = await supabase
+          .from("shops")
+          .select("is_test, campaign_assignment_status, name")
+          .eq("id", shopId)
+          .maybeSingle();
+
+        if (shopInfo && shopInfo.is_test !== true) {
+          if (shopInfo.campaign_assignment_status !== "approved") {
+            // Expected: campaign not approved — escalate so the operator sees
+            // the structural gap. The campaign-status-reader will advance it
+            // to approved once both mapping statuses read ADDED.
+            const { data: existingIssue } = await supabase
+              .from("issues")
+              .select("id")
+              .eq("detection_rule", "campaign_not_approved")
+              .eq("tenant_id", shopId)
+              .eq("status", "open")
+              .limit(1);
+            if (!existingIssue || existingIssue.length === 0) {
+              await supabase.from("issues").insert({
+                tenant_id: shopId,
+                shop_id: shopId,
+                severity: "sev_1",
+                detection_rule: "campaign_not_approved",
+                title: `Campaign assignment not approved for ${shopInfo.name ?? shopId}`,
+                description:
+                  `Telnyx returned 10036 (campaign not approved) for outbound SMS from ${fromNumber} to ${toNumber}. ` +
+                  `campaign_assignment_status is "${shopInfo.campaign_assignment_status}". ` +
+                  `The campaign-status-reader polls mapping status automatically — no manual action needed unless this ` +
+                  `persists beyond 2 hours after number provision.`,
+                metadata: {
+                  from_number: fromNumber,
+                  to_number: toNumber,
+                  campaign_assignment_status: shopInfo.campaign_assignment_status,
+                },
+              });
+              console.warn(
+                `[chat-sms] Raised campaign_not_approved issue for shop ${shopId} (status=${shopInfo.campaign_assignment_status})`,
+              );
+            }
+          } else {
+            // Unexpected: campaign is approved but 10036 still returned.
+            // This should not happen — escalate as a mystery.
+            const { data: existingIssue } = await supabase
+              .from("issues")
+              .select("id")
+              .eq("detection_rule", "campaign_10036_unexpected")
+              .eq("tenant_id", shopId)
+              .eq("status", "open")
+              .limit(1);
+            if (!existingIssue || existingIssue.length === 0) {
+              await supabase.from("issues").insert({
+                tenant_id: shopId,
+                shop_id: shopId,
+                severity: "sev_1",
+                detection_rule: "campaign_10036_unexpected",
+                title: `Unexpected 10036 — campaign approved but Telnyx refused for ${shopInfo.name ?? shopId}`,
+                description:
+                  `Telnyx returned 10036 (campaign not approved) for outbound SMS from ${fromNumber} to ${toNumber}, ` +
+                  `but campaign_assignment_status is ALREADY "approved". This is unexpected — investigate. ` +
+                  `The mapping status may have changed since the last status-reader run.`,
+                metadata: {
+                  from_number: fromNumber,
+                  to_number: toNumber,
+                  campaign_assignment_status: shopInfo.campaign_assignment_status,
+                },
+              });
+              console.error(
+                `[chat-sms] Raised campaign_10036_unexpected issue for shop ${shopId} — status is already approved!`,
+              );
+            }
+          }
+        }
+        // is_test shops: 10036 is expected (demo number rides shared brand, not
+        // individually campaign-approved). Don't raise an issue.
+      }
+
       return;
     }
     if (classifyTelnyxSendError(errCode) === "opt_out") {

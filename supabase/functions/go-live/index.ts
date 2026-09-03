@@ -52,7 +52,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at")
+    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at, campaign_assignment_status")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -260,6 +260,9 @@ Deno.serve(async (req: Request) => {
   // ── Delivery Test Gate: first-delivery handset test recorded passed ──
   const deliveryTestPass = isTest || !!shop.first_delivery_test_passed_at;
 
+  // ── Campaign Assignment Gate: number must be mapped/approved before live ──
+  const campaignAssigned = isTest || (shop as any).campaign_assignment_status === "approved";
+
   // ── Ticket Destination Gate: email_ticket_recipient must be valid ──
   const emailRecipient: string | null = (shop as any).email_ticket_recipient ?? null;
   const ticketDestPass = typeof emailRecipient === "string" &&
@@ -278,6 +281,7 @@ Deno.serve(async (req: Request) => {
     ein: hasEin,
     proof: proofPass,
     delivery_test: deliveryTestPass,
+    campaign_assignment: campaignAssigned,
     ticket_destination: ticketDestPass,
   };
 
@@ -290,6 +294,7 @@ Deno.serve(async (req: Request) => {
       delivery_geo: "Go-live refused: Delivery is enabled but shop coordinates are missing. Ensure the shop address is set (formatted_address) and try again — the system will auto-geocode it.",
       proof: proofMessage || "Go-live refused: Proof has not passed.",
       delivery_test: "Go-live refused: the first-delivery test has not been completed on this number. Run the 8-step handset script and record the result.",
+      campaign_assignment: "Go-live refused: campaign assignment is not yet approved. The number is provisioned but carrier mapping is incomplete. The system checks this automatically — no manual action needed unless it has been more than 2 hours since number provision.",
       ticket_destination: "Go-live refused: no order email is configured. The kitchen has no way to receive orders.",
     };
     // Pick the first blocked gate that has a custom message; fall back to join

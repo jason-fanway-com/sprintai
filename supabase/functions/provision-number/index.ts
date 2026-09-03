@@ -101,7 +101,7 @@ Deno.serve(async (req: Request) => {
     .select("id", { count: "exact", head: true })
     .eq("provisioned_on", today);
   if ((count ?? 0) >= MAX_NEW_NUMBERS_PER_DAY) {
-    console.error(`[provision-number] DAILY CAP HIT (${count}/${MAX_NW_NUMBERS_PER_DAY}) — auto-buy paused. Shop ${shopId} queued.`);
+    console.error(`[provision-number] DAILY CAP HIT (${count}/${MAX_NEW_NUMBERS_PER_DAY}) — auto-buy paused. Shop ${shopId} queued.`);
     return jsonError(
       `Daily new-number cap reached (${MAX_NEW_NUMBERS_PER_DAY}). Auto-provisioning paused; your number will be issued shortly.`,
       429,
@@ -224,6 +224,7 @@ Deno.serve(async (req: Request) => {
     telnyx_number_id: numberId,
     telnyx_messaging_profile_id: profileId,
     twilio_number_sid: null,  // clear Twilio remnants
+    campaign_assignment_status: "submitted",
     updated_at: new Date().toISOString(),
   }).eq("id", shopId);
 
@@ -246,7 +247,7 @@ Deno.serve(async (req: Request) => {
     telnyx_messaging_profile_id: profileId,
     webhook: chatSmsWebhook,
     area_code: ndc,
-    pending_campaign_assignment: true,
+    campaign_assignment_status: "submitted",
   });
 });
 
