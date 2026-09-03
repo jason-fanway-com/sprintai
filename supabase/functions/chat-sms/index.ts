@@ -2435,7 +2435,7 @@ async function sendSms(
   }
 }
 
-async function handleSystemEvent(
+export async function handleSystemEvent(
   supabase:    SupabaseClient,
   body:        { system_event?: string; conversation_id?: string; order_cart_id?: string },
 ): Promise<Response> {

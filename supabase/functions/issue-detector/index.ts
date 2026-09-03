@@ -84,7 +84,7 @@ async function sql(supabase: SupabaseClient, query: string) {
 }
 
 // ─── Dedup check ─────────────────────────────────────────────────────────────
-async function isDuplicate(
+export async function isDuplicate(
   supabase: SupabaseClient,
   issue: PendingIssue,
 ): Promise<boolean> {
@@ -111,7 +111,7 @@ async function isDuplicate(
 }
 
 // ─── Write issue ─────────────────────────────────────────────────────────────
-async function createIssue(
+export async function createIssue(
   supabase: SupabaseClient,
   issue: PendingIssue,
 ): Promise<boolean> {
@@ -417,7 +417,7 @@ async function detectLatencySpike(
 
 /** Sev-1: Ticket send failures in ticket_send_log (non-2xx rows).
  *  Catch failures the inline chat-sms handler may have missed. */
-async function detectTicketSendFailures(
+export async function detectTicketSendFailures(
   supabase: SupabaseClient,
   opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
@@ -483,7 +483,7 @@ async function detectTicketSendFailures(
 
 /** Sev-1: Missing tickets — paid carts older than ~15 min with no ticket_emailed_at
  *  and no open ticket issue. Catches cases where no ticket was ever delivered. */
-async function detectMissingTickets(
+export async function detectMissingTickets(
   supabase: SupabaseClient,
   _opts: SweepOptions = {},
 ): Promise<PendingIssue[]> {
