@@ -219,6 +219,23 @@ export default function CommandCenter() {
       return (data ?? []) as TenantRow[]
     },
   })
+  // Today's order-ticket reliability: paid vs emailed
+  const ticketReliability = useQuery<{ paid: number; emailed: number }>({
+    queryKey: ['cc-ticket-reliability'],
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const [{ count: paid }, { count: emailed }] = await Promise.all([
+        supabase.from('order_carts').select('id', { count: 'exact', head: true })
+          .eq('payment_status', 'paid')
+          .gte('updated_at', today),
+        supabase.from('order_carts').select('id', { count: 'exact', head: true })
+          .eq('payment_status', 'paid')
+          .gte('updated_at', today)
+          .not('ticket_emailed_at', 'is', null),
+      ])
+      return { paid: (paid ?? 0) as number, emailed: (emailed ?? 0) as number }
+    },
+  })
   const items = useQuery<ProgramItem[]>({
     queryKey: ['cc-program-items'],
     queryFn: async () => {
@@ -255,6 +272,17 @@ export default function CommandCenter() {
     ['Blockers', blockerCount, 'warn'],
     ['Open risks', openRisks, 'bad'],
   ]
+
+  // At a Glance: ticket reliability tile (orders received vs tickets delivered today)
+  const ticketTile = (() => {
+    const { paid = 0, emailed = 0 } = ticketReliability.data ?? {}
+    if (paid === 0 && emailed === 0) return null
+    const missing = paid - emailed
+    return { paid, emailed, missing, tone: missing > 0 ? ('warn' as const) : ('' as const) }
+  })()
+  const heroVitalsWithTickets: [string, number, '' | 'warn' | 'bad'][] = ticketTile
+    ? [...heroVitals, [`Tickets delivered today`, ticketTile.emailed, '']]
+    : heroVitals
   // kanban counts (derived per column)
   const kanban = KANBAN_COLS.map((col) => ({ col, cards: tasks.filter((t) => t.column_name === col) }))
 
@@ -341,7 +369,7 @@ export default function CommandCenter() {
               security verified; parser and hours fixes in flight ahead of the first real paid SMS order at Jack's Slice.
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {heroVitals.map(([label, n, cls]) => (
+              {heroVitalsWithTickets.map(([label, n, cls]) => (
                 <div key={label} className="bg-white/10 rounded-lg px-3 py-2">
                   <div className={`text-2xl font-bold ${n > 0 && cls === 'bad' ? 'text-red-300' : n > 0 && cls === 'warn' ? 'text-orange-300' : 'text-white'}`}>{n}</div>
                   <div className="text-xs text-gray-300">{label}</div>
