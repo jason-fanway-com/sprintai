@@ -64,12 +64,12 @@ function menuParityPass(
   return twinItems === shopItems && twinHash === shopHash;
 }
 
-// ── Expected gate keys (12 total: 9 original + 3 new) ──────────────────────
+// ── Expected gate keys (13 total: 9 original + 4 new) ──────────────────────
 
 const ALL_GATE_KEYS = [
   "connect", "delivery_geo", "menu", "menu_approved", "menu_clean",
   "number", "hours", "subscription", "ein",
-  "proof", "delivery_test", "ticket_destination",
+  "proof", "delivery_test", "ticket_destination", "campaign_assignment",
 ].sort();
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -181,23 +181,25 @@ Deno.test("menu_parity: null hashes — both null passes, one null fails", () =>
 
 // ── Full gate object: 12 keys ────────────────────────────────────────────
 
-Deno.test("gates: 12 keys exactly (9 original + 3 new)", () => {
+Deno.test("gates: 13 keys exactly (9 original + 4 new)", () => {
   const gates = {
     connect: true, delivery_geo: true, menu: true, menu_approved: true,
     menu_clean: true, number: true, hours: true, subscription: true, ein: true,
     proof: true, delivery_test: true, ticket_destination: true,
+    campaign_assignment: true,
   };
   const keys = Object.keys(gates).sort();
   assertEquals(keys, ALL_GATE_KEYS);
-  assertEquals(keys.length, 12);
+  assertEquals(keys.length, 13);
 });
 
-Deno.test("gates: all-12-pass → live=true, blocked_by=[]", () => {
+Deno.test("gates: all-13-pass → live=true, blocked_by=[]", () => {
   // Simulate the all-or-nothing logic: if every gate passes, blocked_by is empty
   const gates = {
     connect: true, delivery_geo: true, menu: true, menu_approved: true,
     menu_clean: true, number: true, hours: true, subscription: true, ein: true,
     proof: true, delivery_test: true, ticket_destination: true,
+    campaign_assignment: true,
   };
   const blocked_by = Object.entries(gates).filter(([, ok]) => !ok).map(([k]) => k);
   assertEquals(blocked_by.length, 0);
@@ -209,6 +211,7 @@ Deno.test("gates: any single gate fail → blocked_by non-empty", () => {
     connect: true, delivery_geo: true, menu: true, menu_approved: true,
     menu_clean: true, number: true, hours: true, subscription: true, ein: true,
     proof: true, delivery_test: true, ticket_destination: true,
+    campaign_assignment: true,
   };
 
   const failProof = { ...baseGates, proof: false };
@@ -222,13 +225,17 @@ Deno.test("gates: any single gate fail → blocked_by non-empty", () => {
   const failTicket = { ...baseGates, ticket_destination: false };
   blocked = Object.entries(failTicket).filter(([, ok]) => !ok).map(([k]) => k);
   assertEquals(blocked, ["ticket_destination"]);
+
+  const failCampaign = { ...baseGates, campaign_assignment: false };
+  blocked = Object.entries(failCampaign).filter(([, ok]) => !ok).map(([k]) => k);
+  assertEquals(blocked, ["campaign_assignment"]);
 });
 
 Deno.test("gates: 9 original keys unchanged in behaviour", () => {
   // Verify the 9 original gates are still present and independently checked
   const originalKeys = ["connect", "delivery_geo", "menu", "menu_approved",
     "menu_clean", "number", "hours", "subscription", "ein"];
-  const newKeys = ["proof", "delivery_test", "ticket_destination"];
+  const newKeys = ["proof", "delivery_test", "ticket_destination", "campaign_assignment"];
   const allSorted = [...originalKeys, ...newKeys].sort();
   assertEquals(allSorted, ALL_GATE_KEYS);
 
