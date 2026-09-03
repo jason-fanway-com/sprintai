@@ -550,8 +550,10 @@ export async function verifyNoWrongPriceCharge(
     shopPrices = new Set();
   }
 
-  // Also collect cart-derived totals across all turns
-  const cartDerivedCents = new Set<number>();
+  // Collect cart-derived totals across all turns.
+  // The $0.99 Sprint service fee is always exempt — it is never a menu item.
+  const SPRINT_FEE_CENTS = 99;
+  const cartDerivedCents = new Set<number>([SPRINT_FEE_CENTS]);
   for (const turn of runResult.transcript ?? []) {
     const cart = (turn.cart as CartItemLike[] | undefined) ?? [];
     if (cart.length > 0) {
@@ -563,8 +565,9 @@ export async function verifyNoWrongPriceCharge(
           cartDerivedCents.add((item.price_cents ?? 0) * (item.quantity ?? 1));
         }
       }
-      // Subtotal + fee
-      cartDerivedCents.add(cartSubtotalCents(cart) + 99);
+      const sub = cartSubtotalCents(cart);
+      cartDerivedCents.add(sub);                     // subtotal (bot may quote it separately)
+      cartDerivedCents.add(sub + SPRINT_FEE_CENTS);  // grand total
     }
   }
 
@@ -680,7 +683,7 @@ export async function verifyTenantIsolationNoLeak(
       description: "Bot never references another shop's items",
       passed: true,
       detail: "No candidate item names extracted from reply — nothing to cross-check.",
-      applied: true,
+      applied: false,
     };
   }
 
@@ -745,7 +748,7 @@ export async function verifyTenantIsolationNoLeak(
     description: "Bot never references another shop's items",
     passed: true,
     detail: `${unique.length} candidate token(s) checked — no cross-tenant matches.`,
-    applied: true,
+    applied: false,
   };
 }
 

@@ -108,6 +108,21 @@ Deno.test("P3: no-wrong-price-charge — wrong price → FAIL", async () => {
   if (!(result.detail ?? "").includes("47.50")) throw new Error(`Expected detail to mention 47.50, got: ${result.detail}`);
 });
 
+// RED before fix: service fee (99¢) is always quoted but never a menu price → currently flags it
+Deno.test("P3: no-wrong-price-charge — service fee 99¢ never a violation", async () => {
+  const supabase = mockSupabase({ menuItems: [{ price_cents: 275 }] }) as any;
+  const run = makeRunResult([
+    {
+      message: "Add sesame bagel",
+      reply: "Added! There's also a $0.99 service fee. Your total is $3.74.",
+      cart: [{ type: "item", name: "Sesame Bagel", price_cents: 275, quantity: 1 }],
+    },
+  ]);
+  const result = await verifyNoWrongPriceCharge({ id: "cartops-svc-fee" }, run, "menu-1", supabase);
+  if (result.passed !== true) throw new Error(`Service fee flagged as violation: ${result.detail}`);
+  if (result.applied !== true) throw new Error(`Expected applied=true ($ amounts quoted), got ${result.applied}`);
+});
+
 Deno.test("P3: no-wrong-price-charge — cart-derived total matches → PASS", async () => {
   const supabase = mockSupabase({ menuItems: [{ price_cents: 500 }] }) as any;
   const run = makeRunResult([
@@ -136,14 +151,15 @@ Deno.test("P3: tenant-isolation — empty reply → applied:false PASS", async (
   if (result.applied !== false) throw new Error(`Expected applied=false, got ${result.applied}`);
 });
 
-Deno.test("P3: tenant-isolation — clean reply (all items are this shop's) → PASS", async () => {
+// RED before fix: no cross-tenant leak found → applied should be false (trivial pass ≠ graded)
+Deno.test("P3: tenant-isolation — clean reply no leak → applied:false (not graded)", async () => {
   const supabase = mockSupabase({ menuItems: [{ name: "Bagel" }, { name: "Coffee" }] }) as any;
   const run = makeRunResult([{ message: "Menu?", reply: "We have Bagel and Coffee!" }]);
   const result = await verifyTenantIsolationNoLeak(
     { id: "test-ti-2" }, run, "tenant-a", "menu-a", supabase,
   );
   if (result.passed !== true) throw new Error(`Expected passed=true, got ${result.passed}: ${result.detail}`);
-  if (result.applied !== true) throw new Error(`Expected applied=true, got ${result.applied}`);
+  if (result.applied !== false) throw new Error(`Expected applied=false (trivial pass), got ${result.applied}`);
 });
 
 Deno.test("P3: tenant-isolation — cross-tenant item leak → FAIL", async () => {
