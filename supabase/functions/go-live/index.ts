@@ -9,11 +9,18 @@
  * Connect unconfigured, this endpoint correctly REFUSES to go live.
  *
  * Gates (all must pass):
- *   - Connect:       isShopLive(shop) === true  (charges+payouts enabled)
- *   - Menu:          a confirmed csv-source menu with >=1 active item
- *   - Number:        phone_number_e164 set
- *   - Hours:         open_hours has at least one day configured
- *   - Subscription:  subscription_status === 'active'
+ *   - Connect:          isShopLive(shop) === true  (charges+payouts enabled)
+ *   - Delivery Geo:     coords set when delivery_enabled
+ *   - Menu:             a confirmed csv-source menu with >=1 active item
+ *   - Menu Approved:    owner attestation (§C) on current menu hash
+ *   - Menu Clean:       no flagged-awaiting-review rows
+ *   - Number:           phone_number_e164 set
+ *   - Hours:            open_hours has at least one day configured
+ *   - Subscription:     subscription_status === 'active'
+ *   - EIN:              required for non-test shops
+ *   - Proof:            100% proof_pass_pct on current menu via QA twin
+ *   - Delivery Test:    first-delivery handset test recorded passed
+ *   - Ticket Dest:      email_ticket_recipient set and valid
  *
  * Returns { ok, live, gates: {...}, blocked_by: [...] }. Never throws the shop
  * live partially; it's all-or-nothing.
@@ -45,7 +52,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address")
+    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -156,6 +163,109 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Proof Gate: resolve QA twin, read latest test_run, verify 100% ──
+  let proofPass = false;
+  let proofMessage = "";
+  const sourceName: string = (shop as any).name ?? "";
+  const sourceSlug: string = (shop as any).slug ?? "";
+
+  // Find QA twin: is_test=true, phone-less, tenant config has is_qa_twin
+  const { data: twinCandidates } = await supabase
+    .from("shops")
+    .select("id, name, tenant_id")
+    .eq("is_test", true)
+    .is("phone_number_e164", null);
+
+  let twinShop: { id: string; name: string } | null = null;
+  if (twinCandidates && twinCandidates.length > 0) {
+    const tenantIds = [...new Set(twinCandidates.map((t: any) => t.tenant_id))];
+    const { data: tenants } = await supabase
+      .from("tenants")
+      .select("id, config")
+      .in("id", tenantIds);
+    const qaTenantIds = new Set(
+      (tenants ?? []).filter((t: any) => t.config?.is_qa_twin === true).map((t: any) => t.id),
+    );
+    const qaTwins = (twinCandidates ?? []).filter((t: any) => qaTenantIds.has(t.tenant_id));
+    // Match by name: twin name contains source name (case-insensitive)
+    twinShop = qaTwins.find((t: any) =>
+      t.name.toLowerCase().includes(sourceName.toLowerCase()),
+    ) ?? null;
+  }
+
+  const sourceMenuHash: string | null = menu?.content_hash ?? null;
+
+  if (twinShop) {
+    // Read twin's menu for parity check
+    const { data: twinMenu } = await supabase
+      .from("menus")
+      .select("id, content_hash, updated_at")
+      .eq("shop_id", twinShop.id)
+      .or("source.eq.csv,source.eq.pdf")
+      .order("created_at", { ascending: false })
+      .maybeSingle();
+
+    let twinActiveItems = 0;
+    if (twinMenu?.id) {
+      const { count: tc } = await supabase
+        .from("menu_items").select("id", { count: "exact", head: true })
+        .eq("menu_id", twinMenu.id).eq("active", true);
+      twinActiveItems = tc ?? 0;
+    }
+
+    // Menu parity: same item count + same content_hash
+    const menuParity = twinActiveItems === activeItems &&
+      twinMenu?.content_hash === sourceMenuHash;
+
+    if (!menuParity) {
+      proofMessage = `Go-live refused: QA twin "${twinShop.name}" menu does not match shop menu. ` +
+        `Twin: ${twinActiveItems} items (hash ${(twinMenu?.content_hash ?? "none").slice(0, 8)}). ` +
+        `Shop: ${activeItems} items (hash ${(sourceMenuHash ?? "none").slice(0, 8)}). ` +
+        `Re-create the twin with create-qa-twin.py before launch.`;
+    } else {
+      // Read latest test_run for twin
+      const { data: latestRun } = await supabase
+        .from("test_runs")
+        .select("id, proof_pass_pct, scorer_version, started_at")
+        .eq("shop_id", twinShop.id)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!latestRun) {
+        proofMessage = `Go-live refused: no Proof run found for QA twin "${twinShop.name}". ` +
+          `Run Proof before launch.`;
+      } else if (latestRun.scorer_version !== 3) {
+        proofMessage = `Go-live refused: Proof run ${latestRun.id} uses scorer_version ` +
+          `${latestRun.scorer_version}, requires version 3. Re-run Proof.`;
+      } else if (latestRun.proof_pass_pct !== 100) {
+        proofMessage = `Go-live refused: Proof run ${latestRun.id} scored ` +
+          `${latestRun.proof_pass_pct}% (100% required). Run Proof and clear all failures before launch.`;
+      } else if (
+        twinMenu?.updated_at && latestRun.started_at &&
+        new Date(latestRun.started_at) < new Date(twinMenu.updated_at)
+      ) {
+        proofMessage = `Go-live refused: Proof run ${latestRun.id} is stale — ` +
+          `twin menu changed after the run (run: ${latestRun.started_at}, ` +
+          `menu updated: ${twinMenu.updated_at}). Re-run Proof.`;
+      } else {
+        proofPass = true;
+      }
+    }
+  } else {
+    proofMessage = `Go-live refused: no QA twin found for "${sourceName}". ` +
+      `Create a twin with create-qa-twin.py before running Proof.`;
+  }
+
+  // ── Delivery Test Gate: first-delivery handset test recorded passed ──
+  const deliveryTestPass = isTest || !!shop.first_delivery_test_passed_at;
+
+  // ── Ticket Destination Gate: email_ticket_recipient must be valid ──
+  const emailRecipient: string | null = (shop as any).email_ticket_recipient ?? null;
+  const ticketDestPass = typeof emailRecipient === "string" &&
+    emailRecipient.trim().length > 0 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRecipient.trim());
+
   const gates = {
     connect: hasStripe,
     delivery_geo: shop.delivery_enabled ? (shop.latitude != null && shop.longitude != null) : true,
@@ -166,20 +276,29 @@ Deno.serve(async (req: Request) => {
     hours: hoursSet,
     subscription: shop.subscription_status === "active",
     ein: hasEin,
+    proof: proofPass,
+    delivery_test: deliveryTestPass,
+    ticket_destination: ticketDestPass,
   };
 
   const blocked_by = Object.entries(gates).filter(([, ok]) => !ok).map(([k]) => k);
 
   if (blocked_by.length > 0) {
-    return jsonResponse({
-      ok: true, live: false, gates, blocked_by,
-      message:
-        blocked_by.includes("connect")
-          ? "Go-live refused: Stripe Connect is not enabled yet (charges_enabled false). This is the expected Phase-1 gate — the shop cannot take live orders until payouts are configured."
-          : blocked_by.includes("delivery_geo")
-            ? "Go-live refused: Delivery is enabled but shop coordinates are missing. Ensure the shop address is set (formatted_address) and try again — the system will auto-geocode it."
-            : "Go-live refused: " + blocked_by.join(", "),
-    });
+    // Build per-gate refusal messages (actionable, spec §Refusal messages)
+    const gateMsgs: Record<string, string> = {
+      connect: "Go-live refused: Stripe Connect is not enabled yet (charges_enabled false). This is the expected Phase-1 gate — the shop cannot take live orders until payouts are configured.",
+      delivery_geo: "Go-live refused: Delivery is enabled but shop coordinates are missing. Ensure the shop address is set (formatted_address) and try again — the system will auto-geocode it.",
+      proof: proofMessage || "Go-live refused: Proof has not passed.",
+      delivery_test: "Go-live refused: the first-delivery test has not been completed on this number. Run the 8-step handset script and record the result.",
+      ticket_destination: "Go-live refused: no order email is configured. The kitchen has no way to receive orders.",
+    };
+    // Pick the first blocked gate that has a custom message; fall back to join
+    const customMsg = blocked_by.find((k) => gateMsgs[k]) ?? null;
+    const message = customMsg
+      ? gateMsgs[customMsg]
+      : "Go-live refused: " + blocked_by.join(", ");
+
+    return jsonResponse({ ok: true, live: false, gates, blocked_by, message });
   }
 
   // All gates pass → flip live.

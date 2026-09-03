@@ -384,10 +384,27 @@ notified without a corresponding issue.
 | `admin-api` | REST API for admin dashboard (CRUD) | Yes |
 | `admin-chat` | Conversational AI admin (menu mgmt, delivery) | Yes |
 | `onboarding-save` | Wizard step persistence (create shop, save step) | No |
-| `go-live` | All-or-nothing go-live gate check | No |
+| `go-live` | All-or-nothing go-live gate check (12 gates) | No |
 | `merchant-auth` | Server-side PIN auth for sold-out manager | No |
 | `set-app-metadata` | Set user roles in app_metadata (service-key only) | No |
 | `shop-financials` | Shop financial reporting (KPIs, ledger, payouts, CSV export) | Yes |
+
+#### Go-live gates (12 — all must pass)
+
+| Gate | Check |
+|------|-------|
+| connect | `isShopLive()` true (charges+payouts enabled) |
+| delivery_geo | Coordinates set when delivery_enabled |
+| menu | ≥1 active item on confirmed csv/pdf menu |
+| menu_approved | Owner attestation (§C) on current menu hash |
+| menu_clean | No flagged-awaiting-review menu_items |
+| number | `phone_number_e164` set |
+| hours | ≥1 day configured in `open_hours` |
+| subscription | `subscription_status = "active"` |
+| ein | Required for non-test shops |
+| proof | 100% proof_pass_pct via QA twin (scorer_version=3, current menu) |
+| delivery_test | `first_delivery_test_passed_at` set (is_test skips) |
+| ticket_destination | `email_ticket_recipient` non-null, valid email syntax |
 
 ### Payments
 | Function | Purpose | JWT |
