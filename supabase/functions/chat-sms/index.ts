@@ -142,6 +142,7 @@ interface OrderCart {
   delivery_address:           Record<string, unknown> | null;
   delivery_fee_cents:         number | null;
   driver_tip_cents:           number | null;
+  ticket_send_attempt_at:     string | null;
 }
 
 interface ContentBlock {
@@ -2522,53 +2523,92 @@ async function handleSystemEvent(
 
   await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message);
 
-  // Send order ticket email on payment confirmed
-  if (system_event === "payment_confirmed" && shop.email_ticket_recipient) {
-    // Idempotency guard: claim the ticket-email slot with a conditional UPDATE.
-    // Only one concurrent caller can claim it (WHERE ticket_emailed_at IS NULL).
-    const { data: claimed } = await supabase
-      .from("order_carts")
-      .update({ ticket_emailed_at: new Date().toISOString() })
-      .eq("id", order_cart_id)
-      .is("ticket_emailed_at", null)
-      .select("id");
-    if (!claimed || claimed.length === 0) {
-      console.log(`[chat-sms] ticket already emailed for cart ${order_cart_id}, skipping`);
+  // ── Order ticket email (payment_confirmed only) ──────────────────────────
+  //
+  // send-then-claim pattern: serialize concurrent callers using a SHORT-LIVED
+  // ticket_send_attempt_at claim (NOT ticket_emailed_at). ticket_emailed_at is
+  // set ONLY after a confirmed 2xx from Resend. The old claim-before-send
+  // pattern would burn the slot on a failed send with no retry and no alarm.
+  //
+  // Failure modes guarded:
+  //   A) Resend non-2xx / throw → retry up to 3x inline (~2 min total),
+  //      then clear attempt_at and raise a CRITICAL issue for the issue-detector
+  //      to re-drive later. No silent ticket loss.
+  //   B) NULL email_ticket_recipient on a paid order → write CRITICAL issue
+  //      immediately (no destination to send to).
+  if (system_event === "payment_confirmed") {
+    if (!shop.email_ticket_recipient) {
+      // B) No destination — CRITICAL issue, not a silent skip.
+      const { data: existingIssue } = await supabase
+        .from("issues")
+        .select("id")
+        .eq("detection_rule", "ticket_no_destination")
+        .eq("conversation_id", conversation_id)
+        .eq("status", "open")
+        .limit(1);
+      if (!existingIssue || existingIssue.length === 0) {
+        await supabase.from("issues").insert({
+          tenant_id: conversation.tenant_id,
+          shop_id: shop.id,
+          conversation_id: conversation_id,
+          severity: "sev_1",
+          detection_rule: "ticket_no_destination",
+          title: `Order #${cartRow.order_number ?? cartRow.id} has no ticket destination`,
+          description: `Shop "${shop.name}" has no email_ticket_recipient set but received a paid order. The kitchen ticket cannot be sent. Set an email recipient in shop settings.`,
+          metadata: {
+            cart_id: order_cart_id,
+            order_number: cartRow.order_number ?? null,
+            shop_name: shop.name,
+            total_cents: cartRow.total_cents ?? null,
+          },
+        });
+        console.error(`[chat-sms] CRITICAL: ticket_no_destination for cart ${order_cart_id} (shop ${shop.id})`);
+      }
     } else {
-      try {
-        const resendApiKey = Deno.env.get("RESEND_API_KEY");
-        if (!resendApiKey) {
-          console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
-        } else {
-          const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
-          const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
-          const emailPickup = cartRow.pickup_name ?? "Unknown";
-          const emailOrderType = (cartRow.order_type as string) === "delivery" ? "DELIVERY" : "TAKEOUT";
-          const emailDeliveryAddr = cartRow.delivery_address as Record<string, unknown> | null;
-          const emailDeliveryFormatted = emailDeliveryAddr
-            ? ((emailDeliveryAddr.formatted as string) || `${emailDeliveryAddr.street || ""}, ${emailDeliveryAddr.city || ""}, ${emailDeliveryAddr.state || ""} ${emailDeliveryAddr.zip || ""}`.trim().replace(/^, /, "").replace(/, $/, ""))
-            : null;
-          const now = new Date();
-          const etTime = now.toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
-          const emailNotes = (cartRow.notes as string | null) ?? null;
-          const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
-            if ((i as BundleItem).type === "bundle") {
-              const b = i as BundleItem;
-              const bPrice = b.price_cents != null ? `$${(b.price_cents / 100).toFixed(2)}` : "";
-              const flavorSub = b.selections?.length
-                ? `<br><span style="font-size:11px;color:#888;">${b.selections.map(s => `${s.quantity}\u00d7 ${h(s.flavor)}`).join(", ")}</span>`
-                : "";
-              return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
-            }
-            const r = i as CartItem;
-            const linePrice = r.price_cents != null ? `$${((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
-            const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
-            const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
-            const detail = [...new Set([...mods, ...opts])].join(", ");
-            const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
-            return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity || 1}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
-          }).join("");
-          const emailHtml = `<!DOCTYPE html>
+      // ── Serialization: claim ticket_send_attempt_at (short-lived lock) ──
+      // Claim if NULL (first caller) OR older than 30s (stale claim from a
+      // caller that crashed before clearing). ticket_emailed_at is NOT touched
+      // until a 2xx is received.
+      const now = new Date().toISOString();
+      const staleThreshold = new Date(Date.now() - 30_000).toISOString();
+      const { data: claimed } = await supabase
+        .from("order_carts")
+        .update({ ticket_send_attempt_at: now })
+        .eq("id", order_cart_id)
+        .or(`ticket_send_attempt_at.is.null,ticket_send_attempt_at.lte.${staleThreshold}`)
+        .select("id");
+      if (!claimed || claimed.length === 0) {
+        console.log(`[chat-sms] ticket send already in progress for cart ${order_cart_id}, skipping`);
+      } else {
+        // ── Build email payload once (same for each retry attempt) ──
+        const emailOrderNum = cartRow.order_number ? `#${cartRow.order_number}` : "";
+        const emailTotal = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
+        const emailPickup = cartRow.pickup_name ?? "Unknown";
+        const emailOrderType = (cartRow.order_type as string) === "delivery" ? "DELIVERY" : "TAKEOUT";
+        const emailDeliveryAddr = cartRow.delivery_address as Record<string, unknown> | null;
+        const emailDeliveryFormatted = emailDeliveryAddr
+          ? ((emailDeliveryAddr.formatted as string) || `${emailDeliveryAddr.street || ""}, ${emailDeliveryAddr.city || ""}, ${emailDeliveryAddr.state || ""} ${emailDeliveryAddr.zip || ""}`.trim().replace(/^, /, "").replace(/, $/, ""))
+          : null;
+        const etTime = new Date().toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "long", timeStyle: "short" });
+        const emailNotes = (cartRow.notes as string | null) ?? null;
+        const cartItems = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
+          if ((i as BundleItem).type === "bundle") {
+            const b = i as BundleItem;
+            const bPrice = b.price_cents != null ? `$${(b.price_cents / 100).toFixed(2)}` : "";
+            const flavorSub = b.selections?.length
+              ? `<br><span style="font-size:11px;color:#888;">${b.selections.map(s => `${s.quantity}\u00d7 ${h(s.flavor)}`).join(", ")}</span>`
+              : "";
+            return `<tr><td style="padding:6px 8px;">${h(b.name)}${flavorSub}</td><td style="padding:6px 8px;text-align:center;">1</td><td style="padding:6px 8px;text-align:right;">${bPrice}</td></tr>`;
+          }
+          const r = i as CartItem;
+          const linePrice = r.price_cents != null ? `$${((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
+          const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
+          const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
+          const detail = [...new Set([...mods, ...opts])].join(", ");
+          const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
+          return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity || 1}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
+        }).join("");
+        const emailHtml = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
   <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
@@ -2608,45 +2648,107 @@ async function handleSystemEvent(
   </div>
 </body>
 </html>`;
-          const emailResp = await fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              from: "SprintAI Orders <orders@getsprintai.com>",
-              to: [shop.email_ticket_recipient],
-              subject: `New ${emailOrderType}${emailOrderNum ? ` ${hs(emailOrderNum)}` : ""} \u2014 ${emailOrderType === "DELIVERY" && emailDeliveryFormatted ? hs(emailDeliveryFormatted) : hs(emailPickup)} \u2014 $${emailTotal} \u2014 ${hs(shop.name)}`,
-              html: emailHtml,
-            }),
-          });
-          // ── Audit: log every send attempt to ticket_send_log for determinism proof
-          try {
-            let resendMessageId: string | null = null;
+        // Dedupe subject on order_number (for the same cart, regardless of recipient).
+        const emailSubject = `New ${emailOrderType}${emailOrderNum ? ` ${hs(emailOrderNum)}` : ""} \u2014 ${emailOrderType === "DELIVERY" && emailDeliveryFormatted ? hs(emailDeliveryFormatted) : hs(emailPickup)} \u2014 $${emailTotal} \u2014 ${hs(shop.name)}`;
+
+        // ── Bounded retry: up to 3 attempts, ~2 min total inline window ──
+        const MAX_ATTEMPTS = 3;
+        const resendApiKey = Deno.env.get("RESEND_API_KEY");
+        if (!resendApiKey) {
+          console.warn("[chat-sms] RESEND_API_KEY not set — skipping order ticket email");
+          // Clear the claim so issue-detector can re-drive if the key appears later.
+          await supabase.from("order_carts").update({ ticket_send_attempt_at: null }).eq("id", order_cart_id);
+        } else {
+          let sentOk = false;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-              const resendBody = await emailResp.clone().json();
-              resendMessageId = (resendBody && typeof resendBody === "object" && "id" in resendBody) ? String((resendBody as Record<string, unknown>).id) : null;
-            } catch { /* body may not be JSON or already consumed — id stays null */ }
-            await supabase.from("ticket_send_log").insert({
-              cart_id: order_cart_id,
-              shop_id: shop.id,
-              order_number: cartRow.order_number ?? null,
-              recipient: shop.email_ticket_recipient,
-              resend_message_id: resendMessageId,
-              http_status: emailResp.status,
-            });
-          } catch (auditErr) {
-            console.error("[chat-sms] Non-fatal: failed to insert ticket_send_log row:", auditErr);
+              const emailResp = await fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  from: "SprintAI Orders <orders@getsprintai.com>",
+                  to: [shop.email_ticket_recipient],
+                  subject: emailSubject,
+                  html: emailHtml,
+                }),
+              });
+
+              // ── Log EVERY attempt to ticket_send_log ──
+              try {
+                let resendMessageId: string | null = null;
+                try {
+                  const resendBody = await emailResp.clone().json();
+                  resendMessageId = (resendBody && typeof resendBody === "object" && "id" in resendBody) ? String((resendBody as Record<string, unknown>).id) : null;
+                } catch { /* body may not be JSON or already consumed */ }
+                await supabase.from("ticket_send_log").insert({
+                  cart_id: order_cart_id,
+                  shop_id: shop.id,
+                  order_number: cartRow.order_number ?? null,
+                  recipient: shop.email_ticket_recipient,
+                  resend_message_id: resendMessageId,
+                  http_status: emailResp.status,
+                  attempt_number: attempt,
+                });
+              } catch (auditErr) {
+                console.error(`[chat-sms] Non-fatal: failed to insert ticket_send_log row (attempt ${attempt}):`, auditErr);
+              }
+
+              if (emailResp.ok) {
+                // ── Success: mark ticket_emailed_at (the durable success marker) ──
+                const successTime = new Date().toISOString();
+                await supabase.from("order_carts").update({ ticket_emailed_at: successTime }).eq("id", order_cart_id);
+                console.log(`[chat-sms] Order ticket email sent to ${shop.email_ticket_recipient} (attempt ${attempt})`);
+                sentOk = true;
+                break;
+              }
+
+              const errText = await emailResp.text();
+              console.error(`[chat-sms] Resend email failed (attempt ${attempt}/${MAX_ATTEMPTS}, HTTP ${emailResp.status}): ${errText}`);
+            } catch (emailErr) {
+              console.error(`[chat-sms] Resend email threw (attempt ${attempt}/${MAX_ATTEMPTS}):`, emailErr);
+            }
+
+            // Backoff before retry (~1s, then ~3s).
+            if (attempt < MAX_ATTEMPTS) {
+              const delayMs = attempt === 1 ? 1_200 : 3_500;
+              await new Promise(r => setTimeout(r, delayMs));
+            }
           }
-          if (!emailResp.ok) {
-            const errText = await emailResp.text();
-            console.error(`[chat-sms] Resend email failed (${emailResp.status}): ${errText}`);
-          } else {
-            console.log(`[chat-sms] Order ticket email sent to ${shop.email_ticket_recipient}`);
+
+          if (!sentOk) {
+            // ── Exhausted all attempts: clear claim, raise CRITICAL issue ──
+            console.error(`[chat-sms] CRITICAL: ticket send exhausted after ${MAX_ATTEMPTS} attempts for cart ${order_cart_id}`);
+            await supabase.from("order_carts").update({ ticket_send_attempt_at: null }).eq("id", order_cart_id);
+
+            const { data: existingIssue } = await supabase
+              .from("issues")
+              .select("id")
+              .eq("detection_rule", "ticket_send_failed")
+              .eq("conversation_id", conversation_id)
+              .eq("status", "open")
+              .limit(1);
+            if (!existingIssue || existingIssue.length === 0) {
+              await supabase.from("issues").insert({
+                tenant_id: conversation.tenant_id,
+                shop_id: shop.id,
+                conversation_id: conversation_id,
+                severity: "sev_1",
+                detection_rule: "ticket_send_failed",
+                title: `Order #${cartRow.order_number ?? cartRow.id} ticket send failed`,
+                description: `Kitchen ticket email for order #${cartRow.order_number ?? cartRow.id} ($${emailTotal}) failed after ${MAX_ATTEMPTS} attempts. The issue-detector will re-attempt on next cycle.`,
+                metadata: {
+                  cart_id: order_cart_id,
+                  order_number: cartRow.order_number ?? null,
+                  max_attempts: MAX_ATTEMPTS,
+                  total_cents: cartRow.total_cents ?? null,
+                  recipient: shop.email_ticket_recipient,
+                },
+              });
+            }
           }
         }
-      } catch (emailErr) {
-        console.error("[chat-sms] Non-fatal: order ticket email threw:", emailErr);
-      }
-    } // closes else (idempotency-guard claimed block)
+      } // closes claimed block
+    } // closes has recipient
   }
 
   // ── STRUCTURAL OUTBOUND WATCHDOG: transactional push context ──────────────
