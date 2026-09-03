@@ -50,7 +50,11 @@ Deno.serve(async (_req: Request) => {
   try {
     // 1. Find active job, or claim next pending
     let job = await findRunningJob(supabase);
+    const fromRunning = !!job;
     if (!job) {
+      // claimNextPending is safety-aware: it fails+skips any pending job that
+      // targets a protected shop or a shop with a phone number, so an unsafe
+      // shop never enters 'running' and traps the cron loop.
       const claimed = await claimNextPending(supabase);
       if (!claimed) return Response.json({ status: "idle", message: "queue empty" });
       job = claimed;
@@ -59,6 +63,25 @@ Deno.serve(async (_req: Request) => {
     const jobId: string = job.id;
     const shopId: string = job.shop_id;
     const tenantId: string = job.tenant_id;
+
+    // Safety drain: a job already in 'running' (claimed before the claim-time
+    // gate existed, or manually flipped) for an unsafe shop would otherwise loop
+    // forever — runCase throws every tick and status stays 'running', wasting
+    // cron ticks and re-spending on case generation. Fail it now, before any
+    // generation or LLM call. The claim path is already gated, so only re-check
+    // jobs that came from findRunningJob.
+    if (fromRunning) {
+      const reason = await shopSafetyReason(supabase, shopId);
+      if (reason) {
+        await supabase.from("test_run_queue").update({
+          status: "error",
+          error: reason,
+          finished_at: new Date().toISOString(),
+        }).eq("id", jobId);
+        console.warn(`test-runner [${jobId}]: safety drain — ${reason}`);
+        return Response.json({ status: "skipped", jobId, reason });
+      }
+    }
     let caseIdx: number = job.case_index ?? 0;
     let totalCases: number = job.total_cases ?? 0;
     let cases: AnyCase[] = (job.cases_json as AnyCase[]) ?? [];
@@ -439,30 +462,72 @@ async function findRunningJob(supabase: any) {
   return data?.[0] ?? null;
 }
 
+/**
+ * Returns a human-readable reason string if the shop must NOT be tested against
+ * (mirrors runner.ts enforceSafetyGate: protected=true OR phone_number_e164 set,
+ * plus shop-not-found), or null if the shop is safe. Enforcing this at claim
+ * time — not only inside runCase — stops an unsafe shop from ever entering
+ * 'running' and trapping the every-60s cron loop on a job that can never succeed.
+ */
+async function shopSafetyReason(supabase: any, shopId: string): Promise<string | null> {
+  const { data: shop, error } = await supabase
+    .from("shops")
+    .select("id, name, protected, phone_number_e164")
+    .eq("id", shopId)
+    .maybeSingle();
+  if (error || !shop) return `Shop ${shopId} not found — refusing to run test suite`;
+  if (shop.protected === true) {
+    return `SAFETY GATE: shop "${shop.name}" (${shopId}) is protected — refusing to run test suite`;
+  }
+  if (shop.phone_number_e164 != null && shop.phone_number_e164 !== "") {
+    return `SAFETY GATE: shop "${shop.name}" (${shopId}) has a phone number (${shop.phone_number_e164}) — refusing to run test suite`;
+  }
+  return null;
+}
+
 async function claimNextPending(supabase: any) {
+  // Fetch a small batch oldest-first so we can skip unsafe jobs and still claim
+  // a safe one in the same tick (limit=1 would stall behind a single poisoned row).
   const { data } = await supabase
     .from("test_run_queue")
     .select("*")
     .eq("status", "pending")
     .order("requested_at", { ascending: true })
-    .limit(1);
+    .limit(20);
 
   if (!data?.length) return null;
 
-  const job = data[0];
-  await supabase.from("test_run_queue").update({
-    status: "running",
-    started_at: new Date().toISOString(),
-  }).eq("id", job.id);
+  for (const job of data) {
+    const reason = await shopSafetyReason(supabase, job.shop_id);
+    if (reason) {
+      // Fail the poisoned job terminally so it leaves the pending queue and
+      // never becomes 'running'. No bot call, no generation, no message sent.
+      await supabase.from("test_run_queue").update({
+        status: "error",
+        error: reason,
+        finished_at: new Date().toISOString(),
+      }).eq("id", job.id);
+      console.warn(`test-runner: refusing to claim job ${job.id} — ${reason}`);
+      continue;
+    }
 
-  return {
-    ...job,
-    status: "running",
-    case_index: 0,
-    cases_json: null,
-    scored_json: null,
-    shop_name: null,
-  };
+    await supabase.from("test_run_queue").update({
+      status: "running",
+      started_at: new Date().toISOString(),
+    }).eq("id", job.id);
+
+    return {
+      ...job,
+      status: "running",
+      case_index: 0,
+      cases_json: null,
+      scored_json: null,
+      shop_name: null,
+    };
+  }
+
+  // Every pending job in this batch was unsafe (now failed) — nothing to run.
+  return null;
 }
 
 function jsonErr(status: number, message: string) {
