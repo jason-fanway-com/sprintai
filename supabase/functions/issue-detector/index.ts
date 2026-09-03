@@ -415,6 +415,135 @@ async function detectLatencySpike(
   return issues;
 }
 
+/** Sev-1: Ticket send failures in ticket_send_log (non-2xx rows).
+ *  Catch failures the inline chat-sms handler may have missed. */
+async function detectTicketSendFailures(
+  supabase: SupabaseClient,
+  opts: SweepOptions = {},
+): Promise<PendingIssue[]> {
+  const since = opts.backfill
+    ? "1970-01-01T00:00:00Z"
+    : new Date(Date.now() - LOOKBACK_HOURS * 60 * 60_000).toISOString();
+
+  const { data: failedRows } = await supabase
+    .from("ticket_send_log")
+    .select("cart_id, http_status, sent_at")
+    .not("http_status", "is", null)
+    .not("http_status", "in", "(200,201,202,204)")
+    .gte("sent_at", since)
+    .limit(100);
+
+  if (!failedRows || failedRows.length === 0) return [];
+
+  // Get cart+shop+tenant for each unique cart_id
+  const cartIds = [...new Set(failedRows.map((r: { cart_id: string }) => r.cart_id))];
+  const { data: carts } = await supabase
+    .from("order_carts")
+    .select("id, conversation_id, order_number, total_cents, shop_id")
+    .in("id", cartIds);
+  if (!carts || carts.length === 0) return [];
+
+  const cartMap = new Map((carts as Array<{ id: string; conversation_id: string; order_number: number | null; total_cents: number | null; shop_id: string }>).map(c => [c.id, c]));
+
+  const shopIds = [...new Set(carts.map((c: { shop_id: string }) => c.shop_id))];
+  const { data: shops } = await supabase
+    .from("shops")
+    .select("id, tenant_id, name")
+    .in("id", shopIds);
+  const shopMap = new Map((shops ?? []).map((s: { id: string; tenant_id: string; name: string }) => [s.id, s]));
+
+  const issues: PendingIssue[] = [];
+  for (const row of failedRows as Array<{ cart_id: string; http_status: number; sent_at: string }>) {
+    const cart = cartMap.get(row.cart_id);
+    if (!cart) continue;
+    const shop = shopMap.get(cart.shop_id);
+    if (!shop) continue;
+
+    issues.push({
+      tenant_id: shop.tenant_id,
+      shop_id: cart.shop_id,
+      conversation_id: cart.conversation_id,
+      eval_id: null,
+      severity: "sev_1",
+      detection_rule: "ticket_send_failed",
+      title: `Order #${cart.order_number ?? row.cart_id} ticket send failed (HTTP ${row.http_status})`,
+      description: `Ticket email for order #${cart.order_number ?? row.cart_id} received HTTP ${row.http_status} from Resend at ${row.sent_at}. The kitchen may not have received this ticket.`,
+      metadata: {
+        cart_id: row.cart_id,
+        order_number: cart.order_number ?? null,
+        http_status: row.http_status,
+        sent_at: row.sent_at,
+        total_cents: cart.total_cents ?? null,
+        shop_name: shop.name ?? null,
+      },
+    });
+  }
+  return issues;
+}
+
+/** Sev-1: Missing tickets — paid carts older than ~15 min with no ticket_emailed_at
+ *  and no open ticket issue. Catches cases where no ticket was ever delivered. */
+async function detectMissingTickets(
+  supabase: SupabaseClient,
+  _opts: SweepOptions = {},
+): Promise<PendingIssue[]> {
+  const cutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+
+  const { data: carts } = await supabase
+    .from("order_carts")
+    .select("id, conversation_id, order_number, total_cents, shop_id, updated_at")
+    .eq("phase", "confirmed")
+    .eq("payment_status", "paid")
+    .is("ticket_emailed_at", null)
+    .lt("updated_at", cutoff)
+    .limit(50);
+
+  if (!carts || carts.length === 0) return [];
+
+  // Get shop tenant_ids
+  const shopIds = [...new Set((carts as Array<{ shop_id: string }>).map(c => c.shop_id))];
+  const { data: shops } = await supabase
+    .from("shops")
+    .select("id, tenant_id, name")
+    .in("id", shopIds);
+  const shopMap = new Map((shops ?? []).map((s: { id: string; tenant_id: string; name: string }) => [s.id, s]));
+
+  // Pre-check: skip carts that already have an open ticket issue
+  const convIds = (carts as Array<{ conversation_id: string }>).map(c => c.conversation_id);
+  const { data: existingIssues } = await supabase
+    .from("issues")
+    .select("conversation_id")
+    .eq("status", "open")
+    .in("detection_rule", ["ticket_send_failed", "ticket_no_destination", "ticket_missing"])
+    .in("conversation_id", convIds);
+  const convsWithIssue = new Set((existingIssues ?? []).map((i: { conversation_id: string }) => i.conversation_id));
+
+  const issues: PendingIssue[] = [];
+  for (const cart of (carts as Array<{ id: string; conversation_id: string; order_number: number | null; total_cents: number | null; shop_id: string; updated_at: string }>)) {
+    if (convsWithIssue.has(cart.conversation_id)) continue;
+    const shop = shopMap.get(cart.shop_id);
+    if (!shop) continue;
+
+    issues.push({
+      tenant_id: shop.tenant_id,
+      shop_id: cart.shop_id,
+      conversation_id: cart.conversation_id,
+      eval_id: null,
+      severity: "sev_1",
+      detection_rule: "ticket_missing",
+      title: `Order #${cart.order_number ?? cart.id} has no kitchen ticket`,
+      description: `Order #${cart.order_number ?? cart.id} ($${((cart.total_cents ?? 0) / 100).toFixed(2)}) was paid but has no ticket_emailed_at after ${Math.round((Date.now() - new Date(cart.updated_at).getTime()) / 60000)} minutes. The kitchen may have missed this order.`,
+      metadata: {
+        cart_id: cart.id,
+        order_number: cart.order_number ?? null,
+        total_cents: cart.total_cents ?? null,
+        shop_name: shop.name ?? null,
+      },
+    });
+  }
+  return issues;
+}
+
 /** Sev-3: Low-score conversation — any flagged eval with minor severity. */
 async function detectLowScoreConversations(
   supabase: SupabaseClient,
@@ -479,6 +608,8 @@ async function runDetection(supabase: SupabaseClient, opts: SweepOptions = {}): 
     { fn: () => detectQualityDecline(supabase, opts), label: "quality_decline" },
     { fn: () => detectIntentFailure(supabase, opts), label: "intent_failure" },
     { fn: () => detectLatencySpike(supabase, opts), label: "latency_spike" },
+    { fn: () => detectTicketSendFailures(supabase, opts), label: "ticket_send_failed" },
+    { fn: () => detectMissingTickets(supabase, opts), label: "ticket_missing" },
     { fn: () => detectLowScoreConversations(supabase, opts), label: "low_score_conversation" },
   ];
 

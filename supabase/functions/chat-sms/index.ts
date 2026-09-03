@@ -2543,6 +2543,7 @@ async function handleSystemEvent(
         .from("issues")
         .select("id")
         .eq("detection_rule", "ticket_no_destination")
+        .eq("tenant_id", conversation.tenant_id)
         .eq("conversation_id", conversation_id)
         .eq("status", "open")
         .limit(1);
@@ -2724,6 +2725,7 @@ async function handleSystemEvent(
               .from("issues")
               .select("id")
               .eq("detection_rule", "ticket_send_failed")
+              .eq("tenant_id", conversation.tenant_id)
               .eq("conversation_id", conversation_id)
               .eq("status", "open")
               .limit(1);
