@@ -21,6 +21,11 @@ import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 
 const CHAT_MODEL_DEFAULT = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-pro";
 let CHAT_MODEL = CHAT_MODEL_DEFAULT;
+// TEST-ONLY: prompt variant, selectable per request via ?prompt=minimal.
+// "current" = the shipped 51-rule prompt + all post-turn guards.
+// "minimal" = shop/hours/delivery + menu + one instruction, and NO post-turn
+// reply rewriting (the model's text is sent verbatim, plus the ledger footer).
+let PROMPT_VARIANT: "current" | "minimal" = "current";
 // TEST-ONLY FUNCTION: bot model is selectable per request via ?bot_model=<slug>.
 // Safe because the harness drives this function strictly sequentially.
 const CHAT_API   = "https://openrouter.ai/api/v1/messages";
@@ -532,7 +537,33 @@ function buildSystemPrompt(
     ? `\nTEST MODE: Ignore all business-hours restrictions — allow ordering at any time. Do NOT refuse orders based on the current time or TODAY'S HOURS.`
     : "";
 
+  // ── EXPERIMENT (2026-09-04): minimal prompt variant ──────────────────────
+  // Shop name, hours, delivery availability, the menu with prices and options,
+  // and ONE instruction. The tool definitions are unchanged (they are passed
+  // separately as ORDERING_TOOLS). Nothing else — no rules block, no phase
+  // behaviour, no compliance note.
+  if (PROMPT_VARIANT === "minimal") {
+    const deliveryLine = deliveryEnabled === true && deliveryGeoAvailable !== false
+      ? "Delivery is available, and so is pickup."
+      : "Pickup only — this shop does not deliver.";
+    return `You are taking a food order by text message for ${shop.name}. Be warm and brief, like a good employee behind the counter. Confirm what you just added before asking anything. Ask at most one question per message. Never say you did something you did not actually do. If you are not sure what someone means, ask plainly.
+
+You are replying by SMS text message. Plain text only. Never use markdown, tables, headings, or bullet points of any kind - no hyphens, asterisks, or numbers starting a line, and never put each item on its own line. Write lists inline in a sentence, the way a person texts: "Large cheese pizza, french fries, and bone-in wings (hot)". Keep replies under about 300 characters. Write the way a person texts.
+
+TODAY'S HOURS: ${hoursStr}
+${deliveryLine}
+CURRENT TIME: ${currentTime}
+
+MENU:
+${menuStr}
+
+CURRENT CART:
+${cartStr}`;
+  }
+
   return `You are the ordering assistant for ${shop.name}. Help customers order for pickup or delivery via text.
+
+You are replying by SMS text message. Plain text only. Never use markdown, tables, headings, or bullet points of any kind - no hyphens, asterisks, or numbers starting a line, and never put each item on its own line. Write lists inline in a sentence, the way a person texts: "Large cheese pizza, french fries, and bone-in wings (hot)". Keep replies under about 300 characters. Write the way a person texts.
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
@@ -1646,6 +1677,10 @@ function cartTotalFragment(totalCents: number | null | undefined): string {
 function repairOrphanedPunctuation(text: string): string {
   return text
     // "Fries — . What else"  /  "Fries —. What else"  → "Fries. What else"
+    // empty brackets left where a stripped amount used to be: "bone-in ( )"
+    .replace(/\(\s*\)/g, "")
+    // "3 items — ( )" / "3 items —" left when the model's own total was stripped
+    .replace(/\b\d+\s+items?\s*[—–-]\s*(?=[.!?]|$)/gim, "")
     .replace(/\s*[—–-]\s*([.,;:!?])/g, "$1")
     // "Fries — total. What" → "Fries. What"  (word "total" left behind alone)
     .replace(/\s+[—–-]\s+total\b/gi, "")
@@ -1889,6 +1924,16 @@ function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | nul
     if (!m) continue;
     const claimed = m[1].replace(/["']/g, '').trim();
     if (claimed.length < 2) continue;
+    // CHANGE 2 (2026-09-04, Jason): an item COUNT is not an item NAME. These
+    // patterns capture "You've got 3 items in your cart" as a claim that an
+    // item literally called "3 items" is in the cart, so a TRUE statement was
+    // flagged as a hallucination and the whole reply was thrown away. Verify a
+    // count as a count: right number, no hallucination.
+    const countClaim = claimed.match(/\b(\d+)\s+items?\b/i);
+    if (countClaim) {
+      if (Number(countClaim[1]) === guardCart.length) continue; // truthful
+      return claimed;                                           // wrong count
+    }
     const cartNames = guardCart.map(i =>
       (i as BundleItem).type === "bundle" ? (i as BundleItem).name : (i as CartItem).name
     );
@@ -1929,6 +1974,41 @@ function extractDollarCents(text: string): number[] {
 
 // Helper: detects "fixed it", "removed that", "that's one now", etc.
 // when the model narrates a correction but no cart mutation occurred.
+/**
+ * CHANGE 2 (2026-09-04, Jason): does the model's reply already acknowledge the
+ * cart state?
+ *
+ * Guard 1f used to REPLACE the model's reply with a flat recital
+ * ("Your cart: 1x Cheese - Large (16"), 1x French Fries. What else can I add?")
+ * whenever it suspected a narrated correction that never mutated the cart. In a
+ * six-turn test it discarded two perfectly coherent replies, because its
+ * predicate matches a plain cart listing ("1x ...") next to the word "want".
+ *
+ * The recital is now a FALLBACK, not a blanket replacement: it is used only when
+ * the model produced nothing usable, or wrote something that shows no awareness
+ * of what is in the cart. A reply that names an item in the cart, or refers to
+ * the cart/order at all, is coherent — send the model's words.
+ */
+function replyAcknowledgesCart(reply: string, cart: AnyCartItem[]): boolean {
+  const text = (reply ?? "").trim();
+  if (text.length === 0) return false;
+
+  // Generic cart/order awareness.
+  if (/\b(?:cart|order|added|got it|that'?s|so far|total)\b/i.test(text)) return true;
+
+  // Or it names something actually in the cart. Match on the item's most
+  // distinctive word so "Cheese - Large (16\")" is recognised in "large cheese".
+  const norm = text.toLowerCase();
+  for (const item of cart) {
+    const name = ((item as CartItem).name ?? (item as BundleItem).name ?? "").toLowerCase();
+    if (!name) continue;
+    if (norm.includes(name)) return true;
+    const words = name.split(/[^a-z0-9]+/).filter(w => w.length > 3);
+    if (words.some(w => norm.includes(w))) return true;
+  }
+  return false;
+}
+
 function claimsCorrectedWithoutMutation(reply: string, cartBefore: AnyCartItem[], cartAfter: AnyCartItem[]): boolean {
   if (!reply) return false;
   // If the cart actually changed, the correction was real
@@ -2990,10 +3070,13 @@ Deno.serve(async (req: Request) => {
 
   // ── model override (test rig) ────────────────────────────────
   try {
-    const _m = new URL(req.url).searchParams.get("bot_model");
+    const _u = new URL(req.url);
+    const _m = _u.searchParams.get("bot_model");
     CHAT_MODEL = _m && _m.trim() ? _m.trim() : CHAT_MODEL_DEFAULT;
-    console.log(`[chat-sms-mtest] bot model = ${CHAT_MODEL}`);
-  } catch { CHAT_MODEL = CHAT_MODEL_DEFAULT; }
+    const _p = (_u.searchParams.get("prompt") ?? "").trim().toLowerCase();
+    PROMPT_VARIANT = _p === "minimal" ? "minimal" : "current";
+    console.log(`[chat-sms-mtest] bot model = ${CHAT_MODEL}, prompt = ${PROMPT_VARIANT}`);
+  } catch { CHAT_MODEL = CHAT_MODEL_DEFAULT; PROMPT_VARIANT = "current"; }
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")              ?? "",
@@ -3751,6 +3834,12 @@ Deno.serve(async (req: Request) => {
     checkoutUrl = loopResult.checkoutUrl;
   }
 
+  // EXPERIMENT: the model's own words, before any post-turn guard touches them.
+  // The minimal variant restores this just before the ledger footer is appended,
+  // so nothing rewrites punctuation, appends "Pickup or delivery today?", or
+  // replaces the reply with an injected cart line.
+  const rawModelReply = reply;
+
   // Snapshot pre-loop order_type before DB reload (guard 2b uses it).
   const orderTypePreLoop = cart.order_type ?? null;
 
@@ -3918,7 +4007,10 @@ Deno.serve(async (req: Request) => {
   // ── Guard 1f: narrated correction without cart mutation ────────────────
   // If the model says "fixed it, 1x" / "removed that" / "updated to just one"
   // but the cart didn't change, replace the reply with the real cart state.
-  if (!portionCheck.tripped && claimsCorrectedWithoutMutation(reply, cartItems, guardCart)) {
+  // CHANGE 2 (2026-09-04): fire ONLY when the model gave us nothing coherent to
+  // send. When it wrote a reply that acknowledges the cart, that reply ships.
+  if (!portionCheck.tripped && claimsCorrectedWithoutMutation(reply, cartItems, guardCart)
+      && !replyAcknowledgesCart(reply, guardCart)) {
     console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     if (guardCart.length === 0) {
       reply = "Your cart is empty. What would you like to order?";
@@ -4021,21 +4113,42 @@ Deno.serve(async (req: Request) => {
   // quote a different number.
   if (guardCart.length > 0 && !checkoutUrl) {
     const quotedCents = extractDollarCents(reply);
-    // Only check when the reply quotes a single total-ish dollar amount
-    // and the cart has items. Look for the LAST dollar amount as it's
-    // typically the total.
-    if (quotedCents.length > 0) {
+    // CHANGE 2 (2026-09-04, Jason): only fire when the model presents a figure
+    // AS A TOTAL. Previously ANY dollar amount counted and the LAST one was
+    // assumed to be the total, so a reply offering menu prices
+    // ("bone-in ($16.99) or boneless ($11.99)?") or writing its own
+    // "(subtotal $37.49 + $0.99 service fee)" line was judged to have
+    // hallucinated a total and had its entire message discarded. Quoting a
+    // price is not quoting a total.
+    const claimsATotal = /\b(?:total|subtotal|comes to|that['\u2019]ll be|that will be|you owe|grand total|order total|due|to pay|adds up to|comes out to|altogether|all together)\b/i.test(reply);
+    if (quotedCents.length > 0 && claimsATotal) {
       const lastQuoted = quotedCents[quotedCents.length - 1];
       // Allow ±$0.01 rounding difference
       if (Math.abs(lastQuoted - guardRealTotalCents) > 1) {
         console.warn(`[chat-sms] GUARD 2c (hallucinated-total) tripped (conv=${conversation.id}). Quoted ${lastQuoted}¢ vs real ${guardRealTotalCents}¢. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
 
-        const itemList = guardCart.map(i => {
-          const r = i as CartItem;
-          return `${(r.quantity || 1)}x ${r.name}`;
-        }).join(", ");
-        // BUG-2 FIX: guard the dash+total fragment (see cartTotalFragment).
-        reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
+        // CHANGE 2 (2026-09-04, Jason): do NOT replace a coherent reply with a
+        // flat cart recital. This guard was the one overwriting the model mid
+        // conversation — it treats the LAST dollar amount in the reply as "the
+        // total", so a model that writes its own "(subtotal $37.49 + $0.99
+        // service fee)" line reads as quoting 99c against a real 3947c cart and
+        // gets its whole message thrown away.
+        //
+        // Money safety is preserved WITHOUT discarding the model's words: strip
+        // the model-emitted money from its own sentence and let the
+        // deterministic Ledger footer below state the real numbers. The customer
+        // still never sees a wrong figure. Only if stripping leaves nothing
+        // usable do we fall back to the recital.
+        const stripped = repairOrphanedPunctuation(stripLlmMoneyLines(reply));
+        if (replyAcknowledgesCart(stripped, guardCart)) {
+          reply = stripped;
+        } else {
+          const itemList = guardCart.map(i => {
+            const r = i as CartItem;
+            return `${(r.quantity || 1)}x ${r.name}`;
+          }).join(", ");
+          reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
+        }
       }
     }
   }
@@ -4062,15 +4175,12 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // BUG-1 FIX: single-owner flag. Guard 2b owns the pickup/delivery question;
-  // the D2 re-ask-killer below must not strip it back out.
-  let deliveryQuestionOwnedThisTurn = false;
-
-  // ── Guard 2b: DELIVERY-GATE INJECTION ────────────────────────────────
-  // Runs LAST so other guards don't overwrite it. When delivery is enabled,
-  // order_type is unknown (was null pre-loop), and the reply doesn't already
-  // mention pickup/delivery, inject the question. Also revert silently-set
-  // order_type so the customer's NEXT turn actually gates.
+  // ── Guard 2b: SILENT ORDER-TYPE REVERT ───────────────────────────────
+  // 2026-09-04 (Jason): no longer appends "Pickup or delivery today?" to the
+  // reply. The model asks about order type on its own when the prompt's ORDER
+  // TYPE line tells it to. What remains is the state correction: if the model
+  // silently set an order_type WITHOUT asking, revert it so the prompt keeps
+  // instructing it to ask next turn.
   const guardDeliveryEnabled = shop?.delivery_enabled === true;
   const guardOrderTypeBefore = orderTypePreLoop;
   const guardOrderTypeAfter  = guardCartRow?.order_type ?? null;
@@ -4086,7 +4196,7 @@ Deno.serve(async (req: Request) => {
   // Also skip if the customer's message THIS turn contains pickup/delivery
   // (they're answering the question).
   const userSaidPickupDelivery = /\b(?:pickup|delivery)\b/i.test(userMessage);
-  const needsDeliveryGate = guardDeliveryEnabled && !checkoutUrl &&
+  const needsDeliveryGate = PROMPT_VARIANT !== "minimal" && guardDeliveryEnabled && !checkoutUrl &&
     guardCart.length > 0 && !guardReplyHadPickupDelivery && !guardOrderTypeBefore &&
     !userSaidPickupDelivery;
 
@@ -4098,13 +4208,7 @@ Deno.serve(async (req: Request) => {
       cart.order_type = null;
       console.log(`[chat-sms] GUARD 2b reverted silently-set order_type "${guardOrderTypeAfter}" (conv=${conversation.id})`);
     }
-    // BUG-1 FIX: never rewrite the model's own punctuation.
-    const guardBase = reply.trimEnd();
-    reply = guardBase
-      ? `${guardBase}${/[.!?]$/.test(guardBase) ? "" : "."} Pickup or delivery today?`
-      : "Pickup or delivery today?";
-    deliveryQuestionOwnedThisTurn = true;
-    console.log(`[chat-sms] GUARD 2b (delivery-gate) injected question (conv=${conversation.id})`);
+    // NO reply mutation here by design — see the block comment above.
   }
 
   // ── POST-TURN PHANTOM-LINK SAFETY NET (Guard 3) ───────────────────────────
@@ -4186,40 +4290,19 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // ── D2 (2026-08-29): Kill pickup/delivery re-ask when mode is known ──
-  // Once order_type is set, strip any lingering pickup/delivery question from
-  // the reply so the LLM doesn't loop re-asking a question already answered.
-  // BUG-1 FIX: read order_type AFTER Guard 2b, and stand down when Guard 2b
-  // owns the question this turn.
-  // BUG-1 FIX: when Guard 2b owns the question this turn it has ALSO reverted any
-  // silently-set order_type, so the effective post-guard value is null. Deriving it
-  // that way makes the single-owner rule explicit instead of depending on two
-  // independent flags staying in sync. (Reading `cart.order_type ?? guardCartRow...`
-  // would fall straight back through to the stale pre-revert snapshot.)
-  const orderTypeAfterGuard = deliveryQuestionOwnedThisTurn
-    ? null
-    : (guardCartRow?.order_type ?? null);
-  if (orderTypeAfterGuard && !checkoutUrl && guardCart.length > 0) {
-    // Strip pickup/delivery questions — case-insensitive, multiline-aware
-    const beforeLen = reply.length;
-    reply = reply
-      .replace(/\?.*?(?:pickup|delivery).*?\?/gi, '')
-      .replace(/Pickup or delivery today\?/gi, '')
-      .replace(/Are you (?:ordering )?(?:for )?(?:pickup|delivery)\?/gi, '')
-      .replace(/Would you like (?:pickup|delivery)\?/gi, '')
-      .replace(/\s+\n\s+/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-    if (reply.length < beforeLen) {
-      console.log(`[chat-sms] D2 (re-ask-killer) stripped pickup/delivery re-ask from reply (conv=${conversation.id})`);
-    }
-  }
+  // ── D2 (retired 2026-09-04) ──────────────────────────────────────────
+  // The pickup/delivery re-ask killer is gone. It existed only to strip the
+  // question Guard 2b appended above; with nothing appending it, there is
+  // nothing to strip.
 
   // ── Phase A: Deterministic money/status rendering ────────────────────
   // Strip LLM-emitted totals/fees/status lines, then append the Ledger footer.
   // Cart has items, not in checkout phase → deterministic footer owns the numbers.
   if (!checkoutUrl && guardCart.length > 0) {
-    reply = stripLlmMoneyLines(reply);
+    // EXPERIMENT: the minimal variant keeps the model's wording intact, money
+    // mentions included — only the footer is added. The current variant still
+    // strips LLM-emitted money so the deterministic footer owns the numbers.
+    if (PROMPT_VARIANT !== "minimal") reply = stripLlmMoneyLines(reply);
     const driverTip = (guardCartRow as any)?.driver_tip_cents ?? undefined;
     const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip);
     if (footer && !reply.includes("total") && !reply.match(/\$\d+[.,]\d{2}/)) {

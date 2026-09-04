@@ -128,3 +128,42 @@ Deno.test("BUG1: 'no delivery fee' does NOT suppress the gate (review finding)",
 Deno.test("BUG1: a genuine 'no delivery available' DOES suppress", () => {
   assertEquals(statesPickupOnly("Sorry, no delivery available right now."), true);
 });
+
+// ── 2026-09-04 CHANGE 2: guard-overwrite regressions ─────────────────────────
+
+function repairV2(text: string): string {
+  return text
+    .replace(/\(\s*\)/g, "")
+    .replace(/\b\d+\s+items?\s*[—–-]\s*(?=[.!?]|$)/gim, "")
+    .replace(/\s*[—–-]\s*([.,;:!?])/g, "$1")
+    .replace(/\s+[—–-]\s+total\b/gi, "")
+    .replace(/\s*[—–-]\s*$/gm, "")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .replace(/([.!?])\1{1,}/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+const claimsATotal = (r: string) =>
+  /\b(?:total|subtotal|comes to|that['’]ll be|that will be|you owe|grand total|order total|due|to pay|adds up to|comes out to|altogether|all together)\b/i.test(r);
+
+Deno.test("2c: offering menu prices is NOT quoting a total", () => {
+  assertEquals(claimsATotal("Sure thing — bone-in ($16.99) or boneless ($11.99)?"), false);
+  assertEquals(claimsATotal("For the wings, Bone-In is $16.99 and Boneless is $11.99."), false);
+});
+
+Deno.test("2c: an actual total claim still trips", () => {
+  assertEquals(claimsATotal("Your total is $39.47"), true);
+  assertEquals(claimsATotal("That comes to $39.47"), true);
+  assertEquals(claimsATotal("3 items — $38.48 total (subtotal $37.49 + $0.99 service fee)"), true);
+});
+
+Deno.test("empty parens left by money stripping are removed", () => {
+  assertEquals(repairV2("Sure thing — bone-in ( ) or boneless ( )?"),
+               "Sure thing — bone-in or boneless?");
+});
+
+Deno.test("orphaned '3 items —' left by money stripping is removed", () => {
+  assertEquals(repairV2("Want to mix flavors or keep as is? 3 items — ( )"),
+               "Want to mix flavors or keep as is?");
+});
