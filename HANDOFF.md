@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -71,6 +71,7 @@ sprintai-ordering/
 │   │   ├── onboard-tenant/   # Website scrape → knowledge base
 │   │   ├── train-tenant/     # Text paste → knowledge base
 │   │   ├── import-menu-csv/  # CSV menu importer
+│   │   ├── create-subscription/  # Stripe $99/mo Checkout (subscription mode)
 │   │   ├── connect-*/        # Stripe Connect onboarding
 │   │   ├── go-live/          # All-or-nothing go-live gate
 │   │   ├── provision-number/ # Auto-buy Telnyx number
@@ -410,6 +411,8 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   without an EIN fails out of signup cleanly — no alternate path. Permanent
   decision by Jason.
 - **Telnyx brand/campaign is live and approved** (all 7 carriers). Brand BJ8MUGY verified; campaign CSMB9HG is TCR_ACCEPTED. ISV/reseller re-registration is NOT needed (per Chris, SE, 2026-08-28 call). Throughput is per-campaign (2K seg/day T-Mobile, 240 TPM AT&T), not pooled. The send gate is mapping status (both ADDED), not campaignStatus/operationStatus. The per-merchant model: brand → campaign → number, with per-merchant CTA pages at `getsprintai.com/<slug>`. Demo numbers use SprintAI brand + disclosure; no DBA needed. Mock brands/campaigns documented for free API testing. `failureReasons` still carries an 806 CTA rejection that may be stale — the first-delivery test is the ground-truth gate. Do not modify the campaign.
+
+- **campaign_assignment_status tracks per-number approval** (migration 081, applied 2026-09-03). Column on `shops`: `not_started | submitted | approved | rejected`. `go-live` gate (#13) refuses non-test shops unless `approved`. `is_test` shops are exempt. `campaign-status-reader` function polls Telnyx GET-only and advances `submitted→approved` when both mappings `ADDED`. `chat-sms` raises a critical issue on 10036 for non-approved shops; a distinct issue type for approved shops (approval regression). **Open gate: `TELNYX_API_KEY` and `DAILY_RESET_SECRET` are not set in Supabase function secrets** — `campaign-status-reader` will return "Not configured" until Jason adds them. Add via Supabase Dashboard → Project Settings → Edge Functions → Secrets. Until then `campaign_assignment_status` never auto-advances past `submitted`; a shop must be manually set to `approved` for go-live to pass.
 - **First delivery test is a hard go-live gate.** Before any shop goes live, the
   Telnyx provisioning + delivery test (`sprintai-telnyx-provisioning-test.md`,
   8-step real-handset script) must pass — it is the ground-truth check that the

@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -156,6 +156,16 @@ These are encoded in the architecture, not just in marketing.
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
+- **Stripe subscription billing is live.** `create-subscription` edge function
+  creates a real Stripe Checkout session ($99/mo, mode:subscription) for
+  restaurant signup. `stripe-webhook` is the sole writer of
+  `subscription_status` — client-side writes are blocked at the edge-function
+  allowlist level. The go-live gate checks `subscription_status = "active"`
+  and is immune to client forgery.
+- **Campaign assignment is a hard go-live gate (#13).** `campaign-status-reader`
+  polls Telnyx hourly (pg_cron) and advances `submitted→approved` when both
+  number mappings are ADDED. Non-test shops are refused at go-live until
+  campaign_assignment_status=approved; is_test shops are exempt.
 - **The order-taker got sharper.** Modifier price changes (e.g. "add cheese
   +$1") now actually add to the cart total. A multi-item message with one
   off-menu item adds the valid items instead of rejecting the whole order.

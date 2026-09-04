@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -54,7 +54,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–064) |
+| Migrations | `supabase/migrations/` (001–081) |
 
 ---
 
@@ -353,13 +353,38 @@ routes to `https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/pay-redirect/o/
 The `pay-redirect` function uses service-role key to read `pay_links` (anon key
 cannot access it). The old GoDaddy Commerce Poynt CNAME was deleted.
 
+### Ticket delivery — send-then-claim with bounded retry
+
+Kitchen ticket emails use a **send-then-claim** pattern to eliminate silent
+ticket loss: serialize on `ticket_send_attempt_at` (short-lived ~30s lock),
+call Resend, and set `ticket_emailed_at` only after confirmed 2xx. Up to 3
+retry attempts (~1.2s / ~3.5s backoff / ~2 min total); on exhaustion a
+CRITICAL `ticket_send_failed` issue is written. NULL `email_ticket_recipient`
+on a paid order writes a CRITICAL `ticket_no_destination` issue instead of
+silently skipping. `ticket_send_log.attempt_number` (migration 080) records
+per-attempt audit trace. Subject lines dedupe on `order_number`.
+
+The `issue-detector` runs two sev-1 ticket delivery reliability rules:
+- `ticket_send_failed`: scans `ticket_send_log` for non-2xx rows, creates one
+  issue per failed cart (deduped by `detection_rule` + `conversation_id`).
+- `ticket_missing`: finds paid+confirmed `order_carts` older than ~15 min with
+  no `ticket_emailed_at` and no existing open ticket issue.
+
+A ticket reliability test suite (19 tests) covers send-then-claim, retry,
+NULL recipient, issue-detector rules, concurrency, dedup, and outbound-guard
+integrity.
+
+The Command Center's At a Glance now shows a "Tickets delivered today" tile in
+heroVitals when there are paid orders today.
+
 ### Scheduled jobs
 
 | Function | Schedule | Purpose |
 |----------|----------|---------|
 | `eval-sweep` | Every 5 min (cron) | Judge completed conversations; write eval scores |
-| `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals; write to issues table; set notified_at on source evals |
+| `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals + ticket delivery failures; write to issues table; set notified_at on source evals |
 | `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
+| `campaign-status-reader` | Hourly (pg_cron, 083) | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 
 **NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
@@ -384,12 +409,12 @@ notified without a corresponding issue.
 | `admin-api` | REST API for admin dashboard (CRUD) | Yes |
 | `admin-chat` | Conversational AI admin (menu mgmt, delivery) | Yes |
 | `onboarding-save` | Wizard step persistence (create shop, save step) | No |
-| `go-live` | All-or-nothing go-live gate check (12 gates) | No |
+| `go-live` | All-or-nothing go-live gate check (13 gates) | No |
 | `merchant-auth` | Server-side PIN auth for sold-out manager | No |
 | `set-app-metadata` | Set user roles in app_metadata (service-key only) | No |
 | `shop-financials` | Shop financial reporting (KPIs, ledger, payouts, CSV export) | Yes |
 
-#### Go-live gates (12 — all must pass)
+#### Go-live gates (13 — all must pass)
 
 | Gate | Check |
 |------|-------|
@@ -400,16 +425,18 @@ notified without a corresponding issue.
 | menu_clean | No flagged-awaiting-review menu_items |
 | number | `phone_number_e164` set |
 | hours | ≥1 day configured in `open_hours` |
-| subscription | `subscription_status = "active"` |
+| subscription | `subscription_status = "active"` (written ONLY by stripe-webhook; client writes blocked via onboarding-save allowlist) |
 | ein | Required for non-test shops |
 | proof | 100% proof_pass_pct via QA twin (scorer_version=3, current menu) |
 | delivery_test | `first_delivery_test_passed_at` set (is_test skips) |
 | ticket_destination | `email_ticket_recipient` non-null, valid email syntax |
+| campaign_assignment | `campaign_assignment_status = "approved"` (is_test exempt; migration 081) |
 
 ### Payments
 | Function | Purpose | JWT |
 |----------|---------|-----|
-| `stripe-webhook` | Stripe billing events → tenant lifecycle | No |
+| `create-subscription` | Create Stripe Checkout session for $99/mo subscription (mode:subscription) | No |
+| `stripe-webhook` | Stripe billing events → subscription lifecycle + tenant billing | No |
 | `refund-order` | Refund order with fee logic | No |
 | `connect-create-express` | Create Express connected account + onboarding session | No |
 | `connect-oauth` | OAuth for existing Standard accounts | No |
@@ -431,7 +458,8 @@ notified without a corresponding issue.
 |----------|---------|-----|
 | `provision-number` | Auto-buy Telnyx number for new shop (v2 API) | No |
 | `toast-order` | Toast POS menu fetch + order placement | No |
-| `daily-reset` | Clear expired specials + delivery pauses | No |
+| `campaign-status-reader` | Poll Telnyx mapping status; advance submitted→approved when both ADDED | No |
+| `daily-reset` | Clear expired specials, delivery pauses | No |
 | `test-parse-judge` | Judge parser robustness test (script, not deployed) | N/A |
 
 ### Quality & monitoring
@@ -449,6 +477,7 @@ notified without a corresponding issue.
 | `test-suite/fix.ts` | LLM root-cause + proposed-fix generator for failing cases |
 | `test-suite/worker.ts` | launchd worker — drains `test_run_queue` (onboarding QA) |
 | `test-runner/` | **Edge function** — pg_cron-driven autonomous runner; polls queue every 60s, checkpoints per-case, scores incrementally. Runs the same test suite as `worker.ts` but server-side, no Mac dependency. |
+| `campaign-status-reader/` | Polls Telnyx GET-only; advances campaign_assignment_status submitted→approved when both mappings ADDED. |
 | `create-qa-twin.py` | Clone any shop as unprotected/phone-less twin for safe Proof testing |
 | `create-vitos-pizza-demo.py` | Create Vito's Pizza demo shop from Jack's Slice CSV |
 
@@ -478,7 +507,7 @@ Key tables: `tenants`, `shops`, `menu_items`, `option_groups`, `option_choices`,
 `resolution_log`, `sprintai_clients`, `ticket_send_log`, `outbound_queue`,
 `number_provision_log`.
 
-Migrations are in `supabase/migrations/` (001–077). Migration `039` added the
+Migrations are in `supabase/migrations/` (001–083). Migration `039` added the
 delivery flow (order_type, delivery_address, driver_tip). Migration `038` removed
 user-metadata-based RLS policies, replaced with `app_metadata`-based policies
 via the `set-app-metadata` edge function. Migration `041` locked ops tables
@@ -515,7 +544,15 @@ adds `telnyx_number_id`, `telnyx_messaging_profile_id`, and
 Telnyx provisioning rewrite. Migration `069` adds the `merchant_registration`
 state machine (`registration_status`, `registration_deadline`, `submitted_at`)
 and `merchant_business_info` table (EIN, business_type, ownership_details) for
-Phase 2 merchant identity verification.
+Phase 2 merchant identity verification. Migration `078` adds
+`first_delivery_test_passed_at` + `recorded_by` for the delivery_test go-live
+gate. Migration `079` adds `ticket_send_attempt_at` to `order_carts` for the
+send-then-claim ticket delivery pattern. Migration `080` adds `attempt_number`
+to `ticket_send_log` for per-attempt audit tracing. Migration `081` adds
+`campaign_assignment_status` to `shops` for the campaign assignment go-live
+gate (#13). Migration `082` restores shops config columns (prod-applied but
+previously untracked). Migration `083` schedules `campaign-status-reader` via
+pg_cron (hourly).
 
 ### RLS model
 
@@ -603,6 +640,11 @@ Phase 2 merchant identity verification.
       words ("tub", "pint") not in the shop's menu vocabulary.
     - Guard 1c: suppress claims an item is in the cart when the authoritative
       cart row disagrees (including empty-cart assertions).
+    - Guard 1d (phantom-add guard): extracted to `chat-sms/phantom-add-guard.ts`
+      (unit-testable). Catches "added X for ya" / "to your cart" claims when the
+      cart didn't mutate — including colloquial completions (for ya/you/u) and
+      bare item-add claims ending at clause boundaries. Fee/tip/service/note
+      narration excluded.
     - Guard 1g (post-turn menu hallucination): `claimsOffMenuItem` helper
       checks if the model invented or offered items not on the shop's actual
       menu; falls back to honest cart summary.
@@ -637,6 +679,16 @@ Phase 2 merchant identity verification.
       scans replies for product-claim patterns and validates against
       the effective menu, with distinctive-token fuzzy matching, question-
       word exclusion, and ack-leader filtering to avoid false positives.
+    - P3 safety invariants (three deterministic checks run per-case in Proof):
+      `verifyNoWrongPriceCharge` (charges quoted in reply match cart-derived
+      amounts including $0.99 service fee), `verifyTenantIsolationNoLeak`
+      (cross-tenant data never appears in reply), `verifyStopOptOutHonored`
+      (STOP word replies correctly refuse service and persist opt-out).
+    - False-green kill (`correction_reflected`): harness scoring checkpoint
+      gated on fixture flag `expectCorrection`; absent the flag, `correction_reflected`
+      is skipped (never scores). `fragmentGuard` tightened to match only when
+      the fragment is absent — a model that happens to include correct text nearby
+      no longer passes by accident. SCORER_VERSION bumped to 3.
     - Guard F (fake-checkout gate): after `submit_order` returns a real
       checkoutUrl, the reply is deterministically replaced with the real
       payment link — the model can never emit a hallucinated "order placed"
