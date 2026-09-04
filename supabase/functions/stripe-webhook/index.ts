@@ -125,6 +125,9 @@ Deno.serve(async (req: Request) => {
         if (sess.metadata?.order_cart_id) {
           // DIRECT-CHARGE order: this event fires on the CONNECTED account.
           await handleOrderPaymentComplete(supabase, stripe, sess, connectedAccount);
+        } else if (sess.metadata?.shop_id || sess.client_reference_id) {
+          // SHOP SUBSCRIPTION checkout: platform-level subscription for shop owner.
+          await handleShopSubscriptionCheckout(supabase, stripe, sess);
         } else {
           await handleCheckoutComplete(supabase, stripe, sess);
         }
@@ -499,6 +502,46 @@ async function handleOrderPaymentExpired(
 
 // ─── Event Handlers ───────────────────────────────────────────────────────────
 
+/** checkout.session.completed (with shop_id) → activate shop subscription */
+async function handleShopSubscriptionCheckout(
+  supabase: ReturnType<typeof createClient>,
+  stripe: Stripe,
+  session: Stripe.Checkout.Session
+): Promise<void> {
+  const shopId = session.metadata?.shop_id || (session.client_reference_id as string | undefined);
+  if (!shopId) {
+    console.error("[stripe-webhook] shop subscription checkout with no shop_id");
+    return;
+  }
+
+  const customerId = session.customer as string;
+  const subscriptionId = session.subscription as string;
+
+  if (!customerId || !subscriptionId) {
+    console.error(`[stripe-webhook] shop subscription checkout missing customer/subscription for shop ${shopId}`);
+    return;
+  }
+
+  console.log(`[stripe-webhook] Shop subscription checkout complete: shop=${shopId}, customer=${customerId}, sub=${subscriptionId}`);
+
+  const { error } = await supabase
+    .from("shops")
+    .update({
+      subscription_status: "active",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId,
+      subscription_pm_set: true,
+    })
+    .eq("id", shopId);
+
+  if (error) {
+    console.error(`[stripe-webhook] Failed to update shop ${shopId} subscription:`, error.message);
+    throw error;
+  }
+
+  console.log(`[stripe-webhook] Shop ${shopId} subscription_status → active (Stripe-authored)`);
+}
+
 /** checkout.session.completed → create tenant, run onboarding, assign Twilio number */
 async function handleCheckoutComplete(
   supabase: ReturnType<typeof createClient>,
@@ -633,7 +676,7 @@ async function handleCheckoutComplete(
   }
 }
 
-/** customer.subscription.updated → sync plan/status changes */
+/** customer.subscription.updated → sync plan/status changes for tenants AND shops */
 async function handleSubscriptionUpdated(
   supabase: ReturnType<typeof createClient>,
   subscription: Stripe.Subscription
@@ -643,15 +686,30 @@ async function handleSubscriptionUpdated(
   const plan = resolvePlan(priceId, "");
   const status = subscription.status === "active" ? "active" : "paused";
 
+  // Update tenants table (existing behavior)
   await supabase
     .from("tenants")
     .update({ plan, status, stripe_subscription_id: subscription.id })
     .eq("stripe_customer_id", customerId);
 
-  console.log(`[stripe-webhook] Subscription updated for customer ${customerId}: plan=${plan}, status=${status}`);
+  // Also update shops table if this customer is a shop
+  const shopSubStatus = mapSubscriptionStatus(subscription.status);
+  const { error: shopErr } = await supabase
+    .from("shops")
+    .update({
+      subscription_status: shopSubStatus,
+      stripe_subscription_id: subscription.id,
+    })
+    .eq("stripe_customer_id", customerId);
+
+  if (shopErr) {
+    console.warn(`[stripe-webhook] subscription.updated shop update failed for customer ${customerId}:`, shopErr.message);
+  } else {
+    console.log(`[stripe-webhook] Subscription updated for customer ${customerId}: plan=${plan}, status=${status}, shop_status=${shopSubStatus}`);
+  }
 }
 
-/** customer.subscription.deleted → deactivate tenant, release Twilio number */
+/** customer.subscription.deleted → deactivate tenant + shop, release Twilio number */
 async function handleSubscriptionDeleted(
   supabase: ReturnType<typeof createClient>,
   stripe: Stripe,
@@ -659,6 +717,16 @@ async function handleSubscriptionDeleted(
 ): Promise<void> {
   const customerId = subscription.customer as string;
 
+  // Update shops table
+  const { error: shopErr } = await supabase
+    .from("shops")
+    .update({ subscription_status: "canceled", subscription_pm_set: false })
+    .eq("stripe_customer_id", customerId);
+  if (!shopErr) {
+    console.log(`[stripe-webhook] Shop subscription canceled for customer ${customerId}`);
+  }
+
+  // Existing tenant deactivation
   const { data: tenant } = await supabase
     .from("tenants")
     .select("id, phone_number, name")
@@ -690,7 +758,7 @@ async function handleSubscriptionDeleted(
   console.log(`[stripe-webhook] Tenant ${tenant.id} (${tenant.name}) cancelled`);
 }
 
-/** invoice.payment_failed → pause tenant */
+/** invoice.payment_failed → pause tenant + mark shop past_due */
 async function handlePaymentFailed(
   supabase: ReturnType<typeof createClient>,
   stripe: Stripe,
@@ -698,6 +766,16 @@ async function handlePaymentFailed(
 ): Promise<void> {
   const customerId = invoice.customer as string;
 
+  // Update shops table — mark past_due
+  const { error: shopErr } = await supabase
+    .from("shops")
+    .update({ subscription_status: "past_due" })
+    .eq("stripe_customer_id", customerId);
+  if (!shopErr) {
+    console.log(`[stripe-webhook] Shop subscription past_due for customer ${customerId}`);
+  }
+
+  // Existing tenant pause logic
   await supabase
     .from("tenants")
     .update({
@@ -721,7 +799,7 @@ async function handlePaymentFailed(
   console.log(`[stripe-webhook] Tenant paused due to payment failure: customer ${customerId}`);
 }
 
-/** invoice.payment_succeeded → reactivate tenant if paused */
+/** invoice.payment_succeeded → reactivate tenant + shop if paused/past_due */
 async function handlePaymentSucceeded(
   supabase: ReturnType<typeof createClient>,
   stripe: Stripe,
@@ -729,6 +807,17 @@ async function handlePaymentSucceeded(
 ): Promise<void> {
   const customerId = invoice.customer as string;
 
+  // Reactivate shop if past_due
+  const { error: shopErr } = await supabase
+    .from("shops")
+    .update({ subscription_status: "active" })
+    .eq("stripe_customer_id", customerId)
+    .eq("subscription_status", "past_due");
+  if (!shopErr) {
+    console.log(`[stripe-webhook] Shop subscription reactivated for customer ${customerId}`);
+  }
+
+  // Existing tenant reactivation
   const { data: tenant } = await supabase
     .from("tenants")
     .select("id, status, config")
@@ -744,6 +833,20 @@ async function handlePaymentSucceeded(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Map Stripe subscription status to shops.subscription_status enum */
+function mapSubscriptionStatus(stripeStatus: string): string {
+  switch (stripeStatus) {
+    case "active": return "active";
+    case "trialing": return "active";  // trial = has payment method, functionally active
+    case "past_due": return "past_due";
+    case "unpaid": return "past_due";
+    case "canceled": return "canceled";
+    case "incomplete": return "none";
+    case "incomplete_expired": return "none";
+    default: return "none";
+  }
+}
 
 /** Assign a new Twilio phone number to a tenant */
 async function assignTwilioNumber(

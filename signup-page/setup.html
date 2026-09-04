@@ -578,6 +578,33 @@
     </div>
   </div>
 
+  <!-- SECTION 4a: Subscription (Item A — Stripe Checkout) -->
+  <div class="section" id="subscriptionSection">
+    <div class="section-h">💳 Subscription</div>
+    <div class="section-desc">SprintAI is $99/mo. Your card is charged after a 7-day free trial. Cancel anytime. A payment method is required to go live.</div>
+
+    <div id="subscriptionNone" style="display:block">
+      <button class="btn btn-primary" id="subscribeBtn" disabled>Set up subscription →</button>
+      <div class="hint" style="margin-top:8px;">You&rsquo;ll be redirected to Stripe to enter your card securely. Sprint never sees your card details.</div>
+    </div>
+
+    <div id="subscriptionActive" style="display:none">
+      <div class="badge-ok" style="display:inline-flex;margin-bottom:8px;">✓ Subscription active</div>
+      <div class="hint">Your $99/mo plan is active. Changes or cancellations are managed from your Stripe billing portal.</div>
+    </div>
+
+    <div id="subscriptionPending" style="display:none">
+      <div class="badge-warn" style="display:inline-flex;margin-bottom:8px;">Checkout started</div>
+      <div class="hint">Come back here after you finish checking out. If your payment went through, your subscription should appear as active.</div>
+    </div>
+
+    <div id="subscriptionPastDue" style="display:none">
+      <div class="badge-warn" style="display:inline-flex;margin-bottom:8px;background:#FEF2F2;color:#DC2626;border:1px solid #FECACA;">⚠ Payment past due</div>
+      <button class="btn btn-primary" id="retrySubscribeBtn" style="margin-top:8px;">Update payment method →</button>
+      <div class="hint" style="margin-top:6px;">Your subscription payment did not go through. Update your card to keep your shop active.</div>
+    </div>
+  </div>
+
   <!-- SECTION 5: Go Live (4b) -->
   <div class="section">
     <div class="section-h">🚀 Go live</div>
@@ -663,7 +690,8 @@
     menuDirty: false,
     stripeConnected: false,
     openHours: {},
-    deliveryHours: {}
+    deliveryHours: {},
+    subscriptionStatus: null  // 'none' | 'active' | 'past_due' | 'canceled'
   };
 
   // ── UI helpers ────────────────────────────────────────────────────────────
@@ -921,6 +949,9 @@
 
     // Stripe connect button
     document.getElementById("connectStripeBtn").disabled = false;
+
+    // ── Subscription state ───────────────────────────────────────────────
+    renderSubscription(s);
 
     // Menu grid
     renderMenuGrid();
@@ -1245,6 +1276,126 @@
       btn.textContent = "Save & finish →";
     });
   };
+
+  // ── Subscription (Item A) ─────────────────────────────────────────────────
+  function renderSubscription(s) {
+    var status = s.subscription_status || "none";
+    state.subscriptionStatus = status;
+
+    var elNone = document.getElementById("subscriptionNone");
+    var elActive = document.getElementById("subscriptionActive");
+    var elPending = document.getElementById("subscriptionPending");
+    var elPastDue = document.getElementById("subscriptionPastDue");
+    var btn = document.getElementById("subscribeBtn");
+    var retryBtn = document.getElementById("retrySubscribeBtn");
+
+    // Hide all first
+    elNone.style.display = "none";
+    elActive.style.display = "none";
+    elPending.style.display = "none";
+    elPastDue.style.display = "none";
+
+    if (status === "active") {
+      elActive.style.display = "block";
+    } else if (status === "past_due") {
+      elPastDue.style.display = "block";
+    } else {
+      // none, canceled — show subscribe button
+      elNone.style.display = "block";
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("subscribeBtn").onclick = function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Connecting to Stripe…";
+
+    api("create-subscription", { shop_id: state.shop.id })
+      .then(function (r) {
+        if (r.json && r.json.url) {
+          // Show pending state and redirect to Stripe
+          document.getElementById("subscriptionNone").style.display = "none";
+          document.getElementById("subscriptionPending").style.display = "block";
+          window.open(r.json.url, "_blank");
+          showToast("Stripe checkout opened. Come back here after you finish.");
+        } else if (r.json && r.json.already_subscribed) {
+          // Edge case: another tab already completed subscription
+          renderSubscription({ subscription_status: "active" });
+          showToast("Your subscription is already active.");
+        } else {
+          showToast("Something went wrong: " + ((r.json && r.json.error) || "unknown"));
+          btn.disabled = false;
+          btn.textContent = "Set up subscription →";
+        }
+      })
+      .catch(function (e) {
+        showToast("Couldn't reach Stripe: " + e.message);
+        btn.disabled = false;
+        btn.textContent = "Set up subscription →";
+      });
+  };
+
+  document.getElementById("retrySubscribeBtn").onclick = function () {
+    // Same flow as subscribe — opens new Checkout Session for payment method update
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "Connecting to Stripe…";
+
+    api("create-subscription", { shop_id: state.shop.id })
+      .then(function (r) {
+        if (r.json && r.json.url) {
+          window.open(r.json.url, "_blank");
+          showToast("Stripe checkout opened. Complete checkout to update your payment method.");
+          btn.disabled = false;
+          btn.textContent = "Update payment method →";
+        } else if (r.json && r.json.already_subscribed) {
+          renderSubscription({ subscription_status: "active" });
+          showToast("Your subscription is active.");
+          btn.disabled = false;
+          btn.textContent = "Update payment method →";
+        } else {
+          showToast("Something went wrong: " + ((r.json && r.json.error) || "unknown"));
+          btn.disabled = false;
+          btn.textContent = "Update payment method →";
+        }
+      })
+      .catch(function (e) {
+        showToast("Couldn't reach Stripe: " + e.message);
+        btn.disabled = false;
+        btn.textContent = "Update payment method →";
+      });
+  };
+
+  // Handle ?sub=success return from Stripe Checkout
+  if (location.search.indexOf("sub=success") !== -1) {
+    // The webhook writes subscription_status, but it's async — poll a few times
+    var pollCount = 0;
+    var maxPolls = 6; // up to ~30s
+    (function pollSubscription() {
+      setTimeout(function () {
+        api("onboarding-save", { action: "resume", token: state.token })
+          .then(function (r) {
+            if (r.json && r.json.shop && r.json.shop.subscription_status === "active") {
+              state.shop = r.json.shop;
+              renderSubscription(r.json.shop);
+              showToast("Subscription active! 🎉");
+            } else if (pollCount < maxPolls) {
+              pollCount++;
+              pollSubscription();
+            } else {
+              showToast("Still waiting for payment confirmation. You can continue — this page will refresh once Stripe confirms.");
+            }
+          });
+      }, 3000);
+    })();
+
+    // Clean up the URL so a refresh doesn't re-trigger
+    if (history.replaceState) {
+      var cleanUrl = location.href.split("?")[0] + "?t=" + encodeURIComponent(state.token);
+      history.replaceState(null, "", cleanUrl);
+    }
+  }
 
   // ── Stripe Connect (4b — hosted onboarding link) ──────────────────────────
   document.getElementById("connectStripeBtn").onclick = function () {
