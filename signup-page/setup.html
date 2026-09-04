@@ -656,6 +656,21 @@
   </div>
 </main>
 
+<!-- ── Onboarding complete (terminal owner screen, INSTRUCTION-09 §1) ──────── -->
+<!-- Shown when all nine Phase A owner gates pass. Terminal: no blocked gates,
+     no errors, nothing further to ask. The four QA gates run on our side. -->
+<main id="done" style="display:none">
+  <div class="card" style="max-width:560px;margin:48px auto;text-align:center;padding:48px 36px;">
+    <div style="font-size:56px;line-height:1;">🎉</div>
+    <h1 style="font-family:Georgia,serif;font-size:28px;margin:20px 0 12px;color:var(--ink,#17212E);">You're done. Congratulations.</h1>
+    <p style="font-size:17px;line-height:1.6;color:var(--body,#2A3540);max-width:440px;margin:0 auto;">
+      Sit tight and let us do our work. We're putting your assistant through its
+      paces and waiting on your phone number to clear the carriers. We'll message
+      you the moment we're ready to launch.
+    </p>
+  </div>
+</main>
+
 <div class="toast" id="toast"></div>
 
 <footer>
@@ -699,17 +714,41 @@
     document.getElementById("loading").style.display = "block";
     document.getElementById("error").style.display = "none";
     document.getElementById("setup").style.display = "none";
+    document.getElementById("done").style.display = "none";
   }
   function showError(msg) {
     document.getElementById("loading").style.display = "none";
     document.getElementById("error").style.display = "block";
     document.getElementById("setup").style.display = "none";
+    document.getElementById("done").style.display = "none";
     document.getElementById("errorMsg").textContent = msg || "This link doesn't match any shop.";
   }
   function showSetup() {
     document.getElementById("loading").style.display = "none";
     document.getElementById("error").style.display = "none";
     document.getElementById("setup").style.display = "block";
+    document.getElementById("done").style.display = "none";
+  }
+  // Terminal owner completion screen (INSTRUCTION-09 §1). Replaces the setup
+  // view once the nine Phase A gates pass; the QA gates run on our side.
+  function showDone() {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("error").style.display = "none";
+    document.getElementById("setup").style.display = "none";
+    document.getElementById("done").style.display = "block";
+    window.scrollTo(0, 0);
+  }
+  // Ask go-live (evaluate mode — never flips live) whether the owner's nine
+  // gates are done. Shows the completion screen if so; otherwise no-op.
+  function checkOnboardingComplete() {
+    if (!state.shop || !state.shop.id) return;
+    api("go-live", { shop_id: state.shop.id, evaluate: true })
+      .then(function (r) {
+        if (r.json && r.json.onboarding_complete === true && r.json.live !== true) {
+          showDone();
+        }
+      })
+      .catch(function () { /* evaluation is best-effort; leave setup visible */ });
   }
   function showToast(msg) {
     var t = document.getElementById("toast");
@@ -968,6 +1007,10 @@
 
     // QR code
     renderQrCode(s);
+
+    // If the owner has already finished all nine Phase A gates, show the
+    // terminal completion screen instead of leaving them on the setup form.
+    checkOnboardingComplete();
   }
 
   function showCrawlDone(s) {
@@ -1274,6 +1317,9 @@
         document.getElementById("goToShopBtn").style.display = "inline-flex";
         document.getElementById("goToShopBtn").href = "https://getsprintai.com/admin/shop-owner?shop=" + encodeURIComponent(state.shop.id);
         btn.textContent = "All done ✓";
+        // If that save cleared the last Phase A gate, show the terminal
+        // completion screen now rather than waiting for a reload.
+        checkOnboardingComplete();
       } else {
         showToast("Save failed: " + ((r.json && r.json.error) || "unknown"));
         btn.disabled = false;

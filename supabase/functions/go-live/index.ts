@@ -39,10 +39,14 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return jsonError("Method Not Allowed", 405);
 
-  let body: { shop_id?: string };
+  let body: { shop_id?: string; evaluate?: boolean };
   try { body = await req.json(); } catch { return jsonError("Invalid JSON"); }
   const shopId = body.shop_id;
   if (!shopId) return jsonError("shop_id is required");
+  // evaluate mode: compute gates + persist onboarding_complete, but NEVER flip
+  // live. This is the read path the owner surface uses to render the completion
+  // screen without ever forcing a go-live attempt.
+  const evaluateOnly = body.evaluate === true;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -52,7 +56,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at, campaign_assignment_status")
+    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at, campaign_assignment_status, onboarding_complete")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -287,6 +291,43 @@ Deno.serve(async (req: Request) => {
 
   const blocked_by = Object.entries(gates).filter(([, ok]) => !ok).map(([k]) => k);
 
+  // ── Phase split (INSTRUCTION-09 §1) ──────────────────────────────────────
+  // The thirteen gates are unchanged and still all required for go-live. This
+  // only classifies WHEN each is evaluated and WHO waits on it.
+  //   Phase A — the owner's job (nine gates). When all pass → onboarding_complete.
+  //   Phase B — our QA job (four gates). Evaluated after; owner not blocked on it.
+  const PHASE_A_GATES = [
+    "ein", "connect", "subscription", "menu", "menu_approved",
+    "menu_clean", "hours", "ticket_destination", "delivery_geo",
+  ] as const;
+  const PHASE_B_GATES = ["number", "campaign_assignment", "proof", "delivery_test"] as const;
+
+  const allGates = gates as Record<string, boolean>;
+  const phase_a: Record<string, boolean> = {};
+  for (const k of PHASE_A_GATES) phase_a[k] = allGates[k];
+  const phase_b: Record<string, boolean> = {};
+  for (const k of PHASE_B_GATES) phase_b[k] = allGates[k];
+
+  const onboarding_complete = PHASE_A_GATES.every((k) => allGates[k] === true);
+
+  // Persist the onboarding_complete milestone the first time it flips true.
+  // This runs in BOTH evaluate and go-live modes — reaching it is the owner's
+  // terminal state regardless of whether the QA gates are satisfied yet.
+  if (onboarding_complete && (shop as any).onboarding_complete !== true) {
+    await supabase
+      .from("shops")
+      .update({ onboarding_complete: true, onboarding_complete_at: new Date().toISOString() })
+      .eq("id", shopId);
+  }
+
+  // evaluate mode never flips live — return the full breakdown for the owner UI.
+  if (evaluateOnly) {
+    return jsonResponse({
+      ok: true, evaluated: true, live: false,
+      onboarding_complete, gates, phase_a, phase_b, blocked_by,
+    });
+  }
+
   if (blocked_by.length > 0) {
     // Build per-gate refusal messages (actionable, spec §Refusal messages)
     const gateMsgs: Record<string, string> = {
@@ -303,7 +344,7 @@ Deno.serve(async (req: Request) => {
       ? gateMsgs[customMsg]
       : "Go-live refused: " + blocked_by.join(", ");
 
-    return jsonResponse({ ok: true, live: false, gates, blocked_by, message });
+    return jsonResponse({ ok: true, live: false, onboarding_complete, gates, phase_a, phase_b, blocked_by, message });
   }
 
   // All gates pass → flip live.
@@ -312,7 +353,7 @@ Deno.serve(async (req: Request) => {
     .eq("id", shopId);
   if (upErr) return jsonError("Failed to flip live: " + upErr.message, 500);
 
-  return jsonResponse({ ok: true, live: true, gates, blocked_by: [] });
+  return jsonResponse({ ok: true, live: true, onboarding_complete, gates, phase_a, phase_b, blocked_by: [] });
 });
 
 function jsonResponse(b: unknown, status = 200): Response {
