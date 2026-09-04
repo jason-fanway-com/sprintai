@@ -31,6 +31,7 @@ interface Shop {
   delivery_enabled: boolean;
   delivery_paused_until: string | null;
   delivery_pause_reason: string | null;
+  email_ticket_recipient: string | null;
 }
 
 interface MenuItem {
@@ -56,6 +57,7 @@ interface Proposal {
   linked_item_id?: string | null;
   special_id?: string;
   reason?: string;
+  new_email?: string;
   needs_clarification: boolean;
   clarification_question?: string | null;
   clarification_options?: string[];
@@ -211,6 +213,20 @@ const ADMIN_TOOLS = [
     },
   },
   {
+    name: "SET_TICKET_DESTINATION",
+    description: "Change where the shop's order tickets are emailed (the order/receipt inbox). The Expo Screen always shows orders regardless. Use when the owner wants orders sent to a different email address.",
+    input_schema: {
+      type: "object",
+      properties: {
+        new_email: { type: "string", description: "The email address order tickets should be sent to" },
+        needs_clarification: { type: "boolean", description: "Set true if no valid email was given" },
+        clarification_question: { type: "string" },
+        summary: { type: "string", description: "e.g. 'Send order tickets to kitchen@joes.com'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
     name: "UNKNOWN_OR_OUT_OF_SCOPE",
     description: "The request doesn't match any supported intent. Redirect to the right place.",
     input_schema: {
@@ -277,8 +293,9 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 6. For PAUSE_DELIVERY: if the customer doesn't specify duration, set needs_clarification=true with options: ["1 hour", "Rest of today", "Until I turn it back on"].
 7. For QUERY_STATUS: just return the stats; no state change.
 8. For UNDO: no clarification needed — just propose it.
-9. Anything outside these 9 intents → UNKNOWN_OR_OUT_OF_SCOPE with a friendly redirect.
-10. "summary" MUST be in plain English describing what the owner sees on the confirmation card. Examples:
+9. For SET_TICKET_DESTINATION: if the owner wants order tickets/emails sent to a different address, capture new_email. If no clear email address is given, set needs_clarification=true and ask for it. Never guess an address.
+10. Anything outside these supported intents → UNKNOWN_OR_OUT_OF_SCOPE with a friendly redirect.
+11. "summary" MUST be in plain English describing what the owner sees on the confirmation card. Examples:
     - "Mark Lox Bagel sold out until close tonight"
     - "Add 'Friday Lobster Roll' special at $18.00 for today"
     - "Pause delivery for 1 hour — pickup still open"
@@ -398,6 +415,16 @@ async function validateProposal(
         return { valid: true, clarification: makeClarificationCard(proposal) };
       }
       if (!proposal.duration) return { valid: false, error: "Please choose a duration." };
+      return { valid: true };
+    }
+    case "SET_TICKET_DESTINATION": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const email = (proposal.new_email ?? "").trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return { valid: false, error: "That doesn't look like a valid email address. Try again with the full address." };
+      }
       return { valid: true };
     }
     case "RESUME_DELIVERY":
@@ -634,6 +661,11 @@ async function executeAction(
           delivery_paused_until: untilBefore,
           delivery_pause_reason: null,
         }).eq("id", shopId);
+      } else if (snapType === "ticket_destination") {
+        const emailBefore = (snap.email_ticket_recipient_before ?? null) as string | null;
+        await supabase.from("shops").update({
+          email_ticket_recipient: emailBefore,
+        }).eq("id", shopId);
       }
 
       // Mark the undone action
@@ -643,6 +675,22 @@ async function executeAction(
 
       beforeSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_before_snapshot: lastAction.before_snapshot };
       afterSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_applied: true };
+      break;
+    }
+    case "SET_TICKET_DESTINATION": {
+      const newEmail = (proposal.new_email ?? "").trim();
+      const { data: curShop } = await supabase
+        .from("shops").select("email_ticket_recipient").eq("id", shopId).single();
+      const prevEmail = (curShop?.email_ticket_recipient ?? null) as string | null;
+      beforeSnapshot = { type: "ticket_destination", email_ticket_recipient_before: prevEmail };
+      // A dedicated mailbox is what they actually want — mirror the onboarding answer.
+      await supabase.from("shops").update({
+        email_ticket_recipient: newEmail,
+        ticket_destination_type: "mailbox",
+        ticket_destination_detail: newEmail,
+      }).eq("id", shopId);
+      resultMsg = `Done — order tickets will now go to ${newEmail}. Your Expo Screen still shows every order.`;
+      afterSnapshot = { type: "ticket_destination", email_ticket_recipient_after: newEmail };
       break;
     }
     case "QUERY_STATUS": {
@@ -1034,6 +1082,7 @@ Deno.serve(async (req: Request) => {
       linked_item_id: (input.linked_item_id as string) ?? null,
       special_id: input.special_id as string | undefined,
       reason: input.reason as string | undefined,
+      new_email: input.new_email as string | undefined,
       needs_clarification: (input.needs_clarification as boolean) ?? false,
       clarification_question: input.clarification_question as string | null | undefined,
       clarification_options: (input.clarification_options ?? input.options) as string[] | undefined,

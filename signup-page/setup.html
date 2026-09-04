@@ -543,6 +543,48 @@
     </label>
   </div>
 
+  <!-- SECTION 3b: Order ticket destination (INSTRUCTION-09 §5 / item E) -->
+  <div class="section">
+    <div class="section-h">🎫 Where should orders go?</div>
+    <div class="section-desc">
+      The email you signed up with is where your orders would land — but that's usually your
+      personal inbox, not the kitchen. Let's send them somewhere that works. Your live
+      <strong>Expo Screen</strong> always shows every order, no matter what you pick here.
+    </div>
+
+    <label class="fld" style="flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer;">
+      <input type="radio" name="ticketDest" value="expo" style="margin-top:4px;" checked />
+      <span><strong>The Expo Screen</strong> — a live order board for the kitchen. Always on. Nothing else needed.</span>
+    </label>
+    <label class="fld" style="flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer;">
+      <input type="radio" name="ticketDest" value="mailbox" style="margin-top:4px;" />
+      <span><strong>A dedicated order mailbox</strong> — an email address used only for orders.</span>
+    </label>
+    <label class="fld" style="flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer;">
+      <input type="radio" name="ticketDest" value="own_system" style="margin-top:4px;" />
+      <span><strong>My own ticketing system</strong> — the system the kitchen already runs.</span>
+    </label>
+    <label class="fld" style="flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer;">
+      <input type="radio" name="ticketDest" value="other" style="margin-top:4px;" />
+      <span><strong>Something else</strong> — tell us what you have in mind.</span>
+    </label>
+
+    <label class="fld" id="ticketMailboxWrap" style="display:none">
+      <span>Order mailbox address</span>
+      <input type="email" id="ticketMailbox" placeholder="orders@yourrestaurant.com" autocomplete="off" />
+      <div class="hint">We'll send order tickets to this address (and always to your Expo Screen).</div>
+    </label>
+    <label class="fld" id="ticketSystemWrap" style="display:none">
+      <span>Which system does your kitchen use?</span>
+      <input type="text" id="ticketSystem" placeholder="e.g. Toast, Square, Clover" autocomplete="off" />
+      <div class="hint">We'll note it now. A direct hookup comes later — for now, orders go to your Expo Screen.</div>
+    </label>
+    <label class="fld" id="ticketOtherWrap" style="display:none">
+      <span>Tell us where orders should go</span>
+      <textarea id="ticketOther" placeholder="Describe how you'd like to receive orders."></textarea>
+    </label>
+  </div>
+
   <!-- SECTION 4: Delivery (4d) -->
   <div class="section">
     <div class="section-h">🚗 Delivery options</div>
@@ -955,6 +997,24 @@
       document.getElementById("deliveryRadius").value = s.delivery_radius_mi;
     }
 
+    // Ticket destination (INSTRUCTION-09 §5 / item E)
+    var destType = s.ticket_destination_type || "expo";
+    var destDetail = s.ticket_destination_detail || "";
+    var destRadio = document.querySelector('input[name="ticketDest"][value="' + destType + '"]');
+    if (destRadio) destRadio.checked = true;
+    if (destType === "mailbox") document.getElementById("ticketMailbox").value = destDetail;
+    else if (destType === "own_system") document.getElementById("ticketSystem").value = destDetail;
+    else if (destType === "other") document.getElementById("ticketOther").value = destDetail;
+    function syncTicketDest() {
+      var v = (document.querySelector('input[name="ticketDest"]:checked') || {}).value || "expo";
+      document.getElementById("ticketMailboxWrap").style.display = v === "mailbox" ? "flex" : "none";
+      document.getElementById("ticketSystemWrap").style.display = v === "own_system" ? "flex" : "none";
+      document.getElementById("ticketOtherWrap").style.display = v === "other" ? "flex" : "none";
+    }
+    var destRadios = document.querySelectorAll('input[name="ticketDest"]');
+    for (var di = 0; di < destRadios.length; di++) destRadios[di].onchange = syncTicketDest;
+    syncTicketDest();
+
     // EIN label gating
     var einLabel = document.getElementById("einLabel");
     if (einLabel) {
@@ -1303,6 +1363,23 @@
       delivery_radius_mi: parseFloat(document.getElementById("deliveryRadius").value) || null
     };
     if (einVal) fields.ein = einVal;
+
+    // Ticket destination (INSTRUCTION-09 §5 / item E). Expo Screen is always active
+    // regardless; this records what else the owner wants, including free text.
+    var destType = (document.querySelector('input[name="ticketDest"]:checked') || {}).value || "expo";
+    fields.ticket_destination_type = destType;
+    if (destType === "mailbox") {
+      var mbox = document.getElementById("ticketMailbox").value.trim();
+      fields.ticket_destination_detail = mbox || null;
+      // A dedicated mailbox is where they actually want tickets — act on the answer.
+      if (mbox) fields.email_ticket_recipient = mbox;
+    } else if (destType === "own_system") {
+      fields.ticket_destination_detail = document.getElementById("ticketSystem").value.trim() || null;
+    } else if (destType === "other") {
+      fields.ticket_destination_detail = document.getElementById("ticketOther").value.trim() || null;
+    } else {
+      fields.ticket_destination_detail = null;
+    }
 
     api("onboarding-save", {
       action: "save",

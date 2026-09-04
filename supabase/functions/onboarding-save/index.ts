@@ -35,6 +35,8 @@ const ALLOWED_FIELDS = new Set<string>([
   // Phase 2–4 onboarding fields
   "owner_name", "ein", "is_test", "menu_links", "special_instructions",
   "delivery_enabled", "delivery_hours", "delivery_fee_cents", "delivery_radius_mi",
+  // INSTRUCTION-09 §5 / item E — order ticket destination (asked explicitly at onboarding).
+  "ticket_destination_type", "ticket_destination_detail",
 ]);
 
 function slugify(s: string): string {
