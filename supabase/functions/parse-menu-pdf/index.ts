@@ -232,6 +232,7 @@ Deno.serve(async (req: Request) => {
             flaggedByConsensus++;
             (row as any)._flag = true;
             (row as any)._reason = ((row as any)._reason ? (row as any)._reason + "; " : "") + "§B_silent_price_gate: price not in document text";
+            (row as any)._confidence = 0.70; // 3/3 agree but price not verifiable in source
             openQuestions.push({
               item_ref: `${row.category}|${row.name}|${row.size}`,
               issue: "§B silent_price_gate",
@@ -239,9 +240,11 @@ Deno.serve(async (req: Request) => {
             });
           } else {
             confirmedPrices++;
+            (row as any)._confidence = 1.0; // 3/3 agree + price verified in source
           }
         } else {
           confirmedPrices++;
+          (row as any)._confidence = 1.0;
         }
       } else if (hasPrice) {
         // DISAGREEMENT — flag it
@@ -253,12 +256,21 @@ Deno.serve(async (req: Request) => {
         if (p3price === null) reasons.push(`P3 missing`);
         else if (p3price !== row.price) reasons.push(`P3=$ ${p3price}`);
         (row as any)._reason = ((row as any)._reason ? (row as any)._reason + "; " : "") + `§B_consensus: ${reasons.join(", ")}`;
+        // Confidence based on how many passes agreed
+        const agreeCount = [row.price].concat(
+          p2price === row.price ? [p2price] : [],
+          p3price === row.price ? [p3price] : []
+        ).length;
+        (row as any)._confidence = agreeCount >= 3 ? 0.70 : agreeCount >= 2 ? 0.45 : 0.25;
 
         openQuestions.push({
           item_ref: `${row.category}|${row.name}|${row.size}`,
           issue: "§B price_consensus",
           question: `P1=$${row.price} | P2=$${p2price ?? "?"} | P3=$${p3price ?? "?"} — owner must confirm`,
         });
+      } else {
+        // No price in any pass — low confidence
+        (row as any)._confidence = 0.20;
       }
       // Items with NO price in any pass → caught by blank_price check below
     }
@@ -300,6 +312,7 @@ Deno.serve(async (req: Request) => {
         });
         (row as any)._flag = true;
         (row as any)._reason = ((row as any)._reason ? (row as any)._reason + "; " : "") + "blank_price";
+        (row as any)._confidence = 0.10; // No price at all
       }
     }
 
@@ -345,6 +358,7 @@ Deno.serve(async (req: Request) => {
       size_label: (row.size && row.size !== "None") ? row.size : null,
       row_type: (row as any)._rt || "item",
       display_order: idx, active: true, is_available: true,
+      confidence_score: (row as any)._confidence ?? 1.0,
       flag_review: (row as any)._flag || false,
       flag_reason: (row as any)._reason || null,
       modifiers_json: null,

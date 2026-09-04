@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
@@ -38,6 +38,7 @@ const superAdminBottomNav = [
 // Shop-owner left sidebar nav
 const shopOwnerNav = [
   { to: '/shop-owner', label: 'At a Glance', icon: LayoutDashboard },
+  { to: '/expo', label: 'Expo Screen', icon: Monitor },
   { to: '/conversations', label: 'Conversation', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Quality', icon: ShieldCheck },
   { to: '/test-suite', label: 'Production Readiness', icon: FlaskConical },
@@ -49,10 +50,10 @@ const shopOwnerNav = [
 // Bottom nav for shop owners (mobile)
 const shopOwnerBottomNav = [
   { to: '/shop-owner', label: 'Glance', icon: LayoutDashboard },
+  { to: '/expo', label: 'Orders', icon: Monitor },
   { to: '/conversations', label: 'Chats', icon: MessageSquare },
   { to: '/test-suite', label: 'Readiness', icon: FlaskConical },
   { to: '/issues', label: 'Issues', icon: AlertTriangle },
-  { to: '/financial-reporting', label: 'Money', icon: DollarSign },
 ]
 
 export default function Layout({ user, role: _role }: LayoutProps) {

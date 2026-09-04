@@ -28,6 +28,7 @@ import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 import ShopOwnerDashboard from './pages/ShopOwnerDashboard'
 import TestSuite from './pages/TestSuite'
 import FinancialReporting from './pages/FinancialReporting'
+import ExpoScreen from './pages/ExpoScreen'
 
 // ── route guards ────────────────────────────────────────────────────────────
 // Every protected route uses one of these. Navigation links hiding is
@@ -122,6 +123,22 @@ export default function App() {
             element={
               <ShopOwnerRoute role={roleInfo}>
                 <ShopFinancialsPage />
+              </ShopOwnerRoute>
+            }
+          />
+          <Route
+            path="shop/:shopId/expo"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <ExpoScreen />
+              </ShopOwnerRoute>
+            }
+          />
+          <Route
+            path="expo"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <ExpoScreen />
               </ShopOwnerRoute>
             }
           />

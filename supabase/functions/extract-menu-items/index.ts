@@ -163,6 +163,8 @@ Deno.serve(async (req: Request) => {
       active: true,
       is_available: true,
       owner_edited: false,
+      // Item F: confidence score (0.0-1.0) for menu curation sorting
+      confidence_score: confidence / 100,
       // Item F: flag low-confidence rows for owner review
       flag_review: lowConf,
       flag_reason: lowConf ? (it.flag_reason ?? "Please verify this item's name, price, and category.") : null,
