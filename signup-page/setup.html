@@ -717,6 +717,16 @@
     t.classList.add("show");
     setTimeout(function () { t.classList.remove("show"); }, 2500);
   }
+
+  function showFoundingBanner() {
+    var existing = document.getElementById("founding-banner");
+    if (existing) return;
+    var banner = document.createElement("div");
+    banner.id = "founding-banner";
+    banner.style.cssText = "position:fixed;top:0;left:0;right:0;background:#E8521A;color:#fff;text-align:center;padding:14px 20px;font-size:15px;font-weight:600;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,0.15);";
+    banner.innerHTML = '🎉 Welcome to the SprintAI family! Your $99/mo subscription is waived for 6 months — thank you for being a founding shop. <button onclick="document.getElementById(\'founding-banner\').remove()" style="margin-left:12px;background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:13px;">Got it</button>';
+    document.body.insertBefore(banner, document.body.firstChild);
+  }
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
@@ -1379,7 +1389,11 @@
             if (r.json && r.json.shop && r.json.shop.subscription_status === "active") {
               state.shop = r.json.shop;
               renderSubscription(r.json.shop);
-              showToast("Subscription active! 🎉");
+              if (r.json.shop.founding_promo) {
+                showFoundingBanner();
+              } else {
+                showToast("Subscription active! 🎉");
+              }
             } else if (pollCount < maxPolls) {
               pollCount++;
               pollSubscription();

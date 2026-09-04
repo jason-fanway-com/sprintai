@@ -524,14 +524,35 @@ async function handleShopSubscriptionCheckout(
 
   console.log(`[stripe-webhook] Shop subscription checkout complete: shop=${shopId}, customer=${customerId}, sub=${subscriptionId}`);
 
+  // Detect founding promo: retrieve the subscription and check for the
+  // designated founding coupon. STRIPE_FOUNDING_COUPON_ID is set in Supabase
+  // secrets once the coupon is created in Stripe.
+  let isFoundingShop = false;
+  const foundingCouponId = Deno.env.get("STRIPE_FOUNDING_COUPON_ID") ?? "";
+  if (foundingCouponId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const appliedCouponId = sub.discount?.coupon?.id ?? "";
+      if (appliedCouponId === foundingCouponId) {
+        isFoundingShop = true;
+        console.log(`[stripe-webhook] Founding promo detected for shop ${shopId} (coupon ${appliedCouponId})`);
+      }
+    } catch (e) {
+      console.warn(`[stripe-webhook] Could not retrieve subscription for founding-promo check: ${e}`);
+    }
+  }
+
+  const updatePayload: Record<string, unknown> = {
+    subscription_status: "active",
+    stripe_platform_customer_id: customerId,
+    stripe_subscription_id: subscriptionId,
+    subscription_pm_set: true,
+  };
+  if (isFoundingShop) updatePayload.founding_promo = true;
+
   const { error } = await supabase
     .from("shops")
-    .update({
-      subscription_status: "active",
-      stripe_platform_customer_id: customerId,
-      stripe_subscription_id: subscriptionId,
-      subscription_pm_set: true,
-    })
+    .update(updatePayload)
     .eq("id", shopId);
 
   if (error) {
@@ -540,6 +561,88 @@ async function handleShopSubscriptionCheckout(
   }
 
   console.log(`[stripe-webhook] Shop ${shopId} subscription_status → active (Stripe-authored)`);
+
+  if (isFoundingShop) {
+    // Fetch shop email + owner name to send the founding-shop thank-you note.
+    const { data: shop } = await supabase
+      .from("shops")
+      .select("owner_name, email_ticket_recipient")
+      .eq("id", shopId)
+      .single();
+    const ownerEmail = (shop as { owner_name?: string; email_ticket_recipient?: string } | null)?.email_ticket_recipient ?? "";
+    const ownerName = (shop as { owner_name?: string; email_ticket_recipient?: string } | null)?.owner_name ?? "there";
+    if (ownerEmail) {
+      await sendFoundingThankYouEmail(ownerEmail, ownerName).catch((e) =>
+        console.error("[stripe-webhook] founding thank-you email failed:", e)
+      );
+    }
+  }
+}
+
+/** Send the founding-shop thank-you note via Resend. */
+async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Promise<void> {
+  const resendKey = Deno.env.get("RESEND_API_KEY");
+  if (!resendKey) {
+    console.warn("[stripe-webhook] RESEND_API_KEY unset — founding thank-you email skipped for", toEmail);
+    return;
+  }
+
+  const name = ownerName || "there";
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#FFFDF9;font-family:'DM Sans',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#FFFDF9;padding:40px 0;">
+<tr><td align="center">
+<table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;box-shadow:0 2px 16px rgba(0,0,0,0.06);overflow:hidden;">
+  <tr><td style="background:#E8521A;padding:28px 32px;text-align:center;">
+    <div style="font-size:32px;">🎉</div>
+    <div style="font-family:Georgia,serif;font-size:22px;font-weight:800;color:#fff;margin-top:6px;">You're a SprintAI Founding Shop</div>
+  </td></tr>
+  <tr><td style="padding:32px;color:#2A3540;">
+    <h1 style="font-family:Georgia,serif;font-size:20px;margin:0 0 12px;color:#17212E;">Thank you, ${name}.</h1>
+    <p style="font-size:16px;line-height:1.6;margin:0 0 16px;color:#2A3540;">
+      You're one of the very first restaurants on SprintAI — and that means the world to us. You're helping shape what this platform becomes, and we don't take that lightly.
+    </p>
+    <p style="font-size:16px;line-height:1.6;margin:0 0 16px;color:#2A3540;">
+      As a founding shop, your $99/month subscription is <strong>waived for the next six months</strong>. You'll only pay the small $0.99 per-order service fee — the rest is our way of saying thank you for being early.
+    </p>
+    <p style="font-size:16px;line-height:1.6;margin:0 0 24px;color:#2A3540;">
+      If you ever hit a snag or have a question, reply to this email or text us directly. We actually read it, and we'll actually help.
+    </p>
+    <p style="font-size:14px;color:#687585;margin:0;">
+      With gratitude,<br/>
+      The SprintAI Team
+    </p>
+  </td></tr>
+  <tr><td style="background:#FEF3EE;padding:20px 32px;text-align:center;">
+    <p style="font-size:12px;color:#96A5B4;margin:0;">
+      SprintAI · Allentown, PA · <a href="https://getsprintai.com/privacy.html" style="color:#96A5B4;">Privacy</a>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: "SprintAI <hello@getsprintai.com>",
+      to: [toEmail],
+      subject: `You're a SprintAI Founding Shop, ${name} 🎉`,
+      html,
+    }),
+  });
+
+  if (res.ok) {
+    console.log(`[stripe-webhook] Founding thank-you email sent to ${toEmail}`);
+  } else {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Resend rejected founding email (HTTP ${res.status}): ${text}`);
+  }
 }
 
 /** checkout.session.completed → create tenant, run onboarding, assign Twilio number */
