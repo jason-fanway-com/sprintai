@@ -47,6 +47,9 @@ verify_jwt = false  # Stripe webhooks don't send JWT
 [functions.create-checkout]
 verify_jwt = false  # Called from public signup page
 
+[functions.create-subscription]
+verify_jwt = false  # Called from public signup page (setup.html) with anon key
+
 [functions.toast-order]
 verify_jwt = false  # Called internally
 
