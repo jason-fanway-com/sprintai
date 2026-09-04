@@ -27,7 +27,11 @@ const ALLOWED_FIELDS = new Set<string>([
   "ai_instructions", "tax_rate_bps", "cash_discount_mode", "catering_mode",
   "wing_flavors_included", "wing_mix_extra", "open_hours", "pause_message",
   "optin_language", "stop_help_wording", "reply_from_e164",
-  "subscription_status", "subscription_pm_set", "stripe_subscription_id",
+  // subscription_status / subscription_pm_set / stripe_subscription_id are DELIBERATELY
+  // NOT client-writable. Only stripe-webhook (service role, driven by real Stripe events)
+  // may set them. A client-writable allowlist here would let anyone with an onboarding
+  // token POST subscription_status="active" and satisfy the go-live gate with no money
+  // moving — the same defect as the old wizard.js bug, server-side. Do not re-add.
   // Phase 2–4 onboarding fields
   "owner_name", "ein", "is_test", "menu_links", "special_instructions",
   "delivery_enabled", "delivery_hours", "delivery_fee_cents", "delivery_radius_mi",
