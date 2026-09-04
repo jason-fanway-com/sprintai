@@ -109,6 +109,7 @@ Deno.serve(async (req: Request) => {
         display_name: name,
         slug,
         owner_name: ownerName,
+        owner_mobile: (account.owner_mobile ?? "").trim() || null,
         onboarding_token: token,
         website_url: account.website_url ?? null,
         timezone: account.timezone || "America/New_York",

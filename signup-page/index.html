@@ -263,6 +263,10 @@
       <input type="email" id="f-email" placeholder="owner@jacksslice.com" autocomplete="email" inputmode="email" />
     </label>
     <label class="fld">
+      <span>Mobile number</span>
+      <input type="tel" id="f-mobile" placeholder="(610) 555-0100" autocomplete="tel" inputmode="tel" />
+    </label>
+    <label class="fld">
       <span>Website <em style="font-weight:400;color:var(--light)">(optional)</em></span>
       <input type="url" id="f-url" placeholder="https://jacksslice.com" autocomplete="url" inputmode="url" />
     </label>
@@ -353,13 +357,14 @@
     var name = document.getElementById("f-name").value.trim();
     var ownerName = document.getElementById("f-owner").value.trim();
     var email = document.getElementById("f-email").value.trim();
+    var mobile = document.getElementById("f-mobile").value.trim();
     var website = document.getElementById("f-url").value.trim();
 
     if (!name) { showError("Enter your restaurant name."); return; }
     if (!ownerName) { showError("Enter your name."); return; }
     if (!email) { showError("Enter your email so we can send the setup link."); return; }
-    // Basic email validation
     if (!/\S+@\S+\.\S+/.test(email)) { showError("That doesn't look like a valid email."); return; }
+    if (!mobile) { showError("Enter your mobile number so we can text you when you're ready to launch."); return; }
 
     var btn = this;
     btn.disabled = true;
@@ -378,6 +383,7 @@
           name: name,
           owner_name: ownerName,
           email: email,
+          owner_mobile: mobile,
           website_url: website,
           timezone: "America/New_York"
         }
