@@ -49,7 +49,7 @@ Deno.serve(async (req: Request) => {
   // Verify shop exists
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, name, subscription_status")
+    .select("id, name, subscription_status, onboarding_token")
     .eq("id", shop_id)
     .single();
 
@@ -65,12 +65,17 @@ Deno.serve(async (req: Request) => {
     httpClient: Stripe.createFetchHttpClient(),
   });
 
-  // Build success/cancel URLs returning to setup.html
+  // Build success/cancel URLs returning to setup.html.
+  // setup.html.boot() resolves the shop from the `t` (onboarding_token) query
+  // param — without it the owner lands on "Setup link not found". Carry the
+  // token through Stripe so the return trip can resume the correct shop.
   const baseUrl = Deno.env.get("URL") ?? "https://getsprintai.com";
   const setupUrl = `${baseUrl}/signup-page/setup.html`;
-  // We pass shop_id back so setup.html can resume the correct shop
-  const successUrl = `${setupUrl}?sub=success&session_id={CHECKOUT_SESSION_ID}`;
-  const cancelUrl = `${setupUrl}?sub=canceled`;
+  const tokenParam = shop.onboarding_token
+    ? `t=${encodeURIComponent(shop.onboarding_token)}&`
+    : "";
+  const successUrl = `${setupUrl}?${tokenParam}sub=success&session_id={CHECKOUT_SESSION_ID}`;
+  const cancelUrl = `${setupUrl}?${tokenParam}sub=canceled`;
 
   try {
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
