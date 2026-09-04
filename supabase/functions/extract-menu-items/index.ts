@@ -6,15 +6,32 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-const MENU_EXTRACT_PROMPT = `Extract the restaurant's menu items from the following website content. Return ONLY a JSON object with an "items" array. Each item has: "name" (string, required), "price_cents" (integer, price in cents — e.g. $14.99 = 1499), "category" (string), and "description" (string).
+// INSTRUCTION-10 item F: each extracted item carries a confidence score (0-100) and,
+// when confidence < 75, a specific flag_reason question for the owner to answer.
+const MENU_EXTRACT_PROMPT = `Extract the restaurant's menu items from the following website content. Return ONLY a JSON object with an "items" array. Each item has:
+- "name" (string, required)
+- "price_cents" (integer, price in cents — e.g. $14.99 = 1499; 0 if truly unknown)
+- "category" (string)
+- "description" (string)
+- "size_label" (string | null)
+- "confidence" (integer 0-100, your certainty about this item's name, price, and category)
+- "flag_reason" (string | null, a short specific question for the owner when confidence < 75; null otherwise)
 
-Rules:
+Rules for extraction:
 - Only include items with a clear, explicitly-stated price. Never guess a price.
 - If a price range is given (e.g. "$12-$18"), skip that item.
 - Standardize category names (Pizza, Appetizers, Salads, Pasta, Desserts, Drinks, etc.).
 - Include every item you can find with a clear price. Never silently drop items that have a stated price.
 - Pizza base prices (e.g. "$15.25+") are fine — extract the base price. If size-specific prices are explicitly listed, create one row per size with the size_label field set (e.g. "Small 12\"", "Medium 14\"", "Large 16\"", "Sicilian", "Half Tray", "Full Tray"). Otherwise leave size_label null.
-- Return valid JSON only, no other text.`;
+
+Rules for confidence and flag_reason:
+- confidence 90-100: name, price, and category are all unambiguous from the source.
+- confidence 75-89: minor uncertainty — item parsed cleanly but description sparse or category inferred.
+- confidence 50-74: price may be a base price of a size range; item name may be abbreviated; category unclear.
+- confidence < 50: name or price is guessed or the listing is very ambiguous.
+- flag_reason: required when confidence < 75. Write one plain-English question the restaurant owner can answer to confirm this row (e.g. "Is the Chicken Parm $14.99 for the sandwich or the dinner plate?" or "What category does the House Salad belong to — Salads or Appetizers?"). Null when confidence >= 75.
+
+Return valid JSON only, no other text.`;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":  "*",
@@ -29,10 +46,20 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+type RawItem = {
+  name: string;
+  price_cents: number;
+  category: string;
+  description: string;
+  size_label?: string;
+  confidence?: number;
+  flag_reason?: string | null;
+};
+
 async function extractMenuItems(
   combinedText: string,
   openRouterKey: string,
-): Promise<Array<{ name: string; price_cents: number; category: string; description: string; size_label?: string }> | null> {
+): Promise<RawItem[] | null> {
   let raw = "";
   try {
     const menuPrompt = MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 50_000);
@@ -122,18 +149,25 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ok: true, items_extracted: menuItems.length, items_inserted: 0, skipped: "menu_has_items" });
   }
 
-  const rows = menuItems.map((it, idx) => ({
-    menu_id: menuData.id,
-    name: it.name,
-    price_cents: it.price_cents || 0,
-    category: it.category || "",
-    description: it.description || "",
-    size_label: it.size_label || null,
-    display_order: idx,
-    active: true,
-    is_available: true,
-    owner_edited: false,
-  }));
+  const rows = menuItems.map((it, idx) => {
+    const confidence = typeof it.confidence === "number" ? it.confidence : 100;
+    const lowConf = confidence < 75;
+    return {
+      menu_id: menuData.id,
+      name: it.name,
+      price_cents: it.price_cents || 0,
+      category: it.category || "",
+      description: it.description || "",
+      size_label: it.size_label || null,
+      display_order: idx,
+      active: true,
+      is_available: true,
+      owner_edited: false,
+      // Item F: flag low-confidence rows for owner review
+      flag_review: lowConf,
+      flag_reason: lowConf ? (it.flag_reason ?? "Please verify this item's name, price, and category.") : null,
+    };
+  });
 
   const { error: insertErr } = await supabase.from("menu_items").insert(rows);
   if (insertErr) {

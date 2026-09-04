@@ -1,0 +1,7 @@
+# Asset path rewrites — Vite base="/admin/" but files at /assets/
+/admin/assets/*  /assets/:splat  200
+/admin/icons/*   /icons/:splat   200
+/admin/manifest.json  /manifest.json  200
+
+# SPA fallback — must be LAST
+/*  /index.html  200

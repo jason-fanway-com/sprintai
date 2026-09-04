@@ -40,6 +40,8 @@ interface MenuItem {
   description: string | null
   active: boolean
   modifiers_json: Array<{ name: string; price_cents: number }> | null
+  flag_review?: boolean | null
+  flag_reason?: string | null
 }
 
 interface OrderCart {
@@ -145,6 +147,16 @@ export default function ShopDetail() {
       await supabase.from('availability_overrides').delete().eq('shop_id', id!).eq('business_date', today)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['availability', id, today] }),
+  })
+
+  // Item F: owner confirms a flagged item → clear the flag so it moves to the confident set
+  const clearFlag = useMutation({
+    mutationFn: async ({ menuItemId }: { menuItemId: string }) => {
+      const { error } = await supabase.from('menu_items').update({ flag_review: false, flag_reason: null }).eq('id', menuItemId)
+      if (error) throw error
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
   })
 
   const togglePause = useMutation({
@@ -369,6 +381,7 @@ export default function ShopDetail() {
           onUploadPdf={uploadPdf}
           onToggleSoldOut={toggleSoldOut}
           onResetAll={resetAll}
+          onClearFlag={clearFlag}
         />
       )}
 
