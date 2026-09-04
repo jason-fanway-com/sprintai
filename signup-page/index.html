@@ -143,6 +143,25 @@
     }
     .btn-primary:hover { background: var(--brand-hover); }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-secondary {
+      background: #fff;
+      color: var(--brand);
+      border: 1.5px solid var(--brand);
+      padding: 10px 18px;
+      font-size: 14px;
+    }
+    .btn-secondary:hover { background: #FEF3EE; }
+
+    .email-warn {
+      text-align: left;
+      color: #7A3B12;
+      font-size: 14px;
+      padding: 14px 16px;
+      background: #FEF3EE;
+      border: 1px solid #F5C9AE;
+      border-radius: var(--r);
+      margin: 4px 0 16px;
+    }
 
     .error-msg {
       display: none;
@@ -254,7 +273,12 @@
   <div class="success-box" id="successBox">
     <div class="success-icon">🎉</div>
     <h2>You're in!</h2>
-    <p>We sent a setup link to your email. Finish uploading your menu at your desk.</p>
+    <p id="emailSentMsg">We sent a setup link to your email. Finish uploading your menu at your desk.</p>
+    <div class="email-warn" id="emailWarn" style="display:none;">
+      <p style="margin:0 0 8px;"><strong>We couldn't email your setup link.</strong> <span id="emailWarnDetail"></span> Save the link below — it's how you finish setup.</p>
+      <button class="btn btn-secondary" id="resendBtn" type="button">Resend the email</button>
+      <span id="resendStatus" style="margin-left:10px;font-size:13px;"></span>
+    </div>
     <div class="setup-link-box">
       <strong>Your setup link:</strong><br />
       <a id="setupLink" href="#" target="_blank"></a>
@@ -289,6 +313,39 @@
   function clearError() {
     var el = document.getElementById("errorMsg");
     el.classList.remove("show");
+  }
+
+  function wireResend(token) {
+    var btn = document.getElementById("resendBtn");
+    var statusEl = document.getElementById("resendStatus");
+    btn.onclick = function () {
+      btn.disabled = true;
+      statusEl.textContent = "Sending…";
+      fetch(fnUrl("onboarding-save"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": CFG.ANON_KEY,
+          "Authorization": "Bearer " + CFG.ANON_KEY
+        },
+        body: JSON.stringify({ action: "resend_welcome", token: token })
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.email_sent) {
+          statusEl.textContent = "Sent — check your inbox.";
+          document.getElementById("emailWarn").style.display = "none";
+          document.getElementById("emailSentMsg").style.display = "block";
+        } else {
+          btn.disabled = false;
+          statusEl.textContent = (d.email_error || "Still couldn't send.") + " Use the link above to continue.";
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        statusEl.textContent = "Couldn't reach the server. Use the link above to continue.";
+      });
+    };
   }
 
   document.getElementById("submitBtn").onclick = function () {
@@ -341,6 +398,15 @@
       var setupLink = document.getElementById("setupLink");
       setupLink.href = data.setup_url;
       setupLink.textContent = data.setup_url;
+
+      // §C: the email is the bridge to onboarding. If it did not send, say so
+      // plainly and offer a resend — never claim success we didn't have.
+      if (data.email_sent === false) {
+        document.getElementById("emailSentMsg").style.display = "none";
+        document.getElementById("emailWarnDetail").textContent = data.email_error || "";
+        document.getElementById("emailWarn").style.display = "block";
+        wireResend(data.onboarding_token);
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     })
     .catch(function (e) {

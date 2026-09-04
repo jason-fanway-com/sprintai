@@ -126,38 +126,11 @@ Deno.serve(async (req: Request) => {
     // Kick async Google Places lookup (non-blocking, Phase 6)
     const _places = kickPlaces(shop.id, name, Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
 
-    const resendKey = Deno.env.get("RESEND_API_KEY");
     const setupUrl = `https://getsprintai.com/signup-page/setup.html?t=${shop.onboarding_token}`;
 
-    // Send welcome email (non-blocking).
-    if (resendKey) {
-      try {
-        const emailHtml = welcomeEmailHtml(ownerName, setupUrl);
-        const resendRes = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${resendKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            from: "SprintAI <hello@getsprintai.com>",
-            to: [email],
-            subject: `Welcome to the SprintAI family, ${ownerName} 🎉`,
-            html: emailHtml,
-          }),
-        });
-        if (!resendRes.ok) {
-          const errText = await resendRes.text();
-          console.error("Resend send failed:", errText);
-        } else {
-          console.log("Welcome email sent to", email);
-        }
-      } catch (e) {
-        console.error("Resend send error:", e);
-      }
-    } else {
-      console.warn("RESEND_API_KEY unset — welcome email skipped");
-    }
+    // Send welcome email and PERSIST the true outcome (§C). This is the only
+    // bridge from signup to onboarding — a silent failure strands the shop.
+    const emailResult = await sendWelcomeEmail(supabase, shop.id, ownerName, email, setupUrl);
 
     return jsonResponse({
       ok: true,
@@ -166,6 +139,38 @@ Deno.serve(async (req: Request) => {
       onboarding_step: shop.onboarding_step,
       onboarding_token: shop.onboarding_token,
       setup_url: setupUrl,
+      email_status: emailResult.status,        // 'sent' | 'failed' | 'skipped'
+      email_sent: emailResult.status === "sent",
+      email_error: emailResult.error,          // human-readable, null when sent
+    });
+  }
+
+  // ── RESEND WELCOME ─────────────────────────────────────────────────────────
+  // Re-send the setup-link email and persist the new outcome. Lookup by
+  // onboarding_token (setup page) or shop_id. Returns the true send result.
+  if (action === "resend_welcome") {
+    const token = body.token ? String(body.token) : "";
+    const shopId = body.shop_id ? String(body.shop_id) : "";
+    if (!token && !shopId) return jsonError("token or shop_id is required");
+
+    let q = supabase.from("shops").select("id, owner_name, email_ticket_recipient, onboarding_token");
+    q = token ? q.eq("onboarding_token", token) : q.eq("id", shopId);
+    const { data: shop, error: sErr } = await q.single();
+    if (sErr || !shop) return jsonError("Shop not found", 404);
+
+    const to = (shop.email_ticket_recipient ?? "").trim();
+    if (!to) return jsonError("No email on file for this shop", 400);
+
+    const setupUrl = `https://getsprintai.com/signup-page/setup.html?t=${shop.onboarding_token}`;
+    const emailResult = await sendWelcomeEmail(
+      supabase, shop.id, (shop.owner_name ?? "there").trim() || "there", to, setupUrl,
+    );
+
+    return jsonResponse({
+      ok: emailResult.status === "sent",
+      email_status: emailResult.status,
+      email_sent: emailResult.status === "sent",
+      email_error: emailResult.error,
     });
   }
 
@@ -375,6 +380,70 @@ function isTestEmail(email: string): boolean {
 }
 
 /** Kick an async website scrape in the background — fire-and-forget, never blocks create. */
+/**
+ * Send the welcome / setup-link email and persist the true outcome on the shop
+ * row (§C — INSTRUCTION-10). Returns the status so the caller can report it to
+ * the signup page instead of silently claiming success.
+ *   'sent'    — Resend accepted the message.
+ *   'failed'  — key present but Resend rejected or threw.
+ *   'skipped' — RESEND_API_KEY unset (no mail configured).
+ */
+async function sendWelcomeEmail(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  shopId: string,
+  ownerName: string,
+  email: string,
+  setupUrl: string,
+): Promise<{ status: "sent" | "failed" | "skipped"; error: string | null }> {
+  const resendKey = Deno.env.get("RESEND_API_KEY");
+  let status: "sent" | "failed" | "skipped" = "skipped";
+  let error: string | null = null;
+
+  if (!resendKey) {
+    error = "Email is not configured (RESEND_API_KEY unset).";
+    console.warn("RESEND_API_KEY unset — welcome email skipped");
+  } else {
+    try {
+      const resendRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: "SprintAI <hello@getsprintai.com>",
+          to: [email],
+          subject: `Welcome to the SprintAI family, ${ownerName} 🎉`,
+          html: welcomeEmailHtml(ownerName, setupUrl),
+        }),
+      });
+      if (resendRes.ok) {
+        status = "sent";
+        console.log("Welcome email sent to", email);
+      } else {
+        status = "failed";
+        error = `Resend rejected the message (HTTP ${resendRes.status}).`;
+        console.error("Resend send failed:", await resendRes.text());
+      }
+    } catch (e) {
+      status = "failed";
+      error = "Could not reach the email service.";
+      console.error("Resend send error:", e);
+    }
+  }
+
+  // Persist outcome. Never let a bookkeeping failure mask the real send result.
+  try {
+    await supabase.from("shops").update({
+      welcome_email_status: status,
+      welcome_email_error: error,
+      welcome_email_last_attempt_at: new Date().toISOString(),
+    }).eq("id", shopId);
+  } catch (e) {
+    console.error("Failed to persist welcome_email_status:", e);
+  }
+
+  return { status, error };
+}
+
 async function kickScrape(shopId: string, websiteUrl: string | null, supabaseUrl: string, serviceKey: string) {
   if (!websiteUrl) return;
   try {
