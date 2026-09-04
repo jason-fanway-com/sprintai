@@ -175,10 +175,7 @@
     ));
     document.getElementById("bk").onclick = back;
     document.getElementById("go").onclick = function () {
-      // Phase 1: mark the payment-method flag so number provisioning's
-      // subscription-first guardrail is satisfied in test mode. Real charge =
-      // Phase 2 when Stripe config flips. No card data touches Sprint.
-      saveStep("subscription", { subscription_status: "active", subscription_pm_set: true }).then(next);
+      next();
     };
   };
 
