@@ -20,7 +20,10 @@
  * merchant-facing B2B onboarding "welcome SMS" in stripe-webhook is a separate
  * audience tied to the merchant's own subscription checkout; it is represented
  * by the explicit `merchant_welcome` reason so it is ACCOUNTED FOR and gated,
- * never silently bypassing the chokepoint.
+ * never silently bypassing the chokepoint. The same is true of
+ * `owner_escalation` (INSTRUCTION-10 item I): a B2B operational alert to the
+ * shop owner's own mobile when a paid order sits unacknowledged past 7
+ * minutes — never the diner, and gated on a real exactly-once DB claim.
  *
  * DEFAULT-DENY IS STRUCTURAL, NOT CONVENTIONAL:
  *   The real network sender is NOT exported. The ONLY exported way to send is
@@ -45,7 +48,8 @@ export type OutboundReason =
   | "inbound_reply"
   | "payment_confirmed"
   | "order_refunded"
-  | "merchant_welcome";
+  | "merchant_welcome"
+  | "owner_escalation";
 
 export interface OutboundContext {
   /** WHY this send is happening. Anything not in the enum → DENY. */
@@ -73,6 +77,14 @@ export interface OutboundContext {
   cartRefundedCents?: number | null;
   /** merchant_welcome: the merchant's own subscription/checkout completed. */
   subscriptionActive?: boolean | null;
+
+  // ── owner_escalation evidence (INSTRUCTION-10 item I) ────────────────────
+  /** owner_escalation: minutes the order has sat unacknowledged. Must be >= 7. */
+  unackedMinutes?: number | null;
+  /** owner_escalation: the kitchen ticket was delivered/handed off to Resend. */
+  ticketHandedOff?: boolean | null;
+  /** owner_escalation: this order won the exactly-once DB claim (conditional UPDATE). */
+  escalationClaimed?: boolean | null;
 }
 
 export interface GuardDecision {
@@ -81,7 +93,8 @@ export interface GuardDecision {
   why: string;
 }
 
-const PAID_STATES = new Set(["paid", "confirmed", "succeeded", "complete", "completed"]);
+export const PAID_STATES: ReadonlySet<string> =
+  new Set(["paid", "confirmed", "succeeded", "complete", "completed"]);
 
 function toMs(at: number | string | null | undefined): number | null {
   if (at == null) return null;
@@ -164,6 +177,30 @@ export function assertOutboundAllowed(ctx: OutboundContext): GuardDecision {
         return { allow: false, reason, why: "merchant_welcome without active subscription/checkout" };
       }
       return { allow: true, reason, why: "merchant welcome tied to completed subscription" };
+    }
+
+    case "owner_escalation": {
+      // B2B operational alert to the OWNER'S OWN mobile — same audience class
+      // as merchant_welcome, never the diner. Default-deny with real evidence
+      // required for every leg of the 7-minute unacknowledged-order rule
+      // (INSTRUCTION-10 item I).
+      if (!ctx.cartId) {
+        return { allow: false, reason, why: "owner_escalation missing cart id" };
+      }
+      const status = (ctx.cartPaymentStatus ?? "").toLowerCase();
+      if (!PAID_STATES.has(status)) {
+        return { allow: false, reason, why: `owner_escalation cart not paid (status=${status || "none"})` };
+      }
+      if (ctx.ticketHandedOff !== true) {
+        return { allow: false, reason, why: "owner_escalation without delivered/handed-off ticket" };
+      }
+      if (!(Number(ctx.unackedMinutes) >= 7)) {
+        return { allow: false, reason, why: `owner_escalation before 7-minute threshold (unackedMinutes=${ctx.unackedMinutes ?? "none"})` };
+      }
+      if (ctx.escalationClaimed !== true) {
+        return { allow: false, reason, why: "owner_escalation without exactly-once DB claim" };
+      }
+      return { allow: true, reason, why: "unacknowledged paid order past 7-minute threshold" };
     }
 
     default:

@@ -21,6 +21,7 @@
  */
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { guardedSend, PAID_STATES, type OutboundContext } from "../_shared/outbound-guard.ts";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const LOOKBACK_HOURS = 24;
@@ -31,6 +32,11 @@ const FLAGGED_RATE_SAMPLE = 50;
 const INTENT_FAILURE_THRESHOLD = 5;  // flagged convs in 1 hour
 const INTENT_FAILURE_WINDOW_MIN = 60;
 const LATENCY_P95_MS = 60_000;        // 60 seconds P95
+
+// INSTRUCTION-10 item I — 7-minute unacknowledged-order escalation.
+const ESCALATION_THRESHOLD_MIN = 7;
+const ESCALATION_QUERY_LIMIT = 100;
+const ESCALATION_PER_SHOP_CAP = 5;    // caps a single stuck shop's burst
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -72,6 +78,14 @@ interface ScanReport {
   issues_created: number;
   issues_deduped: number;
   by_severity: Record<string, number>;
+  /** Present only when detectUnackedOrders ran — send-attempt detail doesn't
+   *  fit the generic PendingIssue tally above, so it's surfaced separately
+   *  rather than silently dropped from the HTTP response. */
+  escalation?: {
+    candidates_scanned: number;
+    sends_attempted: number;
+    sends_sent: number;
+  };
 }
 
 // ─── SQL helper ──────────────────────────────────────────────────────────────
@@ -587,10 +601,309 @@ async function detectLowScoreConversations(
 
 interface SweepOptions {
   backfill?: boolean;
+  /** Escalation rule only: include test-mode shops (validation walk only). */
+  include_test_mode?: boolean;
+}
+
+interface EscalationCandidate {
+  id: string;
+  shop_id: string;
+  conversation_id: string | null;
+  order_number: number | null;
+  total_cents: number | null;
+  expo_status: string;
+  expo_acknowledged_at: string | null;
+  payment_status: string;
+  test_mode: boolean;
+  ticket_emailed_at: string | null;
+  ticket_delivery_at: string | null;
+  ticket_delivery_status: string | null;
+  owner_escalated_at: string | null;
+}
+
+interface EscalationReport {
+  candidates_scanned: number;
+  issues_created: number;
+  sends_attempted: number;
+  sends_sent: number;
+}
+
+// ─── Escalation SMS provider (mirrors chat-sms resolveSmsProvider) ────────────
+// Never the hardcoded-Twilio path from stripe-webhook — Telnyx first, Twilio
+// as rollback, same as every other outbound in the system.
+function resolveEscalationSmsProvider(): "telnyx" | "twilio" {
+  const telnyxKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+  return telnyxKey.length > 0 ? "telnyx" : "twilio";
+}
+
+/** Send the owner-escalation SMS through the resolved provider, via guardedSend
+ *  (the only door to the network). Throws on delivery failure so the caller can
+ *  log it without touching the already-committed exactly-once claim. */
+async function sendEscalationSms(
+  ctx: OutboundContext,
+  provider: "telnyx" | "twilio",
+  fromNumber: string,
+  toNumber: string,
+  message: string,
+): Promise<{ sent: boolean }> {
+  if (provider === "telnyx") {
+    const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+    if (!apiKey) throw new Error("Telnyx API key not configured");
+
+    const { sent } = await guardedSend({ ...ctx, to: toNumber }, async () => {
+      const res = await fetch("https://api.telnyx.com/v2/messages", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: fromNumber, to: toNumber, text: message }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Telnyx escalation send failed: ${res.status} ${errText}`);
+      }
+    });
+    return { sent };
+  }
+
+  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN") ?? "";
+  if (!accountSid || !authToken) throw new Error("Twilio credentials not configured");
+
+  const { sent } = await guardedSend({ ...ctx, to: toNumber }, async () => {
+    const res = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          From: fromNumber,
+          To: toNumber,
+          Body: message,
+          ...(Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")
+            ? { MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")! }
+            : {}),
+        }),
+      },
+    );
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Twilio escalation send failed: ${res.status} ${errText}`);
+    }
+  });
+  return { sent };
+}
+
+/**
+ * Sev-1: Unacknowledged-order escalation (INSTRUCTION-10 item I).
+ *
+ * A PAID order whose kitchen ticket was handed off, still `expo_status='new'`
+ * (never acknowledged) 7+ minutes later → exactly one SMS to the SHOP OWNER'S
+ * OWN mobile, never the diner. Exactly-once is enforced by a conditional
+ * UPDATE claim on order_carts (WHERE owner_escalated_at IS NULL RETURNING id)
+ * — never gated on the issues table, which can be deduped/closed/reopened
+ * independently of whether an order was ever actually claimed.
+ */
+export async function detectUnackedOrders(
+  supabase: SupabaseClient,
+  opts: SweepOptions = {},
+): Promise<EscalationReport> {
+  const report: EscalationReport = {
+    candidates_scanned: 0,
+    issues_created: 0,
+    sends_attempted: 0,
+    sends_sent: 0,
+  };
+
+  // Permanently-ineligible rows (test-mode, bounced/complained tickets) are
+  // filtered at the QUERY level, not just in the loop below — otherwise they
+  // never get owner_escalated_at set, never leave the "oldest 100" window,
+  // and permanently starve real candidates out of the LIMIT. Postgrest's
+  // `not.in` excludes NULLs by SQL three-valued-logic, so the null case is
+  // OR'd in explicitly (a NULL delivery status has no bounce/complaint yet).
+  const now = Date.now();
+  const cutoffIso = new Date(now - ESCALATION_THRESHOLD_MIN * 60_000).toISOString();
+
+  let query = supabase
+    .from("order_carts")
+    .select(
+      "id, shop_id, conversation_id, order_number, total_cents, expo_status, expo_acknowledged_at, payment_status, test_mode, ticket_emailed_at, ticket_delivery_at, ticket_delivery_status, owner_escalated_at",
+    )
+    .in("payment_status", [...PAID_STATES])
+    .eq("expo_status", "new")
+    .is("expo_acknowledged_at", null)
+    .is("owner_escalated_at", null)
+    .not("ticket_emailed_at", "is", null)
+    .lte("ticket_emailed_at", cutoffIso)
+    .or("ticket_delivery_status.is.null,ticket_delivery_status.not.in.(bounced,complained)")
+    .order("ticket_emailed_at", { ascending: true })
+    .limit(ESCALATION_QUERY_LIMIT);
+
+  if (!opts.include_test_mode) {
+    query = query.eq("test_mode", false);
+  }
+
+  const { data: rows } = await query;
+
+  const candidates = (rows ?? []) as EscalationCandidate[];
+  report.candidates_scanned = candidates.length;
+
+  // ── Phase 1: filter + per-shop cap in memory (no DB calls) ──────────────
+  const perShopCount = new Map<string, number>();
+  const eligible: Array<{ cart: EscalationCandidate; unackedMinutes: number }> = [];
+
+  for (const cart of candidates) {
+    // Belt-and-suspenders: the query above already excludes these, but the
+    // loop re-checks in case a future query edit drops a filter.
+    if (!opts.include_test_mode && cart.test_mode) continue;
+    if (cart.ticket_delivery_status === "bounced" || cart.ticket_delivery_status === "complained") continue;
+
+    // Clock: prefer a confirmed delivery event; fall back to handed-to-Resend
+    // so the rule still fires while item H's delivery webhooks are pending.
+    const effectiveAtStr = cart.ticket_delivery_at ?? cart.ticket_emailed_at;
+    if (!effectiveAtStr) continue;
+    const effectiveAt = new Date(effectiveAtStr).getTime();
+    if (!Number.isFinite(effectiveAt)) continue;
+
+    const unackedMinutes = (now - effectiveAt) / 60_000;
+    if (unackedMinutes < ESCALATION_THRESHOLD_MIN) continue;
+
+    const shopCount = perShopCount.get(cart.shop_id) ?? 0;
+    if (shopCount >= ESCALATION_PER_SHOP_CAP) continue;
+    perShopCount.set(cart.shop_id, shopCount + 1);
+
+    eligible.push({ cart, unackedMinutes });
+  }
+
+  if (eligible.length === 0) return report;
+
+  // ── Phase 2: ONE batched exactly-once claim for every eligible cart ─────
+  // Still race-safe per row (`owner_escalated_at IS NULL` in the WHERE), but
+  // costs one round trip instead of one per candidate.
+  const { data: claimed, error: claimErr } = await supabase
+    .from("order_carts")
+    .update({ owner_escalated_at: new Date().toISOString() })
+    .in("id", eligible.map((e) => e.cart.id))
+    .is("owner_escalated_at", null)
+    .select("id");
+
+  if (claimErr) {
+    console.error(`[issue-detector] escalation batch claim error:`, claimErr.message);
+    return report;
+  }
+
+  const wonIds = new Set((claimed ?? []).map((r: { id: string }) => r.id));
+  const won = eligible.filter((e) => wonIds.has(e.cart.id));
+  if (won.length === 0) return report;
+
+  // ── Phase 3: ONE batched shop lookup for every won candidate ────────────
+  const shopIds = [...new Set(won.map((e) => e.cart.shop_id))];
+  const { data: shopRows } = await supabase
+    .from("shops")
+    .select("id, tenant_id, name, owner_mobile, phone_number_e164")
+    .in("id", shopIds);
+
+  const shopMap = new Map(
+    (shopRows ?? []).map((s: { id: string; tenant_id: string; name: string | null; owner_mobile: string | null; phone_number_e164: string | null }) => [s.id, s]),
+  );
+
+  for (const { cart, unackedMinutes } of won) {
+    const shop = shopMap.get(cart.shop_id);
+    if (!shop) {
+      console.error(`[issue-detector] escalation: shop ${cart.shop_id} not found for cart ${cart.id}`);
+      continue;
+    }
+
+    const minutesRounded = Math.round(unackedMinutes);
+
+    // ── issue row (audit trail, dashboard) ───────────────────────
+    // createIssue dedups by (detection_rule, tenant_id, conversation_id,
+    // status=open) — also enforced as a hard DB constraint
+    // (uq_issues_rule_tenant_open), so a second order in the same open
+    // conversation legitimately shares one issue card, same as every other
+    // rule. The exactly-once DB claim above already guarantees the SMS/audit
+    // side effects for THIS order happened exactly once regardless.
+    const created = await createIssue(supabase, {
+      tenant_id: shop.tenant_id,
+      shop_id: cart.shop_id,
+      conversation_id: cart.conversation_id,
+      eval_id: null,
+      severity: "sev_1",
+      detection_rule: "unacked_order_escalation",
+      title: `Order #${cart.order_number ?? cart.id} unacknowledged for ${minutesRounded} minutes`,
+      description:
+        `Order #${cart.order_number ?? cart.id} at ${shop.name ?? shop.id} has not been acknowledged ` +
+        `on the Expo Screen for ${minutesRounded} minutes after the kitchen ticket was handed off.`,
+      metadata: {
+        cart_id: cart.id,
+        order_number: cart.order_number ?? null,
+        unacked_minutes: minutesRounded,
+        shop_name: shop.name ?? null,
+      },
+    });
+    if (created) report.issues_created += 1;
+
+    // ── Step 4: send — ONLY shops.owner_mobile, never a diner number ────
+    if (!shop.owner_mobile) {
+      console.warn(`[issue-detector] escalation: shop ${shop.id} has no owner_mobile — issue created, no send.`);
+      continue;
+    }
+    if (!shop.phone_number_e164) {
+      // No sender number configured — a real send would fail anyway; don't
+      // burn the network round-trip (or confuse the failure with a delivery
+      // problem). The issue row above already surfaces this order.
+      console.warn(`[issue-detector] escalation: shop ${shop.id} has no phone_number_e164 — issue created, no send.`);
+      continue;
+    }
+
+    const ctx: OutboundContext = {
+      reason: "owner_escalation",
+      shopId: cart.shop_id,
+      tenantId: shop.tenant_id,
+      conversationId: cart.conversation_id,
+      cartId: cart.id,
+      cartPaymentStatus: cart.payment_status,
+      ticketHandedOff: true,
+      unackedMinutes: minutesRounded,
+      escalationClaimed: true,
+    };
+
+    const message =
+      `SprintAI: order #${cart.order_number ?? cart.id} at ${shop.name ?? "your shop"} has not been ` +
+      `acknowledged for ${minutesRounded} minutes. Open the Expo Screen: getsprintai.com/admin/expo`;
+
+    report.sends_attempted += 1;
+    try {
+      const provider = resolveEscalationSmsProvider();
+      const { sent } = await sendEscalationSms(
+        ctx,
+        provider,
+        shop.phone_number_e164,
+        shop.owner_mobile,
+        message,
+      );
+      if (sent) report.sends_sent += 1;
+    } catch (err) {
+      // ── Step 5: on send failure, log and leave owner_escalated_at set ──
+      // A retry storm is worse than one missed alert; the issue row remains
+      // for the dashboard.
+      console.error(`[issue-detector] escalation send failed for cart ${cart.id}:`, (err as Error).message);
+    }
+  }
+
+  return report;
 }
 
 // ─── Sweep orchestrator ──────────────────────────────────────────────────────
-async function runDetection(supabase: SupabaseClient, opts: SweepOptions = {}): Promise<ScanReport> {
+// mode:"escalation" runs ONLY detectUnackedOrders (the 2-minute cron in
+// migration 093). The default full sweep (10-minute cron, 047/048) still
+// includes it too, so a shop isn't only covered by the fast cron.
+async function runDetection(
+  supabase: SupabaseClient,
+  opts: SweepOptions = {},
+  mode?: "escalation",
+): Promise<ScanReport> {
   const report: ScanReport = {
     evals_scanned: 0,
     tenants_scanned: 0,
@@ -598,6 +911,22 @@ async function runDetection(supabase: SupabaseClient, opts: SweepOptions = {}): 
     issues_deduped: 0,
     by_severity: { sev_1: 0, sev_2: 0, sev_3: 0 },
   };
+
+  if (mode === "escalation") {
+    const escalation = await detectUnackedOrders(supabase, opts);
+    report.issues_created += escalation.issues_created;
+    report.by_severity.sev_1 += escalation.issues_created;
+    report.escalation = {
+      candidates_scanned: escalation.candidates_scanned,
+      sends_attempted: escalation.sends_attempted,
+      sends_sent: escalation.sends_sent,
+    };
+    console.log(
+      `[issue-detector] escalation mode: ${escalation.candidates_scanned} candidates, ` +
+      `${escalation.issues_created} issues, ${escalation.sends_sent}/${escalation.sends_attempted} sends`,
+    );
+    return report;
+  }
 
   // Collect all pending issues from all rules
   const allIssues: PendingIssue[] = [];
@@ -640,6 +969,25 @@ async function runDetection(supabase: SupabaseClient, opts: SweepOptions = {}): 
     }
   }
 
+  // detectUnackedOrders manages its own claim + issue-write + send per
+  // candidate (exactly-once semantics), so it runs outside the generic
+  // PendingIssue[] batch above — merge its tally into the sweep report.
+  try {
+    const escalation = await detectUnackedOrders(supabase, opts);
+    report.issues_created += escalation.issues_created;
+    report.by_severity.sev_1 += escalation.issues_created;
+    report.escalation = {
+      candidates_scanned: escalation.candidates_scanned,
+      sends_attempted: escalation.sends_attempted,
+      sends_sent: escalation.sends_sent,
+    };
+    if (escalation.issues_created > 0) {
+      console.log(`[issue-detector] unacked_order_escalation: ${escalation.issues_created} issues detected`);
+    }
+  } catch (err) {
+    console.error(`[issue-detector] rule unacked_order_escalation failed:`, (err as Error).message);
+  }
+
   return report;
 }
 
@@ -659,11 +1007,22 @@ Deno.serve(async (req: Request) => {
 
   // Parse optional mode:
   //  - backfill=true → remove lookback window, scan ALL evals for flagged/unresolved
+  //  - mode="escalation" → run ONLY the 7-minute unacked-order rule (2-min cron)
   let backfill = false;
+  let mode: "escalation" | undefined;
   try {
     const body = await req.json();
     backfill = Boolean(body?.backfill);
+    mode = body?.mode === "escalation" ? "escalation" : undefined;
   } catch { /* default: regular sweep with lookback */ }
+
+  // include_test_mode is deliberately NOT read from the request body: this
+  // endpoint runs verify_jwt=false, so a client-supplied flag here would let
+  // any caller bypass the demo-shop safety skip and trigger real SMS sends
+  // to test-mode shops' owner_mobile. The validation walk sets this via a
+  // server-side secret instead — set/unset ESCALATION_INCLUDE_TEST_MODE=true
+  // in the function's env for the duration of the walk only.
+  const includeTestMode = Deno.env.get("ESCALATION_INCLUDE_TEST_MODE") === "true";
 
   // On backfill, temporarily widen the lookback to include all evals since epoch.
   // We do this by setting a wide LOOKBACK global that the rules use.
@@ -675,7 +1034,7 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
   try {
-    const report = await runDetection(supabase, { backfill });
+    const report = await runDetection(supabase, { backfill, include_test_mode: includeTestMode }, mode);
     return new Response(JSON.stringify({ ok: true, report }), {
       status: 200,
       headers: { ...CORS, "content-type": "application/json" },
