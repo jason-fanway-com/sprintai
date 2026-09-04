@@ -80,3 +80,6 @@ verify_jwt = false  # Proof queue drainer; invoked by scheduled sweep with servi
 
 [functions.pay-redirect]
 verify_jwt = false  # Public short-link redirect; no JWT needed
+
+[functions.resend-webhook]
+verify_jwt = false  # Resend delivery webhooks; auth is Svix signature verification

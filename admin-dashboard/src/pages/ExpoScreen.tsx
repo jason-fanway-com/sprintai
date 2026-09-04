@@ -29,6 +29,9 @@ interface OrderCart {
   created_at: string
   payment_status: string
   order_type: string | null
+  ticket_delivery_status: 'delivered' | 'bounced' | 'complained' | 'delivery_delayed' | null
+  ticket_delivery_detail: string | null
+  ticket_delivery_at: string | null
 }
 
 const STATUS_LABELS: Record<ExpoStatus, string> = {
@@ -53,6 +56,16 @@ const STATUS_NEXT_LABEL: Record<ExpoStatus, string> = {
 }
 
 const ACTIVE_STATUSES: ExpoStatus[] = ['new', 'acknowledged', 'preparing']
+
+// Per-order ticket delivery truth (item H). A bounce/complaint means the shop
+// never received the ticket — surface it loud, not as a footnote.
+type DeliveryStatus = 'delivered' | 'bounced' | 'complained' | 'delivery_delayed'
+const DELIVERY_BADGE: Record<DeliveryStatus, { label: string; className: string }> = {
+  delivered: { label: '✓ Ticket delivered', className: 'text-emerald-400' },
+  delivery_delayed: { label: '◷ Ticket delivery delayed', className: 'text-amber-300' },
+  bounced: { label: '⚠ TICKET BOUNCED — shop did not receive this order', className: 'text-red-300 bg-red-950/60 rounded px-2 py-1 font-semibold' },
+  complained: { label: '⚠ Ticket marked spam — delivery not confirmed', className: 'text-red-300 bg-red-950/60 rounded px-2 py-1 font-semibold' },
+}
 
 function fmt(cents: number | null): string {
   if (cents == null) return '—'
@@ -155,7 +168,7 @@ export default function ExpoScreen() {
     if (!shopId) return
     supabase
       .from('order_carts')
-      .select('id, shop_id, order_number, pickup_name, pickup_time, subtotal_cents, total_cents, notes, cart_json, expo_status, expo_acknowledged_at, created_at, payment_status, order_type')
+      .select('id, shop_id, order_number, pickup_name, pickup_time, subtotal_cents, total_cents, notes, cart_json, expo_status, expo_acknowledged_at, created_at, payment_status, order_type, ticket_delivery_status, ticket_delivery_detail, ticket_delivery_at')
       .eq('shop_id', shopId)
       .eq('payment_status', 'paid')
       .in('expo_status', ACTIVE_STATUSES)
@@ -333,6 +346,16 @@ export default function ExpoScreen() {
                   {order.notes && (
                     <div className="mb-2 text-xs text-amber-300 bg-amber-950/40 rounded px-2 py-1">
                       {order.notes}
+                    </div>
+                  )}
+
+                  {/* Ticket delivery truth (item H) */}
+                  {order.ticket_delivery_status && DELIVERY_BADGE[order.ticket_delivery_status] && (
+                    <div className={`mb-2 text-xs ${DELIVERY_BADGE[order.ticket_delivery_status].className}`}>
+                      {DELIVERY_BADGE[order.ticket_delivery_status].label}
+                      {(order.ticket_delivery_status === 'bounced' || order.ticket_delivery_status === 'complained') && order.ticket_delivery_detail
+                        ? ` (${order.ticket_delivery_detail})`
+                        : ''}
                     </div>
                   )}
 
