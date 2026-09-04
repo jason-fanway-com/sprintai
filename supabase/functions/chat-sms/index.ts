@@ -79,6 +79,11 @@ interface EffectiveMenuItem {
   price_cents:   number;
   category:      string;
   modifiers_json: Array<{ name: string; price_cents: number }> | null;
+  // The importer recorded that this item REQUIRES a choice (e.g. "which wing
+  // flavor(s)", "which dressing") without recording what the choices are. 398
+  // active items carry this and chat-sms never read it, so the bot saw a
+  // description saying "Choose flavor(s)" with no list and invented one.
+  prompt_for?:    string | null;
   option_groups?: OptionGroup[];
 }
 
@@ -108,6 +113,11 @@ type OrderPhase = "greeting" | "building" | "review" | "checkout" | "payment" | 
 interface Shop {
   id:                      string;
   name:                    string;
+  // Wing policy, collected at onboarding. TRI-STATE: null/undefined means the
+  // owner never told us, which is NOT the same as "no". An unset column must
+  // never be spoken to a customer as policy - the bot asks instead.
+  wing_flavors_included:   number | null;
+  wing_mix_extra:          boolean | null;
   tenant_id:               string;
   phone_number_e164:       string | null;
   reply_from_e164:         string | null;
@@ -318,7 +328,7 @@ async function buildEffectiveMenu(
 
   const { data: items } = await supabase
     .from("menu_items")
-    .select("id, name, description, price_cents, category, modifiers_json")
+    .select("id, name, description, price_cents, category, modifiers_json, prompt_for")
     .eq("menu_id", menu!.id)
     .eq("active", true)
     .order("display_order", { ascending: true });
@@ -386,6 +396,7 @@ async function buildEffectiveMenu(
       price_cents:    item.price_cents,
       category:       item.category,
       modifiers_json: item.modifiers_json,
+      prompt_for:     item.prompt_for ?? null,
       option_groups:  groupsByItem[item.id] || [],
     }));
 
@@ -478,7 +489,14 @@ function buildSystemPrompt(
           return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
         } else {
           const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
-          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}`;
+          // The importer knew this item needs a choice but never captured WHAT
+          // the choices are. Say that a choice is REQUIRED and that the list is
+          // unknown, so the bot asks instead of inventing one. Deliberately
+          // phrased with no examples: any example becomes the answer it recites.
+          const ask = (!mods && item.prompt_for)
+            ? ` | REQUIRES A CHOICE: ${item.prompt_for} - the available choices are NOT recorded. ASK the customer; never state or guess a list.`
+            : "";
+          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${ask}`;
         }
       }).join("\n");
       return `${cat}:\n${rows}`;
@@ -525,6 +543,31 @@ function buildSystemPrompt(
     return `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`;
   })();
 
+  // WING POLICY (2026-09-04). Collected by onboarding-save and, until now, never
+  // read by chat-sms - so a bot told a customer "You can mix and match!" with no
+  // basis at all. Emitted ONLY when the owner actually set a value. Unset stays
+  // silent so the OPTION GROUNDING rules make the bot ask; the alternative -
+  // treating the column default false as policy - would have the bot telling
+  // every shop's customers that mixing costs extra, which is equally invented.
+  const wingIncluded = shop.wing_flavors_included;
+  const wingMixExtra = shop.wing_mix_extra;
+  const wingPolicy = (() => {
+    const lines: string[] = [];
+    if (typeof wingIncluded === "number" && wingIncluded > 0) {
+      lines.push(wingIncluded === 1
+        ? `one flavor is included per order of wings`
+        : `up to ${wingIncluded} flavors are included per order of wings`);
+    }
+    if (wingMixExtra === true) lines.push(`splitting an order across flavors costs extra`);
+    else if (wingMixExtra === false && typeof wingIncluded === "number") {
+      lines.push(`splitting an order across flavors costs nothing extra`);
+    }
+    if (lines.length === 0) {
+      return `\nWING POLICY: NOT CONFIGURED for this shop. You do NOT know how many flavors are included, or whether an order can be split across flavors. Do NOT tell the customer they can mix and match, and do NOT tell them they cannot. Ask, or say you will check with the kitchen.`;
+    }
+    return `\nWING POLICY (authoritative, from this shop's settings): ${lines.join("; ")}. Do not state any wing policy beyond this.`;
+  })();
+
   const testModeDirective = testMode
     ? `\nTEST MODE: Ignore all business-hours restrictions — allow ordering at any time. Do NOT refuse orders based on the current time or TODAY'S HOURS.`
     : "";
@@ -535,7 +578,7 @@ You are replying by SMS text message. Plain text only. Never use markdown, table
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
-TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}
+TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}
 
 AVAILABLE MENU:
 ${menuStr}
@@ -579,7 +622,10 @@ RULES:
 - Example 2: "I want a dozen bagels -- 6 plain, 3 everything, 2 jalapeno, 3 sesame" → call start_bundle, then add_to_bundle for each flavor. All in one turn.
 - When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If they say "7 sesame and 7 plain" and a dozen bundle is active, that is 14 bagels which completes the dozen. Just add them.
 - While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
-- Never state the number of available flavors or menu items. If asked what flavors are available, just list them without counting.
+- OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
+- WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask, or offer to check - never guess and never imply a list exists. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "Let me check which dressings we have - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
+- NEVER STATE SHOP POLICY YOU WERE NOT TOLD: whether flavors can be mixed or split across an order, whether substitutions are allowed, whether extras cost more, minimums, or timing. If a policy is not given to you above, do not assert it in either direction. Say you will check. "You can mix and match!" is a promise the kitchen may not be able to keep.
+- Never state the NUMBER of available flavors or menu items ("we have 12 flavors"). If the item's entry does list its options, you may name them, without counting.
 - NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
 - NEVER ask "are you ordering individual bagels or a bundle?" If the customer already said "a dozen" or you started a bundle, they are ordering a bundle. Period.
 - REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), call add_item IMMEDIATELY for the item — even if you don't yet know the required option. The system will accept the item and store the missing option as pending. In the SAME reply, casually ask the customer for the missing choice(s) — e.g. "What kind of meat on that gyro — beef or chicken?" The item is already in the cart at its base price; the option surcharge applies once chosen. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
