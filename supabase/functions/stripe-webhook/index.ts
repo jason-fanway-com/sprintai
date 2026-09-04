@@ -528,7 +528,7 @@ async function handleShopSubscriptionCheckout(
     .from("shops")
     .update({
       subscription_status: "active",
-      stripe_customer_id: customerId,
+      stripe_platform_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
       subscription_pm_set: true,
     })
@@ -700,7 +700,7 @@ async function handleSubscriptionUpdated(
       subscription_status: shopSubStatus,
       stripe_subscription_id: subscription.id,
     })
-    .eq("stripe_customer_id", customerId);
+    .eq("stripe_platform_customer_id", customerId);
 
   if (shopErr) {
     console.warn(`[stripe-webhook] subscription.updated shop update failed for customer ${customerId}:`, shopErr.message);
@@ -721,7 +721,7 @@ async function handleSubscriptionDeleted(
   const { error: shopErr } = await supabase
     .from("shops")
     .update({ subscription_status: "canceled", subscription_pm_set: false })
-    .eq("stripe_customer_id", customerId);
+    .eq("stripe_platform_customer_id", customerId);
   if (!shopErr) {
     console.log(`[stripe-webhook] Shop subscription canceled for customer ${customerId}`);
   }
@@ -770,7 +770,7 @@ async function handlePaymentFailed(
   const { error: shopErr } = await supabase
     .from("shops")
     .update({ subscription_status: "past_due" })
-    .eq("stripe_customer_id", customerId);
+    .eq("stripe_platform_customer_id", customerId);
   if (!shopErr) {
     console.log(`[stripe-webhook] Shop subscription past_due for customer ${customerId}`);
   }
@@ -811,7 +811,7 @@ async function handlePaymentSucceeded(
   const { error: shopErr } = await supabase
     .from("shops")
     .update({ subscription_status: "active" })
-    .eq("stripe_customer_id", customerId)
+    .eq("stripe_platform_customer_id", customerId)
     .eq("subscription_status", "past_due");
   if (!shopErr) {
     console.log(`[stripe-webhook] Shop subscription reactivated for customer ${customerId}`);
