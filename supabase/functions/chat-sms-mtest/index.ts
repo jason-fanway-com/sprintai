@@ -19,7 +19,10 @@ import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+const CHAT_MODEL_DEFAULT = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+let CHAT_MODEL = CHAT_MODEL_DEFAULT;
+// TEST-ONLY FUNCTION: bot model is selectable per request via ?bot_model=<slug>.
+// Safe because the harness drives this function strictly sequentially.
 const CHAT_API   = "https://openrouter.ai/api/v1/messages";
 const MAX_RETRIES = 8;
 
@@ -2985,6 +2988,13 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== "POST") return jsonError("Method Not Allowed", 405);
 
+  // ── model override (test rig) ────────────────────────────────
+  try {
+    const _m = new URL(req.url).searchParams.get("bot_model");
+    CHAT_MODEL = _m && _m.trim() ? _m.trim() : CHAT_MODEL_DEFAULT;
+    console.log(`[chat-sms-mtest] bot model = ${CHAT_MODEL}`);
+  } catch { CHAT_MODEL = CHAT_MODEL_DEFAULT; }
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")              ?? "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
@@ -3918,8 +3928,7 @@ Deno.serve(async (req: Request) => {
         return `${(r.quantity || 1)}x ${r.name}`;
       }).join(", ");
       // BUG-2 FIX: omit the dash+total fragment entirely when the total is
-      // not a real positive amount. The deterministic Ledger footer below owns
-      // the numbers, so a missing fragment loses nothing.
+      // not a real positive amount.
       reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
     }
   }
@@ -4054,8 +4063,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // BUG-1 FIX: single-owner flag. Guard 2b owns the pickup/delivery question;
-  // when it injects, the D2 re-ask-killer below MUST NOT strip it back out.
-  // Those two paths previously fought each other on the same reply.
+  // the D2 re-ask-killer below must not strip it back out.
   let deliveryQuestionOwnedThisTurn = false;
 
   // ── Guard 2b: DELIVERY-GATE INJECTION ────────────────────────────────
@@ -4066,11 +4074,8 @@ Deno.serve(async (req: Request) => {
   const guardDeliveryEnabled = shop?.delivery_enabled === true;
   const guardOrderTypeBefore = orderTypePreLoop;
   const guardOrderTypeAfter  = guardCartRow?.order_type ?? null;
-  // BUG-1 FIX (2026-09-04): "already present" must also catch the exact phrase
-  // we would append, and any reply that has ALREADY resolved the question —
-  // e.g. one that tells the customer the shop is pickup only. Appending
-  // "Pickup or delivery today?" to "we're pickup only at this time" is the
-  // robotic non-sequitur Jason hit.
+  // BUG-1 FIX (2026-09-04): also catch the exact phrase we would append, and
+  // any reply that has ALREADY resolved the question (e.g. "pickup only").
   const guardReplyHasExactQuestion = /Pickup or delivery today\?/i.test(reply);
   const guardReplyStatesPickupOnly = /pickup[- ]only|only (?:doing|offering|available for) pickup|we (?:do not|don['’]t) (?:offer|do) delivery|no delivery (?:option|available|right now|today|at this time)/i.test(reply);
   const guardReplyHadPickupDelivery = /pickup.*delivery|delivery.*pickup|all set for (?:pickup|delivery)|switching to (?:pickup|delivery)|(?:pickup|delivery) order/i.test(reply) ||
@@ -4093,10 +4098,7 @@ Deno.serve(async (req: Request) => {
       cart.order_type = null;
       console.log(`[chat-sms] GUARD 2b reverted silently-set order_type "${guardOrderTypeAfter}" (conv=${conversation.id})`);
     }
-    // BUG-1 FIX: never rewrite the model's own punctuation. Previously this
-    // stripped the trailing [.!?] and forced a period, turning
-    // "What else can I add?" into "What else can I add. Pickup or delivery today?".
-    // Append as its own sentence, preserving whatever the model wrote.
+    // BUG-1 FIX: never rewrite the model's own punctuation.
     const guardBase = reply.trimEnd();
     reply = guardBase
       ? `${guardBase}${/[.!?]$/.test(guardBase) ? "" : "."} Pickup or delivery today?`
@@ -4187,10 +4189,8 @@ Deno.serve(async (req: Request) => {
   // ── D2 (2026-08-29): Kill pickup/delivery re-ask when mode is known ──
   // Once order_type is set, strip any lingering pickup/delivery question from
   // the reply so the LLM doesn't loop re-asking a question already answered.
-  // BUG-1 FIX: read the order_type as it stands AFTER Guard 2b (which may have
-  // reverted a silently-set value). The previous code read the stale pre-guard
-  // snapshot, so D2 could strip the very question Guard 2b had just injected.
-  // And when Guard 2b owns the question this turn, D2 stands down entirely.
+  // BUG-1 FIX: read order_type AFTER Guard 2b, and stand down when Guard 2b
+  // owns the question this turn.
   // BUG-1 FIX: when Guard 2b owns the question this turn it has ALSO reverted any
   // silently-set order_type, so the effective post-guard value is null. Deriving it
   // that way makes the single-owner rule explicit instead of depending on two
