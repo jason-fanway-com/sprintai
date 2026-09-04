@@ -19,7 +19,7 @@ import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-pro";
 const CHAT_API   = "https://openrouter.ai/api/v1/messages";
 const MAX_RETRIES = 8;
 

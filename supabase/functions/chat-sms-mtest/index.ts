@@ -19,7 +19,7 @@ import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CHAT_MODEL_DEFAULT = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+const CHAT_MODEL_DEFAULT = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-pro";
 let CHAT_MODEL = CHAT_MODEL_DEFAULT;
 // TEST-ONLY FUNCTION: bot model is selectable per request via ?bot_model=<slug>.
 // Safe because the harness drives this function strictly sequentially.
