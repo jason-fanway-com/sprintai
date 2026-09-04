@@ -2,7 +2,7 @@
  * create-subscription Edge Function — Item A, INSTRUCTION-08/10
  *
  * POST /functions/v1/create-subscription
- * Body: { shop_id, promo_code? }
+ * Body: { shop_id }
  *
  * Creates a Stripe Checkout Session in subscription mode ($99/mo).
  * The session is platform-level (NOT a Connect direct charge).
@@ -34,10 +34,10 @@ Deno.serve(async (req: Request) => {
   const priceId = Deno.env.get("STRIPE_PRICE_SUBSCRIPTION") ?? "";
   if (!priceId) return jsonError("Subscription price not configured", 500);
 
-  let body: { shop_id?: string; promo_code?: string };
+  let body: { shop_id?: string };
   try { body = await req.json(); } catch { return jsonError("Invalid JSON"); }
 
-  const { shop_id, promo_code } = body;
+  const { shop_id } = body;
   if (!shop_id) return jsonError("shop_id is required");
 
   const supabase = createClient(
@@ -88,11 +88,10 @@ Deno.serve(async (req: Request) => {
         metadata: { shop_id },
       },
     };
-
-    // Pre-apply a promo code if provided
-    if (promo_code) {
-      sessionParams.discounts = [{ coupon: promo_code }];
-    }
+    // Promo codes are entered by the customer on Stripe's hosted Checkout page
+    // (allow_promotion_codes:true). Do NOT pre-apply server-side: passing a
+    // promotion code as a `coupon` id is the wrong object type, and `discounts`
+    // conflicts with allow_promotion_codes (Stripe rejects both together).
 
     const session = await stripe.checkout.sessions.create(sessionParams);
 
