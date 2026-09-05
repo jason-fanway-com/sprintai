@@ -50,13 +50,23 @@ interface JudgeVerdict {
 const JARGON_REPLACEMENTS: [RegExp, string][] = [
   [/\bhow the menu data is structured\b/gi, 'how the menu is set up'],
   [/\bmenu data\b/gi, 'menu'],
-  [/\bmodifiers?\b/gi, 'extras or options'],
+  // Singular and plural handled separately: "a modifier" -> "a extras or
+  // options" is broken English, and an owner-facing sentence that reads wrong
+  // costs more trust than the jargon it replaced.
+  [/\bmodifiers\b/gi, 'options'],
+  // Article first, or "a modifier" becomes "a option".
+  [/\ba modifier\b/g, 'an option'],
+  [/\bA modifier\b/g, 'An option'],
+  [/\bmodifier\b/gi, 'option'],
   [/\bstate machine\b/gi, 'order flow'],
   [/\bphantom add(s|ed)?\b/gi, 'item added without confirmation'],
   [/\brubric\b/gi, 'checklist'],
-  [/\bprompt\b/gi, "assistant's instructions"],
-  [/\bguard(rail)?\b/gi, 'check'],
   [/\bhandler\b/gi, 'step'],
+  // NOT replaced, deliberately: "prompt" and "guard" are ordinary English in a
+  // food-ordering critique. Melvin's probe turned "The bot was prompt and
+  // polite" into "The bot was assistant's instructions and polite" and "The
+  // security guard checked the order" into "The security check checked the
+  // order". A softener that mangles a correct sentence is worse than the term.
 ]
 
 function humanize(text: string): string {
