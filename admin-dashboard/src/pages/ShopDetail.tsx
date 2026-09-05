@@ -7,7 +7,7 @@ import { supabase, supabaseAnonKey } from '../lib/supabase'
 import ShopHeader from '../components/shop/ShopHeader'
 import MenuTab from '../components/shop/MenuTab'
 import OrdersTab from '../components/shop/OrdersTab'
-import SettingsTab from '../components/shop/SettingsTab'
+import SettingsTab, { normalizeDayHours, DayHours } from '../components/shop/SettingsTab'
 import ChatAdminTab from '../components/shop/ChatAdminTab'
 import QRCodesTab from '../components/shop/QRCodesTab'
 
@@ -20,7 +20,11 @@ interface Shop {
   email_ticket_recipient: string | null
   is_paused: boolean
   pause_message: string | null
-  open_hours: Record<string, Array<{ open: string; close: string }>>
+  open_hours: DayHours
+  delivery_hours: DayHours
+  delivery_enabled: boolean
+  wing_flavors_included: number | null
+  wing_mix_extra: boolean | null
   website_url: string | null
   shop_context: string | null
   ai_instructions: string | null
@@ -30,6 +34,23 @@ interface Shop {
   latitude: number | null
   longitude: number | null
   delivery_radius_mi: number | null
+}
+
+interface OptionChoice {
+  id: string
+  name: string
+  price_cents: number
+  display_order: number
+}
+
+interface OptionGroup {
+  id: string
+  name: string
+  required: boolean
+  min_select: number
+  max_select: number
+  display_order: number
+  option_choices?: OptionChoice[] | null
 }
 
 interface MenuItem {
@@ -42,6 +63,8 @@ interface MenuItem {
   modifiers_json: Array<{ name: string; price_cents: number }> | null
   flag_review?: boolean | null
   flag_reason?: string | null
+  prompt_for?: string | null
+  option_groups?: OptionGroup[] | null
 }
 
 interface OrderCart {
@@ -105,7 +128,9 @@ export default function ShopDetail() {
       const { data: menus } = await supabase.from('menus').select('id').eq('shop_id', id!).order('created_at', { ascending: false }).limit(1)
       if (!menus?.length) { setActiveMenuId(null); return [] }
       setActiveMenuId(menus[0].id)
-      const { data, error } = await supabase.from('menu_items').select('*').eq('menu_id', menus[0].id).eq('active', true).order('display_order', { ascending: true })
+      const { data, error } = await supabase.from('menu_items')
+        .select('*, option_groups(id, name, required, min_select, max_select, display_order, option_choices(id, name, price_cents, display_order))')
+        .eq('menu_id', menus[0].id).eq('active', true).order('display_order', { ascending: true })
       if (error) throw error
       return data ?? []
     },
@@ -159,6 +184,112 @@ export default function ShopDetail() {
     onError: (err) => toast.error((err as Error).message),
   })
 
+  // Item Shop-Editor Step 1: owner answers a prompt_for question the importer flagged
+  // (e.g. "which wing flavor(s)") by creating the option group(s) + choices it describes.
+  const answerPromptFor = useMutation({
+    mutationFn: async ({ itemId, groups }: {
+      itemId: string
+      groups: Array<{
+        name: string
+        required: boolean
+        minSelect: number
+        maxSelect: number
+        choices: Array<{ name: string; price_cents: number }>
+      }>
+    }) => {
+      for (let i = 0; i < groups.length; i++) {
+        const g = groups[i]
+        const { data: groupRow, error: groupErr } = await supabase.from('option_groups').insert({
+          menu_item_id: itemId,
+          name: g.name,
+          required: g.required,
+          min_select: g.minSelect,
+          max_select: g.maxSelect,
+          display_order: i,
+          owner_edited: true,
+        }).select('id').single()
+        if (groupErr) throw groupErr
+        const choiceRows = g.choices.map((c, ci) => ({
+          option_group_id: groupRow.id,
+          name: c.name,
+          price_cents: c.price_cents,
+          display_order: ci,
+          owner_edited: true,
+        }))
+        const { error: choiceErr } = await supabase.from('option_choices').insert(choiceRows)
+        if (choiceErr) throw choiceErr
+      }
+      const { error: clearErr } = await supabase.from('menu_items').update({ prompt_for: null }).eq('id', itemId)
+      if (clearErr) throw clearErr
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['menu-items', id] })
+      toast.success('Saved — the bot will offer these choices on the next order')
+    },
+    onError: (err) => toast.error((err as Error).message),
+  })
+
+  // Shop editor Step 3: full option-group / option-choice CRUD, reused by both the
+  // Step 1 prompt_for form's later edits and the Menu tab's per-item option editor.
+  const saveOptionGroup = useMutation({
+    mutationFn: async ({ id: groupId, itemId, name, required, minSelect, maxSelect }: {
+      id?: string; itemId: string; name: string; required: boolean; minSelect: number; maxSelect: number
+    }) => {
+      if (groupId) {
+        const { error } = await supabase.from('option_groups').update({
+          name, required, min_select: minSelect, max_select: maxSelect, owner_edited: true,
+        }).eq('id', groupId)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('option_groups').insert({
+          menu_item_id: itemId, name, required, min_select: minSelect, max_select: maxSelect,
+          display_order: 0, owner_edited: true,
+        })
+        if (error) throw error
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
+  })
+
+  const deleteOptionGroup = useMutation({
+    mutationFn: async (groupId: string) => {
+      const { error } = await supabase.from('option_groups').delete().eq('id', groupId)
+      if (error) throw error
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
+  })
+
+  const saveOptionChoice = useMutation({
+    mutationFn: async ({ id: choiceId, groupId, name, priceCents }: {
+      id?: string; groupId: string; name: string; priceCents: number
+    }) => {
+      if (choiceId) {
+        const { error } = await supabase.from('option_choices').update({
+          name, price_cents: priceCents, owner_edited: true,
+        }).eq('id', choiceId)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('option_choices').insert({
+          option_group_id: groupId, name, price_cents: priceCents, display_order: 0, owner_edited: true,
+        })
+        if (error) throw error
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
+  })
+
+  const deleteOptionChoice = useMutation({
+    mutationFn: async (choiceId: string) => {
+      const { error } = await supabase.from('option_choices').delete().eq('id', choiceId)
+      if (error) throw error
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),
+    onError: (err) => toast.error((err as Error).message),
+  })
+
   const togglePause = useMutation({
     mutationFn: async (pause: boolean) => {
       await supabase.from('shops').update({ is_paused: pause }).eq('id', id!)
@@ -178,6 +309,12 @@ export default function ShopDetail() {
         toast_client_secret: shopForm.toast_client_secret ?? null,
         toast_location_guid: shopForm.toast_location_guid ?? null,
         delivery_radius_mi: shopForm.delivery_radius_mi ?? null,
+        open_hours: normalizeDayHours(shopForm.open_hours),
+        delivery_hours: normalizeDayHours(shopForm.delivery_hours),
+        delivery_enabled: shopForm.delivery_enabled ?? true,
+        wing_flavors_included: shopForm.wing_flavors_included ?? null,
+        wing_mix_extra: shopForm.wing_mix_extra ?? null,
+        ai_instructions: shopForm.ai_instructions ?? null,
       }).eq('id', id!)
       if (error) throw error
     },
@@ -214,6 +351,7 @@ export default function ShopDetail() {
         price_cents: isNaN(priceCents) ? 0 : priceCents,
         description: form.description || null,
         category: form.category,
+        owner_edited: true,
       }).eq('id', itemId)
       if (error) throw error
     },
@@ -242,6 +380,7 @@ export default function ShopDetail() {
         category,
         active: true,
         display_order: 9999,
+        owner_edited: true,
       })
       if (error) throw error
     },
@@ -398,6 +537,14 @@ export default function ShopDetail() {
           onToggleSoldOut={toggleSoldOut}
           onResetAll={resetAll}
           onClearFlag={clearFlag}
+          onAnswerPromptFor={answerPromptFor}
+          onEditMenuItem={editMenuItem}
+          onDeleteMenuItem={deleteMenuItem}
+          onAddMenuItem={addMenuItem}
+          onSaveOptionGroup={saveOptionGroup}
+          onDeleteOptionGroup={deleteOptionGroup}
+          onSaveOptionChoice={saveOptionChoice}
+          onDeleteOptionChoice={deleteOptionChoice}
         />
       )}
 

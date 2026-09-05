@@ -14,7 +14,8 @@
  *   - DEACTIVATES (active=false) items no longer present — never hard-deletes,
  *   - enforces referential integrity (fails loudly) before writing.
  *
- * Returns: { ok, menu_id, inserted, updated, deactivated, skipped_owner_edited, no_op }
+ * Returns: { ok, menu_id, inserted, updated, deactivated, skipped_owner_edited,
+ *            skipped_owner_edited_option_groups, skipped_owner_edited_option_choices, no_op }
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
@@ -105,18 +106,26 @@ Deno.serve(async (req: Request) => {
   const diff = diffItems(plan.items, existing);
 
   let inserted = 0, updated = 0, skippedOwnerEdited = 0, deactivated = 0;
+  let skippedOwnerEditedGroups = 0, skippedOwnerEditedChoices = 0;
 
   // -- Inserts -----------------------------------------------------------------
   for (const d of diff.toInsert) {
     const itemId = await upsertItem(supabase, menuId, d, null);
-    if (itemId) { await syncGroups(supabase, itemId, d); inserted++; }
+    if (itemId) {
+      const r = await syncGroups(supabase, itemId, d);
+      skippedOwnerEditedGroups += r.skippedGroups;
+      skippedOwnerEditedChoices += r.skippedChoices;
+      inserted++;
+    }
   }
 
   // -- Updates (skip owner-edited) ---------------------------------------------
   for (const u of diff.toUpdate) {
     if (u.skippedOwnerEdited) { skippedOwnerEdited++; continue; }
     await upsertItem(supabase, menuId, u.desired, u.id);
-    await syncGroups(supabase, u.id, u.desired);
+    const r = await syncGroups(supabase, u.id, u.desired);
+    skippedOwnerEditedGroups += r.skippedGroups;
+    skippedOwnerEditedChoices += r.skippedChoices;
     // Re-activate if it was previously deactivated.
     await supabase.from("menu_items").update({ active: true }).eq("id", u.id);
     updated++;
@@ -131,6 +140,8 @@ Deno.serve(async (req: Request) => {
   return jsonResponse({
     ok: true, menu_id: menuId, no_op: false,
     inserted, updated, deactivated, skipped_owner_edited: skippedOwnerEdited,
+    skipped_owner_edited_option_groups: skippedOwnerEditedGroups,
+    skipped_owner_edited_option_choices: skippedOwnerEditedChoices,
   });
 });
 
@@ -166,68 +177,90 @@ async function upsertItem(
 
 /**
  * Sync option groups + choices for an item by import_key (diff-based).
- * Replaces choices/groups that came from import; safe because option rows are
- * machine-owned (not the owner-edited menu_item).
+ * Replaces machine-owned choices/groups that came from import. A group or
+ * choice with owner_edited=true is never overwritten or deleted as stale —
+ * an owner's hand-added wing flavor or hand-corrected price must survive
+ * the next re-import. Owner-added groups/choices (import_key IS NULL, e.g.
+ * from the shop editor) are invisible to this diff entirely and so are
+ * never touched here regardless of owner_edited.
  */
 async function syncGroups(
   // deno-lint-ignore no-explicit-any
   supabase: any, itemId: string, d: DesiredItem,
-): Promise<void> {
+): Promise<{ skippedGroups: number; skippedChoices: number }> {
+  let skippedGroups = 0, skippedChoices = 0;
   const desiredGroupKeys = new Set(d.groups.map((g) => g.importKey));
 
   // Existing groups for this item.
   const { data: exGroups } = await supabase
-    .from("option_groups").select("id, import_key").eq("menu_item_id", itemId);
+    .from("option_groups").select("id, import_key, owner_edited").eq("menu_item_id", itemId);
+  type ExGroup = { id: string; import_key: string | null; owner_edited: boolean };
 
-  // Deactivate-by-delete groups no longer desired (machine-owned, safe to remove).
-  const staleGroupIds = (exGroups ?? [])
-    .filter((g: { import_key: string | null }) => g.import_key && !desiredGroupKeys.has(g.import_key))
-    .map((g: { id: string }) => g.id);
+  // Deactivate-by-delete groups no longer desired (machine-owned, safe to remove) —
+  // unless the owner has hand-edited that group.
+  const staleGroups = (exGroups ?? []).filter(
+    (g: ExGroup) => g.import_key && !desiredGroupKeys.has(g.import_key),
+  );
+  skippedGroups += staleGroups.filter((g: ExGroup) => g.owner_edited).length;
+  const staleGroupIds = staleGroups.filter((g: ExGroup) => !g.owner_edited).map((g: ExGroup) => g.id);
   if (staleGroupIds.length) {
     await supabase.from("option_choices").delete().in("option_group_id", staleGroupIds);
     await supabase.from("option_groups").delete().in("id", staleGroupIds);
   }
 
-  const exByKey = new Map<string, string>();
-  for (const g of exGroups ?? []) if (g.import_key) exByKey.set(g.import_key, g.id);
+  const exByKey = new Map<string, ExGroup>();
+  for (const g of (exGroups ?? []) as ExGroup[]) if (g.import_key) exByKey.set(g.import_key, g);
 
   for (const g of d.groups) {
-    let groupId = exByKey.get(g.importKey);
-    const groupRow = {
-      menu_item_id: itemId, name: g.name, required: g.required,
-      min_select: g.minSelect, max_select: g.maxSelect,
-      display_order: g.displayOrder, import_key: g.importKey,
-    };
-    if (groupId) {
-      await supabase.from("option_groups").update(groupRow).eq("id", groupId);
+    const existing = exByKey.get(g.importKey);
+    let groupId = existing?.id;
+    if (existing?.owner_edited) {
+      skippedGroups++;
     } else {
-      const { data, error } = await supabase.from("option_groups").insert(groupRow).select("id").single();
-      if (error || !data) { console.error("[import-menu-csv] group insert failed:", error?.message); continue; }
-      groupId = data.id as string;
+      const groupRow = {
+        menu_item_id: itemId, name: g.name, required: g.required,
+        min_select: g.minSelect, max_select: g.maxSelect,
+        display_order: g.displayOrder, import_key: g.importKey,
+      };
+      if (groupId) {
+        await supabase.from("option_groups").update(groupRow).eq("id", groupId);
+      } else {
+        const { data, error } = await supabase.from("option_groups").insert(groupRow).select("id").single();
+        if (error || !data) { console.error("[import-menu-csv] group insert failed:", error?.message); continue; }
+        groupId = data.id as string;
+      }
     }
+    if (!groupId) continue;
 
-    // Sync choices for this group.
+    // Sync choices for this group (independent of whether the group row itself
+    // was owner-edited — an owner may have only touched one choice's price).
     const desiredChoiceKeys = new Set(g.choices.map((c) => c.importKey));
     const { data: exChoices } = await supabase
-      .from("option_choices").select("id, import_key").eq("option_group_id", groupId);
-    const staleChoiceIds = (exChoices ?? [])
-      .filter((c: { import_key: string | null }) => c.import_key && !desiredChoiceKeys.has(c.import_key))
-      .map((c: { id: string }) => c.id);
+      .from("option_choices").select("id, import_key, owner_edited").eq("option_group_id", groupId);
+    type ExChoice = { id: string; import_key: string | null; owner_edited: boolean };
+    const staleChoices = (exChoices ?? []).filter(
+      (c: ExChoice) => c.import_key && !desiredChoiceKeys.has(c.import_key),
+    );
+    skippedChoices += staleChoices.filter((c: ExChoice) => c.owner_edited).length;
+    const staleChoiceIds = staleChoices.filter((c: ExChoice) => !c.owner_edited).map((c: ExChoice) => c.id);
     if (staleChoiceIds.length) await supabase.from("option_choices").delete().in("id", staleChoiceIds);
 
-    const exChoiceByKey = new Map<string, string>();
-    for (const c of exChoices ?? []) if (c.import_key) exChoiceByKey.set(c.import_key, c.id);
+    const exChoiceByKey = new Map<string, ExChoice>();
+    for (const c of (exChoices ?? []) as ExChoice[]) if (c.import_key) exChoiceByKey.set(c.import_key, c);
 
     for (const c of g.choices) {
+      const existingChoice = exChoiceByKey.get(c.importKey);
+      if (existingChoice?.owner_edited) { skippedChoices++; continue; }
       const choiceRow = {
         option_group_id: groupId, name: c.name, price_cents: c.priceCents,
         display_order: c.displayOrder, import_key: c.importKey,
       };
-      const cid = exChoiceByKey.get(c.importKey);
-      if (cid) await supabase.from("option_choices").update(choiceRow).eq("id", cid);
+      if (existingChoice) await supabase.from("option_choices").update(choiceRow).eq("id", existingChoice.id);
       else await supabase.from("option_choices").insert(choiceRow);
     }
   }
+
+  return { skippedGroups, skippedChoices };
 }
 
 // ---- response helpers ------------------------------------------------------
