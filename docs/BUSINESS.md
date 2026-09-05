@@ -154,6 +154,43 @@ These are encoded in the architecture, not just in marketing.
 
 ## Current state (September 2026)
 
+### Added 2026-09-05 — human testing became the main quality engine
+
+The most important shift this week is not a feature. **Three human test orders found more
+real defects than every automated test combined**, including a SEV-1 where an $11.99 item
+was silently dropped from a cart. Months of AI-to-AI testing had not surfaced it. That
+changed where quality effort goes.
+
+Two things were built off the back of it:
+
+- **Capture** — every human test conversation is now saved verbatim, both directions, cart
+  footers included, with one tap and one line of judgement ("what felt wrong?"). Stored
+  append-only in `test_transcripts`. Over time this becomes the regression corpus we do not
+  currently have. Deliberately no scoring and no LLM judging: capture only, judgement stays
+  with a human.
+- **Scale** — `getsprintai.com/try` is a public, login-free link Jason can text to friends
+  and family. They order pretend pizza on a phone and say what was wrong. Their transcripts
+  land beside his. Cost is roughly $30 for 100 testers doing three orders each, bounded by
+  a turn cap, three rate limits, and a kill switch that flips without a deploy.
+
+The bottleneck this exposes is the next thing to build: **if closing a data gap means
+someone opening the database, testers will find gaps faster than anyone can fix them.**
+Hence the owner-facing menu and settings editor — an owner maintains their own menu, which
+closes gaps during testing AND removes a per-restaurant human cost after launch. That is
+the difference between a testing programme that compounds and one that produces a backlog.
+
+### Menu intake is still the real blocker for new shops
+
+The website menu reader was importing zero menu for real restaurants **and reporting
+success**. It now discovers PDF menus from homepage HTML, routes them to the PDF parser,
+and backs off Firecrawl rate limits. Measured after the fix: 6/20 sites pass, up from 0/20,
+and honesty went 5% → 100% — meaning it no longer claims success when it imported nothing.
+
+Be clear about what that means commercially: **6/20 is the pass rate.** A self-serve
+platform that can only read a third of restaurant menus still needs a human for the other
+two-thirds. Honest failure is a prerequisite for fixing it, not the fix.
+
+
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
 - **Stripe subscription billing is live.** `create-subscription` edge function

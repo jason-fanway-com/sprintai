@@ -7,6 +7,56 @@ within a day. Not a reference — a map.
 
 ---
 
+
+## State as of 2026-09-05 10:34
+
+Written from the code and `git log`, not from specs. Where they disagree, the code wins.
+
+### What is LIVE right now
+
+| Thing | Where | State |
+|---|---|---|
+| Public tester link | `getsprintai.com/try` | Live, `public_tester_enabled = true` |
+| `public-tester` edge function | Supabase | Deployed |
+| Migration 096 (tester tables, `app_config`) | Supabase | Applied |
+| Migration 097 (`owner_edited`, owner INSERT/DELETE RLS) | Supabase | Applied |
+| `test_transcripts` capture from the simulator | Admin dashboard | Shipped (095 applied) |
+| Expo Screen, Demo Kit, menu confidence curation | Admin dashboard | Shipped |
+
+### What is committed but NOT deployed
+
+- `import-menu-csv` honouring `owner_edited` — changes import behaviour for real shops'
+  menus. Needs QA before it goes anywhere near NJB or Zio's.
+- Branch `shop-editor-admin-shape` — the admin-shaped menu/config editor, reverted off
+  `main` because the feature was redefined as owner-facing. Kept for reuse.
+
+### The public tester, in one paragraph
+
+`try.html` (root, allowlisted in `scripts/build-public-site.sh`) talks only to the
+`public-tester` edge function. That function holds the service role and is the single place
+the kill switch, the test-shop guard, the 20-turn cap and the three rate limits are
+enforced — nothing is trusted from the browser, including the transcript, which the
+function accumulates itself turn by turn. Kill it with
+`update app_config set value='false'::jsonb where key='public_tester_enabled';`.
+Cost is quadratic in turns: ~$0.08 for a 9-turn order, ~$30 for 100 testers × 3 orders.
+
+### Open, and who has to move
+
+- **Owner-facing menu/config editor** — designed and specced
+  (`docs/specs/2026-09-05-shop-editor.md`), including the requirement that the admin chat
+  and the structured form are two views of ONE operations layer. Awaiting Jason's go.
+- **A `support` app role** — RLS gives cross-shop scope to super-admins only, so giving
+  the product owner that scope today also hands them Toast secrets and the money screens.
+  Jason's call.
+- **Hours fall-through in `chat-sms`** — a missing day key in `open_hours` falls past the
+  closed-message block and the bot takes the order anyway. Latent today (all real shops
+  have seven day keys), likely the moment owners edit their own hours.
+- **`SettingsTab` exposes `toast_client_secret` and `phone_number_e164`** as editable
+  fields. Pre-existing, not from this week's work, but it is why "just give the product
+  owner the settings tab" is not free.
+- **`delivery_hours`** is a column and is validated on write, but `chat-sms` does not read
+  it anywhere. It has no runtime effect yet.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a

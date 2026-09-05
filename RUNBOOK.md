@@ -8,6 +8,131 @@ anything here disagrees with the code, the code wins — and fix this document.
 
 ---
 
+
+## Shipped 2026-09-05 (07:57 – 10:34)
+
+Documented from `git log` and the code as it stands, not from the specs. Where a spec and
+the code disagree the code wins, and that is called out.
+
+### Public tester link — `getsprintai.com/try` (LIVE, behind an off switch)
+
+A login-free page anyone can open on a phone, order pretend pizza, and file feedback.
+Built so Jason can text it to friends and family with no explanation attached.
+
+- `try.html` at the repo root, allowlisted in `scripts/build-public-site.sh`, served at
+  `/try` off the root origin. Plain HTML/JS, no build step, no framework.
+- It talks ONLY to the `public-tester` edge function, never to `chat-sms` directly. Two
+  reasons, both load-bearing: `test_transcripts` REVOKEs `anon` so a public browser cannot
+  write a transcript, and every guard rail has to be server-side or it is bypassed in
+  thirty seconds.
+- Guards, all enforced per request: kill switch, target-shop hard guard
+  (`is_test = true AND phone_number_e164 IS NULL`, re-checked every call because the
+  config row is editable), 20-turn cap, and three rate limits — 3/hr per browser session,
+  5/hr per IP, 150/day global. IPs are stored only as a salted SHA-256; the function
+  REFUSES to run if `PUBLIC_TESTER_SALT` is unset rather than hash them unsalted.
+- The transcript is accumulated SERVER-side, turn by turn. `submit` ignores any
+  `messages`/`model` in the request body. On a public endpoint a client-supplied
+  transcript means anyone can write into the corpus and "verbatim" means "whatever the
+  browser claimed".
+- Checkout stays live — it is test mode and routes to `order-success-test.html`.
+
+**Kill switch:** `app_config.public_tester_enabled` (a DB row, NOT an env var, so it flips
+without a deploy).
+```sql
+update app_config set value = 'false'::jsonb where key = 'public_tester_enabled';
+```
+Target shop is `app_config.public_tester_shop_id`, currently Vito's Pizza (QA)
+`22ed2761-a3f2-5bde-9012-916a93c521cd`.
+
+**Measured cost** (real OpenRouter spend, deepseek/deepseek-v4-pro, 221-item menu):
+3 turns $0.018 · 9 turns $0.082 · 16 turns $0.226. Cost is QUADRATIC in turns — the whole
+~17k-token system prompt is re-sent every turn. The turn cap is the cost control; the rate
+limits are the abuse control. 100 testers × 3 orders ≈ $30, ~$100 worst case at the cap.
+
+Migration 096: `test_transcripts.tester_name`, source check widened to include
+`public-tester`, `public_tester_sessions`, and a generic `app_config` key/value store.
+
+### Human test capture — `test_transcripts` (1bff8d5)
+
+Two buttons under the chat simulator in `ShopChatTest.tsx`, so both mount points (the
+shop's Chat Admin tab and the owner's At a Glance) get them: **Copy transcript** (plain
+text) and **Send for review** (one-line "what felt wrong?", optional, with Skip).
+Migration 095 adds the table plus its `qa_ro` view. Append-only by design: no UPDATE and
+no DELETE policy at all. No FK on `shop_id` — a transcript must outlive its shop, and
+`shop_name` is denormalised for the same reason. Messages are `{role, text, at}` and are
+stored verbatim, cart footers included; nothing summarises or reformats that column.
+`chat-sms` now returns `model` on the web JSON response so the corpus records what actually
+served the conversation.
+
+### Demo Kit page (10be919)
+
+Owner-facing page at `/demo-kit`, rendered from the shop record — QR codes, the order
+message, the phone number. All derived, nothing stored.
+
+### Expo Screen (c361d71, b2661fd)
+
+Kitchen order board at `/admin/expo` and `/expo`. Four states per PAID order:
+`new → acknowledged → preparing → done`. Rows carry `ticket_delivery_status`
+(`delivered | bounced | complained | delivery_delayed`) from the Resend webhook, so a
+bounced ticket is visible on the board rather than silently lost.
+
+### Menu curation by confidence (2819738, edd5abe)
+
+`extract-menu-items` now returns a `confidence` per row and persists it to
+`menu_items.confidence_score`. Below 75 it also writes `flag_review` plus a `flag_reason`
+that is a specific plain-English QUESTION for the owner ("Is the Chicken Parm $14.99 for
+the sandwich or the dinner plate?"), not a generic warning. Surfaced in the admin Menu tab
+as "We have questions".
+
+### Item K — website menu reader (838b2f9, d34f7eb, afce671)
+
+The website reader was importing ZERO menu for real restaurants and reporting success.
+Fixed in three parts: PDF menus are discovered from homepage HTML and merged BEFORE the
+top-N cut (they were being truncated away), candidate PDFs are routed to `parse-menu-pdf`,
+and Firecrawl 429s get exponential backoff — an unpaced batch had been collapsing 18/20
+sites into false "no readable text" partials.
+
+Measured after the fix: **0/20 → 6/20 PASS, honesty 5% → 100%** (9c86b88). Read that
+honestly: 6/20 is the real pass rate. The 100% is *honesty* — the reader no longer claims
+success when it imported nothing. Menu intake remains the real blocker for new shops.
+
+### chat-sms honesty fixes (97f2db5, a7e088c, 23ebe36, 18bc28a, 801a8b1)
+
+A run of fixes all pointing the same way — the bot must not invent, and the guards must not
+overwrite the bot:
+- **SEV-1 phantom add** shipped uncaught: an $11.99 item was silently dropped from a cart.
+- Guards were overwriting the model's own correct replies with flat cart recitals; they now
+  fire only when the model produced nothing coherent.
+- The bot was inventing menu options and shop policy it had no basis for.
+- Reply punctuation was being mangled and dangling-dash totals shipped to diners.
+- `CHAT_MODEL` now defaults to `deepseek/deepseek-v4-pro` (3e6055d).
+
+### Owner-editable option data — migration 097 (partially reverted, read this)
+
+Migration **097 is applied to production**: `owner_edited` on `option_groups` and
+`option_choices`, plus the INSERT and DELETE RLS policies shop owners were missing.
+Before it, an owner could not add a wing flavor at all — they had SELECT and UPDATE only.
+
+`import-menu-csv` was changed to honour `owner_edited` on groups and choices so a
+hand-added flavor survives a re-import. **That change is committed but NOT deployed** and
+has not been through QA; do not deploy it to a real shop's menu until it has.
+
+The admin-dashboard UI from that build was REVERTED off `main` (b192d65) — Jason redefined
+the editor as owner-facing, living in the shop owner portal, not an admin tool. The work is
+preserved on branch `shop-editor-admin-shape` for the owner-facing rebuild.
+
+### Known defect found while documenting — hours fall-through (NOT fixed)
+
+In `chat-sms`, if a day key is absent from `shops.open_hours`, `dayWindows()` returns `[]`
+so `isOpen` is false — but the closed-message block has no branch for the unconfigured
+case. `isClosedAllDay` is false and `todayHours.length > 0` is false, so it falls through
+and **takes the order anyway**. The code comment claims it distinguishes three cases
+(explicitly closed / outside windows / unconfigured) and only handles two.
+
+Not currently reachable: all three real shops have all seven day keys. It becomes likely
+the moment owners edit their own hours, because "we're closed Mondays so I'll leave Monday
+out" is the natural thing to do. Fix belongs with the owner editor.
+
 ## System overview
 
 SprintAI replaces a restaurant's phone ordering: customers text a shop's number,
@@ -143,6 +268,37 @@ New functions: add the entry before deploying.
 ---
 
 ## Services & integrations
+
+### Demo shops & phone numbers — AUTHORITATIVE (Jason, 2026-09-05)
+
+Settled. Do not re-derive this from old notes, old QA shops, or old specs.
+
+| Shop | id | Number | Carrier / path | Status |
+|---|---|---|---|---|
+| **Not Just Bagels** | `b0000000-…0001` | `+16103792553` | Twilio | REAL restaurant. 10DLC **approved**. Both demo *and* a sellable property — Erin has spoken to them and they are willing. **Never touch this number.** |
+| **Vito's Pizza** | `e0000000-…0001` | `+14842018054` | **iMessage bridge** | The real pizza demo account. |
+| _(parked)_ | — | `+16107358315` | Telnyx | **NOT 10DLC approved** — pending with Chris. Assigned to **no shop**. Cannot carry commercial SMS until approval lands. |
+
+- `+14842018054` is a **physical iPhone Jason pays for**, plugged into power at
+  his house, always on. It runs through the iMessage bridge, **not a carrier**.
+  It will never appear in Telnyx or Twilio inventory — its absence there is
+  expected, not a bug.
+  - Bridge: `scripts/imsg-bridge.sh`, launchd job `com.sprintai.imsg-bridge`
+    (`KeepAlive`, `ORDERING_NUMBER=+14842018054`), hardwired to
+    `SHOP_ID=e0000000-…0001`. It POSTs `{shop_id, message, session_id}` straight
+    to `chat-sms` and speaks the reply back over iMessage. It does **not**
+    resolve the shop by `phone_number_e164`.
+- The **Twilio sole-proprietor listing can only ever hold one number.** That is
+  the entire reason Telnyx exists alongside it.
+- **Once Telnyx 10DLC clears:** `+16107358315` becomes the pizza demo, replacing
+  the iPhone. Then provision a **second** Telnyx number for NJB.
+
+**Deleted 2026-09-05 as fabricated / QA artifacts** — do not recreate:
+`Mario's Pizza` (`d0000000-…0001`, invented during testing) and six
+Melvin-created QA shops (`Melvin QA Diner`, `Melvins QA Diner` ×2,
+`Melvin Menu Proof`, `Melvin Ungated Refusal`, `Melvin Queue Test - DELETE ME`),
+each with its tenant row.
+
 
 ### Payments — short branded links
 
