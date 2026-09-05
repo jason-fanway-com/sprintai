@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -412,7 +412,7 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
   decision by Jason.
 - **Telnyx brand/campaign is live and approved** (all 7 carriers). Brand BJ8MUGY verified; campaign CSMB9HG is TCR_ACCEPTED. ISV/reseller re-registration is NOT needed (per Chris, SE, 2026-08-28 call). Throughput is per-campaign (2K seg/day T-Mobile, 240 TPM AT&T), not pooled. The send gate is mapping status (both ADDED), not campaignStatus/operationStatus. The per-merchant model: brand → campaign → number, with per-merchant CTA pages at `getsprintai.com/<slug>`. Demo numbers use SprintAI brand + disclosure; no DBA needed. Mock brands/campaigns documented for free API testing. `failureReasons` still carries an 806 CTA rejection that may be stale — the first-delivery test is the ground-truth gate. Do not modify the campaign.
 
-- **campaign_assignment_status tracks per-number approval** (migration 081, applied 2026-09-03). Column on `shops`: `not_started | submitted | approved | rejected`. `go-live` gate (#13) refuses non-test shops unless `approved`. `is_test` shops are exempt. `campaign-status-reader` function polls Telnyx GET-only and advances `submitted→approved` when both mappings `ADDED`. `chat-sms` raises a critical issue on 10036 for non-approved shops; a distinct issue type for approved shops (approval regression). **Open gate: `TELNYX_API_KEY` and `DAILY_RESET_SECRET` are not set in Supabase function secrets** — `campaign-status-reader` will return "Not configured" until Jason adds them. Add via Supabase Dashboard → Project Settings → Edge Functions → Secrets. Until then `campaign_assignment_status` never auto-advances past `submitted`; a shop must be manually set to `approved` for go-live to pass.
+- **campaign_assignment_status tracks per-number approval** (migration 081, applied 2026-09-03). Column on `shops`: `not_started | submitted | approved | rejected`. `go-live` gate (#13) refuses non-test shops unless `approved`. `is_test` shops are exempt. `campaign-status-reader` function polls Telnyx GET-only and advances `submitted→approved` when both mappings `ADDED`. `chat-sms` raises a critical issue on 10036 for non-approved shops; a distinct issue type for approved shops (approval regression). **Open gate: migration 083 (the hourly pg_cron schedule) is unapplied, blocked on Jason setting `TELNYX_API_KEY` and `DAILY_RESET_SECRET` as Supabase function secrets.** Add via Supabase Dashboard → Project Settings → Edge Functions → Secrets, then apply 083. Until then `campaign_assignment_status` never auto-advances past `submitted`; a shop must be manually set to `approved` for go-live to pass. A separate trap was found and fixed 2026-09-04: the deployed function had `verify_jwt=true`, which would have rejected 083's shared-secret cron POST at the platform edge (401, wrong error class) before it ever reached the function's own secret check — the job would have silently 401'd forever even after Jason set the secrets. Now `verify_jwt=false`; the function's own check is unchanged.
 - **First delivery test is a hard go-live gate.** Before any shop goes live, the
   Telnyx provisioning + delivery test (`sprintai-telnyx-provisioning-test.md`,
   8-step real-handset script) must pass — it is the ground-truth check that the
@@ -497,6 +497,50 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
     cart NEVER auto-adds — upsell/ask only.
   These are code-path intercepts, not prompt preferences — they fire
   regardless of what the LLM intended.
+- **The phantom-add guard (1d) missed a real production SEV-1.** A live order
+  said "Added the Chicken Parmesan sandwich for mom (comes with fries)!" with
+  the cart never actually mutated — a real customer would have paid for and
+  picked up an order missing an $11.99 item, caught only because he happened
+  to ask. All three detectors missed it: the cart-phrasing pattern only
+  recognized the customer as recipient ("for you/ya/u"), not a third party
+  ("for mom") — natural in a family group order; and the item-phrase match
+  terminated only at `[.!?\n]`, so the parenthetical `(comes with fries)`
+  broke the match outright. Fixed 2026-09-04: recipient can now be anyone
+  (him/her/them/mom/dad/grandma/a personal name), and `(` / end-of-string
+  now terminate the item phrase too. Every broadening is paired with a
+  regression pin, since this guard discards the model's reply when it fires
+  and a false positive is its own kind of bug (e.g. "I'll put your order in
+  for Pickup" must NOT trigger it).
+- **The bot cannot invent menu options it doesn't have.** A customer was told
+  wings could be "mixed and matched" among "hot, mild, BBQ, sweet & spicy" —
+  none of that existed in the menu data; the bot assembled it from other
+  items and general knowledge. Root cause: 431 active items across 18 shops
+  require a choice (`prompt_for` set, e.g. "which wing flavor(s)") but record
+  no actual list of choices, and the prompt never surfaced `prompt_for` or
+  read it. Fixed 2026-09-04: OPTION GROUNDING (a prompt rule covering
+  flavors, sauces, dressings, toppings, cheeses, breads, sizes) forbids
+  naming any option not listed on that exact item's own menu entry, and bans
+  inventing shop policy (mixing, splitting, substitutions) in either
+  direction. `prompt_for` now reaches the prompt as "REQUIRES A CHOICE — the
+  available choices are NOT recorded. ASK the customer" with no example
+  choices given, since an example becomes the invented answer. Wing-specific
+  policy (`wing_flavors_included` / `wing_mix_extra`) also now reaches the
+  prompt, tri-stated: unset renders as "NOT CONFIGURED — do not assert either
+  way" rather than defaulting to a guess, since every shop's columns were
+  still at their unset default. Backfilling real option data for the ~16 live
+  affected items needs the owners — Jason's call, not automated.
+- **7-minute unacknowledged-order owner escalation is live.** A paid order
+  whose kitchen ticket was delivered but never acknowledged on the Expo
+  Screen escalates once by SMS to the owner's mobile (`shops.owner_mobile`).
+  Protects the restaurant from a missed order sitting silently in the queue
+  and protects the diner from being forgotten. Runs on a dedicated `pg_cron`
+  job every 2 minutes (migration 093) — the existing 10-min `issue-detector`
+  sweep is too coarse for a 7-minute SLA. Sends route through
+  `outbound-guard`'s default-deny reason enum via a new `owner_escalation`
+  reason. Melvin's independent QA (driven against the live function, not
+  taken on the builder's word) confirmed exactly-once delivery under
+  concurrent sweeps and that the recipient is structurally the owner only —
+  the function never loads a diner phone column.
 - **order_type is set on cart creation.** Cart insert sets `order_type`:
   'pickup' for delivery-disabled shops, null for delivery-enabled ones.
   The C2 name-turn deadlock breaker and phantom-link guard both default to

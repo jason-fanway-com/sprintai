@@ -152,7 +152,7 @@ These are encoded in the architecture, not just in marketing.
 
 ---
 
-## Current state (August 2026)
+## Current state (September 2026)
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
@@ -163,9 +163,15 @@ These are encoded in the architecture, not just in marketing.
   allowlist level. The go-live gate checks `subscription_status = "active"`
   and is immune to client forgery.
 - **Campaign assignment is a hard go-live gate (#13).** `campaign-status-reader`
-  polls Telnyx hourly (pg_cron) and advances `submitted→approved` when both
-  number mappings are ADDED. Non-test shops are refused at go-live until
-  campaign_assignment_status=approved; is_test shops are exempt.
+  polls Telnyx and advances `submitted→approved` when both number mappings
+  are ADDED. Non-test shops are refused at go-live until
+  campaign_assignment_status=approved; is_test shops are exempt. The hourly
+  pg_cron schedule (migration 083) is not yet applied — blocked on Jason
+  setting Telnyx/cron secrets — so a shop must currently be advanced to
+  `approved` by hand. Until a shop's own number is fully carrier-approved,
+  going live on it means texting real customers on an unapproved number,
+  which risks carrier filtering or a shutdown of the number — the gate exists
+  to keep a restaurant from going live before its number can actually deliver.
 - **The order-taker got sharper.** Modifier price changes (e.g. "add cheese
   +$1") now actually add to the cart total. A multi-item message with one
   off-menu item adds the valid items instead of rejecting the whole order.
@@ -256,8 +262,26 @@ These are encoded in the architecture, not just in marketing.
   "dozen bagels" with flavor selection) are built into the tool loop.
   **Option data is now persisted on import** — `import-menu-csv` and the menu
   pipeline's `import-plan.ts` no longer silently drop `prompt_for`, `upsell`,
-  and `modifiers_json`. The bot previously invented phantom required choices
-  because it had no real option data.
+  and `modifiers_json`.
+- **The bot no longer invents menu options or shop policy it doesn't have.**
+  A real customer was told wings could be "mixed and matched" among flavors
+  the shop never listed — a promise the kitchen can't keep, made in the
+  shop's name. Persisting option data on import (above) wasn't enough on its
+  own: 431 active items across 18 shops record that a choice is required
+  (e.g. "which wing flavor(s)") without recording what the choices are, so
+  the bot still had to improvise. Fixed by grounding the conversation itself:
+  the bot may only name an option that's actually listed on that exact
+  item's menu entry, must ask rather than guess when the shop hasn't
+  recorded the choices, and must never assert unstated policy (mixing,
+  splitting, substitutions) in either direction. This protects every
+  restaurant's word to its own customers, and protects the diner from being
+  promised something the kitchen will refuse at pickup.
+- **A missed order now escalates to the owner automatically.** If a paid
+  order's kitchen ticket goes seven minutes without being acknowledged, the
+  owner gets a text. This is the safety net behind Expo Screen — busy
+  kitchens miss things, and a restaurant that quietly loses a paid order
+  loses the customer's trust along with it. No customer number is ever in
+  the loop; only the shop's own owner is texted.
 - **Onboarding now starts from a PDF or photo, not a CSV.** The signup wizard
   takes a menu PDF or phone photos, and `parse-menu-pdf` (running the most
   capable Opus model, multi-pass with a dedicated modifier-block pass) reads

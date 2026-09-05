@@ -377,14 +377,34 @@ integrity.
 The Command Center's At a Glance now shows a "Tickets delivered today" tile in
 heroVitals when there are paid orders today.
 
+**Owner escalation (7-minute unacknowledged order).** A paid order whose
+ticket was delivered but not acknowledged on the Expo Screen within 7 minutes
+escalates once by SMS to `shops.owner_mobile` (migrations 092/093: the
+`owner_escalated_at` column + partial index, and the `issue-detector-escalation`
+pg_cron job, every 2 min — a dedicated job, not the 10-min `issue-detector`
+sweep, because a 7-min timer on a 10-min cadence would fire 7–17 min late).
+The clock falls back to `ticket_emailed_at` when `ticket_delivery_status` is
+NULL (item H's Resend webhook registration is still pending on Jason). Sends
+go through `outbound-guard`'s default-deny reason enum via a new gated
+`owner_escalation` reason — never a bypass. Exactly-once is enforced by a DB
+conditional UPDATE claim on `owner_escalated_at`, not by the `issues` table;
+Melvin's independent QA drove 6 concurrent sweeps over 3 eligible carts and
+got exactly one send per cart. The recipient is structurally the owner only —
+the function never loads a diner phone column. Known non-blocking gap: the
+function runs `verify_jwt=false`, so an unauthenticated POST triggers a real
+sweep (not exploitable for spam — exactly-once is DB-enforced and the
+recipient is owner-only — but should be closed with the vault bearer
+`issue_detector_bearer` used elsewhere).
+
 ### Scheduled jobs
 
 | Function | Schedule | Purpose |
 |----------|----------|---------|
 | `eval-sweep` | Every 5 min (cron) | Judge completed conversations; write eval scores |
 | `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals + ticket delivery failures; write to issues table; set notified_at on source evals |
+| `issue-detector-escalation` | Every 2 min (pg_cron, 093, jobid 80) | Escalate paid+unacknowledged orders to `owner_mobile` by SMS after 7 min |
 | `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
-| `campaign-status-reader` | Hourly (pg_cron, 083) | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
+| `campaign-status-reader` | Deployed, **not yet scheduled** — migration 083 unapplied | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 
 **NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
@@ -552,7 +572,16 @@ to `ticket_send_log` for per-attempt audit tracing. Migration `081` adds
 `campaign_assignment_status` to `shops` for the campaign assignment go-live
 gate (#13). Migration `082` restores shops config columns (prod-applied but
 previously untracked). Migration `083` schedules `campaign-status-reader` via
-pg_cron (hourly).
+pg_cron (hourly) — **unapplied**, blocked on Jason setting `DAILY_RESET_SECRET`
+and `TELNYX_API_KEY` as Supabase function secrets. The deployed function was
+also caught running `verify_jwt=true`, which would have rejected 083's
+non-JWT shared-secret cron POST at the platform edge (401
+`UNAUTHORIZED_INVALID_JWT_FORMAT`) before it ever reached the function's own
+secret check — meaning the job would have silently 401'd forever even after
+Jason set the secrets. Fixed 2026-09-04 (`config.toml` → `verify_jwt=false`,
+redeployed); the function's own shared-secret check is unchanged. Applying
+083 and setting the secrets remain the only steps left to close go-live
+gate #13's auto-advance path.
 
 ### RLS model
 
@@ -642,9 +671,16 @@ pg_cron (hourly).
       cart row disagrees (including empty-cart assertions).
     - Guard 1d (phantom-add guard): extracted to `chat-sms/phantom-add-guard.ts`
       (unit-testable). Catches "added X for ya" / "to your cart" claims when the
-      cart didn't mutate — including colloquial completions (for ya/you/u) and
-      bare item-add claims ending at clause boundaries. Fee/tip/service/note
-      narration excluded.
+      cart didn't mutate — including colloquial completions (for ya/you/u),
+      third-party recipients (him/her/them/mom/dad/grandma/"my wife"/a personal
+      name), and bare item-add claims terminated by `(`, end-of-string, or a
+      clause boundary. Fixed 2026-09-04 after a production SEV-1: a real order
+      said "Added the Chicken Parmesan sandwich for mom (comes with fries)!"
+      with no cart mutation and no guard firing — "for mom" wasn't a customer
+      pronoun and "(" wasn't a recognized terminator. NON_ITEM_NARRATION
+      (fee/tip/service/note/instruction, incl. plurals) is excluded from the
+      captured claim object only, not the whole reply, so a message that both
+      drops an item and mentions a fee is still caught.
     - Guard 1g (post-turn menu hallucination): `claimsOffMenuItem` helper
       checks if the model invented or offered items not on the shop's actual
       menu; falls back to honest cart summary.
