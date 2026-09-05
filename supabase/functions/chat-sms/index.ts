@@ -98,6 +98,11 @@ interface CartItem {
   modifiers:    string[];
   options?:     Record<string, string[]>;
   pending_options?: string[];  // option group names not yet chosen (required groups with no selection)
+  // A customer request naming something that doesn't match any real option
+  // group (e.g. a wing flavor when the shop never recorded the flavor list).
+  // NEVER treated as a validated menu selection and NEVER priced — surfaced
+  // to a human (chat + kitchen ticket) as an unverified ask, e.g. "Flavor: Boosenberry".
+  unverified_requests?: string[];
 }
 
 interface BundleItem {
@@ -156,6 +161,7 @@ interface OrderCart {
   delivery_fee_cents:         number | null;
   driver_tip_cents:           number | null;
   ticket_send_attempt_at:     string | null;
+  fee_disclosed_at:           string | null;
 }
 
 interface ContentBlock {
@@ -448,7 +454,11 @@ function buildSystemPrompt(
         const mods = r.modifiers?.length > 0 ? ` [${r.modifiers.join(", ")}]` : "";
         const opts = r.options ? ` [${Object.entries(r.options).map(([_k, v]) => v.join(', ')).join(', ')}]` : "";
         const qty = r.quantity || 1;
-        return `${qty}x ${r.name}${mods}${opts} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
+        // NOT a validated menu selection — never priced, never phrased as "noted"/selected.
+        const unverified = r.unverified_requests?.length
+          ? ` [customer asked for: ${r.unverified_requests.join(", ")} (not a menu option — unconfirmed, pass to shop)]`
+          : "";
+        return `${qty}x ${r.name}${mods}${opts}${unverified} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
@@ -755,6 +765,26 @@ async function executeTool(
 
       let extraCents = 0;
       const pending: string[] = [];
+      const unverifiedRequests: string[] = [];
+
+      // Reject/redirect option keys that are not a real option group for this
+      // item — symmetric with invalidMods above. Without this, a key the
+      // model invents (no group matches) sailed straight into
+      // normalizedOptions and was stored as if it were a validated menu
+      // selection (the Boosenberry-wings defect).
+      for (const [key, vals] of Object.entries(inputOptions)) {
+        if (groupNames.has(key)) continue;
+        if (menuItem.prompt_for) {
+          // The shop flagged this item as needing a choice but never recorded
+          // the valid values — don't invent a menu selection, and don't block
+          // the add. Preserve the customer's own words for a human to resolve.
+          for (const v of vals) unverifiedRequests.push(`${key}: ${v}`);
+          delete inputOptions[key];
+        } else {
+          const validNames = itemGroups.map(g => g.name).join(", ");
+          return { ok: false, result: { error: `"${key}" is not a valid option for ${menuItem.name}. ${validNames ? `Valid option groups: ${validNames}.` : "This item has no option groups recorded."}` } };
+        }
+      }
 
       for (const group of itemGroups) {
         const selections = inputOptions[group.name] || [];
@@ -794,12 +824,27 @@ async function executeTool(
           p => !(inputOptions[p] && inputOptions[p].length > 0)
         );
         (cart[existing] as CartItem).pending_options = mergedPending.length > 0 ? mergedPending : undefined;
+        const existingUnverified = (cart[existing] as CartItem).unverified_requests || [];
+        const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
+        (cart[existing] as CartItem).unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
-      return { ok: true, result: { added: menuItem.name, quantity, cart_total: `$${(total / 100).toFixed(2)}` }, newPhase: "building" };
+      const unverifiedNote = unverifiedRequests.length > 0
+        ? ` NOTE: ${unverifiedRequests.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection — it was saved only as an unverified customer request for the shop to confirm. Do not tell the customer it was selected/noted as a menu choice; say it will be passed along to the shop for confirmation, or ask them to choose once options are available.`
+        : undefined;
+      return {
+        ok: true,
+        result: {
+          added: menuItem.name,
+          quantity,
+          cart_total: `$${(total / 100).toFixed(2)}`,
+          ...(unverifiedRequests.length > 0 ? { unverified_requests: unverifiedRequests, note: unverifiedNote } : {}),
+        },
+        newPhase: "building",
+      };
     }
 
     case "remove_item": {
@@ -824,24 +869,45 @@ async function executeTool(
       const modifierNames = new Set(validMods);
       let newModifiers = (modifiers ?? (cart[idx] as CartItem).modifiers ?? []).slice();
       let newOptions = options ?? (cart[idx] as CartItem).options;
+      let newUnverified = (cart[idx] as CartItem).unverified_requests ?? [];
+      let unverifiedNote: string | undefined;
       if (options !== undefined) {
         const groupNames = new Set((menuItem?.option_groups || []).map(g => g.name));
         const cleaned: Record<string, string[]> = {};
+        const unverifiedThisCall: string[] = [];
         for (const [key, vals] of Object.entries(options)) {
           if (modifierNames.has(key) && !groupNames.has(key)) {
             for (const v of vals) {
               if (modifierNames.has(v) && !newModifiers.includes(v)) newModifiers.push(v);
             }
-          } else {
+            continue;
+          }
+          if (groupNames.has(key)) {
             cleaned[key] = vals;
+            continue;
+          }
+          // Unknown key — same rule as add_item: reject unless the shop
+          // flagged this item as needing an unrecorded choice, in which case
+          // preserve the customer's ask as unverified rather than as a
+          // validated selection (the Boosenberry-wings defect, via modify_item).
+          if (menuItem?.prompt_for) {
+            for (const v of vals) unverifiedThisCall.push(`${key}: ${v}`);
+          } else {
+            const validNames = (menuItem?.option_groups || []).map(g => g.name).join(", ");
+            return { ok: false, result: { error: `"${key}" is not a valid option for ${menuItem?.name ?? "this item"}. ${validNames ? `Valid option groups: ${validNames}.` : "This item has no option groups recorded."}` } };
           }
         }
         newOptions = Object.keys(cleaned).length > 0 ? cleaned : undefined;
+        newUnverified = unverifiedThisCall;
+        if (unverifiedThisCall.length > 0) {
+          unverifiedNote = `NOTE: ${unverifiedThisCall.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection — it was saved only as an unverified customer request for the shop to confirm. Do not tell the customer it was selected/noted as a menu choice; say it will be passed along to the shop for confirmation, or ask them to choose once options are available.`;
+        }
       }
       const invalidMods = newModifiers.filter(m => !validMods.includes(m));
       if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
       (cart[idx] as CartItem).modifiers = newModifiers;
       if (newOptions !== undefined) (cart[idx] as CartItem).options = newOptions;
+      (cart[idx] as CartItem).unverified_requests = newUnverified.length > 0 ? newUnverified : undefined;
       if (menuItem) {
         let extraCents = 0;
         for (const group of (menuItem.option_groups || [])) {
@@ -863,7 +929,15 @@ async function executeTool(
         (cart[idx] as CartItem).pending_options = newPending.length > 0 ? newPending : undefined;
       }
       await saveCart(supabase, cartId, cart, "building");
-      return { ok: true, result: { modified: (cart[idx] as CartItem).name, quantity: (cart[idx] as CartItem).quantity, price: (cart[idx] as CartItem).price_cents } };
+      return {
+        ok: true,
+        result: {
+          modified: (cart[idx] as CartItem).name,
+          quantity: (cart[idx] as CartItem).quantity,
+          price: (cart[idx] as CartItem).price_cents,
+          ...(newUnverified.length > 0 ? { unverified_requests: newUnverified, note: unverifiedNote } : {}),
+        },
+      };
     }
 
     case "clear_cart": {
@@ -1664,12 +1738,19 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): str
  * Render the authoritative money/status footer from Ledger truth.
  * The LLM owns the conversational framing; the Ledger owns the numbers.
  * This is appended to every non-checkout reply that has cart items.
+ *
+ * Line 1 (item count + total) appears every turn. Line 2 (the fee breakdown)
+ * is noise on repeat — Jason's product call was to state it once, the first
+ * turn the fee applies, and again at checkout (the checkout path is separate,
+ * see the checkoutUrl branch below). Callers pass `showFeeBreakdown = false`
+ * once `order_carts.fee_disclosed_at` is already set for this cart.
  */
 function renderLedgerFooter(
   cart: AnyCartItem[],
   phase: string,
   deliveryFeeCents?: number,
   driverTipCents?: number,
+  showFeeBreakdown = true,
 ): string {
   if (cart.length === 0) return "";
 
@@ -1689,7 +1770,9 @@ function renderLedgerFooter(
 
   const lines: string[] = [];
   lines.push(`${itemCount} item${itemCount === 1 ? "" : "s"} — $${(totalCents / 100).toFixed(2)} total`);
-  lines.push(`(subtotal $${(subtotal / 100).toFixed(2)} + $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee${deliveryFeeCents ? ` + $${(deliveryFeeCents / 100).toFixed(2)} delivery` : ""}${driverTipCents ? ` + $${(driverTipCents / 100).toFixed(2)} tip` : ""})`);
+  if (showFeeBreakdown) {
+    lines.push(`(subtotal $${(subtotal / 100).toFixed(2)} + $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee${deliveryFeeCents ? ` + $${(deliveryFeeCents / 100).toFixed(2)} delivery` : ""}${driverTipCents ? ` + $${(driverTipCents / 100).toFixed(2)} tip` : ""})`);
+  }
 
   return lines.join("\n");
 }
@@ -2921,7 +3004,12 @@ export async function handleSystemEvent(
           const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
           const detail = [...new Set([...mods, ...opts])].join(", ");
           const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
-          return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity || 1}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
+          // Not a validated menu selection — kept visually distinct so the kitchen
+          // never confuses it for a real option (the Boosenberry-wings defect).
+          const unverifiedSub = r.unverified_requests?.length
+            ? `<br><span style="font-size:11px;color:#b45309;">customer asked for: ${r.unverified_requests.map(u => h(u)).join(", ")} (not a menu option)</span>`
+            : "";
+          return `<tr><td style="padding:6px 8px;">${h(r.name)}${detailSub}${unverifiedSub}</td><td style="padding:6px 8px;text-align:center;">${r.quantity || 1}</td><td style="padding:6px 8px;text-align:right;">${linePrice}</td></tr>`;
         }).join("");
         const emailHtml = `<!DOCTYPE html>
 <html>
@@ -3968,7 +4056,7 @@ Deno.serve(async (req: Request) => {
 
   // Fetch order-level metadata for guards (pickup_name, checkout session, etc).
   const { data: guardCartRow } = await supabase
-    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_fee_cents, driver_tip_cents")
+    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_fee_cents, driver_tip_cents, fee_disclosed_at")
     .eq("id", cart.id).single();
   const guardCart: AnyCartItem[] = cart.cart_json as AnyCartItem[];
 
@@ -4500,14 +4588,17 @@ Deno.serve(async (req: Request) => {
   if (!checkoutUrl && guardCart.length > 0) {
     reply = stripLlmMoneyLines(reply);
     const driverTip = (guardCartRow as any)?.driver_tip_cents ?? undefined;
-    const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip);
-    if (footer && !reply.includes("total") && !reply.match(/\$\d+[.,]\d{2}/)) {
-      // Only append if the reply doesn't already have numbers (belt + suspenders).
-      // The stripper should have removed them, but if the LLM re-injects them
-      // in a way we didn't cover, the footer still goes in.
-    }
+    // Fee breakdown noise fix (Jason, 2026-09-05): line 1 (item count + total)
+    // every turn; line 2 (subtotal + fee breakdown) only the first turn the
+    // fee applies, persisted so it never repeats after that — and again at
+    // checkout (separate code path below, unconditional on this flag).
+    const feeAlreadyDisclosed = !!(guardCartRow as any)?.fee_disclosed_at;
+    const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
     if (footer) {
       reply = `${reply}\n\n${footer}`;
+    }
+    if (!feeAlreadyDisclosed) {
+      await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
     }
   }
 

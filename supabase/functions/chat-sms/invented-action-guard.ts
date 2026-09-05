@@ -42,6 +42,22 @@ function isPromise(fragment: string): boolean {
   return !!m && !NEGATED.test(m[0]);
 }
 
+// Defect (2026-09-05, Jason's live Test Kitchen transcript): both removal
+// paths below can leave a dangling fragment as the new first sentence —
+// TRAILING_CLAUSE eating from a mid-sentence dash/comma, or the sentence
+// filter's split(/(?<=[.!?\n])\s+/) treating an abbreviation/stray period as
+// a boundary — and shipped "the meantime. What flavor were you thinking?".
+// A fragment starts lowercase or with a connective; a real sentence doesn't.
+// NOTE: the lowercase check must stay case-SENSITIVE — an `i` flag over
+// [a-z] would match any letter at all and flag every ordinary sentence.
+const FRAGMENT_LEAD_LOWERCASE = /^[a-z]/;
+const FRAGMENT_LEAD_CONNECTIVE = /^(?:the|and|but|so|in|on|at|to|for|with|meantime|then|while)\b/i;
+
+function looksLikeFragment(sentence: string): boolean {
+  const s = sentence.trimStart();
+  return FRAGMENT_LEAD_LOWERCASE.test(s) || FRAGMENT_LEAD_CONNECTIVE.test(s);
+}
+
 // A trailing clause hanging off a legitimate sentence:
 // "What flavor are you thinking - let me check with the kitchen"
 const TRAILING_CLAUSE = new RegExp(
@@ -73,6 +89,20 @@ export function stripInventedActions(reply: string): string {
     .join(" ");
 
   out = out.replace(/\s{2,}/g, " ").replace(/^[\s,;:—–-]+|[\s,;:—–-]+$/g, "").trim();
+
+  // 3) Never ship a reply that begins mid-sentence. Only applies when steps
+  //    1/2 actually changed something — an untouched reply's own first
+  //    sentence is never treated as a fragment, however it's worded.
+  const normalizedInput = reply
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s,;:—–-]+|[\s,;:—–-]+$/g, "")
+    .trim();
+  if (out !== normalizedInput) {
+    const sentences = out.split(/(?<=[.!?\n])\s+/);
+    if (sentences.length > 0 && looksLikeFragment(sentences[0])) {
+      out = sentences.slice(1).join(" ").trim();
+    }
+  }
 
   // Never ship an empty or stub reply: the customer asked something.
   if (out.length < 12) {

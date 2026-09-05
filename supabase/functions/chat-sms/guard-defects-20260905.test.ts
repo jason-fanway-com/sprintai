@@ -140,6 +140,26 @@ Deno.test("leaves a clean reply untouched (identity, no allocation)", () => {
   assertEquals(stripInventedActions(clean), clean);
 });
 
+// ── DEFECT (2026-09-05, Jason's live Test Kitchen transcript): TRUNCATED REPLY ──
+// Turn 4 shipped literally: "the meantime. What flavor were you thinking?".
+// Root cause: an abbreviation-like stray period ("re: no.") makes the sentence
+// filter's split(/(?<=[.!?\n])\s+/) treat it as a sentence boundary, so the
+// whole-clause promise sentence gets split in two — the model's clause
+// containing the promise gets filtered out, but the tail half ("the meantime.")
+// looks like an ordinary sentence on its own and survives.
+Deno.test("DEFECT FIX: never ships a reply beginning mid-sentence (exact observed output)", () => {
+  const broken = "Let me check with the kitchen re: no. the meantime. What flavor were you thinking?";
+  const out = stripInventedActions(broken);
+  // The exact string Jason's Test Kitchen turn 4 shipped must never be produced.
+  assertEquals(out === "the meantime. What flavor were you thinking?", false);
+  assertEquals(out, "What flavor were you thinking?");
+});
+
+Deno.test("DEFECT FIX: a normal reply starting with a lowercase word is untouched when the guard did not fire", () => {
+  const clean = "the meantime is fine — what flavor were you thinking?";
+  assertEquals(stripInventedActions(clean), clean);
+});
+
 // ── Negation: denying the action is the CORRECT behaviour, never strip it ────
 // Caught on the live replay after deploying the first draft of this guard.
 Deno.test("does NOT fire on an honest denial of the action", () => {
