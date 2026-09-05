@@ -3922,8 +3922,13 @@ Deno.serve(async (req: Request) => {
   // If the shop has delivery_enabled but no geo coordinates, delivery cannot
   // function (the set_delivery_address tool needs coords for the zone check).
   // Tell the LLM delivery is unavailable; never fall through to delivery.
+  // Must match the shopGeo condition below exactly. Coords alone are not enough:
+  // set_delivery_address builds shopGeo from coords AND delivery_radius_mi > 0,
+  // so a shop with coords but no radius would be told to offer delivery and then
+  // save the address with no zone check at all — a delivery promise, in the
+  // restaurant's name, to an address nobody verified we can reach.
   const deliveryGeoAvailable = shop.delivery_enabled === true
-    ? (shop.latitude != null && shop.longitude != null)
+    ? (shop.latitude != null && shop.longitude != null && Number(shop.delivery_radius_mi) > 0)
     : false;
 
   // ── Deterministic correction handler (Fix 2: Corrections must write back) ──
@@ -4340,8 +4345,16 @@ Deno.serve(async (req: Request) => {
         // handled only when the SAME sentence both declares an unavailability
         // and names that item.
         const UNAVAILABLE = /(?:we\s+(?:don['’]?t|do\s+not)\s+(?:have|carry|offer|make)|not\s+on\s+(?:the|our)\s+menu|don['’]?t\s+have\s+a\s+plain|isn['’]?t\s+(?:on\s+the\s+menu|something\s+we)|we\s+don['’]?t\s+do)/i;
+        // Split on CLAUSES, not just sentences (2026-09-05, QA D1). The model
+        // usually joins these with a comma, not a period: "We don't have a plain
+        // pepperoni pizza, but I can add the garlic knots now though" is ONE
+        // sentence, so the pepperoni clause still silenced the knots and the
+        // cart still finished empty. Splitting on ; — and a leading but/though/
+        // however/although makes the guard's effectiveness independent of the
+        // model's punctuation. Over-splitting is safe: it can only make the
+        // guard fire a redundant upsell, never wrongly suppress one.
         const replySentences = reply
-          .split(/(?<=[.!?])\s+|\n+/)
+          .split(/(?<=[.!?;])\s+|\n+|\s*[\u2014\u2013]\s*|,?\s+(?=but\b|though\b|however\b|although\b)/i)
           .map(t => t.trim())
           .filter(Boolean);
         const unavailableSentences = replySentences
