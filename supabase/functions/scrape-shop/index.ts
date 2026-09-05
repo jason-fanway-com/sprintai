@@ -133,6 +133,26 @@ function findMenuPdfCandidates(links: string[]): string[] {
     .map(x => x.url);
 }
 
+/** Extract PDF hrefs directly out of homepage HTML. Firecrawl /map only
+ *  surfaces links it chooses to crawl, which misses off-domain CDN-hosted
+ *  PDFs (e.g. a Webflow asset host) and can miss relative hrefs entirely —
+ *  both observed on real shop sites. Anchor parsing catches what /map drops. */
+function extractPdfLinksFromHtml(html: string, baseUrl: string): string[] {
+  const links: string[] = [];
+  const re = /<a\s+[^>]*href=["']([^"']+)["']/gi;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    const href = match[1];
+    if (!/\.pdf(\?|$)/i.test(href)) continue;
+    try {
+      links.push(new URL(href, baseUrl).href);
+    } catch {
+      // skip unparseable hrefs
+    }
+  }
+  return links;
+}
+
 /** Filter discovered URLs to the most useful content pages */
 function prioritizePages(links: string[], baseUrl: string): string[] {
   // Skip PDFs, sitemaps, assets, cookie/privacy pages
@@ -172,7 +192,7 @@ function prioritizePages(links: string[], baseUrl: string): string[] {
 }
 
 /** Scrape a single page via Firecrawl /scrape (synchronous, fast) */
-async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string }> {
+async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string; pdfLinks: string[] }> {
   try {
     const formats = includeRaw ? ["markdown", "rawHtml"] : ["markdown"];
     const res = await fetchWithBackoff(`${FIRECRAWL_BASE}/scrape`, {
@@ -184,14 +204,15 @@ async function scrapePage(url: string, apiKey: string, includeRaw = false): Prom
       body: JSON.stringify({ url, formats }),
     });
 
-    if (!res.ok) return { markdown: "", structured: "" };
+    if (!res.ok) return { markdown: "", structured: "", pdfLinks: [] };
 
     const data: { success: boolean; data?: { markdown?: string; rawHtml?: string } } = await res.json();
     const markdown = data.data?.markdown ?? "";
     const structured = includeRaw && data.data?.rawHtml ? extractStructuredData(data.data.rawHtml) : "";
-    return { markdown, structured };
+    const pdfLinks = includeRaw && data.data?.rawHtml ? extractPdfLinksFromHtml(data.data.rawHtml, url) : [];
+    return { markdown, structured, pdfLinks };
   } catch {
-    return { markdown: "", structured: "" };
+    return { markdown: "", structured: "", pdfLinks: [] };
   }
 }
 
@@ -425,8 +446,10 @@ Deno.serve(async (req: Request) => {
   try {
     const allLinks = await discoverPages(shop.website_url, firecrawlKey);
     pages = prioritizePages(allLinks, shop.website_url.replace(/\/$/, ""));
-    pdfCandidates = findMenuPdfCandidates(allLinks).slice(0, MAX_PDF_CANDIDATES);
-    console.log(`[scrape-shop] Discovered ${allLinks.length} links, scraping top ${pages.length}, ${pdfCandidates.length} PDF candidate(s)`);
+    // Ranked but not yet sliced to MAX_PDF_CANDIDATES — homepage-HTML PDF links
+    // (below) still need to be merged in before the final cut.
+    pdfCandidates = findMenuPdfCandidates(allLinks);
+    console.log(`[scrape-shop] Discovered ${allLinks.length} links, scraping top ${pages.length}, ${pdfCandidates.length} PDF candidate(s) from /map`);
   } catch (err) {
     console.error("[scrape-shop] Firecrawl /map error:", err);
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -441,13 +464,25 @@ Deno.serve(async (req: Request) => {
   // Request rawHtml for homepage to extract structured data (JSON-LD, footer)
   const results: string[] = [];
   let structuredContext = "";
+  let homepagePdfLinks: string[] = [];
   for (let i = 0; i < pages.length; i++) {
     const pageUrl = pages[i];
     const includeRaw = i === 0; // only homepage for structured data
-    const { markdown, structured } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
+    const { markdown, structured, pdfLinks } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
     if (markdown.trim()) results.push(`## Source: ${pageUrl}\n\n${markdown}`);
     if (structured) structuredContext = structured;
+    if (pdfLinks.length) homepagePdfLinks = pdfLinks;
   }
+
+  // Merge homepage-HTML PDF links (catches off-domain CDN hosts and relative
+  // hrefs that Firecrawl /map misses) into the /map-derived candidates, then
+  // re-rank and re-cut to MAX_PDF_CANDIDATES.
+  if (homepagePdfLinks.length) {
+    const merged = Array.from(new Set([...pdfCandidates, ...homepagePdfLinks]));
+    pdfCandidates = findMenuPdfCandidates(merged);
+    console.log(`[scrape-shop] Merged ${homepagePdfLinks.length} homepage-HTML PDF link(s), ${pdfCandidates.length} total PDF candidate(s)`);
+  }
+  pdfCandidates = pdfCandidates.slice(0, MAX_PDF_CANDIDATES);
 
   // Prepend structured data so the summarizer sees address, hours, etc.
   if (structuredContext) {
