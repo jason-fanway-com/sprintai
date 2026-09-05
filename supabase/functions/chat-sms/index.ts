@@ -525,11 +525,21 @@ function buildSystemPrompt(
     ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
     : "";
 
+  // A shop that cannot take a delivery order must never be asked to choose one.
+  // Vito's has delivery_enabled=true but no delivery radius, so DELIVERY
+  // AVAILABLE below said "No — pickup only" while this line said "REQUIRED: ask
+  // pickup or delivery?". The model obeyed whichever it read last, so the very
+  // first reply a tester saw was a coin flip between "we're pickup only" and
+  // "pickup or delivery today?" — for the same shop, in the same minute. Two
+  // instructions that contradict each other are one instruction the bot ignores.
+  const canActuallyDeliver = deliveryEnabled === true && deliveryGeoAvailable !== false;
   const orderTypeInfo = orderTypeStr === "delivery"
     ? `\nORDER TYPE: Delivery`
     : orderTypeStr === "pickup"
       ? `\nORDER TYPE: Pickup`
-      : `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`;
+      : canActuallyDeliver
+        ? `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`
+        : `\nORDER TYPE: Pickup — this shop cannot take delivery orders right now, so there is nothing to choose. Do NOT ask \"pickup or delivery?\". Mention pickup once, in passing, and keep the order moving.`;
 
   const deliveryInfo = deliveryAddress
     ? `\nDELIVERY ADDRESS: ${(deliveryAddress as Record<string,unknown>).formatted || JSON.stringify(deliveryAddress)}`
@@ -635,6 +645,7 @@ RULES:
 - OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
 - WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask - never guess, never imply a list exists, and never offer to go find out. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "I don't have the dressing list for that one - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
 - NEVER CLAIM AN ACTION YOU DO NOT TAKE (CRITICAL): you can do exactly two things - read the menu above and call the tools listed below. You cannot check with the kitchen, ask the owner, ask anyone, look anything up, call, walk back, confirm with staff, or go find out and come back. Never say or imply that you will. Banned in every wording: "let me check", "I'll check with the kitchen", "let me ask", "I'll find out", "let me confirm", "let me look that up", "one moment", "give me a sec", "I'll get back to you", "hold on while I". When you do not know something, say you do not know it and ask the customer in the same breath, then keep the order moving. Good: "I don't have the flavor list for these - what flavor would you like?" Never: "Let me check with the kitchen on which ones we have." Inventing an action is the same lie as inventing an option, and worse, because it is a lie about yourself. The one thing you may promise is what the tools actually do: adding an item, saving a note, sending the payment link.
+- NEVER NARRATE A TECHNICAL FAILURE TO THE CUSTOMER: if a tool call comes back with an error, that is between you and the system. A customer ordering dinner has no use for "that's giving me a system hiccup", "there's a glitch on my end", "an error came back", or "the system won't let me". Say the plain human version instead - "I can't add the large cheese right now" - and immediately offer the closest real thing on the menu. Never invent a technical excuse for something you simply could not find.
 - NEVER STATE SHOP POLICY YOU WERE NOT TOLD: whether flavors can be mixed or split across an order, whether substitutions are allowed, whether extras cost more, minimums, or timing. If a policy is not given to you above, do not assert it in either direction. Say plainly that you do not have it and ask the customer what they want. "You can mix and match!" is a promise the kitchen may not be able to keep.
 - Never state the NUMBER of available flavors or menu items ("we have 12 flavors"). If the item's entry does list its options, you may name them, without counting.
 - NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
@@ -1821,6 +1832,15 @@ const GENERIC_LAST_WORDS = new Set([
   "lunch", "breakfast", "meal", "meals", "plate", "plates", "basket",
   "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
 ]);
+
+// Words a customer uses to name the FORM of a dish, not the dish itself. When
+// someone says "pepperoni pizza" and the only Pepperoni we sell is a stromboli,
+// offering them "the Pepperoni" is technically true and practically a lie —
+// these words are how we notice the mismatch and name the section instead.
+const FOOD_FORM_WORDS = [
+  "pizza", "stromboli", "calzone", "sandwich", "sub", "hoagie", "wrap",
+  "salad", "soup", "burger", "roll", "panini", "flatbread", "bagel",
+];
 
 function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
@@ -4194,27 +4214,68 @@ Deno.serve(async (req: Request) => {
         // "I can definitely add the garlic knots!" and added nothing; treating
         // that as handled left the customer with an empty cart and no prompt.
         // A promise is not a cart row.
-        const replyLower = reply.toLowerCase();
+        //
+        // SCOPED PER SENTENCE (2026-09-05). This test used to ask whether the
+        // reply ANYWHERE declared something unavailable, then drop every item
+        // the reply named. One sentence about a missing item therefore
+        // suppressed the guard for items in completely different sentences.
+        // Measured: "We don't have a plain pepperoni pizza, but ... I can add
+        // the garlic knots now though" finished with an EMPTY cart and no
+        // prompt — the pepperoni sentence silenced the knots. An item counts as
+        // handled only when the SAME sentence both declares an unavailability
+        // and names that item.
         const UNAVAILABLE = /(?:we\s+(?:don['’]?t|do\s+not)\s+(?:have|carry|offer|make)|not\s+on\s+(?:the|our)\s+menu|don['’]?t\s+have\s+a\s+plain|isn['’]?t\s+(?:on\s+the\s+menu|something\s+we)|we\s+don['’]?t\s+do)/i;
-        const replySaysUnavailable = UNAVAILABLE.test(reply);
+        const replySentences = reply
+          .split(/(?<=[.!?])\s+|\n+/)
+          .map(t => t.trim())
+          .filter(Boolean);
+        const unavailableSentences = replySentences
+          .filter(t => UNAVAILABLE.test(t))
+          .map(t => t.toLowerCase());
         missing = missing.filter(n => {
-          if (!replySaysUnavailable) return true;
+          if (unavailableSentences.length === 0) return true;
           const norm = n.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
           const words = norm.split(' ').filter(w => w.length >= 4 && !GENERIC_LAST_WORDS.has(w));
-          // Only drop it if the reply both declares something unavailable AND
+          if (words.length === 0) return true;
+          // Drop only when ONE sentence both declares an unavailability AND
           // names this specific item.
-          return !(words.length > 0 && words.every(w => replyLower.includes(w)));
+          return !unavailableSentences.some(t => words.every(w => t.includes(w)));
         });
         if (missing.length > 0) {
           const mode = replyIsClosing ? "v2-closing" : "v3-multi-item";
           console.warn(`[chat-sms] GUARD 4 ${mode} (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
           // Item names keep their real casing. Lowercasing produced
           // 'cheese - large (16")' in a customer-facing sentence.
+          //
+          // QUALIFY BY CATEGORY when the customer named a FORM of food that the
+          // matched item is not (2026-09-05). "large pepperoni and a side of
+          // garlic knots" matched the Pepperoni *Stromboli Roll* and asked
+          // "Want me to add the Pepperoni too?" — which reads, to someone who
+          // just asked for a pizza, like an offer of a pepperoni pizza we do
+          // not sell. Naming the section makes the offer true.
+          const catByName = new Map<string, string>();
+          for (const mi of effectiveMenu) {
+            if (mi.category && !catByName.has(mi.name)) catByName.set(mi.name, mi.category);
+          }
+          const askedForms = FOOD_FORM_WORDS.filter(w =>
+            new RegExp(`\\b${w}s?\\b`, "i").test(userMessage),
+          );
+          const label = (n: string): string => {
+            const cat = catByName.get(n);
+            if (!cat || askedForms.length === 0) return n;
+            const hay = `${n} ${cat}`.toLowerCase();
+            // Only qualify when NONE of the forms the customer named appear in
+            // the item's own name or category — i.e. we'd be answering "pizza?"
+            // with something that is not a pizza.
+            const formMatches = askedForms.some(w => new RegExp(`\\b${w}s?\\b`, "i").test(hay));
+            return formMatches ? n : `${n} (${cat})`;
+          };
+          const labelled = missing.map(label);
           let upsellLine: string;
-          if (missing.length === 1) {
-            upsellLine = `Want me to add the ${missing[0]} too, or are you all set?`;
+          if (labelled.length === 1) {
+            upsellLine = `Want me to add the ${labelled[0]} too, or are you all set?`;
           } else {
-            const list = missing.map((n, i) => i === missing.length - 1 ? `and ${n}` : n).join(', ');
+            const list = labelled.map((n, i) => i === labelled.length - 1 ? `and ${n}` : n).join(', ');
             upsellLine = `Did you also want ${list}, or good to go?`;
           }
           reply = `${reply}\n\n${upsellLine}`;
