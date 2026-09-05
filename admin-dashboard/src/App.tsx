@@ -27,6 +27,7 @@ import IssueDetail from './pages/IssueDetail'
 import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 import ShopOwnerDashboard from './pages/ShopOwnerDashboard'
 import ShopOwnerDemoKit from './pages/ShopOwnerDemoKit'
+import ShopOwnerMenuSettings from './pages/ShopOwnerMenuSettings'
 import TestSuite from './pages/TestSuite'
 import FinancialReporting from './pages/FinancialReporting'
 import ExpoScreen from './pages/ExpoScreen'
@@ -148,6 +149,14 @@ export default function App() {
             element={
               <ShopOwnerRoute role={roleInfo}>
                 <ShopOwnerDemoKit />
+              </ShopOwnerRoute>
+            }
+          />
+          <Route
+            path="menu-settings"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <ShopOwnerMenuSettings />
               </ShopOwnerRoute>
             }
           />

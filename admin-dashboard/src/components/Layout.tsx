@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor, Gift } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor, Gift, UtensilsCrossed } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
@@ -38,6 +38,7 @@ const superAdminBottomNav = [
 // Shop-owner left sidebar nav
 const shopOwnerNav = [
   { to: '/shop-owner', label: 'At a Glance', icon: LayoutDashboard },
+  { to: '/menu-settings', label: 'Menu & Settings', icon: UtensilsCrossed },
   { to: '/expo', label: 'Expo Screen', icon: Monitor },
   { to: '/conversations', label: 'Conversation', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Quality', icon: ShieldCheck },

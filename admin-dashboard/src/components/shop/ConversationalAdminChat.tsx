@@ -160,6 +160,9 @@ export default function ConversationalAdminChat({ shopId }: Props) {
           executedResult: executed,
         }])
         setStatusHeader(executed.status_header)
+        // Menu & Settings editor listens for this to invalidate its queries — a chat-issued
+        // change appears in the structured list on the same screen with no manual refresh.
+        window.dispatchEvent(new CustomEvent('sprintai:admin-chat-executed'))
       } else {
         // Plain text reply (clarification, error, or QUERY_STATUS)
         setMessages(prev => [...prev, { role: 'assistant', content: data.reply ?? 'Done.' }])
@@ -212,6 +215,9 @@ export default function ConversationalAdminChat({ shopId }: Props) {
           executedResult: executed,
         }])
         setStatusHeader(executed.status_header)
+        // Menu & Settings editor listens for this to invalidate its queries — a chat-issued
+        // change appears in the structured list on the same screen with no manual refresh.
+        window.dispatchEvent(new CustomEvent('sprintai:admin-chat-executed'))
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: data.reply ?? data.error ?? 'Done.' }])
       }
@@ -256,6 +262,9 @@ export default function ConversationalAdminChat({ shopId }: Props) {
           executedResult: executed,
         }])
         setStatusHeader(executed.status_header)
+        // Menu & Settings editor listens for this to invalidate its queries — a chat-issued
+        // change appears in the structured list on the same screen with no manual refresh.
+        window.dispatchEvent(new CustomEvent('sprintai:admin-chat-executed'))
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: data.reply ?? 'Undo failed.' }])
       }

@@ -37,11 +37,43 @@ interface Shop {
 interface MenuItem {
   id: string; name: string; price_cents: number; description: string | null;
   category: string; active: boolean;
+  prompt_for?: string | null; flag_review?: boolean | null; flag_reason?: string | null;
+}
+
+interface OptionGroupRow {
+  id: string; menu_item_id: string; name: string; required: boolean;
+  min_select: number; max_select: number;
+}
+
+interface OptionChoiceRow {
+  id: string; option_group_id: string; name: string; price_cents: number;
 }
 
 interface Special {
   id: string; name: string; price_cents: number; description: string | null;
   linked_item_id: string | null; active_date: string;
+}
+
+interface OptionChoiceInput {
+  choice_id?: string;
+  name: string;
+  price_cents: number;
+}
+
+interface OptionGroupInput {
+  group_id?: string;
+  name: string;
+  required: boolean;
+  min_select: number;
+  max_select: number;
+  choices: OptionChoiceInput[];
+  delete_choice_ids?: string[];
+}
+
+interface DayHours {
+  closed: boolean;
+  open?: string;
+  close?: string;
 }
 
 interface Proposal {
@@ -62,6 +94,26 @@ interface Proposal {
   clarification_question?: string | null;
   clarification_options?: string[];
   summary: string;
+  // ── Menu & Settings editor ops (SET_ITEM_OPTIONS, SET_ITEM_FIELDS, SET_STORE_HOURS,
+  // SET_DELIVERY_HOURS, SET_DELIVERY_ENABLED, SET_SHOP_INSTRUCTIONS, SET_WING_POLICY) ──
+  item_id?: string;
+  item_name?: string;
+  upsert_groups?: OptionGroupInput[];
+  delete_group_ids?: string[];
+  item_fields?: {
+    name?: string;
+    price_dollars?: string;
+    description?: string;
+    category?: string;
+    active?: boolean;
+    clear_review_flag?: boolean;
+  };
+  open_hours?: Record<string, DayHours>;
+  delivery_hours?: Record<string, DayHours>;
+  delivery_enabled?: boolean;
+  ai_instructions?: string;
+  wing_flavors_included?: number | null;
+  wing_mix_extra?: boolean | null;
 }
 
 interface ConfirmationCard {
@@ -227,6 +279,151 @@ const ADMIN_TOOLS = [
     },
   },
   {
+    name: "SET_ITEM_OPTIONS",
+    description: "Add, rename, or remove option groups and choices on a menu item (e.g. wing flavors, bread choices, toppings). NEVER invent a choice the owner did not say — only write the exact names given. If the item reference is ambiguous (e.g. both a bone-in and boneless version), set needs_clarification=true and ask which.",
+    input_schema: {
+      type: "object",
+      properties: {
+        item_id: { type: "string", description: "Menu item ID — resolve unambiguously against the real menu" },
+        item_name: { type: "string", description: "Human-readable item name, for the summary" },
+        upsert_groups: {
+          type: "array",
+          description: "Option groups to create or update on this item",
+          items: {
+            type: "object",
+            properties: {
+              group_id: { type: "string", description: "Existing group ID to update; omit to create a new group" },
+              name: { type: "string", description: "Group name, e.g. 'Wing Flavor'" },
+              required: { type: "boolean" },
+              min_select: { type: "integer" },
+              max_select: { type: "integer" },
+              choices: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    choice_id: { type: "string", description: "Existing choice ID to update; omit to create a new choice" },
+                    name: { type: "string" },
+                    price_cents: { type: "integer", description: "Extra charge in cents; 0 if free — never omit" },
+                  },
+                  required: ["name", "price_cents"],
+                },
+              },
+              delete_choice_ids: { type: "array", items: { type: "string" } },
+            },
+            required: ["name", "required", "min_select", "max_select", "choices"],
+          },
+        },
+        delete_group_ids: { type: "array", items: { type: "string" }, description: "Option group IDs to remove entirely" },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string", description: "e.g. 'Add three wing flavors: Hot, Mild, BBQ'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_ITEM_FIELDS",
+    description: "Edit a menu item's name, price, description, or category. To add/remove/rename option groups or choices, use SET_ITEM_OPTIONS instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        item_id: { type: "string", description: "Menu item ID — resolve unambiguously against the real menu" },
+        item_fields: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            price_dollars: { type: "string", description: "Price in dollars as a decimal string, e.g. '12.99'" },
+            description: { type: "string" },
+            category: { type: "string" },
+            active: { type: "boolean" },
+            clear_review_flag: { type: "boolean", description: "Set true when the owner confirms a low-confidence item is correct as-is ('looks right')" },
+          },
+        },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string", description: "e.g. 'Rename Lox Bagel to Lox & Cream Cheese Bagel, $11.50'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_STORE_HOURS",
+    description: "Set the shop's regular operating hours (not delivery hours — use SET_DELIVERY_HOURS for that). Must cover all seven days.",
+    input_schema: {
+      type: "object",
+      properties: {
+        open_hours: {
+          type: "object",
+          description: "Keys mon,tue,wed,thu,fri,sat,sun. Each value: {closed:true} or {closed:false, open:'HH:MM', close:'HH:MM'} in 24h shop-local time.",
+        },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        summary: { type: "string", description: "e.g. 'Open 11am-9pm Mon-Sat, closed Sunday'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_DELIVERY_HOURS",
+    description: "Set the shop's delivery-specific hours (may differ from store hours). Must cover all seven days.",
+    input_schema: {
+      type: "object",
+      properties: {
+        delivery_hours: {
+          type: "object",
+          description: "Same shape as open_hours: keys mon..sun, each {closed:true} or {closed:false, open:'HH:MM', close:'HH:MM'}.",
+        },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        summary: { type: "string" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_DELIVERY_ENABLED",
+    description: "Permanently turn delivery on or off for this shop. This is NOT the same as PAUSE_DELIVERY/RESUME_DELIVERY, which are temporary same-day pauses — use those for 'pause delivery for an hour' style requests. Use this only for a permanent on/off change to whether the shop offers delivery at all.",
+    input_schema: {
+      type: "object",
+      properties: {
+        delivery_enabled: { type: "boolean" },
+        needs_clarification: { type: "boolean" },
+        summary: { type: "string", description: "e.g. 'Turn delivery off for this shop permanently'" },
+      },
+      required: ["delivery_enabled", "needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_SHOP_INSTRUCTIONS",
+    description: "Update the shop's AI instructions — behavior rules for the ordering bot. Note: the menu overrides instructions on item names and prices, so instructions that contradict the menu will lose.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ai_instructions: { type: "string" },
+        needs_clarification: { type: "boolean" },
+        summary: { type: "string" },
+      },
+      required: ["ai_instructions", "needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_WING_POLICY",
+    description: "Configure how many wing flavors are included per order and whether mixing flavors costs extra. Until this is set, the ordering bot refuses to guess and will not tell customers they can or can't mix flavors.",
+    input_schema: {
+      type: "object",
+      properties: {
+        wing_flavors_included: { type: "integer", description: "How many flavors are included per order, e.g. 1 for a 10-piece order" },
+        wing_mix_extra: { type: "boolean", description: "True if mixing flavors across an order costs extra or is restricted" },
+        needs_clarification: { type: "boolean" },
+        summary: { type: "string" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
     name: "UNKNOWN_OR_OUT_OF_SCOPE",
     description: "The request doesn't match any supported intent. Redirect to the right place.",
     input_schema: {
@@ -247,10 +444,21 @@ function buildSystemPrompt(
   specials: Special[],
   eightySixList: MenuItem[],
   currentTime: string,
+  optionGroupsByItem?: Map<string, { group: OptionGroupRow; choices: OptionChoiceRow[] }[]>,
 ): string {
   const menuStr = Object.entries(groupBy(menu, m => m.category))
     .map(([cat, items]) => {
-      const rows = items.map(i => `  ${i.id}: ${i.name} — $${(i.price_cents / 100).toFixed(2)}${!i.active ? " [INACTIVE]" : ""}`);
+      const rows = items.map(i => {
+        const groups = optionGroupsByItem?.get(i.id) ?? [];
+        const groupsStr = groups.length > 0
+          ? " | options: " + groups.map(g => `${g.group.name} [${g.group.id}] (${g.choices.map(c => `${c.name}${c.price_cents ? ` +$${(c.price_cents / 100).toFixed(2)}` : ""}`).join(", ") || "no choices yet"})`).join("; ")
+          : "";
+        const flags = [
+          i.prompt_for ? ` [NEEDS ANSWER: ${i.prompt_for}]` : "",
+          i.flag_review ? ` [LOW CONFIDENCE: ${i.flag_reason ?? "unreviewed"}]` : "",
+        ].join("");
+        return `  ${i.id}: ${i.name} — $${(i.price_cents / 100).toFixed(2)}${!i.active ? " [INACTIVE]" : ""}${flags}${groupsStr}`;
+      });
       return `**${cat}**\n${rows}`;
     }).join("\n\n");
 
@@ -268,14 +476,14 @@ function buildSystemPrompt(
 
   const businessDate = new Date().toISOString().slice(0, 10);
 
-  return `You are the store-management assistant for ${shop.name}. The owner texts you plain-language commands to manage same-day operational toggles. You NEVER execute changes directly — you return a structured PROPOSAL that the backend validates and shows as a confirmation card.
+  return `You are the store-management assistant for ${shop.name}. The owner texts you plain-language commands to manage same-day operational toggles AND their permanent menu/settings. You NEVER execute changes directly — you return a structured PROPOSAL that the backend validates and shows as a confirmation card.
 
 CURRENT TIME: ${currentTime}
 BUSINESS DATE: ${businessDate}
 SHOP: ${shop.name}
 ${deliveryStatus}
 
-LIVE MENU (${menu.length} items):
+LIVE MENU (${menu.length} items) — [NEEDS ANSWER] means prompt_for is set and no options exist yet; [LOW CONFIDENCE] means menu curation flagged it for owner review; "options:" lists existing option groups with their real IDs:
 ${menuStr}
 
 CURRENTLY 86'D (${eightySixList.length} items):
@@ -299,7 +507,14 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
     - "Mark Lox Bagel sold out until close tonight"
     - "Add 'Friday Lobster Roll' special at $18.00 for today"
     - "Pause delivery for 1 hour — pickup still open"
-    - "End the Lox Special"`;
+    - "End the Lox Special"
+12. For SET_ITEM_OPTIONS: NEVER invent a choice the owner did not literally say. If the item name matches more than one menu item (e.g. "Wings (Bone-In)" AND "Wings (Boneless)" both exist), set needs_clarification=true and list both as options — do not guess. If the item already has an option group with a matching name in "options:" above, reuse that group_id to add choices to it rather than creating a duplicate group. Every choice needs an explicit price_cents (0 if free) — never omit it.
+13. For SET_ITEM_FIELDS: only include the fields the owner actually mentioned; leave the rest out of item_fields entirely rather than guessing a value.
+14. For SET_STORE_HOURS / SET_DELIVERY_HOURS: every one of mon,tue,wed,thu,fri,sat,sun must be present, each either {"closed":true} or {"closed":false,"open":"HH:MM","close":"HH:MM"}. If the owner only gives some days, set needs_clarification=true and ask about the rest rather than guessing.
+15. For SET_DELIVERY_ENABLED: this is a PERMANENT on/off switch, not a same-day pause. If the owner says something like "pause delivery" or "turn delivery back on" for today, use PAUSE_DELIVERY/RESUME_DELIVERY instead. Only use SET_DELIVERY_ENABLED for "stop offering delivery" / "start offering delivery" style permanent requests.
+16. For SET_SHOP_INSTRUCTIONS: capture the owner's instructions verbatim into ai_instructions; do not summarize or rewrite their wording.
+17. For SET_WING_POLICY: capture wing_flavors_included and/or wing_mix_extra only from what the owner explicitly states.
+18. Whenever your reply describes the RESULT of a completed change, describe it from what was actually written — never claim a change happened if it didn't.`;
 }
 
 function groupBy<T>(arr: T[], keyFn: (item: T) => string): Record<string, T[]> {
@@ -348,6 +563,38 @@ async function getActiveSpecials(supabase: ReturnType<typeof createClient>, shop
     .from("specials")
     .select("*").eq("shop_id", shopId).eq("active_date", today);
   return (data ?? []) as unknown as Special[];
+}
+
+// Option groups + choices for a set of menu items, keyed by menu_item_id. Used to give the
+// LLM (and the read-back sentence builder) real group/choice IDs so it reuses an existing
+// group instead of creating a duplicate, and never has to invent one.
+async function getOptionGroupsForItems(
+  db: ReturnType<typeof createClient>,
+  itemIds: string[],
+): Promise<Map<string, { group: OptionGroupRow; choices: OptionChoiceRow[] }[]>> {
+  const result = new Map<string, { group: OptionGroupRow; choices: OptionChoiceRow[] }[]>();
+  if (itemIds.length === 0) return result;
+  const { data: groups } = await db
+    .from("option_groups")
+    .select("id, menu_item_id, name, required, min_select, max_select")
+    .in("menu_item_id", itemIds);
+  const groupRows = (groups ?? []) as OptionGroupRow[];
+  if (groupRows.length === 0) return result;
+  const groupIds = groupRows.map(g => g.id);
+  const { data: choices } = await db
+    .from("option_choices")
+    .select("id, option_group_id, name, price_cents")
+    .in("option_group_id", groupIds);
+  const choiceRows = (choices ?? []) as OptionChoiceRow[];
+  const choicesByGroup = new Map<string, OptionChoiceRow[]>();
+  for (const c of choiceRows) {
+    choicesByGroup.set(c.option_group_id, [...(choicesByGroup.get(c.option_group_id) ?? []), c]);
+  }
+  for (const g of groupRows) {
+    const entry = { group: g, choices: choicesByGroup.get(g.id) ?? [] };
+    result.set(g.menu_item_id, [...(result.get(g.menu_item_id) ?? []), entry]);
+  }
+  return result;
 }
 
 async function validateProposal(
@@ -427,6 +674,105 @@ async function validateProposal(
       }
       return { valid: true };
     }
+    case "SET_ITEM_OPTIONS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const itemId = proposal.item_id;
+      if (!itemId || !menuMap.has(itemId)) return { valid: false, error: "Item not found on this shop's menu." };
+      const upserts = proposal.upsert_groups ?? [];
+      const deleteGroupIds = proposal.delete_group_ids ?? [];
+      if (upserts.length === 0 && deleteGroupIds.length === 0) {
+        return { valid: false, error: "Nothing to change — no option groups or choices given." };
+      }
+      for (const g of upserts) {
+        if (!g.name?.trim()) return { valid: false, error: "An option group needs a name." };
+        if (typeof g.min_select !== "number" || typeof g.max_select !== "number" || g.min_select < 0 || g.max_select < 1 || g.min_select > g.max_select) {
+          return { valid: false, error: `"${g.name}" has an invalid min/max select.` };
+        }
+        if (g.group_id) {
+          const { data: existing } = await supabase.from("option_groups").select("id, menu_item_id").eq("id", g.group_id).single();
+          if (!existing || existing.menu_item_id !== itemId) return { valid: false, error: "That option group wasn't found on this item." };
+        }
+        const choices = g.choices ?? [];
+        for (const c of choices) {
+          if (!c.name?.trim()) return { valid: false, error: "A choice needs a name — never leave one blank." };
+          if (typeof c.price_cents !== "number" || c.price_cents < 0 || !Number.isFinite(c.price_cents)) {
+            return { valid: false, error: `"${c.name}" needs a price of $0.00 or more.` };
+          }
+          if (c.choice_id) {
+            const { data: existingChoice } = await supabase.from("option_choices").select("id, option_group_id").eq("id", c.choice_id).single();
+            if (!existingChoice || (g.group_id && existingChoice.option_group_id !== g.group_id)) {
+              return { valid: false, error: "That choice wasn't found in that group." };
+            }
+          }
+        }
+      }
+      for (const gid of deleteGroupIds) {
+        const { data: existing } = await supabase.from("option_groups").select("id, menu_item_id").eq("id", gid).single();
+        if (!existing || existing.menu_item_id !== itemId) return { valid: false, error: "That option group wasn't found on this item." };
+      }
+      return { valid: true };
+    }
+    case "SET_ITEM_FIELDS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const itemId = proposal.item_id;
+      if (!itemId || !menuMap.has(itemId)) return { valid: false, error: "Item not found on this shop's menu." };
+      const f = proposal.item_fields ?? {};
+      if (Object.keys(f).length === 0) return { valid: false, error: "No fields to change." };
+      if (f.name !== undefined && !f.name.trim()) return { valid: false, error: "Name can't be blank." };
+      if (f.price_dollars !== undefined) {
+        const cents = Math.round(parseFloat(f.price_dollars) * 100);
+        if (!Number.isFinite(cents) || cents < 0) return { valid: false, error: "That doesn't look like a valid price." };
+      }
+      return { valid: true };
+    }
+    case "SET_STORE_HOURS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const err = validateHoursShape(proposal.open_hours);
+      if (err) return { valid: false, error: err };
+      return { valid: true };
+    }
+    case "SET_DELIVERY_HOURS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const err = validateHoursShape(proposal.delivery_hours);
+      if (err) return { valid: false, error: err };
+      return { valid: true };
+    }
+    case "SET_DELIVERY_ENABLED": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (typeof proposal.delivery_enabled !== "boolean") {
+        return { valid: false, error: "Specify whether delivery should be permanently on or off." };
+      }
+      return { valid: true };
+    }
+    case "SET_SHOP_INSTRUCTIONS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (proposal.ai_instructions === undefined) return { valid: false, error: "No instructions given." };
+      return { valid: true };
+    }
+    case "SET_WING_POLICY": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (proposal.wing_flavors_included == null && proposal.wing_mix_extra == null) {
+        return { valid: false, error: "Specify flavors included and/or the mix policy." };
+      }
+      if (proposal.wing_flavors_included != null && (!Number.isInteger(proposal.wing_flavors_included) || proposal.wing_flavors_included < 1)) {
+        return { valid: false, error: "Flavors included must be a whole number of at least 1." };
+      }
+      return { valid: true };
+    }
     case "RESUME_DELIVERY":
     case "QUERY_STATUS":
     case "UNDO":
@@ -436,6 +782,35 @@ async function validateProposal(
     default:
       return { valid: false, error: `Unknown intent: ${proposal.intent}` };
   }
+}
+
+const HOUR_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+function validateHoursShape(hours: Record<string, DayHours> | undefined): string | null {
+  if (!hours || typeof hours !== "object") return "Hours are required for all seven days.";
+  for (const d of HOUR_DAY_KEYS) {
+    const v = hours[d];
+    if (!v || typeof v !== "object") return `Missing hours for ${d}.`;
+    if (v.closed === true) continue;
+    if (v.closed === false) {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v.open ?? "") || !/^([01]\d|2[0-3]):[0-5]\d$/.test(v.close ?? "")) {
+        return `${d}: open/close must be 24h "HH:MM".`;
+      }
+      continue;
+    }
+    return `${d}: "closed" must be true or false.`;
+  }
+  return null;
+}
+
+function summarizeHours(hours: Record<string, DayHours> | null | undefined): string {
+  if (!hours) return "not set";
+  const labels: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+  return HOUR_DAY_KEYS.map(d => {
+    const v = hours[d];
+    if (!v || v.closed) return `${labels[d]} closed`;
+    return `${labels[d]} ${v.open}-${v.close}`;
+  }).join(", ");
 }
 
 function makeClarificationCard(proposal: Proposal): ConfirmationCard {
@@ -462,12 +837,32 @@ async function executeAction(
   menu: MenuItem[],
   eightySixList: { item: MenuItem; override_id: string }[],
   specials: Special[],
+  tenantId: string,
+  svc: ReturnType<typeof createClient>,
+  actorLabel: "chat" | "form" = "chat",
 ): Promise<ExecutedAction> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
   const eightySixMap = new Map(eightySixList.map(e => [e.item.id, e]));
   let resultMsg = "";
   let beforeSnapshot: Record<string, unknown> = {};
   let afterSnapshot: Record<string, unknown> = {};
+
+  // Fire-and-forget audit trail — never blocks the response, never throws into the caller.
+  // Both the chat path and the form path call this same executeAction(), so both produce
+  // an identical menu_edit_log shape; actorLabel is the only thing that tells them apart.
+  const logEdit = (params: { table_name: string; row_id: string | null; before: unknown; after: unknown }) => {
+    svc.from("menu_edit_log").insert({
+      shop_id: shopId,
+      tenant_id: tenantId,
+      actor: userId,
+      actor_label: actorLabel,
+      op_id: proposal.intent,
+      table_name: params.table_name,
+      row_id: params.row_id,
+      before: params.before ?? null,
+      after: params.after ?? null,
+    }).then(() => {}, (err: unknown) => console.error("[admin-chat] menu_edit_log insert error:", err));
+  };
 
   switch (proposal.intent) {
     case "EIGHTYSIX_ITEM": {
@@ -666,6 +1061,31 @@ async function executeAction(
         await supabase.from("shops").update({
           email_ticket_recipient: emailBefore,
         }).eq("id", shopId);
+      } else if (snapType === "item_fields") {
+        const before = snap.before as Record<string, unknown> | null;
+        if (before) {
+          await supabase.from("menu_items").update({
+            name: before.name, price_cents: before.price_cents, description: before.description,
+            category: before.category, active: before.active,
+          }).eq("id", snap.item_id as string);
+        }
+      } else if (snapType === "store_hours") {
+        await supabase.from("shops").update({ open_hours: snap.open_hours_before ?? {} }).eq("id", shopId);
+      } else if (snapType === "delivery_hours") {
+        await supabase.from("shops").update({ delivery_hours: snap.delivery_hours_before ?? {} }).eq("id", shopId);
+      } else if (snapType === "delivery_enabled_permanent") {
+        await supabase.from("shops").update({ delivery_enabled: snap.delivery_enabled_before ?? true }).eq("id", shopId);
+      } else if (snapType === "shop_instructions") {
+        await supabase.from("shops").update({ ai_instructions: snap.ai_instructions_before ?? null }).eq("id", shopId);
+      } else if (snapType === "wing_policy") {
+        const before = snap.before as Record<string, unknown> | null;
+        await supabase.from("shops").update({
+          wing_flavors_included: before?.wing_flavors_included ?? null,
+          wing_mix_extra: before?.wing_mix_extra ?? null,
+        }).eq("id", shopId);
+      } else if (snapType === "item_options") {
+        resultMsg = "Option group changes can't be auto-undone yet — edit the item directly to revert.";
+        break;
       }
 
       // Mark the undone action
@@ -675,6 +1095,149 @@ async function executeAction(
 
       beforeSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_before_snapshot: lastAction.before_snapshot };
       afterSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_applied: true };
+      break;
+    }
+    case "SET_ITEM_OPTIONS": {
+      const itemId = proposal.item_id!;
+      const item = menuMap.get(itemId);
+      const upserts = proposal.upsert_groups ?? [];
+      const deleteGroupIds = proposal.delete_group_ids ?? [];
+
+      const beforeGroups = (await getOptionGroupsForItems(supabase, [itemId])).get(itemId) ?? [];
+      beforeSnapshot = { type: "item_options", item_id: itemId, groups_before: beforeGroups };
+
+      for (const gid of deleteGroupIds) {
+        await supabase.from("option_groups").delete().eq("id", gid);
+        logEdit({ table_name: "option_groups", row_id: gid, before: beforeGroups.find(g => g.group.id === gid) ?? null, after: null });
+      }
+
+      let anyChoiceWritten = false;
+      for (const g of upserts) {
+        let groupId = g.group_id ?? null;
+        if (groupId) {
+          await supabase.from("option_groups").update({
+            name: g.name, required: g.required, min_select: g.min_select, max_select: g.max_select, owner_edited: true,
+          }).eq("id", groupId);
+        } else {
+          const { data: created, error: gErr } = await supabase.from("option_groups").insert({
+            menu_item_id: itemId, name: g.name, required: g.required, min_select: g.min_select, max_select: g.max_select, owner_edited: true,
+          }).select("id").single();
+          if (gErr || !created) throw new Error(gErr?.message ?? "Failed to create option group");
+          groupId = created.id as string;
+        }
+        logEdit({ table_name: "option_groups", row_id: groupId, before: null, after: { name: g.name, required: g.required, min_select: g.min_select, max_select: g.max_select } });
+
+        for (const cid of g.delete_choice_ids ?? []) {
+          await supabase.from("option_choices").delete().eq("id", cid);
+          logEdit({ table_name: "option_choices", row_id: cid, before: null, after: null });
+        }
+        for (const c of g.choices ?? []) {
+          if (c.choice_id) {
+            await supabase.from("option_choices").update({ name: c.name, price_cents: c.price_cents, owner_edited: true }).eq("id", c.choice_id);
+            logEdit({ table_name: "option_choices", row_id: c.choice_id, before: null, after: { name: c.name, price_cents: c.price_cents } });
+          } else {
+            const { data: createdChoice, error: cErr } = await supabase.from("option_choices").insert({
+              option_group_id: groupId, name: c.name, price_cents: c.price_cents, owner_edited: true,
+            }).select("id").single();
+            if (cErr) throw new Error(cErr.message);
+            logEdit({ table_name: "option_choices", row_id: (createdChoice?.id as string) ?? null, before: null, after: { name: c.name, price_cents: c.price_cents } });
+          }
+          anyChoiceWritten = true;
+        }
+      }
+
+      // Never invent an answer: prompt_for clears ONLY when this submission actually supplied
+      // a choice, never as a side effect of an empty or clarification-only turn.
+      if (anyChoiceWritten && item?.prompt_for) {
+        await supabase.from("menu_items").update({ prompt_for: null, owner_edited: true }).eq("id", itemId);
+        logEdit({ table_name: "menu_items", row_id: itemId, before: { prompt_for: item.prompt_for }, after: { prompt_for: null } });
+      }
+
+      // Read back from the DB — the result sentence is built from what was actually written,
+      // never from the proposal.
+      const afterGroups = (await getOptionGroupsForItems(supabase, [itemId])).get(itemId) ?? [];
+      afterSnapshot = { type: "item_options", item_id: itemId, groups_after: afterGroups };
+      const groupDescs = afterGroups
+        .map(g => `${g.group.name}: ${g.choices.map(c => c.name).join(", ") || "no choices yet"}`)
+        .join("; ");
+      resultMsg = afterGroups.length > 0
+        ? `${item?.name ?? "This item"} now has ${afterGroups.length} option group${afterGroups.length === 1 ? "" : "s"} — ${groupDescs}.`
+        : `${item?.name ?? "This item"} has no option groups.`;
+      break;
+    }
+    case "SET_ITEM_FIELDS": {
+      const itemId = proposal.item_id!;
+      const before = menuMap.get(itemId) ?? null;
+      const f = proposal.item_fields ?? {};
+      beforeSnapshot = { type: "item_fields", item_id: itemId, before };
+      const update: Record<string, unknown> = { owner_edited: true };
+      if (f.name !== undefined) update.name = f.name;
+      if (f.price_dollars !== undefined) update.price_cents = Math.round(parseFloat(f.price_dollars) * 100);
+      if (f.description !== undefined) update.description = f.description || null;
+      if (f.category !== undefined) update.category = f.category;
+      if (f.active !== undefined) update.active = f.active;
+      if (f.clear_review_flag) { update.flag_review = false; update.flag_reason = null; }
+      await supabase.from("menu_items").update(update).eq("id", itemId);
+      logEdit({ table_name: "menu_items", row_id: itemId, before, after: update });
+      const { data: fresh } = await supabase.from("menu_items")
+        .select("name, price_cents, description, category, active, flag_review").eq("id", itemId).single();
+      afterSnapshot = { type: "item_fields", item_id: itemId, after: fresh ?? null };
+      resultMsg = fresh
+        ? `${fresh.name} is now $${(fresh.price_cents / 100).toFixed(2)}${fresh.active ? "" : " (marked unavailable)"}${f.clear_review_flag ? " — confirmed correct" : ""}.`
+        : "Updated.";
+      break;
+    }
+    case "SET_STORE_HOURS": {
+      const { data: curShop } = await supabase.from("shops").select("open_hours").eq("id", shopId).single();
+      beforeSnapshot = { type: "store_hours", open_hours_before: curShop?.open_hours ?? null };
+      await supabase.from("shops").update({ open_hours: proposal.open_hours }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { open_hours: curShop?.open_hours ?? null }, after: { open_hours: proposal.open_hours } });
+      const { data: fresh } = await supabase.from("shops").select("open_hours").eq("id", shopId).single();
+      afterSnapshot = { type: "store_hours", open_hours_after: fresh?.open_hours ?? null };
+      resultMsg = `Store hours updated — ${summarizeHours(fresh?.open_hours)}.`;
+      break;
+    }
+    case "SET_DELIVERY_HOURS": {
+      const { data: curShop } = await supabase.from("shops").select("delivery_hours").eq("id", shopId).single();
+      beforeSnapshot = { type: "delivery_hours", delivery_hours_before: curShop?.delivery_hours ?? null };
+      await supabase.from("shops").update({ delivery_hours: proposal.delivery_hours }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { delivery_hours: curShop?.delivery_hours ?? null }, after: { delivery_hours: proposal.delivery_hours } });
+      const { data: fresh } = await supabase.from("shops").select("delivery_hours").eq("id", shopId).single();
+      afterSnapshot = { type: "delivery_hours", delivery_hours_after: fresh?.delivery_hours ?? null };
+      resultMsg = `Delivery hours updated — ${summarizeHours(fresh?.delivery_hours)}.`;
+      break;
+    }
+    case "SET_DELIVERY_ENABLED": {
+      const { data: curShop } = await supabase.from("shops").select("delivery_enabled").eq("id", shopId).single();
+      beforeSnapshot = { type: "delivery_enabled_permanent", delivery_enabled_before: curShop?.delivery_enabled ?? null };
+      await supabase.from("shops").update({ delivery_enabled: proposal.delivery_enabled }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { delivery_enabled: curShop?.delivery_enabled ?? null }, after: { delivery_enabled: proposal.delivery_enabled } });
+      afterSnapshot = { type: "delivery_enabled_permanent", delivery_enabled_after: proposal.delivery_enabled };
+      resultMsg = proposal.delivery_enabled
+        ? "Delivery is now enabled for this shop."
+        : "Delivery is now turned off for this shop — the bot will refuse delivery orders.";
+      break;
+    }
+    case "SET_SHOP_INSTRUCTIONS": {
+      const { data: curShop } = await supabase.from("shops").select("ai_instructions").eq("id", shopId).single();
+      beforeSnapshot = { type: "shop_instructions", ai_instructions_before: curShop?.ai_instructions ?? null };
+      await supabase.from("shops").update({ ai_instructions: proposal.ai_instructions }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { ai_instructions: curShop?.ai_instructions ?? null }, after: { ai_instructions: proposal.ai_instructions } });
+      afterSnapshot = { type: "shop_instructions", ai_instructions_after: proposal.ai_instructions };
+      resultMsg = "Shop instructions updated.";
+      break;
+    }
+    case "SET_WING_POLICY": {
+      const { data: curShop } = await supabase.from("shops").select("wing_flavors_included, wing_mix_extra").eq("id", shopId).single();
+      beforeSnapshot = { type: "wing_policy", before: curShop ?? null };
+      const update: Record<string, unknown> = {};
+      if (proposal.wing_flavors_included !== undefined) update.wing_flavors_included = proposal.wing_flavors_included;
+      if (proposal.wing_mix_extra !== undefined) update.wing_mix_extra = proposal.wing_mix_extra;
+      await supabase.from("shops").update(update).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: curShop ?? null, after: update });
+      const { data: fresh } = await supabase.from("shops").select("wing_flavors_included, wing_mix_extra").eq("id", shopId).single();
+      afterSnapshot = { type: "wing_policy", after: fresh ?? null };
+      resultMsg = `Wing policy: ${fresh?.wing_flavors_included ?? "not set"} flavor(s) included${fresh?.wing_mix_extra ? ", mixing flavors costs extra" : fresh?.wing_mix_extra === false ? ", mixing flavors is included" : ""}.`;
       break;
     }
     case "SET_TICKET_DESTINATION": {
@@ -854,7 +1417,13 @@ Deno.serve(async (req: Request) => {
   const db = isAdmin ? supabase : supabaseRls;
 
   // Parse request
-  let body: { message?: string; message_history?: { role: string; content: string }[]; shop_id?: string; confirmed_action_id?: string };
+  let body: {
+    message?: string; message_history?: { role: string; content: string }[]; shop_id?: string;
+    confirmed_action_id?: string;
+    // Menu & Settings editor form path — an array of ops built directly from clicks/edits,
+    // bypassing the LLM entirely. See the FORM FLOW branch below.
+    form_ops?: Array<Partial<Proposal> & { intent: string }>;
+  };
   try { body = await req.json(); } catch {
     logTranscript(supabase, requestStart, {
       turn_type: "message", outcome: "error", user_id: userId,
@@ -863,7 +1432,7 @@ Deno.serve(async (req: Request) => {
     });
     return jsonResponse({ error: "Invalid JSON" }, 400);
   }
-  const { message, message_history = [], shop_id, confirmed_action_id } = body;
+  const { message, message_history = [], shop_id, confirmed_action_id, form_ops } = body;
 
   const requestSessionId = crypto.randomUUID();
 
@@ -901,6 +1470,66 @@ Deno.serve(async (req: Request) => {
 
   const businessDate = getBusinessDate(shop.timezone ?? "America/New_York");
 
+  // ─── FORM FLOW: the structured Menu & Settings editor builds ops directly from clicks/
+  // edits and sends them here, skipping the LLM entirely. This calls the exact same
+  // validateProposal()/executeAction() the chat path calls below — there is exactly one
+  // apply() per operation, so chat and form cannot diverge into two writers. The client
+  // already showed its own plain-language diff and got an explicit Save before this fires.
+  if (Array.isArray(form_ops) && form_ops.length > 0) {
+    const { data: menuData } = await db
+      .from("menus").select("id").eq("shop_id", shop_id)
+      .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
+      .order("created_at", { ascending: false }).limit(1).single();
+
+    let menuItems: MenuItem[] = [];
+    if (menuData) {
+      const { data: items } = await db
+        .from("menu_items")
+        .select("id, name, price_cents, description, category, active, prompt_for, flag_review, flag_reason")
+        .eq("menu_id", menuData.id)
+        .order("display_order", { ascending: true });
+      menuItems = items ?? [];
+    }
+    const eightySixList = await get86List(db, shop_id, businessDate);
+    const specials = await getActiveSpecials(db, shop_id, businessDate);
+
+    const results: Array<{ ok: boolean; intent: string; result?: string; error?: string }> = [];
+    for (const raw of form_ops) {
+      const proposal: Proposal = { needs_clarification: false, summary: "", ...raw, intent: raw.intent };
+
+      const validation = await validateProposal(proposal, shop_id, businessDate, supabase, menuItems, specials, eightySixList);
+      if (!validation.valid) {
+        results.push({ ok: false, intent: proposal.intent, error: validation.error ?? "Invalid operation" });
+        continue;
+      }
+      if (validation.clarification) {
+        results.push({ ok: false, intent: proposal.intent, error: validation.clarification.summary });
+        continue;
+      }
+      try {
+        const actionId = crypto.randomUUID();
+        const executed = await executeAction(
+          proposal, actionId, shop_id, userId, `[form: ${proposal.intent}]`,
+          businessDate, shop.timezone, db, menuItems, eightySixList, specials,
+          shop.tenant_id, supabase, "form",
+        );
+        results.push({ ok: true, intent: proposal.intent, result: executed.result });
+      } catch (err) {
+        // Honest failure beats a false confirmation — never claim a write succeeded that didn't.
+        results.push({ ok: false, intent: proposal.intent, error: err instanceof Error ? err.message : "Write failed" });
+      }
+    }
+
+    const responseBody = { type: "form_batch_result", results, all_ok: results.every(r => r.ok) };
+    logTranscript(supabase, requestStart, {
+      shop_id, user_id: userId, session_id: requestSessionId,
+      turn_type: "form_ops", outcome: responseBody.all_ok ? "executed" : "partial_error",
+      raw_message: JSON.stringify(form_ops).slice(0, 2000),
+      response_sent: responseBody,
+    });
+    return jsonResponse(responseBody);
+  }
+
   // ─── CONFIRMATION FLOW: if confirmed_action_id is present, execute ────────────
   if (confirmed_action_id && message) {
     // Re-parse the confirming message — it should be a JSON proposal + action_id
@@ -927,7 +1556,7 @@ Deno.serve(async (req: Request) => {
     if (menuData) {
       const { data: items } = await db
         .from("menu_items")
-        .select("id, name, price_cents, description, category, active")
+        .select("id, name, price_cents, description, category, active, prompt_for, flag_review, flag_reason")
         .eq("menu_id", menuData.id)
         .order("display_order", { ascending: true });
       menuItems = items ?? [];
@@ -939,6 +1568,7 @@ Deno.serve(async (req: Request) => {
     const executed = await executeAction(
       proposal, confirmed_action_id, shop_id, userId, `[confirmed: ${confirmed_action_id}]`,
       businessDate, shop.timezone, db, menuItems, eightySixList, specials,
+      shop.tenant_id, supabase, "chat",
     );
     logTranscript(supabase, requestStart, {
       shop_id, user_id: userId, session_id: requestSessionId,
@@ -970,7 +1600,7 @@ Deno.serve(async (req: Request) => {
   if (menuData) {
     const { data: items } = await db
       .from("menu_items")
-      .select("id, name, price_cents, description, category, active")
+      .select("id, name, price_cents, description, category, active, prompt_for, flag_review, flag_reason")
       .eq("menu_id", menuData.id)
       .order("display_order", { ascending: true });
     menuItems = items ?? [];
@@ -978,9 +1608,10 @@ Deno.serve(async (req: Request) => {
 
   const eightySixList = await get86List(db, shop_id, businessDate);
   const specials = await getActiveSpecials(db, shop_id, businessDate);
+  const optionGroupsByItem = await getOptionGroupsForItems(db, menuItems.map(m => m.id));
 
   const currentTime = new Date().toLocaleString("en-US", { timeZone: shop.timezone ?? "America/New_York" });
-  const systemPrompt = buildSystemPrompt(shop, menuItems, specials, eightySixList.map(e => e.item), currentTime);
+  const systemPrompt = buildSystemPrompt(shop, menuItems, specials, eightySixList.map(e => e.item), currentTime, optionGroupsByItem);
 
   // Anthropic API
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? "";
@@ -1087,6 +1718,17 @@ Deno.serve(async (req: Request) => {
       clarification_question: input.clarification_question as string | null | undefined,
       clarification_options: (input.clarification_options ?? input.options) as string[] | undefined,
       summary: (input.summary as string) ?? assistantText,
+      item_id: input.item_id as string | undefined,
+      item_name: input.item_name as string | undefined,
+      upsert_groups: input.upsert_groups as OptionGroupInput[] | undefined,
+      delete_group_ids: input.delete_group_ids as string[] | undefined,
+      item_fields: input.item_fields as Proposal["item_fields"] | undefined,
+      open_hours: input.open_hours as Record<string, DayHours> | undefined,
+      delivery_hours: input.delivery_hours as Record<string, DayHours> | undefined,
+      delivery_enabled: input.delivery_enabled as boolean | undefined,
+      ai_instructions: input.ai_instructions as string | undefined,
+      wing_flavors_included: (input.wing_flavors_included as number | null) ?? undefined,
+      wing_mix_extra: (input.wing_mix_extra as boolean | null) ?? undefined,
     };
 
     // For QUERY_STATUS, just return the reply directly
@@ -1118,6 +1760,7 @@ Deno.serve(async (req: Request) => {
       const executed = await executeAction(
         proposal, actionId, shop_id, userId, message,
         businessDate, shop.timezone, db, menuItems, eightySixList, specials,
+        shop.tenant_id, supabase, "chat",
       );
       logTranscript(supabase, requestStart, {
         shop_id, user_id: userId, session_id: requestSessionId,
