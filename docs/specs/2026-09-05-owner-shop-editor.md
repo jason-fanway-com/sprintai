@@ -47,8 +47,12 @@ editing, hours editor, validation, price handling. Take the logic; move the surf
 
 ## Acceptance criteria
 
-- AC1 New owner page reachable at `/menu`, labelled in `shopOwnerNav` beside Demo Kit, guarded
-  by `ShopOwnerRoute`, self-scoping to the signed-in owner's shop.
+- AC1 New owner page reachable at `/menu-settings`, labelled "Menu & Settings" in
+  `shopOwnerNav`, guarded by `ShopOwnerRoute`, self-scoping to the signed-in owner's shop.
+  (LEAD DECISION 2026-09-05: this spec originally said `/menu` "beside Demo Kit"; the sibling
+  spec `2026-09-05-shop-editor.md` said `/menu-settings`. Resolved in favour of
+  `/menu-settings` at nav position 2 — the route name matches the page, and an owner's
+  most-used screen belongs near the top, not next to the sales kit. As built = correct.)
 - AC2 Items with an unresolved `prompt_for` are surfaced as a fillable question. Answering it
   creates the group + choices, marks them `owner_edited`, and clears `prompt_for`. Submitting
   nothing changes nothing.
