@@ -108,6 +108,12 @@ interface Proposal {
     active?: boolean;
     clear_review_flag?: boolean;
   };
+  new_item?: {
+    name?: string;
+    price_dollars?: string;
+    description?: string;
+    category?: string;
+  };
   open_hours?: Record<string, DayHours>;
   delivery_hours?: Record<string, DayHours>;
   delivery_enabled?: boolean;
@@ -350,6 +356,45 @@ const ADMIN_TOOLS = [
     },
   },
   {
+    name: "ADD_ITEM",
+    description: "Add a brand-new menu item. NEVER invent the name, price, or category — only use exactly what the owner said. If name or price is missing, set needs_clarification=true and ask for it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        new_item: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            price_dollars: { type: "string", description: "Price in dollars as a decimal string, e.g. '9.99'" },
+            description: { type: "string" },
+            category: { type: "string", description: "Menu category/section, e.g. 'Sandwiches'. Leave out if the owner didn't say one." },
+          },
+          required: ["name", "price_dollars"],
+        },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        summary: { type: "string", description: "e.g. 'Add new item: Turkey Club — $9.99'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "REMOVE_ITEM",
+    description: "Permanently remove a menu item from the menu (it stops showing to customers and to the ordering bot; its past order history is unaffected). This is NOT the same as EIGHTYSIX_ITEM, which is a same-day sold-out mark — use EIGHTYSIX_ITEM for 'we're out of X tonight'. Resolve against the real menu; if ambiguous, set needs_clarification=true.",
+    input_schema: {
+      type: "object",
+      properties: {
+        item_id: { type: "string", description: "Menu item ID — resolve unambiguously against the real menu" },
+        item_name: { type: "string", description: "Human-readable item name, for the summary" },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string", description: "e.g. 'Remove Lox Bagel from the menu'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
     name: "SET_STORE_HOURS",
     description: "Set the shop's regular operating hours (not delivery hours — use SET_DELIVERY_HOURS for that). Must cover all seven days.",
     input_schema: {
@@ -510,6 +555,8 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
     - "End the Lox Special"
 12. For SET_ITEM_OPTIONS: NEVER invent a choice the owner did not literally say. If the item name matches more than one menu item (e.g. "Wings (Bone-In)" AND "Wings (Boneless)" both exist), set needs_clarification=true and list both as options — do not guess. If the item already has an option group with a matching name in "options:" above, reuse that group_id to add choices to it rather than creating a duplicate group. Every choice needs an explicit price_cents (0 if free) — never omit it.
 13. For SET_ITEM_FIELDS: only include the fields the owner actually mentioned; leave the rest out of item_fields entirely rather than guessing a value.
+13a. For ADD_ITEM: name and price are required and must come verbatim from the owner — never invent either. If category is not given, leave it out (the backend defaults it).
+13b. For REMOVE_ITEM: resolve against the REAL menu, same as EIGHTYSIX_ITEM. If the owner just wants it unavailable for tonight, that's EIGHTYSIX_ITEM, not REMOVE_ITEM — only use REMOVE_ITEM when they clearly mean permanently taking it off the menu.
 14. For SET_STORE_HOURS / SET_DELIVERY_HOURS: every one of mon,tue,wed,thu,fri,sat,sun must be present, each either {"closed":true} or {"closed":false,"open":"HH:MM","close":"HH:MM"}. If the owner only gives some days, set needs_clarification=true and ask about the rest rather than guessing.
 15. For SET_DELIVERY_ENABLED: this is a PERMANENT on/off switch, not a same-day pause. If the owner says something like "pause delivery" or "turn delivery back on" for today, use PAUSE_DELIVERY/RESUME_DELIVERY instead. Only use SET_DELIVERY_ENABLED for "stop offering delivery" / "start offering delivery" style permanent requests.
 16. For SET_SHOP_INSTRUCTIONS: capture the owner's instructions verbatim into ai_instructions; do not summarize or rewrite their wording.
@@ -727,6 +774,25 @@ async function validateProposal(
         const cents = Math.round(parseFloat(f.price_dollars) * 100);
         if (!Number.isFinite(cents) || cents < 0) return { valid: false, error: "That doesn't look like a valid price." };
       }
+      return { valid: true };
+    }
+    case "ADD_ITEM": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const n = proposal.new_item ?? {};
+      if (!n.name?.trim()) return { valid: false, error: "New item needs a name." };
+      if (n.price_dollars === undefined || n.price_dollars === "") return { valid: false, error: "New item needs a price." };
+      const cents = Math.round(parseFloat(n.price_dollars) * 100);
+      if (!Number.isFinite(cents) || cents < 0) return { valid: false, error: "That doesn't look like a valid price." };
+      return { valid: true };
+    }
+    case "REMOVE_ITEM": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      const itemId = proposal.item_id;
+      if (!itemId || !menuMap.has(itemId)) return { valid: false, error: "Item not found on this shop's menu." };
       return { valid: true };
     }
     case "SET_STORE_HOURS": {
@@ -1086,6 +1152,11 @@ async function executeAction(
       } else if (snapType === "item_options") {
         resultMsg = "Option group changes can't be auto-undone yet — edit the item directly to revert.";
         break;
+      } else if (snapType === "item_add") {
+        await supabase.from("menu_items").delete().eq("id", snap.item_id as string);
+      } else if (snapType === "item_remove") {
+        const before = snap.before as Record<string, unknown> | null;
+        await supabase.from("menu_items").update({ active: (before?.active as boolean | undefined) ?? true }).eq("id", snap.item_id as string);
       }
 
       // Mark the undone action
@@ -1185,6 +1256,51 @@ async function executeAction(
       resultMsg = fresh
         ? `${fresh.name} is now $${(fresh.price_cents / 100).toFixed(2)}${fresh.active ? "" : " (marked unavailable)"}${f.clear_review_flag ? " — confirmed correct" : ""}.`
         : "Updated.";
+      break;
+    }
+    case "ADD_ITEM": {
+      const n = proposal.new_item ?? {};
+      const cents = Math.round(parseFloat(n.price_dollars ?? "0") * 100);
+      const { data: menuRow } = await supabase
+        .from("menus").select("id").eq("shop_id", shopId)
+        .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
+        .order("created_at", { ascending: false }).limit(1).single();
+      if (!menuRow) throw new Error("No active menu found for this shop.");
+      const { data: maxRow } = await supabase
+        .from("menu_items").select("display_order")
+        .eq("menu_id", menuRow.id)
+        .order("display_order", { ascending: false })
+        .limit(1).maybeSingle();
+      const nextOrder = ((maxRow?.display_order as number | null) ?? menu.length) + 1;
+      const { data: created, error: insErr } = await supabase.from("menu_items").insert({
+        menu_id: menuRow.id,
+        name: n.name!.trim(),
+        price_cents: cents,
+        description: n.description?.trim() || null,
+        category: n.category?.trim() || "Other",
+        display_order: nextOrder,
+        active: true,
+        owner_edited: true,
+      }).select("id, name, price_cents, description, category, active").single();
+      if (insErr || !created) throw new Error(insErr?.message ?? "Failed to add item");
+      beforeSnapshot = { type: "item_add", item_id: created.id };
+      logEdit({ table_name: "menu_items", row_id: created.id as string, before: null, after: created });
+      afterSnapshot = { type: "item_add", item_id: created.id, after: created };
+      resultMsg = `Added "${created.name}" — $${((created.price_cents as number) / 100).toFixed(2)} to ${created.category}.`;
+      break;
+    }
+    case "REMOVE_ITEM": {
+      const itemId = proposal.item_id!;
+      const item = menuMap.get(itemId);
+      const { data: curItem } = await supabase
+        .from("menu_items").select("id, name, price_cents, description, category, active")
+        .eq("id", itemId).single();
+      const before = curItem ?? item ?? null;
+      beforeSnapshot = { type: "item_remove", item_id: itemId, before };
+      await supabase.from("menu_items").update({ active: false, owner_edited: true }).eq("id", itemId);
+      logEdit({ table_name: "menu_items", row_id: itemId, before, after: { active: false } });
+      afterSnapshot = { type: "item_remove", item_id: itemId, after: { active: false } };
+      resultMsg = `Removed "${item?.name ?? curItem?.name ?? "item"}" from the menu.`;
       break;
     }
     case "SET_STORE_HOURS": {
@@ -1723,6 +1839,7 @@ Deno.serve(async (req: Request) => {
       upsert_groups: input.upsert_groups as OptionGroupInput[] | undefined,
       delete_group_ids: input.delete_group_ids as string[] | undefined,
       item_fields: input.item_fields as Proposal["item_fields"] | undefined,
+      new_item: input.new_item as Proposal["new_item"] | undefined,
       open_hours: input.open_hours as Record<string, DayHours> | undefined,
       delivery_hours: input.delivery_hours as Record<string, DayHours> | undefined,
       delivery_enabled: input.delivery_enabled as boolean | undefined,

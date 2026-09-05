@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, HelpCircle, AlertTriangle, Search, Plus, Trash2, Save, X, Check } from 'lucide-react'
+import { ChevronDown, ChevronRight, HelpCircle, AlertTriangle, Search, Plus, Trash2, Save, X, Check, Ban, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { applyFormOps, type OptionGroupOp } from '../../lib/shopOps'
 
@@ -41,6 +41,7 @@ interface MenuBulkEditorProps {
   items: MenuItemRow[]
   isLoading: boolean
   optionGroupsByItem: Record<string, OptionGroupWithChoices[]>
+  eightySixedIds: Set<string>
   onSaved: () => void
 }
 
@@ -48,13 +49,15 @@ function titleCase(s: string): string {
   return s.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase())
 }
 
-export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsByItem, onSaved }: MenuBulkEditorProps) {
+export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsByItem, eightySixedIds, onSaved }: MenuBulkEditorProps) {
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const [pending, setPending] = useState<Record<string, PendingEdit>>({})
   const [expanded, setExpanded] = useState<string | null>(null)
   const [showDiff, setShowDiff] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [showAddItem, setShowAddItem] = useState(false)
+  const [busyItemId, setBusyItemId] = useState<string | null>(null)
 
   const needsAnswers = useMemo(
     () => items.filter(i => i.prompt_for && (optionGroupsByItem[i.id]?.length ?? 0) === 0),
@@ -98,6 +101,41 @@ export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsB
       onSaved()
     } catch (err) {
       toast.error((err as Error).message)
+    }
+  }
+
+  const removeItem = async (itemId: string, itemName: string) => {
+    if (!window.confirm(`Remove "${itemName}" from the menu? Customers and the ordering bot will no longer see it.`)) return
+    setBusyItemId(itemId)
+    try {
+      const result = await applyFormOps(shopId, [{ intent: 'REMOVE_ITEM', item_id: itemId, item_name: itemName }])
+      const r = result.results[0]
+      if (!r?.ok) throw new Error(r?.error ?? 'Failed to remove item')
+      toast.success(r.result ?? `Removed ${itemName}`)
+      onSaved()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setBusyItemId(null)
+    }
+  }
+
+  const toggleEightySix = async (itemId: string, itemName: string, currentlyOut: boolean) => {
+    setBusyItemId(itemId)
+    try {
+      const result = await applyFormOps(shopId, [
+        currentlyOut
+          ? { intent: 'RESTORE_ITEM', item_ids: [itemId], needs_clarification: false }
+          : { intent: 'EIGHTYSIX_ITEM', item_ids: [itemId], needs_clarification: false },
+      ])
+      const r = result.results[0]
+      if (!r?.ok) throw new Error(r?.error ?? 'Failed to update')
+      toast.success(r.result ?? (currentlyOut ? `${itemName} is back on` : `${itemName} marked sold out`))
+      onSaved()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setBusyItemId(null)
     }
   }
 
@@ -180,6 +218,13 @@ export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsB
             className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
           />
         </div>
+        <button
+          onClick={() => setShowAddItem(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add item
+        </button>
         {pendingCount > 0 && (
           <button
             onClick={() => setShowDiff(true)}
@@ -263,6 +308,24 @@ export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsB
                         </button>
                       </>
                     )}
+                    <button
+                      onClick={() => toggleEightySix(item.id, item.name, eightySixedIds.has(item.id))}
+                      disabled={busyItemId === item.id}
+                      title={eightySixedIds.has(item.id) ? 'Make available again' : "Mark sold out for tonight"}
+                      className={`flex-shrink-0 flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 border disabled:opacity-50 ${
+                        eightySixedIds.has(item.id) ? 'border-red-200 text-red-700 bg-red-50 hover:bg-red-100' : 'border-gray-200 text-gray-400 bg-gray-50 hover:bg-gray-100'
+                      }`}
+                    >
+                      {eightySixedIds.has(item.id) ? <><RotateCcw className="w-3 h-3" /> 86'd</> : <><Ban className="w-3 h-3" /> 86 tonight</>}
+                    </button>
+                    <button
+                      onClick={() => removeItem(item.id, item.name)}
+                      disabled={busyItemId === item.id}
+                      title="Remove from menu"
+                      className="flex-shrink-0 text-gray-400 hover:text-red-600 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                   {isExpanded && (
                     <ItemOptionsEditor
@@ -278,6 +341,14 @@ export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsB
           </div>
         </div>
       ))}
+
+      {showAddItem && (
+        <AddItemModal
+          shopId={shopId}
+          onClose={() => setShowAddItem(false)}
+          onAdded={() => { setShowAddItem(false); onSaved() }}
+        />
+      )}
 
       {showDiff && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -295,6 +366,99 @@ export default function MenuBulkEditor({ shopId, items, isLoading, optionGroupsB
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function AddItemModal({ shopId, onClose, onAdded }: { shopId: string; onClose: () => void; onAdded: () => void }) {
+  const [name, setName] = useState('')
+  const [priceDollars, setPriceDollars] = useState('')
+  const [category, setCategory] = useState('')
+  const [description, setDescription] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const cents = Math.round((parseFloat(priceDollars) || NaN) * 100)
+  const canSave = name.trim().length > 0 && Number.isFinite(cents) && cents >= 0
+
+  const save = async () => {
+    if (!canSave) return
+    setSaving(true)
+    try {
+      const result = await applyFormOps(shopId, [{
+        intent: 'ADD_ITEM',
+        new_item: {
+          name: name.trim(),
+          price_dollars: priceDollars,
+          description: description.trim() || undefined,
+          category: category.trim() || undefined,
+        },
+      }])
+      const r = result.results[0]
+      if (!r?.ok) throw new Error(r?.error ?? 'Failed to add item')
+      toast.success(r.result ?? `Added ${name.trim()}`)
+      onAdded()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-5">
+        <h3 className="text-base font-semibold text-gray-900 mb-4">Add a new item</h3>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Turkey Club"
+              className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Price</label>
+            <div className="flex items-center gap-1">
+              <span className="text-sm text-gray-400">$</span>
+              <input
+                value={priceDollars}
+                onChange={e => setPriceDollars(e.target.value)}
+                placeholder="9.99"
+                className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Category (optional)</label>
+            <input
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              placeholder="e.g. Sandwiches"
+              className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Description (optional)</label>
+            <input
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="Short description"
+              className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            Cancel
+          </button>
+          <button onClick={save} disabled={!canSave || saving} className="px-3 py-1.5 text-sm text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
+            {saving ? 'Adding...' : 'Add item'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

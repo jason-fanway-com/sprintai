@@ -151,15 +151,40 @@ export default function ShopOwnerMenuSettings() {
   })
 
   // ── Shop settings (hours, delivery, instructions, wing policy) ───────────────────
-  const { data: shopSettings } = useQuery<OwnerShopSettings | null>({
+  const { data: shopSettings } = useQuery<(OwnerShopSettings & { timezone?: string | null }) | null>({
     queryKey: ['menu-settings-shop-config', activeShopId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('shops')
-        .select('id, name, open_hours, delivery_hours, delivery_enabled, ai_instructions, wing_flavors_included, wing_mix_extra')
+        .select('id, name, timezone, open_hours, delivery_hours, delivery_enabled, ai_instructions, wing_flavors_included, wing_mix_extra')
         .eq('id', activeShopId!).single()
       if (error) throw error
       return data
+    },
+    enabled: !!activeShopId,
+  })
+
+  // ── Today's 86 list — same-day sold-out marks, so the list can offer a quick
+  // "86 tonight" / "un-86" toggle without a second screen ───────────────────────────
+  const businessDate = useMemo(() => {
+    const tz = shopSettings?.timezone || 'America/New_York'
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+    } catch {
+      return new Date().toISOString().slice(0, 10)
+    }
+  }, [shopSettings?.timezone])
+
+  const { data: eightySixedIds } = useQuery<Set<string>>({
+    queryKey: ['menu-settings-86', activeShopId, businessDate],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('availability_overrides')
+        .select('menu_item_id')
+        .eq('shop_id', activeShopId!)
+        .eq('business_date', businessDate)
+      if (error) throw error
+      return new Set((data ?? []).map(r => r.menu_item_id as string))
     },
     enabled: !!activeShopId,
   })
@@ -168,6 +193,7 @@ export default function ShopOwnerMenuSettings() {
     qc.invalidateQueries({ queryKey: ['menu-settings-items', menuId] })
     qc.invalidateQueries({ queryKey: ['menu-settings-options'] })
     qc.invalidateQueries({ queryKey: ['menu-settings-shop-config', activeShopId] })
+    qc.invalidateQueries({ queryKey: ['menu-settings-86', activeShopId] })
   }
 
   if (!asOwner) {
@@ -252,6 +278,7 @@ export default function ShopOwnerMenuSettings() {
             items={menuItems ?? []}
             isLoading={itemsLoading}
             optionGroupsByItem={optionGroupsByItem ?? {}}
+            eightySixedIds={eightySixedIds ?? new Set()}
             onSaved={invalidateAll}
           />
         ) : (

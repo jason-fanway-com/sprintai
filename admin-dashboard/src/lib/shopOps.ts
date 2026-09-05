@@ -31,6 +31,10 @@ export interface DayHoursOp {
 
 export type FormOp =
   | { intent: 'SET_ITEM_FIELDS'; item_id: string; item_fields: { name?: string; price_dollars?: string; description?: string; category?: string; active?: boolean; clear_review_flag?: boolean } }
+  | { intent: 'ADD_ITEM'; new_item: { name: string; price_dollars: string; description?: string; category?: string } }
+  | { intent: 'REMOVE_ITEM'; item_id: string; item_name?: string }
+  | { intent: 'EIGHTYSIX_ITEM'; item_ids: string[]; needs_clarification: false }
+  | { intent: 'RESTORE_ITEM'; item_ids: string[]; needs_clarification: false }
   | { intent: 'SET_ITEM_OPTIONS'; item_id: string; item_name?: string; upsert_groups?: OptionGroupOp[]; delete_group_ids?: string[] }
   | { intent: 'SET_STORE_HOURS'; open_hours: Record<string, DayHoursOp> }
   | { intent: 'SET_DELIVERY_HOURS'; delivery_hours: Record<string, DayHoursOp> }
