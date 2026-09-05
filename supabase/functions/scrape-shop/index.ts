@@ -29,6 +29,13 @@ const PDF_FALLBACK_ELAPSED_BUDGET_MS = 100_000;
 // limit and cascade every remaining page to a false "no readable text" partial.
 // Retry with exponential backoff before giving up.
 const FIRECRAWL_MAX_RETRIES = 3;
+// Source priority ladder (docs/specs/2026-09-05-menu-source-priority.md):
+// rung 1 own site (html + own-domain PDF, above) already has its own budget.
+// Rungs 3 (Google listing) and 4 (aggregator) are LAST RESORTS and each cost
+// a Places lookup and/or another Firecrawl scrape + LLM call — bound the total
+// so a shop that fails every rung can't run the function past its timeout.
+const LADDER_FALLBACK_ELAPSED_BUDGET_MS = 130_000;
+const GOOGLE_PLACES_DETAILS_BASE = "https://places.googleapis.com/v1/places";
 // Menu prompt asks for up to 300 items; 8000 tokens truncates real menus mid-JSON.
 // 300 items x ~45 tokens ~= 13.5k, so 16k covers the prompt's own contract with headroom.
 // Deliberately NOT the model's 64k ceiling: this fetch blocks the edge function's wall
@@ -153,6 +160,50 @@ function extractPdfLinksFromHtml(html: string, baseUrl: string): string[] {
   return links;
 }
 
+/** Rung 4 (LAST RESORT) — known off-domain ordering platforms. Measured
+ *  2026-09-05 (docs/specs/2026-09-05-menu-source-priority.md): Slice returns a
+ *  usable priced menu; Toast/ChowNow return zero items because their storefront
+ *  is a JS app our static scrape can't read (a rendering scraper is out of
+ *  scope here). Marketplaces (DoorDash/UberEats/GrubHub) are deliberately
+ *  excluded — they mark up restaurant prices, unlike the direct-order/POS
+ *  platforms below where the restaurant sets the price. */
+const AGGREGATOR_DOMAINS: Array<{ pattern: RegExp; platform: string; label: string }> = [
+  { pattern: /slicelife\.com|slice\.com/i, platform: "slice",   label: "Slice" },
+  { pattern: /toasttab\.com/i,             platform: "toast",   label: "Toast" },
+  { pattern: /chownow\.com/i,              platform: "chownow", label: "ChowNow" },
+  { pattern: /order\.online/i,             platform: "order_online", label: "your ordering site" },
+  { pattern: /orderowner\.com|\bowner\.com/i, platform: "owner", label: "your ordering site" },
+];
+
+function findAggregatorMatch(url: string): { platform: string; label: string } | null {
+  for (const { pattern, platform, label } of AGGREGATOR_DOMAINS) {
+    if (pattern.test(url)) return { platform, label };
+  }
+  return null;
+}
+
+/** Extract off-domain "Order Online" links to known aggregator platforms out
+ *  of homepage HTML — same anchor-scan approach as extractPdfLinksFromHtml,
+ *  since Firecrawl /map only surfaces links it chooses to crawl. */
+function extractAggregatorLinksFromHtml(html: string, baseUrl: string): Array<{ url: string; platform: string; label: string }> {
+  const found: Array<{ url: string; platform: string; label: string }> = [];
+  const seenPlatforms = new Set<string>();
+  const re = /<a\s+[^>]*href=["']([^"']+)["']/gi;
+  let match;
+  while ((match = re.exec(html)) !== null) {
+    const href = match[1];
+    const agg = findAggregatorMatch(href);
+    if (!agg || seenPlatforms.has(agg.platform)) continue;
+    try {
+      found.push({ url: new URL(href, baseUrl).href, ...agg });
+      seenPlatforms.add(agg.platform);
+    } catch {
+      // skip unparseable hrefs
+    }
+  }
+  return found;
+}
+
 /** Filter discovered URLs to the most useful content pages */
 function prioritizePages(links: string[], baseUrl: string): string[] {
   // Skip PDFs, sitemaps, assets, cookie/privacy pages
@@ -192,7 +243,7 @@ function prioritizePages(links: string[], baseUrl: string): string[] {
 }
 
 /** Scrape a single page via Firecrawl /scrape (synchronous, fast) */
-async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string; pdfLinks: string[] }> {
+async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string; pdfLinks: string[]; aggregatorLinks: Array<{ url: string; platform: string; label: string }> }> {
   try {
     const formats = includeRaw ? ["markdown", "rawHtml"] : ["markdown"];
     const res = await fetchWithBackoff(`${FIRECRAWL_BASE}/scrape`, {
@@ -204,15 +255,16 @@ async function scrapePage(url: string, apiKey: string, includeRaw = false): Prom
       body: JSON.stringify({ url, formats }),
     });
 
-    if (!res.ok) return { markdown: "", structured: "", pdfLinks: [] };
+    if (!res.ok) return { markdown: "", structured: "", pdfLinks: [], aggregatorLinks: [] };
 
     const data: { success: boolean; data?: { markdown?: string; rawHtml?: string } } = await res.json();
     const markdown = data.data?.markdown ?? "";
     const structured = includeRaw && data.data?.rawHtml ? extractStructuredData(data.data.rawHtml) : "";
     const pdfLinks = includeRaw && data.data?.rawHtml ? extractPdfLinksFromHtml(data.data.rawHtml, url) : [];
-    return { markdown, structured, pdfLinks };
+    const aggregatorLinks = includeRaw && data.data?.rawHtml ? extractAggregatorLinksFromHtml(data.data.rawHtml, url) : [];
+    return { markdown, structured, pdfLinks, aggregatorLinks };
   } catch {
-    return { markdown: "", structured: "", pdfLinks: [] };
+    return { markdown: "", structured: "", pdfLinks: [], aggregatorLinks: [] };
   }
 }
 
@@ -351,6 +403,11 @@ async function routeMenuPdf(
   const form = new FormData();
   form.append("shop_id", shopId);
   form.append("file", new Blob([bytes], { type: "application/pdf" }), "menu.pdf");
+  // Rung 1: this PDF was found on the restaurant's OWN domain during the site
+  // crawl, not uploaded by the owner — tag it 'website' so it's told apart
+  // from a manual owner upload (which still defaults to 'pdf' in parse-menu-pdf).
+  form.append("source", "website");
+  form.append("source_ref", pdfUrl);
 
   let parseRes: Response;
   try {
@@ -386,6 +443,146 @@ async function routeMenuPdf(
   return { itemCount: count ?? 0 };
 }
 
+type RungLog = { rung: number; source: string; result: string; platform?: string; url?: string; items?: number };
+
+/** Insert LLM-extracted items with explicit provenance (rung 3 or 4). Shared
+ *  by the Google-listing and aggregator rungs below — both scrape an off-domain
+ *  page and hand its markdown to the same extractMenuItems() the html rung uses. */
+async function insertProvenancedItems(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  menuId: string,
+  items: Array<{ name: string; price_cents: number; category: string; description: string }>,
+  source: "google" | "aggregator",
+  sourceRef: string,
+  flagForOwnerReview: boolean,
+  flagReason?: string,
+): Promise<{ inserted: number; error?: string }> {
+  const rows = items.map((it, idx) => ({
+    menu_id: menuId,
+    name: it.name,
+    price_cents: it.price_cents || 0,
+    category: it.category || "",
+    description: it.description || "",
+    display_order: idx,
+    active: true,
+    is_available: true,
+    owner_edited: false,
+    source,
+    source_ref: sourceRef,
+    ...(flagForOwnerReview ? { confidence_score: 0.5, flag_review: true, flag_reason: flagReason } : {}),
+  }));
+  const { error } = await supabase.from("menu_items").insert(rows);
+  if (error) return { inserted: 0, error: error.message };
+  return { inserted: rows.length };
+}
+
+/** Rung 3 (Google listing) — a stub, not a full crawl (spec's own assessment:
+ *  "not close to buildable today"). The Places API exposes no structured menu,
+ *  only a `websiteUri`. This only does anything when that URL is (a) present,
+ *  (b) not the same domain rung 1 already tried, and (c) not itself an
+ *  aggregator link — in which case it's handed to rung 4 instead of double
+ *  counting. One cheap single-page scrape, no multi-page crawl. */
+async function tryGoogleListingRung(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  shop: { google_place_id?: string | null; website_url: string },
+  menuId: string,
+  googleApiKey: string,
+  firecrawlKey: string,
+  openRouterKey: string,
+  anthropicKey: string,
+): Promise<{ success: boolean; itemCount: number; url?: string; rungLog: RungLog; deferredAggregator?: { url: string; platform: string; label: string } }> {
+  if (!shop.google_place_id) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_place_id" } };
+  }
+  if (!googleApiKey) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "google_api_key_not_configured" } };
+  }
+
+  let websiteUri = "";
+  try {
+    const res = await fetch(`${GOOGLE_PLACES_DETAILS_BASE}/${shop.google_place_id}`, {
+      headers: { "X-Goog-Api-Key": googleApiKey, "X-Goog-FieldMask": "websiteUri" },
+    });
+    if (!res.ok) {
+      return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: `places_lookup_failed_${res.status}` } };
+    }
+    const data = await res.json();
+    websiteUri = data?.websiteUri ?? "";
+  } catch (err) {
+    console.error("[scrape-shop] Google Places details error:", err);
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "places_lookup_error" } };
+  }
+
+  if (!websiteUri) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_menu_available" } };
+  }
+
+  const normalize = (u: string) => u.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase();
+  if (shop.website_url && normalize(websiteUri) === normalize(shop.website_url)) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "same_as_website", url: websiteUri } };
+  }
+
+  const agg = findAggregatorMatch(websiteUri);
+  if (agg) {
+    return {
+      success: false, itemCount: 0,
+      rungLog: { rung: 3, source: "google", result: "aggregator_link_deferred_to_rung4", url: websiteUri, platform: agg.platform },
+      deferredAggregator: { url: websiteUri, ...agg },
+    };
+  }
+
+  const { markdown } = await scrapePage(websiteUri, firecrawlKey, false);
+  if (!markdown.trim()) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_content", url: websiteUri } };
+  }
+  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey);
+  if (!items || items.length === 0) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_priced_items", url: websiteUri } };
+  }
+
+  const { inserted, error } = await insertProvenancedItems(supabase, menuId, items, "google", websiteUri, false);
+  if (error) {
+    return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: `insert_failed: ${error}`, url: websiteUri } };
+  }
+  return { success: true, itemCount: inserted, url: websiteUri, rungLog: { rung: 3, source: "google", result: "ok", url: websiteUri, items: inserted } };
+}
+
+/** Rung 4 (LAST RESORT) — follow an off-domain "Order Online" link to a known
+ *  direct-order platform. Every item lands flagged for owner review: an
+ *  aggregator's price is not known to be the restaurant's own price (that's
+ *  the whole reason this rung is last), so it must never look as trusted as a
+ *  rung-1 import. Toast/ChowNow are expected to return 0 items here — their
+ *  storefront is a JS app a static scrape can't read; that's an honest
+ *  no_priced_items result, not a bug in this function. */
+async function tryAggregatorRung(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  menuId: string,
+  aggLink: { url: string; platform: string; label: string },
+  firecrawlKey: string,
+  openRouterKey: string,
+  anthropicKey: string,
+): Promise<{ success: boolean; itemCount: number; rungLog: RungLog }> {
+  const { markdown } = await scrapePage(aggLink.url, firecrawlKey, false);
+  if (!markdown.trim()) {
+    return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_content" } };
+  }
+
+  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey);
+  if (!items || items.length === 0) {
+    return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_priced_items" } };
+  }
+
+  const flagReason = `This price came from ${aggLink.label === "your ordering site" ? aggLink.label : aggLink.label + ", not from you"}. Ordering sites often list higher prices than what you charge directly — please check this against your actual price.`;
+  const { inserted, error } = await insertProvenancedItems(supabase, menuId, items, "aggregator", aggLink.url, true, flagReason);
+  if (error) {
+    return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: `insert_failed: ${error}` } };
+  }
+  return { success: true, itemCount: inserted, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "ok", items: inserted } };
+}
+
 Deno.serve(async (req: Request) => {
   const startedAt = Date.now();
   if (req.method === "OPTIONS") {
@@ -404,7 +601,7 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
   const { data: shop, error: shopErr } = await supabase
-    .from("shops").select("id, website_url, crawl_status, updated_at").eq("id", shop_id).single();
+    .from("shops").select("id, website_url, crawl_status, updated_at, google_place_id").eq("id", shop_id).single();
 
   if (shopErr || !shop)  return jsonResponse({ error: "Shop not found" }, 404);
   if (!shop.website_url) return jsonResponse({ error: "Shop has no website_url set" }, 400);
@@ -465,13 +662,15 @@ Deno.serve(async (req: Request) => {
   const results: string[] = [];
   let structuredContext = "";
   let homepagePdfLinks: string[] = [];
+  let homepageAggregatorLinks: Array<{ url: string; platform: string; label: string }> = [];
   for (let i = 0; i < pages.length; i++) {
     const pageUrl = pages[i];
     const includeRaw = i === 0; // only homepage for structured data
-    const { markdown, structured, pdfLinks } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
+    const { markdown, structured, pdfLinks, aggregatorLinks } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
     if (markdown.trim()) results.push(`## Source: ${pageUrl}\n\n${markdown}`);
     if (structured) structuredContext = structured;
     if (pdfLinks.length) homepagePdfLinks = pdfLinks;
+    if (aggregatorLinks.length) homepageAggregatorLinks = aggregatorLinks;
   }
 
   // Merge homepage-HTML PDF links (catches off-domain CDN hosts and relative
@@ -589,6 +788,14 @@ Deno.serve(async (req: Request) => {
     console.error("[scrape-shop] No menu row found for shop", shop_id);
   }
 
+  // Ladder rung 1 (own site, HTML) + the ladder bookkeeping. rungsTried and
+  // finalSource/finalSourceDetail stay empty unless this run is actually the
+  // one deciding the menu's provenance (existingCount === 0) — a shop that
+  // already has items keeps whatever provenance it already has.
+  const rungsTried: RungLog[] = [];
+  let finalSource: "website" | "google" | "aggregator" | null = null;
+  let finalSourceRef: string | null = null;
+
   if (menuItemsRaw && menuItemsRaw.length > 0) {
     if (menuData) {
       if (existingCount === 0) {
@@ -602,6 +809,8 @@ Deno.serve(async (req: Request) => {
           active: true,
           is_available: true,
           owner_edited: false,
+          source: "website",
+          source_ref: shop.website_url,
         }));
 
         const { error: insertErr } = await supabase.from("menu_items").insert(rows);
@@ -643,6 +852,77 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // Source priority ladder — rungs 3 (Google listing) and 4 (aggregator), LAST
+  // RESORTS, only run when rung 1 (website, above — HTML or own-domain PDF)
+  // and rung 2 (owner upload — not something this function drives; logged as
+  // "not_provided") produced nothing. Only meaningful when this run owns the
+  // menu's provenance (existingCount === 0); an already-populated menu is left
+  // alone. docs/specs/2026-09-05-menu-source-priority.md.
+  if (menuData && existingCount === 0) {
+    rungsTried.push({ rung: 1, source: "website", result: menuHasUsableItems ? "ok" : "no_priced_items", ...(menuHasUsableItems ? { items: menuInserted } : {}) });
+    rungsTried.push({ rung: 2, source: "owner_upload", result: "not_provided" });
+
+    if (menuHasUsableItems) {
+      finalSource = "website";
+      finalSourceRef = shop.website_url;
+    }
+
+    let deferredAggregator: { url: string; platform: string; label: string } | undefined;
+
+    if (!menuHasUsableItems) {
+      if (Date.now() - startedAt > LADDER_FALLBACK_ELAPSED_BUDGET_MS) {
+        rungsTried.push({ rung: 3, source: "google", result: "skipped_elapsed_budget" });
+      } else {
+        const googleApiKey = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
+        const googleResult = await tryGoogleListingRung(supabase, shop, menuData.id, googleApiKey, firecrawlKey, openRouterKey, anthropicKey);
+        rungsTried.push(googleResult.rungLog);
+        if (googleResult.success) {
+          menuInserted = googleResult.itemCount;
+          menuHasUsableItems = true;
+          finalSource = "google";
+          finalSourceRef = googleResult.url ?? null;
+        } else {
+          deferredAggregator = googleResult.deferredAggregator;
+        }
+      }
+    }
+
+    if (!menuHasUsableItems) {
+      if (Date.now() - startedAt > LADDER_FALLBACK_ELAPSED_BUDGET_MS) {
+        rungsTried.push({ rung: 4, source: "aggregator", result: "skipped_elapsed_budget" });
+      } else {
+        // Prefer a link actually found on the homepage; fall back to one the
+        // Google listing pointed at only if the homepage didn't have one.
+        const aggLink = homepageAggregatorLinks[0] ?? deferredAggregator;
+        if (!aggLink) {
+          rungsTried.push({ rung: 4, source: "aggregator", result: "no_aggregator_link_found" });
+        } else {
+          const aggResult = await tryAggregatorRung(supabase, menuData.id, aggLink, firecrawlKey, openRouterKey, anthropicKey);
+          rungsTried.push(aggResult.rungLog);
+          if (aggResult.success) {
+            menuInserted = aggResult.itemCount;
+            menuHasUsableItems = true;
+            finalSource = "aggregator";
+            finalSourceRef = aggLink.url;
+          }
+        }
+      }
+    }
+
+    const menuUpdate: Record<string, unknown> = {
+      source_detail: {
+        rung: finalSource === "website" ? 1 : finalSource === "google" ? 3 : finalSource === "aggregator" ? 4 : null,
+        platform: finalSource === "aggregator" ? findAggregatorMatch(finalSourceRef ?? "")?.platform ?? null : null,
+        url: finalSourceRef,
+        fetched_at: new Date().toISOString(),
+        rungs_tried: rungsTried,
+      },
+    };
+    if (finalSource) menuUpdate.source = finalSource;
+    const { error: menuUpdateErr } = await supabase.from("menus").update(menuUpdate).eq("id", menuData.id);
+    if (menuUpdateErr) console.error("[scrape-shop] Failed to save menu source_detail:", menuUpdateErr);
+  }
+
   const crawlStatus = menuHasUsableItems ? "done" : "partial";
   const crawlError = menuHasUsableItems
     ? null
@@ -675,6 +955,8 @@ Deno.serve(async (req: Request) => {
     menu_links: menuLinkUrls,
     menu_items_extracted: menuItemsRaw?.length ?? 0,
     menu_items_inserted: menuInserted,
+    menu_source: finalSource,
+    rungs_tried: rungsTried,
   });
   } catch (err) {
     console.error("[scrape-shop] Unhandled crawl error:", err);

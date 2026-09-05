@@ -62,16 +62,27 @@ Deno.serve(async (req: Request) => {
     const ct = req.headers.get("Content-Type") || "";
     let shop_id: string | null = null;
     let menuText: string | null = null;
+    // Provenance override: callers driving the source priority ladder (e.g.
+    // scrape-shop finding a PDF on the restaurant's OWN domain) pass these so
+    // the resulting rows are tagged 'website'/<pdf url> instead of the default
+    // 'pdf'/null an owner's manual upload gets. Untrusted free text otherwise —
+    // constrained to the menus_source_check vocabulary below, never trusted raw.
+    let sourceOverride: string | null = null;
+    let sourceRefOverride: string | null = null;
 
     if (ct.includes("application/json")) {
       const body = await req.json() as Record<string,unknown>;
       shop_id  = body.shop_id as string | null;
       menuText = body.text    as string | null;
+      sourceOverride    = (body.source as string | null)     ?? null;
+      sourceRefOverride = (body.source_ref as string | null) ?? null;
     } else if (ct.includes("multipart/form-data")) {
       let fd: FormData;
       try { fd = await req.formData(); } catch { return jsonError("Failed to parse form data"); }
       shop_id  = fd.get("shop_id") as string | null;
       menuText = fd.get("text")    as string | null;
+      sourceOverride    = fd.get("source")     as string | null;
+      sourceRefOverride = fd.get("source_ref") as string | null;
       const file  = fd.get("file")  as File | null;
       const files = fd.getAll("files") as File[];
       for (const f of (file ? [file, ...files] : files)) {
@@ -90,6 +101,10 @@ Deno.serve(async (req: Request) => {
 
     if (!shop_id) return jsonError("shop_id is required");
     if (!menuText || menuText.length < 50) return jsonError("Menu text is required (min 50 chars). Send 'text' field directly, or send a 'file' PDF with extractable text.");
+
+    const ALLOWED_SOURCES = new Set(["toast", "manual", "pdf", "csv", "website", "owner_upload", "google", "aggregator"]);
+    const menuSource = sourceOverride && ALLOWED_SOURCES.has(sourceOverride) ? sourceOverride : "pdf";
+    const menuSourceRef = menuSource !== "pdf" ? (sourceRefOverride || null) : null;
 
     const textChars = menuText.length;
     console.log(`[parse-menu-pdf] ${textChars} chars`);
@@ -342,7 +357,7 @@ Deno.serve(async (req: Request) => {
 
     // -- Persist menu ---------------------------------------------------------
     const { data: menu, error: mErr } = await supabase.from("menus").insert({
-      shop_id, name: "Uploaded Menu", source: "pdf", raw_json: allRows,
+      shop_id, name: "Uploaded Menu", source: menuSource, raw_json: allRows,
       content_hash: contentHash, open_questions: openQuestions, validated: validation.passed,
       extraction_metadata: { model: MODEL, latency_ms: latencyMs, text_chars: textChars, confirmed_prices: confirmedPrices, flagged_by_consensus: flaggedByConsensus, passes: 3, dollar_amounts_in_text: dollarAmounts.size },
       effective_from: new Date().toISOString(),
@@ -362,6 +377,8 @@ Deno.serve(async (req: Request) => {
       flag_review: (row as any)._flag || false,
       flag_reason: (row as any)._reason || null,
       modifiers_json: null,
+      source: menuSource,
+      source_ref: menuSourceRef,
     }));
     const { error: iErr } = await supabase.from("menu_items").insert(itemRows);
     if (iErr) { await supabase.from("menus").delete().eq("id", menu.id); return jsonError("Items: " + iErr.message, 500); }
