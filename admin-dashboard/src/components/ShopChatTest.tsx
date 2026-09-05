@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, RefreshCw, MessageSquare, ShoppingCart, X } from 'lucide-react'
+import { Send, RefreshCw, MessageSquare, ShoppingCart, X, ClipboardCopy, Check, Flag } from 'lucide-react'
 import { supabase, supabaseAnonKey } from '../lib/supabase'
 
 interface ChatMessage {
@@ -55,6 +55,15 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
   const [phase, setPhase]             = useState<string>('greeting')
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null)
   const [showCart, setShowCart]       = useState(false)
+  // Which model actually served this conversation. Reported by chat-sms; left
+  // null if the response doesn't carry it. A guessed value would be worse than
+  // none — the whole value of the corpus is that it records what really happened.
+  const [servingModel, setServingModel] = useState<string | null>(null)
+  // Capture flow: idle → asking ("what felt wrong?") → saving → sent | failed
+  const [capture, setCapture]         = useState<'idle' | 'asking' | 'saving' | 'sent' | 'failed'>('idle')
+  const [reporterNote, setReporterNote] = useState('')
+  const [captureError, setCaptureError] = useState<string | null>(null)
+  const [copied, setCopied]           = useState(false)
   const messagesRef      = useRef<HTMLDivElement>(null)
   const pollStartTimeRef = useRef<string | null>(null)
   const inputRef         = useRef<HTMLInputElement>(null)
@@ -225,6 +234,7 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
       }
       if (data.cart)         setCart(data.cart)
       if (data.phase)        setPhase(data.phase)
+      if (data.model)        setServingModel(data.model)
       if (data.checkout_url) setCheckoutUrl(data.checkout_url)
       if (data.session_id)   localStorage.setItem(makeStorageKey(shopId), data.session_id)
     } catch (err) {
@@ -249,6 +259,94 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
     setCart([])
     setPhase('greeting')
     setCheckoutUrl(null)
+    setServingModel(null)
+    setCapture('idle')
+    setReporterNote('')
+    setCaptureError(null)
+  }
+
+  // ── Capture ───────────────────────────────────────────────────────────────
+  // Spec: docs/specs/2026-09-05-test-capture.md. Capture only — nothing here
+  // analyses, scores, or judges the conversation.
+
+  /**
+   * The conversation as plain text for a human to read after pasting.
+   * Verbatim in both directions, including the cart footer lines exactly as the
+   * bot sent them. No markdown, no tables, no summarising.
+   */
+  const buildTranscriptText = (): string => {
+    const header = [
+      `Shop:  ${shopName}`,
+      `Model: ${servingModel ?? 'unknown'}`,
+      `Time:  ${new Date().toLocaleString()}`,
+      `Phase: ${phase}`,
+      '',
+      '─'.repeat(48),
+      '',
+    ].join('\n')
+
+    const body = messages
+      .map(m => `${m.role === 'user' ? 'Customer' : 'Bot'} (${m.timestamp.toLocaleTimeString()}):\n${m.content}`)
+      .join('\n\n')
+
+    const cartLines = cart.length
+      ? [
+          '',
+          '─'.repeat(48),
+          '',
+          'Final cart:',
+          ...cart.map(i => `  ${i.quantity}x ${i.name}${i.modifiers?.length ? ` (${i.modifiers.join(', ')})` : ''} — $${((i.price_cents * i.quantity) / 100).toFixed(2)}`),
+          `  Subtotal: $${(cartSubtotal / 100).toFixed(2)}`,
+        ].join('\n')
+      : ''
+
+    return header + body + cartLines + '\n'
+  }
+
+  const copyTranscript = async () => {
+    await navigator.clipboard.writeText(buildTranscriptText())
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  /** Persist verbatim. `note` is null when the reporter skipped the question. */
+  const submitForReview = async (note: string | null) => {
+    setCapture('saving')
+    setCaptureError(null)
+    try {
+      // tenant_id is required by the RLS insert policy. Read it from the shop
+      // rather than trusting anything held in the client.
+      const { data: shopRow, error: shopErr } = await supabase
+        .from('shops')
+        .select('tenant_id')
+        .eq('id', shopId)
+        .single()
+      if (shopErr) throw shopErr
+
+      const { error } = await supabase.from('test_transcripts').insert({
+        shop_id:       shopId,
+        tenant_id:     shopRow?.tenant_id ?? null,
+        shop_name:     shopName,
+        model:         servingModel,
+        // Verbatim, both directions, in order. Do not reformat this.
+        messages:      messages.map(m => ({
+          role: m.role,
+          text: m.content,
+          at:   m.timestamp.toISOString(),
+        })),
+        final_cart:    { items: cart, subtotal_cents: cartSubtotal, phase },
+        reporter_note: note && note.trim() ? note.trim() : null,
+        source:        'simulator',
+      })
+      if (error) throw error
+
+      setCapture('sent')
+      setReporterNote('')
+      setTimeout(() => setCapture(c => (c === 'sent' ? 'idle' : c)), 4000)
+    } catch (err) {
+      setCaptureError(err instanceof Error ? err.message : 'Could not save')
+      setCapture('failed')
+    }
   }
 
   const cartSubtotal = cart.reduce((s, i) => s + i.price_cents * i.quantity, 0)
@@ -448,6 +546,71 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
               </div>
             </div>
           </div>
+        )}
+      </div>
+
+      {/* ── Capture bar ───────────────────────────────────────────────────
+          Two buttons beneath the simulator, per
+          docs/specs/2026-09-05-test-capture.md. Lives inside ShopChatTest so
+          every mount point (Chat Admin tab, At a Glance) gets it for free.
+          Capture only — nothing here scores or judges the conversation. */}
+      <div className="w-[300px] mt-2.5 px-0.5">
+        {capture === 'asking' ? (
+          <div className="bg-white rounded-2xl p-2.5">
+            <label className="block text-xs font-semibold text-gray-800 mb-1.5">
+              What felt wrong?
+            </label>
+            <input
+              value={reporterNote}
+              onChange={e => setReporterNote(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submitForReview(reporterNote) }}
+              placeholder="One line is plenty — optional"
+              maxLength={280}
+              autoFocus
+              className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500"
+            />
+            <div className="flex gap-1.5 mt-2">
+              <button
+                onClick={() => submitForReview(reporterNote)}
+                className="flex-1 px-2 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-xl hover:bg-brand-700 transition-colors"
+              >
+                Send
+              </button>
+              <button
+                onClick={() => submitForReview(null)}
+                className="px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex gap-1.5">
+            <button
+              onClick={copyTranscript}
+              disabled={messages.length === 0}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium bg-white/10 text-white rounded-xl hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied' : 'Copy transcript'}
+            </button>
+            <button
+              onClick={() => { setCaptureError(null); setCapture('asking') }}
+              disabled={messages.length === 0 || capture === 'saving'}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium bg-white/10 text-white rounded-xl hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              {capture === 'sent'
+                ? <><Check className="w-3.5 h-3.5" />Sent for review</>
+                : capture === 'saving'
+                  ? 'Sending…'
+                  : <><Flag className="w-3.5 h-3.5" />Send for review</>}
+            </button>
+          </div>
+        )}
+        {capture === 'failed' && (
+          <p className="text-xs text-red-300 mt-1.5 px-1 leading-snug">
+            Not saved — {captureError}. Copy the transcript so it isn't lost.
+          </p>
         )}
       </div>
     </div>

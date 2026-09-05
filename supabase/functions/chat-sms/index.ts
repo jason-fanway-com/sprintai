@@ -4384,5 +4384,10 @@ Deno.serve(async (req: Request) => {
     notes:        currentCart.notes,
     session_id:   sessionId,
     checkout_url: checkoutUrl,
+    // Which model served this turn. Read by the simulator's test-transcript
+    // capture so the stored corpus records what actually answered, rather than
+    // a value the client guessed. Web/JSON path only — the SMS branch above
+    // returns TwiML and is untouched.
+    model:        CHAT_MODEL,
   });
 });
