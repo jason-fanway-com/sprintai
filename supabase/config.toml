@@ -92,3 +92,10 @@ verify_jwt = false  # Migration 083's hourly pg_cron job authenticates with a
                     # function's own secret check ever runs (incident found
                     # 2026-09-04: deployed with verify_jwt=true, silently
                     # blocking go-live gate #13 for every real merchant).
+
+[functions.public-tester]
+verify_jwt = false  # Called from the public, unauthenticated /try page with no
+                    # Supabase key at all. The function is its own gate: it
+                    # holds the service role internally and enforces the kill
+                    # switch, the live-shop guard, and all rate limits itself
+                    # on every request. See docs/specs/2026-09-05-public-tester-BUILD.md.

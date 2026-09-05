@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Try SprintAI — Test Kitchen</title>
+<meta name="description" content="Order pretend pizza and help us test SprintAI's text-message ordering system.">
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --brand: #E8521A;
+  --brand-hover: #C94412;
+  --brand-light: #FEF3EE;
+  --cream: #FFFDF9;
+  --warm: #FFF8F3;
+  --navy: #17212E;
+  --ink: #2A3540;
+  --muted: #687585;
+  --light: #96A5B4;
+  --border: #E6ECF2;
+  --border-warm: #EDE3DA;
+  --green: #16A34A;
+  --green-light: #F0FDF4;
+  --green-border: #BBF7D0;
+  --red: #DC2626;
+  --red-light: #FEF2F2;
+  --font-d: 'Fraunces', Georgia, serif;
+  --font-b: 'DM Sans', system-ui, sans-serif;
+  --r: 14px;
+  --r-lg: 20px;
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font-b);
+  background: var(--warm);
+  color: var(--ink);
+  line-height: 1.5;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 14px 32px;
+}
+
+.wrap { width: 100%; max-width: 460px; }
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.brand-mark {
+  font-family: var(--font-d);
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--navy);
+}
+.brand-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.framing {
+  background: var(--brand-light);
+  border: 1px solid var(--border-warm);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.framing p + p { margin-top: 6px; }
+.framing strong { color: var(--brand-hover); }
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(23,33,46,0.06);
+}
+
+.card-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-header .shop-name { font-weight: 700; font-size: 14.5px; color: var(--navy); }
+.card-header .status {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--warm);
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.messages {
+  height: 56vh;
+  min-height: 320px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--cream);
+}
+.msg { display: flex; }
+.msg.user { justify-content: flex-end; }
+.msg .bubble {
+  max-width: 82%;
+  padding: 9px 13px;
+  border-radius: 16px;
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg.user .bubble { background: var(--brand); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot .bubble { background: #fff; color: var(--ink); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg .bubble a { color: inherit; text-decoration: underline; }
+.msg.user .bubble a { color: #fff; }
+
+.typing .bubble { display: flex; gap: 4px; align-items: center; padding: 11px 14px; }
+.typing .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--light); animation: bounce 1.1s infinite; }
+.typing .dot:nth-child(2) { animation-delay: 0.15s; }
+.typing .dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-3px); opacity: 1; } }
+
+.input-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+.input-bar input {
+  flex: 1;
+  padding: 10px 13px;
+  font-size: 14px;
+  font-family: var(--font-b);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  outline: none;
+}
+.input-bar input:focus { border-color: var(--brand); }
+.input-bar button {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-b);
+  color: #fff;
+  background: var(--brand);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.input-bar button:hover { background: var(--brand-hover); }
+.input-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.center-msg {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.center-msg strong { display: block; color: var(--navy); font-size: 16px; margin-bottom: 6px; }
+
+.capture-bar { padding: 12px; border-top: 1px solid var(--border); background: #fff; }
+.capture-bar .row { display: flex; gap: 8px; }
+.capture-bar button {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: var(--font-b);
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--warm);
+  color: var(--ink);
+}
+.capture-bar button.primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+.capture-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+.capture-bar button:hover:not(:disabled) { filter: brightness(0.96); }
+
+.ask-form label { display: block; font-size: 13px; font-weight: 600; color: var(--navy); margin-bottom: 6px; }
+.ask-form input[type=text] {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-family: var(--font-b);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  outline: none;
+}
+.ask-form input[type=text]:focus { border-color: var(--brand); }
+.ask-form .row { display: flex; gap: 8px; }
+
+.note { font-size: 12px; color: var(--muted); margin-top: 8px; text-align: center; }
+.note.error { color: var(--red); }
+
+.thankyou { padding: 32px 20px; text-align: center; }
+.thankyou .check {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--green-light); border: 1px solid var(--green-border);
+  color: var(--green); display: flex; align-items: center; justify-content: center;
+  font-size: 22px; margin: 0 auto 12px;
+}
+.thankyou strong { display: block; color: var(--navy); font-size: 16px; margin-bottom: 6px; }
+.thankyou p { color: var(--muted); font-size: 13.5px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <span class="brand-mark">SprintAI</span>
+    <span class="brand-tag">Test Kitchen</span>
+  </div>
+
+  <div class="framing">
+    <p>This is a test of our text-message ordering system — <strong>order like you would from a real pizzeria.</strong></p>
+    <p>Nothing is charged and no food comes. Your conversation helps us find rough edges.</p>
+  </div>
+
+  <div class="card" id="card">
+    <div class="center-msg">Loading…</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3NDg2ODksImV4cCI6MjA5MDMyNDY4OX0.5SOW_FX92dIw_zgbqF7HO2SM5ueQC3YPaAexKCFAv3E';
+  const FN_URL = SUPABASE_URL + '/functions/v1/public-tester';
+  const STORAGE_KEY = 'sprintai-tester-session';
+
+  const RATE_LIMIT_MESSAGES = {
+    global_cap:    "We've hit today's testing limit across all testers — please try again tomorrow. Thanks for your patience!",
+    ip_limit:      "You've started a few test orders in the last hour — take a short break and try again soon.",
+    session_limit: "You've started a few test orders in the last hour — take a short break and try again soon.",
+    disabled:      "Testing is paused right now. Check back later!",
+    misconfigured: "Something's not set up right on our end. Please try again later.",
+  };
+
+  const card = document.getElementById('card');
+
+  let sessionId = null;
+  let shopName = '';
+  let messages = [];   // { role: 'user'|'assistant', content, at }
+  let cart = [];
+  let model = null;
+  let capped = false;
+  let sending = false;
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+  }
+
+  function linkify(text) {
+    return esc(text).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  async function api(action, extra) {
+    const res = await fetch(FN_URL, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(Object.assign({ action: action }, extra || {})),
+    });
+    const data = await res.json().catch(function () { return {}; });
+    return { status: res.status, data: data };
+  }
+
+  function friendlyReason(reason) {
+    return RATE_LIMIT_MESSAGES[reason] || "Something went wrong starting your test order. Please try again.";
+  }
+
+  function renderPaused(message) {
+    card.innerHTML = '<div class="center-msg"><strong>Testing is paused</strong>' + esc(message) + '</div>';
+  }
+
+  async function start() {
+    card.innerHTML = '<div class="center-msg">Loading…</div>';
+    messages = []; cart = []; model = null; capped = false;
+
+    const hint = localStorage.getItem(STORAGE_KEY);
+    const { status, data } = await api('start', hint ? { session_id: hint } : {});
+
+    if (!data.ok) {
+      if (status === 503 && data.reason === 'disabled') {
+        renderPaused(friendlyReason('disabled'));
+      } else if (status === 429) {
+        renderPaused(friendlyReason(data.reason));
+      } else {
+        renderPaused(friendlyReason(data.reason));
+      }
+      return;
+    }
+
+    sessionId = data.session_id;
+    shopName = data.shop_name || 'the test shop';
+    localStorage.setItem(STORAGE_KEY, sessionId);
+    renderChat();
+  }
+
+  function renderChat() {
+    card.innerHTML =
+      '<div class="card-header">' +
+        '<span class="shop-name">' + esc(shopName) + '</span>' +
+        '<span class="status">Test mode</span>' +
+      '</div>' +
+      '<div class="messages" id="messages"></div>' +
+      '<div class="input-bar">' +
+        '<input id="msg-input" type="text" placeholder="Type as the customer…" autocomplete="off">' +
+        '<button id="send-btn">Send</button>' +
+      '</div>' +
+      '<div class="capture-bar" id="capture-bar"></div>';
+
+    document.getElementById('send-btn').addEventListener('click', sendMessage);
+    document.getElementById('msg-input').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    renderMessages();
+    renderCaptureBar();
+  }
+
+  function renderMessages() {
+    const el = document.getElementById('messages');
+    if (!el) return;
+    el.innerHTML = messages.map(function (m) {
+      return '<div class="msg ' + (m.role === 'user' ? 'user' : 'bot') + '"><div class="bubble">' + linkify(m.content) + '</div></div>';
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setTyping(on) {
+    const el = document.getElementById('messages');
+    if (!el) return;
+    const existing = el.querySelector('.typing');
+    if (on && !existing) {
+      const d = document.createElement('div');
+      d.className = 'msg bot typing';
+      d.innerHTML = '<div class="bubble"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>';
+      el.appendChild(d);
+      el.scrollTop = el.scrollHeight;
+    } else if (!on && existing) {
+      existing.remove();
+    }
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('msg-input');
+    const btn = document.getElementById('send-btn');
+    const text = (input.value || '').trim();
+    if (!text || sending) return;
+
+    sending = true;
+    input.value = '';
+    btn.disabled = true;
+    messages.push({ role: 'user', content: text, at: new Date().toISOString() });
+    renderMessages();
+    setTyping(true);
+
+    const { data } = await api('send', { session_id: sessionId, message: text });
+    setTyping(false);
+    sending = false;
+    btn.disabled = false;
+
+    if (!data.ok) {
+      messages.push({ role: 'assistant', content: 'Sorry — something went wrong sending that. Please try again.', at: new Date().toISOString() });
+      renderMessages();
+      return;
+    }
+
+    if (data.reply) {
+      messages.push({ role: 'assistant', content: data.reply, at: new Date().toISOString() });
+    }
+    if (data.cart) cart = data.cart;
+    if (data.model) model = data.model;
+    if (data.checkout_url) {
+      messages.push({ role: 'assistant', content: 'Payment link: ' + data.checkout_url, at: new Date().toISOString() });
+    }
+    if (data.capped) {
+      capped = true;
+      document.getElementById('msg-input').disabled = true;
+      document.getElementById('send-btn').disabled = true;
+    }
+    renderMessages();
+    renderCaptureBar();
+  }
+
+  function renderCaptureBar() {
+    const el = document.getElementById('capture-bar');
+    if (!el) return;
+    const disabled = messages.length === 0 ? 'disabled' : '';
+    el.innerHTML =
+      '<div class="row">' +
+        '<button id="review-btn" ' + disabled + '>What felt wrong? (Send for review)</button>' +
+      '</div>';
+    document.getElementById('review-btn').addEventListener('click', renderAskForm);
+  }
+
+  function renderAskForm() {
+    const el = document.getElementById('capture-bar');
+    el.innerHTML =
+      '<div class="ask-form">' +
+        '<label>Your first name (optional)</label>' +
+        '<input type="text" id="tester-name" maxlength="60" placeholder="e.g. Erin">' +
+        '<label>What felt wrong? (optional)</label>' +
+        '<input type="text" id="reporter-note" maxlength="280" placeholder="One line is plenty">' +
+        '<div class="row">' +
+          '<button class="primary" id="submit-review-btn">Send</button>' +
+          '<button id="skip-review-btn">Skip</button>' +
+        '</div>' +
+        '<p class="note" id="submit-note"></p>' +
+      '</div>';
+    document.getElementById('submit-review-btn').addEventListener('click', function () { submitReview(false); });
+    document.getElementById('skip-review-btn').addEventListener('click', function () { submitReview(true); });
+  }
+
+  async function submitReview(skip) {
+    const testerNameEl = document.getElementById('tester-name');
+    const noteEl = document.getElementById('reporter-note');
+    const noteOut = document.getElementById('submit-note');
+    const testerName = testerNameEl ? testerNameEl.value.trim() : '';
+    const reporterNote = skip ? '' : (noteEl ? noteEl.value.trim() : '');
+
+    noteOut.textContent = 'Sending…';
+    noteOut.className = 'note';
+
+    const { data } = await api('submit', {
+      session_id:    sessionId,
+      tester_name:   testerName || undefined,
+      reporter_note: reporterNote || undefined,
+      model:         model,
+      messages:      messages.map(function (m) { return { role: m.role, text: m.content, at: m.at }; }),
+      final_cart:    { items: cart, phase: capped ? 'capped' : undefined },
+    });
+
+    if (!data.ok) {
+      noteOut.textContent = data.message || 'Could not save your feedback — please try again.';
+      noteOut.className = 'note error';
+      return;
+    }
+
+    renderThankYou();
+  }
+
+  function renderThankYou() {
+    card.innerHTML =
+      '<div class="thankyou">' +
+        '<div class="check">✓</div>' +
+        '<strong>Thanks for testing!</strong>' +
+        '<p>Your feedback landed with the team. Want to try another order?</p>' +
+        '<div class="capture-bar" style="border:none;padding:0;">' +
+          '<div class="row"><button class="primary" id="fresh-btn">Start a fresh order</button></div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('fresh-btn').addEventListener('click', start);
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
