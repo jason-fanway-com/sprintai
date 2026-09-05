@@ -45,6 +45,12 @@ const MENU_MAX_TOKENS = 16_000;
 // Hard bound so a stalled upstream can never eat the whole function budget; on abort the
 // catch below returns null and the caller records "partial" instead of dying silently.
 const LLM_TIMEOUT_MS = 90_000;
+// Menu extraction generates far more output than hours/context (up to 300 items at
+// MENU_MAX_TOKENS=16k). Measured 2026-09-05 on a real 150-item menu (biaggiopizza.com):
+// the model needed ~121s to finish, so LLM_TIMEOUT_MS=90s was aborting the fetch mid-generation
+// and returning null — reported as "no_priced_items" for a menu that was fully extractable.
+// That's a timeout bug, not a missing-menu result; give this call more room.
+const MENU_LLM_TIMEOUT_MS = 170_000;
 
 /** Extract JSON-LD structured data from raw HTML */
 function extractStructuredData(html: string): string {
@@ -178,6 +184,29 @@ const AGGREGATOR_DOMAINS: Array<{ pattern: RegExp; platform: string; label: stri
 function findAggregatorMatch(url: string): { platform: string; label: string } | null {
   for (const { pattern, platform, label } of AGGREGATOR_DOMAINS) {
     if (pattern.test(url)) return { platform, label };
+  }
+  return null;
+}
+
+/** White-label trap (docs/specs/2026-09-05-menu-source-priority.md, item D):
+ *  familypizzeriamenu.com and biaggiopizza.com/menu both serve a *custom* domain whose
+ *  page assets are actually rendered by an aggregator's platform underneath — "the
+ *  restaurant's own site" wearing the aggregator as a costume. findAggregatorMatch()
+ *  only catches the overt case (URL literally on slicelife.com/toasttab.com/etc.); this
+ *  catches the disguised case by looking for the platform's asset/CDN signature in the
+ *  page content itself. Only meaningful when the domain isn't already an overt
+ *  aggregator domain — that's not a costume, it's not hiding anything. */
+const WHITE_LABEL_BACKEND_SIGNATURES: Array<{ pattern: RegExp; platform: string }> = [
+  { pattern: /pluto-images\.|static-content\.owner\.com|powered by owner/i, platform: "owner" },
+  { pattern: /slicelife\.com|powered by slice/i, platform: "slice" },
+  { pattern: /toasttab\.com/i, platform: "toast" },
+  { pattern: /chownow\.com/i, platform: "chownow" },
+];
+
+function detectWhiteLabelBackend(combinedText: string, ownWebsiteUrl: string): string | null {
+  if (findAggregatorMatch(ownWebsiteUrl)) return null;
+  for (const { pattern, platform } of WHITE_LABEL_BACKEND_SIGNATURES) {
+    if (pattern.test(combinedText)) return platform;
   }
   return null;
 }
@@ -347,7 +376,7 @@ async function extractMenuItems(
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 55_000) }],
       }),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(MENU_LLM_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.error("[scrape-shop] LLM menu extraction failed:", res.status);
@@ -443,7 +472,7 @@ async function routeMenuPdf(
   return { itemCount: count ?? 0 };
 }
 
-type RungLog = { rung: number; source: string; result: string; platform?: string; url?: string; items?: number };
+type RungLog = { rung: number; source: string; result: string; platform?: string; url?: string; items?: number; backend?: string };
 
 /** Insert LLM-extracted items with explicit provenance (rung 3 or 4). Shared
  *  by the Google-listing and aggregator rungs below — both scrape an off-domain
@@ -689,6 +718,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const combinedText = results.join("\n\n---\n\n").substring(0, MAX_COMBINED_CHARS);
+  const websiteBackend = detectWhiteLabelBackend(combinedText, shop.website_url);
 
   if (!combinedText.trim()) {
     await supabase.from("shops").update({ crawl_status: "failed", crawl_error: "No readable text found on website" }).eq("id", shop_id);
@@ -859,7 +889,7 @@ Deno.serve(async (req: Request) => {
   // menu's provenance (existingCount === 0); an already-populated menu is left
   // alone. docs/specs/2026-09-05-menu-source-priority.md.
   if (menuData && existingCount === 0) {
-    rungsTried.push({ rung: 1, source: "website", result: menuHasUsableItems ? "ok" : "no_priced_items", ...(menuHasUsableItems ? { items: menuInserted } : {}) });
+    rungsTried.push({ rung: 1, source: "website", result: menuHasUsableItems ? "ok" : "no_priced_items", ...(menuHasUsableItems ? { items: menuInserted } : {}), ...(websiteBackend ? { backend: websiteBackend } : {}) });
     rungsTried.push({ rung: 2, source: "owner_upload", result: "not_provided" });
 
     if (menuHasUsableItems) {
@@ -916,6 +946,11 @@ Deno.serve(async (req: Request) => {
         url: finalSourceRef,
         fetched_at: new Date().toISOString(),
         rungs_tried: rungsTried,
+        // The DOMAIN can say "website" while the page is actually rendered by an
+        // aggregator underneath (the white-label trap — see detectWhiteLabelBackend).
+        // Recorded regardless of which rung ultimately won, so "source=website" never
+        // reads as more independent than it actually is.
+        on_domain_backend: websiteBackend,
       },
     };
     if (finalSource) menuUpdate.source = finalSource;
