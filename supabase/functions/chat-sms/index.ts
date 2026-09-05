@@ -16,6 +16,7 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
 import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
+import { stripInventedActions } from "./invented-action-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -563,7 +564,7 @@ function buildSystemPrompt(
       lines.push(`splitting an order across flavors costs nothing extra`);
     }
     if (lines.length === 0) {
-      return `\nWING POLICY: NOT CONFIGURED for this shop. You do NOT know how many flavors are included, or whether an order can be split across flavors. Do NOT tell the customer they can mix and match, and do NOT tell them they cannot. Ask, or say you will check with the kitchen.`;
+      return `\nWING POLICY: NOT CONFIGURED for this shop. You do NOT know how many flavors are included, or whether an order can be split across flavors. Do NOT tell the customer they can mix and match, and do NOT tell them they cannot. Ask the customer what they want, add it, and move on. Do NOT say you will check with the kitchen - you cannot check with anyone.`;
     }
     return `\nWING POLICY (authoritative, from this shop's settings): ${lines.join("; ")}. Do not state any wing policy beyond this.`;
   })();
@@ -623,8 +624,9 @@ RULES:
 - When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If they say "7 sesame and 7 plain" and a dozen bundle is active, that is 14 bagels which completes the dozen. Just add them.
 - While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
 - OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
-- WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask, or offer to check - never guess and never imply a list exists. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "Let me check which dressings we have - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
-- NEVER STATE SHOP POLICY YOU WERE NOT TOLD: whether flavors can be mixed or split across an order, whether substitutions are allowed, whether extras cost more, minimums, or timing. If a policy is not given to you above, do not assert it in either direction. Say you will check. "You can mix and match!" is a promise the kitchen may not be able to keep.
+- WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask - never guess, never imply a list exists, and never offer to go find out. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "I don't have the dressing list for that one - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
+- NEVER CLAIM AN ACTION YOU DO NOT TAKE (CRITICAL): you can do exactly two things - read the menu above and call the tools listed below. You cannot check with the kitchen, ask the owner, ask anyone, look anything up, call, walk back, confirm with staff, or go find out and come back. Never say or imply that you will. Banned in every wording: "let me check", "I'll check with the kitchen", "let me ask", "I'll find out", "let me confirm", "let me look that up", "one moment", "give me a sec", "I'll get back to you", "hold on while I". When you do not know something, say you do not know it and ask the customer in the same breath, then keep the order moving. Good: "I don't have the flavor list for these - what flavor would you like?" Never: "Let me check with the kitchen on which ones we have." Inventing an action is the same lie as inventing an option, and worse, because it is a lie about yourself. The one thing you may promise is what the tools actually do: adding an item, saving a note, sending the payment link.
+- NEVER STATE SHOP POLICY YOU WERE NOT TOLD: whether flavors can be mixed or split across an order, whether substitutions are allowed, whether extras cost more, minimums, or timing. If a policy is not given to you above, do not assert it in either direction. Say plainly that you do not have it and ask the customer what they want. "You can mix and match!" is a promise the kitchen may not be able to keep.
 - Never state the NUMBER of available flavors or menu items ("we have 12 flavors"). If the item's entry does list its options, you may name them, without counting.
 - NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
 - NEVER ask "are you ordering individual bagels or a bundle?" If the customer already said "a dozen" or you started a bundle, they are ordering a bundle. Period.
@@ -1927,17 +1929,29 @@ function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | nul
   }
 
   // Cart has items — extract what the LLM claims is in the cart and verify.
+  //
+  // CHANGE 3 (2026-09-05, Jason): every pattern now REQUIRES the literal phrase
+  // "in your/the cart". Pattern 2 used to make that suffix optional against a
+  // lazy capture, so plain English tripped it: "I can add it if you have a
+  // preference" matched "you have a pr" and was reported as a claim that an item
+  // called "pr" was in the cart. On 2026-09-05 that discarded the model's honest
+  // answer to "you're not really checking with the kitchen, you're a bot" and
+  // shipped a cart recital instead — the customer's direct question went
+  // unanswered. Pattern 3's bare "already" alternative had the same shape.
+  // A cart-content claim says "in your cart". Nothing else is one.
   const patterns = [
     /(?:one\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)(?:\s+is\s+)?(?:already\s+)?in\s+(?:your|the)\s+cart/i,
-    /you\s+(?:already\s+)?have\s+(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)(?:\s+in\s+(?:your|the)\s+cart)?/i,
-    /i['"]?(?:ve|\s+have)\s+(?:already\s+)?(?:got\s+)?(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+(?:in\s+(?:your|the)\s+cart|already)/i,
+    /you\s+(?:already\s+)?have\s+(?:a\s+|an\s+|the\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+in\s+(?:your|the)\s+cart/i,
+    /i['"]?(?:ve|\s+have)\s+(?:already\s+)?(?:got\s+)?(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+(?:already\s+)?in\s+(?:your|the)\s+cart/i,
   ];
 
   for (const re of patterns) {
     const m = reply.match(re);
     if (!m) continue;
     const claimed = m[1].replace(/["']/g, '').trim();
-    if (claimed.length < 2) continue;
+    // A one- or two-letter fragment is never a menu item name; it is the regex
+    // catching a preposition. Require enough characters to be a real claim.
+    if (claimed.length < 4) continue;
     // CHANGE 2 (2026-09-04, Jason): an item COUNT is not an item NAME. These
     // patterns capture "You've got 3 items in your cart" as a claim that an
     // item literally called "3 items" is in the cart, so a TRUE statement was
@@ -3835,6 +3849,16 @@ Deno.serve(async (req: Request) => {
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
     );
     reply = loopResult.reply;
+    // Defect 1 (2026-09-05): the model may still promise to "check with the
+    // kitchen". It checks with nobody. Strip the promise, keep the answer.
+    // Applied to model output only — guard-authored replies below are exempt.
+    {
+      const grounded = stripInventedActions(reply);
+      if (grounded !== reply) {
+        console.warn(`[chat-sms] INVENTED-ACTION scrub (conv=${conversation.id}). Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+        reply = grounded;
+      }
+    }
     checkoutUrl = loopResult.checkoutUrl;
   }
 
@@ -3985,9 +4009,16 @@ Deno.serve(async (req: Request) => {
     const hallucinatedItem = claimsItemInCart(reply, guardCart);
     if (hallucinatedItem) {
       console.warn(`[chat-sms] GUARD 1c (cart-content hallucination) tripped (conv=${conversation.id}). Claimed "${hallucinatedItem}" in cart but not present. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+      // CHANGE 3 (2026-09-05, Jason): the old fallback was a recital AND it did
+      // not survive the pipeline — stripLlmMoneyLines() deletes "I've got N
+      // items in your cart" (it exists to strip exactly that phrasing from the
+      // model), so what actually reached Jason was the bare fragment "What else
+      // can I add?" in answer to "why wouldn't you just tell me what's
+      // available?". Say something a person would say, own the mistake, and use
+      // no digits or the word "items" so the stripper leaves it alone.
       const fallback = guardCart.length > 0
-        ? `I've got ${guardCart.length} item${guardCart.length === 1 ? "" : "s"} in your cart. What else can I add?`
-        : "Your cart is empty. What would you like to order?";
+        ? "Sorry, I got mixed up about your order there. What would you like to add or change?"
+        : "Nothing's in your order yet. What can I get started for you?";
       reply = fallback;
     }
   }
