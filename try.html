@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<!-- No maximum-scale: iOS ignores it for accessibility anyway, and it blocks
+     pinch-zoom for anyone who needs it. Input font-size below handles the
+     real problem it was reaching for. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Try SprintAI — Test Kitchen</title>
 <meta name="description" content="Order pretend pizza and help us test SprintAI's text-message ordering system.">
 <meta name="robots" content="noindex, nofollow">
@@ -152,7 +155,7 @@ body {
 .input-bar input {
   flex: 1;
   padding: 10px 13px;
-  font-size: 14px;
+  font-size: 16px;
   font-family: var(--font-b);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -203,7 +206,7 @@ body {
 .ask-form input[type=text] {
   width: 100%;
   padding: 9px 12px;
-  font-size: 13.5px;
+  font-size: 16px;
   font-family: var(--font-b);
   border: 1px solid var(--border);
   border-radius: 10px;
