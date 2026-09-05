@@ -186,7 +186,7 @@ export default function ChatAdminTab({
               <Settings className="w-4 h-4 text-gray-400" />
               AI Training Instructions
             </h3>
-            <p className="text-xs text-gray-400 mb-2">Behavior corrections and rules for this shop. These override default behavior. Also editable in the Settings tab, under Shop-Specific Config.</p>
+            <p className="text-xs text-gray-400 mb-2">Behavior corrections and rules for this shop. These override default behavior.</p>
             <textarea
               value={instructionsDraft}
               onChange={e => onInstructionsDraftChange(e.target.value)}
