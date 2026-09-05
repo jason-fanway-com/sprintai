@@ -142,15 +142,24 @@ Deno.serve(async (req: Request) => {
   const { data: shop, error: shopErr } = shopId
     ? await supabase
         .from("shops")
-        .select("id, name, tenant_id, is_test, phone_number_e164, timezone")
+        .select("id, name, tenant_id, is_test, phone_number_e164, twilio_number_sid, telnyx_number_id, timezone")
         .eq("id", shopId)
         .maybeSingle()
     : { data: null, error: null };
   if (shopErr) console.error("[public-tester] shop lookup failed:", shopErr.message);
-  if (!shop || shop.is_test !== true || shop.phone_number_e164 !== null) {
+  //    The guard used to require phone_number_e164 === null. That was a proxy
+  //    for "this shop cannot send SMS", and it excluded Vito's — the demo shop
+  //    Jason wants testers to populate (2026-09-05). Vito's number is an
+  //    iPhone reached through the iMessage bridge, NOT a carrier number: no
+  //    Twilio SID, no Telnyx id. The real invariant is CARRIER-number absence,
+  //    so test for that directly instead of for any number at all. Not Just
+  //    Bagels (the one real restaurant) still fails twice over: is_test=false
+  //    AND a Twilio SID.
+  const hasCarrierNumber = !!(shop?.twilio_number_sid || shop?.telnyx_number_id);
+  if (!shop || shop.is_test !== true || hasCarrierNumber) {
     console.error(
       "[public-tester] REFUSED: target shop failed the test-shop guard",
-      { shopId, found: !!shop, is_test: shop?.is_test, hasPhone: !!shop?.phone_number_e164 },
+      { shopId, found: !!shop, is_test: shop?.is_test, hasCarrierNumber },
     );
     return refuse("misconfigured", 503);
   }
