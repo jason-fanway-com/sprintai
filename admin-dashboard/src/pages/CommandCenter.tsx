@@ -2,35 +2,36 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   Activity, ShieldAlert, ShieldCheck, Store, GitBranch, Server,
-  AlertTriangle, CircleDot, CheckCircle2, Ban, RefreshCw, Clock, Flag,
+  AlertTriangle, RefreshCw, Hammer, GitCommit, FlaskConical, UserCheck,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 /**
  * Command Center — internal super-admin operator view.
  *
- * Two halves, both LIVE (nothing hand-maintained in the bundle):
+ * Every tile reads from a source that cannot drift (Jason, 2026-09-05). The
+ * browser cannot read the repo or run git, so `scripts/publish-build-status.sh`
+ * (launchd every 5 min + a git post-commit hook) derives build/ship state from
+ * docs/specs/2026-09-03-READINESS.md, `git log`, and the Supabase Management
+ * API, and writes it to build_status_items / _commits / _functions / _meta.
+ * This page reads those tables back — nothing here is hand-typed, and there is
+ * no "illustrative" content. If a number cannot be derived from real data, it
+ * does not get a tile.
  *
- *  A) PROGRAM-MANAGEMENT DASHBOARD (restored from the original command-center.html).
- *     Editorial content lives in admin-RLS DB ROWS (migration 019: program_epics,
- *     program_tasks, program_milestones, program_launch_path, program_risks,
- *     program_decisions, program_compliance, program_team, program_activity,
- *     program_series_a, program_meta). Updating any of it is a ROW WRITE, not a
- *     redeploy. EVERY rollup (overall build %, vital signs, per-epic %, kanban
- *     column counts, roadmap NOW marker) is DERIVED here at view-time from those
- *     rows — never stored, never typed.
- *
- *  B) OPERATIONAL PANELS (the 4 already-live panels, unchanged):
- *     - Platform health / deploy state ... supabase.rpc('command_center_deploy_status')
- *     - Conversation-quality rollup ...... conversation_evals (admin RLS)
- *     - Onboarding / tenant state ........ shops + tenants (admin RLS)
- *     - Known open items / blockers ...... program_items (admin RLS, editorial rows)
+ * Freshness guard: every publisher-sourced tile (Build progress, Shipped
+ * today, Blocked on Jason) checks build_status_meta. If generated_at is more
+ * than 15 minutes old, or publisher_ok is false, the tile renders a "not
+ * updating" banner INSTEAD of numbers — a dashboard that silently shows stale
+ * data is the thing this page replaced.
  *
  * All reads use the admin user's JWT via the existing `supabase` client. NO
- * service-role key / access token / secret is ever in the client bundle.
- * Reuses ProtectedRoute (mounted under the authed Layout in App.tsx). NOT public.
- * The live order/messaging/billing path never reads or writes any program_* table.
+ * service-role key / access token / secret is ever in the client bundle —
+ * writes to build_status_* happen only from the publisher script's service
+ * role, never from the browser. Reuses ProtectedRoute (mounted under the
+ * authed Layout in App.tsx). NOT public.
  */
+
+const FRESHNESS_LIMIT_MS = 15 * 60 * 1000
 
 // ── shared types ─────────────────────────────────────────────────────────────
 type Severity = 'critical' | 'major' | 'minor'
@@ -50,15 +51,6 @@ interface EvalRow {
   cost_cents: number | null
 }
 
-interface ProgramItem {
-  id: string
-  title: string
-  status: 'open' | 'done' | 'blocked'
-  severity: Severity
-  note: string | null
-  updated_at: string
-}
-
 interface ShopRow {
   id: string
   name: string
@@ -70,56 +62,35 @@ interface ShopRow {
 
 interface TenantRow { id: string; name: string; status: string | null }
 
-// ── program (restored dashboard) types ──────────────────────────────────────
-type Tone = 'done' | 'progress' | 'todo' | 'open'
-
-interface Epic {
-  epic_key: string; name: string; owner: string
-  status_label: string; status_tone: Tone; sort_order: number
+// ── build_status_* types (publisher-derived, never hand-typed) ─────────────
+interface BuildStatusItem {
+  item: string
+  what: string
+  status: string
+  blockers: string | null
+  blocked_on_jason: boolean
+  sort_order: number
 }
-type KanbanColumn = 'To Do' | 'In Progress' | 'In Review' | 'Done' | 'Blocked'
-interface Task {
-  task_key: string; title: string; epic_key: string
-  column_name: KanbanColumn; priority: string | null
-  evidence: string | null; blocker: string | null; sort_order: number
+interface BuildStatusCommit {
+  sha: string
+  subject: string
+  committed_at: string
+  author: string
 }
-interface Milestone {
-  milestone_key: string; phase: string; start_date: string; end_date: string
-  status: 'done' | 'active' | 'upcoming'; sort_order: number
+interface BuildStatusMeta {
+  generated_at: string
+  head_sha: string | null
+  readiness_mtime: string | null
+  publisher_ok: boolean
+  publisher_error: string | null
 }
-interface LaunchStep {
-  step_key: string; title: string; detail: string
-  state: 'progress' | 'blocked' | 'todo' | 'done'; label: string; sort_order: number
+interface TestTranscriptRow {
+  id: string
+  tester_name: string | null
+  reporter_note: string | null
+  shop_name: string
+  created_at: string
 }
-interface Risk {
-  risk_key: string; risk: string; severity: string; likelihood: string
-  status_label: string; status_tone: 'open' | 'progress'; mitigation: string; sort_order: number
-}
-interface Decision {
-  decision_key: string; kind: 'locked' | 'open'; text: string
-  owner: string | null; sort_order: number
-}
-interface StateRow {
-  item: string; status_text: string; state: 'done' | 'progress' | 'open'; sort_order: number
-}
-interface ComplianceRow extends StateRow { item_key: string }
-interface SeriesARow extends StateRow { item_key: string }
-interface TeamMember {
-  member_key: string; name: string; role: string; model: string
-  load_text: string; color: string; sort_order: number
-}
-interface ActivityRow { activity_key: string; when_label: string; text: string; sort_order: number }
-interface MetaRow { meta_key: string; meta_value: string }
-
-// Edge functions are public repo facts (names only), not secrets.
-const EDGE_FUNCTIONS = [
-  'chat-sms', 'admin-api', 'eval-sweep', 'create-checkout', 'refund-order',
-  'stripe-webhook', 'toast-order', 'go-live', 'onboard-tenant', 'onboarding-save',
-  'provision-number', 'scrape-shop', 'train-tenant', 'parse-menu-pdf',
-  'import-menu-csv', 'merchant-auth', 'connect-create-express', 'connect-oauth',
-]
-
-const KANBAN_COLS: KanbanColumn[] = ['To Do', 'In Progress', 'In Review', 'Done', 'Blocked']
 
 const SEV_RANK: Record<Severity, number> = { critical: 3, major: 2, minor: 1 }
 const sevBadge: Record<Severity, string> = {
@@ -127,62 +98,87 @@ const sevBadge: Record<Severity, string> = {
   major: 'bg-orange-100 text-orange-700 border border-orange-200',
   minor: 'bg-yellow-100 text-yellow-700 border border-yellow-200',
 }
-const itemStatusIcon = {
-  open: <CircleDot className="w-4 h-4 text-orange-500" />,
-  done: <CheckCircle2 className="w-4 h-4 text-green-600" />,
-  blocked: <Ban className="w-4 h-4 text-red-600" />,
-}
-
-// status-tone → tailwind tag classes (mirrors original 'tag' colors)
-const toneTag: Record<string, string> = {
-  done: 'bg-green-100 text-green-700 border border-green-200',
-  progress: 'bg-blue-100 text-blue-700 border border-blue-200',
-  todo: 'bg-gray-100 text-gray-600 border border-gray-200',
-  open: 'bg-orange-100 text-orange-700 border border-orange-200',
-}
-const stateDot: Record<string, string> = {
-  done: 'bg-green-500', progress: 'bg-blue-500', open: 'bg-orange-500',
-}
-const sevPill: Record<string, string> = {
-  High: 'bg-red-100 text-red-700', Med: 'bg-orange-100 text-orange-700', Low: 'bg-gray-100 text-gray-600',
+const statusBadge: Record<string, string> = {
+  building: 'bg-blue-100 text-blue-700 border border-blue-200',
+  'in verification': 'bg-purple-100 text-purple-700 border border-purple-200',
+  'not started': 'bg-gray-100 text-gray-500 border border-gray-200',
+  built: 'bg-green-100 text-green-700 border border-green-200',
+  other: 'bg-gray-100 text-gray-600 border border-gray-200',
 }
 
 function fmt(ts: string | null | undefined) {
   return ts ? new Date(ts).toLocaleString() : '—'
 }
+function fmtET(ts: string | null | undefined) {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString('en-US', {
+    timeZone: 'America/New_York', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }) + ' ET'
+}
 
-// generic admin-RLS table read, sorted by sort_order
-function useProgramTable<T>(key: string, table: string, cols: string) {
-  return useQuery<T[]>({
-    queryKey: [key],
-    queryFn: async () => {
-      const { data } = await supabase.from(table).select(cols).order('sort_order', { ascending: true })
-      return (data ?? []) as T[]
-    },
-  })
+type StatusGroup = 'building' | 'in verification' | 'not started' | 'built' | 'other'
+const GROUP_ORDER: StatusGroup[] = ['building', 'in verification', 'not started', 'built', 'other']
+function classifyStatus(status: string): StatusGroup {
+  const s = status.toLowerCase()
+  if (s.startsWith('building')) return 'building'
+  if (s.startsWith('in verification')) return 'in verification'
+  if (s.startsWith('not started')) return 'not started'
+  if (s.startsWith('built')) return 'built'
+  return 'other'
 }
 
 export default function CommandCenter() {
-  // ── A) restored program dashboard sources (admin-RLS DB rows) ──────────────
-  const epicsQ = useProgramTable<Epic>('cc-epics', 'program_epics', 'epic_key, name, owner, status_label, status_tone, sort_order')
-  const tasksQ = useProgramTable<Task>('cc-tasks', 'program_tasks', 'task_key, title, epic_key, column_name, priority, evidence, blocker, sort_order')
-  const milesQ = useProgramTable<Milestone>('cc-miles', 'program_milestones', 'milestone_key, phase, start_date, end_date, status, sort_order')
-  const launchQ = useProgramTable<LaunchStep>('cc-launch', 'program_launch_path', 'step_key, title, detail, state, label, sort_order')
-  const risksQ = useProgramTable<Risk>('cc-risks', 'program_risks', 'risk_key, risk, severity, likelihood, status_label, status_tone, mitigation, sort_order')
-  const decQ = useProgramTable<Decision>('cc-decisions', 'program_decisions', 'decision_key, kind, text, owner, sort_order')
-  const compQ = useProgramTable<ComplianceRow>('cc-compliance', 'program_compliance', 'item_key, item, status_text, state, sort_order')
-  const teamQ = useProgramTable<TeamMember>('cc-team', 'program_team', 'member_key, name, role, model, load_text, color, sort_order')
-  const feedQ = useProgramTable<ActivityRow>('cc-activity', 'program_activity', 'activity_key, when_label, text, sort_order')
-  const seriesQ = useProgramTable<SeriesARow>('cc-seriesa', 'program_series_a', 'item_key, item, status_text, state, sort_order')
-  const metaQ = useQuery<MetaRow[]>({
-    queryKey: ['cc-meta'],
+  // ── publisher-derived sources (build_status_*, admin-RLS) ──────────────────
+  const buildItems = useQuery<BuildStatusItem[]>({
+    queryKey: ['cc-build-items'],
     queryFn: async () => {
-      const { data } = await supabase.from('program_meta').select('meta_key, meta_value')
-      return (data ?? []) as MetaRow[]
+      const { data } = await supabase
+        .from('build_status_items')
+        .select('item, what, status, blockers, blocked_on_jason, sort_order')
+        .order('sort_order', { ascending: true })
+      return (data ?? []) as BuildStatusItem[]
+    },
+    refetchInterval: 60_000,
+  })
+  const buildCommits = useQuery<BuildStatusCommit[]>({
+    queryKey: ['cc-build-commits'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('build_status_commits')
+        .select('sha, subject, committed_at, author')
+        .order('committed_at', { ascending: false })
+      return (data ?? []) as BuildStatusCommit[]
+    },
+    refetchInterval: 60_000,
+  })
+  const buildMeta = useQuery<BuildStatusMeta | null>({
+    queryKey: ['cc-build-meta'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('build_status_meta')
+        .select('generated_at, head_sha, readiness_mtime, publisher_ok, publisher_error')
+        .maybeSingle()
+      return (data ?? null) as BuildStatusMeta | null
+    },
+    refetchInterval: 60_000,
+  })
+
+  // ── Test Kitchen — direct live query, not publisher-sourced ─────────────────
+  const testKitchen = useQuery<TestTranscriptRow[]>({
+    queryKey: ['cc-test-kitchen'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('test_transcripts')
+        .select('id, tester_name, reporter_note, shop_name, created_at')
+        .eq('source', 'public-tester')
+        .order('created_at', { ascending: false })
+        .limit(50)
+      return (data ?? []) as TestTranscriptRow[]
     },
   })
 
-  // ── B) the 4 existing live operational panels (unchanged) ──────────────────
+  // ── the 4 kept operational panels (unchanged, already live) ────────────────
   const deploy = useQuery<{ migrations: DeployRow[]; error: string | null }>({
     queryKey: ['cc-deploy'],
     queryFn: async () => {
@@ -236,77 +232,21 @@ export default function CommandCenter() {
       return { paid: (paid ?? 0) as number, emailed: (emailed ?? 0) as number }
     },
   })
-  const items = useQuery<ProgramItem[]>({
-    queryKey: ['cc-program-items'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('program_items')
-        .select('id, title, status, severity, note, updated_at')
-        .order('status', { ascending: true })
-        .order('updated_at', { ascending: false })
-      return (data ?? []) as ProgramItem[]
-    },
-  })
 
-  // ══ DERIVED rollups — computed from rows at view-time, never stored/typed ══
-  const epics = epicsQ.data ?? []
-  const tasks = tasksQ.data ?? []
-  const miles = milesQ.data ?? []
-  const risks = risksQ.data ?? []
+  // ══ DERIVED — computed at view-time, never stored/typed ══════════════════
+  const meta = buildMeta.data ?? null
+  const metaAge = meta ? Date.now() - new Date(meta.generated_at).getTime() : Infinity
+  const publisherFresh = !!meta && meta.publisher_ok && metaAge <= FRESHNESS_LIMIT_MS
 
-  // per-epic done/total/% (from tasks)
-  const epicRollup = epics.map((ep) => {
-    const ts = tasks.filter((t) => t.epic_key === ep.epic_key)
-    const done = ts.filter((t) => t.column_name === 'Done').length
-    return { ...ep, total: ts.length, done, pct: ts.length ? Math.round((done / ts.length) * 100) : 0 }
-  })
-  // overall build % = done tasks / all tasks
-  const overall = tasks.length
-    ? Math.round((tasks.filter((t) => t.column_name === 'Done').length / tasks.length) * 100) : 0
-  // vital signs (all derived)
-  const blockerCount = tasks.filter((t) => t.column_name === 'Blocked').length
-  const openRisks = risks.filter((r) => r.status_tone === 'open').length
-  const heroVitals: [string, number, '' | 'warn' | 'bad'][] = [
-    ['Workstreams', epics.length, ''],
-    ['Tracked tasks', tasks.length, ''],
-    ['Blockers', blockerCount, 'warn'],
-    ['Open risks', openRisks, 'bad'],
-  ]
+  const items = buildItems.data ?? []
+  const grouped = GROUP_ORDER.map((g) => ({ group: g, rows: items.filter((i) => classifyStatus(i.status) === g) }))
+    .filter((g) => g.rows.length > 0)
+  const blockedOnJason = items.filter((i) => i.blocked_on_jason)
+  const commits = buildCommits.data ?? []
 
-  // At a Glance: ticket reliability tile (orders received vs tickets delivered today)
-  const ticketTile = (() => {
-    const { paid = 0, emailed = 0 } = ticketReliability.data ?? {}
-    if (paid === 0 && emailed === 0) return null
-    const missing = paid - emailed
-    return { paid, emailed, missing, tone: missing > 0 ? ('warn' as const) : ('' as const) }
-  })()
-  const heroVitalsWithTickets: [string, number, '' | 'warn' | 'bad'][] = ticketTile
-    ? [...heroVitals, [`Tickets delivered today`, ticketTile.emailed, '']]
-    : heroVitals
-  // kanban counts (derived per column)
-  const kanban = KANBAN_COLS.map((col) => ({ col, cards: tasks.filter((t) => t.column_name === col) }))
+  const kitchenRows = testKitchen.data ?? []
+  const distinctNamedTesters = new Set(kitchenRows.map((r) => r.tester_name).filter(Boolean)).size
 
-  // roadmap axis from program_meta (changeable), with NOW marker derived from today
-  const meta = metaQ.data ?? []
-  const axisStart = meta.find((m) => m.meta_key === 'roadmap_axis_start')?.meta_value ?? '2026-04-01'
-  const axisEnd = meta.find((m) => m.meta_key === 'roadmap_axis_end')?.meta_value ?? '2027-07-01'
-  const frac = (d: string) => {
-    const a = new Date(axisStart).getTime(), b = new Date(axisEnd).getTime(), x = new Date(d).getTime()
-    return Math.max(0, Math.min(1, (x - a) / (b - a)))
-  }
-  const nowPct = frac(new Date().toISOString().slice(0, 10)) * 100
-
-  const epicShort = (id: string) => {
-    const e = epics.find((x) => x.epic_key === id)
-    if (!e) return id
-    const base = e.name.replace(/ \(.*\)/, '').split(' ')[0]
-    return e.epic_key === 'cmdcenter' ? base + ' CC' : base
-  }
-
-  const lockedDecisions = (decQ.data ?? []).filter((d) => d.kind === 'locked')
-  const openDecisions = (decQ.data ?? []).filter((d) => d.kind === 'open')
-
-  // ── operational rollups (panels B) ─────────────────────────────────────────
   const evRows = evals.data ?? []
   const clean = evRows.filter((r) => r.verdict === 'clean').length
   const flagged = evRows.filter((r) => r.verdict === 'flagged').length
@@ -335,8 +275,10 @@ export default function CommandCenter() {
     acc[k] = (acc[k] ?? 0) + 1
     return acc
   }, {})
-  const itemRows = items.data ?? []
-  const openBlockers = itemRows.filter((i) => i.status !== 'done').length
+  const ticketTile = (() => {
+    const { paid = 0, emailed = 0 } = ticketReliability.data ?? {}
+    return { paid, emailed, missing: paid - emailed }
+  })()
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -352,280 +294,144 @@ export default function CommandCenter() {
         <span className="text-sm text-gray-400">rendered {new Date().toLocaleString()}</span>
       </div>
       <p className="text-gray-500 mb-8">
-        Internal operator view. Program content is editable DB rows; every number is derived live at view-time — nothing here is hand-maintained.
+        Every tile below reads from a source that cannot drift — nothing here is hand-maintained.
       </p>
 
-      {/* ════════════════ A) RESTORED PROGRAM DASHBOARD ════════════════ */}
+      {/* top vitals — every value from a live table, none from build_status_* */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <Vital icon={<ShieldAlert className="w-5 h-5 text-red-500" />} n={highConf} label="High-confidence flags" tone={highConf > 0 ? 'bad' : 'ok'} />
+        <Vital icon={<Store className="w-5 h-5 text-brand-600" />} n={liveShops} label={`Live shops / ${shopRows.length} total`} />
+        <Vital icon={<GitBranch className="w-5 h-5 text-gray-600" />} n={deploy.data?.migrations.length ?? 0} label="DB migrations applied" />
+        <Vital
+          icon={<AlertTriangle className={`w-5 h-5 ${ticketTile.missing > 0 ? 'text-orange-500' : 'text-gray-400'}`} />}
+          n={ticketTile.missing}
+          label={`Tickets undelivered today (${ticketTile.emailed}/${ticketTile.paid})`}
+          tone={ticketTile.missing > 0 ? 'warn' : 'ok'}
+        />
+      </div>
 
-      {/* 1) HERO — overall build % + vital signs (all derived) */}
-      <section className="card p-6 mb-8 bg-gradient-to-br from-gray-900 to-gray-800 text-white">
-        <div className="flex flex-col md:flex-row md:items-center gap-6">
-          <Ring pct={overall} />
-          <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wide text-brand-300 mb-1">Program status · Q2 2026</div>
-            <h2 className="text-2xl font-bold mb-2">SprintAI build at a glance</h2>
-            <p className="text-gray-300 text-sm mb-4 max-w-2xl">
-              {epics.length} workstreams from foundation to launch — payments, menu pipeline, signup wizard and merchant
-              security verified; parser and hours fixes in flight ahead of the first real paid SMS order at Jack's Slice.
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {heroVitalsWithTickets.map(([label, n, cls]) => (
-                <div key={label} className="bg-white/10 rounded-lg px-3 py-2">
-                  <div className={`text-2xl font-bold ${n > 0 && cls === 'bad' ? 'text-red-300' : n > 0 && cls === 'warn' ? 'text-orange-300' : 'text-white'}`}>{n}</div>
-                  <div className="text-xs text-gray-300">{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 2) LAUNCH CRITICAL PATH — the most important section */}
-      <section className="card p-6 mb-8 border-2 border-brand-200 bg-brand-50/40">
-        <div className="flex items-center gap-2 mb-1">
-          <Flag className="w-5 h-5 text-brand-600" />
-          <span className="text-xs uppercase tracking-wide font-semibold text-brand-700">Launch critical path</span>
-        </div>
-        <h2 className="text-lg font-bold text-gray-900">What stands between us and Jack's Slice taking one real paid SMS order</h2>
-        <p className="text-sm text-gray-500 mb-4">The shortest line to first revenue. Everything else is secondary until these four clear.</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {(launchQ.data ?? []).map((s, i) => {
-            const tone = s.state === 'blocked' ? 'border-red-300 bg-red-50' : s.state === 'progress' ? 'border-blue-300 bg-blue-50' : s.state === 'done' ? 'border-green-300 bg-green-50' : 'border-gray-200 bg-white'
-            return (
-              <div key={s.step_key} className={`rounded-lg border p-4 ${tone}`}>
-                <div className="w-7 h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold mb-2">{i + 1}</div>
-                <div className="font-semibold text-sm text-gray-900">{s.title}</div>
-                <div className="text-xs text-gray-600 mt-1">{s.detail}</div>
-                <div className="text-xs font-medium text-gray-500 mt-2">{s.label}</div>
-              </div>
-            )
-          })}
-        </div>
-      </section>
-
-      {/* 3) PROGRESS BY EPIC */}
-      <section className="mb-8">
-        <SecHead eyebrow="Workstreams" title="Progress by epic" hint="Owner · tasks complete · % built" />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {epicRollup.map((e) => (
-            <div key={e.epic_key} className="card p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold text-sm text-gray-900">{e.name}</div>
-                  <div className="text-xs text-gray-500">{e.owner} · {e.done} / {e.total} tasks</div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="text-lg font-bold text-gray-900">{e.pct}%</div>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${toneTag[e.status_tone] ?? toneTag.todo}`}>{e.status_label}</span>
-                </div>
-              </div>
-              <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-brand-500 rounded-full" style={{ width: `${e.pct}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 4) TASK BOARD (kanban) */}
-      <section className="mb-8">
-        <SecHead eyebrow="Execution" title="Task board" hint="Swipe columns on mobile" />
-        <div className="flex gap-3 overflow-x-auto pb-2">
-          {kanban.map(({ col, cards }) => (
-            <div key={col} className={`flex-shrink-0 w-64 rounded-lg p-3 ${col === 'Blocked' ? 'bg-red-50 border border-red-100' : 'bg-gray-50 border border-gray-100'}`}>
-              <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide flex items-center justify-between mb-2">
-                {col}<span className="text-gray-400 bg-white rounded-full px-2 py-0.5 text-[10px]">{cards.length}</span>
-              </h3>
-              <div className="space-y-2">
-                {cards.map((t) => (
-                  <div key={t.task_key} className="bg-white rounded-md border border-gray-200 p-2.5 shadow-sm">
-                    <div className="text-xs font-medium text-gray-900">{t.title}</div>
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      <span className="text-[10px] bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{epicShort(t.epic_key)}</span>
-                      {t.priority && <span className={`text-[10px] rounded px-1.5 py-0.5 ${sevPill[t.priority] ?? 'bg-gray-100 text-gray-600'}`}>{t.priority}</span>}
-                    </div>
-                    {t.blocker && <div className="text-[11px] text-red-600 mt-1.5">⛔ {t.blocker}</div>}
-                    {t.column_name === 'Done' && t.evidence && (
-                      <div className="text-[11px] text-green-700 mt-1.5">✓ <b>evidence:</b> {t.evidence}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 5) ROADMAP / PHASE TIMELINE */}
-      <section className="mb-8">
-        <SecHead eyebrow="Roadmap" title="Phase timeline" hint="Illustrative plan — editable" />
-        <div className="card p-6">
-          <div className="flex text-[11px] text-gray-400 mb-2 pl-[34%]">
-            <span className="flex-1">Q2 '26</span><span className="flex-1">Q3 '26</span><span className="flex-1">Q4 '26</span><span className="flex-1">Q1 '27</span><span className="flex-1">Q2 '27</span>
-          </div>
-          <div className="relative">
-            {/* NOW marker */}
-            <div className="absolute top-0 bottom-0 w-px bg-brand-500 z-10" style={{ left: `calc(34% + ${nowPct}% * 0.66)` }}>
-              <span className="absolute -top-1 -translate-x-1/2 text-[9px] font-bold text-brand-600 bg-white px-1">NOW</span>
-            </div>
-            {miles.map((g) => {
-              const s = frac(g.start_date) * 100, e = frac(g.end_date) * 100
-              const width = Math.max(2, e - s)
-              const barTone = g.status === 'active' ? 'bg-blue-500' : g.status === 'done' ? 'bg-green-500' : 'bg-gray-300'
-              const lbl = g.status === 'active' ? 'In progress' : g.status === 'done' ? 'Complete' : ''
+      {/* ════════════════ 1) BUILD PROGRESS ════════════════ */}
+      <section className="card p-6 mb-6">
+        <TileHead icon={<Hammer className="w-5 h-5 text-gray-500" />} title="Build progress" meta={meta} fresh={publisherFresh} isLoading={buildItems.isLoading} />
+        {!publisherFresh ? (
+          <StaleBanner meta={meta} />
+        ) : items.length === 0 ? (
+          <p className="text-sm text-gray-400">No items on the readiness board.</p>
+        ) : (
+          <div className="space-y-4">
+            {grouped.map(({ group, rows }) => {
+              const body = (
+                <ul className="space-y-2">
+                  {rows.map((i) => (
+                    <li key={i.item} className="flex items-start gap-3 text-sm">
+                      <span className="font-mono text-xs text-gray-400 mt-0.5 w-4 flex-shrink-0">{i.item}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${statusBadge[classifyStatus(i.status)]}`}>{i.status}</span>
+                      <span className="text-gray-700 min-w-0">{i.what}</span>
+                    </li>
+                  ))}
+                </ul>
+              )
+              if (group === 'built') {
+                return (
+                  <details key={group}>
+                    <summary className="text-xs uppercase tracking-wide text-gray-400 cursor-pointer select-none mb-2">
+                      Built ({rows.length}) — click to expand
+                    </summary>
+                    {body}
+                  </details>
+                )
+              }
               return (
-                <div key={g.milestone_key} className="flex items-center gap-2 py-1.5">
-                  <div className="w-1/3 text-xs text-gray-700 truncate pr-2">{g.phase}</div>
-                  <div className="flex-1 relative h-6 bg-gray-50 rounded">
-                    <div className={`absolute h-6 rounded ${barTone} flex items-center justify-center text-[10px] text-white font-medium px-1 overflow-hidden`} style={{ left: `${s}%`, width: `${width}%` }}>{lbl}</div>
-                  </div>
+                <div key={group}>
+                  <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">{group} ({rows.length})</div>
+                  {body}
                 </div>
               )
             })}
           </div>
-        </div>
+        )}
       </section>
 
-      {/* 6) RISK REGISTER */}
-      <section className="mb-8">
-        <SecHead eyebrow="Governance" title="Risk register" hint="Identified · rated · mitigated" />
-        <div className="card p-0 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-gray-400 border-b border-gray-100">
-                <th className="px-4 py-3">Risk</th><th className="px-4 py-3">Severity</th><th className="px-4 py-3">Likelihood</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 w-2/5">Mitigation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {risks.map((r) => (
-                <tr key={r.risk_key} className="border-b border-gray-50 last:border-0">
-                  <td className="px-4 py-3 text-gray-900 font-medium">{r.risk}</td>
-                  <td className="px-4 py-3"><span className={`text-[10px] rounded px-1.5 py-0.5 font-semibold ${sevPill[r.severity] ?? 'bg-gray-100 text-gray-600'}`}>{r.severity}</span></td>
-                  <td className="px-4 py-3 text-gray-600">{r.likelihood}</td>
-                  <td className="px-4 py-3"><span className={`text-[10px] rounded px-1.5 py-0.5 font-semibold ${toneTag[r.status_tone === 'open' ? 'todo' : r.status_tone] ?? toneTag.todo}`}>{r.status_label}</span></td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">{r.mitigation}</td>
-                </tr>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* ════════════════ 2) SHIPPED TODAY ════════════════ */}
+        <section className="card p-6">
+          <TileHead icon={<GitCommit className="w-5 h-5 text-gray-500" />} title="Shipped today" meta={meta} fresh={publisherFresh} isLoading={buildCommits.isLoading} />
+          {!publisherFresh ? (
+            <StaleBanner meta={meta} />
+          ) : commits.length === 0 ? (
+            <p className="text-sm text-gray-400">Nothing shipped yet today.</p>
+          ) : (
+            <ul className="space-y-2 max-h-96 overflow-y-auto">
+              {commits.map((c) => (
+                <li key={c.sha} className="text-sm flex items-start gap-2">
+                  <span className="text-xs text-gray-400 flex-shrink-0 w-24">{fmtET(c.committed_at)}</span>
+                  <span className="text-gray-700 min-w-0">{c.subject}</span>
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </ul>
+          )}
+        </section>
 
-      {/* 7) DECISIONS — locked + open */}
-      <section className="mb-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Architecture decision record</div>
-          <h2 className="text-lg font-bold text-gray-900">Decisions locked</h2>
-          <p className="text-sm text-gray-500 mb-3">The calls that shape the build</p>
-          <ul className="space-y-2">
-            {lockedDecisions.map((d) => (
-              <li key={d.decision_key} className="flex gap-2 text-sm text-gray-700">
-                <span className="text-green-600 flex-shrink-0">✓</span><span>{d.text}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Needs you</div>
-          <h2 className="text-lg font-bold text-gray-900">Open decisions</h2>
-          <p className="text-sm text-gray-500 mb-3">Awaiting a founder call — these gate work</p>
-          <ul className="space-y-2">
-            {openDecisions.map((d) => (
-              <li key={d.decision_key} className="flex gap-2 text-sm text-gray-700">
-                <span className="text-orange-500 flex-shrink-0">?</span><span>{d.text}{d.owner && <b className="text-gray-900"> · {d.owner}</b>}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
+        {/* ════════════════ 3) TEST KITCHEN ACTIVITY (live, not publisher) ════════════════ */}
+        <section className="card p-6">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
+            <FlaskConical className="w-5 h-5 text-gray-500" /> Test Kitchen activity
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Live query on <span className="font-mono">test_transcripts</span> — {distinctNamedTesters} distinct named tester{distinctNamedTesters === 1 ? '' : 's'}.
+          </p>
+          {testKitchen.isLoading ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : kitchenRows.length === 0 ? (
+            <p className="text-sm text-gray-400">No test kitchen activity yet.</p>
+          ) : (
+            <ul className="space-y-3 max-h-96 overflow-y-auto">
+              {kitchenRows.map((r) => (
+                <li key={r.id} className="text-sm border-b border-gray-50 pb-2 last:border-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-900">{r.tester_name || 'anonymous'}</span>
+                    <span className="text-xs text-gray-400 flex-shrink-0">{fmtET(r.created_at)}</span>
+                  </div>
+                  <div className="text-xs text-gray-500">{r.shop_name}</div>
+                  {r.reporter_note && <p className="text-xs text-gray-600 mt-1">"{r.reporter_note}"</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
 
-      {/* 8-10) COMPLIANCE / TEAM / ACTIVITY */}
-      <section className="mb-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 8 compliance */}
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Posture</div>
-          <h2 className="text-lg font-bold text-gray-900">Compliance &amp; readiness</h2>
-          <p className="text-sm text-gray-500 mb-3">Maturity signals</p>
-          <div className="space-y-2">
-            {(compQ.data ?? []).map((c) => (
-              <div key={c.item_key} className="flex items-center justify-between gap-2 text-sm">
-                <span className="text-gray-700">{c.item}</span>
-                <span className="flex items-center gap-1.5 text-gray-500 text-xs text-right"><span className={`w-2 h-2 rounded-full flex-shrink-0 ${stateDot[c.state] ?? 'bg-gray-300'}`} />{c.status_text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* 9 team */}
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Build team</div>
-          <h2 className="text-lg font-bold text-gray-900">Agents</h2>
-          <p className="text-sm text-gray-500 mb-3">Multi-agent build crew</p>
-          <div className="space-y-3">
-            {(teamQ.data ?? []).map((m) => (
-              <div key={m.member_key} className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0" style={{ background: m.color }}>{m.name[0].toUpperCase()}</div>
+      {/* ════════════════ 4) BLOCKED ON JASON ════════════════ */}
+      <section className="card p-6 mb-8">
+        <TileHead icon={<UserCheck className="w-5 h-5 text-gray-500" />} title="Blocked on Jason" meta={meta} fresh={publisherFresh} isLoading={buildItems.isLoading} />
+        {!publisherFresh ? (
+          <StaleBanner meta={meta} />
+        ) : blockedOnJason.length === 0 ? (
+          <p className="text-sm text-gray-400">Nothing on the board names Jason as a blocker right now.</p>
+        ) : (
+          <ul className="space-y-3">
+            {blockedOnJason.map((i) => (
+              <li key={i.item} className="flex gap-3">
+                <span className="font-mono text-xs text-gray-400 mt-0.5">{i.item}</span>
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold text-gray-900">{m.name}</div>
-                  <div className="text-xs text-gray-500 truncate">{m.role} · {m.model}</div>
+                  <div className="text-sm font-medium text-gray-900">{i.what}</div>
+                  {i.blockers && <p className="text-xs text-gray-500 mt-0.5">{i.blockers}</p>}
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* 10 activity — plain text (NOT innerHTML) */}
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Recent</div>
-          <h2 className="text-lg font-bold text-gray-900">Activity</h2>
-          <p className="text-sm text-gray-500 mb-3">Latest movements</p>
-          <ul className="space-y-2.5">
-            {(feedQ.data ?? []).map((f) => (
-              <li key={f.activity_key} className="text-sm">
-                <span className="text-xs text-gray-400 mr-2">{f.when_label}</span>
-                <span className="text-gray-700">{f.text}</span>
               </li>
             ))}
           </ul>
-        </div>
+        )}
       </section>
 
-      {/* 11) SERIES A READINESS */}
-      <section className="mb-10">
-        <div className="card p-6">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Investor lens</div>
-          <h2 className="text-lg font-bold text-gray-900">Series A readiness</h2>
-          <p className="text-sm text-gray-500 mb-3">What a Series A diligence team looks for — tracked from day one</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {(seriesQ.data ?? []).map((s) => (
-              <div key={s.item_key} className="flex items-center justify-between gap-2 text-sm border-b border-gray-50 py-1.5">
-                <span className="text-gray-700">{s.item}</span>
-                <span className="flex items-center gap-1.5 text-gray-500 text-xs text-right"><span className={`w-2 h-2 rounded-full flex-shrink-0 ${stateDot[s.state] ?? 'bg-gray-300'}`} />{s.status_text}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 rounded-lg bg-gray-50 border border-gray-100 p-3">
-            <span className="text-[10px] uppercase font-semibold text-gray-500">Definition of done</span>
-            <p className="text-xs text-gray-600 mt-1"><b>Done</b> means observable artifacts — running code, passing QA, data in production — <b>never</b> an agent's claim.</p>
-          </div>
-        </div>
-      </section>
-
-      {/* ════════════════ B) LIVE OPERATIONAL PANELS (unchanged) ════════════════ */}
+      {/* ════════════════ LIVE OPERATIONAL PANELS (unchanged, already live) ════════════════ */}
       <div className="border-t border-gray-200 pt-8 mb-4">
         <div className="text-xs uppercase tracking-wide text-gray-400 mb-1">Live operations</div>
         <h2 className="text-lg font-bold text-gray-900 mb-1">Operational telemetry</h2>
         <p className="text-sm text-gray-500 mb-6">Real platform state read live at view-time.</p>
       </div>
 
-      {/* top vitals (operational) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <Vital icon={<ShieldAlert className="w-5 h-5 text-red-500" />} n={highConf} label="High-confidence flags" tone={highConf > 0 ? 'bad' : 'ok'} />
-        <Vital icon={<Store className="w-5 h-5 text-brand-600" />} n={liveShops} label={`Live shops / ${shopRows.length} total`} />
-        <Vital icon={<AlertTriangle className="w-5 h-5 text-orange-500" />} n={openBlockers} label="Open blockers" tone={openBlockers > 0 ? 'warn' : 'ok'} />
-        <Vital icon={<GitBranch className="w-5 h-5 text-gray-600" />} n={deploy.data?.migrations.length ?? 0} label="DB migrations applied" />
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* PANEL 1: platform health / deploy */}
+        {/* platform health / deploy */}
         <section className="card p-6">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
             <Server className="w-5 h-5 text-gray-500" /> Platform health &amp; deploy
@@ -647,49 +453,9 @@ export default function CommandCenter() {
               {deploy.data?.migrations.length === 0 && <span className="text-sm text-gray-400">none reported</span>}
             </div>
           )}
-
-          <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">Edge functions ({EDGE_FUNCTIONS.length})</div>
-          <div className="flex flex-wrap gap-1.5">
-            {EDGE_FUNCTIONS.map((f) => (
-              <span key={f} className="font-mono text-xs bg-gray-50 text-gray-600 rounded px-2 py-1 border border-gray-200">{f}</span>
-            ))}
-          </div>
-          <p className="text-xs text-gray-400 mt-2">
-            Function names from repo manifest. Per-function deploy <em>versions</em> are not available client-side
-            (would require a secret) and are intentionally omitted.
-          </p>
         </section>
 
-        {/* PANEL 4: known open items / blockers */}
-        <section className="card p-6">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
-            <AlertTriangle className="w-5 h-5 text-orange-500" /> Known open items &amp; blockers
-          </h2>
-          <p className="text-sm text-gray-500 mb-4">Editorial rows from <span className="font-mono">program_items</span> — update is a row write, not a redeploy.</p>
-          {items.isLoading ? (
-            <p className="text-sm text-gray-400">Loading…</p>
-          ) : itemRows.length === 0 ? (
-            <p className="text-sm text-gray-400">No items.</p>
-          ) : (
-            <ul className="space-y-3">
-              {itemRows.map((i) => (
-                <li key={i.id} className="flex gap-3">
-                  <div className="mt-0.5">{itemStatusIcon[i.status]}</div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-sm font-medium ${i.status === 'done' ? 'line-through text-gray-400' : 'text-gray-900'}`}>{i.title}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${sevBadge[i.severity]}`}>{i.severity.toUpperCase()}</span>
-                    </div>
-                    {i.note && <p className="text-xs text-gray-500 mt-0.5">{i.note}</p>}
-                    <p className="text-[11px] text-gray-300 mt-0.5 flex items-center gap-1"><Clock className="w-3 h-3" /> {fmt(i.updated_at)}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* PANEL 2: conversation quality */}
+        {/* conversation quality */}
         <section className="card p-6">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
             <ShieldCheck className="w-5 h-5 text-green-600" /> Conversation quality
@@ -728,7 +494,7 @@ export default function CommandCenter() {
           <Link to="/conversation-quality" className="inline-block text-sm text-brand-600 hover:underline mt-3">View full conversation quality →</Link>
         </section>
 
-        {/* PANEL 3: onboarding / tenant state */}
+        {/* onboarding / tenant state */}
         <section className="card p-6">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
             <Store className="w-5 h-5 text-brand-600" /> Onboarding &amp; tenant state
@@ -755,6 +521,19 @@ export default function CommandCenter() {
           </div>
           <Link to="/shops" className="inline-block text-sm text-brand-600 hover:underline mt-3">View shops →</Link>
         </section>
+
+        {/* ticket reliability detail */}
+        <section className="card p-6">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
+            <AlertTriangle className="w-5 h-5 text-orange-500" /> Order-ticket reliability
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">Today's paid orders vs. tickets actually emailed (<span className="font-mono">order_carts</span>).</p>
+          <div className="grid grid-cols-3 gap-3">
+            <Stat n={ticketTile.paid} label="Paid today" />
+            <Stat n={ticketTile.emailed} label="Emailed" tone="ok" />
+            <Stat n={ticketTile.missing} label="Undelivered" tone={ticketTile.missing > 0 ? 'warn' : 'ok'} />
+          </div>
+        </section>
       </div>
 
       <p className="text-xs text-gray-300 mt-8 flex items-center gap-1">
@@ -765,39 +544,30 @@ export default function CommandCenter() {
 }
 
 // ── small presentational helpers ─────────────────────────────────────────────
-function Ring({ pct }: { pct: number }) {
-  const C = 2 * Math.PI * 42 // r=42
-  const offset = C - (C * pct) / 100
+function TileHead({ icon, title, meta, fresh, isLoading }: {
+  icon: React.ReactNode; title: string; meta: BuildStatusMeta | null; fresh: boolean; isLoading: boolean
+}) {
   return (
-    <div className="relative flex-shrink-0 w-32 h-32">
-      <svg width="128" height="128" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="8" />
-        <circle
-          cx="50" cy="50" r="42" fill="none" stroke="url(#ccog)" strokeWidth="8" strokeLinecap="round"
-          strokeDasharray={C} strokeDashoffset={offset} transform="rotate(-90 50 50)"
-        />
-        <defs>
-          <linearGradient id="ccog" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#E8521A" /><stop offset="1" stopColor="#FF6B35" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-3xl font-bold">{pct}%</span>
-        <span className="text-[10px] text-gray-300 uppercase tracking-wide">Overall build</span>
-      </div>
+    <div className="flex items-center justify-between mb-1">
+      <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">{icon} {title}</h2>
+      {!isLoading && meta && (
+        <span className={`text-xs ${fresh ? 'text-gray-400' : 'text-red-500 font-medium'}`}>
+          as of {fmtET(meta.generated_at)}
+        </span>
+      )}
     </div>
   )
 }
 
-function SecHead({ eyebrow, title, hint }: { eyebrow: string; title: string; hint: string }) {
+function StaleBanner({ meta }: { meta: BuildStatusMeta | null }) {
+  const lastRan = meta ? fmtET(meta.generated_at) : 'never'
   return (
-    <div className="flex items-end justify-between mb-3">
+    <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700 flex items-start gap-2">
+      <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
       <div>
-        <div className="text-xs uppercase tracking-wide text-gray-400">{eyebrow}</div>
-        <h2 className="text-xl font-bold text-gray-900">{title}</h2>
+        <p className="font-medium">Build status is not updating — publisher last ran at {lastRan}.</p>
+        {meta?.publisher_error && <p className="text-xs text-red-500 mt-1 font-mono">{meta.publisher_error}</p>}
       </div>
-      <div className="text-xs text-gray-400 hidden sm:block">{hint}</div>
     </div>
   )
 }
