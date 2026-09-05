@@ -52,6 +52,23 @@ async function sha256Hex(input: string): Promise<string> {
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Midnight today in the given IANA timezone, as an ISO instant. */
+function startOfShopDay(timeZone: string): string {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(now).reduce<Record<string, string>>((a, p) => (a[p.type] = p.value, a), {});
+  const localMidnight = Date.UTC(+parts.year, +parts.month - 1, +parts.day);
+  const asUtc = Date.UTC(
+    +parts.year, +parts.month - 1, +parts.day,
+    +parts.hour % 24, +parts.minute, +parts.second,
+  );
+  // offset = how far the shop's wall clock is from UTC right now
+  const offsetMs = asUtc - now.getTime() + (now.getTime() % 1000);
+  return new Date(localMidnight - offsetMs).toISOString();
+}
+
 /** Best-effort client IP from the platform's forwarding headers. Never the raw
  *  value stored anywhere — only its salted hash. */
 function clientIp(req: Request): string {
@@ -66,8 +83,6 @@ interface RequestBody {
   message?:       string;
   tester_name?:   string;
   reporter_note?: string;
-  model?:         string;
-  messages?:      Array<{ role: string; text: string; at: string }>;
   final_cart?:    unknown;
 }
 
@@ -114,7 +129,7 @@ Deno.serve(async (req: Request) => {
   const { data: shop, error: shopErr } = shopId
     ? await supabase
         .from("shops")
-        .select("id, name, tenant_id, is_test, phone_number_e164")
+        .select("id, name, tenant_id, is_test, phone_number_e164, timezone")
         .eq("id", shopId)
         .maybeSingle()
     : { data: null, error: null };
@@ -128,19 +143,30 @@ Deno.serve(async (req: Request) => {
   }
 
   // 3. Hash the client IP. Raw IP is never stored — minimum PII is a hard rule.
+  //
+  // FAIL CLOSED on a missing salt. An unsalted SHA-256 of an IPv4 address is
+  // reversible by brute force in seconds (2^32 candidates), so an empty salt
+  // silently turns "we store hashed IPs" into "we store IPs". That is a
+  // privacy claim we would be making falsely, so refuse to run instead.
   const salt = Deno.env.get("PUBLIC_TESTER_SALT") ?? "";
+  if (!salt) {
+    console.error("[public-tester] REFUSED: PUBLIC_TESTER_SALT is not set — refusing to hash IPs unsalted");
+    return refuse("misconfigured", 500);
+  }
   const ipHash = await sha256Hex(`${clientIp(req)}:${salt}`);
 
   // ── action: start ─────────────────────────────────────────────────────────
   if (action === "start") {
-    const dayStart = new Date();
-    dayStart.setUTCHours(0, 0, 0, 0);
+    // Day boundary in the SHOP's timezone, not UTC. A UTC midnight reset means
+    // the "150 per day" window rolls over at 8pm local, which is neither the
+    // day Jason means nor the day the spend lands on.
+    const dayStart = startOfShopDay(shop.timezone ?? "America/New_York");
     const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     const { count: globalCount, error: globalErr } = await supabase
       .from("public_tester_sessions")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", dayStart.toISOString());
+      .gte("created_at", dayStart);
     if (globalErr) { console.error("[public-tester] global rate check failed:", globalErr.message); return refuse("misconfigured", 500); }
     if ((globalCount ?? 0) >= RATE_LIMIT_GLOBAL_PER_DAY) return refuse("global_cap", 429);
 
@@ -193,7 +219,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: session, error: sessionLookupErr } = await supabase
       .from("public_tester_sessions")
-      .select("id, turns")
+      .select("id, turns, messages")
       .eq("session_id", sessionId)
       .maybeSingle();
     if (sessionLookupErr) { console.error("[public-tester] session lookup failed:", sessionLookupErr.message); return refuse("misconfigured", 500); }
@@ -231,6 +257,26 @@ Deno.serve(async (req: Request) => {
     }
     const chatData = await chatRes.json();
 
+    // Append this turn to the SERVER-side transcript, verbatim, both
+    // directions, in order. The browser's copy is for display only and is
+    // never what gets stored — see the column comment in migration 096.
+    const priorMessages = Array.isArray(session.messages) ? session.messages : [];
+    const nowIso = new Date().toISOString();
+    const appended = [
+      ...priorMessages,
+      { role: "user",      text: message.trim(),      at: nowIso },
+      { role: "assistant", text: chatData.reply ?? "", at: nowIso },
+    ];
+    const { error: transcriptErr } = await supabase
+      .from("public_tester_sessions")
+      .update({ messages: appended, model: chatData.model ?? null })
+      .eq("id", session.id);
+    if (transcriptErr) {
+      // Non-fatal for the tester's conversation, but it means this turn would
+      // be missing from the corpus — say so in the log rather than lose it silently.
+      console.error("[public-tester] transcript append failed:", transcriptErr.message);
+    }
+
     return jsonResponse({
       ok:           true,
       reply:        chatData.reply ?? "",
@@ -250,7 +296,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: session, error: sessionLookupErr } = await supabase
       .from("public_tester_sessions")
-      .select("id")
+      .select("id, messages, model")
       .eq("session_id", sessionId)
       .maybeSingle();
     if (sessionLookupErr) { console.error("[public-tester] session lookup failed:", sessionLookupErr.message); return refuse("misconfigured", 500); }
@@ -267,9 +313,12 @@ Deno.serve(async (req: Request) => {
       shop_id:       shop.id,
       tenant_id:     shop.tenant_id,
       shop_name:     shop.name,
-      model:         typeof body.model === "string" ? body.model : null,
-      // Verbatim, both directions, in order — never reformat this.
-      messages:      Array.isArray(body.messages) ? body.messages : [],
+      // Both taken from the SERVER's record of the conversation, never from
+      // the request body. This endpoint is public: a client-supplied
+      // transcript would let anyone write anything into the corpus, and
+      // "verbatim" would mean "whatever the browser claimed".
+      model:         session.model ?? null,
+      messages:      Array.isArray(session.messages) ? session.messages : [],
       final_cart:    body.final_cart ?? null,
       reporter_note: reporterNote,
       tester_name:   testerName,

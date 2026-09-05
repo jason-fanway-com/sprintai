@@ -105,6 +105,11 @@ body {
   border-radius: 999px;
 }
 
+.msg.notice { justify-content: center; }
+.notice-text {
+  font-size: 13px; color: #6b7280; background: #f3f4f6;
+  border-radius: 10px; padding: 6px 12px; text-align: center; max-width: 90%;
+}
 .messages {
   height: 56vh;
   min-height: 320px;
@@ -346,6 +351,11 @@ body {
     const el = document.getElementById('messages');
     if (!el) return;
     el.innerHTML = messages.map(function (m) {
+      if (m.role === 'notice') {
+        // Visually distinct from the bot so a tester is never confused about
+        // who said what — and so a screenshot of this page stays truthful.
+        return '<div class="msg notice"><div class="notice-text">' + linkify(m.content) + '</div></div>';
+      }
       return '<div class="msg ' + (m.role === 'user' ? 'user' : 'bot') + '"><div class="bubble">' + linkify(m.content) + '</div></div>';
     }).join('');
     el.scrollTop = el.scrollHeight;
@@ -385,7 +395,10 @@ body {
     btn.disabled = false;
 
     if (!data.ok) {
-      messages.push({ role: 'assistant', content: 'Sorry — something went wrong sending that. Please try again.', at: new Date().toISOString() });
+      // A local notice, NOT an assistant turn. The transcript is a record of
+      // what the bot actually said; putting our own words in its mouth would
+      // corrupt the very thing this page exists to collect.
+      messages.push({ role: 'notice', content: 'Sorry — something went wrong sending that. Please try again.', at: new Date().toISOString() });
       renderMessages();
       return;
     }
@@ -396,7 +409,10 @@ body {
     if (data.cart) cart = data.cart;
     if (data.model) model = data.model;
     if (data.checkout_url) {
-      messages.push({ role: 'assistant', content: 'Payment link: ' + data.checkout_url, at: new Date().toISOString() });
+      // Also a local notice — the bot's own reply already contains the payment
+      // link in its own words. Adding ours would put text in the transcript
+      // that was never sent.
+      messages.push({ role: 'notice', content: 'Payment link: ' + data.checkout_url, at: new Date().toISOString() });
     }
     if (data.capped) {
       capped = true;
@@ -450,8 +466,8 @@ body {
       session_id:    sessionId,
       tester_name:   testerName || undefined,
       reporter_note: reporterNote || undefined,
-      model:         model,
-      messages:      messages.map(function (m) { return { role: m.role, text: m.content, at: m.at }; }),
+      // The transcript and model are NOT sent from here. The server recorded
+      // both, turn by turn, from what was actually exchanged. See migration 096.
       final_cart:    { items: cart, phase: capped ? 'capped' : undefined },
     });
 

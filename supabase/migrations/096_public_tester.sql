@@ -47,7 +47,12 @@ ALTER TABLE test_transcripts ADD CONSTRAINT test_transcripts_source_check
 -- nothing here relaxes it. The public-tester edge function writes through
 -- the service role, which bypasses RLS and table grants alike.
 
-CREATE OR REPLACE VIEW qa_ro.test_transcripts AS
+-- DROP then CREATE, not CREATE OR REPLACE: Postgres cannot add a column to the
+-- middle of an existing view's column list ("cannot change name of view column").
+-- tester_name lands before created_at to keep the column order readable.
+DROP VIEW IF EXISTS qa_ro.test_transcripts;
+
+CREATE VIEW qa_ro.test_transcripts AS
   SELECT id,
     shop_id,
     shop_name,
@@ -81,6 +86,17 @@ CREATE TABLE IF NOT EXISTS public_tester_sessions (
   shop_id     uuid,
   turns       int NOT NULL DEFAULT 0,
   submitted   boolean NOT NULL DEFAULT false,
+  -- The transcript is accumulated SERVER-SIDE, one turn at a time, from what
+  -- the tester actually sent and what chat-sms actually replied. It is NOT
+  -- taken from the browser at submit time. Two reasons, both load-bearing:
+  --   1. "Verbatim" has to be structurally true, not a promise the client
+  --      keeps. A browser-supplied transcript is verbatim only if the browser
+  --      says so, and the entire value of this corpus is that it is exact.
+  --   2. This is a public endpoint. A client-supplied transcript means anyone
+  --      who can reach it can write arbitrary content into the regression
+  --      corpus we intend to trust.
+  messages    jsonb NOT NULL DEFAULT '[]'::jsonb,
+  model       text,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
