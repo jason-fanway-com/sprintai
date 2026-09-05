@@ -1,76 +1,19 @@
 import { useMemo } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { Download, MessageSquare, MessageCircle, UserPlus, ClipboardCheck, ImageIcon } from 'lucide-react'
-
-interface Shop {
-  id: string
-  name: string
-  slug: string
-  phone_number_e164: string | null
-}
+// Payload builders live in one place so the admin tab and the owner-facing
+// Demo Kit page can never render different codes for the same shop.
+import {
+  type DemoKitShop as Shop,
+  deriveOrderMessage,
+  formatPhoneDisplay,
+  buildSmsUri,
+  buildVCard,
+  downloadSvg,
+} from '../../lib/demoKit'
 
 interface QRCodesTabProps {
   shop: Shop
-}
-
-/**
- * Derive a friendly "I want to order" message from the shop name.
- * If the name contains a known food keyword, use it. Otherwise, generic.
- */
-function deriveOrderMessage(shopName: string): string {
-  const lower = shopName.toLowerCase()
-  if (lower.includes('bagel')) return `I'd like to order some bagels from ${shopName}!`
-  if (lower.includes('pizza')) return `I'd like to order some pizza from ${shopName}!`
-  if (lower.includes('burger')) return `I'd like to order a burger from ${shopName}!`
-  if (lower.includes('sushi')) return `I'd like to order some sushi from ${shopName}!`
-  if (lower.includes('taco')) return `I'd like to order some tacos from ${shopName}!`
-  if (lower.includes('chicken')) return `I'd like to order some chicken from ${shopName}!`
-  if (lower.includes('sandwich') || lower.includes('sub') || lower.includes('deli')) return `I'd like to order a sandwich from ${shopName}!`
-  if (lower.includes('coffee') || lower.includes('cafe') || lower.includes('café')) return `I'd like to place an order from ${shopName}!`
-  if (lower.includes('bakery') || lower.includes('bake')) return `I'd like to place an order from ${shopName}!`
-  if (lower.includes('thai') || lower.includes('chinese') || lower.includes('indian') || lower.includes('mexican')) return `I'd like to place an order from ${shopName}!`
-  return `I'd like to place an order from ${shopName}!`
-}
-
-/** Format E.164 number for display: +1 (610) 379-2553 */
-function formatPhoneDisplay(e164: string): string {
-  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/)
-  if (m) return `+1 (${m[1]}) ${m[2]}-${m[3]}`
-  return e164
-}
-
-/** Build the SMS QR payload.  iOS/Android handle sms: URIs slightly differently. */
-function buildSmsUri(phone: string, body: string): string {
-  return `sms:${phone}?&body=${encodeURIComponent(body)}`
-}
-
-/** Build a vCard 3.0 string for the contact card QR */
-function buildVCard(shop: Shop): string {
-  const phone = shop.phone_number_e164 || ''
-  const displayPhone = formatPhoneDisplay(phone)
-  return [
-    'BEGIN:VCARD',
-    'VERSION:3.0',
-    `FN:${shop.name}`,
-    `TEL;TYPE=WORK,MSG:${displayPhone}`,
-    `TEL;TYPE=WORK,MSG:${phone}`,
-    `ORG:${shop.name}`,
-    'END:VCARD',
-  ].join('\n')
-}
-
-function downloadSvg(svgElement: SVGSVGElement, filename: string) {
-  const serializer = new XMLSerializer()
-  const svgString = serializer.serializeToString(svgElement)
-  const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
 }
 
 export default function QRCodesTab({ shop }: QRCodesTabProps) {

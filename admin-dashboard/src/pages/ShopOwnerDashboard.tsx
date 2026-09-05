@@ -334,25 +334,31 @@ export default function ShopOwnerDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin])
 
-  // ── Deep-link from signup "Go to my Shop" (reads ?shop= param) ─────────
+  // ── Deep-link from signup "Go to my Shop" / demo QR (reads ?shop= param) ──
+  // The param may be a UUID *or* a slug — the demo QR codes and the marketing
+  // site link by slug (?shop=vitos-pizza). Resolve either to the real UUID
+  // before it reaches setShopId, which matches shops by `id`.
   useEffect(() => {
     const shopParam = searchParams.get('shop')
     if (!shopParam) return
-    setShopId(shopParam)
-    // For super-admins previewing, resolve the shop's tenant so the tenant-scoped
-    // query fires with the correct effTenant.
-    if (isSuperAdmin) {
-      supabase
-        .from('shops')
-        .select('id, tenant_id, name')
-        .eq('id', shopParam)
-        .single()
-        .then(({ data, error }) => {
-          if (error || !data) return
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(shopParam)
+    if (isUuid) setShopId(shopParam)
+    // Resolve the row so a slug becomes an id, and so super-admins previewing
+    // get the shop's tenant and the tenant-scoped query fires with the correct
+    // effTenant. RLS keeps a non-super-admin scoped to their own tenant.
+    supabase
+      .from('shops')
+      .select('id, tenant_id, name')
+      .eq(isUuid ? 'id' : 'slug', shopParam)
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) return
+        setShopId(data.id)
+        if (isSuperAdmin) {
           setPreview(data.tenant_id, data.name ?? null)
           if (mode !== 'owner') setMode('owner')
-        })
-    }
+        }
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, isSuperAdmin])
 

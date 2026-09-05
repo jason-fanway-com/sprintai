@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor, Gift } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
@@ -45,6 +45,7 @@ const shopOwnerNav = [
   { to: '/issues', label: 'Issues', icon: AlertTriangle },
   { to: '/shop-chats', label: 'Chat with your shop', icon: Store },
   { to: '/financial-reporting', label: 'Financial Reporting', icon: DollarSign },
+  { to: '/demo-kit', label: 'Demo Kit', icon: Gift },
 ]
 
 // Bottom nav for shop owners (mobile)
