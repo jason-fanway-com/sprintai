@@ -32,6 +32,8 @@ const CORS_HEADERS = {
 
 // ─── Compliance texts (EXACT registered strings from TCR campaign CSMB9HG) ──
 const COMPLIANCE_STOP = "You've been unsubscribed and will receive no further messages from this restaurant. Reply START to opt back in.";
+/** Appended verbatim to the first outbound reply of a conversation, last. */
+const COMPLIANCE_DISCLOSURE = "Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.";
 const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
 
@@ -504,8 +506,15 @@ function buildSystemPrompt(
     })
     .join("\n\n");
 
+  // The compliance disclosure is NOT the model's job. It used to be instructed
+  // here, and the model placed it wherever it liked — on 2026-09-05 a tester's
+  // very first reply began "Msg & data rates may apply. Reply HELP for help or
+  // STOP to unsubscribe." before any content, and another began mid-sentence at
+  // "to unsubscribe." It is now stripped from model output unconditionally and
+  // appended deterministically, last, once, on first contact only. See the
+  // append site near the end of the request handler.
   const complianceNote = isFirstMessage
-    ? "\n\nCOMPLIANCE NOTE: Append this sentence to your very first message (after your greeting): \"Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.\""
+    ? "\n\nCOMPLIANCE NOTE: Do NOT write any 'Msg & data rates' or 'Reply HELP/STOP' text yourself. The system appends the required disclosure automatically."
     : "";
 
   // SYNCHRONOUS expired-link nudge (lead directive 2026-06-22). This is added
@@ -1789,6 +1798,21 @@ function claimsOffMenuPortion(reply: string, menuVocab: Set<string>): { tripped:
 // ─── F1 (2026-08-29): Menu-item hallucination detection ───────────────────
 // Maps canonical lowercased menu names to display names, including last-word
 // variants for customer shorthand (e.g. "stromboli" → "Special Stromboli").
+/**
+ * Words that describe a size, a format, or a whole course rather than a
+ * specific dish. Never usable as a one-word alias for a menu item: matching
+ * them produces confident nonsense ("large" → 'Cheese - Large (16")').
+ */
+const GENERIC_LAST_WORDS = new Set([
+  "large", "medium", "small", "regular", "mini", "jumbo", "giant", "personal",
+  "half", "whole", "single", "double", "triple", "side", "sides", "plain",
+  "pizza", "pizzas", "pie", "pies", "roll", "rolls", "wrap", "wraps", "sub",
+  "subs", "sandwich", "sandwiches", "salad", "salads", "soup", "soups",
+  "platter", "platters", "combo", "combos", "special", "specials", "dinner",
+  "lunch", "breakfast", "meal", "meals", "plate", "plates", "basket",
+  "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
+]);
+
 function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
 
@@ -1803,6 +1827,20 @@ function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const duplicateNames = new Set(
     [...nameCount.entries()].filter(([, c]) => c > 1).map(([n]) => n),
   );
+
+  // How many distinct menu items contain each word? A one-word alias is only
+  // safe when the word belongs to exactly ONE dish. "scampi" identifies Shrimp
+  // Scampi; "cheese" appears in Cheese - Large, Cheese - Medium, Grilled
+  // Cheese, Cheesesteak and Cheese Ravioli, so it identifies nothing.
+  // Aliasing it made "large cheese pizza and garlic knots" produce
+  // "Want me to add the Grilled Cheese too?" — an item nobody mentioned.
+  const wordItemCount = new Map<string, number>();
+  for (const item of menu) {
+    const words = new Set(
+      item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim().split(' '),
+    );
+    for (const w of words) wordItemCount.set(w, (wordItemCount.get(w) || 0) + 1);
+  }
 
   for (const item of menu) {
     const full = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1822,10 +1860,23 @@ function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
       names.set(full, item.name);
     }
 
+    // Last-word alias, so "scampi" finds "Shrimp Scampi". Deliberately NOT
+    // applied to size/format/generic words.
+    //
+    // 2026-09-05: this registered the bare word "large" as an alias for
+    // 'Cheese - Large (16")' (normalised "cheese large 16" → last word "large").
+    // A customer typing "large pepperoni and a side of garlic knots" therefore
+    // matched Cheese - Large AND the Pepperoni stromboli, and Guard 4 asked
+    // 'Did you also want cheese - large (16"), and pepperoni, or good to go?' —
+    // offering back, in mangled form, the thing they had just asked for. A word
+    // this generic identifies a SIZE, never a dish.
     const parts = full.split(' ').filter(w => w.length >= 3);
     if (parts.length > 1) {
       const lastName = parts[parts.length - 1];
-      if (!names.has(lastName)) names.set(lastName, item.name);
+      const unique = (wordItemCount.get(lastName) ?? 0) === 1;
+      if (unique && !GENERIC_LAST_WORDS.has(lastName) && !names.has(lastName)) {
+        names.set(lastName, item.name);
+      }
     }
   }
   return names;
@@ -4086,7 +4137,14 @@ Deno.serve(async (req: Request) => {
   //   - If the customer uses phrasing the menu-name scanner doesn't match,
   //     the guard won't fire.
   //   - Prefer under-asking to nagging.
-  if (!checkoutUrl && guardCart.length > 0) {
+  // NOTE: this deliberately does NOT require a non-empty cart. It used to
+  // (`guardCart.length > 0`), which meant the net was silent in the worst case
+  // of all — the customer asked for two things and got ZERO. On 2026-09-05 a
+  // tester typed "large pepperoni and a side of garlic knots" and finished with
+  // an empty cart and no mention of the knots anywhere in the reply. An
+  // under-populated cart guard that only runs once something is in the cart
+  // cannot catch nothing being added.
+  if (!checkoutUrl) {
     const replyIsClosing = isClosingReply(reply);
 
     // MODE B: Non-closing multi-item current message → scan current msg only.
@@ -4108,15 +4166,39 @@ Deno.serve(async (req: Request) => {
       );
       referenced = filterNegatedItems(referenced, userMessage);
       if (referenced.size > 0) {
-        const missing = findMissingCartItems(referenced, guardCart);
+        let missing = findMissingCartItems(referenced, guardCart);
+        // Suppress the guard ONLY where the reply explains the item is
+        // unavailable — that is a handled request, and appending "want me to
+        // add it?" would contradict the sentence above it. On 2026-09-05 the
+        // model correctly said "we don't have a plain pepperoni pizza" and this
+        // guard appended 'Did you also want cheese - large (16"), and
+        // pepperoni, or good to go?' directly underneath.
+        //
+        // Merely MENTIONING the item is NOT handling it. The model also said
+        // "I can definitely add the garlic knots!" and added nothing; treating
+        // that as handled left the customer with an empty cart and no prompt.
+        // A promise is not a cart row.
+        const replyLower = reply.toLowerCase();
+        const UNAVAILABLE = /(?:we\s+(?:don['’]?t|do\s+not)\s+(?:have|carry|offer|make)|not\s+on\s+(?:the|our)\s+menu|don['’]?t\s+have\s+a\s+plain|isn['’]?t\s+(?:on\s+the\s+menu|something\s+we)|we\s+don['’]?t\s+do)/i;
+        const replySaysUnavailable = UNAVAILABLE.test(reply);
+        missing = missing.filter(n => {
+          if (!replySaysUnavailable) return true;
+          const norm = n.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+          const words = norm.split(' ').filter(w => w.length >= 4 && !GENERIC_LAST_WORDS.has(w));
+          // Only drop it if the reply both declares something unavailable AND
+          // names this specific item.
+          return !(words.length > 0 && words.every(w => replyLower.includes(w)));
+        });
         if (missing.length > 0) {
           const mode = replyIsClosing ? "v2-closing" : "v3-multi-item";
           console.warn(`[chat-sms] GUARD 4 ${mode} (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+          // Item names keep their real casing. Lowercasing produced
+          // 'cheese - large (16")' in a customer-facing sentence.
           let upsellLine: string;
           if (missing.length === 1) {
-            upsellLine = `Want me to add the ${missing[0].toLowerCase()} too, or are you all set?`;
+            upsellLine = `Want me to add the ${missing[0]} too, or are you all set?`;
           } else {
-            const list = missing.map((n, i) => i === missing.length - 1 ? `and ${n.toLowerCase()}` : n.toLowerCase()).join(', ');
+            const list = missing.map((n, i) => i === missing.length - 1 ? `and ${n}` : n).join(', ');
             upsellLine = `Did you also want ${list}, or good to go?`;
           }
           reply = `${reply}\n\n${upsellLine}`;
@@ -4380,19 +4462,29 @@ Deno.serve(async (req: Request) => {
   // Strip markdown for clean SMS/text output
   let finalReply = stripMarkdown(safeReply);
 
-  // Strip the compliance footer on all but the lifetime first contact.
-  // The disclosure ("Msg & data rates...") is REQUIRED on the first outbound
-  // reply ever to this (consumer, shop) pair. On subsequent contacts it is
-  // dead weight — it costs segments and adds nothing for a returning customer.
-  if (!isLifetimeFirstContact) {
-    finalReply = finalReply
-      .replace(/\.?\s*Msg[& ]+data rates may apply\.?\s*/gi, "")
-      .replace(/\.?\s*Reply HELP for help(,)?( or| &) STOP to (unsubscribe|opt out|stop)\.?\s*/gi, "")
-      .replace(/\.?\s*Reply STOP to (unsubscribe|opt out|stop)\.?\s*/gi, "")
-      .replace(/\.?\s*Text HELP for help\.?\s*/gi, "")
-      .replace(/\.?\s*Text STOP to cancel\.?\s*/gi, "")
-      .replace(/\n{2,}/g, "\n")  // collapse double newlines
-      .trim();
+  // ── Compliance disclosure: stripped from model output ALWAYS, then appended
+  //    deterministically, last, exactly once, on first contact only.
+  //
+  // It used to be left to the model on first contact. The model put it wherever
+  // it liked: on 2026-09-05 a public tester's first reply opened with
+  // "Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe."
+  // before a word of content, and another opened mid-sentence at
+  // "to unsubscribe." Position is not something to hope for — a legal footer
+  // belongs at the end, and the code owns where it goes.
+  finalReply = finalReply
+    .replace(/\.?\s*Msg[& ]+data rates may apply\.?\s*/gi, " ")
+    .replace(/\.?\s*Reply HELP for help(,)?( or| &) STOP to (unsubscribe|opt out|stop)\.?\s*/gi, " ")
+    .replace(/\.?\s*Reply STOP to (unsubscribe|opt out|stop)\.?\s*/gi, " ")
+    .replace(/\.?\s*Text HELP for help\.?\s*/gi, " ")
+    .replace(/\.?\s*Text STOP to cancel\.?\s*/gi, " ")
+    // A partial strip can leave a dangling fragment at the very start.
+    .replace(/^\s*(?:or\s+)?(?:to\s+)?(?:unsubscribe|opt out|stop)\.?\s*/i, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (isLifetimeFirstContact) {
+    finalReply = `${finalReply}\n\n${COMPLIANCE_DISCLOSURE}`;
   }
 
   // Append payment URL if present and not already in the reply
