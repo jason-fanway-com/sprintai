@@ -112,3 +112,19 @@ Status vocabulary: `not started` · `building` · `in verification` · `built`.
   my own pre-mortem named: the editor marks owner edits, but the deployed importer does not yet
   respect the mark, so a re-import erases them. The editor is safe to use; the durability is not
   there yet. Tracked as ledger 05de5bc0 rather than called done.
+- 2026-09-05 19:20 EDT — import-menu-csv v38 deployed; owner-edit durability closed. Melvin
+  verdict SHIP on a live throwaway shop: owner-set item price, an option-choice price, an addon
+  price and a hand-added option group all survived both a no-op re-import and a changed-CSV
+  re-import, byte-for-byte. Normal import behaviour measured identical to the prior deployed
+  version for non-owner rows (update / insert / deactivate), and two identical re-imports are a
+  hash no-op. Verified against the deployed body (v38 ACTIVE), not the commit.
+  **Correction to the 15:50 entry above:** the previously deployed v37 was NOT zero-handling —
+  it already skipped owner-edited ITEMS. What it lacked, and what v38 adds, is protection for
+  owner-edited option GROUPS and CHOICES. Measured: an owner-set addon price of $3.00 reverted to
+  $2.50 on re-import under v37 and survives under v38. So the live risk that existed today was
+  erased option/choice edits, not erased items — narrower than I reported.
+  **Deliberate behaviour, not a defect:** an owner-edited item that is inactive stays inactive
+  even if the CSV re-adds it (the owner-edited skip short-circuits before the reactivation line).
+  QA flagged this as an optional fix; I am keeping it. `owner_edited=true` + `active=false` is
+  indistinguishable from an owner's explicit REMOVE_ITEM, and resurrecting an item the owner took
+  off the menu is a worse failure than leaving one hidden. Owner intent wins over the CSV.
