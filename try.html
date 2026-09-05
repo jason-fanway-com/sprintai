@@ -36,6 +36,9 @@
   --r-lg: 20px;
 }
 html { scroll-behavior: smooth; }
+/* A phone is the primary device here and nothing on this page should ever
+   scroll sideways. QA saw the Submit label clipped at the right edge at 390px. */
+html, body { overflow-x: hidden; max-width: 100%; }
 body {
   font-family: var(--font-b);
   background: var(--warm);
@@ -114,9 +117,11 @@ body {
 }
 .capture-bar input[type=text]:focus { outline: none; border-color: var(--brand); }
 .fix-row { display: flex; gap: 8px; margin-top: 8px; }
-.fix-row input[type=text] { flex: 0 1 40%; min-width: 0; }
+.fix-row input[type=text] { flex: 0 1 38%; min-width: 0; }
 .fix-row button.primary {
-  flex: 1 1 auto; flex-shrink: 0; white-space: nowrap; padding: 11px 16px; font-size: 15px; font-weight: 700;
+  /* min-width:0 lets the button shrink instead of overflowing the row on a
+     narrow phone; the label wraps rather than being cut off. */
+  flex: 1 1 auto; min-width: 0; white-space: normal; padding: 11px 16px; font-size: 15px; font-weight: 700;
   font-family: var(--font-b); color: #fff; background: var(--navy);
   border: none; border-radius: 10px; cursor: pointer; min-height: 46px;
 }

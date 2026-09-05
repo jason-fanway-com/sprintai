@@ -187,7 +187,7 @@ Deno.serve(async (req: Request) => {
       const { count: sessionCount, error: sessionErr } = await supabase
         .from("public_tester_sessions")
         .select("id", { count: "exact", head: true })
-        .eq("session_id", hintedSessionId)
+        .eq("client_hint", hintedSessionId)
         .gte("created_at", hourAgo);
       if (sessionErr) { console.error("[public-tester] session rate check failed:", sessionErr.message); return refuse("misconfigured", 500); }
       if ((sessionCount ?? 0) >= RATE_LIMIT_SESSION_PER_HOUR) return refuse("session_limit", 429);
@@ -195,11 +195,16 @@ Deno.serve(async (req: Request) => {
 
     const newSessionId = crypto.randomUUID();
     const { error: insertErr } = await supabase.from("public_tester_sessions").insert({
-      session_id: newSessionId,
-      ip_hash:    ipHash,
-      shop_id:    shop.id,
-      turns:      0,
-      submitted:  false,
+      session_id:  newSessionId,
+      // Stored so the per-browser limit above can actually count this browser's
+      // recent conversations. Previously the hint was compared against
+      // session_id, which is always a fresh server UUID, so the count could
+      // never exceed 1 and the limit never fired. Best-effort by nature.
+      client_hint: hintedSessionId ?? newSessionId,
+      ip_hash:     ipHash,
+      shop_id:     shop.id,
+      turns:       0,
+      submitted:   false,
     });
     if (insertErr) {
       console.error("[public-tester] session insert failed:", insertErr.message);
@@ -225,16 +230,19 @@ Deno.serve(async (req: Request) => {
     if (sessionLookupErr) { console.error("[public-tester] session lookup failed:", sessionLookupErr.message); return refuse("misconfigured", 500); }
     if (!session) return refuse("unknown_session", 400);
 
-    if (session.turns >= TURN_CAP) {
+    // ATOMIC claim. The cap is enforced by the UPDATE's WHERE clause inside the
+    // database, so two concurrent requests cannot both win a turn. The previous
+    // read-check-increment here was not a ceiling: QA fired three concurrent
+    // sends at a session seeded to turns=19 and got two real model replies.
+    // Cost is quadratic in turns and this endpoint is public, so a soft cap is
+    // an unbounded bill.
+    const { data: claimed, error: claimErr } = await supabase
+      .rpc("public_tester_claim_turn", { p_session_id: sessionId, p_cap: TURN_CAP });
+    if (claimErr) { console.error("[public-tester] turn claim failed:", claimErr.message); return refuse("misconfigured", 500); }
+    if (claimed === null || claimed === undefined) {
       return jsonResponse({ ok: true, capped: true, reply: CAP_MESSAGE });
     }
-
-    const newTurns = session.turns + 1;
-    const { error: turnUpdateErr } = await supabase
-      .from("public_tester_sessions")
-      .update({ turns: newTurns })
-      .eq("id", session.id);
-    if (turnUpdateErr) { console.error("[public-tester] turn increment failed:", turnUpdateErr.message); return refuse("misconfigured", 500); }
+    const newTurns = claimed as number;
 
     let chatRes: Response;
     try {
@@ -257,20 +265,18 @@ Deno.serve(async (req: Request) => {
     }
     const chatData = await chatRes.json();
 
-    // Append this turn to the SERVER-side transcript, verbatim, both
-    // directions, in order. The browser's copy is for display only and is
-    // never what gets stored — see the column comment in migration 096.
-    const priorMessages = Array.isArray(session.messages) ? session.messages : [];
-    const nowIso = new Date().toISOString();
-    const appended = [
-      ...priorMessages,
-      { role: "user",      text: message.trim(),      at: nowIso },
-      { role: "assistant", text: chatData.reply ?? "", at: nowIso },
-    ];
+    // Append this turn to the SERVER-side transcript, verbatim, both directions,
+    // in order. Done as a single `messages = messages || turn` statement in the
+    // database: the previous read-modify-write here lost turns whenever two
+    // requests overlapped. The browser's copy is for display only and is never
+    // what gets stored — see the column comment in migration 096.
     const { error: transcriptErr } = await supabase
-      .from("public_tester_sessions")
-      .update({ messages: appended, model: chatData.model ?? null })
-      .eq("id", session.id);
+      .rpc("public_tester_append_turn", {
+        p_session_id: sessionId,
+        p_user_text:  message.trim(),
+        p_bot_text:   chatData.reply ?? "",
+        p_model:      chatData.model ?? null,
+      });
     if (transcriptErr) {
       // Non-fatal for the tester's conversation, but it means this turn would
       // be missing from the corpus — say so in the log rather than lose it silently.
@@ -296,17 +302,27 @@ Deno.serve(async (req: Request) => {
 
     const { data: session, error: sessionLookupErr } = await supabase
       .from("public_tester_sessions")
-      .select("id, messages, model")
+      .select("id, messages, model, submitted")
       .eq("session_id", sessionId)
       .maybeSingle();
     if (sessionLookupErr) { console.error("[public-tester] session lookup failed:", sessionLookupErr.message); return refuse("misconfigured", 500); }
     if (!session) return refuse("unknown_session", 400);
 
+    // One transcript per conversation. Without this a valid session id could be
+    // re-submitted without limit, each call inserting another row with
+    // client-controlled name and note — storage amplification on a public
+    // endpoint, and duplicate noise in a corpus we intend to trust.
+    if (session.submitted === true) {
+      return jsonResponse({ ok: true, already: true });
+    }
+
     const testerName = typeof body.tester_name === "string" && body.tester_name.trim()
       ? body.tester_name.trim().slice(0, 60)
       : null;
+    // Server-side cap. The page limits this to 280 chars, but the page is not
+    // the only thing that can POST here.
     const reporterNote = typeof body.reporter_note === "string" && body.reporter_note.trim()
-      ? body.reporter_note.trim()
+      ? body.reporter_note.trim().slice(0, 500)
       : null;
 
     const { error: insertErr } = await supabase.from("test_transcripts").insert({
