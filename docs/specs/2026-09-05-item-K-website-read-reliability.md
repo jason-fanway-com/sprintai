@@ -167,3 +167,39 @@ All prod rows were created under a single throwaway tenant so cleanup is one cas
 ## 8. Bottom line
 
 The website-read path, a core first-impression feature, **imports no menu at all** for real restaurants — 0/20, driven live against the deployed function — because Claude-via-OpenRouter returns fenced JSON and the extractor `JSON.parse`s it without stripping the fence. It fails silently (`ok:true`, "done"), so an owner finishes onboarding believing their site was read while their menu is empty. This is a deterministic, single-cause break, not a long-tail reliability issue. Not fixed here (measurement only); the one-line-ish fix and the copy changes above are recommendations.
+
+---
+
+# After the fix (commit 838b2f9) — re-measurement, 2026-09-05
+
+**Verdict: fixed. The single-cause 0% break is gone.** Re-driven live against the deployed `scrape-shop` (project `rvdqfxtrskxekfkqnegx`, fix confirmed deployed) over the **exact same 20 locked sites**, fresh throwaway tenant, one shop per site, `{shop_id, force:true}`.
+
+## Rates (before → after)
+| Metric | Baseline | After fix |
+|---|---|---|
+| **PASS** (≥1 priced menu item) | **0/20 (0%)** | **6/20 (30%)** |
+| **PARTIAL** (site read, 0 items) | 19/20 (95%) | 14/20 (70%) |
+| **FAIL** (error / no output) | 1/20 (5%) | **0/20 (0%)** |
+| **Honesty** (crawl_status matches DB) | 5% (19 false "done") | **100% (0 false "done")** |
+| Hours captured | 0/20 | 14/20 |
+
+The parse fix works. Six sites imported real, priced menus where baseline got zero: newcitypizzeria (25), subonehoagie (36), myfamilypizzas (73), bagelfresh (149), delionabagelcafe (59), hoagiesandhops (88) — **all items priced**. `subonehoagie` was a hard 422 in baseline; now 36 items. `extractOpenHours` also fixed: hours on 14/20 (was 0).
+
+**Honesty check: perfect.** All 6 "done" have items; all 14 "partial" have 0 items; no site claimed "done" over an empty menu. The false-success bug that told owners their menu was read is closed.
+
+**Hallucination spot-check (3 PASS shops, item names + prices vs live sites):** hoagiesandhops ("Brotherly Love" $9.25, "Hog Island" — found live), myfamilypizzas ("Alfredo Pizza", "Supreme", $12.99 — found), subonehoagie ("Philly Steak" $9.39, "Supreme Steak" — found). **Real menus, not hallucinated.**
+
+## Measurement note — first run was contaminated (Firecrawl rate limit), discarded
+The first (unpaced) re-run ran 20 crawls in ~44s and collapsed: sites 1-2 scraped fine, then cascaded to "No readable text" and "Firecrawl /map failed" at ~350ms (429s). Firecrawl account is healthy (direct `/map` = 200, 575/1000 credits). `scrape-shop` has **no retry/backoff on a Firecrawl 429** (`discoverPages` throws straight through). Baseline never hit this because each crawl took 30-139s, spacing calls out. Re-ran with 45s between sites → clean, 0 Firecrawl failures. Numbers above are the paced run.
+
+## Ranked remaining failure modes (the 14 PARTIALs — all honest, none are regressions)
+1. **PDF menus, dropped by design (largest bucket).** Sites read 8-9 pages, 0 items (1,3,4,6,11,15,16,18,19). `prioritizePages` skips `.pdf` and `wp-content/uploads`; confirmed independent-pizzeria's menu is `IP-PrintMenu-March.pdf`. `parse-menu-pdf` exists but `scrape-shop` never routes to it. **Biggest single lever for lifting 30% → higher.**
+2. **Menu behind JS / off-domain ordering widget.** `/map` discovers only 1-2 pages (8,9,10,14,20 — Slice/Toast/Owner.com SPAs). Menu text isn't on the shop's own domain.
+3. **No Firecrawl 429 retry/backoff.** Not a per-site failure, but destroyed the unpaced batch run 18/20. Production onboards one shop at a time so it won't trip there; any batch/backfill will collapse. Add exponential backoff.
+4. **Options/modifiers still not captured.** Extraction schema is flat (`name, price_cents, category, description`); `modifiers_json` never written. PASS items are correct but size/topping choices are lost. (Not graded a FAIL — pre-existing.)
+
+## Cleanup
+Throwaway tenant `e8b92edd-428c-4251-ab21-1b140d287a30` (paced run) cascade-deleted; verified 0 shops remain. The earlier contaminated tenant was also deleted (0 shops). Artifacts: `scripts/tmp-item-K-after-runner.cjs`, `-after-ids.json`, `-after-results.json`, `-after-run.log` — measurement only, not product code.
+
+## Bottom line (after)
+The deterministic 0% parse break is fixed: **6/20 now import real, correctly-priced menus, 0 hallucinations, 0 false-success, 0 hard failures.** The remaining 70% are honest PARTIALs — the crawler can't reach menus that live in PDFs or off-domain ordering widgets, which the fix never claimed to solve. Routing PDFs to `parse-menu-pdf` is the highest-value next step; add Firecrawl 429 backoff before any batch re-crawl.
