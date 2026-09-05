@@ -23,6 +23,48 @@ interface Props {
   forceTest?: boolean
 }
 
+// ── Judge panel types ────────────────────────────────────────────────────
+// Shape returned by judge-transcript (docs/specs/2026-09-05-judge-panel.md).
+// Read-only on this side: nothing here writes back, and every proposal's
+// `status` is always 'proposed' — see the backend, which force-sets it.
+
+interface JudgeProposal {
+  title: string
+  rationale: string
+  target: string
+  status: string
+}
+
+interface JudgeVerdict {
+  summary: string
+  score: number | null
+  proposals: JudgeProposal[]
+  judged_at: string
+}
+
+// The judge model is prompted to avoid engineering jargon, but nothing
+// guarantees it always does — Melvin found stored proposals using
+// "modifiers" and "how the menu data is structured". Soften known internal
+// terms here, in the RENDERING layer only; judge_summary/judge_proposals in
+// the database are never rewritten.
+const JARGON_REPLACEMENTS: [RegExp, string][] = [
+  [/\bhow the menu data is structured\b/gi, 'how the menu is set up'],
+  [/\bmenu data\b/gi, 'menu'],
+  [/\bmodifiers?\b/gi, 'extras or options'],
+  [/\bstate machine\b/gi, 'order flow'],
+  [/\bphantom add(s|ed)?\b/gi, 'item added without confirmation'],
+  [/\brubric\b/gi, 'checklist'],
+  [/\bprompt\b/gi, "assistant's instructions"],
+  [/\bguard(rail)?\b/gi, 'check'],
+  [/\bhandler\b/gi, 'step'],
+]
+
+function humanize(text: string): string {
+  let out = text
+  for (const [pattern, replacement] of JARGON_REPLACEMENTS) out = out.replace(pattern, replacement)
+  return out
+}
+
 function makeStorageKey(shopId: string) {
   return `chat-test-session-${shopId}`
 }
@@ -64,6 +106,11 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
   const [reporterNote, setReporterNote] = useState('')
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [copied, setCopied]           = useState(false)
+  // Judge panel: idle → running → done | failed. Kicked off automatically
+  // right after a transcript is captured. Advisory only — see runJudge.
+  const [judge, setJudge]             = useState<'idle' | 'running' | 'done' | 'failed'>('idle')
+  const [judgeResult, setJudgeResult] = useState<JudgeVerdict | null>(null)
+  const [judgeError, setJudgeError]   = useState<string | null>(null)
   const messagesRef      = useRef<HTMLDivElement>(null)
   const pollStartTimeRef = useRef<string | null>(null)
   const inputRef         = useRef<HTMLInputElement>(null)
@@ -263,6 +310,9 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
     setCapture('idle')
     setReporterNote('')
     setCaptureError(null)
+    setJudge('idle')
+    setJudgeResult(null)
+    setJudgeError(null)
   }
 
   // ── Capture ───────────────────────────────────────────────────────────────
@@ -323,7 +373,15 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
         .single()
       if (shopErr) throw shopErr
 
+      // Generated here, not read back via `.select()`: the SELECT RLS policy
+      // on test_transcripts is super-admin only (095), so a shop-owner insert
+      // with `.select()` would have its RETURNING row filtered to nothing.
+      // Knowing the id up front sidesteps that and lets us kick off the judge
+      // immediately after the plain insert succeeds.
+      const transcriptId = crypto.randomUUID()
+
       const { error } = await supabase.from('test_transcripts').insert({
+        id:            transcriptId,
         shop_id:       shopId,
         tenant_id:     shopRow?.tenant_id ?? null,
         shop_name:     shopName,
@@ -343,9 +401,50 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
       setCapture('sent')
       setReporterNote('')
       setTimeout(() => setCapture(c => (c === 'sent' ? 'idle' : c)), 4000)
+
+      void runJudge(transcriptId)
     } catch (err) {
       setCaptureError(err instanceof Error ? err.message : 'Could not save')
       setCapture('failed')
+    }
+  }
+
+  // ── Judge panel ──────────────────────────────────────────────────────────
+  // Spec: docs/specs/2026-09-05-judge-panel.md PART 2. Advisory only: this
+  // calls judge-transcript, which writes judge_summary/judge_score/
+  // judge_proposals/judged_at back onto the transcript row and returns the
+  // same values here. Nothing in this component writes judge_proposals or
+  // its `status` — there is no apply/approve control, by design.
+  const runJudge = async (transcriptId: string) => {
+    setJudge('running')
+    setJudgeResult(null)
+    setJudgeError(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('Please log in again.')
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
+      const res = await fetch(`${supabaseUrl}/functions/v1/judge-transcript`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ transcript_id: transcriptId }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `Review failed (${res.status})`)
+
+      setJudgeResult({
+        summary:   data.judge_summary,
+        score:     data.judge_score ?? null,
+        proposals: Array.isArray(data.judge_proposals) ? data.judge_proposals : [],
+        judged_at: data.judged_at,
+      })
+      setJudge('done')
+    } catch (err) {
+      setJudgeError(err instanceof Error ? err.message : 'Could not get a review')
+      setJudge('failed')
     }
   }
 
@@ -613,6 +712,76 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
           </p>
         )}
       </div>
+
+      {/* ── Judge panel ──────────────────────────────────────────────────
+          Advisory critique from judge-transcript, per
+          docs/specs/2026-09-05-judge-panel.md PART 2. READ ONLY: no button
+          here writes judge_proposals or its status, and there is no
+          apply/approve/dismiss control — every proposal always renders as
+          "Proposed — pending review". Nothing in this panel can reach the
+          ordering engine, a shop's prompt, or shared config. */}
+      {judge !== 'idle' && (
+        <div className="w-[300px] mt-2.5 bg-white rounded-2xl p-3">
+          {judge === 'running' && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span className="w-3 h-3 border-2 border-gray-300 border-t-brand-600 rounded-full animate-spin flex-shrink-0" />
+              Reviewing this conversation…
+            </div>
+          )}
+
+          {judge === 'failed' && (
+            <p className="text-xs text-red-500 leading-snug">
+              Couldn't get a review — {judgeError}. The conversation was still saved.
+            </p>
+          )}
+
+          {judge === 'done' && judgeResult && (
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs font-semibold text-gray-800 mb-1">What happened</p>
+                <p className="text-xs text-gray-600 leading-snug whitespace-pre-wrap">
+                  {humanize(judgeResult.summary)}
+                </p>
+              </div>
+
+              {judgeResult.score !== null && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-gray-800">Score: {judgeResult.score}/100</span>
+                  <span className="px-1.5 py-0.5 rounded-full text-xs font-bold tracking-wide bg-amber-100 text-amber-700">
+                    ADVISORY
+                  </span>
+                </div>
+              )}
+
+              {judgeResult.proposals.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-800 mb-1.5">Suggestions</p>
+                  <div className="space-y-2">
+                    {judgeResult.proposals.map((p, i) => (
+                      <div key={i} className="bg-gray-50 rounded-xl p-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-medium text-gray-900 leading-snug">{humanize(p.title)}</p>
+                          <span className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600 whitespace-nowrap">
+                            Proposed — pending review
+                          </span>
+                        </div>
+                        {p.rationale && (
+                          <p className="text-xs text-gray-500 mt-1 leading-snug">{humanize(p.rationale)}</p>
+                        )}
+                        {p.target && (
+                          <p className="text-xs text-gray-400 mt-1 italic leading-snug">
+                            Would change: {humanize(p.target)}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
