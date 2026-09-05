@@ -32,9 +32,22 @@ const CAP_MESSAGE =
   "We've reached the end of this test conversation — thanks for sticking with it! " +
   "Hit \"Send for review\" below to tell us what felt wrong, then start a fresh order if you'd like to try another.";
 
-const RATE_LIMIT_GLOBAL_PER_DAY    = 150;
-const RATE_LIMIT_IP_PER_HOUR       = 5;
-const RATE_LIMIT_SESSION_PER_HOUR  = 3;
+// The ONLY volume control. This is a link Jason texts to friends and family,
+// not an endpoint under attack: the abuse risk is near zero and the friction
+// cost is total — a friend who orders three pizzas and hits a wall stops
+// testing, and we lose exactly the data the page exists to collect.
+//
+// Removed 2026-09-05 after Jason was blocked on his own phone:
+//   - per-IP hourly limit. Households, offices and phone carriers share one
+//     public IP. The crew tests from a machine on Jason's home network, so our
+//     own testing spent his allowance before he opened the page.
+//   - per-browser hourly limit. A tester running ten orders in an hour is the
+//     best possible outcome, not abuse.
+//
+// What still bounds spend: this daily cap, the 20-turn per-conversation cap
+// (a runaway single session), and the kill switch — one row, instant off,
+// which is the real abuse control.
+const RATE_LIMIT_GLOBAL_PER_DAY    = 1000;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -161,7 +174,6 @@ Deno.serve(async (req: Request) => {
     // the "150 per day" window rolls over at 8pm local, which is neither the
     // day Jason means nor the day the spend lands on.
     const dayStart = startOfShopDay(shop.timezone ?? "America/New_York");
-    const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     const { count: globalCount, error: globalErr } = await supabase
       .from("public_tester_sessions")
@@ -170,36 +182,15 @@ Deno.serve(async (req: Request) => {
     if (globalErr) { console.error("[public-tester] global rate check failed:", globalErr.message); return refuse("misconfigured", 500); }
     if ((globalCount ?? 0) >= RATE_LIMIT_GLOBAL_PER_DAY) return refuse("global_cap", 429);
 
-    const { count: ipCount, error: ipErr } = await supabase
-      .from("public_tester_sessions")
-      .select("id", { count: "exact", head: true })
-      .eq("ip_hash", ipHash)
-      .gte("created_at", hourAgo);
-    if (ipErr) { console.error("[public-tester] ip rate check failed:", ipErr.message); return refuse("misconfigured", 500); }
-    if ((ipCount ?? 0) >= RATE_LIMIT_IP_PER_HOUR) return refuse("ip_limit", 429);
-
-    // Client-supplied session_id here is a rate-limit hint ONLY — a returning
-    // browser's previous session_id, used to count its recent conversations.
-    // It is never trusted as an identifier for anything else; the row this
-    // call creates gets a fresh, server-generated session_id regardless.
+    // No per-IP and no per-browser limit. See the constants above.
     const hintedSessionId = typeof body.session_id === "string" ? body.session_id : null;
-    if (hintedSessionId) {
-      const { count: sessionCount, error: sessionErr } = await supabase
-        .from("public_tester_sessions")
-        .select("id", { count: "exact", head: true })
-        .eq("client_hint", hintedSessionId)
-        .gte("created_at", hourAgo);
-      if (sessionErr) { console.error("[public-tester] session rate check failed:", sessionErr.message); return refuse("misconfigured", 500); }
-      if ((sessionCount ?? 0) >= RATE_LIMIT_SESSION_PER_HOUR) return refuse("session_limit", 429);
-    }
 
     const newSessionId = crypto.randomUUID();
     const { error: insertErr } = await supabase.from("public_tester_sessions").insert({
       session_id:  newSessionId,
-      // Stored so the per-browser limit above can actually count this browser's
-      // recent conversations. Previously the hint was compared against
-      // session_id, which is always a fresh server UUID, so the count could
-      // never exceed 1 and the limit never fired. Best-effort by nature.
+      // Kept for grouping a returning browser's conversations when reading the
+      // corpus. No longer gates anything — the per-browser limit it existed for
+      // was removed 2026-09-05.
       client_hint: hintedSessionId ?? newSessionId,
       ip_hash:     ipHash,
       shop_id:     shop.id,
