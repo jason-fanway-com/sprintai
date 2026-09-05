@@ -782,11 +782,24 @@ async function executeTool(
       // selection (the Boosenberry-wings defect).
       for (const [key, vals] of Object.entries(inputOptions)) {
         if (groupNames.has(key)) continue;
-        if (menuItem.prompt_for) {
+        // REGRESSION FIX (2026-09-05): an item with NO option groups recorded
+        // has nothing to correct toward, so a hard reject only kills a
+        // legitimate add. "large cheese pizza" failed on turn 1 — the page's
+        // own suggested phrase — because the model tacked a size/style key
+        // onto an item with zero groups. Drop the key rather than the order;
+        // it still NEVER becomes a validated selection or affects price.
+        if (menuItem.prompt_for || itemGroups.length === 0) {
           // The shop flagged this item as needing a choice but never recorded
           // the valid values — don't invent a menu selection, and don't block
           // the add. Preserve the customer's own words for a human to resolve.
-          for (const v of vals) unverifiedRequests.push(`${key}: ${v}`);
+          const descriptor = menuItem.name.toLowerCase();
+          for (const v of vals) {
+            // A value the item name already states ("Size: Large (16\")" on
+            // `Cheese - Large (16\")`) is redundant, not a customer request —
+            // it must not land on a kitchen ticket as an unresolved ask.
+            if (descriptor.includes(String(v).toLowerCase())) continue;
+            unverifiedRequests.push(`${key}: ${v}`);
+          }
           delete inputOptions[key];
         } else {
           const validNames = itemGroups.map(g => g.name).join(", ");
@@ -898,8 +911,14 @@ async function executeTool(
           // flagged this item as needing an unrecorded choice, in which case
           // preserve the customer's ask as unverified rather than as a
           // validated selection (the Boosenberry-wings defect, via modify_item).
-          if (menuItem?.prompt_for) {
-            for (const v of vals) unverifiedThisCall.push(`${key}: ${v}`);
+          // Same regression fix as add_item: zero recorded groups means there
+          // is nothing to correct toward, so never fail the modify over it.
+          if (menuItem?.prompt_for || (menuItem?.option_groups || []).length === 0) {
+            const descriptor = (menuItem?.name ?? "").toLowerCase();
+            for (const v of vals) {
+              if (descriptor && descriptor.includes(String(v).toLowerCase())) continue;
+              unverifiedThisCall.push(`${key}: ${v}`);
+            }
           } else {
             const validNames = (menuItem?.option_groups || []).map(g => g.name).join(", ");
             return { ok: false, result: { error: `"${key}" is not a valid option for ${menuItem?.name ?? "this item"}. ${validNames ? `Valid option groups: ${validNames}.` : "This item has no option groups recorded."}` } };
