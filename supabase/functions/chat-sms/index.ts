@@ -1515,6 +1515,15 @@ async function runOrderingLoop(
         deliveryFeeCents,
         shopGeo ?? null,
       );
+      // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
+      // all. When add_item failed the model narrated it to the customer ("that's
+      // giving me a system hiccup") and the only record was the customer's
+      // screenshot. Every rejection is logged with the arguments that caused it.
+      if (!result.ok) {
+        console.warn(
+          `[chat-sms] TOOL FAILED: ${toolBlock.name} args=${JSON.stringify(toolBlock.input).slice(0, 300)} -> ${JSON.stringify(result.result).slice(0, 300)}`,
+        );
+      }
       if (result.checkoutUrl) checkoutUrl = result.checkoutUrl;
       if (result.newPhase)    finalPhase  = result.newPhase;
       toolResults.push({
@@ -3435,7 +3444,14 @@ Deno.serve(async (req: Request) => {
   // not a first contact. If this is a new conversation, query whether any prior
   // conversations exist for this pair.
   let isLifetimeFirstContact = true;
-  if (isSms && customerPhone) {
+  // Covers BOTH sms and web. It used to be `isSms && customerPhone`, so the web
+  // path (channel === "web", customerPhone = `web:${sessionId}`) never recomputed
+  // and stayed true on every turn — the compliance footer therefore appended to
+  // EVERY reply in the /try tester, not just the first. Reported 2026-09-05.
+  // For web the (tenant_id, customer_phone) key is per-session (session id is in
+  // the phone), so "any prior conversation for this pair" == "not this session's
+  // first message", which is exactly the first-message-only rule we want.
+  if ((isSms || channel === "web") && customerPhone) {
     if (conversation) {
       // Existing active conversation — definitely not first contact.
       isLifetimeFirstContact = false;
