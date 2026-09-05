@@ -12,6 +12,23 @@ const SONNET_MODEL = "claude-sonnet-4-6";
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v1";
 const MAX_PAGES = 8;
 const MAX_COMBINED_CHARS = 60_000;
+// PDF menu fallback: only tried when the HTML pass got zero priced items, and
+// only against a small, bounded set of candidates — this is a cost/timeout
+// guard, not a quality cap (parse-menu-pdf itself does the real extraction).
+const MAX_PDF_CANDIDATES = 2;
+const MAX_PDF_FILE_BYTES = 15 * 1024 * 1024;
+const PDF_FETCH_TIMEOUT_MS = 20_000;
+const PDF_PARSE_TIMEOUT_MS = 90_000;
+// The HTML pass (map + scrape + 3 LLM calls) alone has been observed taking
+// 100s+ on slow sites. A PDF attempt on top of that risks the whole function
+// timing out and losing the honest HTML-side partial along with it. Only
+// spend the time if there's real budget left; otherwise skip straight to the
+// honest partial that's already computed.
+const PDF_FALLBACK_ELAPSED_BUDGET_MS = 100_000;
+// Firecrawl 429 backoff: an unpaced batch of crawls can trip Firecrawl's rate
+// limit and cascade every remaining page to a false "no readable text" partial.
+// Retry with exponential backoff before giving up.
+const FIRECRAWL_MAX_RETRIES = 3;
 // Menu prompt asks for up to 300 items; 8000 tokens truncates real menus mid-JSON.
 // 300 items x ~45 tokens ~= 13.5k, so 16k covers the prompt's own contract with headroom.
 // Deliberately NOT the model's 64k ceiling: this fetch blocks the edge function's wall
@@ -65,9 +82,26 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+/** Fetch with exponential backoff on Firecrawl 429s. Any other status (incl.
+ *  other errors) is returned as-is for the caller to handle. */
+async function fetchWithBackoff(url: string, init: RequestInit): Promise<Response> {
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 || attempt >= FIRECRAWL_MAX_RETRIES) return res;
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const delayMs = retryAfterHeader && !isNaN(Number(retryAfterHeader))
+      ? Number(retryAfterHeader) * 1000
+      : 1000 * 2 ** attempt; // 1s, 2s, 4s
+    console.warn(`[scrape-shop] Firecrawl 429 on attempt ${attempt + 1}/${FIRECRAWL_MAX_RETRIES}, retrying in ${delayMs}ms`);
+    await new Promise(r => setTimeout(r, delayMs));
+    attempt++;
+  }
+}
+
 /** Discover all pages on the domain via Firecrawl /map */
 async function discoverPages(url: string, apiKey: string): Promise<string[]> {
-  const res = await fetch(`${FIRECRAWL_BASE}/map`, {
+  const res = await fetchWithBackoff(`${FIRECRAWL_BASE}/map`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -84,6 +118,19 @@ async function discoverPages(url: string, apiKey: string): Promise<string[]> {
   const data: { success: boolean; links?: string[] } = await res.json();
   if (!data.success || !data.links) return [url];
   return data.links;
+}
+
+/** Pick candidate menu PDFs out of the raw discovered links (before the
+ *  content-page filter drops them). URL text is all Firecrawl /map gives us —
+ *  no anchor text — so ranking is URL-pattern-based, same signal `prioritizePages`
+ *  already uses for HTML menu pages. */
+function findMenuPdfCandidates(links: string[]): string[] {
+  const pdfLinks = links.filter(l => /\.pdf(\?|$)/i.test(l));
+  const menuLike = /menu|food|dinner|lunch|takeout/i;
+  return pdfLinks
+    .map((url, idx) => ({ url, score: menuLike.test(url) ? 1 : 0, idx }))
+    .sort((a, b) => b.score - a.score || a.idx - b.idx)
+    .map(x => x.url);
 }
 
 /** Filter discovered URLs to the most useful content pages */
@@ -128,7 +175,7 @@ function prioritizePages(links: string[], baseUrl: string): string[] {
 async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string }> {
   try {
     const formats = includeRaw ? ["markdown", "rawHtml"] : ["markdown"];
-    const res = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+    const res = await fetchWithBackoff(`${FIRECRAWL_BASE}/scrape`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -246,7 +293,80 @@ async function extractMenuItems(
   }
 }
 
+/** Fetch a candidate menu PDF and hand it to parse-menu-pdf, which does the
+ *  real extraction (triple-extract consensus) and persists items itself.
+ *  Never trust parse-menu-pdf's self-reported counts for the honesty
+ *  invariant — it can "succeed" with every price flagged/unconfirmed — so
+ *  this re-checks the DB directly for priced item rows before reporting back. */
+async function routeMenuPdf(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  pdfUrl: string,
+  shopId: string,
+  supabaseUrl: string,
+  serviceRoleKey: string,
+): Promise<{ itemCount: number; error?: string }> {
+  let pdfRes: Response;
+  try {
+    pdfRes = await fetch(pdfUrl, { signal: AbortSignal.timeout(PDF_FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    return { itemCount: 0, error: `PDF fetch error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!pdfRes.ok) return { itemCount: 0, error: `PDF fetch failed: ${pdfRes.status}` };
+
+  const contentLength = pdfRes.headers.get("content-length");
+  if (contentLength && Number(contentLength) > MAX_PDF_FILE_BYTES) {
+    return { itemCount: 0, error: "PDF exceeds 15MB cap (content-length)" };
+  }
+
+  const bytes = await pdfRes.arrayBuffer();
+  if (bytes.byteLength > MAX_PDF_FILE_BYTES) {
+    return { itemCount: 0, error: "PDF exceeds 15MB cap" };
+  }
+  if (bytes.byteLength === 0) {
+    return { itemCount: 0, error: "PDF fetch returned 0 bytes" };
+  }
+
+  const form = new FormData();
+  form.append("shop_id", shopId);
+  form.append("file", new Blob([bytes], { type: "application/pdf" }), "menu.pdf");
+
+  let parseRes: Response;
+  try {
+    parseRes = await fetch(`${supabaseUrl}/functions/v1/parse-menu-pdf`, {
+      method: "POST",
+      headers: {
+        "apikey":        serviceRoleKey,
+        "Authorization": `Bearer ${serviceRoleKey}`,
+      },
+      body: form,
+      signal: AbortSignal.timeout(PDF_PARSE_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return { itemCount: 0, error: `parse-menu-pdf call error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  if (!parseRes.ok) {
+    const text = await parseRes.text();
+    return { itemCount: 0, error: `parse-menu-pdf ${parseRes.status}: ${text.slice(0, 200)}` };
+  }
+
+  const { data: menuRow } = await supabase
+    .from("menus").select("id").eq("shop_id", shopId).maybeSingle();
+  if (!menuRow) return { itemCount: 0, error: "parse-menu-pdf did not leave a menu row behind" };
+
+  const { count } = await supabase
+    .from("menu_items")
+    .select("id", { count: "exact", head: true })
+    .eq("menu_id", menuRow.id)
+    .eq("row_type", "item")
+    .not("price_cents", "is", null);
+
+  return { itemCount: count ?? 0 };
+}
+
 Deno.serve(async (req: Request) => {
+  const startedAt = Date.now();
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -258,11 +378,9 @@ Deno.serve(async (req: Request) => {
   const { shop_id, force } = body;
   if (!shop_id) return jsonResponse({ error: "shop_id is required" }, 400);
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")              ?? "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-    { auth: { persistSession: false } },
-  );
+  const supabaseUrl     = Deno.env.get("SUPABASE_URL")              ?? "";
+  const serviceRoleKey  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops").select("id, website_url, crawl_status, updated_at").eq("id", shop_id).single();
@@ -303,10 +421,12 @@ Deno.serve(async (req: Request) => {
 
   try {
   let pages: string[];
+  let pdfCandidates: string[] = [];
   try {
     const allLinks = await discoverPages(shop.website_url, firecrawlKey);
     pages = prioritizePages(allLinks, shop.website_url.replace(/\/$/, ""));
-    console.log(`[scrape-shop] Discovered ${allLinks.length} links, scraping top ${pages.length}`);
+    pdfCandidates = findMenuPdfCandidates(allLinks).slice(0, MAX_PDF_CANDIDATES);
+    console.log(`[scrape-shop] Discovered ${allLinks.length} links, scraping top ${pages.length}, ${pdfCandidates.length} PDF candidate(s)`);
   } catch (err) {
     console.error("[scrape-shop] Firecrawl /map error:", err);
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -456,6 +576,34 @@ Deno.serve(async (req: Request) => {
           menuInserted = rows.length;
           menuHasUsableItems = true;
         }
+      }
+    }
+  }
+
+  // PDF menu fallback: the HTML pass got nothing usable, the shop still has no
+  // menu of its own, and we discovered candidate menu PDFs during page discovery
+  // (dropped from the HTML crawl by `prioritizePages` by design). Hand the file
+  // to parse-menu-pdf, which already does real PDF extraction — never reimplement
+  // that here. Bounded to MAX_PDF_CANDIDATES tries; stop at the first one that
+  // actually lands priced rows. A slow/failing PDF attempt must never cost us the
+  // honest HTML-side partial result already computed above.
+  if (!menuHasUsableItems && menuData && pdfCandidates.length > 0) {
+    for (const pdfUrl of pdfCandidates) {
+      if (Date.now() - startedAt > PDF_FALLBACK_ELAPSED_BUDGET_MS) {
+        console.warn(`[scrape-shop] Skipping remaining PDF candidate(s) — elapsed time budget exceeded, keeping honest partial`);
+        break;
+      }
+      try {
+        const result = await routeMenuPdf(supabase, pdfUrl, shop_id, supabaseUrl, serviceRoleKey);
+        if (result.itemCount > 0) {
+          menuInserted = result.itemCount;
+          menuHasUsableItems = true;
+          console.log(`[scrape-shop] PDF menu route succeeded: ${pdfUrl} -> ${result.itemCount} priced item(s)`);
+          break;
+        }
+        console.log(`[scrape-shop] PDF menu route yielded 0 priced items: ${pdfUrl}${result.error ? ` (${result.error})` : ""}`);
+      } catch (err) {
+        console.error(`[scrape-shop] PDF menu route error for ${pdfUrl}:`, err instanceof Error ? err.message : String(err));
       }
     }
   }
