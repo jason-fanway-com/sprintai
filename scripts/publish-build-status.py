@@ -36,6 +36,11 @@ READINESS = os.path.join(REPO, "docs/specs/2026-09-03-READINESS.md")
 
 JASON_RE = re.compile(r"Jason|BLOCKED ON JASON|Jason's (action|integration test)", re.I)
 
+# A cell that explicitly declares nothing outstanding. Checked FIRST, because the
+# same cell often goes on to suggest an integration test Jason *could* run — that
+# is a suggestion, not a blocker.
+NO_BLOCKER_RE = re.compile(r"^\s*(?:[-—–]|none|no blockers|n/?a|no migration needed)\b", re.I)
+
 
 def env(name):
     v = os.environ.get(name)
@@ -97,7 +102,17 @@ def parse_readiness():
             continue
         blockers = cells[col["blockers"]]
         validated_how = cells[validated_idx] if validated_idx is not None else ""
-        blocked_on_jason = bool(JASON_RE.search(blockers) or JASON_RE.search(validated_how))
+        # Derived from the BLOCKERS cell only. Reading "validated how" too flagged
+        # items whose blocker cell literally says "No blockers" / "None" — on
+        # 2026-09-05 that put 7 of 14 items in front of Jason when 3 were real.
+        # A tile that cries wolf is the same failure as one that drifts: he stops
+        # trusting it. An item is blocked on Jason only when its blockers cell
+        # names him AND does not open by declaring there is nothing outstanding.
+        blocked_on_jason = bool(
+            blockers
+            and not NO_BLOCKER_RE.match(blockers)
+            and JASON_RE.search(blockers)
+        )
         items.append({
             "item": item,
             "what": cells[col["what"]],
