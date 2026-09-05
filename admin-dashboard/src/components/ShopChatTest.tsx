@@ -55,12 +55,21 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
   const [phase, setPhase]             = useState<string>('greeting')
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null)
   const [showCart, setShowCart]       = useState(false)
-  const messagesEndRef   = useRef<HTMLDivElement>(null)
+  const messagesRef      = useRef<HTMLDivElement>(null)
   const pollStartTimeRef = useRef<string | null>(null)
   const inputRef         = useRef<HTMLInputElement>(null)
 
+  // Scroll the message list, never the page.
+  //
+  // This used to be `messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })`.
+  // With no `block` option that defaults to `block: 'start'`, which scrolls the
+  // *page* until the end-of-list marker sits at the top of the viewport — so every
+  // Enter press yanked the simulator off the top of the screen. Driving the
+  // container's own scrollTop touches page scroll not at all.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = messagesRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages])
 
   useEffect(() => {
@@ -226,7 +235,9 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
       }])
     } finally {
       setIsLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 0)
+      // preventScroll: focusing the input otherwise scrolls it into view,
+      // which drags the page down the same way the old scrollIntoView did.
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0)
     }
   }
 
@@ -288,7 +299,7 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto p-3 space-y-2.5">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
               <MessageSquare className="w-8 h-8 mb-2 opacity-30" />
@@ -326,10 +337,18 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
             </div>
           )}
 
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input bar */}
+        {/*
+          The input is deliberately NOT disabled while a reply is in flight.
+          Toggling `disabled` blurs the focused input, and on the way back React's
+          selection restoration calls focus() with no arguments — which we cannot
+          pass preventScroll to, and which makes the browser scroll the page to
+          bring the input into view. That was the remaining source of the page
+          jumping on every send. sendMessage() already guards on isLoading, so an
+          enabled input costs nothing and lets the owner keep typing.
+        */}
         <div className="bg-white border-t border-gray-200 p-2 flex gap-1.5 flex-shrink-0">
           <input
             ref={inputRef}
@@ -337,9 +356,7 @@ export default function ShopChatTest({ shopId, shopName, forceTest = false }: Pr
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
             placeholder="Type as the customer..."
-            disabled={isLoading}
-            autoFocus
-            className="flex-1 px-3 py-1.5 text-xs border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50 min-w-0"
+            className="flex-1 px-3 py-1.5 text-xs border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 min-w-0"
           />
           <button
             onClick={sendMessage}
