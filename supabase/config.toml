@@ -83,3 +83,12 @@ verify_jwt = false  # Public short-link redirect; no JWT needed
 
 [functions.resend-webhook]
 verify_jwt = false  # Resend delivery webhooks; auth is Svix signature verification
+
+[functions.campaign-status-reader]
+verify_jwt = false  # Migration 083's hourly pg_cron job authenticates with a
+                    # shared secret (Bearer DAILY_RESET_SECRET), not a Supabase
+                    # JWT — same pattern as daily-reset. Must stay false or the
+                    # platform edge rejects the cron's request before the
+                    # function's own secret check ever runs (incident found
+                    # 2026-09-04: deployed with verify_jwt=true, silently
+                    # blocking go-live gate #13 for every real merchant).
