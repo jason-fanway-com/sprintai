@@ -70,17 +70,15 @@ body {
   letter-spacing: 0.06em;
 }
 
-.framing {
-  background: var(--brand-light);
-  border: 1px solid var(--border-warm);
-  border-radius: var(--r);
-  padding: 14px 16px;
-  margin-bottom: 16px;
-  font-size: 13.5px;
-  color: var(--ink);
+.prompt {
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: 19px;
+  line-height: 1.3;
+  color: var(--navy);
+  margin-bottom: 4px;
 }
-.framing p + p { margin-top: 6px; }
-.framing strong { color: var(--brand-hover); }
+.reassure { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 
 .card {
   background: #fff;
@@ -108,15 +106,39 @@ body {
   border-radius: 999px;
 }
 
+.capture-bar { padding: 12px 14px 14px; border-top: 1px solid var(--border); background: #fff; }
+.fix-label { display: block; font-size: 14px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+.capture-bar input[type=text] {
+  width: 100%; padding: 11px 13px; font-size: 16px; font-family: var(--font-b);
+  border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--ink);
+}
+.capture-bar input[type=text]:focus { outline: none; border-color: var(--brand); }
+.fix-row { display: flex; gap: 8px; margin-top: 8px; }
+.fix-row input[type=text] { flex: 0 1 40%; min-width: 0; }
+.fix-row button.primary {
+  flex: 1 1 auto; flex-shrink: 0; white-space: nowrap; padding: 11px 16px; font-size: 15px; font-weight: 700;
+  font-family: var(--font-b); color: #fff; background: var(--navy);
+  border: none; border-radius: 10px; cursor: pointer; min-height: 46px;
+}
+.fix-row button.primary:hover:not(:disabled) { background: #0F1822; }
+.fix-row button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.empty-hint { margin: auto; text-align: center; padding: 0 20px; }
+.empty-hint-lead { font-family: var(--font-d); font-weight: 700; font-size: 17px; color: var(--navy); }
+.empty-hint-eg { font-size: 13.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+.empty-hint-eg em { color: var(--brand-hover); font-style: normal; font-weight: 600; }
+
 .msg.notice { justify-content: center; }
 .notice-text {
   font-size: 13px; color: #6b7280; background: #f3f4f6;
   border-radius: 10px; padding: 6px 12px; text-align: center; max-width: 90%;
 }
 .messages {
-  height: 56vh;
-  min-height: 320px;
-  max-height: 520px;
+  /* Deliberately short. The Submit button and the comment box must be visible
+     without scrolling on a phone — that is the whole brief. */
+  height: 38vh;
+  min-height: 230px;
+  max-height: 380px;
   overflow-y: auto;
   padding: 14px;
   display: flex;
@@ -198,7 +220,6 @@ body {
   background: var(--warm);
   color: var(--ink);
 }
-.capture-bar button.primary { background: var(--navy); color: #fff; border-color: var(--navy); }
 .capture-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
 .capture-bar button:hover:not(:disabled) { filter: brightness(0.96); }
 
@@ -232,15 +253,8 @@ body {
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">
-    <span class="brand-mark">SprintAI</span>
-    <span class="brand-tag">Test Kitchen</span>
-  </div>
-
-  <div class="framing">
-    <p>This is a test of our text-message ordering system — <strong>order like you would from a real pizzeria.</strong></p>
-    <p>Nothing is charged and no food comes. Your conversation helps us find rough edges.</p>
-  </div>
+  <p class="prompt">Order dinner here, like you're texting a pizza shop.</p>
+  <p class="reassure">Nothing is charged and no food is coming.</p>
 
   <div class="card" id="card">
     <div class="center-msg">Loading…</div>
@@ -323,7 +337,9 @@ body {
     }
 
     sessionId = data.session_id;
-    shopName = data.shop_name || 'the test shop';
+    // Display only — internal suffixes like "(QA)" or "(TEST CLONE)" are our
+    // vocabulary, not a diner's. The page has to read as a pizza shop.
+    shopName = (data.shop_name || 'Pizza Shop').replace(/\s*\((?:QA|TEST[^)]*|DEMO)\)\s*$/i, '').trim();
     localStorage.setItem(STORAGE_KEY, sessionId);
     renderChat();
   }
@@ -332,11 +348,10 @@ body {
     card.innerHTML =
       '<div class="card-header">' +
         '<span class="shop-name">' + esc(shopName) + '</span>' +
-        '<span class="status">Test mode</span>' +
       '</div>' +
       '<div class="messages" id="messages"></div>' +
       '<div class="input-bar">' +
-        '<input id="msg-input" type="text" placeholder="Type as the customer…" autocomplete="off">' +
+        '<input id="msg-input" type="text" placeholder="Type your order…" autocomplete="off">' +
         '<button id="send-btn">Send</button>' +
       '</div>' +
       '<div class="capture-bar" id="capture-bar"></div>';
@@ -347,12 +362,20 @@ body {
     });
 
     renderMessages();
+    syncSubmitState();
     renderCaptureBar();
   }
+
+  var EMPTY_HINT =
+    '<div class="empty-hint">' +
+      '<p class="empty-hint-lead">Say hi, or just order.</p>' +
+      '<p class="empty-hint-eg">Try: <em>"large pepperoni and a side of garlic knots"</em></p>' +
+    '</div>';
 
   function renderMessages() {
     const el = document.getElementById('messages');
     if (!el) return;
+    if (messages.length === 0) { el.innerHTML = EMPTY_HINT; return; }
     el.innerHTML = messages.map(function (m) {
       if (m.role === 'notice') {
         // Visually distinct from the bot so a tester is never confused about
@@ -390,6 +413,7 @@ body {
     btn.disabled = true;
     messages.push({ role: 'user', content: text, at: new Date().toISOString() });
     renderMessages();
+    syncSubmitState();
     setTyping(true);
 
     const { data } = await api('send', { session_id: sessionId, message: text });
@@ -403,6 +427,7 @@ body {
       // corrupt the very thing this page exists to collect.
       messages.push({ role: 'notice', content: 'Sorry — something went wrong sending that. Please try again.', at: new Date().toISOString() });
       renderMessages();
+    syncSubmitState();
       return;
     }
 
@@ -423,44 +448,41 @@ body {
       document.getElementById('send-btn').disabled = true;
     }
     renderMessages();
+    syncSubmitState();
     renderCaptureBar();
   }
 
   function renderCaptureBar() {
     const el = document.getElementById('capture-bar');
     if (!el) return;
-    const disabled = messages.length === 0 ? 'disabled' : '';
     el.innerHTML =
-      '<div class="row">' +
-        '<button id="review-btn" ' + disabled + '>What felt wrong? (Send for review)</button>' +
-      '</div>';
-    document.getElementById('review-btn').addEventListener('click', renderAskForm);
+      '<label class="fix-label" for="reporter-note">What needs to be fixed?</label>' +
+      '<input type="text" id="reporter-note" maxlength="280" placeholder="One line is plenty — or leave it blank">' +
+      '<div class="fix-row">' +
+        '<input type="text" id="tester-name" maxlength="60" placeholder="First name">' +
+        '<button class="primary" id="submit-review-btn" disabled>Submit for review</button>' +
+      '</div>' +
+      '<p class="note" id="submit-note"></p>';
+    document.getElementById('submit-review-btn').addEventListener('click', function () { submitReview(); });
+    document.getElementById('reporter-note').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); const b = document.getElementById('submit-review-btn'); if (!b.disabled) submitReview(); }
+    });
+    syncSubmitState();
   }
 
-  function renderAskForm() {
-    const el = document.getElementById('capture-bar');
-    el.innerHTML =
-      '<div class="ask-form">' +
-        '<label>Your first name (optional)</label>' +
-        '<input type="text" id="tester-name" maxlength="60" placeholder="e.g. Erin">' +
-        '<label>What felt wrong? (optional)</label>' +
-        '<input type="text" id="reporter-note" maxlength="280" placeholder="One line is plenty">' +
-        '<div class="row">' +
-          '<button class="primary" id="submit-review-btn">Send</button>' +
-          '<button id="skip-review-btn">Skip</button>' +
-        '</div>' +
-        '<p class="note" id="submit-note"></p>' +
-      '</div>';
-    document.getElementById('submit-review-btn').addEventListener('click', function () { submitReview(false); });
-    document.getElementById('skip-review-btn').addEventListener('click', function () { submitReview(true); });
+  /* Visible from the first paint, but inert until there is actually a
+     conversation to send — submitting an empty one would just be noise. */
+  function syncSubmitState() {
+    const b = document.getElementById('submit-review-btn');
+    if (b) b.disabled = messages.length === 0;
   }
 
-  async function submitReview(skip) {
+  async function submitReview() {
     const testerNameEl = document.getElementById('tester-name');
     const noteEl = document.getElementById('reporter-note');
     const noteOut = document.getElementById('submit-note');
     const testerName = testerNameEl ? testerNameEl.value.trim() : '';
-    const reporterNote = skip ? '' : (noteEl ? noteEl.value.trim() : '');
+    const reporterNote = noteEl ? noteEl.value.trim() : '';
 
     noteOut.textContent = 'Sending…';
     noteOut.className = 'note';
