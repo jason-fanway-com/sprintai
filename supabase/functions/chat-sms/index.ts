@@ -37,6 +37,14 @@ const COMPLIANCE_DISCLOSURE = "Msg & data rates may apply. Reply HELP for help o
 const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
 
+// ─── Customer-facing name ask (ONE wording, both order types) ───────────────
+// Jason 2026-09-05: no pickup/delivery variant. "pickup" is wrong on a delivery
+// order and branching was overruled. Field stays `pickup_name` internally.
+// Straight apostrophe on purpose: U+2019 is not in GSM-7 and would push every
+// SMS containing it to UCS-2 (67 chars/segment instead of 153).
+// NOTE: C2's askedForName detector (below) must keep matching this string.
+const NAME_ASK = "What's your name for the order?";
+
 // ─── Provider resolution ─────────────────────────────────────────────────────
 function resolveSmsProvider(): "telnyx" | "twilio" {
   const telnyxKey = Deno.env.get("TELNYX_API_KEY") ?? "";
@@ -621,12 +629,12 @@ ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
 - Keep ALL responses under 300 characters for SMS
-- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for pickup name, say "What name for pickup?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
+- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
-- When cart has items and customer says they are done or asks to check out, ask for pickup name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Example: "What name should I put this under for pickup?"
+- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"
 - When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
@@ -1472,12 +1480,12 @@ async function runOrderingLoop(
           deliveryFeeCents ?? null, shopGeo ?? null,
         );
         if (tipResult.ok) {
-          return { reply: `Got it — $${tipArg.toFixed(2)} driver tip added. Let me confirm your order. What name for pickup?`, finalPhase: "building" };
+          return { reply: `Got it — $${tipArg.toFixed(2)} driver tip added. Let me confirm your order. ${NAME_ASK}`, finalPhase: "building" };
         }
         console.warn(`[chat-sms] Tip shortcut: set_driver_tip failed, falling through to LLM`);
       } else {
         // User declined tip — proceed without calling tool (tip already $0)
-        return { reply: "No problem — no tip added. Let me confirm your order. What name for pickup?", finalPhase: "building" };
+        return { reply: `No problem — no tip added. Let me confirm your order. ${NAME_ASK}`, finalPhase: "building" };
       }
 
       // Fall through to normal LLM path if tip tool fails
@@ -1729,7 +1737,7 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): str
     return "Almost there! Your bundle still needs a few more picks before I can send your payment link. What else would you like in it?";
   }
   // Has items, just missing the pickup name to submit.
-  return "Got your order! What name should I put it under for pickup? Once I have that I'll send your payment link.";
+  return `Got your order! ${NAME_ASK} Once I have that I'll send your payment link.`;
 }
 
 // ─── Phase A: Deterministic Ledger-status rendering ─────────────────────────
@@ -3969,7 +3977,7 @@ Deno.serve(async (req: Request) => {
       const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
       const askedForName = typeof lastAssistant?.content === "string"
         && /\bname\b/i.test(lastAssistant.content)
-        && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for/i.test(lastAssistant.content);
+        && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(lastAssistant.content);
       if (looksLikeName && askedForName) {
         const orderType = cart.order_type;
         const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
@@ -4379,7 +4387,7 @@ Deno.serve(async (req: Request) => {
   const hasPickupName = !!(guardCartRow?.pickup_name as string | undefined);
   if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
-    reply = "Got it! What name should I put this order under for pickup?";
+    reply = `Got it! ${NAME_ASK}`;
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────

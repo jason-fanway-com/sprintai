@@ -105,6 +105,8 @@ Deno.test("does NOT fire on things the tools actually do", () => {
       "I'll put a note on that for the kitchen.",
       "Got it - I'll add bone-in wings.",
       "What name should I put this under for pickup?",
+      "What's your name for the order?",
+      "Got it! What's your name for the order?",
     ]
   ) {
     assertEquals(claimsInventedAction(s), false, s);
