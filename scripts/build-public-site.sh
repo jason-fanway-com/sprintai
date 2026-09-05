@@ -113,4 +113,28 @@ echo "  - prune signup-page/_proof/ (internal QA artifacts)"
 find "$OUT" -type f \( -name '*.htmltext' -o -name '*.md' -o -name '*.sql' \) -print -delete | sed 's/^/  - prune /' || true
 find "$OUT" -type d -name '_proof' -print -exec rm -rf {} + 2>/dev/null | sed 's/^/  - prune /' || true
 
+# ── Mark every generated file, and make it unwritable ──────────────────────
+# ./public is BUILD OUTPUT. The source of truth is the repo-root copy of each
+# file. On 2026-09-05 a stale public/try.html (an older build left on disk) was
+# read as if it were a second source and reported as file drift — the same
+# class of mistake that let {{DEMO_NUMBER}} ship in the demo-kit SVGs.
+#
+# Two guards, so the wrong file cannot be edited by accident:
+#   1. A banner as the first line of every generated HTML file, naming the real
+#      source path. Anyone who opens it sees what it is immediately.
+#   2. chmod a-w, so an editor refuses to save over it.
+# Both are erased and reapplied on the next build (rm -rf above), so neither
+# can go stale.
+while IFS= read -r gen; do
+  rel="${gen#"$OUT"/}"
+  tmp="$gen.tmp.$$"
+  {
+    printf '%s\n' "<!-- GENERATED FILE — DO NOT EDIT. Built by scripts/build-public-site.sh from /$rel. Edits here are erased on the next build and never deployed. -->"
+    cat "$gen"
+  } > "$tmp"
+  mv "$tmp" "$gen"
+done < <(find "$OUT" -maxdepth 1 -type f -name '*.html')
+find "$OUT" -type f -exec chmod a-w {} +
+echo "  * stamped generated banner + made $OUT read-only"
+
 echo "[build-public-site] done. published file count: $(find "$OUT" -type f | wc -l | tr -d ' ')"

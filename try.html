@@ -273,13 +273,27 @@ body {
   const FN_URL = SUPABASE_URL + '/functions/v1/public-tester';
   const STORAGE_KEY = 'sprintai-tester-session';
 
+  // EVERY reason code the function can return must appear here. A code that is
+  // missing falls through to a generic "something went wrong", which is how a
+  // tester got told the page had crashed when testing was merely switched off.
+  // Source of truth: supabase/functions/public-tester/index.ts (refuse() calls).
   const RATE_LIMIT_MESSAGES = {
-    global_cap:    "We've hit today's testing limit across all testers — please try again tomorrow. Thanks for your patience!",
-    ip_limit:      "You've started a few test orders in the last hour — take a short break and try again soon.",
-    session_limit: "You've started a few test orders in the last hour — take a short break and try again soon.",
-    disabled:      "Testing is paused right now. Check back later!",
-    misconfigured: "Something's not set up right on our end. Please try again later.",
+    global_cap:        "We've hit today's testing limit across all testers — please try again tomorrow. Thanks for your patience!",
+    ip_limit:          "You've started a few test orders in the last hour — take a short break and try again soon.",
+    session_limit:     "You've started a few test orders in the last hour — take a short break and try again soon.",
+    disabled:          "Testing is paused right now — nothing is broken on your end. Check back later!",
+    misconfigured:     "Something's not set up right on our end. Please try again later.",
+    unknown_session:   "This test order expired. Tap below to start a fresh one — nothing was wrong with what you typed.",
+    upstream_error:    "The kitchen didn't answer that one. Please try sending it again.",
+    invalid_request:   "That message didn't come through. Please try again.",
+    invalid_json:      "That message didn't come through. Please try again.",
+    invalid_action:    "Something went wrong on our end. Please try again later.",
+    method_not_allowed:"Something went wrong on our end. Please try again later.",
   };
+
+  // Reasons that mean the conversation itself is over — the page should offer a
+  // fresh start rather than invite a retry that cannot succeed.
+  const FATAL_REASONS = ['disabled', 'unknown_session', 'global_cap', 'ip_limit', 'session_limit', 'misconfigured'];
 
   const card = document.getElementById('card');
 
@@ -316,11 +330,21 @@ body {
   }
 
   function friendlyReason(reason) {
-    return RATE_LIMIT_MESSAGES[reason] || "Something went wrong starting your test order. Please try again.";
+    return RATE_LIMIT_MESSAGES[reason] || "Something went wrong. Please try again in a moment.";
   }
 
-  function renderPaused(message) {
-    card.innerHTML = '<div class="center-msg"><strong>Testing is paused</strong>' + esc(message) + '</div>';
+  // Headings per reason: "Testing is paused" is wrong for an expired order, and
+  // a tester who is told the wrong thing reports the wrong bug.
+  const PAUSED_HEADINGS = {
+    unknown_session: 'That order expired',
+    global_cap:      'Testing limit reached',
+    ip_limit:        'Take a short break',
+    session_limit:   'Take a short break',
+  };
+
+  function renderPaused(message, reason) {
+    const heading = PAUSED_HEADINGS[reason] || 'Testing is paused';
+    card.innerHTML = '<div class="center-msg"><strong>' + esc(heading) + '</strong>' + esc(message) + '</div>';
   }
 
   async function start() {
@@ -332,11 +356,11 @@ body {
 
     if (!data.ok) {
       if (status === 503 && data.reason === 'disabled') {
-        renderPaused(friendlyReason('disabled'));
+        renderPaused(friendlyReason('disabled'), 'disabled');
       } else if (status === 429) {
-        renderPaused(friendlyReason(data.reason));
+        renderPaused(friendlyReason(data.reason), data.reason);
       } else {
-        renderPaused(friendlyReason(data.reason));
+        renderPaused(friendlyReason(data.reason), data.reason);
       }
       return;
     }
@@ -427,10 +451,17 @@ body {
     btn.disabled = false;
 
     if (!data.ok) {
+      // If the whole feature is off, or this conversation no longer exists,
+      // retrying cannot work — say so on the paused screen rather than leaving
+      // the tester poking at a dead input thinking they broke it.
+      if (FATAL_REASONS.indexOf(data.reason) !== -1) {
+        renderPaused(friendlyReason(data.reason), data.reason);
+        return;
+      }
       // A local notice, NOT an assistant turn. The transcript is a record of
       // what the bot actually said; putting our own words in its mouth would
       // corrupt the very thing this page exists to collect.
-      messages.push({ role: 'notice', content: 'Sorry — something went wrong sending that. Please try again.', at: new Date().toISOString() });
+      messages.push({ role: 'notice', content: friendlyReason(data.reason), at: new Date().toISOString() });
       renderMessages();
     syncSubmitState();
       return;
@@ -502,7 +533,10 @@ body {
     });
 
     if (!data.ok) {
-      noteOut.textContent = data.message || 'Could not save your feedback — please try again.';
+      // The function returns {ok:false, reason}. It never returns `message`, so
+      // this used to show "Could not save your feedback" for every cause —
+      // including testing simply being switched off.
+      noteOut.textContent = friendlyReason(data.reason);
       noteOut.className = 'note error';
       return;
     }
