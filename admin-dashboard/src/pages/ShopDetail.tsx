@@ -268,13 +268,20 @@ export default function ShopDetail() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${supabaseAnonKey}`,
         },
-        body: JSON.stringify({ shop_id: id }),
+        body: JSON.stringify({ shop_id: id, force: true }),
       })
       const result = await res.json()
       if (result.ok) {
         if (result.context) setContextDraft(result.context)
         qc.invalidateQueries({ queryKey: ['shop', id] })
-        toast.success(`Website scraped — ${result.pages_scraped ?? ''} pages`)
+        // "partial" means the site read fine but no menu with prices was found. Reporting
+        // that as an unqualified success is the false-green this whole fix exists to kill.
+        if (result.crawl_status === 'partial') {
+          // react-hot-toast has no .warning — use the base call with an icon.
+          toast(`Read ${result.pages_scraped ?? 0} pages, but found no menu with prices — the menu needs to be added another way.`, { icon: '⚠️', duration: 6000 })
+        } else {
+          toast.success(`Website scraped — ${result.pages_scraped ?? ''} pages`)
+        }
       } else {
         toast.error(result.error ?? 'Scraping failed')
       }

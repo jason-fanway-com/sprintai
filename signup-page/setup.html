@@ -467,6 +467,7 @@
     <div class="section-desc">We scanned your website while you signed up. Here's what we found.</div>
     <div id="crawlPending" style="display:none;color:var(--muted);font-size:14px;">⏳ Scanning your website… this usually takes 10–30 seconds.</div>
     <div id="crawlFailed" style="display:none;color:#DC2626;font-size:14px;">⚠️ Couldn't scan your website. You can still continue — just add details below.</div>
+    <div id="crawlPartial" style="display:none;color:var(--muted);font-size:14px;"></div>
     <div id="crawlDone" style="display:none">
       <div id="crawlAbout" style="font-size:14px;color:var(--ink);margin-bottom:12px;line-height:1.5;"></div>
       <div id="crawlHours" style="font-size:13px;color:var(--muted);margin-bottom:8px;"></div>
@@ -1051,6 +1052,8 @@
       } else if (s.crawl_status === "failed") {
         document.getElementById("crawlFailed").style.display = "block";
         if (s.crawl_error) document.getElementById("crawlFailed").textContent += " " + s.crawl_error;
+      } else if (s.crawl_status === "partial") {
+        showCrawlPartial(s);
       } else if (s.crawl_status === "done") {
         showCrawlDone(s);
       }
@@ -1099,6 +1102,13 @@
     }
   }
 
+  function showCrawlPartial(s) {
+    var el = document.getElementById("crawlPartial");
+    el.style.display = "block";
+    el.textContent = "ℹ️ " + (s.crawl_error || "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.");
+    showCrawlDone(s); // about/hours/links may still have been captured even without a menu
+  }
+
   function startCrawlPolling(shopId) {
     var attempts = 0;
     var maxAttempts = 30;
@@ -1110,6 +1120,10 @@
           if (cs === "done") {
             document.getElementById("crawlPending").style.display = "none";
             showCrawlDone(r.json.shop);
+            return;
+          } else if (cs === "partial") {
+            document.getElementById("crawlPending").style.display = "none";
+            showCrawlPartial(r.json.shop);
             return;
           } else if (cs === "failed") {
             document.getElementById("crawlPending").style.display = "none";

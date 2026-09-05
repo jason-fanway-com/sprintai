@@ -5,12 +5,22 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { parseLlmJson } from "../_shared/llm-json.ts";
 
 const CLAUDE_API   = "https://api.anthropic.com/v1/messages";
 const SONNET_MODEL = "claude-sonnet-4-6";
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v1";
 const MAX_PAGES = 8;
 const MAX_COMBINED_CHARS = 60_000;
+// Menu prompt asks for up to 300 items; 8000 tokens truncates real menus mid-JSON.
+// 300 items x ~45 tokens ~= 13.5k, so 16k covers the prompt's own contract with headroom.
+// Deliberately NOT the model's 64k ceiling: this fetch blocks the edge function's wall
+// clock, and a 64k generation can outlive it — the run then dies mid-flight and every
+// crawled page is thrown away. finish_reason=length is logged if 16k ever binds.
+const MENU_MAX_TOKENS = 16_000;
+// Hard bound so a stalled upstream can never eat the whole function budget; on abort the
+// catch below returns null and the caller records "partial" instead of dying silently.
+const LLM_TIMEOUT_MS = 90_000;
 
 /** Extract JSON-LD structured data from raw HTML */
 function extractStructuredData(html: string): string {
@@ -179,14 +189,18 @@ async function extractOpenHours(
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: HOURS_PROMPT + "\n\n" + combinedText.substring(0, 40_000) }],
       }),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.error("[scrape-shop] LLM hours extraction failed:", res.status);
       return null;
     }
     const data = await res.json();
-    const raw = (data?.choices?.[0]?.message?.content ?? "").trim();
-    return JSON.parse(raw) as Record<string, { closed: boolean; open: string; close: string }>;
+    if (data?.choices?.[0]?.finish_reason === "length") {
+      console.error("[scrape-shop] LLM hours extraction truncated (finish_reason=length)");
+    }
+    const raw = data?.choices?.[0]?.message?.content ?? "";
+    return parseLlmJson<Record<string, { closed: boolean; open: string; close: string }>>(raw);
   } catch (err) {
     console.error("[scrape-shop] LLM hours extraction error:", err);
     return null;
@@ -209,19 +223,23 @@ async function extractMenuItems(
       },
       body: JSON.stringify({
         model: openRouterKey ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6",
-        max_tokens: 8_000,
+        max_tokens: MENU_MAX_TOKENS,
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 55_000) }],
       }),
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.error("[scrape-shop] LLM menu extraction failed:", res.status);
       return null;
     }
     const data = await res.json();
-    const raw = (data?.choices?.[0]?.message?.content ?? "").trim();
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed?.items) ? parsed.items : null;
+    if (data?.choices?.[0]?.finish_reason === "length") {
+      console.error("[scrape-shop] LLM menu extraction truncated (finish_reason=length) — raising max_tokens further may be needed");
+    }
+    const raw = data?.choices?.[0]?.message?.content ?? "";
+    const parsed = parseLlmJson<{ items?: unknown }>(raw);
+    return Array.isArray(parsed?.items) ? parsed.items as Array<{ name: string; price_cents: number; category: string; description: string }> : null;
   } catch (err) {
     console.error("[scrape-shop] LLM menu extraction error:", err);
     return null;
@@ -234,10 +252,10 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== "POST") return jsonResponse({ error: "Method Not Allowed" }, 405);
 
-  let body: { shop_id?: string };
+  let body: { shop_id?: string; force?: boolean };
   try { body = await req.json(); } catch { return jsonResponse({ error: "Invalid JSON body" }, 400); }
 
-  const { shop_id } = body;
+  const { shop_id, force } = body;
   if (!shop_id) return jsonResponse({ error: "shop_id is required" }, 400);
 
   const supabase = createClient(
@@ -255,9 +273,13 @@ Deno.serve(async (req: Request) => {
   // Idempotency: never double-crawl. If already done, skip. If pending/running
   // and the shop was updated in the last 10 minutes, skip — another invocation
   // is either working or just finished setting it.
-  if (shop.crawl_status === "done") {
-    console.log(`[scrape-shop] Shop ${shop_id} already crawled — skipping`);
-    return jsonResponse({ ok: true, skipped: true, reason: "already_crawled" });
+  // "partial" is a terminal state too: the site was read and simply had no menu to find.
+  // Without this, every re-invocation re-runs a full Firecrawl map + scrape + two LLM
+  // calls on a site we already know has no machine-readable menu — unbounded spend for a
+  // result that will not change. An explicit `force` (admin retry button) still re-crawls.
+  if (!force && (shop.crawl_status === "done" || shop.crawl_status === "partial")) {
+    console.log(`[scrape-shop] Shop ${shop_id} already crawled (${shop.crawl_status}) — skipping`);
+    return jsonResponse({ ok: true, skipped: true, reason: "already_crawled", crawl_status: shop.crawl_status });
   }
   if (shop.crawl_status === "running") {
     const updatedMs = new Date(shop.updated_at ?? 0).getTime();
@@ -390,10 +412,64 @@ Deno.serve(async (req: Request) => {
   const menuLinkUrls = pages.filter(u => /menu|food|drink|order/i.test(u));
   const menuItemsRaw = await extractMenuItems(combinedText, openRouterKey, anthropicKey);
 
+  // Phase 5b: Auto-populate menu items (idempotent: only if menu is empty).
+  // Resolved BEFORE the status update so crawl_status reflects what actually landed,
+  // not just that the HTTP round-trip completed (the "false success" bug).
+  let menuInserted = 0;
+  let menuHasUsableItems = false; // true if the shop ends this run with >=1 menu item
+
+  // Resolve the shop's existing menu FIRST, unconditionally. A shop that already has
+  // items (owner-entered, or from a prior run / extract-menu-items) is not "partial"
+  // just because this run's extraction came back empty — telling that owner to "add
+  // your items below" when they already did is the same lie in the other direction.
+  const { data: menuData } = await supabase
+    .from("menus").select("id").eq("shop_id", shop_id).maybeSingle();
+  let existingCount = 0;
+  if (menuData) {
+    const { count } = await supabase
+      .from("menu_items").select("id", { count: "exact", head: true }).eq("menu_id", menuData.id);
+    existingCount = count ?? 0;
+    if (existingCount > 0) menuHasUsableItems = true;
+  } else {
+    console.error("[scrape-shop] No menu row found for shop", shop_id);
+  }
+
+  if (menuItemsRaw && menuItemsRaw.length > 0) {
+    if (menuData) {
+      if (existingCount === 0) {
+        const rows = menuItemsRaw.map((it, idx) => ({
+          menu_id: menuData.id,
+          name: it.name,
+          price_cents: it.price_cents || 0,
+          category: it.category || "",
+          description: it.description || "",
+          display_order: idx,
+          active: true,
+          is_available: true,
+          owner_edited: false,
+        }));
+
+        const { error: insertErr } = await supabase.from("menu_items").insert(rows);
+        if (insertErr) {
+          console.error("[scrape-shop] Menu insert failed:", insertErr);
+        } else {
+          menuInserted = rows.length;
+          menuHasUsableItems = true;
+        }
+      }
+    }
+  }
+
+  const crawlStatus = menuHasUsableItems ? "done" : "partial";
+  const crawlError = menuHasUsableItems
+    ? null
+    : "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.";
+
   const updatePayload: Record<string, unknown> = {
     shop_context: context,
     about: context,
-    crawl_status: "done",
+    crawl_status: crawlStatus,
+    crawl_error: crawlError,
     menu_links: menuLinkUrls,
   };
   if (openHours) updatePayload.open_hours = openHours;
@@ -406,43 +482,9 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Failed to save context to database" }, 500);
   }
 
-  // Phase 5b: Auto-populate menu items (idempotent: only if menu is empty)
-  let menuInserted = 0;
-  if (menuItemsRaw && menuItemsRaw.length > 0) {
-    // Get the shop's menu_id
-    const { data: menuData } = await supabase
-      .from("menus").select("id").eq("shop_id", shop_id).maybeSingle();
-    
-    if (menuData) {
-      // Check if menu already has items (idempotent: never overwrite owner-edited)
-      const { count } = await supabase
-        .from("menu_items").select("id", { count: "exact", head: true }).eq("menu_id", menuData.id);
-      
-      if (!count || count === 0) {
-        const rows = menuItemsRaw.map((it, idx) => ({
-          menu_id: menuData.id,
-          name: it.name,
-          price_cents: it.price_cents || 0,
-          category: it.category || "",
-          description: it.description || "",
-          display_order: idx,
-          active: true,
-          is_available: true,
-          owner_edited: false,
-        }));
-        
-        const { error: insertErr } = await supabase.from("menu_items").insert(rows);
-        if (insertErr) {
-          console.error("[scrape-shop] Menu insert failed:", insertErr);
-        } else {
-          menuInserted = rows.length;
-        }
-      }
-    }
-  }
-
   return jsonResponse({
     ok: true,
+    crawl_status: crawlStatus,
     pages_discovered: pages.length,
     pages_scraped: results.length,
     context,

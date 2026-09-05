@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { parseLlmJson } from "../_shared/llm-json.ts";
 
 // INSTRUCTION-10 item F: each extracted item carries a confidence score (0-100) and,
 // when confidence < 75, a specific flag_reason question for the owner to answer.
@@ -85,10 +86,13 @@ async function extractMenuItems(
     const data = await res.json();
     raw = (data?.choices?.[0]?.message?.content ?? "").trim();
     console.log("[extract-menu-items] Raw length: " + raw.length);
-    raw = raw.replace(/^```json\s*\n?/i, "").replace(/\n?```\s*$/, "");
-    console.log("[extract-menu-items] Stripped length: " + raw.length + " starts: " + raw.substring(0, 100));
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed?.items) ? parsed.items : Array.isArray(parsed) ? parsed : null;
+    if (data?.choices?.[0]?.finish_reason === "length") {
+      console.error("[extract-menu-items] LLM response truncated (finish_reason=length)");
+    }
+    const parsed = parseLlmJson<{ items?: unknown } | unknown[]>(raw);
+    return Array.isArray((parsed as { items?: unknown })?.items)
+      ? (parsed as { items: RawItem[] }).items
+      : Array.isArray(parsed) ? parsed as RawItem[] : null;
   } catch (err) {
     console.error("[extract-menu-items] Parse error:", err, "rawLen:", raw?.length ?? 0);
     return null;
@@ -122,8 +126,8 @@ Deno.serve(async (req: Request) => {
 
   if (!menuItems || menuItems.length === 0) {
     await supabase.from("shops").update({
-      crawl_status: "done",
-      crawl_error: "Menu extraction returned 0 items — menu page may not have prices or JS render failed",
+      crawl_status: "partial",
+      crawl_error: "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.",
     }).eq("id", shop_id);
     return jsonResponse({ ok: true, items_extracted: 0, items_inserted: 0 });
   }
@@ -134,8 +138,8 @@ Deno.serve(async (req: Request) => {
 
   if (!menuData) {
     await supabase.from("shops").update({
-      crawl_status: "done",
-      crawl_error: "No menu row found for shop",
+      crawl_status: "partial",
+      crawl_error: "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.",
     }).eq("id", shop_id);
     return jsonResponse({ ok: true, items_extracted: menuItems.length, items_inserted: 0, error: "no_menu_row" });
   }
@@ -146,6 +150,7 @@ Deno.serve(async (req: Request) => {
 
   if (count && count > 0) {
     console.log("[extract-menu-items] Menu already has " + count + " items — skipping insert");
+    await supabase.from("shops").update({ crawl_status: "done", crawl_error: null }).eq("id", shop_id);
     return jsonResponse({ ok: true, items_extracted: menuItems.length, items_inserted: 0, skipped: "menu_has_items" });
   }
 
@@ -175,12 +180,13 @@ Deno.serve(async (req: Request) => {
   if (insertErr) {
     console.error("[extract-menu-items] Insert failed:", insertErr);
     await supabase.from("shops").update({
-      crawl_status: "done",
-      crawl_error: "Menu insert failed: " + String(insertErr.message).substring(0, 800),
+      crawl_status: "partial",
+      crawl_error: "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.",
     }).eq("id", shop_id);
     return jsonResponse({ ok: false, error: "insert_failed", detail: String(insertErr.message) });
   }
 
+  await supabase.from("shops").update({ crawl_status: "done", crawl_error: null }).eq("id", shop_id);
   console.log("[extract-menu-items] Inserted " + rows.length + " items for shop " + shop_id);
   return jsonResponse({ ok: true, items_extracted: menuItems.length, items_inserted: rows.length });
 });
