@@ -73,15 +73,31 @@ body {
   letter-spacing: 0.06em;
 }
 
-.prompt {
+.headline {
   font-family: var(--font-d);
   font-weight: 700;
   font-size: 19px;
-  line-height: 1.3;
+  line-height: 1.25;
   color: var(--navy);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
-.reassure { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.subline {
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: 19px;
+  line-height: 1.25;
+  color: var(--brand-hover);
+  margin-bottom: 8px;
+}
+.prompt {
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--navy);
+  margin-bottom: 3px;
+}
+/* Kept deliberately: a tester must know this is not real before they type a
+   card number or wait for a pizza. Smaller than the ask, never absent. */
+.reassure { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
 
 .card {
   background: #fff;
@@ -258,7 +274,9 @@ body {
 </head>
 <body>
 <div class="wrap">
-  <p class="prompt">Order dinner here, like you're texting a pizza shop.</p>
+  <p class="headline">This is the OrderFare Test Kitchen.</p>
+  <p class="subline">Thanks for helping make it great.</p>
+  <p class="prompt">Order dinner here, like you’re texting a pizza shop owner.</p>
   <p class="reassure">Nothing is charged and no food is coming.</p>
 
   <div class="card" id="card">
