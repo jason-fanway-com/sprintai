@@ -168,7 +168,7 @@ Two things were built off the back of it:
   append-only in `test_transcripts`. Over time this becomes the regression corpus we do not
   currently have. Deliberately no scoring and no LLM judging: capture only, judgement stays
   with a human.
-- **Scale** — `getsprintai.com/try` is a public, login-free link Jason can text to friends
+- **Scale** — `getsprintai.com/test-kitchen` is a public, login-free link Jason can text to friends
   and family. They order pretend pizza on a phone and say what was wrong. Their transcripts
   land beside his. Cost is roughly $30 for 100 testers doing three orders each, bounded by
   a turn cap, three rate limits, and a kill switch that flips without a deploy.

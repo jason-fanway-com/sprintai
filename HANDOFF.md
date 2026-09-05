@@ -16,7 +16,7 @@ Written from the code and `git log`, not from specs. Where they disagree, the co
 
 | Thing | Where | State |
 |---|---|---|
-| Public tester link | `getsprintai.com/try` | Live, `public_tester_enabled = true` |
+| Public tester link | `getsprintai.com/test-kitchen` | Live, `public_tester_enabled = true` (`/try` 301s here) |
 | `public-tester` edge function | Supabase | Deployed |
 | Migration 096 (tester tables, `app_config`) | Supabase | Applied |
 | Migration 097 (`owner_edited`, owner INSERT/DELETE RLS) | Supabase | Applied |
@@ -32,7 +32,7 @@ Written from the code and `git log`, not from specs. Where they disagree, the co
 
 ### The public tester, in one paragraph
 
-`try.html` (root, allowlisted in `scripts/build-public-site.sh`) talks only to the
+`test-kitchen.html` (root, allowlisted in `scripts/build-public-site.sh`) talks only to the
 `public-tester` edge function. That function holds the service role and is the single place
 the kill switch, the test-shop guard, the 20-turn cap and the three rate limits are
 enforced — nothing is trusted from the browser, including the transcript, which the

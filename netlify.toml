@@ -58,6 +58,22 @@
   status = 302
   force = true
 
+# The public tester page was renamed try.html -> test-kitchen.html on
+# 2026-09-05 (it is the OrderFare Test Kitchen; the filename should match the
+# thing). Jason had already texted /try to people, and a dead link to a friend
+# is worse than a stale one — so /try is a PERMANENT redirect, not a removal.
+[[redirects]]
+  from = "/try"
+  to = "/test-kitchen"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/try.html"
+  to = "/test-kitchen"
+  status = 301
+  force = true
+
 [[redirects]]
   from = "/demo/jasons-pizza"
   to = "/demo/marios-pizza"

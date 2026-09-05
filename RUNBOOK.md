@@ -14,13 +14,16 @@ anything here disagrees with the code, the code wins — and fix this document.
 Documented from `git log` and the code as it stands, not from the specs. Where a spec and
 the code disagree the code wins, and that is called out.
 
-### Public tester link — `getsprintai.com/try` (LIVE, behind an off switch)
+### Public tester link — `getsprintai.com/test-kitchen` (LIVE, behind an off switch)
 
 A login-free page anyone can open on a phone, order pretend pizza, and file feedback.
 Built so Jason can text it to friends and family with no explanation attached.
 
-- `try.html` at the repo root, allowlisted in `scripts/build-public-site.sh`, served at
-  `/try` off the root origin. Plain HTML/JS, no build step, no framework.
+- `test-kitchen.html` at the repo root, allowlisted in `scripts/build-public-site.sh`, served
+  at `/test-kitchen` off the root origin (renamed from `try.html` 2026-09-05; `/try` is a
+  permanent 301 to it). Plain HTML/JS, no build step, no framework.
+- `./public` is BUILD OUTPUT: wiped and regenerated each deploy, gitignored, every file
+  stamped `GENERATED FILE — DO NOT EDIT` and chmod a-w. Never edit it; edit the root file.
 - It talks ONLY to the `public-tester` edge function, never to `chat-sms` directly. Two
   reasons, both load-bearing: `test_transcripts` REVOKEs `anon` so a public browser cannot
   write a transcript, and every guard rail has to be server-side or it is bypassed in

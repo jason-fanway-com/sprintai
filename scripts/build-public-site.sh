@@ -42,7 +42,7 @@ PUBLIC_FILES=(
   "vitos-demo.html"     # Erin sales demo page: Vito's Pizza walkthrough
   "order-success.html"       # order confirmation page (real orders)
   "order-success-test.html"  # order confirmation page (test-mode orders; diner-bot success_url target)
-  "try.html"             # public tester link (getsprintai.com/try); talks only to the
+  "test-kitchen.html"    # public tester link (getsprintai.com/test-kitchen); talks only to the
                          # public-tester edge function, never chat-sms directly — see
                          # docs/specs/2026-09-05-public-tester-BUILD.md
 )
