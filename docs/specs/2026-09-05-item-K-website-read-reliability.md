@@ -203,3 +203,84 @@ Throwaway tenant `e8b92edd-428c-4251-ab21-1b140d287a30` (paced run) cascade-dele
 
 ## Bottom line (after)
 The deterministic 0% parse break is fixed: **6/20 now import real, correctly-priced menus, 0 hallucinations, 0 false-success, 0 hard failures.** The remaining 70% are honest PARTIALs — the crawler can't reach menus that live in PDFs or off-domain ordering widgets, which the fix never claimed to solve. Routing PDFs to `parse-menu-pdf` is the highest-value next step; add Firecrawl 429 backoff before any batch re-crawl.
+
+---
+
+# Third measurement — against the source-priority ladder, 2026-09-05
+
+**Verdict: 6/20 → 12/20 (60%) PASS. The PDF routing paid off; two of the biggest menus now die to an edge-function wall-clock timeout, which is the new top failure mode.** Re-driven live against the deployed `scrape-shop` (project `rvdqfxtrskxekfkqnegx`), **exact same 20 locked sites, same order**, fresh throwaway tenant, one shop per site, `{shop_id, force:true}`, paced 45s between sites. Deployed function confirmed current: response carried `menu_source` + `rungs_tried` (the ladder).
+
+## Rates (baseline → after-fix → now)
+| Metric | Baseline | After fix | **Now (ladder)** |
+|---|---|---|---|
+| **PASS** (≥1 priced item) | 0/20 (0%) | 6/20 (30%) | **12/20 (60%)** |
+| **PARTIAL** (site read, 0 items) | 19/20 (95%) | 14/20 (70%) | **6/20 (30%)** |
+| **FAIL** (error / no output) | 1/20 (5%) | 0/20 (0%) | **2/20 (10%)** |
+| **Honesty** (no false "done") | 5% | 100% | **100% (0 false "done")** |
+| Hours captured | 0/20 | 14/20 | 13/20 |
+
+974 priced items across the 12 PASS sites; item names/prices spot-checked against live sites (Spinnato "Original Italian" $10.49, hoagiesandhops "Brotherly Love (Regular)" $14.00, subonehoagie "Philly Steak" $9.39) — real, not hallucinated. Median wall time 80s; **max 150s (the timeout ceiling)**. Options/modifiers: **0/20** (flat schema, unchanged). Firecrawl credits **258 → 121 (137 used)**.
+
+## Per-rung win counts (12 PASS)
+- **Rung 1 — own site, HTML: 8** (2,5,6,7,8,12,13,17)
+- **Rung 1 — own site, PDF (routed to `parse-menu-pdf`): 4** (1,3,4,18)
+- Rung 3 (Google listing): **0**
+- Rung 4 (aggregator): **0**
+
+**Did rung 3 (Google listing) ever fire? No.** It was *reached* on all 6 PARTIAL sites but short-circuited at `no_place_id` every time — freshly created shops (like a shop pre-geocode in real onboarding) carry no `google_place_id`, so `tryGoogleListingRung` returns before any Places lookup or scrape. **Rung 3 remains completely unmeasured — no evidence it works, and this run provides none.**
+
+**Rung 4 (aggregator) fired twice, won zero:** site 10 (Toast) and site 11 (ChowNow), both `no_priced_items` — their storefronts are JS apps a static scrape can't read, exactly as the code comments predict. No Slice rung-4 win appeared because the Slice sites here serve their menu on their *own* domain (caught as a white-label backend, read via rung-1 HTML instead).
+
+## Did PDF routing rescue the PDF bucket? Mostly yes.
+Last time's PDF-shaped PARTIALs were 1,3,4,6,11,15,16,18,19. Now: **1,3,4,18 PASS via the PDF rung; 6 PASS via HTML** (biaggiopizza's menu turned out to be HTML, 124 items). Still PARTIAL: 11 (ChowNow), 15, 16, 19 — no reachable priced menu on the own domain and no aggregator link to follow. So PDF routing converted the true own-domain PDF sites; the leftover PARTIALs were never really own-domain PDFs.
+
+## White-label costume (`source=website` over an aggregator backend)
+`on_domain_backend` was detected on **9 sites**: 1 toast, 2 slice, 6 owner, 7 owner, 8 slice, 9 slice, 10 toast, 11 chownow, 17 toast. On the 6 PASS sites among them (1,2,6,7,8,17) the menu was read directly off the shop's own domain and the prices are the restaurant's own, so `source=website` is defensible — **and provenance records `on_domain_backend` so independence is not overstated. Working as designed** — except on PDF-rung wins where the record is dropped (failure mode #2).
+
+## Honesty
+**0 false "done"** — all 12 "done" have priced items, all 6 "partial" have 0. The original defect stays closed. **But two rows are stuck `crawl_status="running"`** (sites 9, 20) — see failure mode #1. Not a false "done", but a broken terminal state: site 9 has a full 240-item priced menu orphaned under a shop that never reached "done".
+
+## Ranked remaining failure modes
+1. **Edge-function wall-clock timeout on the largest menus (2/20 — sites 9, 20).** Both 504 at ~150s. `MENU_LLM_TIMEOUT_MS=170s` is set *longer than the platform's ~150s function ceiling*, so the biggest menus are killed at the gateway before the function returns. Site 9's 240 priced items **did** land in the DB, but the shop is stuck `running` (never written to `done`); site 20 got nothing. This is the exact class the timeout bump meant to save, now failing one rung up. **Top lever — the menu LLM budget must fit inside the function's own wall clock.**
+2. **Provenance not persisted on PDF-rung wins (4/20 PASS — sites 1,3,4,18).** `parse-menu-pdf` *replaces* the shop's menu row; `scrape-shop` then writes `source_detail` to the old (now-deleted) menu id, so `menus.source_detail` is **null** on exactly the PDF wins — rung, `rungs_tried`, and `on_domain_backend` are lost from the DB (they survive only in the response body). Site 1's `on_domain_backend=toast` is therefore not durable. Menu is correct; the provenance/white-label record is dropped.
+3. **Menu behind Toast/ChowNow JS storefront, unreadable by static scrape (~4/20 — 10,11 + own-domain-empty 14,15,16,19).** Rung 4 reaches them and scrapes, but a static fetch returns no priced items. A rendering scraper is out of scope.
+4. **Rung 3 (Google listing) still unmeasured.** Short-circuits at `no_place_id` on every shop that lacks a `google_place_id`. Until a shop with a place id and an off-domain listing URL is driven through it, we have zero evidence it extracts anything.
+5. **Options/modifiers never captured (0/20).** Flat extraction schema (`name, price_cents, category, description`); `modifiers_json` never written. Pre-existing, unchanged.
+
+## Harness note (measurement integrity)
+`scrape-shop`'s PDF rung swaps the menu row out from under the pre-created menu id, so the first-pass per-site DB counts (keyed to the created `menu_id`) undercounted PDF wins. Ground truth was re-read by `shop_id` (current menu row) in a read-only post-pass — that is the source of the numbers above. Artifacts: `scripts/tmp-item-K-remeasure2-runner.cjs`, `-postpass.cjs`, `-ids.json`, `-results.json`, `-final.json`, `-run.log` — measurement only, not product code.
+
+## Cleanup
+Throwaway tenant `25107b45-256f-4800-8f8e-87781120764c` cascade-deleted; independent post-delete queries confirm 0 tenant / 0 shops / 0 menus / 0 menu_items remain.
+
+## Bottom line (third measurement)
+**Doubled from 6/20 to 12/20 (60%) with 0 false-success and real, correctly-priced menus.** PDF routing did its job (4 clean PDF wins). The new ceiling is a wall-clock timeout that kills the two largest menus (one orphaning a full 240-item menu in a stuck `running` state) — the menu LLM timeout is set longer than the function can live. Rung 3 is still unproven (never fires without a place id); rung 4 reaches Toast/ChowNow but a static scrape can't read them. Highest-value next fix: make the menu extraction budget fit inside the function's wall clock, and persist provenance on PDF-rung wins.
+
+---
+
+# Fourth measurement — the two timeout fixes, 2026-09-05 23:39 EDT
+
+**Verdict: both failure modes named in the third measurement are fixed and verified live on deployed `scrape-shop` v73 — and the fix cost us a menu.** Targeted re-run of exactly the three sites the fixes were aimed at (9, 20 = the 504 pair; 3 = the PDF-rung provenance case), fresh throwaway tenant, `{shop_id, force:true}`, paced. 13 Firecrawl credits (121 → 108). Artifacts: `scripts/tmp-item-K-timeoutfix-runner.cjs`, `-ids.json`, `-results.json`, `-run.log`.
+
+## Failure mode #1 — wall-clock 504 → FIXED, at a cost
+| Site | Before (v72) | After (v73) |
+|---|---|---|
+| 9 familypizzeriarestaurantmenu.com | HTTP **504** @150s, `crawl_status` stuck **`running`** forever, **240 priced items orphaned** under it | HTTP **200** @135s, terminal **`partial`**, owner-facing message written, **0 items** |
+| 20 orderfamilypizzeriamenu.com | HTTP **504** @150s, stuck **`running`**, 0 items | HTTP **200** @135s, terminal **`partial`**, **0 items** |
+
+No more gateway 504. No more stuck `running`. Every run now reaches a terminal status and tells the owner the truth ("We read your website but couldn't find a menu with prices"). That closes ledger `16d6a67a` — the caller no longer sees a failure on a success, because there is no longer a half-finished run.
+
+**But site 9 got worse in the way that matters to a restaurant.** Last run it 504'd *after* landing a real 240-item priced menu in the DB. This run it returns cleanly with nothing. Rung 1 reported `no_priced_items` after scraping only **2 pages** (site 3, unaffected by the budget, scraped 9). Rungs 3 and 4 were then skipped with the new `skipped_elapsed_budget` result. The deadline-aware budget appears to be cutting the crawl short before the page holding the menu is ever fetched — traded a real menu for an honest empty one. Not proven to be causal (the 504 run returned no body, so its `pages_scraped` is unknown), but it is the only changed variable and it is the obvious suspect.
+
+**This is not a net win yet.** Honesty is non-negotiable and we now have it. Losing a readable 240-item menu to buy it is not the trade — the work has to fit inside the wall clock, not be truncated to fit. Tracked as its own ledger item.
+
+## Failure mode #2 — PDF-rung provenance dropped → FIXED
+Site 3 (`spinnatoshoagies.com`), the PDF-rung case: `menu_id_swapped=true` (parse-menu-pdf did replace the menu row, as before) and **`sd_persisted=true`, `sd_rung=1`, `db_menu_source=website`, 101 priced items**. Before the fix, `menus.source_detail` was **null** on exactly these PDF wins. The re-resolve-by-`shop_id` write lands. Provenance is now durable on PDF-rung wins.
+
+Sites 9 and 20 also persisted `source_detail` including `on_domain_backend=slice` and the full `rungs_tried` ladder on a *partial* — so the white-label record survives a failed read too, which is what makes the "we read your own site" claim auditable.
+
+## Cleanup
+Throwaway tenant `b11108bf-84df-4491-b466-70afa0d3837b` deleted; independently re-queried after the fact — 0 tenants, 0 shops remain.
+
+## Bottom line (fourth measurement)
+Both fixes work. The 504-and-stuck-`running` class is gone and PDF provenance is durable. The unresolved cost: the tighter budget looks like it truncates the crawl on the biggest sites, and site 9's 240-item menu no longer imports at all. Item K's headline rate is unchanged at **12/20 (60%)** — sites 9 and 20 were never PASS — but the next fix is to make a big menu fit inside the function's wall clock rather than shrinking the crawl to meet it.

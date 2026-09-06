@@ -1,0 +1,16 @@
+Firecrawl credits BEFORE: 121
+tenant: b11108bf-84df-4491-b466-70afa0d3837b
+
+[site 9] invoking scrape-shop for https://www.familypizzeriarestaurantmenu.com/ ...
+[site 9] http=200 ms=135425 fn_ok=true status=partial items_db=0 priced=0 menu_id_swapped=false sd_persisted=true sd_rung=null backend=slice
+pausing 20s before next site (Firecrawl pacing)...
+
+[site 20] invoking scrape-shop for https://www.orderfamilypizzeriamenu.com/ ...
+[site 20] http=200 ms=135383 fn_ok=true status=partial items_db=0 priced=0 menu_id_swapped=false sd_persisted=true sd_rung=null backend=slice
+pausing 20s before next site (Firecrawl pacing)...
+
+[site 3] invoking scrape-shop for https://www.spinnatoshoagies.com/ ...
+[site 3] http=200 ms=56160 fn_ok=true status=done items_db=120 priced=101 menu_id_swapped=true sd_persisted=true sd_rung=1 backend=-
+
+Firecrawl credits AFTER: 108 (used 13 )
+wrote results + ids. Run with 'cleanup' to delete tenant.

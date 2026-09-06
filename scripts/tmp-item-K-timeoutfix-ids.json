@@ -1,0 +1,28 @@
+{
+  "tenant_id": "b11108bf-84df-4491-b466-70afa0d3837b",
+  "credits_before": 121,
+  "shops": [
+    {
+      "n": 9,
+      "url": "https://www.familypizzeriarestaurantmenu.com/",
+      "label": "JS-heavy (504 FAIL, stuck done w/ items)",
+      "shop_id": "9afcaaa0-fda9-42d7-b12b-349c896fb044",
+      "menu_id": "df5a05f1-93ac-4ad4-ae51-ae3be315f9ed"
+    },
+    {
+      "n": 20,
+      "url": "https://www.orderfamilypizzeriamenu.com/",
+      "label": "JS-heavy (504 FAIL, stuck running, 0 items)",
+      "shop_id": "85b2e623-d430-4b6a-b95b-20ec0d0fd036",
+      "menu_id": "8614b12e-dd71-44a6-b77f-fc39928b58a2"
+    },
+    {
+      "n": 3,
+      "url": "https://www.spinnatoshoagies.com/",
+      "label": "PDF-only (PDF-rung provenance check)",
+      "shop_id": "b4c8e8cc-18b8-4f86-90cc-39c82ce7908c",
+      "menu_id": "98d6fef9-2bec-472e-88c3-defd9b1c732e"
+    }
+  ],
+  "credits_after": 108
+}

@@ -1,0 +1,222 @@
+[
+  {
+    "n": 9,
+    "url": "https://www.familypizzeriarestaurantmenu.com/",
+    "label": "JS-heavy (504 FAIL, stuck done w/ items)",
+    "http": 200,
+    "ms": 135425,
+    "fn_ok": true,
+    "fn_error": null,
+    "crawl_status": "partial",
+    "crawl_error": "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.",
+    "pages_scraped": 2,
+    "menu_items_extracted": 0,
+    "menu_items_inserted": 0,
+    "resp_menu_source": null,
+    "resp_rungs_tried": [
+      {
+        "rung": 1,
+        "source": "website",
+        "result": "no_priced_items",
+        "backend": "slice"
+      },
+      {
+        "rung": 2,
+        "source": "owner_upload",
+        "result": "not_provided"
+      },
+      {
+        "rung": 3,
+        "source": "google",
+        "result": "skipped_elapsed_budget"
+      },
+      {
+        "rung": 4,
+        "source": "aggregator",
+        "result": "skipped_elapsed_budget"
+      }
+    ],
+    "original_menu_id": "df5a05f1-93ac-4ad4-ae51-ae3be315f9ed",
+    "current_menu_id": "df5a05f1-93ac-4ad4-ae51-ae3be315f9ed",
+    "menu_id_swapped": false,
+    "db_menu_source": "manual",
+    "sd_rung": null,
+    "sd_platform": null,
+    "sd_url": null,
+    "sd_on_domain_backend": "slice",
+    "sd_rungs_tried": [
+      {
+        "rung": 1,
+        "result": "no_priced_items",
+        "source": "website",
+        "backend": "slice"
+      },
+      {
+        "rung": 2,
+        "result": "not_provided",
+        "source": "owner_upload"
+      },
+      {
+        "rung": 3,
+        "result": "skipped_elapsed_budget",
+        "source": "google"
+      },
+      {
+        "rung": 4,
+        "result": "skipped_elapsed_budget",
+        "source": "aggregator"
+      }
+    ],
+    "sd_persisted": true,
+    "items_in_db": 0,
+    "items_with_price": 0,
+    "sample_items": []
+  },
+  {
+    "n": 20,
+    "url": "https://www.orderfamilypizzeriamenu.com/",
+    "label": "JS-heavy (504 FAIL, stuck running, 0 items)",
+    "http": 200,
+    "ms": 135383,
+    "fn_ok": true,
+    "fn_error": null,
+    "crawl_status": "partial",
+    "crawl_error": "We read your website but couldn't find a menu with prices. Add your items below and we'll take it from there.",
+    "pages_scraped": 2,
+    "menu_items_extracted": 0,
+    "menu_items_inserted": 0,
+    "resp_menu_source": null,
+    "resp_rungs_tried": [
+      {
+        "rung": 1,
+        "source": "website",
+        "result": "no_priced_items",
+        "backend": "slice"
+      },
+      {
+        "rung": 2,
+        "source": "owner_upload",
+        "result": "not_provided"
+      },
+      {
+        "rung": 3,
+        "source": "google",
+        "result": "skipped_elapsed_budget"
+      },
+      {
+        "rung": 4,
+        "source": "aggregator",
+        "result": "skipped_elapsed_budget"
+      }
+    ],
+    "original_menu_id": "8614b12e-dd71-44a6-b77f-fc39928b58a2",
+    "current_menu_id": "8614b12e-dd71-44a6-b77f-fc39928b58a2",
+    "menu_id_swapped": false,
+    "db_menu_source": "manual",
+    "sd_rung": null,
+    "sd_platform": null,
+    "sd_url": null,
+    "sd_on_domain_backend": "slice",
+    "sd_rungs_tried": [
+      {
+        "rung": 1,
+        "result": "no_priced_items",
+        "source": "website",
+        "backend": "slice"
+      },
+      {
+        "rung": 2,
+        "result": "not_provided",
+        "source": "owner_upload"
+      },
+      {
+        "rung": 3,
+        "result": "skipped_elapsed_budget",
+        "source": "google"
+      },
+      {
+        "rung": 4,
+        "result": "skipped_elapsed_budget",
+        "source": "aggregator"
+      }
+    ],
+    "sd_persisted": true,
+    "items_in_db": 0,
+    "items_with_price": 0,
+    "sample_items": []
+  },
+  {
+    "n": 3,
+    "url": "https://www.spinnatoshoagies.com/",
+    "label": "PDF-only (PDF-rung provenance check)",
+    "http": 200,
+    "ms": 56160,
+    "fn_ok": true,
+    "fn_error": null,
+    "crawl_status": "done",
+    "crawl_error": null,
+    "pages_scraped": 9,
+    "menu_items_extracted": 0,
+    "menu_items_inserted": 101,
+    "resp_menu_source": "website",
+    "resp_rungs_tried": [
+      {
+        "rung": 1,
+        "source": "website",
+        "result": "ok",
+        "items": 101
+      },
+      {
+        "rung": 2,
+        "source": "owner_upload",
+        "result": "not_provided"
+      }
+    ],
+    "original_menu_id": "98d6fef9-2bec-472e-88c3-defd9b1c732e",
+    "current_menu_id": "75386909-cff4-4bc1-8cd2-88812638e9e0",
+    "menu_id_swapped": true,
+    "db_menu_source": "website",
+    "sd_rung": 1,
+    "sd_platform": null,
+    "sd_url": "https://www.spinnatoshoagies.com/",
+    "sd_on_domain_backend": null,
+    "sd_rungs_tried": [
+      {
+        "rung": 1,
+        "items": 101,
+        "result": "ok",
+        "source": "website"
+      },
+      {
+        "rung": 2,
+        "result": "not_provided",
+        "source": "owner_upload"
+      }
+    ],
+    "sd_persisted": true,
+    "items_in_db": 120,
+    "items_with_price": 101,
+    "sample_items": [
+      {
+        "name": "Original Italian",
+        "price_cents": 1049
+      },
+      {
+        "name": "Original Italian",
+        "price_cents": 1549
+      },
+      {
+        "name": "Original Italian",
+        "price_cents": 1149
+      },
+      {
+        "name": "Original Italian",
+        "price_cents": 999
+      },
+      {
+        "name": "Spicy Italian",
+        "price_cents": 1049
+      }
+    ]
+  }
+]
