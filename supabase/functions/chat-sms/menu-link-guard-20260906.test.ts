@@ -18,9 +18,12 @@ const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url
 
 function impliesMenuRequest(text: string): boolean {
   const t = text.trim();
-  return /\b(send|share|text|get|see|have|got)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
+  // FIX (2026-09-06, QA-found): narrowed from a broad verb list (send/share/
+  // text/get/see/have/got) to send/share/text only, plus exact phrases — the
+  // broad list over-fired on ordinary food language containing "menu"/"have".
+  return /\b(send|share|text)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
     || /\bmenu\b[^.?!]{0,20}\blink\b/i.test(t)
-    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the menu|full menu)\b/i.test(t)
+    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the (full |whole )?menu|full menu|whole menu)\b/i.test(t)
     || /^\s*menu\s*[?.!]?\s*$/i.test(t);
 }
 
@@ -52,6 +55,21 @@ Deno.test("narrow question is NOT a menu request — ordering language", () => {
   assert(!impliesMenuRequest("I'll take a large pepperoni pizza"));
   assert(!impliesMenuRequest("do you have gluten free crust"));
   assert(!impliesMenuRequest("looks good"));
+});
+
+// QA (Melvin, 2026-09-06): these three false-positived under the original
+// broad verb list (send/share/text/get/see/have/got) — "have" is far too
+// common in ordinary food language to safely pair with "menu" nearby.
+Deno.test("QA regression: 'what desserts do you have on the menu' is a narrow question, not a menu request", () => {
+  assert(!impliesMenuRequest("what desserts do you have on the menu"));
+});
+
+Deno.test("QA regression: 'I'll have the menu special' is an order, not a menu request", () => {
+  assert(!impliesMenuRequest("I'll have the menu special"));
+});
+
+Deno.test("QA regression: 'do you have a gluten free / kids menu' is a narrow question, not a menu request", () => {
+  assert(!impliesMenuRequest("do you have a gluten free / kids menu"));
 });
 
 // ── Wiring regression guards against the live file ─────────────────────────

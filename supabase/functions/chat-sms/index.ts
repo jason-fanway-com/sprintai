@@ -1988,9 +1988,16 @@ function stripEmDashes(text: string): string {
  */
 function impliesMenuRequest(text: string): boolean {
   const t = text.trim();
-  return /\b(send|share|text|get|see|have|got)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
+  // FIX (2026-09-06, QA-found): the original verb list (send/share/text/get/
+  // see/have/got + menu/link within 20 chars) over-fired on ordinary food
+  // language that happens to contain "menu" or "have" — "what desserts do
+  // you have on the menu", "I'll have the menu special", and "do you have a
+  // kids menu" all wrongly hijacked into a menu-link reply. Narrowed to
+  // send/share/text (unambiguous document-request verbs) plus a short list
+  // of exact phrases that are unambiguous asks for the menu itself.
+  return /\b(send|share|text)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
     || /\bmenu\b[^.?!]{0,20}\blink\b/i.test(t)
-    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the menu|full menu)\b/i.test(t)
+    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the (full |whole )?menu|full menu|whole menu)\b/i.test(t)
     || /^\s*menu\s*[?.!]?\s*$/i.test(t);
 }
 
