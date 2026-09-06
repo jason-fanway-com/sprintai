@@ -1921,6 +1921,28 @@ function renderLedgerFooter(
 }
 
 /**
+ * Deterministic itemized recap — lists each cart line with its chosen
+ * options/modifiers, not just the total renderLedgerFooter already shows.
+ * Reuses the same "group: choice" formatting submit_order's own Stripe line
+ * items use (see the lineItems.map description logic in executeTool) so the
+ * two never drift apart.
+ */
+function renderItemizedRecap(cart: AnyCartItem[]): string {
+  return cart.map(i => {
+    if ((i as BundleItem).type === "bundle") {
+      const b = i as BundleItem;
+      const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
+      return `1x ${b.name}${detail ? ` (${detail})` : ""}`;
+    }
+    const r = i as CartItem;
+    const detail = r.modifiers?.length > 0
+      ? r.modifiers.join(", ")
+      : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ") : "");
+    return `${r.quantity || 1}x ${r.name}${detail ? ` (${detail})` : ""}`;
+  }).join(", ");
+}
+
+/**
  * Strip LLM-emitted money/status lines from the reply so they don't conflict
  * with the deterministic Ledger footer. The LLM keeps A1 conversational
  * framing; this removes any numbers it leaked.
@@ -4988,10 +5010,24 @@ Deno.serve(async (req: Request) => {
   // If the customer confirms they want to place the order AND the cart has
   // items AND no pickup name is stored, deterministically ask for the name
   // instead of hoping the LLM remembers the PICKUP NAME RULE.
+  //
+  // FIX (2026-09-06, Jason): unresolved required options must be caught here
+  // FIRST. This guard used to ask for the name unconditionally on any
+  // confirmation, so a customer who confirmed with (say) a dressing choice
+  // still pending got asked their name instead of being re-asked about the
+  // dressing — submit_order would reject at D1 and the real reason got
+  // swallowed into a vague reassurance (see the D1 fix below).
   const hasPickupName = !!(guardCartRow?.pickup_name as string | undefined);
-  if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
+  const guardPendingItems = guardCart.filter(
+    i => (i as CartItem).pending_options && (i as CartItem).pending_options!.length > 0,
+  ) as CartItem[];
+  if (!checkoutUrl && guardCart.length > 0 && guardPendingItems.length > 0 && impliesOrderConfirmation(userMessage)) {
+    const asks = guardPendingItems.map(i => `${i.name} (${i.pending_options!.join(", ")})`).join("; ");
+    console.log(`[chat-sms] GUARD 2-pending (confirmation with unresolved required options) tripped (conv=${conversation.id}). Re-asking: ${asks}`);
+    reply = `Almost — I still need to know: ${asks}. What'll it be?`;
+  } else if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
-    reply = `Got it! ${NAME_ASK}`;
+    reply = `Got it! Here's what I have: ${renderItemizedRecap(guardCart)}. ${NAME_ASK}`;
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────
@@ -5056,10 +5092,34 @@ Deno.serve(async (req: Request) => {
       const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
       if (submitResult.ok && submitResult.checkoutUrl) {
         checkoutUrl = submitResult.checkoutUrl;
-        reply = "All set! Here's your payment link — tap to finish your order: " + submitResult.checkoutUrl;
+        reply = `All set! Here's what I'm sending: ${renderItemizedRecap(guardCart)}. Payment link — tap to finish your order: ` + submitResult.checkoutUrl;
       } else {
+        // FIX (2026-09-06, Jason): submit_order's own error already names the
+        // specific reason (pending option, missing order type, missing
+        // address, missing name — see the C1 gates and the pending_options
+        // check above in the submit_order case). The old fallback discarded
+        // that and replaced it with a generic "one moment" reassurance —
+        // which also violates the system prompt's own banned-phrase list
+        // (line ~722: "one moment" is explicitly banned). Never swallow a
+        // real rejection behind a friendly non-answer; surface the actual
+        // reason as a natural re-ask instead.
+        const errMsg = (submitResult.result as { error?: string } | undefined)?.error;
         console.warn(`[chat-sms] D1 submit_order failed: ${JSON.stringify(submitResult.result).slice(0, 200)}`);
-        reply = "Almost there — let me just confirm your order details first. One moment!";
+        if (errMsg && /still need options chosen/.test(errMsg)) {
+          const missing = errMsg
+            .replace(/^Cannot submit yet — these items still need options chosen: /, "")
+            .replace(/\. Ask the customer.*$/, "");
+          reply = `Almost — I still need to know: ${missing}. What'll it be?`;
+        } else if (errMsg && /pickup or delivery/i.test(errMsg)) {
+          reply = "Pickup or delivery today?";
+        } else if (errMsg && /delivery address/i.test(errMsg)) {
+          reply = "What's the delivery address?";
+        } else if (errMsg && /pickup name is required/i.test(errMsg)) {
+          reply = `Got it! ${NAME_ASK}`;
+        } else {
+          // Unmapped/unexpected failure — stay honest rather than reassuring.
+          reply = errMsg ? `I couldn't finish that — ${errMsg}` : "I couldn't finish that order — let's try again.";
+        }
       }
     }
   }
