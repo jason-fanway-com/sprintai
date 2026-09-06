@@ -1963,6 +1963,24 @@ function renderItemizedRecap(cart: AnyCartItem[]): string {
 }
 
 /**
+ * FIX (2026-09-06, Jason): the system prompt already tells the model never
+ * to use em dashes (line ~694), but a prompt instruction is a request, not a
+ * guarantee — and several of the codebase's own hardcoded guard replies use
+ * them too. This is the deterministic backstop, applied at the two places
+ * every outbound message funnels through (sendSms for real SMS delivery,
+ * jsonResponse for the JSON reply field used by the web/test-mode chat), so
+ * no customer-facing text — from the model OR from our own code — can ship
+ * with an em dash, regardless of which of the many reply/guard/branch sites
+ * produced it.
+ */
+function stripEmDashes(text: string): string {
+  return text
+    .replace(/\s*—\s*/g, " - ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
  * Deterministic menu-request detector. Matches an explicit ask for "the
  * menu" or "a link" — deliberately narrow so it does NOT fire on a specific
  * question about one item/category ("what wing flavors do you have?"),
@@ -2594,7 +2612,10 @@ async function smsReply(ctx: OutboundContext, shop: Shop, toNumber: string, mess
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
+  const body = (data && typeof data === "object" && typeof (data as Record<string, unknown>).reply === "string")
+    ? { ...(data as Record<string, unknown>), reply: stripEmDashes((data as Record<string, unknown>).reply as string) }
+    : data;
+  return new Response(JSON.stringify(body), {
     status,
     headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
   });
@@ -3032,10 +3053,11 @@ async function sendSms(
   toNumber:   string,
   message:    string,
 ): Promise<void> {
+  const cleaned = stripEmDashes(message);
   if (provider === "telnyx") {
-    await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, message);
+    await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, cleaned);
   } else {
-    await sendSmsViaTwilio(ctx, fromNumber, toNumber, message);
+    await sendSmsViaTwilio(ctx, fromNumber, toNumber, cleaned);
   }
 }
 
