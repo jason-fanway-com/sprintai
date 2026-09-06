@@ -1128,3 +1128,49 @@ from the shop it mirrors certifies a menu nobody is selling.
 RULE: one shop per real-world restaurant. If a test needs different data it gets
 a differently named shop — `harness-scratch`, never a second copy of a real one.
 Do not create one speculatively.
+
+
+## Reading the QA data yourself (no agent in the loop) — 2026-09-06
+
+`qa_ro` is reachable over the session pooler with the read-only role. The
+credentials live in `~/.sprintai-readonly-env` on Joe's Mac (mode 600). One
+command, from anywhere with ssh to that box:
+
+```
+ssh <host> 'set -a; . ~/.sprintai-readonly-env; set +a; \
+  psql "$DATABASE_URL" -c "select tester_name, reporter_note, source, created_at \
+  from qa_ro.test_transcripts order by created_at desc limit 5;"'
+```
+
+Locally on that box it is just:
+
+```
+set -a; . ~/.sprintai-readonly-env; set +a
+psql "$DATABASE_URL" -c "<your query>"
+psql "$DATABASE_URL"            # interactive
+```
+
+The role can SELECT only inside schema `qa_ro`. No writes, no DDL, no `public`.
+Useful views: `test_transcripts`, `public_tester_sessions` (device +
+is_first_session), `test_runs`, `test_case_results`, `test_run_queue`, `issues`,
+`menus`, `menu_items`, `option_groups`, `option_choices`,
+`menu_item_option_coverage`, `ticket_send_log_ro`, `order_carts_ro`,
+`orders_ro`, `shops_config`, `menu_edit_log`.
+
+If `DATABASE_URL` is missing from a service environment, the fix is to source
+that file — do not ask an agent to run the query.
+
+## Tester attribution (migration 108) — 2026-09-06
+
+`ip_hash` cannot separate testers and never will: every session so far comes
+from one household NAT (`71.185.100.243`), so the founder's iPhone, the crew's
+curl and a friend's Android all hash identically. Nothing gates on `ip_hash`
+(the daily cap counts rows), so no limiter was affected.
+
+What separates them is the User-Agent, which was arriving on every request and
+being discarded. `public_tester_sessions.user_agent`,
+`public_tester_sessions.client_first_seen_at` and `test_transcripts.user_agent`
+now record it; `qa_ro.public_tester_sessions` exposes a derived `device`
+(iPhone / Android / Mac / Windows / script / unknown) and `is_first_session`.
+Rows written before 2026-09-06 13:51 UTC show `device = unknown` — that is
+missing history, not a bug.

@@ -85,9 +85,27 @@ function startOfShopDay(timeZone: string): string {
 /** Best-effort client IP from the platform's forwarding headers. Never the raw
  *  value stored anywhere — only its salted hash. */
 function clientIp(req: Request): string {
+  // Order matters. Measured 2026-09-06 against the real edge logs: on this
+  // platform x-forwarded-for is NULL on every request, while x-real-ip and
+  // cf-connecting-ip both carry the true client IP. Reading xff first was
+  // harmless (it fell through) but it hid which header we actually depend on.
+  // "unknown" is a real possible value — never treat it as an identity.
+  const cf = req.headers.get("cf-connecting-ip");
+  if (cf) return cf.trim();
+  const real = req.headers.get("x-real-ip");
+  if (real) return real.trim();
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") ?? "unknown";
+  return "unknown";
+}
+
+// IP cannot separate testers: every session so far shares one household NAT
+// (71.185.100.243), so ip_hash is identical for the founder's iPhone, the
+// crew's curl and a friend's Android. The User-Agent does separate them and
+// was already arriving on every request — we simply never stored it.
+function clientUserAgent(req: Request): string | null {
+  const ua = req.headers.get("user-agent");
+  return ua ? ua.slice(0, 512) : null;
 }
 
 interface RequestBody {
@@ -195,7 +213,24 @@ Deno.serve(async (req: Request) => {
     const hintedSessionId = typeof body.session_id === "string" ? body.session_id : null;
 
     const newSessionId = crypto.randomUUID();
+    // Has this browser been here before? client_hint is stable per browser, so
+    // the earliest row for it is this tester's first-ever session. NULL means
+    // brand new. Read before the insert so the new row cannot match itself.
+    let clientFirstSeen: string | null = null;
+    if (hintedSessionId) {
+      const { data: prior } = await supabase
+        .from("public_tester_sessions")
+        .select("created_at")
+        .eq("client_hint", hintedSessionId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      clientFirstSeen = (prior?.created_at as string | undefined) ?? null;
+    }
+
     const { error: insertErr } = await supabase.from("public_tester_sessions").insert({
+      user_agent:           clientUserAgent(req),
+      client_first_seen_at: clientFirstSeen,
       session_id:  newSessionId,
       // Kept for grouping a returning browser's conversations when reading the
       // corpus. No longer gates anything — the per-browser limit it existed for
@@ -339,6 +374,9 @@ Deno.serve(async (req: Request) => {
       reporter_note: reporterNote,
       tester_name:   testerName,
       source:        "public-tester",
+      // Attribution. tester_name is optional and usually blank; without this
+      // the corpus cannot tell whose feedback it is reading.
+      user_agent:    clientUserAgent(req),
     });
     if (insertErr) {
       console.error("[public-tester] transcript insert failed:", insertErr.message);
