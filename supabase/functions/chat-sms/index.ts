@@ -562,7 +562,7 @@ function buildSystemPrompt(
         if (groups.length > 0) {
           const groupLines = groups.map(g => {
             const reqLabel = g.required ? `required, pick ${g.max_select > 1 ? g.min_select + '-' + g.max_select : '1'}` : `optional${g.max_select > 1 ? ', pick up to ' + g.max_select : ''}`;
-            return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
+            return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.is_default ? ' [default]' : '') + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
           }).join('\n');
           return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
         } else {
@@ -831,6 +831,7 @@ async function executeTool(
       let extraCents = 0;
       const pending: string[] = [];
       const unverifiedRequests: string[] = [];
+      const defaultedGroups: string[] = [];
 
       // Reject/redirect option keys that are not a real option group for this
       // item — symmetric with invalidMods above. Without this, a key the
@@ -867,6 +868,18 @@ async function executeTool(
       for (const group of itemGroups) {
         const selections = inputOptions[group.name] || [];
         if (group.required && selections.length === 0) {
+          // DEFAULT-FILL (2026-09-06, Jason): a required group with a
+          // recorded free default is applied deterministically instead of
+          // left to the model — this was the source of the model picking a
+          // different dressing/default across otherwise-identical orders.
+          // A default that costs extra is never auto-applied (no surprise
+          // charges); that case still falls through to pending below.
+          const defaultChoice = group.choices.find(c => c.is_default && c.price_cents === 0);
+          if (defaultChoice) {
+            inputOptions[group.name] = [defaultChoice.name];
+            defaultedGroups.push(`${group.name}: ${defaultChoice.name}`);
+            continue;
+          }
           // Required option not yet chosen — mark pending instead of rejecting.
           // Item enters cart at base price; surcharge applies when option is resolved.
           pending.push(group.name);
@@ -954,16 +967,22 @@ async function executeTool(
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
-      const unverifiedNote = unverifiedRequests.length > 0
-        ? ` NOTE: ${unverifiedRequests.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection — it was saved only as an unverified customer request for the shop to confirm. Do not tell the customer it was selected/noted as a menu choice; say it will be passed along to the shop for confirmation, or ask them to choose once options are available.`
-        : undefined;
+      const notes: string[] = [];
+      if (unverifiedRequests.length > 0) {
+        notes.push(`${unverifiedRequests.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection — it was saved only as an unverified customer request for the shop to confirm. Do not tell the customer it was selected/noted as a menu choice; say it will be passed along to the shop for confirmation, or ask them to choose once options are available.`);
+      }
+      if (defaultedGroups.length > 0) {
+        notes.push(`${defaultedGroups.join(", ")} defaulted automatically (no charge) since the customer didn't specify — mention this casually in your reply (e.g. "I put the usual ranch on that") and let them change it if they'd like.`);
+      }
       return {
         ok: true,
         result: {
           added: menuItem.name,
           quantity,
           cart_total: `$${(total / 100).toFixed(2)}`,
-          ...(unverifiedRequests.length > 0 ? { unverified_requests: unverifiedRequests, note: unverifiedNote } : {}),
+          ...(unverifiedRequests.length > 0 ? { unverified_requests: unverifiedRequests } : {}),
+          ...(defaultedGroups.length > 0 ? { defaulted_options: defaultedGroups } : {}),
+          ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
         },
         newPhase: "building",
       };
