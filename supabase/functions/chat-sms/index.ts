@@ -15,8 +15,16 @@ import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts"
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
+import { dayWindows } from "../_shared/hours.ts";
 import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 import { stripInventedActions } from "./invented-action-guard.ts";
+import {
+  categoryWordMatches,
+  renderDisambiguationReask,
+  resolvePendingDisambiguation,
+  type PendingCandidate,
+  type PendingDisambiguation,
+} from "./pending-disambiguation.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -170,6 +178,11 @@ interface OrderCart {
   driver_tip_cents:           number | null;
   ticket_send_attempt_at:     string | null;
   fee_disclosed_at:           string | null;
+  // BLOCKER 1 (docs/specs/2026-09-06-disambiguation-and-menu-gaps.md): the
+  // candidates GUARD 7 offered, so the NEXT inbound message can be resolved
+  // deterministically before the LLM ever runs. Null once resolved, reset,
+  // or expired.
+  pending_disambiguation:     PendingDisambiguation | null;
 }
 
 interface ContentBlock {
@@ -327,6 +340,35 @@ const ORDERING_TOOLS = [
 
 // ─── Effective menu builder ───────────────────────────────────────────────────
 
+// PostgREST caps a single response at 1000 rows by default and returns that
+// cap SILENTLY — no error, no truncation flag, just fewer rows than the table
+// actually has. Vito's has 2640 option_choices across 186 groups; almost all
+// rows share display_order=0, so which 1000 of the 2640 survive the cut is
+// whatever order Postgres happens to return ties in, and that shifted between
+// requests. The Chicken Caesar's 18-choice Dressing group would sometimes
+// land inside the surviving 1000 and sometimes not — the model wasn't failing
+// to recite data it had; the data silently never arrived that request
+// (2026-09-06, Jason's live "I don't have the dressing list" transcript).
+// Page through with .range() so a table of any size is read in full, with a
+// stable secondary sort (id) so ties don't reshuffle rows between pages.
+const FETCH_PAGE_SIZE = 1000;
+async function fetchAllRows<T>(queryBuilder: () => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const rows: T[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await (queryBuilder() as any).range(from, from + FETCH_PAGE_SIZE - 1);
+    if (error) {
+      console.error(`[chat-sms] fetchAllRows error at offset ${from}:`, error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    if (data.length < FETCH_PAGE_SIZE) break;
+    from += FETCH_PAGE_SIZE;
+  }
+  return rows;
+}
+
 async function buildEffectiveMenu(
   supabase:     SupabaseClient,
   shopId:       string,
@@ -343,31 +385,40 @@ async function buildEffectiveMenu(
 
   if (!menu) return { menu: [], soldOutNames: [] };
 
-  const { data: items } = await supabase
-    .from("menu_items")
-    .select("id, name, description, price_cents, category, modifiers_json, prompt_for")
-    .eq("menu_id", menu!.id)
-    .eq("active", true)
-    .order("display_order", { ascending: true });
+  const items = await fetchAllRows<{ id: string; name: string; description: string | null; price_cents: number; category: string; modifiers_json: Array<{ name: string; price_cents: number }> | null; prompt_for: string | null }>(() =>
+    supabase
+      .from("menu_items")
+      .select("id, name, description, price_cents, category, modifiers_json, prompt_for")
+      .eq("menu_id", menu!.id)
+      .eq("active", true)
+      .order("display_order", { ascending: true })
+      .order("id", { ascending: true }),
+  );
 
-  if (!items?.length) return { menu: [], soldOutNames: [] };
+  if (!items.length) return { menu: [], soldOutNames: [] };
 
   // Load option groups and choices for these menu items
   const itemIds = items.map(i => i.id);
-  const { data: optionGroupsData } = await supabase
-    .from("option_groups")
-    .select("id, menu_item_id, name, required, min_select, max_select, display_order")
-    .in("menu_item_id", itemIds)
-    .order("display_order");
+  const optionGroupsData = await fetchAllRows<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number; display_order: number }>(() =>
+    supabase
+      .from("option_groups")
+      .select("id, menu_item_id, name, required, min_select, max_select, display_order")
+      .in("menu_item_id", itemIds)
+      .order("display_order", { ascending: true })
+      .order("id", { ascending: true }),
+  );
 
-  const groupIds = (optionGroupsData || []).map(g => g.id);
-  const { data: optionChoicesData } = groupIds.length > 0
-    ? await supabase
-        .from("option_choices")
-        .select("id, option_group_id, name, price_cents, is_default, display_order")
-        .in("option_group_id", groupIds)
-        .order("display_order")
-    : { data: [] };
+  const groupIds = optionGroupsData.map(g => g.id);
+  const optionChoicesData = groupIds.length > 0
+    ? await fetchAllRows<{ id: string; option_group_id: string; name: string; price_cents: number; is_default: boolean; display_order: number }>(() =>
+        supabase
+          .from("option_choices")
+          .select("id, option_group_id, name, price_cents, is_default, display_order")
+          .in("option_group_id", groupIds)
+          .order("display_order", { ascending: true })
+          .order("id", { ascending: true }),
+      )
+    : [];
 
   // Assemble option groups with their choices
   const choicesByGroup: Record<string, OptionChoice[]> = {};
@@ -2335,12 +2386,27 @@ function findMissingCartItems(
   referencedItems: Set<string>,
   cart: AnyCartItem[],
 ): string[] {
-  const cartLower = new Set(
-    cart.map(i => {
-      if ((i as BundleItem).type === "bundle") return (i as BundleItem).name.toLowerCase();
-      return (i as CartItem).name.toLowerCase();
-    })
-  );
+  // A referenced name is satisfied by ANYTHING already on the cart that
+  // means it, not just a cart LINE whose own name matches. Before this fix,
+  // ordering "large cheese pizza ... add pepperoni and mushrooms" put
+  // pepperoni into the cart as an OPTION CHOICE
+  // (options: {"Toppings": ["Pepperoni (Whole pizza)"]}) on the cheese pizza
+  // line — never as a line item literally named "Pepperoni". Guard 4 read
+  // that as still missing and offered to add pepperoni immediately after
+  // adding it (2026-09-06, Jason's Test Kitchen transcript). Modifiers,
+  // selected option choices, AND unverified_requests (a customer ask the shop
+  // hasn't confirmed a real choice for) all count as "this is on the ticket".
+  const cartLower = new Set<string>();
+  for (const i of cart) {
+    if ((i as BundleItem).type === "bundle") { cartLower.add((i as BundleItem).name.toLowerCase()); continue; }
+    const ci = i as CartItem;
+    cartLower.add(ci.name.toLowerCase());
+    for (const m of ci.modifiers ?? []) cartLower.add(m.toLowerCase());
+    for (const selections of Object.values(ci.options ?? {})) {
+      for (const sel of selections) cartLower.add(sel.toLowerCase());
+    }
+    for (const u of ci.unverified_requests ?? []) cartLower.add(u.toLowerCase());
+  }
 
   const missing: string[] = [];
   for (const displayName of referencedItems) {
@@ -2451,16 +2517,6 @@ function getCurrentTime(timezone: string): string {
   } catch {
     return new Date().toLocaleTimeString();
   }
-}
-
-// Normalize open_hours for a day into an array of {open,close} windows.
-// Handles both the new flat-object shape (Phase 5) and the legacy array shape.
-function dayWindows(dayHours: { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }> | undefined | null): Array<{ open: string; close: string }> {
-  if (!dayHours) return [];
-  if (Array.isArray(dayHours)) return dayHours;
-  // Flat-object shape: { closed, open, close }
-  if (dayHours.closed || !dayHours.open || !dayHours.close) return [];
-  return [{ open: dayHours.open, close: dayHours.close }];
 }
 
 // Day-of-week KEY (mon/tue/...) in the SHOP'S local timezone. Using
@@ -3671,9 +3727,17 @@ Deno.serve(async (req: Request) => {
     cart = newCart as OrderCart;
   }
 
+  // TRUE pre-turn snapshot, captured before any tool execution can mutate
+  // cart_json. Guard 7 (ambiguous same-name match, below) needs to know what
+  // was added THIS turn — `cartItems` (used elsewhere for the same purpose)
+  // is mutated IN PLACE by executeTool's push()/splice() calls, since it's
+  // the same array object by reference, so it cannot answer "what changed".
+  // Deep-cloned because cart_json is a nested object graph, not flat.
+  const cartSnapshotBeforeTurn: AnyCartItem[] = JSON.parse(JSON.stringify(cart.cart_json ?? []));
+
   // RESET keyword — expire current cart so next message gets a clean one
   if (userMessage.trim().toUpperCase() === "RESET") {
-    await supabase.from("order_carts").update({ phase: "expired", test_mode: false }).eq("id", cart.id);
+    await supabase.from("order_carts").update({ phase: "expired", test_mode: false, pending_disambiguation: null }).eq("id", cart.id);
     const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -3697,7 +3761,7 @@ Deno.serve(async (req: Request) => {
     if (wantsRestart) {
       // Clear cart and start fresh
       cart.cart_json = [];
-      await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0 }).eq("id", cart.id);
+      await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0, pending_disambiguation: null }).eq("id", cart.id);
       const reply = "No problem! Starting fresh. What would you like to order?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -3816,6 +3880,7 @@ Deno.serve(async (req: Request) => {
         total_cents: 0,
         stripe_checkout_session_id: null,
         pickup_name: null,
+        pending_disambiguation: null,
       }).eq("id", cart.id);
       cart.test_mode = true;
       cart.cart_json = [];
@@ -3841,6 +3906,7 @@ Deno.serve(async (req: Request) => {
         total_cents: 0,
         stripe_checkout_session_id: null,
         pickup_name: null,
+        pending_disambiguation: null,
       }).eq("id", cart.id);
       cart.test_mode = true;
       cart.cart_json = [];
@@ -3945,6 +4011,47 @@ Deno.serve(async (req: Request) => {
   const deliveryGeoAvailable = shop.delivery_enabled === true
     ? (shop.latitude != null && shop.longitude != null && Number(shop.delivery_radius_mi) > 0)
     : false;
+
+  // ── Pending disambiguation resolution (BLOCKER 1) ───────────────────────
+  // GUARD 7 (below) asks a clarifying question when two active menu items
+  // share a name and persists the offered candidates on
+  // order_carts.pending_disambiguation. This is the other half: on the VERY
+  // NEXT turn, resolve the customer's answer deterministically BEFORE the
+  // LLM/tool loop ever runs — a plain answer like "the salad one" or "the
+  // 12.95 one" must never fall into the normal tool loop with no memory of
+  // which two candidates were offered (docs/specs/2026-09-06-disambiguation-
+  // and-menu-gaps.md, BLOCKER 1).
+  if (cart.pending_disambiguation) {
+    const pending = cart.pending_disambiguation;
+    const resolved = resolvePendingDisambiguation(userMessage, pending.candidates);
+    const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+
+    if (resolved) {
+      const localCartItems = [...cart.cart_json];
+      const addResult = await executeTool(
+        "add_item", { menu_item_id: resolved.menu_item_id, quantity: 1 },
+        localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+      );
+      await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
+      const total = addResult.ok ? (addResult.result as { cart_total?: string }).cart_total : undefined;
+      const reply = addResult.ok
+        ? `Got it — ${resolved.name}${resolved.category ? ` (${resolved.category})` : ""} added${total ? `. Your cart total is ${total}` : ""}. Anything else?`
+        : "Sorry, I had trouble adding that one — mind trying again?";
+      console.log(`[chat-sms] Pending disambiguation resolved (conv=${conversation.id}): "${pending.query_name}" -> ${resolved.name} (${resolved.category ?? "no category"}, ${resolved.price_cents}c).`);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
+    } else {
+      // Could not resolve — re-ask with an explicit numbered list, never
+      // GUARD 7's original sentence, and never the identical re-ask twice
+      // in a row (renderDisambiguationReask guarantees this by construction).
+      const reply = renderDisambiguationReask(pending.candidates, typeof lastAssistant?.content === "string" ? lastAssistant.content : null);
+      console.log(`[chat-sms] Pending disambiguation NOT resolved (conv=${conversation.id}): "${pending.query_name}", customer said "${userMessage}". Re-asking.`);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    }
+  }
 
   // ── Deterministic correction handler (Fix 2: Corrections must write back) ──
   // Before the LLM ever runs, detect correction intent in the user message
@@ -4414,16 +4521,144 @@ Deno.serve(async (req: Request) => {
             return formMatches ? n : `${n} (${cat})`;
           };
           const labelled = missing.map(label);
+          // Don't ask "are you all set?" twice in one message. The model's
+          // own reply frequently already closes with a question in this
+          // shape ("Anything else, or are you all set?") — appending a
+          // second one stacked two closers back to back (2026-09-06, Jason's
+          // transcript: "...or are you all set? Want me to add the Pepperoni
+          // too, or are you all set?"). When the reply already closes, the
+          // upsell asks its OWN question without a redundant closing tag.
+          const replyAlreadyCloses = /\b(?:are you all set|good to go|anything else|all set)\??\s*$/i.test(reply.trim());
           let upsellLine: string;
           if (labelled.length === 1) {
-            upsellLine = `Want me to add the ${labelled[0]} too, or are you all set?`;
+            upsellLine = replyAlreadyCloses
+              ? `Want me to add the ${labelled[0]} too?`
+              : `Want me to add the ${labelled[0]} too, or are you all set?`;
           } else {
             const list = labelled.map((n, i) => i === labelled.length - 1 ? `and ${n}` : n).join(', ');
-            upsellLine = `Did you also want ${list}, or good to go?`;
+            upsellLine = replyAlreadyCloses
+              ? `Did you also want ${list}?`
+              : `Did you also want ${list}, or good to go?`;
           }
           reply = `${reply}\n\n${upsellLine}`;
         }
       }
+    }
+  }
+
+  // ── Guard 7: ambiguous/upgrading match — same name, different real item ──
+  // "caesar salad" silently became "Chicken Caesar" (Salads, $12.95) when
+  // "Chicken Caesar" (Wraps, $9.99) is an equally valid match — the customer
+  // never said "chicken", never said which. Same ask-don't-guess rule we
+  // protect on typos ("prop pizza"), except here it silently charges the
+  // wrong price. Deliberately NARROW: fires only when two ACTIVE menu items
+  // share the exact same name — never on ordinary composability
+  // ("pepperoni pizza" -> Cheese + Pepperoni topping is a correct, wanted
+  // resolution the customer never spelled out either, and must not be
+  // flagged; that shape has no duplicate-name item to collide with).
+  {
+    const beforeIds = new Set(
+      cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => (i as CartItem).menu_item_id),
+    );
+    const addedThisTurn = guardCart.filter(
+      i => (i as CartItem).menu_item_id && !beforeIds.has((i as CartItem).menu_item_id),
+    ) as CartItem[];
+
+    if (addedThisTurn.length > 0) {
+      const byName = new Map<string, EffectiveMenuItem[]>();
+      for (const mi of effectiveMenu) {
+        const key = mi.name.trim().toLowerCase();
+        const arr = byName.get(key) ?? [];
+        arr.push(mi);
+        byName.set(key, arr);
+      }
+
+      for (const added of addedThisTurn) {
+        const menuItem = effectiveMenu.find(mi => mi.id === added.menu_item_id);
+        if (!menuItem) continue;
+        const candidates = byName.get(menuItem.name.trim().toLowerCase()) ?? [menuItem];
+        if (candidates.length < 2) continue;
+
+        // Already disambiguated? If the customer's own words name a
+        // category that matches exactly ONE candidate, the resolution was
+        // correct — don't second-guess a right answer. Singular/plural
+        // tolerant (docs/specs/2026-09-06-disambiguation-and-menu-gaps.md,
+        // the CORRECTION section): a plain substring match against the
+        // category column missed "caesar salad" against "Salads" and "the
+        // wrap" against "Wraps" because neither is an exact substring.
+        const categoryMatches = candidates.filter(c => categoryWordMatches(c.category, userMessage));
+        if (categoryMatches.length === 1) continue;
+
+        console.warn(`[chat-sms] GUARD 7 (ambiguous same-name match) tripped (conv=${conversation.id}). "${menuItem.name}" exists as ${candidates.length} different items; customer message did not disambiguate.`);
+        // An ambiguous charge must never stand silently — roll it back
+        // before asking, not after.
+        const idx = guardCart.indexOf(added);
+        if (idx !== -1) guardCart.splice(idx, 1);
+        const optionsText = candidates
+          .map(c => `${c.name}${c.category ? ` (${c.category})` : ""} — $${(c.price_cents / 100).toFixed(2)}`)
+          .join(" or ");
+        reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
+        // deno-lint-ignore no-await-in-loop
+        await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+        // BLOCKER 1: persist exactly what was offered so the NEXT message
+        // can be resolved deterministically instead of falling into the LLM
+        // with no memory of which two items were on the table.
+        const pendingPayload: PendingDisambiguation = {
+          query_name: menuItem.name,
+          candidates: candidates.map((c): PendingCandidate => ({
+            menu_item_id: c.id,
+            name:         c.name,
+            category:     c.category ?? null,
+            price_cents:  c.price_cents,
+          })),
+        };
+        // deno-lint-ignore no-await-in-loop
+        await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
+        break; // one clarification per turn is enough
+      }
+    }
+  }
+
+  // ── Guard 8: pending-options reply doesn't name the actual choices ──────
+  // add_item is 100% ID-based and correctly stores pending_options + the full
+  // choice list in effectiveMenu/the system prompt — but surfacing "what
+  // dressing would you like, choices are Ranch, Caesar, ..." to the customer
+  // is otherwise left entirely to the model recalling it from a ~17k-token
+  // system prompt resent every turn, and it sometimes (nondeterministically)
+  // claims it doesn't have the list even though the data is right there
+  // (2026-09-06, Jason's live Chicken Caesar transcript: "I don't have the
+  // dressing list for this one" while the tool result held 18 real choices).
+  // Deterministic fix: if an item was added this turn with unresolved
+  // required groups and the model's own reply doesn't already name a real
+  // choice from a group, append the actual list — pulled from effectiveMenu,
+  // never from the model.
+  {
+    const beforeIds8 = new Set(
+      cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => (i as CartItem).menu_item_id),
+    );
+    const addedThisTurn8 = guardCart.filter(
+      i => (i as CartItem).menu_item_id && !beforeIds8.has((i as CartItem).menu_item_id) && (i as CartItem).pending_options?.length,
+    ) as CartItem[];
+
+    const missingClauses: string[] = [];
+    for (const added of addedThisTurn8) {
+      const menuItem = effectiveMenu.find(mi => mi.id === added.menu_item_id);
+      if (!menuItem) continue;
+      // Strip the item's own name before matching — "Chicken Caesar added!"
+      // must not count as enumerating a "Caesar" dressing choice just
+      // because the word appears in the item name.
+      const replyLower = reply.toLowerCase().split(menuItem.name.toLowerCase()).join(" ");
+      for (const groupName of added.pending_options ?? []) {
+        const group = menuItem.option_groups?.find(g => g.name === groupName);
+        if (!group || group.choices.length === 0) continue;
+        const namesReplyMentions = group.choices.some(c => replyLower.includes(c.name.toLowerCase()));
+        if (namesReplyMentions) continue;
+        missingClauses.push(`Choices for ${group.name}: ${group.choices.map(c => c.name).join(", ")}.`);
+      }
+    }
+    if (missingClauses.length > 0) {
+      console.warn(`[chat-sms] GUARD 8 (pending-options not enumerated) tripped (conv=${conversation.id}). Reply omitted real choice names for: ${missingClauses.join(" | ")}`);
+      reply = `${reply} ${missingClauses.join(" ")}`;
     }
   }
 
