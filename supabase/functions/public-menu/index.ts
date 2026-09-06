@@ -112,18 +112,13 @@ function renderItem(item: Item): string {
 }
 
 function renderCategory(name: string, items: Item[]): string {
-  const anyOptions = items.some(i => i.groups.length > 0);
-  // Spec: an item with no options must look like it has none — no silent
-  // omission. Surfaced at the category level: if NOTHING in this category has
-  // options, say so once rather than let 62 items silently look identical to
-  // items that were never checked.
-  const note = anyOptions
-    ? ""
-    : `<div class="no-options-note">No add-ons or choices are configured for this category yet.</div>`;
+  // A category with no add-ons is not an error and needs no explanation —
+  // the items and prices are the content. Silence is correct (Jason
+  // 2026-09-06): a prior note here read as an internal-database status
+  // message to customers, not something a restaurant would say.
   return `
     <section class="category">
       <h2>${h(name)}</h2>
-      ${note}
       ${items.map(renderItem).join("")}
     </section>`;
 }
@@ -139,7 +134,6 @@ const PAGE_CSS = `
   main { max-width:640px; margin:0 auto; padding:0 12px 40px; }
   .category { margin-top:22px; }
   .category h2 { font-size:15px; text-transform:uppercase; letter-spacing:0.04em; color:#666; border-bottom:1px solid #e2e2de; padding-bottom:6px; margin-bottom:10px; }
-  .no-options-note { font-size:12px; color:#8a6d00; background:#fff8e1; border-radius:6px; padding:6px 10px; margin-bottom:10px; }
   .item { padding:10px 0; border-bottom:1px solid #ececea; }
   .item-row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
   .item-name { font-weight:600; font-size:15px; }
