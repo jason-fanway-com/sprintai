@@ -2018,9 +2018,16 @@ function renderItemizedRecap(cart: AnyCartItem[], deliveryFeeCents?: number, dri
  * produced it.
  */
 function stripEmDashes(text: string): string {
+  // QA-found (Melvin, 2026-09-06): the blanket `\s{2,}` collapse this used to
+  // end with ran on the WHOLE message, not just around the dash it replaced —
+  // `\s` matches newlines too, so it silently flattened the itemized recap's
+  // column padding AND merged its "\n\n" paragraph break into a single space,
+  // running the name-ask and the receipt together on one line. The primary
+  // replacement below already normalizes spacing directly around the dash
+  // (`\s*—\s*` → " - "), so the extra collapse was redundant for its actual
+  // job and only destructive everywhere else.
   return text
     .replace(/\s*—\s*/g, " - ")
-    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
