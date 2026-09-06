@@ -40,7 +40,7 @@ const PROJECT_REF = "rvdqfxtrskxekfkqnegx";
 const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
 
 // Test shop: synthetic, no phone, not protected — safe for automated testing.
-const SHOP_ID = "38ae034c-cb9d-4f32-b4f1-d9b40393574b";
+const SHOP_ID = "e0000000-0000-0000-0000-000000000001";
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error("quick: missing SPRINTAI_CHAT_SUPABASE_URL or SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY");

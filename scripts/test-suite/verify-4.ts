@@ -9,7 +9,7 @@ import type { TestCase } from "./library.ts";
 import type { RunnerConfig } from "./runner.ts";
 import type { JudgeConfig } from "./judge.ts";
 
-const SHOP_ID = "38ae034c-cb9d-4f32-b4f1-d9b40393574b";
+const SHOP_ID = "e0000000-0000-0000-0000-000000000001";
 const SUPABASE_URL = Deno.env.get("SPRINTAI_CHAT_SUPABASE_URL") ?? "";
 const SUPABASE_KEY = Deno.env.get("SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";

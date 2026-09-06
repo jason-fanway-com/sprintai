@@ -16,7 +16,7 @@
 const SUPABASE_URL = "https://rvdqfxtrskxekfkqnegx.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZHFmeHRyc2t4ZWtma3FuZWd4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDc0ODY4OSwiZXhwIjoyMDkwMzI0Njg5fQ.18IySZjyLd2KPNxJSDq--UMvICqbTbjMM1ZC5J-g9oI";
 const CHAT_URL = `${SUPABASE_URL}/functions/v1/chat-sms`;
-const SHOP_ID = "38ae034c-cb9d-4f32-b4f1-d9b40393574b";
+const SHOP_ID = "e0000000-0000-0000-0000-000000000001";
 
 const H = { "Authorization": `Bearer ${SUPABASE_KEY}`, "apikey": SUPABASE_KEY };
 
@@ -133,7 +133,7 @@ async function multiTest(id: string, label: string, msgs: string[], checks: Arra
 
 console.log("═══════════════════════════════════════════════════════════");
 console.log("  CYCLE-4 PRICING FIX VERIFICATION (commit 3da9b54)");
-console.log("  Shop: Not Just Bagels (TEST CLONE)");
+console.log("  Shop: Vito's Pizza");
 console.log("═══════════════════════════════════════════════════════════\n");
 
 console.log("═══ A. MODIFIER PRICING (subtotal must include modifier price_cents) ═══\n");

@@ -16,10 +16,10 @@ const CASE_FILTER = [
   'menu-single-517',
 ];
 
-// NJB test clone: 38ae034c-cb9d-4f32-b4f1-d9b40393574b
+// Vito's Pizza (is_test, no carrier number): e0000000-0000-0000-0000-000000000001
 // Vito's Pizza: e0000000-0000-0000-0000-000000000001
 const SHOP_IDS = [
-  '38ae034c-cb9d-4f32-b4f1-d9b40393574b',
+  'e0000000-0000-0000-0000-000000000001',
   'e0000000-0000-0000-0000-000000000001',
 ];
 

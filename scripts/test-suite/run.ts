@@ -35,7 +35,10 @@ const SUPABASE_KEY = Deno.env.get("SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY") ?? 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 // Chat function URL for web-chat-test path.
 const PROJECT_REF = "rvdqfxtrskxekfkqnegx";
-const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
+// Override with TEST_CHAT_FUNCTION_URL to A/B a different bot model against the
+// isolated chat-sms-mtest function. Unset = production chat-sms, unchanged.
+const CHAT_FUNCTION_URL = Deno.env.get("TEST_CHAT_FUNCTION_URL")
+  ?? `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error("Missing SPRINTAI_CHAT_SUPABASE_URL or SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY");

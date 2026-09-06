@@ -1,4 +1,6 @@
--- 108: make testers distinguishable.
+-- 109: make testers distinguishable. (Renumbered from 108 on 2026-09-06: the
+-- importer work landed its own 108 the same hour. Two migrations sharing a
+-- number is the silent-partial class of bug — one silently wins.)
 --
 -- All 22 public-tester sessions carried one identical ip_hash. My first read was
 -- that the hash input was constant. The edge logs say otherwise: x-real-ip and

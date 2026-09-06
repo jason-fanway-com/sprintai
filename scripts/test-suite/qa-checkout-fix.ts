@@ -11,8 +11,8 @@ const H = { "Authorization": `Bearer ${SKEY}`, "apikey": SKEY, "Content-Type": "
 
 // Vito's Pizza: delivery_enabled=true (CRITICAL for adversarial test)
 const VITOS = "e0000000-0000-0000-0000-000000000001";
-// NJB test clone: delivery_enabled=false (our standard test shop)
-const NJB_TEST = "38ae034c-cb9d-4f32-b4f1-d9b40393574b";
+// Vito's Pizza (is_test, no carrier number): delivery_enabled=false (our standard test shop)
+const VITOS = "e0000000-0000-0000-0000-000000000001";
 
 const verdicts: Array<{ id: string; pass: boolean; detail: string }> = [];
 
@@ -99,20 +99,20 @@ async function testMenuCheckout13() {
   const sid = `qa-cf-menuchkout13-${Date.now()}`;
   try {
     // Turn 1: order item
-    let r = await chat(NJB_TEST, "I'll take a plain bagel with butter", sid);
+    let r = await chat(VITOS, "I'll take a plain bagel with butter", sid);
     console.log(`  T1 reply: ${(r.reply||"").slice(0,120)}`);
     
     // Turn 2: confirm
-    r = await chat(NJB_TEST, "yes", r.session_id || sid);
+    r = await chat(VITOS, "yes", r.session_id || sid);
     console.log(`  T2 reply: ${(r.reply||"").slice(0,120)}`);
     
     // Turn 3: checkout
-    r = await chat(NJB_TEST, "checkout", r.session_id || sid);
+    r = await chat(VITOS, "checkout", r.session_id || sid);
     console.log(`  T3 reply: ${(r.reply||"").slice(0,120)}`);
     
     // Turn 4: name
     const finalSid = r.session_id || sid;
-    r = await chat(NJB_TEST, "Jason", finalSid);
+    r = await chat(VITOS, "Jason", finalSid);
     console.log(`  T4 reply (Jason name): ${(r.reply||"").slice(0,200)}`);
     
     const cart = await getCartBySid(finalSid);
@@ -146,18 +146,18 @@ async function testProofCheckoutWritesOrder() {
   console.log("\n── TEST 2: proof-checkout-writes-order ──");
   const sid = `qa-cf-writesorder-${Date.now()}`;
   try {
-    // Uses NJB_TEST (not delivery enabled) — standard 4-turn checkout
-    let r = await chat(NJB_TEST, "I'll take a plain bagel with butter", sid);
+    // Uses VITOS (not delivery enabled) — standard 4-turn checkout
+    let r = await chat(VITOS, "I'll take a plain bagel with butter", sid);
     const currentSid = r.session_id || sid;
     console.log(`  T1 reply: ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "yes", currentSid);
+    r = await chat(VITOS, "yes", currentSid);
     console.log(`  T2 reply: ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "checkout", currentSid);
+    r = await chat(VITOS, "checkout", currentSid);
     console.log(`  T3 reply: ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "Pat", currentSid);
+    r = await chat(VITOS, "Pat", currentSid);
     console.log(`  T4 reply (name): ${(r.reply||"").slice(0,200)}`);
     
     const cart = await getCartBySid(currentSid);
@@ -191,23 +191,23 @@ async function testCartPersistsAcrossMultiple() {
   console.log("\n── TEST 3: proof-cart-persists-across-multiple ──");
   const sid = `qa-cf-persists-${Date.now()}`;
   try {
-    let r = await chat(NJB_TEST, "I'll take a plain bagel with butter", sid);
+    let r = await chat(VITOS, "I'll take a plain bagel with butter", sid);
     let currentSid = r.session_id || sid;
     console.log(`  T1 (order): ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "Do you have any desserts?", currentSid);
+    r = await chat(VITOS, "Do you have any desserts?", currentSid);
     currentSid = r.session_id || currentSid;
     console.log(`  T2 (question): ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "Actually add a sesame bagel with cream cheese", currentSid);
+    r = await chat(VITOS, "Actually add a sesame bagel with cream cheese", currentSid);
     currentSid = r.session_id || currentSid;
     console.log(`  T3 (add 2nd item): ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "checkout", currentSid);
+    r = await chat(VITOS, "checkout", currentSid);
     currentSid = r.session_id || currentSid;
     console.log(`  T4 (checkout): ${(r.reply||"").slice(0,120)}`);
     
-    r = await chat(NJB_TEST, "Pat", currentSid);
+    r = await chat(VITOS, "Pat", currentSid);
     console.log(`  T5 (name): ${(r.reply||"").slice(0,200)}`);
     
     const cart = await getCartBySid(currentSid);
@@ -361,7 +361,7 @@ async function testNoAutoAdd() {
   const sid = `qa-cf-noautoadd-${Date.now()}`;
   try {
     // Simple order: "I'll take a plain bagel with butter"
-    let r = await chat(NJB_TEST, "I'll take a plain bagel with butter", sid);
+    let r = await chat(VITOS, "I'll take a plain bagel with butter", sid);
     let currentSid = r.session_id || sid;
     
     let cart = await getCartBySid(currentSid);
@@ -371,7 +371,7 @@ async function testNoAutoAdd() {
     console.log(`  Initial cart: ${initialCount} items: ${initialNames}`);
     
     // Now provide a name (which should trigger C2 shortcut + pickup-default)
-    r = await chat(NJB_TEST, "Jason", currentSid);
+    r = await chat(VITOS, "Jason", currentSid);
     currentSid = r.session_id || currentSid;
     console.log(`  Name turn reply: ${(r.reply||"").slice(0,200)}`);
     
