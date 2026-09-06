@@ -1947,19 +1947,53 @@ function renderLedgerFooter(
  * items use (see the lineItems.map description logic in executeTool) so the
  * two never drift apart.
  */
-function renderItemizedRecap(cart: AnyCartItem[]): string {
-  return cart.map(i => {
+/**
+ * Right-pads `label`, right-aligns `amount`, to a fixed total width — a
+ * plain-text receipt column, no box-drawing characters (reads correctly in
+ * an SMS). Falls back to a single space when the label alone already fills
+ * the width, so a long item name never throws on a negative repeat count.
+ */
+function padReceiptLine(label: string, amount: string, width = 38): string {
+  const gap = Math.max(1, width - label.length - amount.length);
+  return `${label}${" ".repeat(gap)}${amount}`;
+}
+
+/**
+ * Deterministic itemized recap — a full plain-text receipt (line items with
+ * their own price, chosen options, subtotal, service fee, and total), not
+ * just a count and a total. This is the structural defense against the
+ * double-charge class (2026-09-06, Jason: "Luca only caught a $37 error
+ * because he happened to read a number") — the model never states these
+ * figures itself.
+ */
+function renderItemizedRecap(cart: AnyCartItem[], deliveryFeeCents?: number, driverTipCents?: number): string {
+  const lines: string[] = [];
+  let subtotal = 0;
+  for (const i of cart) {
     if ((i as BundleItem).type === "bundle") {
       const b = i as BundleItem;
+      if (!b.complete) continue; // an incomplete bundle has no settled price yet
+      subtotal += b.price_cents;
       const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-      return `1x ${b.name}${detail ? ` (${detail})` : ""}`;
+      lines.push(padReceiptLine(`${b.name}${detail ? ` (${detail})` : ""}`, `$${(b.price_cents / 100).toFixed(2)}`));
+      continue;
     }
     const r = i as CartItem;
+    const lineTotal = r.price_cents * (r.quantity || 1);
+    subtotal += lineTotal;
+    const qtyPrefix = (r.quantity || 1) > 1 ? `${r.quantity}x ` : "";
     const detail = r.modifiers?.length > 0
       ? r.modifiers.join(", ")
       : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ") : "");
-    return `${r.quantity || 1}x ${r.name}${detail ? ` (${detail})` : ""}`;
-  }).join(", ");
+    lines.push(padReceiptLine(`${qtyPrefix}${r.name}${detail ? ` (${detail})` : ""}`, `$${(lineTotal / 100).toFixed(2)}`));
+  }
+  const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);
+  lines.push(padReceiptLine("Subtotal", `$${(subtotal / 100).toFixed(2)}`));
+  lines.push(padReceiptLine("Service fee", `$${(SERVICE_FEE_CENTS / 100).toFixed(2)}`));
+  if (deliveryFeeCents) lines.push(padReceiptLine("Delivery fee", `$${(deliveryFeeCents / 100).toFixed(2)}`));
+  if (driverTipCents) lines.push(padReceiptLine("Driver tip", `$${(driverTipCents / 100).toFixed(2)}`));
+  lines.push(padReceiptLine("Total", `$${(totalCents / 100).toFixed(2)}`));
+  return lines.join("\n");
 }
 
 /**
@@ -1978,6 +2012,19 @@ function stripEmDashes(text: string): string {
     .replace(/\s*—\s*/g, " - ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+/**
+ * Does this text ask the customer for their pickup name? Shared by C2 (was
+ * the customer's PRIOR message a name-ask, so this turn's short reply is
+ * the name) and by the itemized-recap wiring below (is THIS turn's reply a
+ * name-ask, regardless of whether GUARD 2 forced it or the model asked on
+ * its own initiative). Extracted from C2's original inline check so both
+ * call sites can never drift apart on what counts as a name-ask.
+ */
+function isAskingForPickupName(text: string): boolean {
+  return /\bname\b/i.test(text)
+    && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
 }
 
 /**
@@ -4402,9 +4449,7 @@ Deno.serve(async (req: Request) => {
       const trimmed = userMessage.trim();
       const looksLikeName = /^[A-Z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;
       const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
-      const askedForName = typeof lastAssistant?.content === "string"
-        && /\bname\b/i.test(lastAssistant.content)
-        && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(lastAssistant.content);
+      const askedForName = typeof lastAssistant?.content === "string" && isAskingForPickupName(lastAssistant.content);
       if (looksLikeName && askedForName) {
         const orderType = cart.order_type;
         const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
@@ -5105,7 +5150,11 @@ Deno.serve(async (req: Request) => {
     reply = `Almost — I still need to know: ${asks}. What'll it be?`;
   } else if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
-    reply = `Got it! Here's what I have: ${renderItemizedRecap(guardCart)}. ${NAME_ASK}`;
+    // The itemized receipt is attached below in Phase A (the single place
+    // that owns this, since the model asks for the name on its own
+    // initiative far more often than this guard has to force it) — keep
+    // this reply plain so the receipt is never shown twice.
+    reply = `Got it! ${NAME_ASK}`;
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────
@@ -5170,7 +5219,7 @@ Deno.serve(async (req: Request) => {
       const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
       if (submitResult.ok && submitResult.checkoutUrl) {
         checkoutUrl = submitResult.checkoutUrl;
-        reply = `All set! Here's what I'm sending: ${renderItemizedRecap(guardCart)}. Payment link — tap to finish your order: ` + submitResult.checkoutUrl;
+        reply = `All set! Here's your order:\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}\n\nPayment link — tap to finish: ` + submitResult.checkoutUrl;
       } else {
         // FIX (2026-09-06, Jason): submit_order's own error already names the
         // specific reason (pending option, missing order type, missing
@@ -5343,9 +5392,22 @@ Deno.serve(async (req: Request) => {
     // fee applies, persisted so it never repeats after that — and again at
     // checkout (separate code path below, unconditional on this flag).
     const feeAlreadyDisclosed = !!(guardCartRow as any)?.fee_disclosed_at;
-    const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
-    if (footer) {
-      reply = `${reply}\n\n${footer}`;
+    // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
+    // that matters — the customer is being asked for their pickup name,
+    // which is the last step before checkout, regardless of whether GUARD 2
+    // forced that ask or the model asked on its own initiative (the common
+    // case; GUARD 2 is only a backstop). A count-and-total footer here is
+    // exactly the gap Luca's $37 double-charge exposed: he only caught it
+    // because he happened to read a number, not because the bot itemized
+    // anything. This replaces the plain footer with the full receipt only
+    // at this one moment; every other turn keeps the short footer as before.
+    if (!hasPickupName && isAskingForPickupName(reply)) {
+      reply = `${reply}\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}`;
+    } else {
+      const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
+      if (footer) {
+        reply = `${reply}\n\n${footer}`;
+      }
     }
     if (!feeAlreadyDisclosed) {
       await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
