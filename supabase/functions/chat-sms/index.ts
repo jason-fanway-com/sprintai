@@ -4021,6 +4021,19 @@ Deno.serve(async (req: Request) => {
   // 12.95 one" must never fall into the normal tool loop with no memory of
   // which two candidates were offered (docs/specs/2026-09-06-disambiguation-
   // and-menu-gaps.md, BLOCKER 1).
+  //
+  // FIX B (2026-09-06): a failed resolution attempt is not necessarily an
+  // attempt at all — "large pepperoni pizza" while a Chicken Caesar
+  // salad-vs-wrap question is pending is a brand new, unrelated order, not a
+  // garbled answer. Re-asking the same question and returning immediately
+  // blocked that order behind a stale modal. If the message names a real
+  // menu item the pending candidates don't cover, let it fall through to the
+  // normal LLM/tool loop (so the new item gets added), keep
+  // pending_disambiguation persisted, and carry the still-open question
+  // forward onto whatever reply that loop produces (see carriedDisambiguation
+  // append near the end of this function). Only a message that names nothing
+  // new re-asks and returns, same as before.
+  let carriedDisambiguation: PendingDisambiguation | null = null;
   if (cart.pending_disambiguation) {
     const pending = cart.pending_disambiguation;
     const resolved = resolvePendingDisambiguation(userMessage, pending.candidates);
@@ -4042,14 +4055,47 @@ Deno.serve(async (req: Request) => {
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
     } else {
-      // Could not resolve — re-ask with an explicit numbered list, never
-      // GUARD 7's original sentence, and never the identical re-ask twice
-      // in a row (renderDisambiguationReask guarantees this by construction).
-      const reply = renderDisambiguationReask(pending.candidates, typeof lastAssistant?.content === "string" ? lastAssistant.content : null);
-      console.log(`[chat-sms] Pending disambiguation NOT resolved (conv=${conversation.id}): "${pending.query_name}", customer said "${userMessage}". Re-asking.`);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
-      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      // Not a resolvable answer — but is it actually an attempt to answer at
+      // all, or a new order that happens to arrive while the question is
+      // still open? Reuse the same menu-name matcher Guard 4 uses to detect
+      // items the customer referenced: if the message names a real menu item
+      // that isn't one of the pending candidates, treat it as a new order.
+      //
+      // A referenced name that is a substring of (or contains) the pending
+      // item's own query_name doesn't count — e.g. Vito's menu has a
+      // standalone "Chicken" item (a quesadilla protein) that substring-
+      // matches inside "Chicken Caesar", so naming the ambiguous item at all
+      // ("I'd like to order the chicken caesar please") would otherwise
+      // false-positive as ordering something new.
+      const pendingMenuNames = buildMenuItemNames(effectiveMenu);
+      const pendingReferenced = extractCustomerReferencedItems(
+        [{ role: "user", content: userMessage }], pendingMenuNames,
+      );
+      const pendingCandidateNames = new Set(pending.candidates.map(c => c.name.toLowerCase()));
+      const pendingQueryLower = pending.query_name.toLowerCase();
+      const looksLikeNewOrder = [...pendingReferenced].some(n => {
+        const nLower = n.toLowerCase();
+        if (pendingCandidateNames.has(nLower)) return false;
+        if (pendingQueryLower.includes(nLower) || nLower.includes(pendingQueryLower)) return false;
+        return true;
+      });
+
+      if (looksLikeNewOrder) {
+        console.log(`[chat-sms] Pending disambiguation carried forward (conv=${conversation.id}): "${pending.query_name}" still open; customer message looked like a new/unrelated order ("${userMessage}"). Falling through to the LLM/tool loop.`);
+        carriedDisambiguation = pending;
+        // Deliberately no return: falls through to the normal LLM/tool loop
+        // below. pending_disambiguation is left untouched in the DB.
+      } else {
+        // Could not resolve, and doesn't look like a new order either — re-ask
+        // with an explicit numbered list, never GUARD 7's original sentence,
+        // and never the identical re-ask twice in a row (renderDisambiguationReask
+        // guarantees this by construction).
+        const reply = renderDisambiguationReask(pending.candidates, typeof lastAssistant?.content === "string" ? lastAssistant.content : null);
+        console.log(`[chat-sms] Pending disambiguation NOT resolved (conv=${conversation.id}): "${pending.query_name}", customer said "${userMessage}". Re-asking.`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      }
     }
   }
 
@@ -4616,6 +4662,50 @@ Deno.serve(async (req: Request) => {
         await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
         break; // one clarification per turn is enough
       }
+    } else {
+      // FIX A (2026-09-06): the branch above only persists pending_disambiguation
+      // on the ROLLBACK path (add_item was called and had to be undone). Often
+      // the model recognizes the same-name collision itself and asks the
+      // clarifying question in free text WITHOUT ever calling add_item — the
+      // branch above never runs, nothing gets persisted, and the NEXT message
+      // (an attempted answer) falls into the LLM/tool loop with no memory of
+      // which two items were on the table (silent-partial-success family, see
+      // RUNBOOK.md). Trigger: the customer's message names a duplicate-name
+      // item that isn't already resolved by a category word, AND the model's
+      // own reply is asking something (never fires on a plain factual answer
+      // that doesn't require a choice).
+      if (/\?/.test(reply)) {
+        const byName7b = new Map<string, EffectiveMenuItem[]>();
+        for (const mi of effectiveMenu) {
+          const key = mi.name.trim().toLowerCase();
+          const arr = byName7b.get(key) ?? [];
+          arr.push(mi);
+          byName7b.set(key, arr);
+        }
+        const userMsgLower7b = userMessage.toLowerCase();
+        for (const [name, candidates] of byName7b) {
+          if (candidates.length < 2) continue;
+          const nameRe = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+          if (!nameRe.test(userMsgLower7b)) continue;
+
+          const categoryMatches = candidates.filter(c => categoryWordMatches(c.category, userMessage));
+          if (categoryMatches.length === 1) continue;
+
+          console.warn(`[chat-sms] GUARD 7b (unprompted disambiguation ask) tripped (conv=${conversation.id}). Customer named "${name}" (${candidates.length} matches); model asked in free text without calling add_item. Persisting candidates.`);
+          const pendingPayload7b: PendingDisambiguation = {
+            query_name: candidates[0].name,
+            candidates: candidates.map((c): PendingCandidate => ({
+              menu_item_id: c.id,
+              name:         c.name,
+              category:     c.category ?? null,
+              price_cents:  c.price_cents,
+            })),
+          };
+          // deno-lint-ignore no-await-in-loop
+          await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload7b }).eq("id", cart.id);
+          break; // one clarification per turn is enough
+        }
+      }
     }
   }
 
@@ -4940,6 +5030,18 @@ Deno.serve(async (req: Request) => {
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  // FIX B: this turn fell through with a disambiguation question still open
+  // (see carriedDisambiguation above) — never silently drop it. Carry it
+  // forward onto whatever reply the LLM/tool loop produced for the new order,
+  // so the customer sees both: their new item confirmed AND the still-open
+  // question, in the same message.
+  if (carriedDisambiguation) {
+    const stillOpenOptions = carriedDisambiguation.candidates
+      .map(c => `${c.name}${c.category ? ` (${c.category})` : ""}`)
+      .join(" or ");
+    finalReply = `${finalReply}\n\nStill wondering — did you want the ${stillOpenOptions}?`;
+  }
 
   if (isLifetimeFirstContact) {
     finalReply = `${finalReply}\n\n${COMPLIANCE_DISCLOSURE}`;

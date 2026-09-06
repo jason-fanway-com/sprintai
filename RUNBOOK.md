@@ -1212,3 +1212,21 @@ now record it; `qa_ro.public_tester_sessions` exposes a derived `device`
 (iPhone / Android / Mac / Windows / script / unknown) and `is_first_session`.
 Rows written before 2026-09-06 13:51 UTC show `device = unknown` — that is
 missing history, not a bug.
+
+## Recurring bug shape: bookkeeping only wired to the failure path — 2026-09-06
+
+Guard 7's original `pending_disambiguation` persist (commit 3e01286) only ran on the
+ROLLBACK branch — when `add_item` was actually called and had to be undone. The far
+more common case, the model recognizing the same-name collision itself and asking in
+free text without ever calling `add_item`, never touched that code, so nothing was
+persisted and the next message had no memory of what was offered. Fixed same day by
+adding a second guard (GUARD 7b) keyed on the customer's own message plus a
+free-text question, independent of whether a tool call happened at all.
+
+This is the fourth confirmed instance of the same shape: a success path silently
+skips bookkeeping that only the failure/rollback path performs. The other three:
+the menu importer's silent block-drop, the duplicate migration numbers, and the
+option-price revert. Common thread — whoever wrote the "sad path" handling correctly
+assumed it was the only path that needed it. When adding state that a later turn or
+process depends on, ask whether the HAPPY path reaches the same code, not just the
+one you're staring at while fixing the bug in front of you.
