@@ -532,19 +532,29 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKENS — swap the two values below for the real demo number and admin URL.
 // ═══════════════════════════════════════════════════════════════════════════
-const DEMO_NUMBER  = "+16107358315";
-const ADMIN_URL    = "getsprintai.com/admin/shop-owner?shop=vitos-pizza";
+const DEMO_NUMBER  = "+14842018054";
+const ADMIN_URL    = "https://getsprintai.com/admin/shop-owner?shop=vitos-pizza";
 
 (function() {
+  // --- Format DEMO_NUMBER for display: +1AAABBBCCCC -> (AAA) BBB-CCCC ---
+  function prettyNumber(e164) {
+    const d = String(e164).replace(/\D/g, '').replace(/^1/, '');
+    return d.length === 10 ? '(' + d.slice(0,3) + ') ' + d.slice(3,6) + '-' + d.slice(6) : e164;
+  }
+  const PRETTY_NUMBER = prettyNumber(DEMO_NUMBER);
+
   // --- Update phone header with demo number ---
   const subEl = document.getElementById('phone-sub');
   if (subEl) {
-    subEl.textContent = 'Text to order · (610) 735-8315';
+    subEl.textContent = 'Text to order · ' + PRETTY_NUMBER;
   }
 
   // --- Wire links ---
   const smsLink = document.getElementById('sms-link');
-  if (smsLink) smsLink.href = 'sms:' + DEMO_NUMBER;
+  if (smsLink) {
+    smsLink.href = 'sms:' + DEMO_NUMBER;
+    smsLink.textContent = 'Text ' + PRETTY_NUMBER + ' →';
+  }
 
   const adminLink = document.getElementById('admin-link');
   if (adminLink) adminLink.href = ADMIN_URL;
