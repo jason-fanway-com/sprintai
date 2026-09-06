@@ -190,6 +190,28 @@ Be clear about what that means commercially: **6/20 is the pass rate.** A self-s
 platform that can only read a third of restaurant menus still needs a human for the other
 two-thirds. Honest failure is a prerequisite for fixing it, not the fix.
 
+### Added 2026-09-05 (later) — menu sourcing has a deliberate last resort, and it's weak
+
+A source-priority order was set: the restaurant's own website, then an owner-provided
+photo/PDF, then their Google listing, and only last the aggregator (Slice/Toast/ChowNow)
+they may already be on. The reason is commercial, not technical: aggregator prices are
+typically marked up, and importing that markup into a direct-order channel would quietly
+undercut the entire pitch that ordering direct is better for the restaurant. Measured
+today against 4 sites with no usable menu on the first two rungs: the aggregator fallback
+returned nothing usable for any of them — Slice gave priced items with no options or
+sizes, Toast and ChowNow are JS-rendered storefronts a static read can't see at all. So
+the deliberately-last-resort source is also, right now, the least reliable one. Menu
+intake for a new shop with a weak website remains a human job.
+
+The owner-facing Menu & Settings editor (`/menu-settings`) shipped this week closes a
+related gap: an owner's own edits (item prices, option prices, hand-added flavors) now
+survive a CSV re-import rather than being silently overwritten. That was reported fixed
+once already today, on the strength of a grep that turned out to be checking the wrong
+thing; the real (narrower) gap was found and closed a few hours later. Noted here because
+it is the kind of claim a customer-facing conversation with a restaurant owner could
+repeat before it was actually true — worth a beat of skepticism on any "it's fixed" from
+this week specifically.
+
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.

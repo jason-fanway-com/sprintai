@@ -136,6 +136,81 @@ Not currently reachable: all three real shops have all seven day keys. It become
 the moment owners edit their own hours, because "we're closed Mondays so I'll leave Monday
 out" is the natural thing to do. Fix belongs with the owner editor.
 
+## Shipped 2026-09-05, continued (11:00 – 21:02)
+
+Full narrative in `docs/DAILY.md`. Operational deltas only, here.
+
+### Admin dashboard: auto-deploy has been broken since 8/22
+
+Confirmed in a82ab23's own commit message. Until this is fixed, the manual deploy
+steps in "Admin dashboard (manual deploy)" below are the ONLY way a change reaches
+`getsprintai.com/admin` — and the built `dist/`/`deploy-root/` output must then be
+**committed to git**, or `main` silently drifts from what is actually live (this
+happened today: `main` was carrying `index-FezUO85U` while the front door was
+serving `index-C6h_btXT`). Committing built bundles is an established pattern in
+this repo (`admin-dashboard/dist` and `deploy-root` are not gitignored), not a
+one-off workaround — but it means `git blame` on those files is meaningless and the
+only way to know what's live is to `curl` the front door and match the JS hash, as
+the existing deploy steps already say to do.
+
+### Public tester rate limits changed
+
+Global daily cap raised 150 → 1000. Per-IP (5/hr) and per-browser (3/hr) limits were
+**removed entirely** (f218d19) — the 20-turn cap and the daily global cap are now the
+only abuse controls. Turn claiming goes through a new atomic RPC,
+`public_tester_claim_turn` (migration 098), replacing a read-then-write race.
+
+### chat-sms
+
+Per the readiness log, deployed version is v226 (not independently reconfirmed via
+`supabase functions list` in this pass). Two guard behaviors changed today: the
+phantom-add guard is now clause-aware (splits on `;`, dashes, and leading
+but/though/however/although, not just periods), and the delivery-availability check
+now requires BOTH shop coordinates AND `delivery_radius_mi > 0` — previously
+coordinates alone were enough to tell a customer delivery was available, with no
+zone check ever run for a shop that had coordinates but no configured radius.
+
+### import-menu-csv v38 — confirmed live via Supabase CLI
+
+Owner-edited option GROUPS and CHOICES now survive a re-import (previously only
+owner-edited ITEMS did, under v37 — the initial readiness-log claim that v37 had
+*zero* owner-edit protection was wrong; see the correction logged in
+`docs/specs/2026-09-03-READINESS.md` at 21:05). Deliberate, not a bug: an
+owner-edited item that's `active=false` stays inactive even if the CSV re-adds it —
+owner intent wins over the CSV.
+
+### scrape-shop v72 / parse-menu-pdf v93 — confirmed live via Supabase CLI
+
+Source-priority ladder is live: own website → owner-provided PDF/photo → Google
+listing → aggregator (last resort), with provenance recorded per item (migration
+102: `menus.source_detail`, `menu_items.source`/`source_ref`). Aggregator rung
+measured 0/4 on sites with no usable direct-site menu — Slice returns items with no
+options/sizes, Toast and ChowNow are JS-rendered and return nothing to a static
+scrape.
+
+### Owner-facing Menu & Settings editor — `/menu-settings`
+
+Live, backed by an extended `admin-chat` operations registry (includes
+`ADD_ITEM`/`REMOVE_ITEM`) and migrations 097/101/104. See `docs/DAILY.md` for the
+build → revert → rebuild sequence — the admin-only shape from the first attempt is
+dead on `main`, preserved only on branch `shop-editor-admin-shape`.
+
+### Judge panel — advisory, does not write back
+
+`judge-transcript` edge function (migration 103) scores a submitted test
+conversation; a read-only panel renders the critique under the chat simulator.
+Every proposal is stored as `status: proposed` — there is no code path that applies
+one automatically.
+
+### Uncommitted in the working tree as of 2026-09-05 21:00 EDT
+
+Not part of any commit, so not reflected above as shipped: `scripts/imsg-bridge.sh`
+(default demo shop changed to Vito's Pizza, now env-overridable), `scripts/test-suite/run.ts`
+(chat-function URL now overridable via `TEST_CHAT_FUNCTION_URL`), `vitos-demo.html`
+(demo number changed to `+14842018054`), and a `deno.lock` refresh. Whoever picks
+this up next should check `git status` before assuming the repo matches this
+document.
+
 ## System overview
 
 SprintAI replaces a restaurant's phone ordering: customers text a shop's number,

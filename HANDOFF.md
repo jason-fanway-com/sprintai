@@ -57,6 +57,49 @@ Cost is quadratic in turns: ~$0.08 for a 9-turn order, ~$30 for 100 testers × 3
 - **`delivery_hours`** is a column and is validated on write, but `chat-sms` does not read
   it anywhere. It has no runtime effect yet.
 
+## State as of 2026-09-05 21:02
+
+Supersedes the 10:34 snapshot above for anything it contradicts; that snapshot is left
+in place as a record, not corrected in place. Full narrative: `docs/DAILY.md`.
+
+### What is LIVE right now (new since 10:34)
+
+| Thing | Where | State |
+|---|---|---|
+| Owner-facing Menu & Settings editor | `/menu-settings` in the admin dashboard | Live. Writes go through `admin-chat`'s registry under the owner's own JWT, never service-role. Nine operations including `ADD_ITEM`/`REMOVE_ITEM`. Migrations 097/101/104 applied. |
+| `import-menu-csv` v38 | Supabase, confirmed via CLI | Deployed. Owner-edited option groups/choices now survive re-import (items already did under v37). |
+| `scrape-shop` v72 / `parse-menu-pdf` v93 | Supabase, confirmed via CLI | Deployed. Source-priority ladder (own site → owner PDF/photo → Google listing → aggregator last resort) with per-item provenance (migration 102). |
+| chat-sms | Supabase | v226 per the readiness log (not independently reconfirmed via CLI this pass). Clause-aware phantom-add guard; delivery-availability now requires coordinates AND a configured radius. |
+| Judge panel | Admin dashboard, under the chat simulator | Live, read-only/advisory. No code path writes a proposal back into a live prompt or config. |
+| Public tester rate limits | `public-tester` edge function | Per-IP and per-browser hourly limits REMOVED; global daily cap raised 150 → 1000. Turn claiming is now atomic (RPC, migration 098). |
+| `test-kitchen.html` | root, was `try.html` | `/try` and `/try.html` now 301 to it. |
+
+### What changed from "committed but NOT deployed" (10:34 list)
+
+- `import-menu-csv` honouring `owner_edited` — now deployed as v38 (see above), and the
+  gap it closes turned out narrower than first reported: the original claim that the
+  deployed importer had zero `owner_edited` handling was wrong (a bad `supabase functions
+  download` grep measured a file that was never in the extraction). Corrected on the
+  record at 21:05 EDT.
+- Branch `shop-editor-admin-shape` (the admin-shaped editor) — still reverted off `main`,
+  still kept for reuse. Unchanged.
+
+### What is committed but NOT deployed / NOT independently reconfirmed
+
+- Everything above marked "per the readiness log, not independently reconfirmed via CLI"
+  — treat as likely true (internally consistent with commit timestamps) but not verified
+  by this pass the way `import-menu-csv`/`scrape-shop`/`parse-menu-pdf` were.
+- Working-tree changes to `scripts/imsg-bridge.sh`, `scripts/test-suite/run.ts`,
+  `vitos-demo.html`, and `deno.lock` are UNCOMMITTED as of this writing — not staged, not
+  part of any commit today.
+
+### New standing operational risk
+
+**Admin dashboard auto-deploy has been broken since 8/22** (stated in a82ab23's own
+commit message). Bundles are deployed by hand and then committed to git after the fact
+so `main` has a record of what's actually live — `main` was found stale today (carrying
+`index-FezUO85U` while the front door served `index-C6h_btXT`). See RUNBOOK.md.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a
