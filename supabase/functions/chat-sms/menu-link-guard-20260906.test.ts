@@ -19,12 +19,20 @@ const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url
 function impliesMenuRequest(text: string): boolean {
   const t = text.trim();
   // FIX (2026-09-06, QA-found): narrowed from a broad verb list (send/share/
-  // text/get/see/have/got) to send/share/text only, plus exact phrases — the
-  // broad list over-fired on ordinary food language containing "menu"/"have".
-  return /\b(send|share|text)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
+  // text/get/see/have/got) to send/share/text/show/see, plus exact phrases —
+  // the broad list over-fired on ordinary food language containing
+  // "menu"/"have". "have" stays out of the verb group; "what do you have"
+  // is its own phrase, anchored to the whole message, so "what do you have
+  // for wings?" stays narrow.
+  //
+  // WIDENED (2026-09-06, Jason — real tester phrasing, Luca's exact message
+  // was failing): show/see added to the verb group; "what do you have" and
+  // "menu please" added as exact phrases.
+  return /\b(send|share|text|show|see)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
     || /\bmenu\b[^.?!]{0,20}\blink\b/i.test(t)
-    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the (full |whole )?menu|full menu|whole menu)\b/i.test(t)
-    || /^\s*menu\s*[?.!]?\s*$/i.test(t);
+    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see (a |the )?(full |whole )?menu|full menu|whole menu|menu please)\b/i.test(t)
+    || /^\s*menu\s*[?.!]?\s*$/i.test(t)
+    || /^\s*what do you have\s*[?!.]*\s*$/i.test(t);
 }
 
 Deno.test("menu request: bare 'menu?'", () => {
@@ -70,6 +78,39 @@ Deno.test("QA regression: 'I'll have the menu special' is an order, not a menu r
 
 Deno.test("QA regression: 'do you have a gluten free / kids menu' is a narrow question, not a menu request", () => {
   assert(!impliesMenuRequest("do you have a gluten free / kids menu"));
+});
+
+// Jason (2026-09-06 19:37, live-testing both testers' actual phrasing):
+// "Three of four is not the win it looks like, because the failing one is
+// the sentence Luca actually typed." All five widened below, including the
+// exact failing case.
+Deno.test("Jason's widen list: 'show me the menu'", () => {
+  assert(impliesMenuRequest("show me the menu"));
+});
+
+Deno.test("Jason's widen list: 'can you show me the menu' — Luca's exact phrase, was failing", () => {
+  assert(impliesMenuRequest("can you show me the menu"));
+});
+
+Deno.test("Jason's widen list: 'see the menu'", () => {
+  assert(impliesMenuRequest("see the menu"));
+});
+
+Deno.test("Jason's widen list: 'can I see a menu'", () => {
+  assert(impliesMenuRequest("can I see a menu"));
+});
+
+Deno.test("Jason's widen list: 'what do you have'", () => {
+  assert(impliesMenuRequest("what do you have"));
+  assert(impliesMenuRequest("what do you have?"));
+});
+
+Deno.test("Jason's widen list: 'menu please'", () => {
+  assert(impliesMenuRequest("menu please"));
+});
+
+Deno.test("scoping: 'what do you have' is anchored to the whole message — a category question stays narrow", () => {
+  assert(!impliesMenuRequest("what do you have for wings?"), "a specific category question must stay with the model, not get hijacked into a menu-link reply");
 });
 
 // ── Wiring regression guards against the live file ─────────────────────────

@@ -2040,12 +2040,23 @@ function impliesMenuRequest(text: string): boolean {
   // language that happens to contain "menu" or "have" — "what desserts do
   // you have on the menu", "I'll have the menu special", and "do you have a
   // kids menu" all wrongly hijacked into a menu-link reply. Narrowed to
-  // send/share/text (unambiguous document-request verbs) plus a short list
-  // of exact phrases that are unambiguous asks for the menu itself.
-  return /\b(send|share|text)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
+  // send/share/text/show/see (unambiguous document-request verbs) plus a
+  // short list of exact phrases that are unambiguous asks for the menu
+  // itself. "have" is deliberately NOT in the verb group — it's the word
+  // that caused the over-fire — but is still covered as its own standalone
+  // exact phrase below, so it stays safe without reintroducing the bug.
+  //
+  // WIDENED (2026-09-06, Jason — both real testers' actual phrasing):
+  // "show"/"see" added to the verb group (fixes "can you show me the menu",
+  // the exact phrase that failed). "what do you have" added as its OWN
+  // phrase, deliberately anchored to the (near-)WHOLE message — a customer
+  // asking "what do you have for wings?" is still a narrow question and
+  // must stay with the model; only a bare "what do you have" is a menu ask.
+  return /\b(send|share|text|show|see)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
     || /\bmenu\b[^.?!]{0,20}\blink\b/i.test(t)
-    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the (full |whole )?menu|full menu|whole menu)\b/i.test(t)
-    || /^\s*menu\s*[?.!]?\s*$/i.test(t);
+    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see (a |the )?(full |whole )?menu|full menu|whole menu|menu please)\b/i.test(t)
+    || /^\s*menu\s*[?.!]?\s*$/i.test(t)
+    || /^\s*what do you have\s*[?!.]*\s*$/i.test(t);
 }
 
 /**
