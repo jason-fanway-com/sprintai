@@ -88,6 +88,10 @@ verify_jwt = false  # Proof queue drainer; invoked by scheduled sweep with servi
 [functions.pay-redirect]
 verify_jwt = false  # Public short-link redirect; no JWT needed
 
+[functions.public-menu]
+verify_jwt = false  # Public per-shop menu page (/m/<slug>) — no auth by design,
+                    # texted to strangers. No writes, no PII, read-only render.
+
 [functions.resend-webhook]
 verify_jwt = false  # Resend delivery webhooks; auth is Svix signature verification
 

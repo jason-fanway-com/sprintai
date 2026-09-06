@@ -58,6 +58,17 @@
   status = 302
   force = true
 
+# Public, read-only, no-auth per-shop menu page. Proxy (status 200, not a
+# redirect) so the URL stays getsprintai.com/m/<slug> in the browser bar —
+# same pattern as /admin/* below. Rendered live by the public-menu edge
+# function from menus/menu_items/option_groups/option_choices; no build step,
+# no copy of the menu. Spec: docs/specs/2026-09-06-public-menu-page.md.
+[[redirects]]
+  from = "/m/:slug"
+  to = "https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/public-menu/:slug"
+  status = 200
+  force = true
+
 # The public tester page was renamed try.html -> test-kitchen.html on
 # 2026-09-05 (it is the OrderFare Test Kitchen; the filename should match the
 # thing). Jason had already texted /try to people, and a dead link to a friend
