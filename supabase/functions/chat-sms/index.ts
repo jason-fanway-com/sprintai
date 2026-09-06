@@ -1107,15 +1107,25 @@ async function executeTool(
       // Cart-population fix: reject submit_order if any item has unresolved required options.
       // Deterministic — no LLM loop. The error message names the item + missing option groups
       // so the bot asks once and the customer resolves with modify_item.
-      const itemsWithPending = cart
+      // FIX (2026-09-06, Jason — internal-name leak): `pending` below is
+      // structured (name + raw option-group names) for any CUSTOMER-facing
+      // caller (e.g. D1) to run through renderMissingOptionsPrompt() — never
+      // interpolate it into a sentence directly. `error` stays a plain
+      // English instruction FOR THE MODEL (which calls submit_order itself
+      // outside of D1's forced path) and is allowed to name items/groups
+      // since it's a tool-result the model reads, not a customer-facing string.
+      const pendingItems = cart
         .filter(i => (i as CartItem).pending_options && (i as CartItem).pending_options!.length > 0)
-        .map(i => {
-          const r = i as CartItem;
-          const missing = r.pending_options!.join(', ');
-          return `${r.name} (needs: ${missing})`;
-        });
-      if (itemsWithPending.length > 0) {
-        return { ok: false, result: { error: `Cannot submit yet — these items still need options chosen: ${itemsWithPending.join('; ')}. Ask the customer for each missing option, then use modify_item to set them.` } };
+        .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! }));
+      if (pendingItems.length > 0) {
+        const itemsWithPending = pendingItems.map(p => `${p.name} (needs: ${p.missingGroups.join(', ')})`);
+        return {
+          ok: false,
+          result: {
+            error: `Cannot submit yet — these items still need options chosen: ${itemsWithPending.join('; ')}. Ask the customer for each missing option, then use modify_item to set them.`,
+            pending: pendingItems,
+          },
+        };
       }
       const { pickup_name } = input as { pickup_name?: string };
       // C1 (2026-08-28): Deterministic hard gate — pickup_name is required for submit_order.
@@ -2025,6 +2035,34 @@ function stripEmDashes(text: string): string {
 function isAskingForPickupName(text: string): boolean {
   return /\bname\b/i.test(text)
     && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
+}
+
+/**
+ * FIX (2026-09-06, Jason — internal-name leak, the 4th place a raw name
+ * reached a customer today, this one written AFTER the earlier sweep): a
+ * customer was told "Almost - I still need to know: Chicken Caesar
+ * (Dressing). What'll it be?" — an item name with an option-group name
+ * bolted on in parentheses is not how a person talks; a person asks "what
+ * dressing do you want on the Caesar salad?"
+ *
+ * This is the ONE place any customer-facing text asks about missing
+ * required options, on ANY item — GUARD 2's pending-options branch and D1's
+ * pending-options failure branch both call this instead of interpolating
+ * `${item.name} (${groups.join(", ")})` themselves. A new call site cannot
+ * reintroduce this leak by accident because there is no raw interpolation
+ * left to copy.
+ */
+function renderMissingOptionsPrompt(items: Array<{ name: string; missingGroups: string[] }>): string {
+  const clauses = items.map(item => {
+    const groups = item.missingGroups.length > 1
+      ? `${item.missingGroups.slice(0, -1).join(", ")} and ${item.missingGroups[item.missingGroups.length - 1]}`
+      : item.missingGroups[0];
+    return `what ${groups.toLowerCase()} you'd like on the ${item.name}`;
+  });
+  const joined = clauses.length > 1
+    ? `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`
+    : clauses[0];
+  return `I still need to know ${joined}. What'll it be?`;
 }
 
 /**
@@ -5158,7 +5196,7 @@ Deno.serve(async (req: Request) => {
   if (!checkoutUrl && guardCart.length > 0 && guardPendingItems.length > 0 && impliesOrderConfirmation(userMessage)) {
     const asks = guardPendingItems.map(i => `${i.name} (${i.pending_options!.join(", ")})`).join("; ");
     console.log(`[chat-sms] GUARD 2-pending (confirmation with unresolved required options) tripped (conv=${conversation.id}). Re-asking: ${asks}`);
-    reply = `Almost — I still need to know: ${asks}. What'll it be?`;
+    reply = renderMissingOptionsPrompt(guardPendingItems.map(i => ({ name: i.name, missingGroups: i.pending_options! })));
   } else if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
     // The itemized receipt is attached below in Phase A (the single place
@@ -5242,12 +5280,14 @@ Deno.serve(async (req: Request) => {
         // real rejection behind a friendly non-answer; surface the actual
         // reason as a natural re-ask instead.
         const errMsg = (submitResult.result as { error?: string } | undefined)?.error;
+        const pending = (submitResult.result as { pending?: Array<{ name: string; missingGroups: string[] }> } | undefined)?.pending;
         console.warn(`[chat-sms] D1 submit_order failed: ${JSON.stringify(submitResult.result).slice(0, 200)}`);
-        if (errMsg && /still need options chosen/.test(errMsg)) {
-          const missing = errMsg
-            .replace(/^Cannot submit yet — these items still need options chosen: /, "")
-            .replace(/\. Ask the customer.*$/, "");
-          reply = `Almost — I still need to know: ${missing}. What'll it be?`;
+        // FIX (2026-09-06, Jason — internal-name leak): use submit_order's
+        // STRUCTURED pending list through the shared humanizer, never regex
+        // out of the display-oriented error string — that string is worded
+        // for the model ("Gyro (needs: Dressing)"), not a customer.
+        if (pending && pending.length > 0) {
+          reply = renderMissingOptionsPrompt(pending);
         } else if (errMsg && /pickup or delivery/i.test(errMsg)) {
           reply = "Pickup or delivery today?";
         } else if (errMsg && /delivery address/i.test(errMsg)) {

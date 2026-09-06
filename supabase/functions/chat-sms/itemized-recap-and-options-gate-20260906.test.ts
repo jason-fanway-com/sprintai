@@ -100,14 +100,33 @@ function isAskingForPickupName(text: string): boolean {
     && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
 }
 
+// FIX (2026-09-06, Jason — internal-name leak): a customer was told "Almost
+// - I still need to know: Chicken Caesar (Dressing). What'll it be?" — an
+// item name with an option-group name bolted on in parens. This is the ONE
+// place any customer-facing text asks about missing required options.
+function renderMissingOptionsPrompt(items: Array<{ name: string; missingGroups: string[] }>): string {
+  const clauses = items.map(item => {
+    const groups = item.missingGroups.length > 1
+      ? `${item.missingGroups.slice(0, -1).join(", ")} and ${item.missingGroups[item.missingGroups.length - 1]}`
+      : item.missingGroups[0];
+    return `what ${groups.toLowerCase()} you'd like on the ${item.name}`;
+  });
+  const joined = clauses.length > 1
+    ? `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`
+    : clauses[0];
+  return `I still need to know ${joined}. What'll it be?`;
+}
+
 // Reconstructs D1's failure-branch decision only (not the whole guard) so it
 // can be exercised directly against every submit_order error shape.
-function classifyD1Failure(errMsg: string | undefined): string {
-  if (errMsg && /still need options chosen/.test(errMsg)) {
-    const missing = errMsg
-      .replace(/^Cannot submit yet — these items still need options chosen: /, "")
-      .replace(/\. Ask the customer.*$/, "");
-    return `Almost — I still need to know: ${missing}. What'll it be?`;
+// UPDATED (2026-09-06, internal-name-leak fix): D1 no longer regexes the
+// missing-options list out of the display-oriented error STRING — it reads
+// submit_order's structured `pending` field and runs it through the same
+// renderMissingOptionsPrompt() humanizer GUARD 2 uses, so the two can never
+// phrase this differently or reintroduce a raw "Item (needs: Group)" leak.
+function classifyD1Failure(pending: Array<{ name: string; missingGroups: string[] }> | undefined, errMsg: string | undefined): string {
+  if (pending && pending.length > 0) {
+    return renderMissingOptionsPrompt(pending);
   } else if (errMsg && /pickup or delivery/i.test(errMsg)) {
     return "Pickup or delivery today?";
   } else if (errMsg && /delivery address/i.test(errMsg)) {
@@ -219,41 +238,66 @@ Deno.test("isAskingForPickupName: does not match an unrelated reply that happens
   assert(!isAskingForPickupName("Sorry, we don't have a menu item by that name."));
 });
 
+// ── renderMissingOptionsPrompt ───────────────────────────────────────────────
+
+Deno.test("renderMissingOptionsPrompt: single item, single group reads as a natural question, not a raw tuple", () => {
+  const out = renderMissingOptionsPrompt([{ name: "Chicken Caesar", missingGroups: ["Dressing"] }]);
+  assertEquals(out, "I still need to know what dressing you'd like on the Chicken Caesar. What'll it be?");
+  assert(!out.includes("("), `must never contain a raw "Item (Group)" parenthetical, got: ${out}`);
+});
+
+Deno.test("renderMissingOptionsPrompt: single item, multiple groups joins with 'and'", () => {
+  const out = renderMissingOptionsPrompt([{ name: "Gyro", missingGroups: ["Bread Type", "Dressing"] }]);
+  assertEquals(out, "I still need to know what bread type and dressing you'd like on the Gyro. What'll it be?");
+});
+
+Deno.test("renderMissingOptionsPrompt: multiple items each get their own natural clause", () => {
+  const out = renderMissingOptionsPrompt([
+    { name: "Turkey Club", missingGroups: ["Dressing"] },
+    { name: "Gyro", missingGroups: ["Bread Type"] },
+  ]);
+  assertEquals(
+    out,
+    "I still need to know what dressing you'd like on the Turkey Club, and what bread type you'd like on the Gyro. What'll it be?",
+  );
+  assert(!out.includes("("), `must never contain a raw "Item (Group)" parenthetical, got: ${out}`);
+});
+
 // ── D1 failure classification ───────────────────────────────────────────────
 
-Deno.test("D1 fix: pending required option re-asks the specific option, not a vague reassurance", () => {
-  const errMsg = "Cannot submit yet — these items still need options chosen: Gyro (needs: Dressing). Ask the customer for each missing option, then use modify_item to set them.";
-  const reply = classifyD1Failure(errMsg);
-  assertEquals(reply, "Almost — I still need to know: Gyro (needs: Dressing). What'll it be?");
+Deno.test("D1 fix: pending required option re-asks the specific option via the humanizer, never a raw tuple", () => {
+  const reply = classifyD1Failure([{ name: "Gyro", missingGroups: ["Dressing"] }], "Cannot submit yet — these items still need options chosen: Gyro (needs: Dressing). Ask the customer for each missing option, then use modify_item to set them.");
+  assertEquals(reply, "I still need to know what dressing you'd like on the Gyro. What'll it be?");
+  assert(!reply.includes("("), `must never contain a raw "Item (needs: Group)" leak, got: ${reply}`);
   assertNoBannedPhrase(reply);
 });
 
 Deno.test("D1 fix: missing order type asks pickup-or-delivery directly", () => {
-  const reply = classifyD1Failure("Cannot submit order. Please confirm pickup or delivery first.");
+  const reply = classifyD1Failure(undefined, "Cannot submit order. Please confirm pickup or delivery first.");
   assertEquals(reply, "Pickup or delivery today?");
   assertNoBannedPhrase(reply);
 });
 
 Deno.test("D1 fix: missing delivery address asks for the address directly", () => {
-  const reply = classifyD1Failure("Please provide a delivery address first.");
+  const reply = classifyD1Failure(undefined, "Please provide a delivery address first.");
   assertEquals(reply, "What's the delivery address?");
   assertNoBannedPhrase(reply);
 });
 
 Deno.test("D1 fix: missing pickup name re-asks the name, not a vague reassurance", () => {
-  const reply = classifyD1Failure("Cannot submit order. A pickup name is required — ask the customer for their name first.");
+  const reply = classifyD1Failure(undefined, "Cannot submit order. A pickup name is required — ask the customer for their name first.");
   assertEquals(reply, "Got it! What's your name for the order?");
   assertNoBannedPhrase(reply);
 });
 
 Deno.test("D1 fix: an unmapped/unexpected failure is stated honestly, never a vague reassurance", () => {
-  const reply = classifyD1Failure("Payment system not configured. Please call the shop directly.");
+  const reply = classifyD1Failure(undefined, "Payment system not configured. Please call the shop directly.");
   assertEquals(reply, "I couldn't finish that — Payment system not configured. Please call the shop directly.");
   assertNoBannedPhrase(reply);
 });
 
 Deno.test("D1 fix: no error message at all still avoids the banned reassurance", () => {
-  const reply = classifyD1Failure(undefined);
+  const reply = classifyD1Failure(undefined, undefined);
   assertEquals(reply, "I couldn't finish that order — let's try again.");
   assertNoBannedPhrase(reply);
 });
@@ -293,6 +337,15 @@ Deno.test("GUARD 2 wiring: the name-ask reply is left plain (Phase A owns the re
   );
 });
 
+Deno.test("GUARD 2 wiring: the pending-options re-ask goes through the shared humanizer, never a raw name+group interpolation", () => {
+  const block = extractBlock(
+    INDEX_SOURCE,
+    "// ── Guard 2: order confirmation + no pickup name",
+    "// ── Guard 2c: hallucinated total",
+  );
+  assert(block.includes("reply = renderMissingOptionsPrompt("), "GUARD 2's pending branch must build its customer-facing reply through the shared humanizer");
+});
+
 Deno.test("D1 wiring: the hardcoded banned-phrase fallback is gone, and the success reply includes the priced receipt", () => {
   const block = extractBlock(
     INDEX_SOURCE,
@@ -305,6 +358,26 @@ Deno.test("D1 wiring: the hardcoded banned-phrase fallback is gone, and the succ
   );
   assert(block.includes("submitResult.result as { error?: string }"), "D1 must read submit_order's actual error to classify the failure");
   assert(block.includes("renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)"), "D1's success reply must include the priced itemized recap, with fees");
+});
+
+Deno.test("D1 wiring: pending-options failures use submit_order's STRUCTURED pending field through the shared humanizer, not a regex on the display string", () => {
+  const block = extractBlock(
+    INDEX_SOURCE,
+    "// ── D1 (2026-08-29): CHECKOUT COMPLETION DRIVER",
+    "// ── Guard 2b: SILENT ORDER-TYPE REVERT",
+  );
+  assert(block.includes("submitResult.result as { pending?: Array<{ name: string; missingGroups: string[] }> }"), "D1 must read the structured pending field");
+  assert(block.includes("renderMissingOptionsPrompt(pending)"), "D1 must render the pending-options ask through the shared humanizer");
+  assert(!/still need options chosen/.test(block), "D1 must no longer regex-parse the display-oriented error string for this case");
+});
+
+Deno.test("submit_order wiring: returns structured pending data (name + missingGroups), not just a display string", () => {
+  const start = INDEX_SOURCE.indexOf('case "submit_order": {');
+  assert(start !== -1, "submit_order case must exist");
+  const end = INDEX_SOURCE.indexOf("const { pickup_name }", start);
+  const block = INDEX_SOURCE.slice(start, end);
+  assert(block.includes("missingGroups: (i as CartItem).pending_options!"), "submit_order must build a structured pending list, not just an error string");
+  assert(block.includes("pending: pendingItems"), "submit_order's result must expose the structured pending list for callers like D1");
 });
 
 Deno.test("Phase A wiring: the itemized recap is attached whenever the CURRENT reply asks for the pickup name, regardless of who composed it", () => {
