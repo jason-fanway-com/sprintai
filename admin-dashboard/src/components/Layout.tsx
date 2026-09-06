@@ -72,7 +72,10 @@ export default function Layout({ user, role: _role }: LayoutProps) {
   const { data: allShops } = useQuery<{ id: string; name: string; tenant_id: string }[]>({
     queryKey: ['all-shops-for-preview'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('shops').select('id, name, tenant_id').order('name')
+      // Retired shops (is_paused=true) are kept forever for audit but must
+      // never be selectable here — a human picking a shop by name has no way
+      // to tell a retired twin from the real thing (2026-09-06).
+      const { data, error } = await supabase.from('shops').select('id, name, tenant_id').eq('is_paused', false).order('name')
       if (error) throw error
       return data ?? []
     },
