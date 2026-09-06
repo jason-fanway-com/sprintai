@@ -1841,6 +1841,21 @@ function repairOrphanedPunctuation(text: string): string {
     .replace(/\s+[—–-]\s+total\b/gi, "")
     // dash left at end of a line / string
     .replace(/\s*[—–-]\s*$/gm, "")
+    // ORPHANED SENTENCE REMAINDER (2026-09-06, Jason's Test Kitchen transcript).
+    // The strippers delete a claim from the MIDDLE of a sentence and leave its
+    // tail behind. The model wrote "I've got 1 item in your cart now. Large
+    // cheese with pepperoni added!"; the item-count stripper removed "I've got
+    // 1 item in your cart" and what reached the customer opened with "now. ".
+    // Same family as the "Fries — ." artefact above: we edit replies by string
+    // surgery and leave debris.
+    //
+    // A reply never legitimately opens with a short lowercase fragment that
+    // ends in sentence punctuation — that shape only occurs when something
+    // upstream ate the start of the sentence. Drop it and let the next real
+    // sentence lead. Bounded to 30 chars so this can never swallow real copy.
+    .replace(/^[a-z][a-z'’ ,]{0,29}[.!?]+\s+(?=[A-Z"'“])/, "")
+    // Same fragment with nothing after it — the whole reply was the tail.
+    .replace(/^[a-z][a-z'’ ,]{0,29}[.!?]+\s*$/, "")
     // collapse the ". ." / " ." artefacts
     .replace(/\s+([.,;:!?])/g, "$1")
     .replace(/([.!?])\1{1,}/g, "$1")
