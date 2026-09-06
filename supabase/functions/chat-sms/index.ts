@@ -30,6 +30,7 @@ import {
   findPendingOptionQuestion,
   resolvePendingOptionAnswer,
 } from "./pending-option.ts";
+import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2360,13 +2361,10 @@ function claimsCorrectedWithoutMutation(reply: string, cartBefore: AnyCartItem[]
   );
 }
 
-// Guard 2 helper: detects customer intent to confirm / place the order.
-function impliesOrderConfirmation(text: string): boolean {
-  if (!text) return false;
-  const norm = text.toLowerCase().trim();
-  return /\b(?:yes|yeah|yep|yup|confirm|sure|place (?:the |my |an )?order|check out|checkout|that[' ]s it|that is it|looks good|all good|go ahead|proceed|go for it|do it|send it|pay|ready|done|that[' ]s all|that is all|all set|i'?m ready|i'?m done|good to go|let'?s go|let'?s do it|place it|ring it up|finalize|submit)\b/i.test(norm) ||
-    /^(?:ok|okay|k|kk|fine|perfect|great|awesome|excellent|fantastic|sounds good|good|yes please|do it|let's do this)[.!]?$/i.test(norm);
-}
+// Guard 2 / Guard 9 helper `impliesOrderConfirmation` now lives in
+// guard9-unconsented-affirmation.ts (imported above) — kept with GUARD 9's
+// pure decision logic since that guard's internal bare-affirmation gate must
+// use the exact same function, not a reimplementation.
 
 // ─── Guard 4 helpers: Under-populated cart backstop ─────────────────────────
 
@@ -4912,9 +4910,13 @@ Deno.serve(async (req: Request) => {
   // stands. They are not consent to add anything the customer never named."
   //
   // Deterministic backstop: compare TOTAL QUANTITY per menu_item_id between
-  // the pre-loop cart (`cartItems`) and the post-tool-call cart (`guardCart`).
-  // Quantity growth for an item is what makes a customer pay more — this is
-  // the signal to check for consent on, not a raw line-level diff.
+  // the true pre-turn snapshot (`cartSnapshotBeforeTurn` — NOT `cartItems`,
+  // which is mutated in place by executeTool's push()/splice() calls and so
+  // already reflects post-turn state by the time this guard runs; see the
+  // comment above cartSnapshotBeforeTurn's declaration) and the post-tool-call
+  // cart (`guardCart`). Quantity growth for an item is what makes a customer
+  // pay more — this is the signal to check for consent on, not a raw
+  // line-level diff.
   //
   // Deliberately NOT a fingerprint (menu_item_id + options) diff: filling in
   // a pending required option group (e.g. answering "yes" to "want ranch on
@@ -4932,104 +4934,53 @@ Deno.serve(async (req: Request) => {
   // point) names the item. A genuinely named add on affirmation-adjacent
   // phrasing ("yeah also add fries") is not reverted: "fries" is in this
   // turn's message, so it was actually asked for.
+  //
+  // The diff/decision logic itself lives in guard9-unconsented-affirmation.ts
+  // (imported above) — pure, testable against the real function, and with no
+  // access to `cartItems` at all so the wiring bug above can't recur here.
   {
-    const isBareAffirmationG9 = impliesOrderConfirmation(userMessage);
-    if (isBareAffirmationG9) {
-      const fingerprintG9 = (i: CartItem) => `${i.menu_item_id}::${JSON.stringify(i.options ?? undefined)}`;
-      const beforeByFingerprintG9 = new Map<string, CartItem>();
-      const qtyBeforeG9 = new Map<string, number>();
-      for (const item of cartItems) {
-        const r = item as CartItem;
-        if (!r.menu_item_id) continue; // skip bundles
-        beforeByFingerprintG9.set(fingerprintG9(r), r);
-        qtyBeforeG9.set(r.menu_item_id, (qtyBeforeG9.get(r.menu_item_id) || 0) + (r.quantity || 1));
-      }
-      const qtyAfterG9 = new Map<string, number>();
-      for (const item of guardCart) {
-        const r = item as CartItem;
-        if (!r.menu_item_id) continue; // skip bundles
-        qtyAfterG9.set(r.menu_item_id, (qtyAfterG9.get(r.menu_item_id) || 0) + (r.quantity || 1));
-      }
+    const menuItemNamesG9 = buildMenuItemNames(effectiveMenu);
+    const namedThisTurnG9 = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuItemNamesG9,
+    );
+    const isNamedThisTurnG9 = (itemName: string): boolean => {
+      const itemLower = itemName.toLowerCase();
+      return [...namedThisTurnG9].some(n => {
+        const n2 = n.toLowerCase();
+        return n2.includes(itemLower) || itemLower.includes(n2);
+      });
+    };
 
-      const menuItemNamesG9 = buildMenuItemNames(effectiveMenu);
-      const namedThisTurnG9 = extractCustomerReferencedItems(
-        [{ role: "user", content: userMessage }],
-        menuItemNamesG9,
-      );
-      const isNamedThisTurnG9 = (itemName: string): boolean => {
-        const itemLower = itemName.toLowerCase();
-        return [...namedThisTurnG9].some(n => {
-          const n2 = n.toLowerCase();
-          return n2.includes(itemLower) || itemLower.includes(n2);
-        });
-      };
+    const guard9Result = computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, isNamedThisTurnG9);
 
-      const phantomAddsG9: CartItem[] = [];
-      const qtyRevertsG9: Array<{ item: CartItem; priorQty: number }> = [];
-      for (const [menuItemId, after] of qtyAfterG9) {
-        let delta = after - (qtyBeforeG9.get(menuItemId) || 0);
-        if (delta <= 0) continue;
-        const postLines = guardCart.filter(i => (i as CartItem).menu_item_id === menuItemId) as CartItem[];
-        if (isNamedThisTurnG9(postLines[0]?.name ?? "")) continue;
-
-        // Consume the growth against lines whose exact fingerprint already
-        // existed before (a real quantity bump on an unchanged line) first,
-        // then against lines with no prior fingerprint match at all (a
-        // brand-new line) — bounded by `delta` so an unrelated resolved-
-        // options line for the same item is never touched once the growth
-        // it's responsible for has been fully accounted for.
-        for (const line of postLines) {
-          if (delta <= 0) break;
-          const before = beforeByFingerprintG9.get(fingerprintG9(line));
-          if (!before) continue;
-          const bump = (line.quantity || 1) - (before.quantity || 1);
-          if (bump <= 0) continue;
-          const take = Math.min(bump, delta);
-          qtyRevertsG9.push({ item: line, priorQty: (line.quantity || 1) - take });
-          delta -= take;
-        }
-        for (const line of postLines) {
-          if (delta <= 0) break;
-          if (beforeByFingerprintG9.has(fingerprintG9(line))) continue;
-          const lineQty = line.quantity || 1;
-          if (lineQty <= delta) {
-            phantomAddsG9.push(line);
-            delta -= lineQty;
-          } else {
-            qtyRevertsG9.push({ item: line, priorQty: lineQty - delta });
-            delta = 0;
-          }
-        }
+    if (guard9Result.tripped) {
+      const revertedDesc = [
+        ...guard9Result.phantomAdds.map(r => `removed ${r.name}`),
+        ...guard9Result.qtyReverts.map(({ item, priorQty }) => `reverted ${item.name} qty ${(item as CartItem).quantity} -> ${priorQty}`),
+      ].join(", ");
+      console.warn(`[chat-sms] GUARD 9 (unconsented-add-on-affirmation) tripped (conv=${conversation.id}). Message "${userMessage}" is a bare affirmation; reverted: ${revertedDesc}`);
+      // Mutate guardCart by OBJECT IDENTITY, not menu_item_id lookup —
+      // executeTool's remove_item/modify_item resolve by menu_item_id
+      // alone, which would delete/modify the WRONG line if the customer
+      // has two lines for the same item with different options (e.g. two
+      // pizzas, different toppings, one of which is the phantom add).
+      // Same pattern GUARD 7 above uses (guardCart.splice by indexOf).
+      for (const r of guard9Result.phantomAdds) {
+        const idx = guardCart.indexOf(r);
+        if (idx !== -1) guardCart.splice(idx, 1);
       }
-
-      if (phantomAddsG9.length > 0 || qtyRevertsG9.length > 0) {
-        const revertedDesc = [
-          ...phantomAddsG9.map(r => `removed ${r.name}`),
-          ...qtyRevertsG9.map(({ item, priorQty }) => `reverted ${item.name} qty ${item.quantity} -> ${priorQty}`),
-        ].join(", ");
-        console.warn(`[chat-sms] GUARD 9 (unconsented-add-on-affirmation) tripped (conv=${conversation.id}). Message "${userMessage}" is a bare affirmation; reverted: ${revertedDesc}`);
-        // Mutate guardCart by OBJECT IDENTITY, not menu_item_id lookup —
-        // executeTool's remove_item/modify_item resolve by menu_item_id
-        // alone, which would delete/modify the WRONG line if the customer
-        // has two lines for the same item with different options (e.g. two
-        // pizzas, different toppings, one of which is the phantom add).
-        // Same pattern GUARD 7 above uses (guardCart.splice by indexOf).
-        for (const r of phantomAddsG9) {
-          const idx = guardCart.indexOf(r);
-          if (idx !== -1) guardCart.splice(idx, 1);
-        }
-        for (const { item, priorQty } of qtyRevertsG9) {
-          (item as CartItem).quantity = priorQty;
-        }
-        await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-        // Honest confirmation of the REAL (reverted) cart only. No dollar
-        // figure here by design — the deterministic Ledger footer below
-        // states the real total from the corrected guardCart; hand-rolling a
-        // total here would risk quoting the pre-revert number.
-        reply = guardCart.length > 0
-          ? "Got it! Anything else, or are you all set?"
-          : "Your cart is empty. What would you like to order?";
+      for (const { item, priorQty } of guard9Result.qtyReverts) {
+        (item as CartItem).quantity = priorQty;
       }
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      // Honest confirmation of the REAL (reverted) cart only. No dollar
+      // figure here by design — the deterministic Ledger footer below
+      // states the real total from the corrected guardCart; hand-rolling a
+      // total here would risk quoting the pre-revert number.
+      reply = guardCart.length > 0
+        ? "Got it! Anything else, or are you all set?"
+        : "Your cart is empty. What would you like to order?";
     }
   }
 

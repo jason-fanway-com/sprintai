@@ -9,8 +9,8 @@
 // reading those DB category-adjacent names aloud: "Did you also want
 // Chicken Bacon Ranch (Flatbreads), Chicken (Quesadillas), and Ranch, or
 // good to go?". That unresolved offer sat in conversation history. Two
-// turns later "Looks good" — a bare affirmation matched by the existing
-// impliesOrderConfirmation() helper — was read by the model, given the full
+// turns later "Looks good" — a bare affirmation matched by
+// impliesOrderConfirmation() — was read by the model, given the full
 // history including the still-open 3-item offer, as consent to add all of
 // it, issuing real add_item tool calls for all three. Cart went from 2
 // items/$37.97 to 4 items/$74.95 with zero customer intent.
@@ -20,27 +20,51 @@
 // unchanged — it still catches genuinely dropped items (a real prior bug
 // fixed 2026-09-05) — only the customer-facing suggestion is gone.
 //
-// Fix #2 (verified below against a mirror of the real algorithm): GUARD 9,
-// a deterministic backstop that holds even if some FUTURE mechanism leaves
-// an open, unresolved offer in history again. On any turn where the
-// customer's message is a bare affirmation, if the cart's total quantity
-// for a menu item grew and the CURRENT message alone (never history) does
-// not name that item, the growth is reverted before the reply is sent.
+// Fix #2: GUARD 9, a deterministic backstop that holds even if some FUTURE
+// mechanism leaves an open, unresolved offer in history again. On any turn
+// where the customer's message is a bare affirmation, if the cart's total
+// quantity for a menu item grew and the CURRENT message alone (never
+// history) does not name that item, the growth is reverted before the
+// reply is sent.
+//
+// FOLLOW-UP INCIDENT (same day, caught by independent QA before this guard
+// ever shipped): GUARD 9's first version built its "before" quantity
+// snapshot from index.ts's `cartItems` variable, which is mutated IN PLACE
+// by executeTool's push()/splice() calls during the tool-execution loop that
+// runs BEFORE the guard — so by the time the guard read `cartItems`, it
+// already reflected POST-turn state. "before" and "after" were computed from
+// the same mutated data, delta was always <= 0, and the guard could never
+// trip. The original version of THIS test file used a hand-copied mirror of
+// the diff algorithm fed independently-constructed before/after arrays —
+// which is exactly why it stayed green while the real wiring was broken: a
+// mirror fed clean inputs can't catch an integration bug in how the real
+// code obtains those inputs.
+//
+// The fix moved GUARD 9's diff/decision logic into its own importable module
+// (guard9-unconsented-affirmation.ts), wired to `cartSnapshotBeforeTurn` (a
+// true pre-tool-loop deep clone — see that declaration's comment in
+// index.ts) instead of `cartItems`. This file now imports and tests the REAL
+// function, not a copy, and includes a source-text check (last test) that
+// fails loudly if index.ts's call site ever regresses back to `cartItems`.
 //
 // index.ts calls Deno.serve() at module scope, so it is never imported
 // directly by tests (same constraint as every other *.test.ts file in this
-// directory — see guard-defects-20260906.test.ts's header). The matching
-// helpers below (buildMenuItemNamesMirror / extractCustomerReferencedItemsMirror
-// / GENERIC_LAST_WORDS_MIRROR) are byte-for-byte copies of index.ts's private
-// buildMenuItemNames / extractCustomerReferencedItems / GENERIC_LAST_WORDS —
-// copied rather than reimplemented so the Luca transcript is tested against
-// the ACTUAL matching behavior, not a hand-wavy approximation. If those
-// functions change in index.ts, update the copies here too.
+// directory — see guard-defects-20260906.test.ts's header). The name-lookup
+// helpers below (buildMenuItemNamesMirror / extractCustomerReferencedItemsMirror)
+// remain verbatim mirrors of index.ts's private buildMenuItemNames /
+// extractCustomerReferencedItems — those functions were NOT touched by the
+// GUARD 9 fix (they only build the "was this item named this turn?"
+// predicate that GUARD 9 takes as an external parameter) and are shared by
+// several other guards, so they were deliberately left in index.ts rather
+// than relocated. If those functions change in index.ts, update the copies
+// here too.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 
 const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
 
 // ─── Verbatim mirrors of index.ts's private menu-name-matching helpers ─────
+// (unrelated to the GUARD 9 fix — see file header)
 
 const GENERIC_LAST_WORDS_MIRROR = new Set([
   "large", "medium", "small", "regular", "mini", "jumbo", "giant", "personal",
@@ -128,10 +152,25 @@ function extractCustomerReferencedItemsMirror(
   return referenced;
 }
 
-// ─── Mirror of GUARD 9's own quantity-growth diff/decision logic ───────────
-// A pure copy of the algorithm added to index.ts (search "GUARD 9" there),
-// so the actual decision behavior — not just the name-matching primitive —
-// is under test against realistic cart states.
+// Builds the same `isItemNamedThisTurn` predicate index.ts's GUARD 9 call
+// site builds, from the (mirrored) menu-name helpers above, for use with the
+// REAL imported computeGuard9.
+function isNamedThisTurnPredicate(userMessage: string, menu: MenuLike[]): (itemName: string) => boolean {
+  const menuItemNames = buildMenuItemNamesMirror(menu);
+  const namedThisTurn = extractCustomerReferencedItemsMirror(
+    [{ role: "user", content: userMessage }],
+    menuItemNames,
+  );
+  return (itemName: string): boolean => {
+    const itemLower = itemName.toLowerCase();
+    return [...namedThisTurn].some(n => {
+      const n2 = n.toLowerCase();
+      return n2.includes(itemLower) || itemLower.includes(n2);
+    });
+  };
+}
+
+// ─── Fixtures ───────────────────────────────────────────────────────────────
 
 interface TestCartLine {
   menu_item_id: string;
@@ -139,83 +178,6 @@ interface TestCartLine {
   quantity: number;
   options?: Record<string, string[]>;
 }
-
-function isBareAffirmationMirror(text: string): boolean {
-  const norm = text.toLowerCase().trim();
-  return /\b(?:yes|yeah|yep|yup|confirm|sure|place (?:the |my |an )?order|check out|checkout|that[' ]s it|that is it|looks good|all good|go ahead|proceed|go for it|do it|send it|pay|ready|done|that[' ]s all|that is all|all set|i'?m ready|i'?m done|good to go|let'?s go|let'?s do it|place it|ring it up|finalize|submit)\b/i.test(norm) ||
-    /^(?:ok|okay|k|kk|fine|perfect|great|awesome|excellent|fantastic|sounds good|good|yes please|do it|let's do this)[.!]?$/i.test(norm);
-}
-
-function computeGuard9Reverts(
-  cartItemsBefore: TestCartLine[],
-  guardCartAfter: TestCartLine[],
-  userMessage: string,
-  menu: MenuLike[],
-): { phantomAdds: TestCartLine[]; qtyReverts: Array<{ item: TestCartLine; priorQty: number }> } {
-  const phantomAdds: TestCartLine[] = [];
-  const qtyReverts: Array<{ item: TestCartLine; priorQty: number }> = [];
-
-  if (!isBareAffirmationMirror(userMessage)) return { phantomAdds, qtyReverts };
-
-  const fingerprint = (i: TestCartLine) => `${i.menu_item_id}::${JSON.stringify(i.options ?? undefined)}`;
-  const beforeByFingerprint = new Map<string, TestCartLine>();
-  const qtyBefore = new Map<string, number>();
-  for (const item of cartItemsBefore) {
-    beforeByFingerprint.set(fingerprint(item), item);
-    qtyBefore.set(item.menu_item_id, (qtyBefore.get(item.menu_item_id) || 0) + (item.quantity || 1));
-  }
-  const qtyAfter = new Map<string, number>();
-  for (const item of guardCartAfter) {
-    qtyAfter.set(item.menu_item_id, (qtyAfter.get(item.menu_item_id) || 0) + (item.quantity || 1));
-  }
-
-  const menuItemNames = buildMenuItemNamesMirror(menu);
-  const namedThisTurn = extractCustomerReferencedItemsMirror(
-    [{ role: "user", content: userMessage }],
-    menuItemNames,
-  );
-  const isNamedThisTurn = (itemName: string): boolean => {
-    const itemLower = itemName.toLowerCase();
-    return [...namedThisTurn].some(n => {
-      const n2 = n.toLowerCase();
-      return n2.includes(itemLower) || itemLower.includes(n2);
-    });
-  };
-
-  for (const [menuItemId, after] of qtyAfter) {
-    let delta = after - (qtyBefore.get(menuItemId) || 0);
-    if (delta <= 0) continue;
-    const postLines = guardCartAfter.filter(i => i.menu_item_id === menuItemId);
-    if (isNamedThisTurn(postLines[0]?.name ?? "")) continue;
-
-    for (const line of postLines) {
-      if (delta <= 0) break;
-      const before = beforeByFingerprint.get(fingerprint(line));
-      if (!before) continue;
-      const bump = (line.quantity || 1) - (before.quantity || 1);
-      if (bump <= 0) continue;
-      const take = Math.min(bump, delta);
-      qtyReverts.push({ item: line, priorQty: (line.quantity || 1) - take });
-      delta -= take;
-    }
-    for (const line of postLines) {
-      if (delta <= 0) break;
-      if (beforeByFingerprint.has(fingerprint(line))) continue;
-      const lineQty = line.quantity || 1;
-      if (lineQty <= delta) {
-        phantomAdds.push(line);
-        delta -= lineQty;
-      } else {
-        qtyReverts.push({ item: line, priorQty: lineQty - delta });
-        delta = 0;
-      }
-    }
-  }
-
-  return { phantomAdds, qtyReverts };
-}
-
-// ─── Fixtures ───────────────────────────────────────────────────────────────
 
 const LUCA_MENU: MenuLike[] = [
   { id: "pizza-cbr", name: "Chicken Bacon Ranch", category: "Pizza" },
@@ -238,79 +200,157 @@ const LUCA_CART_AFTER_PHANTOM: TestCartLine[] = [
   { menu_item_id: "ranch", name: "Ranch", quantity: 1 },
 ];
 
-// ── Requirement 1: the exact Luca sequence ──────────────────────────────────
+// ── Requirement 1: the exact Luca sequence, against the REAL function ──────
 
-Deno.test("GUARD 9: 'Looks good' does not name the flatbread/quesadilla/ranch — all three classified as phantom", () => {
-  const { phantomAdds, qtyReverts } = computeGuard9Reverts(
+Deno.test("GUARD 9 (real fn): 'Looks good' does not name the flatbread/quesadilla/ranch — all three classified as phantom", () => {
+  const result = computeGuard9(
+    "Looks good",
     LUCA_CART_BEFORE,
     LUCA_CART_AFTER_PHANTOM,
-    "Looks good",
-    LUCA_MENU,
+    isNamedThisTurnPredicate("Looks good", LUCA_MENU),
   );
-  assertEquals(qtyReverts.length, 0);
-  const phantomIds = phantomAdds.map(i => i.menu_item_id).sort();
+  assertEquals(result.tripped, true);
+  assertEquals(result.qtyReverts.length, 0);
+  const phantomIds = result.phantomAdds.map(i => i.menu_item_id).sort();
   assertEquals(phantomIds, ["flatbread-cbr", "quesadilla-chicken", "ranch"]);
 });
 
-Deno.test("GUARD 9: the pizza and wings the customer actually ordered are never touched", () => {
-  const { phantomAdds } = computeGuard9Reverts(
+Deno.test("GUARD 9 (real fn): the pizza and wings the customer actually ordered are never touched", () => {
+  const result = computeGuard9(
+    "Looks good",
     LUCA_CART_BEFORE,
     LUCA_CART_AFTER_PHANTOM,
-    "Looks good",
-    LUCA_MENU,
+    isNamedThisTurnPredicate("Looks good", LUCA_MENU),
   );
-  const phantomIds = new Set(phantomAdds.map(i => i.menu_item_id));
+  const phantomIds = new Set(result.phantomAdds.map(i => i.menu_item_id));
   assertEquals(phantomIds.has("pizza-cbr"), false);
   assertEquals(phantomIds.has("wings"), false);
 });
 
 // ── Requirement 2: a genuinely named add on affirmation-adjacent phrasing ──
 
-Deno.test("GUARD 9: 'yeah also add fries' names fries in the current message — must NOT be reverted", () => {
+Deno.test("GUARD 9 (real fn): 'yeah also add fries' names fries in the current message — must NOT be reverted", () => {
   const before: TestCartLine[] = [{ menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 }];
   const after: TestCartLine[] = [
     ...before,
     { menu_item_id: "fries", name: "Fries", quantity: 1 },
   ];
-  const { phantomAdds, qtyReverts } = computeGuard9Reverts(before, after, "yeah also add fries", LUCA_MENU);
-  assertEquals(phantomAdds.length, 0, "fries was named this turn and must survive");
-  assertEquals(qtyReverts.length, 0);
+  const result = computeGuard9(
+    "yeah also add fries",
+    before,
+    after,
+    isNamedThisTurnPredicate("yeah also add fries", LUCA_MENU),
+  );
+  assertEquals(result.tripped, false, "fries was named this turn and must survive");
+  assertEquals(result.phantomAdds.length, 0);
+  assertEquals(result.qtyReverts.length, 0);
 });
 
 // ── False-positive guard: resolving a pending option must never look like a
 //    phantom add just because it changes the line's fingerprint ───────────
 
-Deno.test("GUARD 9: resolving a pending option group on 'sure' does not revert anything (no quantity growth)", () => {
-  // Same array slot in the real code: add_item's resolvingPendingIdx path
-  // mutates `options` in place without changing quantity. Total quantity for
-  // the item is identical before/after, so the quantity-growth gate must
-  // never fire here, regardless of the fingerprint (menu_item_id + options)
-  // changing shape.
+Deno.test("GUARD 9 (real fn): resolving a pending option group on 'sure' does not revert anything (no quantity growth)", () => {
   const before: TestCartLine[] = [{ menu_item_id: "wings", name: "Wings", quantity: 1 }];
   const after: TestCartLine[] = [{ menu_item_id: "wings", name: "Wings", quantity: 1, options: { Sauce: ["Ranch"] } }];
-  const { phantomAdds, qtyReverts } = computeGuard9Reverts(before, after, "sure", LUCA_MENU);
-  assertEquals(phantomAdds.length, 0);
-  assertEquals(qtyReverts.length, 0);
+  const result = computeGuard9("sure", before, after, isNamedThisTurnPredicate("sure", LUCA_MENU));
+  assertEquals(result.tripped, false);
 });
 
-Deno.test("GUARD 9: an unnamed quantity bump on an unchanged line is reverted to the prior quantity", () => {
+Deno.test("GUARD 9 (real fn): an unnamed quantity bump on an unchanged line is reverted to the prior quantity", () => {
   const before: TestCartLine[] = [{ menu_item_id: "wings", name: "Wings", quantity: 1 }];
   const after: TestCartLine[] = [{ menu_item_id: "wings", name: "Wings", quantity: 2 }];
-  const { phantomAdds, qtyReverts } = computeGuard9Reverts(before, after, "looks good", LUCA_MENU);
-  assertEquals(phantomAdds.length, 0);
-  assertEquals(qtyReverts.length, 1);
-  assertEquals(qtyReverts[0].priorQty, 1);
+  const result = computeGuard9("looks good", before, after, isNamedThisTurnPredicate("looks good", LUCA_MENU));
+  assertEquals(result.phantomAdds.length, 0);
+  assertEquals(result.qtyReverts.length, 1);
+  assertEquals(result.qtyReverts[0].priorQty, 1);
 });
 
-Deno.test("GUARD 9: a non-affirmation message never triggers the guard, even if the cart grew unexplained", () => {
-  const { phantomAdds, qtyReverts } = computeGuard9Reverts(
+Deno.test("GUARD 9 (real fn): a non-affirmation message never triggers the guard, even if the cart grew unexplained", () => {
+  const result = computeGuard9(
+    "what's in my cart?",
     LUCA_CART_BEFORE,
     LUCA_CART_AFTER_PHANTOM,
-    "what's in my cart?",
-    LUCA_MENU,
+    isNamedThisTurnPredicate("what's in my cart?", LUCA_MENU),
   );
-  assertEquals(phantomAdds.length, 0);
-  assertEquals(qtyReverts.length, 0);
+  assertEquals(result.tripped, false);
+});
+
+Deno.test("impliesOrderConfirmation (real fn): 'Looks good' is a bare affirmation", () => {
+  assert(impliesOrderConfirmation("Looks good"));
+});
+
+// ── Integration-shape regression: the EXACT bug QA found ───────────────────
+// Reproduces the real code's array-mutation shape, not cleanly-separated
+// fixtures: a `cartItemsSim` array that gets mutated IN PLACE the way
+// executeTool's push() mutates the real `cartItems`/`cart` param (same
+// reference), plus a `cartSnapshotBeforeTurnSim` deep clone taken BEFORE
+// that mutation, matching index.ts's actual `cartSnapshotBeforeTurn`
+// construction (`JSON.parse(JSON.stringify(...))`) before the tool loop
+// runs.
+
+Deno.test("GUARD 9 (real fn, integration shape): reverts correctly when 'before' is a pre-mutation deep clone, not the mutated array", () => {
+  // Stands in for index.ts's `cartItems` at the top of the turn.
+  const cartItemsSim: TestCartLine[] = [
+    { menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 },
+    { menu_item_id: "wings", name: "Wings", quantity: 1 },
+  ];
+  // Stands in for index.ts's `cartSnapshotBeforeTurn`: a deep clone taken
+  // BEFORE any tool execution, so later mutation of cartItemsSim cannot
+  // reach it.
+  const cartSnapshotBeforeTurnSim: TestCartLine[] = JSON.parse(JSON.stringify(cartItemsSim));
+
+  // Simulate the tool-execution loop: executeTool's add_item pushes new
+  // lines onto the SAME array object passed in (by reference) — exactly
+  // what made the original `cartItems`-wired guard blind.
+  cartItemsSim.push(
+    { menu_item_id: "flatbread-cbr", name: "Chicken Bacon Ranch (Flatbreads)", quantity: 1 },
+    { menu_item_id: "quesadilla-chicken", name: "Chicken (Quesadillas)", quantity: 1 },
+    { menu_item_id: "ranch", name: "Ranch", quantity: 1 },
+  );
+  // Post-tool-call cart (index.ts's `guardCart`, re-read after the loop) —
+  // same final content as the now-mutated cartItemsSim.
+  const guardCartSim: TestCartLine[] = cartItemsSim;
+
+  const result = computeGuard9(
+    "Looks good",
+    cartSnapshotBeforeTurnSim, // <-- the FIX: real "before" snapshot, untouched by the push() above
+    guardCartSim,
+    isNamedThisTurnPredicate("Looks good", LUCA_MENU),
+  );
+
+  assertEquals(result.tripped, true, "the fixed guard must trip under the real mutation shape");
+  const phantomIds = result.phantomAdds.map(i => i.menu_item_id).sort();
+  assertEquals(phantomIds, ["flatbread-cbr", "quesadilla-chicken", "ranch"]);
+  assertEquals(result.qtyReverts.length, 0);
+});
+
+Deno.test("GUARD 9 (real fn, integration shape): reproduces the ORIGINAL bug when wired to the mutated array as 'before' (proves the fix matters)", () => {
+  // Same simulated turn as above, but this time we deliberately reproduce
+  // the broken wiring: pass the SAME mutated array as both the "before" the
+  // guard reads AND the source that ends up mutated — exactly what
+  // `cartItems` was doing in the shipped-then-reverted version.
+  const cartItemsSim: TestCartLine[] = [
+    { menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 },
+    { menu_item_id: "wings", name: "Wings", quantity: 1 },
+  ];
+
+  cartItemsSim.push(
+    { menu_item_id: "flatbread-cbr", name: "Chicken Bacon Ranch (Flatbreads)", quantity: 1 },
+    { menu_item_id: "quesadilla-chicken", name: "Chicken (Quesadillas)", quantity: 1 },
+    { menu_item_id: "ranch", name: "Ranch", quantity: 1 },
+  );
+  const guardCartSim: TestCartLine[] = cartItemsSim;
+
+  const brokenResult = computeGuard9(
+    "Looks good",
+    cartItemsSim, // <-- the ORIGINAL BUG: "before" is the same mutated array as "after"
+    guardCartSim,
+    isNamedThisTurnPredicate("Looks good", LUCA_MENU),
+  );
+
+  assertEquals(brokenResult.tripped, false, "reproduces the original bug: identical before/after means delta is never > 0");
+  assertEquals(brokenResult.phantomAdds.length, 0);
+  assertEquals(brokenResult.qtyReverts.length, 0);
 });
 
 // ── Requirement 3: GUARD 4 v3 still detects/logs, but never talks ──────────
@@ -336,4 +376,40 @@ Deno.test("GUARD 4: the customer-facing upsell line is gone from index.ts (root 
 Deno.test("GUARD 9: exists in index.ts, keyed off impliesOrderConfirmation, and warns on trip", () => {
   assert(INDEX_SOURCE.includes("GUARD 9 (unconsented-add-on-affirmation)"), "GUARD 9 warn marker must exist");
   assert(/Guard 9: unconsented cart growth on a bare affirmation/.test(INDEX_SOURCE));
+});
+
+// ── Wiring regression guard (the QA-found bug specifically) ────────────────
+// Extracts the GUARD 9 block from index.ts (from its section-header comment
+// to the next guard's) and asserts the call site passes
+// `cartSnapshotBeforeTurn` into computeGuard9 and does NOT feed it
+// `cartItems`. This is the exact wiring mistake QA caught before ship: if it
+// ever recurs, this test fails even though computeGuard9 itself (tested
+// above) is correct in isolation.
+
+function extractGuard9Block(source: string): string {
+  const start = source.indexOf("// ── Guard 9: unconsented cart growth on a bare affirmation");
+  assert(start !== -1, "GUARD 9 section header comment must exist in index.ts");
+  const nextGuardMarker = "// ── Guard 2: order confirmation + no pickup name";
+  const end = source.indexOf(nextGuardMarker, start);
+  assert(end !== -1, "the guard following GUARD 9 must exist in index.ts (marker text may have moved)");
+  return source.slice(start, end);
+}
+
+Deno.test("GUARD 9 wiring: index.ts's call site passes cartSnapshotBeforeTurn, not cartItems, as the before-cart", () => {
+  const block = extractGuard9Block(INDEX_SOURCE);
+  assert(
+    /computeGuard9\(\s*userMessage,\s*cartSnapshotBeforeTurn,\s*guardCart,/.test(block),
+    "GUARD 9 must call computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, ...) — got:\n" + block,
+  );
+  // The historical bug: `cartItems` used as the before-snapshot. GUARD 9's
+  // CODE (comments deliberately still name `cartItems` as a warning — strip
+  // `//` line comments before checking) legitimately references `cartItems`
+  // nowhere — that variable belongs to earlier correction/short-circuit
+  // logic in the function, not to this guard.
+  const codeOnly = block.split("\n").map(line => line.replace(/\/\/.*$/, "")).join("\n");
+  assertEquals(
+    /\bcartItems\b/.test(codeOnly),
+    false,
+    "GUARD 9's executable code must never reference `cartItems` — it is mutated in place and cannot answer 'what changed this turn'",
+  );
 });
