@@ -25,6 +25,10 @@ import {
   type PendingCandidate,
   type PendingDisambiguation,
 } from "./pending-disambiguation.ts";
+import {
+  findPendingOptionQuestion,
+  resolvePendingOptionAnswer,
+} from "./pending-option.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -881,12 +885,56 @@ async function executeTool(
 
       // Dedup: normalize empty options to undefined for comparison
       const normalizedOptions = Object.keys(inputOptions).length > 0 ? inputOptions : undefined;
+
+      // PHANTOM-ADD GUARD (2026-09-06, DEFECT 1): filling in a previously-open
+      // required option can never satisfy the options-equality match below —
+      // the line's options go from empty to filled, which by construction
+      // never equals what they were before. Without this, an add_item call
+      // that answers a pending option question (the model reaching for
+      // add_item instead of modify_item) spawns a brand-new line instead of
+      // landing on the one waiting for it, silently doubling the cart. This
+      // is the general version of whatever accidentally protects "large
+      // cheese pizza" + "add pepperoni" (that path merges only because pizza
+      // toppings aren't a recorded required option group, so its options
+      // never diverge in the first place) — extended to cover ANY item with
+      // an open required group, not just that accidental case. Filling a
+      // pending group is a resolution of the SAME order, not a repeat order,
+      // so quantity is left untouched here (unlike the stacking-merge branch
+      // below, which intentionally adds quantities together).
+      let resolvingPendingIdx = -1;
+      if (Object.keys(inputOptions).length > 0) {
+        resolvingPendingIdx = cart.findIndex(i => {
+          const ci = i as CartItem;
+          return ci.menu_item_id === menu_item_id &&
+            (ci.pending_options?.length ?? 0) > 0 &&
+            ci.pending_options!.some(p => (inputOptions[p]?.length ?? 0) > 0);
+        });
+      }
+
       // Match on menu_item_id + options; merge pending_options when stacking quantity
-      const existing = cart.findIndex(i =>
+      const existing = resolvingPendingIdx >= 0 ? -1 : cart.findIndex(i =>
         (i as CartItem).menu_item_id === menu_item_id &&
         JSON.stringify((i as CartItem).options ?? undefined) === JSON.stringify(normalizedOptions)
       );
-      if (existing >= 0) {
+      if (resolvingPendingIdx >= 0) {
+        const target = cart[resolvingPendingIdx] as CartItem;
+        const mergedOptions = { ...(target.options ?? {}), ...inputOptions };
+        target.options = Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined;
+        target.modifiers = inputMods;
+        let mergedExtraCents = 0;
+        for (const group of itemGroups) {
+          for (const sel of (mergedOptions[group.name] ?? [])) {
+            const choice = group.choices.find(c => c.name.toLowerCase() === sel.toLowerCase());
+            if (choice) mergedExtraCents += choice.price_cents;
+          }
+        }
+        target.price_cents = menuItem.price_cents + mergedExtraCents + modPriceCents;
+        const remainingPending = (target.pending_options ?? []).filter(p => !(inputOptions[p]?.length));
+        target.pending_options = remainingPending.length > 0 ? remainingPending : undefined;
+        const existingUnverified = target.unverified_requests ?? [];
+        const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
+        target.unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
+      } else if (existing >= 0) {
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
         (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
@@ -4046,10 +4094,23 @@ Deno.serve(async (req: Request) => {
         localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
       );
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
-      const total = addResult.ok ? (addResult.result as { cart_total?: string }).cart_total : undefined;
+      // DEFECT 2 fix (2026-09-06, P0 money defect): this reply used to state
+      // its own bespoke total straight off addResult.cart_total, which is a
+      // raw item-price sum with no service fee — it silently printed the
+      // SUBTOTAL and called it the total. Route through the same
+      // renderLedgerFooter() every other reply path uses (subtotal + $0.99
+      // service fee = total) so this number can never drift from what the
+      // rest of the bot says about the same cart.
+      const feeAlreadyDisclosedGuard7 = !!cart.fee_disclosed_at;
+      const footerGuard7 = addResult.ok
+        ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosedGuard7)
+        : "";
       const reply = addResult.ok
-        ? `Got it — ${resolved.name}${resolved.category ? ` (${resolved.category})` : ""} added${total ? `. Your cart total is ${total}` : ""}. Anything else?`
+        ? `Got it — ${resolved.name}${resolved.category ? ` (${resolved.category})` : ""} added.${footerGuard7 ? `\n\n${footerGuard7}` : ""} Anything else?`
         : "Sorry, I had trouble adding that one — mind trying again?";
+      if (addResult.ok && !feeAlreadyDisclosedGuard7) {
+        await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+      }
       console.log(`[chat-sms] Pending disambiguation resolved (conv=${conversation.id}): "${pending.query_name}" -> ${resolved.name} (${resolved.category ?? "no category"}, ${resolved.price_cents}c).`);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -4096,6 +4157,57 @@ Deno.serve(async (req: Request) => {
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
+    }
+  }
+
+  // ── Pending option-answer resolution (DEFECT 1, 2026-09-06 P0) ──────────
+  // A required option group left open on a cart line (e.g. add_item stored
+  // pending_options: ["Temp"] on a cheeseburger and the reply asked "how do
+  // you want that cooked?") must resolve against that SAME line on the very
+  // next turn, deterministically, before the LLM/tool loop ever runs — same
+  // shape as the pending-disambiguation resolver above. Routing the answer
+  // through the LLM at all left "call add_item again" as a real, sometimes-
+  // taken path: add_item's own dedup key is options-equality, and filling in
+  // a previously-empty required option can never match the line's own
+  // (still-empty) prior options, so a phantom second line was the
+  // deterministic consequence, not a rare model slip (docs: the "add
+  // pepperoni" pizza path only avoids this by accident — pizza toppings
+  // aren't a recorded required option group, so the key never diverges).
+  // Resolving here calls modify_item directly; add_item is never reachable
+  // this turn for this item, so it cannot create a second line.
+  {
+    const menuById = new Map(effectiveMenu.map(mi => [mi.id, mi]));
+    const pendingQuestion = findPendingOptionQuestion(cart.cart_json as CartItem[], menuById);
+    if (pendingQuestion) {
+      const resolvedChoice = resolvePendingOptionAnswer(userMessage, pendingQuestion.choices);
+      if (resolvedChoice) {
+        const localCartItems = [...cart.cart_json];
+        const modResult = await executeTool(
+          "modify_item",
+          { menu_item_id: pendingQuestion.menu_item_id, options: { [pendingQuestion.group_name]: [resolvedChoice.name] } },
+          localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+        );
+        const feeAlreadyDisclosed = !!cart.fee_disclosed_at;
+        const footer = modResult.ok
+          ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed)
+          : "";
+        const reply = modResult.ok
+          ? `Got it — ${resolvedChoice.name} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`
+          : "Sorry, I had trouble setting that — mind trying again?";
+        if (modResult.ok && !feeAlreadyDisclosed) {
+          await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+        }
+        console.log(`[chat-sms] Pending option resolved (conv=${conversation.id}): "${pendingQuestion.item_name}" / ${pendingQuestion.group_name} -> ${resolvedChoice.name}.`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
+      }
+      // Unresolved — not necessarily a garbled answer; could be a genuine
+      // new item, a question, or a request the deterministic stem-matcher
+      // just doesn't cover. Unlike disambiguation there is no numbered list
+      // to force a re-ask against, so fall through to the normal LLM/tool
+      // loop; the phantom-add guard in add_item's dedup logic below still
+      // protects this same line if the model reaches for add_item there.
     }
   }
 
