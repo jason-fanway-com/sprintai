@@ -44,13 +44,41 @@ const GOOGLE_PLACES_DETAILS_BASE = "https://places.googleapis.com/v1/places";
 const MENU_MAX_TOKENS = 16_000;
 // Hard bound so a stalled upstream can never eat the whole function budget; on abort the
 // catch below returns null and the caller records "partial" instead of dying silently.
+// This is a DESIRED ceiling, not the timeout actually used — see remainingBudgetMs()
+// below, which clamps it to whatever's left of the platform's wall clock.
 const LLM_TIMEOUT_MS = 90_000;
 // Menu extraction generates far more output than hours/context (up to 300 items at
 // MENU_MAX_TOKENS=16k). Measured 2026-09-05 on a real 150-item menu (biaggiopizza.com):
-// the model needed ~121s to finish, so LLM_TIMEOUT_MS=90s was aborting the fetch mid-generation
+// the model needed ~121s to finish, so a 90s timeout was aborting the fetch mid-generation
 // and returning null — reported as "no_priced_items" for a menu that was fully extractable.
-// That's a timeout bug, not a missing-menu result; give this call more room.
+// That's a timeout bug, not a missing-menu result; give this call more room — but only up
+// to what remainingBudgetMs() below says the wall clock can still afford.
 const MENU_LLM_TIMEOUT_MS = 170_000;
+// Measured 2026-09-05 (docs/specs/2026-09-05-item-K-website-read-reliability.md, "third
+// measurement"): the platform's edge-function gateway 504s the caller at ~150.2s on both
+// timeout sites, and on one of them the isolate was killed before it could write a
+// terminal crawl_status — MENU_LLM_TIMEOUT_MS=170s alone is longer than that ceiling, so
+// the LLM call is still in flight when the platform kills the request out from under it.
+// Every bounded network call in this file must fit inside what's left of this budget:
+//   150s measured ceiling - 10s jitter margin (150.2s was two samples, not a guarantee)
+//   - 5s reserved for the final Supabase writes + JSON response = 135s is the latest any
+//   such call may still be in flight from request start. A call started later than that
+//   gets a proportionally smaller timeout (min(desired, remaining)); once there's no
+//   useful time left, the call is skipped outright — never attempted and then cut off.
+const WALL_CLOCK_CEILING_MS = 150_000;
+const CEILING_JITTER_MARGIN_MS = 10_000;
+const FINAL_WRITE_RESERVE_MS = 5_000;
+const MIN_USEFUL_CALL_MS = 3_000;
+
+/** How long a bounded network call starting now may run before the function must be
+ *  done — writes included — inside the platform's wall clock. Returns 0 once there's
+ *  no useful time left; callers must skip the call entirely rather than fire it with a
+ *  near-zero timeout. */
+function remainingBudgetMs(startedAt: number, desiredMs: number): number {
+  const elapsed = Date.now() - startedAt;
+  const remaining = WALL_CLOCK_CEILING_MS - CEILING_JITTER_MARGIN_MS - FINAL_WRITE_RESERVE_MS - elapsed;
+  return remaining < MIN_USEFUL_CALL_MS ? 0 : Math.min(desiredMs, remaining);
+}
 
 /** Extract JSON-LD structured data from raw HTML */
 function extractStructuredData(html: string): string {
@@ -323,8 +351,14 @@ Rules:
 async function extractOpenHours(
   combinedText: string,
   openRouterKey: string,
-  anthropicKey: string
+  anthropicKey: string,
+  startedAt: number,
 ): Promise<Record<string, { closed: boolean; open: string; close: string }> | null> {
+  const timeoutMs = remainingBudgetMs(startedAt, LLM_TIMEOUT_MS);
+  if (timeoutMs === 0) {
+    console.warn("[scrape-shop] Skipping hours extraction — wall-clock budget exhausted");
+    return null;
+  }
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -338,7 +372,7 @@ async function extractOpenHours(
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: HOURS_PROMPT + "\n\n" + combinedText.substring(0, 40_000) }],
       }),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       console.error("[scrape-shop] LLM hours extraction failed:", res.status);
@@ -361,8 +395,14 @@ async function extractOpenHours(
 async function extractMenuItems(
   combinedText: string,
   openRouterKey: string,
-  anthropicKey: string
+  anthropicKey: string,
+  startedAt: number,
 ): Promise<Array<{ name: string; price_cents: number; category: string; description: string }> | null> {
+  const timeoutMs = remainingBudgetMs(startedAt, MENU_LLM_TIMEOUT_MS);
+  if (timeoutMs === 0) {
+    console.warn("[scrape-shop] Skipping menu extraction — wall-clock budget exhausted");
+    return null;
+  }
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -376,7 +416,7 @@ async function extractMenuItems(
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 55_000) }],
       }),
-      signal: AbortSignal.timeout(MENU_LLM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       console.error("[scrape-shop] LLM menu extraction failed:", res.status);
@@ -407,10 +447,15 @@ async function routeMenuPdf(
   shopId: string,
   supabaseUrl: string,
   serviceRoleKey: string,
+  startedAt: number,
 ): Promise<{ itemCount: number; error?: string }> {
+  const fetchTimeoutMs = remainingBudgetMs(startedAt, PDF_FETCH_TIMEOUT_MS);
+  if (fetchTimeoutMs === 0) {
+    return { itemCount: 0, error: "Skipped PDF fetch — wall-clock budget exhausted" };
+  }
   let pdfRes: Response;
   try {
-    pdfRes = await fetch(pdfUrl, { signal: AbortSignal.timeout(PDF_FETCH_TIMEOUT_MS) });
+    pdfRes = await fetch(pdfUrl, { signal: AbortSignal.timeout(fetchTimeoutMs) });
   } catch (err) {
     return { itemCount: 0, error: `PDF fetch error: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -438,6 +483,10 @@ async function routeMenuPdf(
   form.append("source", "website");
   form.append("source_ref", pdfUrl);
 
+  const parseTimeoutMs = remainingBudgetMs(startedAt, PDF_PARSE_TIMEOUT_MS);
+  if (parseTimeoutMs === 0) {
+    return { itemCount: 0, error: "Skipped parse-menu-pdf call — wall-clock budget exhausted" };
+  }
   let parseRes: Response;
   try {
     parseRes = await fetch(`${supabaseUrl}/functions/v1/parse-menu-pdf`, {
@@ -447,7 +496,7 @@ async function routeMenuPdf(
         "Authorization": `Bearer ${serviceRoleKey}`,
       },
       body: form,
-      signal: AbortSignal.timeout(PDF_PARSE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(parseTimeoutMs),
     });
   } catch (err) {
     return { itemCount: 0, error: `parse-menu-pdf call error: ${err instanceof Error ? err.message : String(err)}` };
@@ -521,6 +570,7 @@ async function tryGoogleListingRung(
   firecrawlKey: string,
   openRouterKey: string,
   anthropicKey: string,
+  startedAt: number,
 ): Promise<{ success: boolean; itemCount: number; url?: string; rungLog: RungLog; deferredAggregator?: { url: string; platform: string; label: string } }> {
   if (!shop.google_place_id) {
     return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_place_id" } };
@@ -566,7 +616,7 @@ async function tryGoogleListingRung(
   if (!markdown.trim()) {
     return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_content", url: websiteUri } };
   }
-  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey);
+  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
   if (!items || items.length === 0) {
     return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_priced_items", url: websiteUri } };
   }
@@ -593,13 +643,14 @@ async function tryAggregatorRung(
   firecrawlKey: string,
   openRouterKey: string,
   anthropicKey: string,
+  startedAt: number,
 ): Promise<{ success: boolean; itemCount: number; rungLog: RungLog }> {
   const { markdown } = await scrapePage(aggLink.url, firecrawlKey, false);
   if (!markdown.trim()) {
     return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_content" } };
   }
 
-  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey);
+  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
   if (!items || items.length === 0) {
     return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_priced_items" } };
   }
@@ -738,50 +789,61 @@ Deno.serve(async (req: Request) => {
   const prompt = `${CONTEXT_PROMPT}\n\n${combinedText}`;
   let context = "";
   let llmErr = "";
+  // Desired cap is generous (this call is a single ~1024-token summary, normally fast);
+  // remainingBudgetMs clamps it to the wall clock. Previously unbounded — a stalled
+  // upstream here could eat the entire remaining budget before menu/hours extraction
+  // ever got a chance to run.
+  const summarizeTimeoutMs = remainingBudgetMs(startedAt, 60_000);
 
-  try {
-    if (openRouterKey) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method:  "POST",
-        headers: {
-          "Authorization": `Bearer ${openRouterKey}`,
-          "Content-Type":  "application/json",
-        },
-        body: JSON.stringify({
-          model:      "anthropic/claude-sonnet-4-6",
-          max_tokens: 1024,
-          messages:   [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) {
-        llmErr = `OpenRouter error: ${res.status} ${(await res.text()).slice(0, 200)}`;
+  if (summarizeTimeoutMs === 0) {
+    llmErr = "Wall-clock budget exhausted before summarization could start";
+  } else {
+    try {
+      if (openRouterKey) {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method:  "POST",
+          headers: {
+            "Authorization": `Bearer ${openRouterKey}`,
+            "Content-Type":  "application/json",
+          },
+          body: JSON.stringify({
+            model:      "anthropic/claude-sonnet-4-6",
+            max_tokens: 1024,
+            messages:   [{ role: "user", content: prompt }],
+          }),
+          signal: AbortSignal.timeout(summarizeTimeoutMs),
+        });
+        if (!res.ok) {
+          llmErr = `OpenRouter error: ${res.status} ${(await res.text()).slice(0, 200)}`;
+        } else {
+          const data = await res.json();
+          context = (data?.choices?.[0]?.message?.content ?? "").trim();
+        }
       } else {
-        const data = await res.json();
-        context = (data?.choices?.[0]?.message?.content ?? "").trim();
+        const res = await fetch(CLAUDE_API, {
+          method:  "POST",
+          headers: {
+            "x-api-key":         anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "content-type":      "application/json",
+          },
+          body: JSON.stringify({
+            model:      SONNET_MODEL,
+            max_tokens: 1024,
+            messages:   [{ role: "user", content: prompt }],
+          }),
+          signal: AbortSignal.timeout(summarizeTimeoutMs),
+        });
+        if (!res.ok) {
+          llmErr = `Claude API error: ${res.status}`;
+        } else {
+          const data: { content: Array<{ type: string; text?: string }> } = await res.json();
+          context = (data.content.find(b => b.type === "text")?.text ?? "").trim();
+        }
       }
-    } else {
-      const res = await fetch(CLAUDE_API, {
-        method:  "POST",
-        headers: {
-          "x-api-key":         anthropicKey,
-          "anthropic-version": "2023-06-01",
-          "content-type":      "application/json",
-        },
-        body: JSON.stringify({
-          model:      SONNET_MODEL,
-          max_tokens: 1024,
-          messages:   [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) {
-        llmErr = `Claude API error: ${res.status}`;
-      } else {
-        const data: { content: Array<{ type: string; text?: string }> } = await res.json();
-        context = (data.content.find(b => b.type === "text")?.text ?? "").trim();
-      }
+    } catch (err) {
+      llmErr = `LLM fetch error: ${(err as Error).message}`;
     }
-  } catch (err) {
-    llmErr = `LLM fetch error: ${(err as Error).message}`;
   }
 
   if (!context) {
@@ -792,9 +854,9 @@ Deno.serve(async (req: Request) => {
   }
 
   // Extract structured hours (Phase 5) and menu items (Phase 5b) via LLM
-  const openHours = await extractOpenHours(combinedText, openRouterKey, anthropicKey);
+  const openHours = await extractOpenHours(combinedText, openRouterKey, anthropicKey, startedAt);
   const menuLinkUrls = pages.filter(u => /menu|food|drink|order/i.test(u));
-  const menuItemsRaw = await extractMenuItems(combinedText, openRouterKey, anthropicKey);
+  const menuItemsRaw = await extractMenuItems(combinedText, openRouterKey, anthropicKey, startedAt);
 
   // Phase 5b: Auto-populate menu items (idempotent: only if menu is empty).
   // Resolved BEFORE the status update so crawl_status reflects what actually landed,
@@ -868,7 +930,7 @@ Deno.serve(async (req: Request) => {
         break;
       }
       try {
-        const result = await routeMenuPdf(supabase, pdfUrl, shop_id, supabaseUrl, serviceRoleKey);
+        const result = await routeMenuPdf(supabase, pdfUrl, shop_id, supabaseUrl, serviceRoleKey, startedAt);
         if (result.itemCount > 0) {
           menuInserted = result.itemCount;
           menuHasUsableItems = true;
@@ -904,7 +966,7 @@ Deno.serve(async (req: Request) => {
         rungsTried.push({ rung: 3, source: "google", result: "skipped_elapsed_budget" });
       } else {
         const googleApiKey = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
-        const googleResult = await tryGoogleListingRung(supabase, shop, menuData.id, googleApiKey, firecrawlKey, openRouterKey, anthropicKey);
+        const googleResult = await tryGoogleListingRung(supabase, shop, menuData.id, googleApiKey, firecrawlKey, openRouterKey, anthropicKey, startedAt);
         rungsTried.push(googleResult.rungLog);
         if (googleResult.success) {
           menuInserted = googleResult.itemCount;
@@ -927,7 +989,7 @@ Deno.serve(async (req: Request) => {
         if (!aggLink) {
           rungsTried.push({ rung: 4, source: "aggregator", result: "no_aggregator_link_found" });
         } else {
-          const aggResult = await tryAggregatorRung(supabase, menuData.id, aggLink, firecrawlKey, openRouterKey, anthropicKey);
+          const aggResult = await tryAggregatorRung(supabase, menuData.id, aggLink, firecrawlKey, openRouterKey, anthropicKey, startedAt);
           rungsTried.push(aggResult.rungLog);
           if (aggResult.success) {
             menuInserted = aggResult.itemCount;
@@ -954,7 +1016,18 @@ Deno.serve(async (req: Request) => {
       },
     };
     if (finalSource) menuUpdate.source = finalSource;
-    const { error: menuUpdateErr } = await supabase.from("menus").update(menuUpdate).eq("id", menuData.id);
+
+    // parse-menu-pdf REPLACES the shop's menu row wholesale (delete + reinsert) when
+    // the PDF rung (above) wins, so `menuData.id` — captured before that swap — can
+    // point at a row that no longer exists. Writing provenance to that dead id is a
+    // silent no-op (an update matching zero rows), which is why source_detail stayed
+    // null on every PDF win. Re-resolve by shop_id right before this write so it
+    // always lands on whichever menu row is actually current.
+    const { data: currentMenu } = await supabase
+      .from("menus").select("id").eq("shop_id", shop_id).maybeSingle();
+    const targetMenuId = currentMenu?.id ?? menuData.id;
+
+    const { error: menuUpdateErr } = await supabase.from("menus").update(menuUpdate).eq("id", targetMenuId);
     if (menuUpdateErr) console.error("[scrape-shop] Failed to save menu source_detail:", menuUpdateErr);
   }
 
