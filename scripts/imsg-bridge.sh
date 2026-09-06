@@ -29,7 +29,10 @@
 source ~/.openclaw/.secrets
 
 # -- Config ───────────────────────────────────────────────────────────────────
-SHOP_ID="b0000000-0000-0000-0000-000000000001"
+# Shop is env-overridable so the demo target can change without editing code.
+# Default target: Vito Pizza demo (pizza demos convert better than bagel demos).
+SHOP_ID="${SHOP_ID:-e0000000-0000-0000-0000-000000000001}"
+if [ -z "${SHOP_NAME:-}" ]; then SHOP_NAME="Vito's Pizza"; fi
 EDGE_URL="${SPRINTAI_CHAT_SUPABASE_URL}/functions/v1/chat-sms"
 EDGE_KEY="${SPRINTAI_CHAT_SUPABASE_ANON_KEY}"
 LOG_FILE="/tmp/sprintai-imsg-bridge.log"
@@ -650,7 +653,7 @@ run_bridge() {
 echo $$ > "$PID_FILE"
 log "================================================="
 log "SprintAI iMessage Bridge started (PID $$)"
-log "Shop: Not Just Bagels ($SHOP_ID)"
+log "Shop: $SHOP_NAME ($SHOP_ID)"
 log "Mode: ${MODE:-live}"
 log "Poll interval: ${POLL_INTERVAL}s"
 log "================================================="

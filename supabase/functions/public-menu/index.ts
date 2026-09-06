@@ -16,6 +16,33 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { dayWindows } from "../_shared/hours.ts";
+
+// PostgREST caps a single response at 1000 rows by default, silently — no
+// error, no truncation flag. Vito's alone has 2640 option_choices across 186
+// groups, almost all sharing display_order=0, so which 1000 survive a given
+// request is whatever order ties happen to come back in — a real shop's menu
+// page can render with option groups missing choices depending on luck. Page
+// through with .range() (stable secondary sort on id) so a table of any size
+// reads in full. Same fix as chat-sms's buildEffectiveMenu — same underlying
+// bug, same shape.
+const FETCH_PAGE_SIZE = 1000;
+async function fetchAllRows<T>(queryBuilder: () => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const rows: T[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await (queryBuilder() as any).range(from, from + FETCH_PAGE_SIZE - 1);
+    if (error) {
+      console.error(`[public-menu] fetchAllRows error at offset ${from}:`, error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    if (data.length < FETCH_PAGE_SIZE) break;
+    from += FETCH_PAGE_SIZE;
+  }
+  return rows;
+}
 
 function h(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -39,11 +66,11 @@ const DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 function formatHours(openHours: unknown): string {
   if (!openHours || typeof openHours !== "object") return "";
-  const oh = openHours as Record<string, Array<{ open: string; close: string }>>;
+  const oh = openHours as Record<string, unknown>;
   const rows: string[] = [];
   for (const d of DAY_ORDER) {
-    const slots = oh[d];
-    if (!slots || slots.length === 0) { rows.push(`${DAY_LABEL[d]} closed`); continue; }
+    const slots = dayWindows(oh[d] as Parameters<typeof dayWindows>[0]);
+    if (slots.length === 0) { rows.push(`${DAY_LABEL[d]} closed`); continue; }
     rows.push(`${DAY_LABEL[d]} ${slots.map(s => `${s.open}–${s.close}`).join(", ")}`);
   }
   return rows.join(" &middot; ");
@@ -170,35 +197,42 @@ Deno.serve(async (req: Request) => {
 
   if (!menu) return notFound();
 
-  const { data: items } = await supabase
-    .from("menu_items")
-    .select("id, name, price_cents, description, category, display_order")
-    .eq("menu_id", menu.id)
-    .eq("active", true)
-    .order("display_order", { ascending: true });
-
-  const itemList = items ?? [];
+  const itemList = await fetchAllRows<{ id: string; name: string; price_cents: number; description: string | null; category: string | null; display_order: number | null }>(() =>
+    supabase
+      .from("menu_items")
+      .select("id, name, price_cents, description, category, display_order")
+      .eq("menu_id", menu.id)
+      .eq("active", true)
+      .order("display_order", { ascending: true })
+      .order("id", { ascending: true }),
+  );
   const itemIds = itemList.map((i) => i.id);
 
-  const { data: groups } = itemIds.length > 0
-    ? await supabase
-        .from("option_groups")
-        .select("id, menu_item_id, name, required, min_select, max_select, display_order")
-        .in("menu_item_id", itemIds)
-        .order("display_order", { ascending: true })
-    : { data: [] as Array<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number }> };
+  const groups = itemIds.length > 0
+    ? await fetchAllRows<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number }>(() =>
+        supabase
+          .from("option_groups")
+          .select("id, menu_item_id, name, required, min_select, max_select, display_order")
+          .in("menu_item_id", itemIds)
+          .order("display_order", { ascending: true })
+          .order("id", { ascending: true }),
+      )
+    : [];
 
-  const groupIds = (groups ?? []).map((g) => g.id);
-  const { data: choices } = groupIds.length > 0
-    ? await supabase
-        .from("option_choices")
-        .select("id, option_group_id, name, price_cents, display_order")
-        .in("option_group_id", groupIds)
-        .order("display_order", { ascending: true })
-    : { data: [] as Array<{ id: string; option_group_id: string; name: string; price_cents: number }> };
+  const groupIds = groups.map((g) => g.id);
+  const choices = groupIds.length > 0
+    ? await fetchAllRows<{ id: string; option_group_id: string; name: string; price_cents: number }>(() =>
+        supabase
+          .from("option_choices")
+          .select("id, option_group_id, name, price_cents, display_order")
+          .in("option_group_id", groupIds)
+          .order("display_order", { ascending: true })
+          .order("id", { ascending: true }),
+      )
+    : [];
 
   const choicesByGroup = new Map<string, Choice[]>();
-  for (const c of choices ?? []) {
+  for (const c of choices) {
     const arr = choicesByGroup.get(c.option_group_id) ?? [];
     arr.push({ id: c.id, name: c.name, price_cents: c.price_cents });
     choicesByGroup.set(c.option_group_id, arr);
