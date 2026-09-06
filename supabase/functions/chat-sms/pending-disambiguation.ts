@@ -68,6 +68,54 @@ export function categoryWordMatches(category: string | null | undefined, message
   return false;
 }
 
+// DEFECT 2 (2026-09-06 live QA): "forget the salad" was reaching
+// resolvePendingDisambiguation's category-word check unfiltered — "salad"
+// stem-matched the Salads candidate and got added, exactly the opposite of
+// what the customer said. Negation/abandonment must be checked BEFORE any
+// category/ordinal/price matching runs, not folded into it, so a decline is
+// never misread as a selection.
+const DECLINE_CUES = /\b(?:forget|never\s*mind|cancel|skip|drop|don'?t|not|no)\b/i;
+
+// Generic referents ("cancel THAT", "skip IT") don't name a candidate by
+// word, but during an open disambiguation they can only refer to the
+// pending item as a whole — treated as a candidate match for this check only.
+const GENERIC_REFERENTS = new Set(["it", "that", "them", "those", "one"]);
+
+/**
+ * Does this message decline/abandon the pending disambiguation rather than
+ * answer it? True only when a decline cue (forget/not/no/never mind/cancel/
+ * skip/don't/drop) appears alongside a word that actually names one of the
+ * candidates (its category, its name) or a generic referent to "the pending
+ * item" ("that", "it"). A bare "no" with nothing else in the message doesn't
+ * trip this — resolvePendingDisambiguation already returns null for it, same
+ * outcome (nothing selected), so this function only needs to catch cases
+ * where a candidate word is ALSO present and would otherwise have matched.
+ */
+export function isPendingDisambiguationDeclined(
+  message:    string,
+  candidates: PendingCandidate[],
+): boolean {
+  if (!DECLINE_CUES.test(message)) return false;
+
+  const candidateStems = new Set<string>();
+  for (const c of candidates) {
+    for (const s of significantStems(c.name)) candidateStems.add(s);
+    if (c.category) for (const s of significantStems(c.category)) candidateStems.add(s);
+  }
+
+  const words = message
+    .toLowerCase()
+    .replace(/[^a-z0-9\s']/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  for (const w of words) {
+    if (GENERIC_REFERENTS.has(w)) return true;
+    if (candidateStems.has(stemWord(w))) return true;
+  }
+  return false;
+}
+
 const ORDINAL_WORDS: Record<string, number> = { first: 0, second: 1, third: 2, fourth: 3, fifth: 4 };
 // Deliberately excludes "one": it is the single most common English filler
 // pronoun ("the salad ONE", "that ONE", "the 12.95 ONE") and would falsely

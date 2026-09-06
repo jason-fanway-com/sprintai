@@ -7,6 +7,7 @@ import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/ass
 import {
   categoryWordMatches,
   extractPriceCentsFromMessage,
+  isPendingDisambiguationDeclined,
   matchOrdinalPosition,
   renderDisambiguationReask,
   resolvePendingDisambiguation,
@@ -17,6 +18,11 @@ import {
 const BLT_CANDIDATES: PendingCandidate[] = [
   { menu_item_id: "cold-blt", name: "BLT", category: "Cold Sandwiches", price_cents: 799 },
   { menu_item_id: "panini-blt", name: "BLT", category: "Homemade Paninis", price_cents: 1099 },
+];
+
+const CAESAR_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "caesar-salad", name: "Chicken Caesar", category: "Salads", price_cents: 1295 },
+  { menu_item_id: "caesar-wrap", name: "Chicken Caesar", category: "Wraps", price_cents: 999 },
 ];
 
 Deno.test("stemWord: singular/plural round-trips for the categories that actually collide", () => {
@@ -68,6 +74,48 @@ Deno.test("resolvePendingDisambiguation: price match tolerates a leading dollar 
 
 Deno.test("resolvePendingDisambiguation: unresolvable answer returns null, never guesses", () => {
   assertEquals(resolvePendingDisambiguation("um not sure", BLT_CANDIDATES), null);
+});
+
+// DEFECT 2 (2026-09-06 live QA): "forget the salad" was silently ADDING the
+// salad — category matching ran with no idea the customer had just declined
+// it. These lock down that a decline cue next to a candidate word (or a
+// generic referent to "the pending item") is caught before any selection
+// could happen, never after.
+Deno.test("isPendingDisambiguationDeclined: 'forget the salad' declines, never selects", () => {
+  assertEquals(isPendingDisambiguationDeclined("forget the salad", CAESAR_CANDIDATES), true);
+  assertEquals(resolvePendingDisambiguation("forget the salad", CAESAR_CANDIDATES)?.category, "Salads");
+});
+
+Deno.test("isPendingDisambiguationDeclined: 'not the wrap' declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("not the wrap", CAESAR_CANDIDATES), true);
+});
+
+Deno.test("isPendingDisambiguationDeclined: 'never mind the caesar' declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("never mind the caesar", CAESAR_CANDIDATES), true);
+});
+
+Deno.test("isPendingDisambiguationDeclined: 'cancel that' declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("cancel that", CAESAR_CANDIDATES), true);
+  assertEquals(resolvePendingDisambiguation("cancel that", CAESAR_CANDIDATES), null);
+});
+
+Deno.test("isPendingDisambiguationDeclined: 'skip it' declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("skip it", CAESAR_CANDIDATES), true);
+  assertEquals(resolvePendingDisambiguation("skip it", CAESAR_CANDIDATES), null);
+});
+
+Deno.test("isPendingDisambiguationDeclined: \"don't want the salad\" declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("don't want the salad", CAESAR_CANDIDATES), true);
+});
+
+Deno.test("isPendingDisambiguationDeclined: 'drop the wrap one' declines", () => {
+  assertEquals(isPendingDisambiguationDeclined("drop the wrap one", CAESAR_CANDIDATES), true);
+});
+
+Deno.test("isPendingDisambiguationDeclined: an ordinary answer is never mistaken for a decline", () => {
+  assertEquals(isPendingDisambiguationDeclined("the salad one", CAESAR_CANDIDATES), false);
+  assertEquals(isPendingDisambiguationDeclined("2", CAESAR_CANDIDATES), false);
+  assertEquals(isPendingDisambiguationDeclined("um not sure", CAESAR_CANDIDATES), false);
 });
 
 Deno.test("matchOrdinalPosition: excludes the fractional half of a decimal price", () => {
