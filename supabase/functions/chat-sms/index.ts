@@ -4217,14 +4217,48 @@ Deno.serve(async (req: Request) => {
   let correctionApplied = false;
   {
     const norm = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Bucket 3 (ambiguous, 2026-09-06 — "no thanks" deleted the only line):
+    // bare "never mind" / "forget that" with items already in the cart and no
+    // pending disambiguation question open. These two phrases are genuinely
+    // ambiguous — "I'm done" after "anything else?" or "don't add that" after
+    // a proposed item — but must NEVER be read as "delete something I already
+    // ordered" as a side effect of guessing wrong. Ask instead of guessing,
+    // and never hand this to the LLM either (it can guess wrong the same way).
+    // A named-item form ("forget the salad") is not covered here — see the
+    // named-item regexes below and isPendingDisambiguationDeclined upstream.
+    const isAmbiguousBareDecline = cartItems.length > 0 && !cart.pending_disambiguation &&
+      /^(never ?mind|forget that)$/i.test(norm);
+    if (isAmbiguousBareDecline) {
+      console.log(`[chat-sms] Ambiguous bare decline (conv=${conversation.id}): "${userMessage}" with ${cartItems.length} cart item(s), no pending question open. Asking instead of guessing.`);
+      const reply = "Just to make sure — did you want to remove your last item, or are you all set and ready to checkout?";
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    }
+
+    // Bucket 1 (completion, 2026-09-06): "no thanks", "no thank you", "nope",
+    // "that's all", "im good"/"i'm good", "all set", "that'll do" must NOT be
+    // treated as corrections at all — same as "that's it"/"checkout" today,
+    // they simply aren't matched below and fall through to the normal
+    // LLM/tool loop with the cart untouched.
     const isCorrection = cartItems.length > 0 && (
       /^(just want one|make it one|just one|only one|one is fine|just 1|make it 1|one of those|one of them|just the one|actually just one|actually one)$/i.test(norm) ||
       /^(i just want|i only want|i want just|ill take just|ill take one|ill have just|i just need|i wanted just|i meant just|give me just|let me get just)\s+(one|1)$/i.test(norm) ||
-      /^(remove one|remove that|remove it|take it off|take that off|no thanks|never mind|nevermind|scratch that|forget that)$/i.test(norm) ||
+      /^(remove one|remove that|remove it|take it off|take that off|scratch that)$/i.test(norm) ||
       /^(remove the|remove my|drop the|drop my|take off the|take off my)\s+.+$/i.test(norm)
     );
     if (isCorrection) {
-      const isRemove = /^(remove|drop|take off|scratch|forget|no thanks|never ?mind)\b/i.test(norm);
+      // Bucket 2 (removal, 2026-09-06): requires an actual removal verb.
+      // "no thanks"/"never mind"/"nevermind" no longer qualify — they're
+      // either bucket 1 (never reach isCorrection) or bucket 3 (handled and
+      // returned above, before isCorrection is even evaluated).
+      // "take (it|that|this|them) off" is matched explicitly alongside bare
+      // "take off" — the old `take off\b` alternative never matched "take it
+      // off"/"take that off" (word-order mismatch), so those two phrases
+      // silently fell through to the quantity-reduction branch below instead
+      // of removing the item. Fixed here since it's the same verb check.
+      const isRemove = /^(remove|delete|drop|take\s+(?:it|that|this|them)\s+off|take off|cancel|scratch|get rid of)\b/i.test(norm);
       if (isRemove && cartItems.length > 0) {
         // Remove the last item from the cart
         const lastItem = cartItems[cartItems.length - 1];
