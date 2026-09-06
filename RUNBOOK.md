@@ -141,18 +141,39 @@ out" is the natural thing to do. Fix belongs with the owner editor.
 
 Full narrative in `docs/DAILY.md`. Operational deltas only, here.
 
-### Admin dashboard: auto-deploy has been broken since 8/22
+### Admin dashboard auto-deploy — CORRECTED 2026-09-06 (do not re-open)
 
-Confirmed in a82ab23's own commit message. Until this is fixed, the manual deploy
-steps in "Admin dashboard (manual deploy)" below are the ONLY way a change reaches
-`getsprintai.com/admin` — and the built `dist/`/`deploy-root/` output must then be
-**committed to git**, or `main` silently drifts from what is actually live (this
-happened today: `main` was carrying `index-FezUO85U` while the front door was
-serving `index-C6h_btXT`). Committing built bundles is an established pattern in
-this repo (`admin-dashboard/dist` and `deploy-root` are not gitignored), not a
-one-off workaround — but it means `git blame` on those files is meaningless and the
-only way to know what's live is to `curl` the front door and match the JS hash, as
-the existing deploy steps already say to do.
+This was previously written up as broken since 8/22, blocked on a GitHub PAT
+missing `workflow` scope. That claim was checked against live evidence
+2026-09-06 and is FALSE — do not repeat it.
+
+**What's actually true:** the admin site (`sprintai-chat-admin`, served at
+`getsprintai.com/admin`) auto-deploys through **Netlify's own git integration**
+— linked to `jason-fanway-com/sprintai`, branch `main`, `npm run build` → `dist`.
+GitHub Actions is not in the deploy path at all. Confirmed via the Netlify API:
+`total_count: 0` workflow runs on the repo, ever; the last 8 production deploys
+(2026-09-05 12:15–19:49 UTC) all `ready`.
+
+**Where the false claim came from:** commit `a82ab23` on branch
+`backup-admin-workflow-ci` added `.github/workflows/deploy-admin.yml` — a
+SECOND, unused deploy path. A `repo`-scoped PAT genuinely cannot push a commit
+touching `.github/workflows/`, so that one new file is blocked. Someone recorded
+that as "admin auto-deploy is dead" without checking whether the existing
+Netlify path (which needs no such file) still worked. It did, the whole time.
+
+**Consequence for retired shops:** none. Hiding a paused shop from the
+owner-preview picker is a one-line `Layout.tsx` change (`77e8b03`/`429d450`) on
+the normal Netlify path — it needed no workflow, no PAT, no decision from
+Jason, and it's live.
+
+**Open question, not chased down — write here for the next person:** the
+Netlify build settings for `sprintai-chat-admin` show `base: (unset)`,
+`cmd: npm run build`, `dir: dist` — nothing in that config obviously points the
+build at `admin-dashboard/`. Deploys succeed and the right bundle serves, so
+something reconciles this (a root `package.json` script? a Netlify UI setting
+not visible via this API call?), but it was not run down. If the admin build
+ever breaks in a way that looks like the wrong directory got built, start here
+before assuming it's a new problem.
 
 ### Public tester rate limits changed
 
