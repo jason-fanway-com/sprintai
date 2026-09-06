@@ -4071,19 +4071,23 @@ Deno.serve(async (req: Request) => {
   // and-menu-gaps.md, BLOCKER 1).
   //
   // FIX C (2026-09-06, live QA — customer could not exit with a pending
-  // question open): resolvePendingDisambiguation() is now the ONLY gate.
-  // Anything it can't deterministically resolve — a genuinely new order
-  // ("large pepperoni pizza"), a decline ("that's it", "no thanks",
-  // "checkout"), or a garbled answer — falls through to the normal LLM/tool
-  // loop rather than re-asking and returning. The re-ask used to fire on
-  // everything except "names a different real menu item", which meant
-  // "checkout" or "nothing else" hit the re-ask branch and returned
-  // immediately: food sat in the cart with no path to pay. There is no
-  // special-casing for decline/checkout here — they simply aren't resolved,
-  // so they take the same fall-through every other unresolved message takes.
-  // The still-open question rides along on whatever reply the loop produces
-  // (see carriedDisambiguation append near the end of this function), which
-  // also clears pending_disambiguation once that turn reaches checkout.
+  // question open): resolvePendingDisambiguation() is now the ONLY gate for
+  // "does this message pick a candidate". Anything it can't deterministically
+  // resolve — a genuinely new order ("large pepperoni pizza"), a checkout
+  // signal ("that's it", "no thanks", "checkout", "nothing else"), or a
+  // garbled answer — falls through to the normal LLM/tool loop rather than
+  // re-asking and returning. The re-ask used to fire on everything except
+  // "names a different real menu item", which meant "checkout" or "nothing
+  // else" hit the re-ask branch and returned immediately: food sat in the
+  // cart with no path to pay. There is no special-casing for checkout intent
+  // here — it simply isn't resolved, so it takes the same fall-through every
+  // other unresolved message takes. The still-open question rides along on
+  // whatever reply the loop produces (see carriedDisambiguation append near
+  // the end of this function), which also clears pending_disambiguation once
+  // that turn reaches checkout. (A decline of THIS item specifically —
+  // "forget the salad" — is a separate, narrower case handled below by
+  // isPendingDisambiguationDeclined; unlike a checkout signal it IS fully
+  // resolved information, so it is not part of this fall-through.)
   let carriedDisambiguation: PendingDisambiguation | null = null;
   if (cart.pending_disambiguation) {
     const pending = cart.pending_disambiguation;
@@ -4097,12 +4101,22 @@ Deno.serve(async (req: Request) => {
     const resolved = declined ? null : resolvePendingDisambiguation(userMessage, pending.candidates);
 
     if (declined) {
+      // Live QA (2026-09-06): falling through to the normal LLM/tool loop
+      // here — as the deterministic layer does for an unresolved answer —
+      // let the model re-litigate the very question the customer just
+      // declined. "forget the salad" cleared pending_disambiguation
+      // correctly, but the model then guessed the customer meant the OTHER
+      // candidate (the wrap) and added THAT, which is exactly the "add
+      // nothing" contract broken from the other direction. A decline is
+      // fully resolved information — same footing as a resolved answer —
+      // so it gets the same short-circuit-and-return treatment: acknowledge,
+      // add nothing, never hand this turn to the LLM at all.
       console.log(`[chat-sms] Pending disambiguation declined (conv=${conversation.id}): "${pending.query_name}" abandoned by customer ("${userMessage}"). Clearing state, adding nothing.`);
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
-      cart.pending_disambiguation = null;
-      // Deliberately no return: falls through to the normal LLM/tool loop
-      // below with the state already cleared. Nothing is added on the
-      // customer's behalf, and there is no still-open question to carry.
+      const reply = "No problem — I won't add that. Anything else?";
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     } else if (resolved) {
       const localCartItems = [...cart.cart_json];
       const addResult = await executeTool(
