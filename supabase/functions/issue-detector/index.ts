@@ -991,6 +991,17 @@ async function runDetection(
   return report;
 }
 
+// ─── Auth ────────────────────────────────────────────────────────────────────
+/** Constant-time string compare (length is not secret here — both sides are JWTs). */
+function secretsMatch(a: string, b: string): boolean {
+  const ea = new TextEncoder().encode(a);
+  const eb = new TextEncoder().encode(b);
+  if (ea.length !== eb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ea.length; i++) diff |= ea[i] ^ eb[i];
+  return diff === 0;
+}
+
 // ─── Entry point ─────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -1002,6 +1013,37 @@ Deno.serve(async (req: Request) => {
     return new Response(
       JSON.stringify({ ok: false, error: "missing SUPABASE_URL / SERVICE_ROLE_KEY" }),
       { status: 500, headers: { ...CORS, "content-type": "application/json" } },
+    );
+  }
+
+  // ── Auth gate (fails CLOSED) ───────────────────────────────────────────────
+  // This function stays verify_jwt=false ON PURPOSE, and the gate lives here
+  // instead. verify_jwt=true would NOT secure this path: it accepts ANY valid
+  // project JWT, including the PUBLIC anon key that ships in the browser bundle
+  // — on an endpoint that sends real SMS to shop owners. Requiring the
+  // service-role key explicitly is strictly stronger, and it is already what
+  // every real caller sends:
+  //   - pg_cron 047/048 (10-min sweep) and 093 (2-min escalation), via the vault
+  //     secret `issue_detector_bearer` — verified 2026-09-06 to be byte-identical
+  //     to SUPABASE_SERVICE_ROLE_KEY (same md5, same 219-char length).
+  //   - scripts/backfill-issues.sh, which sends `Bearer $SERVICE_KEY`.
+  // Nothing in a browser calls this, so there is no anon-key caller to break.
+  // The expected bearer is a DEDICATED secret, NOT the function's injected
+  // SUPABASE_SERVICE_ROLE_KEY. Those two diverge on this project: the platform
+  // injects a NEW-format service key (sha 2d96d1…) into the function env, while
+  // every real caller (pg_cron via vault `issue_detector_bearer`, and
+  // backfill-issues.sh) sends the LEGACY service-role JWT (sha e2ff9f…).
+  // ISSUE_DETECTOR_BEARER is set to that legacy value so the gate matches the
+  // callers, not the env. If it is unset we fall back to the env key rather
+  // than fail every request closed on a missing-secret misconfig.
+  const expectedBearer = Deno.env.get("ISSUE_DETECTOR_BEARER") || key;
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!bearer || !secretsMatch(bearer, expectedBearer)) {
+    console.warn("[issue-detector] rejected request with missing/invalid bearer");
+    return new Response(
+      JSON.stringify({ ok: false, error: "unauthorized" }),
+      { status: 401, headers: { ...CORS, "content-type": "application/json" } },
     );
   }
 

@@ -74,7 +74,10 @@ verify_jwt = false  # Conversation Judge worker. Invoked by the scheduled sweep
 verify_jwt = false  # Public PIN verify; real gate is server-side PIN + HMAC session token
 
 [functions.issue-detector]
-verify_jwt = false  # Scheduled sweep; invoked with service-role key, not by end users
+verify_jwt = false  # Scheduled sweep; invoked with service-role key, not by end users.
+                    # Auth is enforced IN the function against ISSUE_DETECTOR_BEARER
+                    # (fails closed) — stronger than verify_jwt=true, which would also
+                    # accept the public anon key on an SMS-sending path. See index.ts.
 
 [functions.test-runner]
 verify_jwt = false  # Proof queue drainer; invoked by scheduled sweep with service-role
