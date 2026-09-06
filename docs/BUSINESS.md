@@ -190,6 +190,13 @@ Be clear about what that means commercially: **6/20 is the pass rate.** A self-s
 platform that can only read a third of restaurant menus still needs a human for the other
 two-thirds. Honest failure is a prerequisite for fixing it, not the fix.
 
+One specific cause found in that 20-site measurement: the reader's own timeout budget for
+the biggest menus was set longer than the server it runs on allows, so restaurants with the
+largest, most detailed menus — often the ones with the most to gain from not re-typing it
+by hand — were exactly the ones most likely to fail. Fixed 2026-09-06 (`scrape-shop` v73):
+every step of the read now fits inside the platform's real time limit instead of hoping it
+finishes first. Not yet re-measured against the same 20 sites.
+
 ### Added 2026-09-05 (later) — menu sourcing has a deliberate last resort, and it's weak
 
 A source-priority order was set: the restaurant's own website, then an owner-provided

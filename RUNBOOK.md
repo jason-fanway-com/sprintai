@@ -179,7 +179,7 @@ owner-edited ITEMS did, under v37 — the initial readiness-log claim that v37 h
 owner-edited item that's `active=false` stays inactive even if the CSV re-adds it —
 owner intent wins over the CSV.
 
-### scrape-shop v72 / parse-menu-pdf v93 — confirmed live via Supabase CLI
+### scrape-shop v73 / parse-menu-pdf v93 — confirmed live via Supabase CLI
 
 Source-priority ladder is live: own website → owner-provided PDF/photo → Google
 listing → aggregator (last resort), with provenance recorded per item (migration
@@ -187,6 +187,23 @@ listing → aggregator (last resort), with provenance recorded per item (migrati
 measured 0/4 on sites with no usable direct-site menu — Slice returns items with no
 options/sizes, Toast and ChowNow are JS-rendered and return nothing to a static
 scrape.
+
+**v73 (52f4caf, deployed 2026-09-06 03:32 UTC, confirmed via `supabase functions
+list`)** fixed a defect the item-K remeasure2 run surfaced: `MENU_LLM_TIMEOUT_MS=170s`
+was longer than the platform's ~150s function ceiling, so the two biggest menus in
+that batch (sites 9 and 20) died to a gateway 504 mid-extraction. Site 9's 240 items
+had already landed in the DB but the shop was stuck `crawl_status='running'` forever;
+site 20 got nothing. Every bounded network call in the function (context summarize,
+hours, menu extraction, PDF fetch/parse, each ladder rung) now goes through
+`remainingBudgetMs()` — it gets `min(desired timeout, wall-clock budget remaining)`,
+computed from a 150s measured ceiling minus a 10s jitter margin minus a 5s
+final-write reserve, and is skipped outright once there's no useful time left rather
+than fired and cut off mid-flight. Separately, a PDF-rung provenance bug is fixed:
+`parse-menu-pdf` replaces the menu row wholesale on a PDF win, so the menu id
+captured earlier in the request pointed at a deleted row and the
+`source_detail`/`source` write was a silent no-op — the shop's id is now re-resolved
+by `shop_id` immediately before that write. Not yet re-measured against the item-K
+sample; see `docs/specs/2026-09-03-READINESS.md` item K for the open remeasure.
 
 ### Owner-facing Menu & Settings editor — `/menu-settings`
 

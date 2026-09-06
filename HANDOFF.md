@@ -68,7 +68,7 @@ in place as a record, not corrected in place. Full narrative: `docs/DAILY.md`.
 |---|---|---|
 | Owner-facing Menu & Settings editor | `/menu-settings` in the admin dashboard | Live. Writes go through `admin-chat`'s registry under the owner's own JWT, never service-role. Nine operations including `ADD_ITEM`/`REMOVE_ITEM`. Migrations 097/101/104 applied. |
 | `import-menu-csv` v38 | Supabase, confirmed via CLI | Deployed. Owner-edited option groups/choices now survive re-import (items already did under v37). |
-| `scrape-shop` v72 / `parse-menu-pdf` v93 | Supabase, confirmed via CLI | Deployed. Source-priority ladder (own site → owner PDF/photo → Google listing → aggregator last resort) with per-item provenance (migration 102). |
+| `scrape-shop` v73 / `parse-menu-pdf` v93 | Supabase, confirmed via CLI | Deployed. Source-priority ladder (own site → owner PDF/photo → Google listing → aggregator last resort) with per-item provenance (migration 102). v73 adds deadline-aware timeouts on the largest menus — see "State as of 2026-09-06" below. |
 | chat-sms | Supabase | v226 per the readiness log (not independently reconfirmed via CLI this pass). Clause-aware phantom-add guard; delivery-availability now requires coordinates AND a configured radius. |
 | Judge panel | Admin dashboard, under the chat simulator | Live, read-only/advisory. No code path writes a proposal back into a live prompt or config. |
 | Public tester rate limits | `public-tester` edge function | Per-IP and per-browser hourly limits REMOVED; global daily cap raised 150 → 1000. Turn claiming is now atomic (RPC, migration 098). |
@@ -99,6 +99,25 @@ in place as a record, not corrected in place. Full narrative: `docs/DAILY.md`.
 commit message). Bundles are deployed by hand and then committed to git after the fact
 so `main` has a record of what's actually live — `main` was found stale today (carrying
 `index-FezUO85U` while the front door served `index-C6h_btXT`). See RUNBOOK.md.
+
+## State as of 2026-09-06 04:00
+
+Supersedes the 21:02 snapshot above for anything it contradicts.
+
+- **`scrape-shop` v73** (52f4caf) — confirmed deployed via `supabase functions list`
+  (2026-09-06 03:32 UTC). Fixes the item-K remeasure2 failure on the two largest
+  menus: `MENU_LLM_TIMEOUT_MS` exceeded the platform's ~150s function ceiling, so
+  the biggest extractions died to a gateway 504 and one of them left its shop stuck
+  `crawl_status='running'` forever. Every bounded network call in the function is
+  now budget-aware and skips itself rather than firing into a deadline it can't
+  meet. Also fixes a silent no-op: the PDF-rung provenance write was targeting a
+  menu row that `parse-menu-pdf` had already replaced. See RUNBOOK.md for detail.
+  **Not yet re-measured against the item-K sample** — that remeasure is still the
+  open item on `docs/specs/2026-09-03-READINESS.md`.
+- Working-tree state is unchanged from the 21:02 snapshot: `scripts/imsg-bridge.sh`,
+  `scripts/test-suite/run.ts`, `vitos-demo.html`, and `deno.lock` are still
+  uncommitted, plus a number of untracked spec docs and `scripts/tmp-*` scratch
+  files from the item-K measurement runs. None of that is reflected as shipped.
 
 ## What SprintAI is
 
