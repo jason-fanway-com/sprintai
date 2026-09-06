@@ -2073,15 +2073,6 @@ const GENERIC_LAST_WORDS = new Set([
   "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
 ]);
 
-// Words a customer uses to name the FORM of a dish, not the dish itself. When
-// someone says "pepperoni pizza" and the only Pepperoni we sell is a stromboli,
-// offering them "the Pepperoni" is technically true and practically a lie —
-// these words are how we notice the mismatch and name the section instead.
-const FOOD_FORM_WORDS = [
-  "pizza", "stromboli", "calzone", "sandwich", "sub", "hoagie", "wrap",
-  "salad", "soup", "burger", "roll", "panini", "flatbread", "bagel",
-];
-
 function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
 
@@ -4701,53 +4692,21 @@ Deno.serve(async (req: Request) => {
         if (missing.length > 0) {
           const mode = replyIsClosing ? "v2-closing" : "v3-multi-item";
           console.warn(`[chat-sms] GUARD 4 ${mode} (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-          // Item names keep their real casing. Lowercasing produced
-          // 'cheese - large (16")' in a customer-facing sentence.
-          //
-          // QUALIFY BY CATEGORY when the customer named a FORM of food that the
-          // matched item is not (2026-09-05). "large pepperoni and a side of
-          // garlic knots" matched the Pepperoni *Stromboli Roll* and asked
-          // "Want me to add the Pepperoni too?" — which reads, to someone who
-          // just asked for a pizza, like an offer of a pepperoni pizza we do
-          // not sell. Naming the section makes the offer true.
-          const catByName = new Map<string, string>();
-          for (const mi of effectiveMenu) {
-            if (mi.category && !catByName.has(mi.name)) catByName.set(mi.name, mi.category);
-          }
-          const askedForms = FOOD_FORM_WORDS.filter(w =>
-            new RegExp(`\\b${w}s?\\b`, "i").test(userMessage),
-          );
-          const label = (n: string): string => {
-            const cat = catByName.get(n);
-            if (!cat || askedForms.length === 0) return n;
-            const hay = `${n} ${cat}`.toLowerCase();
-            // Only qualify when NONE of the forms the customer named appear in
-            // the item's own name or category — i.e. we'd be answering "pizza?"
-            // with something that is not a pizza.
-            const formMatches = askedForms.some(w => new RegExp(`\\b${w}s?\\b`, "i").test(hay));
-            return formMatches ? n : `${n} (${cat})`;
-          };
-          const labelled = missing.map(label);
-          // Don't ask "are you all set?" twice in one message. The model's
-          // own reply frequently already closes with a question in this
-          // shape ("Anything else, or are you all set?") — appending a
-          // second one stacked two closers back to back (2026-09-06, Jason's
-          // transcript: "...or are you all set? Want me to add the Pepperoni
-          // too, or are you all set?"). When the reply already closes, the
-          // upsell asks its OWN question without a redundant closing tag.
-          const replyAlreadyCloses = /\b(?:are you all set|good to go|anything else|all set)\??\s*$/i.test(reply.trim());
-          let upsellLine: string;
-          if (labelled.length === 1) {
-            upsellLine = replyAlreadyCloses
-              ? `Want me to add the ${labelled[0]} too?`
-              : `Want me to add the ${labelled[0]} too, or are you all set?`;
-          } else {
-            const list = labelled.map((n, i) => i === labelled.length - 1 ? `and ${n}` : n).join(', ');
-            upsellLine = replyAlreadyCloses
-              ? `Did you also want ${list}?`
-              : `Did you also want ${list}, or good to go?`;
-          }
-          reply = `${reply}\n\n${upsellLine}`;
+          // CUSTOMER-FACING SUGGESTION REMOVED (2026-09-06, Jason, P0 incident):
+          // this used to append "Did you also want X, Y, and Z, or good to
+          // go?" built from fuzzy name-matches against the ENTIRE menu. It is
+          // not a real upsell — it is fuzzy search results read aloud. A live
+          // tester ordering "mild wings and chicken bacon ranch pizza" got
+          // offered "Chicken Bacon Ranch (Flatbreads), Chicken (Quesadillas),
+          // and Ranch" (near-name matches to the pizza he already ordered).
+          // That unresolved offer then sat in conversation history until a
+          // later bare "Looks good" was read by the model as consent to add
+          // all three, doubling the cart from $37.97 to $74.95 with zero
+          // customer intent. Detection + logging above stays (it still catches
+          // genuinely dropped items, a real bug fixed 2026-09-05) — only the
+          // customer-facing text is gone. A real upsell is a deliberate
+          // feature with a deliberate design, not a side effect of name
+          // matching.
         }
       }
     }
@@ -4934,6 +4893,143 @@ Deno.serve(async (req: Request) => {
     if (missingClauses.length > 0) {
       console.warn(`[chat-sms] GUARD 8 (pending-options not enumerated) tripped (conv=${conversation.id}). Reply omitted real choice names for: ${missingClauses.join(" | ")}`);
       reply = `${reply} ${missingClauses.join(" ")}`;
+    }
+  }
+
+  // ── Guard 9: unconsented cart growth on a bare affirmation ──────────────
+  // P0 INCIDENT (2026-09-06, Jason's tester "Luca"): GUARD 4's fuzzy-match
+  // upsell line ("Did you also want Chicken Bacon Ranch (Flatbreads), Chicken
+  // (Quesadillas), and Ranch, or good to go?") sat in conversation history as
+  // an unresolved offer. Two turns later Luca said "Looks good" — a bare
+  // affirmation — and the model read the FULL history including that stale
+  // offer as consent to add all three, issuing real add_item tool calls. Cart
+  // went from 2 items/$37.97 to 4 items/$74.95 with zero customer intent.
+  //
+  // Removing GUARD 4's upsell text (above) fixes THIS incident's trigger, but
+  // Jason's rule is broader and must hold for any FUTURE mechanism that
+  // leaves an open offer in history: "'Looks good', 'yes', 'yep', 'sure',
+  // 'ok', 'sounds good', 'perfect', 'that works' confirm the cart as it
+  // stands. They are not consent to add anything the customer never named."
+  //
+  // Deterministic backstop: compare TOTAL QUANTITY per menu_item_id between
+  // the pre-loop cart (`cartItems`) and the post-tool-call cart (`guardCart`).
+  // Quantity growth for an item is what makes a customer pay more — this is
+  // the signal to check for consent on, not a raw line-level diff.
+  //
+  // Deliberately NOT a fingerprint (menu_item_id + options) diff: filling in
+  // a pending required option group (e.g. answering "yes" to "want ranch on
+  // that?") mutates an EXISTING line's `options` in place via add_item's own
+  // resolvingPendingIdx merge path (same array slot, same total quantity) —
+  // a fingerprint-only diff would see a "new" combination and wrongly delete
+  // a line the customer never asked to remove. Total quantity per item is
+  // unchanged by that resolution, so keying on quantity growth skips it
+  // correctly while still catching the Luca-shape bug (brand new lines with
+  // zero prior quantity for that item).
+  //
+  // Any growth on a turn where the customer's message is a bare affirmation
+  // (`impliesOrderConfirmation`, reused — not reinvented) is unconsented
+  // UNLESS the CURRENT message alone (never history — that is the whole
+  // point) names the item. A genuinely named add on affirmation-adjacent
+  // phrasing ("yeah also add fries") is not reverted: "fries" is in this
+  // turn's message, so it was actually asked for.
+  {
+    const isBareAffirmationG9 = impliesOrderConfirmation(userMessage);
+    if (isBareAffirmationG9) {
+      const fingerprintG9 = (i: CartItem) => `${i.menu_item_id}::${JSON.stringify(i.options ?? undefined)}`;
+      const beforeByFingerprintG9 = new Map<string, CartItem>();
+      const qtyBeforeG9 = new Map<string, number>();
+      for (const item of cartItems) {
+        const r = item as CartItem;
+        if (!r.menu_item_id) continue; // skip bundles
+        beforeByFingerprintG9.set(fingerprintG9(r), r);
+        qtyBeforeG9.set(r.menu_item_id, (qtyBeforeG9.get(r.menu_item_id) || 0) + (r.quantity || 1));
+      }
+      const qtyAfterG9 = new Map<string, number>();
+      for (const item of guardCart) {
+        const r = item as CartItem;
+        if (!r.menu_item_id) continue; // skip bundles
+        qtyAfterG9.set(r.menu_item_id, (qtyAfterG9.get(r.menu_item_id) || 0) + (r.quantity || 1));
+      }
+
+      const menuItemNamesG9 = buildMenuItemNames(effectiveMenu);
+      const namedThisTurnG9 = extractCustomerReferencedItems(
+        [{ role: "user", content: userMessage }],
+        menuItemNamesG9,
+      );
+      const isNamedThisTurnG9 = (itemName: string): boolean => {
+        const itemLower = itemName.toLowerCase();
+        return [...namedThisTurnG9].some(n => {
+          const n2 = n.toLowerCase();
+          return n2.includes(itemLower) || itemLower.includes(n2);
+        });
+      };
+
+      const phantomAddsG9: CartItem[] = [];
+      const qtyRevertsG9: Array<{ item: CartItem; priorQty: number }> = [];
+      for (const [menuItemId, after] of qtyAfterG9) {
+        let delta = after - (qtyBeforeG9.get(menuItemId) || 0);
+        if (delta <= 0) continue;
+        const postLines = guardCart.filter(i => (i as CartItem).menu_item_id === menuItemId) as CartItem[];
+        if (isNamedThisTurnG9(postLines[0]?.name ?? "")) continue;
+
+        // Consume the growth against lines whose exact fingerprint already
+        // existed before (a real quantity bump on an unchanged line) first,
+        // then against lines with no prior fingerprint match at all (a
+        // brand-new line) — bounded by `delta` so an unrelated resolved-
+        // options line for the same item is never touched once the growth
+        // it's responsible for has been fully accounted for.
+        for (const line of postLines) {
+          if (delta <= 0) break;
+          const before = beforeByFingerprintG9.get(fingerprintG9(line));
+          if (!before) continue;
+          const bump = (line.quantity || 1) - (before.quantity || 1);
+          if (bump <= 0) continue;
+          const take = Math.min(bump, delta);
+          qtyRevertsG9.push({ item: line, priorQty: (line.quantity || 1) - take });
+          delta -= take;
+        }
+        for (const line of postLines) {
+          if (delta <= 0) break;
+          if (beforeByFingerprintG9.has(fingerprintG9(line))) continue;
+          const lineQty = line.quantity || 1;
+          if (lineQty <= delta) {
+            phantomAddsG9.push(line);
+            delta -= lineQty;
+          } else {
+            qtyRevertsG9.push({ item: line, priorQty: lineQty - delta });
+            delta = 0;
+          }
+        }
+      }
+
+      if (phantomAddsG9.length > 0 || qtyRevertsG9.length > 0) {
+        const revertedDesc = [
+          ...phantomAddsG9.map(r => `removed ${r.name}`),
+          ...qtyRevertsG9.map(({ item, priorQty }) => `reverted ${item.name} qty ${item.quantity} -> ${priorQty}`),
+        ].join(", ");
+        console.warn(`[chat-sms] GUARD 9 (unconsented-add-on-affirmation) tripped (conv=${conversation.id}). Message "${userMessage}" is a bare affirmation; reverted: ${revertedDesc}`);
+        // Mutate guardCart by OBJECT IDENTITY, not menu_item_id lookup —
+        // executeTool's remove_item/modify_item resolve by menu_item_id
+        // alone, which would delete/modify the WRONG line if the customer
+        // has two lines for the same item with different options (e.g. two
+        // pizzas, different toppings, one of which is the phantom add).
+        // Same pattern GUARD 7 above uses (guardCart.splice by indexOf).
+        for (const r of phantomAddsG9) {
+          const idx = guardCart.indexOf(r);
+          if (idx !== -1) guardCart.splice(idx, 1);
+        }
+        for (const { item, priorQty } of qtyRevertsG9) {
+          (item as CartItem).quantity = priorQty;
+        }
+        await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+        // Honest confirmation of the REAL (reverted) cart only. No dollar
+        // figure here by design — the deterministic Ledger footer below
+        // states the real total from the corrected guardCart; hand-rolling a
+        // total here would risk quoting the pre-revert number.
+        reply = guardCart.length > 0
+          ? "Got it! Anything else, or are you all set?"
+          : "Your cart is empty. What would you like to order?";
+      }
     }
   }
 
