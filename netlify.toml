@@ -3,9 +3,10 @@
   # that dir. The origin therefore serves an explicit allowlist — internal
   # source (admin-dashboard/, supabase/, *.md, *.htmltext, _proof/, scripts,
   # specs, etc.) is never on the origin. See scripts/build-public-site.sh.
-  command   = "npm install && bash scripts/build-public-site.sh"
-  publish   = "public"
-  functions = "netlify/functions"
+  command       = "npm install && bash scripts/build-public-site.sh"
+  publish       = "public"
+  functions     = "netlify/functions"
+  edge_functions = "netlify/edge-functions"
 
   # Skip the build entirely when a commit touches only paths that never reach
   # the origin (build notes, docs/, _proof/, supabase/ functions,
@@ -58,31 +59,24 @@
   status = 302
   force = true
 
-# Public, read-only, no-auth per-shop menu page. Proxy (status 200, not a
-# redirect) so the URL stays getsprintai.com/m/<slug> in the browser bar —
-# same pattern as /admin/* below. Rendered live by the public-menu edge
-# function from menus/menu_items/option_groups/option_choices; no build step,
-# no copy of the menu. Spec: docs/specs/2026-09-06-public-menu-page.md.
+# Public, read-only, no-auth per-shop menu page at getsprintai.com/m/<slug>.
+# Handled by netlify/edge-functions/menu-proxy.js — NOT this redirect rule.
 #
-# Header overrides (2026-09-06, live P0): Supabase's edge gateway rewrites
-# EVERY verify_jwt=false function response whose body looks like HTML into
-# content-type: text/plain + x-content-type-options: nosniff +
-# content-security-policy: default-src 'none'; sandbox — regardless of the
-# Content-Type header the function code explicitly sets (confirmed by curling
-# the function directly, bypassing Netlify entirely, and by a hash-busted
-# forced redeploy that changed nothing). This is a platform-level safeguard
-# against hosting arbitrary HTML on the shared *.supabase.co domain, not a
-# bug in public-menu/index.ts — its Content-Type header has been correct
-# since the very first commit. Overriding here, at the one hop we control
-# that sits between the browser and that gateway, is the only real fix.
+# Why an edge function and not a plain proxy redirect: Supabase's gateway
+# rewrites Content-Type to text/plain + sandboxed CSP for ALL verify_jwt=false
+# functions whose body looks like HTML, regardless of the Content-Type the
+# function explicitly sets. [redirects.headers] only sets *request* headers
+# sent to the upstream — it cannot fix response headers. The edge function is
+# the only hop we fully own between the browser and that gateway.
+#
+# This redirect rule is kept as a belt-and-suspenders fallback only; the edge
+# function (which runs before redirects in Netlify's pipeline) will handle
+# every real request first.
 [[redirects]]
   from = "/m/:slug"
   to = "https://rvdqfxtrskxekfkqnegx.supabase.co/functions/v1/public-menu/:slug"
   status = 200
   force = true
-  [redirects.headers]
-    Content-Type = "text/html; charset=utf-8"
-    Content-Security-Policy = "default-src 'self'; style-src 'unsafe-inline'"
 
 # The public tester page was renamed try.html -> test-kitchen.html on
 # 2026-09-05 (it is the OrderFare Test Kitchen; the filename should match the
