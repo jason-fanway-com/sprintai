@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
-"""Create a QA-twin of a source shop: same menu, no phone, no protection.
+"""DEPRECATED 2026-09-06 — DO NOT CLONE A REAL SHOP.
+
+STANDING RULE: one shop per real-world restaurant. If a test needs different
+data it gets a DIFFERENTLY NAMED shop (e.g. `harness-scratch`), never a copy of
+a real one.
+
+Why: `vitos-pizza-qa` was a twin of `vitos-pizza`. It silently drifted — the
+twin kept a menu with zero toppings and zero dressings long after the real shop
+was fixed. On 2026-09-06 Jason opened the owner simulator, picked the twin by
+name, hit the old broken menu and reasonably concluded nothing had been fixed.
+Two shops with the same name is a trap and it sprang on the founder. A twin
+that drifts does not qualify a launch, it certifies a menu nobody is selling.
+
+Do not use this to mirror a live shop. Kept only for creating an obviously
+named scratch shop when a genuinely destructive test needs one.
+
+Original docstring follows.
+
+Create a QA-twin of a source shop: same menu, no phone, no protection.
 
 Pattern: every live/protected shop gets a QA twin that the Proof test-suite
 runner can hit safely. The twin is:

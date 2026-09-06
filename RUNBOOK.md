@@ -44,8 +44,9 @@ without a deploy).
 ```sql
 update app_config set value = 'false'::jsonb where key = 'public_tester_enabled';
 ```
-Target shop is `app_config.public_tester_shop_id`, currently Vito's Pizza (QA)
-`22ed2761-a3f2-5bde-9012-916a93c521cd`.
+Target shop is `app_config.public_tester_shop_id`, currently **Vito's Pizza**
+`e0000000-0000-0000-0000-000000000001`. (Was the QA twin until 2026-09-06; the
+twin is retired — see *One shop per restaurant* below.)
 
 **Measured cost** (real OpenRouter spend, deepseek/deepseek-v4-pro, 221-item menu):
 3 turns $0.018 · 9 turns $0.082 · 16 turns $0.226. Cost is QUADRATIC in turns — the whole
@@ -1106,3 +1107,24 @@ gate #13's auto-advance path.
 - `supabase functions deploy <name>` — check `supabase/config.toml` has the
   function's `verify_jwt` setting.
 - For new functions: add the `[functions.<name>]` block to `config.toml` first.
+
+
+## One shop per real-world restaurant (PERMANENT — 2026-09-06)
+
+There is exactly ONE Vito's Pizza: `vitos-pizza` / `e0000000-0000-0000-0000-000000000001`.
+It is `is_test=true`, so the acceptance harness, the public tester, the owner
+simulator and the demo pages all point at it and risk nothing real.
+
+`vitos-pizza-qa` was a twin of it and is RETIRED (renamed
+`ZZ RETIRED — do not use (was Vito's Pizza QA)`, `is_paused=true`, slug
+`retired-vitos-pizza-qa`). It is not deleted yet; hard-delete once the harness
+has run green against `vitos-pizza`.
+
+The twin drifted: it kept a menu with zero toppings and zero dressings after the
+real shop was fixed, and on 2026-09-06 the founder tested against it by name and
+concluded — reasonably — that nothing had been fixed. A twin that can diverge
+from the shop it mirrors certifies a menu nobody is selling.
+
+RULE: one shop per real-world restaurant. If a test needs different data it gets
+a differently named shop — `harness-scratch`, never a second copy of a real one.
+Do not create one speculatively.

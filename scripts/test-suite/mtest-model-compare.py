@@ -4,7 +4,7 @@ import json, os, sys, time, urllib.request, uuid
 
 PROJ = "rvdqfxtrskxekfkqnegx"
 BASE = f"https://{PROJ}.supabase.co/functions/v1/chat-sms-mtest"
-SHOP = "22ed2761-a3f2-5bde-9012-916a93c521cd"  # Vito's Pizza (QA)
+SHOP = "e0000000-0000-0000-0000-000000000001"  # Vito's Pizza
 ANON = os.environ["SUPABASE_ANON_KEY"]
 
 SCRIPT = [
