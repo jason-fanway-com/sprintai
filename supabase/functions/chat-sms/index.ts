@@ -143,6 +143,7 @@ type OrderPhase = "greeting" | "building" | "review" | "checkout" | "payment" | 
 interface Shop {
   id:                      string;
   name:                    string;
+  slug:                    string;
   // Wing policy, collected at onboarding. TRI-STATE: null/undefined means the
   // owner never told us, which is NOT the same as "no". An unset column must
   // never be spoken to a customer as policy - the bot asks instead.
@@ -1959,6 +1960,20 @@ function renderItemizedRecap(cart: AnyCartItem[]): string {
       : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ") : "");
     return `${r.quantity || 1}x ${r.name}${detail ? ` (${detail})` : ""}`;
   }).join(", ");
+}
+
+/**
+ * Deterministic menu-request detector. Matches an explicit ask for "the
+ * menu" or "a link" — deliberately narrow so it does NOT fire on a specific
+ * question about one item/category ("what wing flavors do you have?"),
+ * which the model should keep answering directly.
+ */
+function impliesMenuRequest(text: string): boolean {
+  const t = text.trim();
+  return /\b(send|share|text|get|see|have|got)\b[^.?!]{0,20}\b(menu|link)\b/i.test(t)
+    || /\bmenu\b[^.?!]{0,20}\blink\b/i.test(t)
+    || /\b(what('?s| is) on the menu|do you have a menu|can (i|we) see the menu|full menu)\b/i.test(t)
+    || /^\s*menu\s*[?.!]?\s*$/i.test(t);
 }
 
 /**
@@ -5023,6 +5038,21 @@ Deno.serve(async (req: Request) => {
         ? "Got it! Anything else, or are you all set?"
         : "Your cart is empty. What would you like to order?";
     }
+  }
+
+  // ── Guard (menu link): send the live menu page, don't leave it to the model ──
+  // FIX (2026-09-06, Jason): "we should be able to send a link to their
+  // menu" — a customer asking for the menu previously got a long category
+  // dump or "I don't have a link to share." The public menu page
+  // (getsprintai.com/m/<slug>, supabase/functions/public-menu) reads the
+  // same rows chat-sms does, so it can never disagree with what the bot
+  // sells. Deliberately narrow: only an explicit ask for "the menu" or "a
+  // link" trips this — a specific question about one item/category (e.g.
+  // "what wing flavors do you have?") is left to the model to answer
+  // directly, per the spec (docs/specs/2026-09-06-public-menu-page.md).
+  if (shop.slug && impliesMenuRequest(userMessage)) {
+    console.log(`[chat-sms] GUARD (menu-link) tripped (conv=${conversation.id}). Sending menu link.`);
+    reply = `Here's our full menu — take a look and let me know what you'd like: https://getsprintai.com/m/${shop.slug}`;
   }
 
   // ── Guard 2: order confirmation + no pickup name → ask for it ──────────
