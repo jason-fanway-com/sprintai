@@ -68,6 +68,20 @@ export function categoryWordMatches(category: string | null | undefined, message
   return false;
 }
 
+// DEFECT 1 (2026-09-06 live QA): raw DB category names ("Salads", "Wraps") are
+// internal, plural, capitalized labels — customers must never see "(Salads)"
+// in a reply. This singularizes and lowercases a category into the ordinary
+// word a person would actually say ("Salads" -> "salad"), for use in
+// customer-facing text in place of the raw category string.
+export function categoryDisplayWord(category: string | null | undefined): string {
+  if (!category) return "";
+  const w = category.trim().toLowerCase();
+  if (w.endsWith("ies")) return w.slice(0, -3) + "y";
+  if (/(?:ches|shes|xes|ses|zes)$/.test(w)) return w.slice(0, -2);
+  if (w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+  return w;
+}
+
 // DEFECT 2 (2026-09-06 live QA): "forget the salad" was reaching
 // resolvePendingDisambiguation's category-word check unfiltered — "salad"
 // stem-matched the Salads candidate and got added, exactly the opposite of
@@ -202,7 +216,10 @@ export function renderDisambiguationReask(
   priorReply?: string | null,
 ): string {
   const list = candidates
-    .map((c, i) => `${i + 1}) ${c.name}${c.category ? ` (${c.category})` : ""} — $${(c.price_cents / 100).toFixed(2)}`)
+    .map((c, i) => {
+      const word = categoryDisplayWord(c.category);
+      return `${i + 1}) the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
+    })
     .join("  ");
   const nums = replyNumbers(candidates.length);
   const primary = `Sorry, I didn't catch that — ${list}. Reply ${nums}.`;

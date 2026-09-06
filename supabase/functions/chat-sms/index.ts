@@ -19,6 +19,7 @@ import { dayWindows } from "../_shared/hours.ts";
 import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 import { stripInventedActions } from "./invented-action-guard.ts";
 import {
+  categoryDisplayWord,
   categoryWordMatches,
   isPendingDisambiguationDeclined,
   resolvePendingDisambiguation,
@@ -1847,9 +1848,24 @@ function checkoutAlreadyExists(row: { stripe_checkout_session_id?: string | null
 // Honest reply used when the model falsely claimed a link was sent but we could
 // NOT create a real session. It asks for the missing piece and never asserts a
 // link/payment was sent. Stays under the 300-char SMS budget.
-function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false): string {
+//
+// DEFECT 2 (2026-09-06 live QA): the empty-cart branch used to return the
+// first-contact greeting unconditionally, with no check on whether this was
+// actually the start of the conversation. Several guards above call this as
+// their fallback whenever cart_json is still empty — which is completely
+// normal mid-order (e.g. an item is stuck in a pending disambiguation and
+// hasn't been confirmed into cart_json yet). A guard tripping in that state
+// overwrote the model's reply with a cold "What can I get started for you?"
+// greeting landing mid-conversation, right before a carried disambiguation
+// question got appended — reading like two unrelated bot turns stapled
+// together. `hasHistory` (the caller passes `!isLifetimeFirstContact`) is the
+// only signal that distinguishes true first contact from a guard tripping
+// mid-order with an empty cart.
+function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false, hasHistory = false): string {
   if (!cart || cart.length === 0) {
-    return "What can I get started for you? Let me know your items and I'll get your order going.";
+    return hasHistory
+      ? "Sorry, I didn't catch that — what would you like to order?"
+      : "What can I get started for you? Let me know your items and I'll get your order going.";
   }
   if (incompleteBundle) {
     return "Almost there! Your bundle still needs a few more picks before I can send your payment link. What else would you like in it?";
@@ -4135,8 +4151,9 @@ Deno.serve(async (req: Request) => {
       const footerGuard7 = addResult.ok
         ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosedGuard7)
         : "";
+      const resolvedWord = categoryDisplayWord(resolved.category);
       const reply = addResult.ok
-        ? `Got it — ${resolved.name}${resolved.category ? ` (${resolved.category})` : ""} added.${footerGuard7 ? `\n\n${footerGuard7}` : ""} Anything else?`
+        ? `Got it — ${resolved.name}${resolvedWord ? ` ${resolvedWord}` : ""} added.${footerGuard7 ? `\n\n${footerGuard7}` : ""} Anything else?`
         : "Sorry, I had trouble adding that one — mind trying again?";
       if (addResult.ok && !feeAlreadyDisclosedGuard7) {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
@@ -4434,13 +4451,13 @@ Deno.serve(async (req: Request) => {
             checkoutUrl = forced.checkoutUrl;
             console.log(`[chat-sms] PROOF-P1 recovered: forced submit_order (cart=${cart.id}).`);
           } else {
-            reply = honestFallbackReply(guardCart);
+            reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
           }
         } catch (_e) {
-          reply = honestFallbackReply(guardCart);
+          reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
         }
       } else {
-        reply = honestFallbackReply(guardCart, !!incompleteBundle);
+        reply = honestFallbackReply(guardCart, !!incompleteBundle, !isLifetimeFirstContact);
       }
     }
   }
@@ -4516,7 +4533,7 @@ Deno.serve(async (req: Request) => {
     const offMenuItem = claimsOffMenuItem(reply, menuItemNames, guardCart);
     if (offMenuItem) {
       console.warn(`[chat-sms] GUARD 1g (menu-item hallucination) tripped (conv=${conversation.id}). Claimed "${offMenuItem}" not in menu. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-      reply = honestFallbackReply(guardCart);
+      reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
     }
   }
 
@@ -4804,7 +4821,10 @@ Deno.serve(async (req: Request) => {
         const idx = guardCart.indexOf(added);
         if (idx !== -1) guardCart.splice(idx, 1);
         const optionsText = candidates
-          .map(c => `${c.name}${c.category ? ` (${c.category})` : ""} — $${(c.price_cents / 100).toFixed(2)}`)
+          .map(c => {
+            const word = categoryDisplayWord(c.category);
+            return `the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
+          })
           .join(" or ");
         reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
         // deno-lint-ignore no-await-in-loop
@@ -5107,16 +5127,16 @@ Deno.serve(async (req: Request) => {
           checkoutUrl = forced.checkoutUrl;
           console.log(`[chat-sms] PHANTOM-LINK GUARD recovered: forced submit_order created a real session (cart=${cart.id}).`);
         } else {
-          reply = honestFallbackReply(guardCart);
+          reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
           console.warn(`[chat-sms] PHANTOM-LINK GUARD: forced submit_order did not produce a link (${JSON.stringify(forced.result).slice(0,160)}). Sent honest fallback.`);
         }
       } catch (e) {
-        reply = honestFallbackReply(guardCart);
+        reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
         console.error(`[chat-sms] PHANTOM-LINK GUARD: forced submit_order threw. Sent honest fallback.`, e);
       }
     } else {
       // HONEST FALLBACK: cannot submit — ask for what's missing, claim nothing.
-      reply = honestFallbackReply(guardCart, !!incompleteBundle);
+      reply = honestFallbackReply(guardCart, !!incompleteBundle, !isLifetimeFirstContact);
       console.warn(`[chat-sms] PHANTOM-LINK GUARD: cannot submit (hasItems=${hasItems}, incompleteBundle=${!!incompleteBundle}, pickupName=${!!pickupName}). Sent honest fallback.`);
     }
   }
@@ -5211,9 +5231,12 @@ Deno.serve(async (req: Request) => {
       console.log(`[chat-sms] Pending disambiguation cleared (conv=${conversation.id}): "${carriedDisambiguation.query_name}" abandoned; customer's turn reached checkout.`);
     } else {
       const stillOpenOptions = carriedDisambiguation.candidates
-        .map(c => `${c.name}${c.category ? ` (${c.category})` : ""}`)
+        .map(c => {
+          const word = categoryDisplayWord(c.category);
+          return `the ${c.name}${word ? ` ${word}` : ""}`;
+        })
         .join(" or ");
-      finalReply = `${finalReply}\n\nStill wondering — did you want the ${stillOpenOptions}?`;
+      finalReply = `${finalReply}\n\nStill wondering — did you want ${stillOpenOptions}?`;
     }
   }
 
