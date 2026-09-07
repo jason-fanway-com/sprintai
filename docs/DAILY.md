@@ -199,3 +199,202 @@ Several spec docs cited by today's readiness log entries —
 were never `git add`ed. They're real files with real content, not phantom
 references, but they carry no history in the repo; if the only working copy that has
 them were lost, the citations in the readiness log would point at nothing.
+
+## 2026-09-06
+
+51 commits, one continuous stretch from 2026-09-05 22:37 EDT to 2026-09-06 20:42 EDT.
+The day has two throughlines: a real P0 money bug in `chat-sms` that triggered a
+17-commit chain of guard fixes, and a new customer-facing public menu page. Both
+verified live against production where stated below, not taken on commit-message
+word.
+
+### P0: cart doubled $37.97 → $74.95 after "Looks good"
+
+A live tester ("Luca") ordered a pizza and wings. GUARD 4 (an "under-populated cart"
+backstop) fuzzy-matched his own order text against every menu item name and appended
+a customer-facing line — "Did you also want Chicken Bacon Ranch (Flatbreads), Chicken
+(Quesadillas), and Ranch, or good to go?" — built from three unrelated near-name
+matches. That unresolved 3-item offer sat in conversation history. Two turns later he
+said "Looks good", a bare affirmation; the model read the full history including the
+stale offer as consent and issued real `add_item` calls for all three, doubling the
+total with zero customer intent (`0398d99`).
+
+The fix removed GUARD 4's customer-facing suggestion (detection/logging stayed) and
+added GUARD 9, a deterministic backstop meant to hold even if a future mechanism
+leaves a stale offer in history again: on any bare-affirmation turn, diff cart
+quantity per item between the true pre-turn snapshot and the post-tool-call cart, and
+revert any growth the current message alone doesn't name. As shipped in that same
+commit, GUARD 9 was wired to `cartItems` — the array `executeTool` mutates in place
+during the tool loop that runs *before* the guard — so "before" and "after" were the
+same mutated data and the revert branch could never fire. **This means the guard
+built specifically to catch a P0 was dead code at the moment it was written.** It
+never reached production in that state: independent review caught it before the
+held-for-deploy commit went out, and the next commit (`7405a13`) rewired it to the
+real pre-turn deep clone and extracted the diff logic into its own module with no
+access to the mutable array, so this exact mistake can't recur. Confirmed by directly
+running `guard9-unconsented-affirmation-add-20260906.test.ts` just now: 16/16 pass,
+including one test that reproduces the original wiring bug on the mutated array to
+prove the fix matters, not just a copy of the logic.
+
+`chat-sms` shows deploy version 259, last updated 2026-09-07 00:43 UTC — one minute
+after the day's final commit (`f5cd463`, 20:42 EDT) — consistent with "held for a
+single combined deploy" and confirming everything below is live, not just committed.
+
+### The rest of the day on `chat-sms`: 17 commits, one guard (GUARD 7c) needed five
+
+Beyond the P0, the day added GUARD 7c (pre-LLM deterministic resolution of
+duplicate-named menu items, e.g. two "Chicken Caesar" rows) and GUARD 10 (required
+option values must match an `is_default` choice or a word in the customer's own
+message — closes the model inventing a plausible but uncredited selection). GUARD 7c
+needed five iterations in about 90 minutes: introduce → doesn't handle negation
+("I don't want the chicken caesar salad") → doesn't handle a bare question ("how much
+is it?") → its deny-list of question forms still leaks on rephrasing QA found within
+the hour → replaced with a positive allow-list (require an order-intent phrase, or
+zero leftover content words after stripping the item/category names). The allow-list
+is a structurally sound move — a deny-list of question phrasing is open-ended and
+English will always find a form it didn't enumerate, which is what happened twice in
+a row; an allow-list is a small, closed decision space. It is the last commit of the
+day.
+
+Two other real regressions worth naming because they show same-day commits stepping
+on each other's fixes with no test catching it either time: a deterministic em-dash
+stripper added mid-afternoon (`7d4f047`) silently destroyed the itemized recap's
+column padding and paragraph breaks a few commits later, caught by QA not tests
+(`2e472b3`); and the itemized recap itself was dead code for a stretch because it was
+attached to GUARD 2's reply specifically, while the model asks for the pickup name
+unprompted more often than GUARD 2 forces it — fixed by moving the attachment to a
+universal footer checkpoint (`2274cbf`), the same "reachable only via specific
+phrasing" shape recurring again in `d662d1a`.
+
+Test coverage caveat worth keeping: `chat-sms/index.ts` is a bare `Deno.serve()`
+entrypoint with no exports, so most same-day test files work by copying the relevant
+logic verbatim into the test and separately regex-checking that `index.ts` still
+contains matching source text. That validates the copy's behavior plus a
+marker-string presence check, not an import-and-exercise of the shipped function.
+GUARD 9's test is the exception — it imports the real `guard9-unconsented-affirmation.ts`
+module directly. Running the full `chat-sms/*.test.ts` suite just now: **252 passed,
+0 failed.**
+
+Overall read on the architecture, not just today's fixes: several commits explicitly
+diagnose *why* the previous fix's shape was wrong (deny-list is whack-a-mole, the
+sweep fixed instances not the cause) and respond by generalizing rather than
+re-patching — that's real convergence. But every one of GUARD 7c's five holes was
+found by a human firing real phrases at a live deploy, not by the same-day test
+suite. An LLM plus an accumulating stack of regex/keyword guards will keep surfacing
+adjacent gaps at roughly this rate; today raised the floor without changing that
+dynamic.
+
+### Pending disambiguation / pending required options: a new persistence layer, 9 commits
+
+`3e01286` (11:58) built the first real state for "what did we just ask the customer":
+a new `pending-disambiguation.ts` module and migration 112
+(`order_carts.pending_disambiguation JSONB`) so a clarifying question ("which Chicken
+Caesar — salad or wrap?") survives to the next turn instead of being re-litigated by
+the model from raw history. Eight more commits through the evening closed gaps in it
+one at a time: persisting the offer when the model asks in free text without calling
+a tool (`ab8c2d0` — the fourth confirmed instance of "the happy path skips bookkeeping
+only the failure path does," per RUNBOOK), a decline ("never mind the salad")
+silently falling through to the LLM and getting re-interpreted as a selection
+(`1c68647`), the same disambiguation trapping checkout by re-asking on "no thanks"
+(`4ef99ac`), and a parallel `pending-option.ts` module for required-option answers
+(size, temp) with its own double-add and stale-total bugs (`24d37bc`). Migration 112
+is a single additive `JSONB` column with a matching `.down.sql`; both are already
+live (see below).
+
+Net effect: real, traced fixes, not guesses — but discovered in the same
+one-at-a-time, live-QA-against-one-tenant pattern as the guard chain above.
+
+### New: public per-shop menu page, `getsprintai.com/m/<slug>`
+
+Server-rendered from the same tables `chat-sms` reads (menus → active menu_items →
+option_groups → option_choices), no auth, no build step, no second copy of the menu
+to disagree with the bot. Verified live just now: `curl -D-
+https://getsprintai.com/m/vitos-pizza` returns `content-type: text/html;
+charset=utf-8`, 221 items, no dev-facing placeholder text, real prices.
+
+Two bugs found and fixed same day are worth flagging because of what they say about
+the initial ship, not just the fix: the pagination fix (`3987ba2`) closes a defect
+that would have hit **every shop except the one it happened to be tested against** —
+PostgREST's default 1000-row cap silently truncated `option_choices` (Vito's alone
+has 2640), with no error, so the first version of this page (`8ddc030`) shipped
+already broken for its general case. The same commit also fixed an `open_hours`
+shape assumption that would 500 on any shop using the newer flat-object hours format.
+Separately, the Content-Type fix took two tries: `06a3cb7` set a Netlify
+`[redirects.headers]` rule, which only affects request headers sent upstream and
+could never have fixed a response header — a dead end shipped and superseded eight
+minutes later (`8ef6871`) by an actual Netlify Edge Function
+(`netlify/edge-functions/menu-proxy.js`) that fetches Supabase server-side and
+re-serves the body with corrected headers. The edge function is what's live; the
+`[[redirects]]` rule in `netlify.toml` is now a documented, inert fallback.
+
+### Security: `issue-detector` was fail-open, now fail-closed
+
+Before today, `issue-detector` (`verify_jwt=false`, fronts a live owner-SMS
+escalation sweep) had **no auth check of any kind** — the commit message states this
+was proven live, an unauthenticated POST returned HTTP 200 and ran the real sweep.
+`e777259` adds a bearer-token gate (constant-time compare) requiring either a
+dedicated `ISSUE_DETECTOR_BEARER` secret or the raw service-role key; `verify_jwt`
+deliberately stays false because the alternative (`verify_jwt=true`) would accept the
+public anon key shipped in the browser bundle, which is weaker, not stronger. One
+designed exception to "fail closed," named honestly in the commit: if
+`ISSUE_DETECTOR_BEARER` is ever unset, the gate falls back to accepting the raw
+service-role key rather than 401ing every request on a missing-secret
+misconfiguration. Deployed (`issue-detector` v18, updated 14:31 UTC — one minute
+after the commit) and verified via a same-session live probe: no-auth, wrong-bearer,
+and public-anon-key all 401; real cron bearer and service-role key both 200.
+
+### Migration-tracking drift: the CLI's "not applied" can't be trusted on its own here
+
+`supabase db push --dry-run` reports migrations 105–111 (qa_ro delivery-truth
+columns, option_groups/choices exposure, tester attribution, the dead-clone-slug fix,
+the non-PII scope widening) as **not applied to remote**, alongside a longer
+pre-existing backlog (014–019, 048, 083, 084, 088, 099–101, 103). Taken at face
+value that would mean none of today's qa_ro reporting work is live. It isn't that
+simple: I live-tested migration 109's actual change — POSTed to the deployed
+`public-tester` function and it wrote successfully to `user_agent` and
+`client_first_seen_at`, the two columns 109 adds — so that schema change **is** live
+on the database despite the tracker saying otherwise. This matches a pattern the
+shop-retirement commits confirm independently: today's `dc542dd`/`0a7ddba` "retire"
+UPDATEs (rename, pause, slug change) exist nowhere in either commit's diff — they
+were applied directly against the database, outside `supabase db push`, exactly like
+109 apparently was.
+
+**Practical consequence:** `supabase_migrations.schema_migrations` has drifted from
+actual schema state on this project, more than once, in a way that makes `supabase
+migration list` an unreliable signal here. I could not independently verify
+105–108/110–111 the same way (they touch `qa_ro` views only, reachable exclusively
+via the `qa_readonly` credentials on Jason's Mac — not available in this
+environment) — so their live status is genuinely unverified, not confirmed either
+way. Recommend running the read-only check documented in RUNBOOK ("Reading the QA
+data yourself") against `qa_ro.schema_migrations` (added by 111, itself unverified)
+to settle it, and treating "committed" and "tracked as applied" as two different
+claims on this project going forward.
+
+### Also today
+
+- **Item K (website-read reliability) → built** (`119ff92`, docs only): a fourth live
+  measurement re-drove `scrape-shop` v73 against the three sites the prior fixes
+  targeted. Both failure modes closed (no more 150s gateway 504 stranding a shop in
+  `crawl_status='running'`; PDF-rung provenance now persists). Rate held at 12/20
+  (60%) — the two fixed sites were never a pass — and a cost is named rather than
+  hidden: one large-menu site that used to land 240 real items before dying to the
+  timeout now imports 0 items honestly, because the tighter deadline budget appears
+  to truncate the crawl rather than just avoid the timeout.
+- **Shop cleanup**: the Not Just Bagels test clone and the Vito's Pizza QA twin were
+  both retired (renamed `ZZ RETIRED`, paused, slug changed, rows kept for audit —
+  not deleted) after the twin's stale zero-topping menu caused Jason to wrongly
+  conclude a real fix hadn't landed. New standing rule recorded in RUNBOOK: one shop
+  per real-world restaurant. As noted above, both retirements were applied directly
+  to the database, not via a tracked migration.
+- **Admin picker fix caught its own "committed but not live" gap**: `429d450` hid
+  paused shops from the owner-preview picker, merged to `main`, but did not reach the
+  live admin site until `3edf483` manually rebuilt and deployed the bundle 20 minutes
+  later — the admin dashboard is still CLI/manual-deploy, not git-auto-deploy,
+  reconfirming the operational risk already logged in HANDOFF from yesterday.
+- **Uncommitted in the working tree**: a new `verifyRequiredOptionsCovered`
+  deterministic invariant (fails a proof/test-runner case that reaches checkout with
+  a required option group never answered) plus a new `category-coverage.ts` case
+  generator (one realistic order per menu category, menu-agnostic). Confirmed by
+  running it directly: `required-options-guard.test.ts` passes 5/5. Wired into
+  `scripts/test-suite/proof.ts` and `supabase/functions/test-runner/index.ts`, but
+  neither file nor the new scripts are staged or committed as of this writing.

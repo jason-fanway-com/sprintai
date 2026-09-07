@@ -1248,3 +1248,38 @@ turn sequence before touching code; three prior incidents in this exact family w
 each traced to a different guard (GUARD 4's fuzzy upsell text, GUARD 9's mutated-
 array wiring, the "no thanks" deletion path) — don't assume it's the same guard as
 last time without checking.
+
+## Migration tracking has drifted from actual schema state — verify before trusting `supabase migration list` — 2026-09-06
+
+`supabase db push --dry-run` reports migrations 105–111 as not applied to remote.
+Live-tested that this is not reliable: POSTing to the deployed `public-tester`
+function writes successfully to `user_agent`/`client_first_seen_at`, the columns
+migration 109 adds — so that schema change is live despite the tracker saying
+otherwise. Confirmed independently by the same day's shop-retirement commits
+(`dc542dd`, `0a7ddba`): the actual `UPDATE`s that retired the two QA-twin shops
+(rename, pause, slug change) exist nowhere in either commit's diff — applied
+directly against the database, outside `supabase db push`, same as 109 apparently
+was.
+
+**Operating rule**: `supabase_migrations.schema_migrations` cannot be trusted alone
+as evidence a change is (or isn't) live on this project — it has been bypassed more
+than once. Before relying on a migration's effect, verify directly: query the
+table/view/column itself (via `qa_ro` credentials, or a live probe of whatever
+function reads/writes it), don't stop at `supabase migration list`. If a change was
+applied out-of-band, run `supabase db push --include-all` (or otherwise reconcile the
+tracker) so the next person doesn't have to re-derive this.
+
+Migrations 105–108/110–111 (today's other `qa_ro` widening) were NOT independently
+verified either way this pass — they only affect `qa_ro` views, reachable solely via
+`~/.sprintai-readonly-env` on Jason's Mac. Check `qa_ro.schema_migrations` (added by
+111) directly before assuming any of them are missing.
+
+## Edge function index — missing rows, 2026-09-06
+
+The "Edge function index" table above predates several now-deployed functions:
+`public-menu` (public per-shop menu page, `/m/<slug>`, `verify_jwt=false`,
+customer-facing), `public-tester` (Test Kitchen), `judge-transcript`, and
+`chat-sms-mtest` (an A/B variant, per an uncommitted change to
+`scripts/test-suite/run.ts`'s target URL) are all `ACTIVE` per `supabase functions
+list` but not in the table. Not fixed here — noted so the index isn't mistaken for
+current.

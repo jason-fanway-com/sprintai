@@ -219,6 +219,22 @@ it is the kind of claim a customer-facing conversation with a restaurant owner c
 repeat before it was actually true — worth a beat of skepticism on any "it's fixed" from
 this week specifically.
 
+### Added 2026-09-06 — a new top-of-funnel surface, and the quality engine caught a real revenue bug
+
+`getsprintai.com/m/<slug>` is a new public, no-auth menu page a restaurant can share
+without a customer texting first — a lower-friction "here's what we have" link than the
+ordering channel itself. It's read-only (no ordering), server-rendered from the same
+data `chat-sms` reads, so it can't drift from what the bot actually sells. Live and
+verified with a real shop's menu (221 items) as of this entry.
+
+Separately, the "human testing became the main quality engine" shift from 2026-09-05
+paid for itself again: a live tester's order silently doubled from $37.97 to $74.95 —
+the bot added three items nobody asked for after a bare "Looks good" — found and fixed
+the same day (see `docs/DAILY.md`, 2026-09-06). This is the second SEV-level defect this
+week that automated testing alone had not surfaced. It also means the guard-based
+architecture behind the ordering conversation is still finding these the hard way, one
+live phrasing at a time, not from a spec written in advance — worth factoring into any
+timeline that assumes the ordering flow is done hardening.
 
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.

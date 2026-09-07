@@ -119,6 +119,46 @@ Supersedes the 21:02 snapshot above for anything it contradicts.
   uncommitted, plus a number of untracked spec docs and `scripts/tmp-*` scratch
   files from the item-K measurement runs. None of that is reflected as shipped.
 
+## State as of 2026-09-06 20:45
+
+Supersedes the 04:00 snapshot above for anything it contradicts. Full narrative:
+`docs/DAILY.md`. This was a 51-commit day dominated by a real P0 revenue bug in
+`chat-sms` and a new customer-facing feature.
+
+### What is LIVE right now (new since 04:00)
+
+| Thing | Where | State |
+|---|---|---|
+| `chat-sms` v259 | Supabase, confirmed via CLI | Deployed 00:43 UTC 09-07 (00:43 = 20:43 EDT), one minute after the day's final commit — the whole 17-commit guard chain is live, not just committed. Fixes a real P0 (cart doubled $37.97→$74.95 on a bare "Looks good" after a fuzzy-match upsell line sat unresolved in history), a pending-disambiguation/pending-option persistence layer (9 commits), and five iterations on a new duplicate-item-name guard (GUARD 7c). See DAILY.md for the full chain — several of the intermediate guards were themselves broken on first commit and fixed same-day. |
+| `getsprintai.com/m/<slug>` | Netlify Edge Function (`menu-proxy.js`) + `public-menu` Supabase fn v7 | Live, verified just now via `curl`: 221 real items, correct `text/html` Content-Type, no dev placeholder text. No auth, no ordering — read-only menu link, texted to strangers. |
+| `issue-detector` v18 | Supabase, confirmed via CLI | Deployed 14:31 UTC. Was fail-open (any unauthenticated POST ran a live owner-SMS escalation sweep) — now requires a bearer secret, fail-closed. Verified live: no-auth/wrong-bearer/anon-key all 401. |
+| `public-tester` v6 | Supabase, confirmed via CLI | Deployed 13:51 UTC. Records `user_agent` + `client_first_seen_at` per session (IP alone can't separate testers behind one household NAT). |
+| Vito's Pizza QA twin, NJB test clone | Database rows, applied directly (not via a tracked migration — see below) | Both retired: renamed `ZZ RETIRED`, paused, slug changed, rows kept for audit. Standing rule now in RUNBOOK: one shop per real-world restaurant. |
+
+### Migration-tracking is unreliable on this project — verify directly, don't trust the CLI alone
+
+`supabase db push --dry-run` reports migrations 105–111 (all of today's `qa_ro`
+reporting work) as **not applied to remote**. That is not proven true: a live probe
+of migration 109's actual change (POSTing to the deployed `public-tester` function)
+shows its columns exist and work on the real database right now. The
+`supabase_migrations.schema_migrations` tracking table has drifted from actual
+schema state — this project has applied schema changes directly against the
+database at least twice today (migration 109, and the two shop-retirement UPDATEs,
+neither of which appears in any migration file) without going through `supabase db
+push`. Practical effect: "not applied" per `supabase migration list` is not reliable
+evidence of "not live" here. 105–108/110–111 specifically are unverified either way —
+they only affect `qa_ro` views, reachable solely via credentials on Jason's Mac, not
+from this environment. Verify directly (`qa_ro.schema_migrations`, itself from 111)
+before assuming any of them are missing or present.
+
+### What is committed but NOT deployed
+
+- `scripts/test-suite/proof.ts`, `supabase/functions/test-runner/index.ts`, and
+  `scripts/test-suite/cart-ops.ts` carry a new `verifyRequiredOptionsCovered`
+  deterministic invariant plus a new `category-coverage.ts` case generator —
+  **uncommitted** in the working tree as of this writing (confirmed passing,
+  5/5, when run directly).
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a
