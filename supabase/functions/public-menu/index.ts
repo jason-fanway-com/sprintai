@@ -76,10 +76,24 @@ function formatHours(openHours: unknown): string {
   return rows.join(" &middot; ");
 }
 
+// A group whose max_select is >= the number of choices imposes no real limit — the
+// shop just lets you add whatever you want. Printing that stored number ("pick up to
+// 32 toppings") is nonsense and makes the menu look machine-generated. Only print a
+// number when it is a genuine cap the customer can actually hit.
+function cardinalityLabel(g: Group): string {
+  const n = g.choices.length;
+  const capped = g.max_select > 1 && n > 0 && g.max_select < n;
+  if (g.required) {
+    if (g.max_select <= 1) return "required &middot; pick 1";
+    if (capped) return `required &middot; pick ${g.min_select}–${g.max_select}`;
+    return g.min_select > 1 ? `required &middot; pick ${g.min_select} or more` : "required &middot; pick 1 or more";
+  }
+  if (g.max_select <= 1) return "optional";
+  return capped ? `optional &middot; pick up to ${g.max_select}` : "optional &middot; add as many as you like";
+}
+
 function renderGroup(g: Group): string {
-  const cardinality = g.required
-    ? (g.max_select > 1 ? `required &middot; pick ${g.min_select}–${g.max_select}` : "required &middot; pick 1")
-    : (g.max_select > 1 ? `optional &middot; pick up to ${g.max_select}` : "optional");
+  const cardinality = cardinalityLabel(g);
   const SHOWN = 8;
   const shown = g.choices.slice(0, SHOWN);
   const rest = g.choices.slice(SHOWN);

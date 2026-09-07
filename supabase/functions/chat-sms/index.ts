@@ -481,6 +481,23 @@ async function buildEffectiveMenu(
 
 // ─── System prompt builder ────────────────────────────────────────────────────
 
+// A group whose max_select is >= the number of choices imposes no real limit —
+// the shop just lets you add whatever you want (pizza toppings, add-ons). Reading
+// that stored number back to a customer ("pick up to 32 toppings") is nonsense and
+// makes the menu look machine-generated. Say "any number" instead, and only print
+// a number when it is a genuine cap the customer can hit.
+function optionCardinality(g: { required: boolean; min_select: number; max_select: number; choices: unknown[] }): string {
+  const n = g.choices.length;
+  const capped = g.max_select > 1 && n > 0 && g.max_select < n;
+  if (g.required) {
+    if (g.max_select <= 1) return "required, pick 1";
+    if (capped) return `required, pick ${g.min_select}-${g.max_select}`;
+    return g.min_select > 1 ? `required, pick at least ${g.min_select}` : "required, pick 1 or more";
+  }
+  if (g.max_select <= 1) return "optional";
+  return capped ? `optional, pick up to ${g.max_select}` : "optional, pick any number";
+}
+
 function buildSystemPrompt(
   shop:           Shop,
   phase:          OrderPhase,
@@ -563,7 +580,7 @@ function buildSystemPrompt(
         const groups = item.option_groups || [];
         if (groups.length > 0) {
           const groupLines = groups.map(g => {
-            const reqLabel = g.required ? `required, pick ${g.max_select > 1 ? g.min_select + '-' + g.max_select : '1'}` : `optional${g.max_select > 1 ? ', pick up to ' + g.max_select : ''}`;
+            const reqLabel = optionCardinality(g);
             return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.is_default ? ' [default]' : '') + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
           }).join('\n');
           return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
