@@ -76,6 +76,18 @@ export interface ExtractedGroup {
   name: string;
   required: boolean;
   choiceNames: string[];
+  // Parallel to choiceNames. cents, relative to that group's own baseline
+  // (its most common price) — null/absent where the source doesn't state a
+  // different price for that choice. Never invented: only populated when a
+  // choice's own price_cents genuinely differs from the group's baseline.
+  choicePriceDeltaCents?: (number | null)[];
+  // Set only for category-derived candidates (buildCategoryCandidateGroups)
+  // — the ArchetypeKey that category's OWN name/items classify to. Guards
+  // findBoundGroup against a category matching a slot's bind pattern by
+  // incidental substring only (e.g. Vito's "Stromboli Rolls" — a pizza-
+  // family category — matching the sandwich archetype's /bread|roll/i
+  // purely because "Rolls" contains "roll"). See findBoundGroup.
+  sourceArchetype?: ArchetypeKey;
 }
 
 export interface InferItemInput {
@@ -88,6 +100,60 @@ export interface InferItemInput {
   nameSlotChoices: string[] | null;
   descriptionSlotChoices: string[] | null;
   extractedGroups: ExtractedGroup[];
+  // §5's "shared list" concept, recognized post-hoc: other categories in the
+  // SAME menu, each turned into a candidate ExtractedGroup (category name as
+  // group name, its items as choices). Lets bind_to_list_named match a real
+  // category-as-choice-list (e.g. a "Bagels" category binding the bagel_type
+  // slot on "Bagel With ..." items) the same way it already matches a real
+  // per-item option_group. Optional/absent = no candidates (existing callers
+  // and fixtures that don't build this keep working unchanged).
+  categoryCandidateGroups?: ExtractedGroup[];
+}
+
+export interface CategoryPriceItem {
+  name: string;
+  priceCents: number;
+}
+
+// Turns every category in a menu into a candidate ExtractedGroup for
+// categoryCandidateGroups above — one shared implementation so every caller
+// (compile-menu.ts, the item-9 report, this file's own live tests) derives
+// the same "category as shared list" shape and price-delta rule instead of
+// three drifting reimplementations. Price delta is each item's own
+// price_cents against the category's baseline (its most common price,
+// smallest price wins ties) — real, sourced data; a choice priced at the
+// baseline carries no delta at all rather than an invented 0.
+// A category priced by a different unit than a single order-choice (found
+// on NJB's real "Homemade Cream Cheese Spreads": every item name ends
+// "(per pound)", priced $10.95-$13.95 as a standalone retail product) must
+// never contribute a price delta — those absolute prices have nothing to
+// do with what a flavor choice costs added to a $4-5 bagel sandwich. The
+// choice NAMES from such a category are still real and usable; only the
+// price-delta computation is suppressed.
+const BULK_UNIT_PATTERN = /\(\s*per\s+(pound|lb\.?|dozen|doz\.?)\s*\)/i;
+
+export function buildCategoryCandidateGroups(
+  itemsByCategory: Map<string, CategoryPriceItem[]>,
+): Map<string, ExtractedGroup> {
+  const result = new Map<string, ExtractedGroup>();
+  for (const [category, items] of itemsByCategory) {
+    if (items.length === 0) continue;
+    const isBulkUnitPriced = items.filter(it => BULK_UNIT_PATTERN.test(it.name)).length / items.length >= 0.5;
+    const freq = new Map<number, number>();
+    for (const it of items) freq.set(it.priceCents, (freq.get(it.priceCents) ?? 0) + 1);
+    const maxCount = Math.max(...freq.values());
+    const baseline = Math.min(...[...freq.entries()].filter(([, c]) => c === maxCount).map(([price]) => price));
+    result.set(category, {
+      name: category,
+      required: false,
+      choiceNames: items.map(it => it.name),
+      ...(isBulkUnitPriced ? {} : {
+        choicePriceDeltaCents: items.map(it => it.priceCents === baseline ? null : it.priceCents - baseline),
+      }),
+      sourceArchetype: classifyCategory(category, items.map(it => it.name)),
+    });
+  }
+  return result;
 }
 
 // Slots whose "stated" source is the normalizer's per-item "X or Y" / "choice
@@ -383,6 +449,9 @@ export interface SlotOutcome {
   choices?: string[];
   source?: "bind" | "name" | "description" | "sibling_rows";
   default_choice?: string;
+  // Parallel to `choices`, only ever set when source is "bind" and the
+  // bound group carried per-choice deltas (see ExtractedGroup).
+  choicePriceDeltaCents?: (number | null)[];
 }
 
 export interface OwnerQuestionDraft {
@@ -423,8 +492,43 @@ function resolveSiblingSourcedSlot(item: InferItemInput): SlotOutcome["kind"] {
   return item.siblingCount > 1 ? "stated" : "not_applicable";
 }
 
-function findBoundGroup(item: InferItemInput, pattern: RegExp): ExtractedGroup | undefined {
-  return item.extractedGroups.find(g => pattern.test(g.name));
+// A category only qualifies as a bind-to-list candidate if the pattern
+// isn't just an accident of the CATEGORY HEADING — most of its actual items
+// have to be about the same thing. Real cases found against Vito's live
+// data: "Stromboli Rolls" (pizza-family dishes: Cheesesteak, Pepperoni,
+// Meat Lovers...) and "Flatbreads" (BBQ Chicken, Margherita...) both
+// classify to an unrelated/no archetype and both match the sandwich
+// archetype's /bread|roll/i on the CATEGORY NAME alone — 0 of their items
+// mention bread or a roll. Contrast "Bagels" (25/26 items literally say
+// "Bagel") and NJB's "Homemade Cream Cheese Spreads" (5/5 say "Cream
+// Cheese Spread"). Majority-of-items is what tells these apart; the
+// category name matching the pattern is necessary but not sufficient.
+const CATEGORY_BIND_ITEM_MATCH_THRESHOLD = 0.5;
+
+function categoryItemsSupportBind(group: ExtractedGroup, pattern: RegExp): boolean {
+  if (group.choiceNames.length === 0) return false;
+  const matching = group.choiceNames.filter(name => pattern.test(name)).length;
+  return matching / group.choiceNames.length >= CATEGORY_BIND_ITEM_MATCH_THRESHOLD;
+}
+
+function findBoundGroup(item: InferItemInput, pattern: RegExp, currentArchetype: ArchetypeKey): ExtractedGroup | undefined {
+  // A real per-item option_group (hand-built for THIS item) wins over a
+  // same-menu category coincidentally matching the pattern — it's the more
+  // specific, already-confirmed source.
+  const own = item.extractedGroups.find(g => pattern.test(g.name));
+  if (own) return own;
+  // Two independent guards against a category matching a slot's pattern by
+  // coincidence rather than being a real shared list: (1) archetype
+  // coherence — the candidate must share the current archetype (plausibly
+  // the same family, e.g. "Bagels" for the bagel archetype) or classify to
+  // no archetype at all ("other" — a plain list with no competing dish
+  // identity, e.g. "Homemade Cream Cheese Spreads"); a category with its
+  // OWN unrelated named archetype (pizza, salad, ...) never qualifies.
+  // (2) item-level support — see categoryItemsSupportBind above.
+  return (item.categoryCandidateGroups ?? []).find(g =>
+    pattern.test(g.name)
+    && (g.sourceArchetype === currentArchetype || g.sourceArchetype === "other")
+    && categoryItemsSupportBind(g, pattern));
 }
 
 // Guards NAME_SOURCED_SLOTS / DESCRIPTION_SOURCED_SLOTS binding against a
@@ -447,7 +551,7 @@ function looksLikeCleanChoiceList(choices: string[]): boolean {
   });
 }
 
-function resolveSlotForItem(slot: SlotRule, item: InferItemInput): SlotOutcome {
+function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchetype: ArchetypeKey): SlotOutcome {
   const base = { item_id: item.id, slot_key: slot.slot_key };
 
   if (SIBLING_SOURCED_SLOTS.has(slot.slot_key)) {
@@ -462,8 +566,13 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput): SlotOutcome {
   }
 
   if (slot.bind_to_list_named) {
-    const found = findBoundGroup(item, slot.bind_to_list_named);
-    if (found) return { ...base, kind: "stated", source: "bind", choices: found.choiceNames };
+    const found = findBoundGroup(item, slot.bind_to_list_named, currentArchetype);
+    if (found) {
+      return {
+        ...base, kind: "stated", source: "bind", choices: found.choiceNames,
+        ...(found.choicePriceDeltaCents ? { choicePriceDeltaCents: found.choicePriceDeltaCents } : {}),
+      };
+    }
   }
 
   if (NAME_SOURCED_SLOTS.has(slot.slot_key) && item.nameSlotChoices && looksLikeCleanChoiceList(item.nameSlotChoices)) {
@@ -506,7 +615,7 @@ export function inferCategory(category: string, items: InferItemInput[]): Catego
   const questions: OwnerQuestionDraft[] = [];
 
   for (const slot of archetype.slots) {
-    const outcomesForSlot = items.map(item => resolveSlotForItem(slot, item));
+    const outcomesForSlot = items.map(item => resolveSlotForItem(slot, item, archetypeKey));
     slotOutcomes.push(...outcomesForSlot);
 
     const needsQuestion = outcomesForSlot.filter(o => o.kind === "needs_question" || o.kind === "proposed");

@@ -29,6 +29,7 @@ function inferSourceItem(overrides: Partial<InferSourceItem> = {}): InferSourceI
     extractedGroups: [],
     nameSlotChoices: null,
     descriptionSlotChoices: null,
+    priceCents: 0,
     ...overrides,
   };
 }

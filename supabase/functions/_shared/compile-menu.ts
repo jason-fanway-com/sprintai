@@ -25,7 +25,7 @@
  *     the LLM pass) are explicitly out of scope for this compiler — P1.
  */
 
-import { inferCategory, type InferItemInput, type ExtractedGroup, type OwnerQuestionDraft, type ArchetypeKey } from "./archetypes.ts";
+import { inferCategory, buildCategoryCandidateGroups, type InferItemInput, type ExtractedGroup, type OwnerQuestionDraft, type ArchetypeKey, type CategoryPriceItem } from "./archetypes.ts";
 
 export type Provenance = "stated" | "inferred" | "owner_confirmed" | "learned" | "defaulted";
 export type GroupKind = "slot" | "modifier";
@@ -690,6 +690,7 @@ export interface InferSourceItem {
   extractedGroups: ExtractedGroup[];
   nameSlotChoices: string[] | null;
   descriptionSlotChoices: string[] | null;
+  priceCents: number;
 }
 
 export interface CategoryQuestionSummary {
@@ -720,8 +721,21 @@ export function buildOwnerQuestionSummaries(items: InferSourceItem[]): CategoryQ
     productKeyCounts.set(item.productKey, (productKeyCounts.get(item.productKey) ?? 0) + 1);
   }
 
+  // §5's "shared list" concept, recognized post-hoc: any category in this
+  // menu can itself be the choice list for another category's slot (e.g.
+  // NJB's "Bagels" category IS the bagel_type list for "Bagel With ..."
+  // items) — real shared-list structure the importer already produced,
+  // just not shaped as an option_group. See archetypes.ts's
+  // buildCategoryCandidateGroups for the price-delta rule.
+  const priceItemsByCategory = new Map<string, CategoryPriceItem[]>();
+  for (const [category, categoryItems] of byCategory) {
+    priceItemsByCategory.set(category, categoryItems.map(i => ({ name: i.name, priceCents: i.priceCents })));
+  }
+  const categoryCandidates = buildCategoryCandidateGroups(priceItemsByCategory);
+
   const summaries: CategoryQuestionSummary[] = [];
   for (const [category, categoryItems] of byCategory) {
+    const otherCategoryCandidates = [...categoryCandidates.values()].filter(g => g.name !== category);
     const inferInputs: InferItemInput[] = categoryItems.map(item => ({
       id: item.id,
       name: item.name,
@@ -732,6 +746,7 @@ export function buildOwnerQuestionSummaries(items: InferSourceItem[]): CategoryQ
       nameSlotChoices: item.nameSlotChoices,
       descriptionSlotChoices: item.descriptionSlotChoices,
       extractedGroups: item.extractedGroups,
+      categoryCandidateGroups: otherCategoryCandidates,
     }));
     const result = inferCategory(category, inferInputs);
     summaries.push({ category, archetype: result.archetype, itemCount: result.itemCount, questions: result.questions });

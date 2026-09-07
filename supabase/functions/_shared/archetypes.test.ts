@@ -24,7 +24,9 @@ import {
   inferCategory,
   computePriority,
   computeBlocking,
+  buildCategoryCandidateGroups,
   type InferItemInput,
+  type CategoryPriceItem,
 } from "./archetypes.ts";
 
 function item(overrides: Partial<InferItemInput>): InferItemInput {
@@ -275,6 +277,113 @@ Deno.test("classify: 'gyro' resolves to sandwich (Appendix B's own worked exampl
   assertEquals(classifyCategory("Baskets & Gyros", ["Gyro", "Chicken Gyro", "Fried Shrimp & Fries", "Chicken Fingers & Fries"]), "sandwich");
 });
 
+// ---- Category-as-shared-list binding (real NJB bug: bagel_type/spread asked
+// unnecessarily even though a real "Bagels" / "Homemade Cream Cheese
+// Spreads" category IS the choice list) ---------------------------------------
+
+Deno.test("bind: bagel_type binds to a real 'Bagels' category candidate, zero questions, real price deltas only", () => {
+  const priceItems = new Map([
+    ["Bagels", [
+      { name: "Plain Bagel", priceCents: 150 },
+      { name: "Everything Bagel", priceCents: 150 },
+      { name: "Assorted Flagel", priceCents: 210 },
+    ]],
+    ["Bagel With", [{ name: "Bagel with Butter", priceCents: 275 }]],
+  ]);
+  const candidates = buildCategoryCandidateGroups(priceItems);
+  const bagelWithItems = [item({
+    name: "Bagel with Butter", category: "Bagel With",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Bagel With"),
+  })];
+  const result = inferCategory("Bagel With", bagelWithItems);
+  assertEquals(result.questions.find(q => q.slot_key === "bagel_type"), undefined);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "bagel_type")!;
+  assertEquals(outcome.kind, "stated");
+  assertEquals(outcome.source, "bind");
+  assertEquals(outcome.choices, ["Plain Bagel", "Everything Bagel", "Assorted Flagel"]);
+  // baseline 150 (mode) -> Plain/Everything no delta, Flagel +60c real delta.
+  assertEquals(outcome.choicePriceDeltaCents, [null, null, 60]);
+});
+
+Deno.test("bind guard: a category matching the pattern only by its HEADING, not its items, does not bind (real Vito's 'Stromboli Rolls'/'Flatbreads' false positive)", () => {
+  const priceItems = new Map([
+    ["Stromboli Rolls", [
+      { name: "Cheesesteak", priceCents: 999 },
+      { name: "Pepperoni", priceCents: 999 },
+      { name: "Meat Lovers", priceCents: 999 },
+    ]],
+    ["Wraps", [{ name: "Chicken Caesar Wrap", priceCents: 895 }]],
+  ]);
+  const candidates = buildCategoryCandidateGroups(priceItems);
+  // "Stromboli Rolls" classifies as pizza (an unrelated named archetype) —
+  // fails the archetype-coherence guard even before item-support is checked.
+  assertEquals(candidates.get("Stromboli Rolls")!.sourceArchetype, "pizza");
+  const wrapItems = [item({
+    name: "Chicken Caesar Wrap", category: "Wraps",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Wraps"),
+  })];
+  const result = inferCategory("Wraps", wrapItems);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "bread")!;
+  assertEquals(outcome.kind, "needs_question"); // NOT wrongly bound to Stromboli Rolls
+  assertExists(result.questions.find(q => q.slot_key === "bread"));
+});
+
+Deno.test("bind guard: item-level support blocks a category that classifies 'other' but whose items don't actually match the pattern (real Vito's 'Flatbreads')", () => {
+  const priceItems = new Map([
+    ["Flatbreads", [
+      { name: "BBQ Chicken", priceCents: 1050 },
+      { name: "Margherita", priceCents: 1050 },
+    ]],
+    ["Wraps", [{ name: "Chicken Caesar Wrap", priceCents: 895 }]],
+  ]);
+  const candidates = buildCategoryCandidateGroups(priceItems);
+  assertEquals(candidates.get("Flatbreads")!.sourceArchetype, "other"); // passes the archetype guard...
+  const wrapItems = [item({
+    name: "Chicken Caesar Wrap", category: "Wraps",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Wraps"),
+  })];
+  const result = inferCategory("Wraps", wrapItems);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "bread")!;
+  assertEquals(outcome.kind, "needs_question"); // ...but 0/2 items mention bread/roll, so no bind
+});
+
+Deno.test("bind: a category priced '(per pound)' contributes real choice names but never a price delta (real NJB 'Homemade Cream Cheese Spreads')", () => {
+  const priceItems = new Map([
+    ["Homemade Cream Cheese Spreads", [
+      { name: "Plain Cream Cheese Spread (per pound)", priceCents: 1095 },
+      { name: "Lox Cream Cheese Spread (per pound)", priceCents: 1395 },
+    ]],
+    ["Bagel With", [{ name: "Bagel with Cream Cheese", priceCents: 400 }]],
+  ]);
+  const candidates = buildCategoryCandidateGroups(priceItems);
+  const group = candidates.get("Homemade Cream Cheese Spreads")!;
+  assertEquals(group.choicePriceDeltaCents, undefined); // bulk-unit prices, never a per-choice delta
+  const bagelWithItems = [item({
+    name: "Bagel with Cream Cheese", category: "Bagel With",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Bagel With"),
+  })];
+  const result = inferCategory("Bagel With", bagelWithItems);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "spread")!;
+  assertEquals(outcome.kind, "stated");
+  assertEquals(outcome.choices, ["Plain Cream Cheese Spread (per pound)", "Lox Cream Cheese Spread (per pound)"]);
+  assertEquals(outcome.choicePriceDeltaCents, undefined);
+});
+
+Deno.test("bind: a real per-item extracted group still wins over a category candidate for the same pattern", () => {
+  const priceItems = new Map([
+    ["Bagels", [{ name: "Plain Bagel", priceCents: 150 }]],
+  ]);
+  const candidates = buildCategoryCandidateGroups(priceItems);
+  const bagelWithItems = [item({
+    name: "Bagel with Butter", category: "Bagel With",
+    extractedGroups: [{ name: "Bagel Type", required: true, choiceNames: ["Hand-picked flavor"] }],
+    categoryCandidateGroups: [...candidates.values()],
+  })];
+  const result = inferCategory("Bagel With", bagelWithItems);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "bagel_type")!;
+  assertEquals(outcome.choices, ["Hand-picked flavor"]);
+});
+
 // ---- §5.2 priority + blocking formulas --------------------------------------
 
 Deno.test("computePriority matches §5.2 exactly: items_affected * (kc?3:0 + pc?3:0 + 1)", () => {
@@ -397,6 +506,18 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
     siblingCounts.set(key, (siblingCounts.get(key) ?? 0) + 1);
   }
 
+  // Same "category as shared list" recognition as compile-menu.ts's
+  // buildOwnerQuestionSummaries and the item-9 report — exercises the real
+  // fix against real data instead of a parallel reimplementation.
+  const priceItemsByCategory = new Map<string, CategoryPriceItem[]>();
+  for (const it of items) {
+    if (!it.category) continue;
+    const list = priceItemsByCategory.get(it.category) ?? [];
+    list.push({ name: it.name, priceCents: it.price_cents });
+    priceItemsByCategory.set(it.category, list);
+  }
+  const categoryCandidates = buildCategoryCandidateGroups(priceItemsByCategory);
+
   return items.map(it => ({
     id: it.id,
     name: it.name,
@@ -407,6 +528,7 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
     nameSlotChoices: extractNameSlot(it.name),
     descriptionSlotChoices: extractDescriptionSlot(it.description),
     extractedGroups: groupsByItem.get(it.id) ?? [],
+    categoryCandidateGroups: [...categoryCandidates.values()].filter(g => g.name !== it.category),
   }));
 }
 

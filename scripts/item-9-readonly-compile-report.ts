@@ -34,9 +34,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { normalizeMenuItems, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 import {
   inferCategory,
+  buildCategoryCandidateGroups,
   type InferItemInput,
   type ExtractedGroup,
   type OwnerQuestionDraft,
+  type CategoryPriceItem,
 } from "../supabase/functions/_shared/archetypes.ts";
 import {
   compileMenu,
@@ -211,6 +213,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
       extractedGroups,
     };
   });
+  const priceCentsById = new Map(itemRows.map(r => [r.id, r.price_cents]));
 
   // §5.1: "category or set first, item second" — an item with no category
   // has no scope to ask a question against, so it's excluded from infer
@@ -226,6 +229,16 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
     byCategory.set(it.category, list);
   }
 
+  // §5's "shared list" concept, recognized post-hoc: any category can
+  // itself be the choice list for another category's slot (e.g. NJB's
+  // "Bagels" category IS the bagel_type list for "Bagel With ..." items).
+  // Same mechanism as compile-menu.ts's buildOwnerQuestionSummaries.
+  const priceItemsByCategory = new Map<string, CategoryPriceItem[]>();
+  for (const [category, catItems] of byCategory) {
+    priceItemsByCategory.set(category, catItems.map(it => ({ name: it.name, priceCents: priceCentsById.get(it.id) ?? 0 })));
+  }
+  const categoryCandidates = buildCategoryCandidateGroups(priceItemsByCategory);
+
   // item_id -> slot_key -> the OwnerQuestionDraft that actually applies to
   // THIS item (needs_question/proposed outcome only — see file header).
   const blockingByItem = new Map<string, Map<string, OwnerQuestionDraft>>();
@@ -233,7 +246,9 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
   let categoriesFellToOther = 0;
 
   for (const [category, catItems] of byCategory) {
-    const result = inferCategory(category, catItems);
+    const otherCategoryCandidates = [...categoryCandidates.values()].filter(g => g.name !== category);
+    const catItemsWithCandidates = catItems.map(it => ({ ...it, categoryCandidateGroups: otherCategoryCandidates }));
+    const result = inferCategory(category, catItemsWithCandidates);
     if (result.archetype === "other") categoriesFellToOther++;
     for (const q of result.questions) drafts.push({ ...q, category, archetype: result.archetype });
 

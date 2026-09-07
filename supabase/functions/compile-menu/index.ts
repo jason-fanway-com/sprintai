@@ -289,8 +289,10 @@ Deno.serve(async (req: Request) => {
   // `extractedGroups` for bind_to_list_named; normalize.ts's "X or Y" /
   // "choice of" slots feed nameSlotChoices/descriptionSlotChoices by
   // source. Menus with zero pre-existing option_groups (NJB, Zio's) simply
-  // get an empty extractedGroups per item, which is the honest input — no
-  // shared-list extraction exists yet (Phase 1 modifier_sets).
+  // get an empty extractedGroups per item — buildOwnerQuestionSummaries
+  // separately recognizes real category-as-shared-list structure (e.g. a
+  // "Bagels" category) via categoryCandidateGroups, so this isn't the only
+  // source of a "found list" bind.
   const inferSourceItems: InferSourceItem[] = itemRows.map(row => {
     const normalized = normalizedById.get(row.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
@@ -309,6 +311,7 @@ Deno.serve(async (req: Request) => {
       extractedGroups,
       nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
       descriptionSlotChoices: descriptionSlot ? descriptionSlot.choices.map(c => c.display_name) : null,
+      priceCents: row.price_cents,
     };
   });
   const categoryQuestionSummaries = buildOwnerQuestionSummaries(inferSourceItems);

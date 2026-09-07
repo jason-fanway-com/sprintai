@@ -699,3 +699,58 @@ issue on Zio's right now if item 4/9 compile these items as-is.
 4 new test cases added (both real gaps + the Oxford-comma regression + the existing Vito's
 "no trailing or" case re-confirmed still 0 slots) — 21/21 pass, 0 ignored, 0 failed, real
 creds (`set -a; source ~/.openclaw/.secrets; set +a`). Committing + pushing now.
+
+[ITEM 3 — real bind bug found by PO, fixing now: "Bagel With" asked a bagel_type/spread
+question NJB's own catalogue already answers]
+2026-09-07 ~19:35 UTC — Not blocked, LANDING NOW, Melvin verification in progress. PO
+confirmed directly: NJB's "Bagels" category (26 real items) IS the choice list for the
+bagel_type slot on "Bagel With ..." items, and "Homemade Cream Cheese Spreads" (5 items) IS
+the spread slot's list — archetypes.ts's bind_to_list_named only ever checked an item's OWN
+extractedGroups (real option_groups), never recognized that ANOTHER category in the same
+menu could itself be the shared list. Root cause confirmed, not new scope.
+Fix: `buildCategoryCandidateGroups` (archetypes.ts) turns every category in a menu into a
+candidate ExtractedGroup; `findBoundGroup` checks it when an item's own extractedGroups
+don't match. Wired into compile-menu.ts's buildOwnerQuestionSummaries, compile-menu/
+index.ts, and the item-9 report script (all three real callers) plus this file's own live
+tests.
+Price-delta wrinkle (PO's ask): choicePriceDeltaCents is real, sourced price_cents diffs
+against each category's own baseline (mode price) — never invented. "Additional charge may
+apply" text alone (no number) correctly produces NO delta; a genuinely different price_cents
+(Assorted Flagel +60c, Super Blueberry +$1.50, Super Cinnamon Raisin +$1.25, Half/One Dozen
++$6/+$13.50) does.
+TWO REAL REGRESSIONS CAUGHT BEFORE SHIPPING (self-caught in re-verification, not by
+Melvin — flagging per the standing "don't rubber-stamp your own summary" norm):
+1. Naive version matched Vito's "Stromboli Rolls" (Cheesesteak/Pepperoni/Meat Lovers — a
+   pizza-family category) as a "bread" list for Wraps/Paninis/Hot Sandwiches purely because
+   "Rolls" contains "roll" — spurious binding, would have silently wrong-answered a real
+   kitchen-critical slot. Same bug also hit "Flatbreads" (BBQ Chicken/Margherita).
+2. Fix: two guards in findBoundGroup — (a) archetype-coherence: candidate category must
+   classify to the SAME archetype as the slot being resolved, or to "other" (no competing
+   dish identity); (b) item-level majority: >=50% of the candidate category's own item NAMES
+   must also match the bind pattern, not just the heading. Both real cases (Stromboli Rolls
+   classifies "pizza"≠sandwich; Flatbreads classifies "other" but 0/6 items mention
+   bread/roll) now correctly excluded, confirmed via unit test + full live rerun (Vito's
+   back to its pre-fix 5 blocking questions, Zio's unchanged at 7 — only NJB's Bagel With
+   moved).
+3. Separately found: NJB's "Homemade Cream Cheese Spreads" items are priced "(per pound)"
+   ($10.95-$13.95 wholesale) — using those absolute prices as a per-choice upcharge on a
+   $2.75-$4.95 bagel sandwich would be actively wrong, not just imprecise. Added a
+   BULK_UNIT_PATTERN guard: choice NAMES from such a category still bind (they're correct),
+   but choicePriceDeltaCents is never computed for it.
+OPEN FLAG, not fixed, needs no action from anyone yet but noting: PO's own confirmation
+named "26 items" as the correct bagel_type list; the real 26 includes "Half Dozen Bagels"
+and "One Dozen Bagels" (pack-size items, not flavor choices) alongside the 24 real single-
+bagel flavors. Included as-is per PO's explicit instruction, not filtered — flagging in case
+that's not actually intended once someone looks at the real choice list an owner would see.
+Real-data result (all 3 shops, live tests + item-9 report re-run): NJB "Bagel With" (13
+items) drops from 2 blocking questions (bagel_type 11, spread 11) to 0 — both slots bind.
+NJB total blocking questions 10->8, orderable 85/170->100/170 (58.8%). Zio's unchanged
+(152/220, 69.1%, 7 questions) — no matching shared-list categories there, correctly no
+change. Vito's unchanged (5 blocking questions) after the regression guards, confirming no
+new false positives anywhere else in the real data.
+70/70 unit+live tests pass (34 archetypes.test.ts incl. 6 new tests for this fix + its two
+guards, 36 compile-menu.test.ts), 0 ignored, 0 failed, real creds (`set -a; source
+~/.openclaw/.secrets ~/.openclaw-sprintai/.secrets 2>/dev/null; set +a`). Melvin
+independently verifying now (live-data spot checks, price-delta correctness, grep for any
+option_groups/option_choices write path, regression-guard correctness). Will commit+push and
+flip this entry to done the moment Melvin's back — not sitting on it.
