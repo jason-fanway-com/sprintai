@@ -2,8 +2,10 @@
  * runner.ts — Run a single test case against the chat-sms bot via the
  * web-chat-test JSON path. NO Twilio, NO outbound SMS.
  *
- * HARD SAFETY GATE: refuses to run against a shop with protected=true OR
- * phone_number_e164 IS NOT NULL. Only synthetic test shops allowed.
+ * SAFETY GATE: for an "sms"-capable channel, refuses to run against a shop
+ * with protected=true OR phone_number_e164 IS NOT NULL. This file always
+ * drives the bot over the "web" JSON path (never SMS), so the gate is a
+ * no-op here by construction — see enforceSafetyGate's comment.
  *
  * Supports both scripted TestCase and LLM-driven ConversationalCase.
  * Conversational cases use a customer-simulator LLM playing a persona toward
@@ -13,6 +15,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import type { TestCase, ConversationalCase, AnyCase, Turn } from "./library.ts";
 import { isConversationalCase } from "./library.ts";
+import { enforceSafetyGate } from "./safety-gate.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -63,22 +66,9 @@ async function loadShop(
   return data;
 }
 
-function enforceSafetyGate(shop: { id: string; name: string; protected: boolean; phone_number_e164: string | null }): void {
-  if (shop.protected === true) {
-    throw new Error(
-      `SAFETY GATE: Shop "${shop.name}" (${shop.id}) is protected. ` +
-      `Refusing to run test suite against a protected shop. ` +
-      `Only test/unprotected shops (no phone number) are allowed.`,
-    );
-  }
-  if (shop.phone_number_e164 !== null && shop.phone_number_e164 !== "") {
-    throw new Error(
-      `SAFETY GATE: Shop "${shop.name}" (${shop.id}) has a phone number ` +
-      `(${shop.phone_number_e164}). Refusing to run — this shop could receive ` +
-      `real SMS traffic. Only phone-less test shops are allowed.`,
-    );
-  }
-}
+// enforceSafetyGate lives in safety-gate.ts — a leaf module with no top-level
+// side effects, so its own unit test can import it without pulling in this
+// file's `Deno.env.get` call (and the permission prompt that comes with it).
 
 // ── Timeout & retry harness ────────────────────────────────────────────────
 
@@ -282,11 +272,14 @@ async function sendMessageWithRetry(
 /**
  * Run a single test case against the bot. Returns a full transcript.
  *
- * Hard safety gate: throws BEFORE any bot call if the shop is protected or
- * has a phone number.
+ * Safety gate: passes channel "web" (this file never drives SMS), so the
+ * protected/phone_number_e164 checks are inapplicable and skipped — see
+ * enforceSafetyGate.
  *
  * Dispatches to scripted or conversational driver based on case type.
  */
+export { enforceSafetyGate };
+
 export async function runCase(
   config: RunnerConfig,
   shopId: string,
@@ -313,7 +306,9 @@ async function runScriptedCase(
 
   // ── HARD SAFETY GATE (MUST run before any network call) ────────────────
   const shop = await loadShop(supabase, shopId);
-  enforceSafetyGate(shop);
+  // This file only ever drives the bot over the JSON web-chat-test path
+  // (sendMessage/sendMessageWithRetry below), never SMS.
+  enforceSafetyGate(shop, "web");
 
   // ── Run each turn ──────────────────────────────────────────────────────
   const sessionId = `test-suite-${crypto.randomUUID()}`;
@@ -390,7 +385,9 @@ async function runConversationalCase(
 
   // ── HARD SAFETY GATE (MUST run before any network call) ────────────────
   const shop = await loadShop(supabase, shopId);
-  enforceSafetyGate(shop);
+  // This file only ever drives the bot over the JSON web-chat-test path
+  // (sendMessage/sendMessageWithRetry below), never SMS.
+  enforceSafetyGate(shop, "web");
 
   if (!config.simulatorApiKey) {
     return {

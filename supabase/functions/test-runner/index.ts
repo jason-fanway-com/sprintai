@@ -9,8 +9,8 @@
  * process. The worker is the diagnostic / interactive copy; this edge
  * function is the hands-free server-side version.
  *
- * SAFETY: runner.ts enforces protected=false + phone_number_e164 IS NULL
- * on every shop. No live shop can be targeted.
+ * SAFETY: this function always drives the bot over the "web" JSON path
+ * (never SMS), which cannot reach a real phone — see shopSafetyReason.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
@@ -71,7 +71,9 @@ Deno.serve(async (_req: Request) => {
     // generation or LLM call. The claim path is already gated, so only re-check
     // jobs that came from findRunningJob.
     if (fromRunning) {
-      const reason = await shopSafetyReason(supabase, shopId);
+      // This function only ever drives the bot over the JSON web-chat-test
+      // path (CHAT_FUNCTION_URL via runCase), never SMS.
+      const reason = await shopSafetyReason(supabase, shopId, "web");
       if (reason) {
         await supabase.from("test_run_queue").update({
           status: "error",
@@ -514,14 +516,25 @@ async function findRunningJob(supabase: any) {
  * plus shop-not-found), or null if the shop is safe. Enforcing this at claim
  * time — not only inside runCase — stops an unsafe shop from ever entering
  * 'running' and trapping the every-60s cron loop on a job that can never succeed.
+ *
+ * `channel` states the risk being guarded against, not a mode switch: this
+ * gate exists to stop a real diner's phone from being texted, and this edge
+ * function only ever POSTs JSON to chat-sms (CHAT_FUNCTION_URL, via runCase),
+ * which hard-sets `channel = "web"` and — per that function's own comment —
+ * "never calls Twilio" for that path. A "web" call therefore cannot reach a
+ * phone no matter what `protected`/`phone_number_e164` say, so the checks are
+ * genuinely inapplicable and skipped. This is a scoped exception based on
+ * verified capability, not a general loosening — any caller that can actually
+ * reach SMS must pass "sms" and gets both checks, unchanged.
  */
-async function shopSafetyReason(supabase: any, shopId: string): Promise<string | null> {
+async function shopSafetyReason(supabase: any, shopId: string, channel: "web" | "sms"): Promise<string | null> {
   const { data: shop, error } = await supabase
     .from("shops")
     .select("id, name, protected, phone_number_e164")
     .eq("id", shopId)
     .maybeSingle();
   if (error || !shop) return `Shop ${shopId} not found — refusing to run test suite`;
+  if (channel === "web") return null;
   if (shop.protected === true) {
     return `SAFETY GATE: shop "${shop.name}" (${shopId}) is protected — refusing to run test suite`;
   }
@@ -544,7 +557,9 @@ async function claimNextPending(supabase: any) {
   if (!data?.length) return null;
 
   for (const job of data) {
-    const reason = await shopSafetyReason(supabase, job.shop_id);
+    // This function only ever drives the bot over the JSON web-chat-test
+    // path (CHAT_FUNCTION_URL via runCase), never SMS.
+    const reason = await shopSafetyReason(supabase, job.shop_id, "web");
     if (reason) {
       // Fail the poisoned job terminally so it leaves the pending queue and
       // never becomes 'running'. No bot call, no generation, no message sent.
