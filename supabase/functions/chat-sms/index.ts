@@ -1034,7 +1034,14 @@ async function executeTool(
       let unverifiedNote: string | undefined;
       if (options !== undefined) {
         const groupNames = new Set((menuItem?.option_groups || []).map(g => g.name));
+        // Seed with existing valid group selections so partial-resolve calls
+        // (e.g. "Bleu cheese or ranch" answered on turn 3) don't erase a group
+        // that was already resolved on an earlier turn (e.g. "Sauce" on turn 2).
+        const existingOpts = (cart[idx] as CartItem).options ?? {};
         const cleaned: Record<string, string[]> = {};
+        for (const [k, v] of Object.entries(existingOpts)) {
+          if (groupNames.has(k)) cleaned[k] = v;
+        }
         const unverifiedThisCall: string[] = [];
         for (const [key, vals] of Object.entries(options)) {
           if (modifierNames.has(key) && !groupNames.has(key)) {
@@ -4523,12 +4530,18 @@ Deno.serve(async (req: Request) => {
           localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
         );
         const feeAlreadyDisclosed = !!cart.fee_disclosed_at;
+        // After resolving this group, check for the NEXT pending group on the
+        // same line — ask it deterministically instead of saying "Anything else?"
+        // (fixes the silent-drop when an item has 2+ required option groups).
+        const nextQuestion = modResult.ok ? findPendingOptionQuestion(localCartItems as CartItem[], menuById) : null;
         const footer = modResult.ok
           ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed)
           : "";
-        const reply = modResult.ok
-          ? `Got it — ${resolvedChoice.name} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`
-          : "Sorry, I had trouble setting that — mind trying again?";
+        const reply = !modResult.ok
+          ? "Sorry, I had trouble setting that — mind trying again?"
+          : nextQuestion
+            ? `Got it — ${resolvedChoice.name}. For the ${nextQuestion.item_name}: what ${nextQuestion.group_name.toLowerCase()} — ${nextQuestion.choices.map(c => c.name).join(", ")}?${footer ? `\n\n${footer}` : ""}`
+            : `Got it — ${resolvedChoice.name} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`;
         if (modResult.ok && !feeAlreadyDisclosed) {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
         }
@@ -4748,6 +4761,19 @@ Deno.serve(async (req: Request) => {
         }
       }
     }
+  }
+
+  // ── Deterministic cart-summary handler ────────────────────────────────────
+  // "show me my order" / "what's in my cart" and obvious variants → call
+  // renderItemizedRecap directly, no LLM. Same renderer the checkout summary
+  // uses, so the numbers can never drift apart. Guard: only fires when the
+  // cart has items and the phase is building (not greeting, not checkout).
+  const CART_SUMMARY_RE = /^(?:show(?:\s+me)?(?:\s+my)?(?:\s+(?:full\s+)?order|\s+cart|\s+order)?|what(?:'?s|\s+is)(?:\s+in)?(?:\s+my)?(?:\s+cart|\s+order)|(?:my\s+)?(?:order|cart)(?:\s+so\s+far)?|(?:see|view|check|read)\s+(?:my\s+)?(?:order|cart)|what(?:\s+did|\s+have)\s+i(?:\s+(?:get|order|got|added))?)[\s?]*$/i;
+  if (!correctionApplied && !nameSubmitCheckoutUrl && cartItems.length > 0 && cart.phase === "building" && CART_SUMMARY_RE.test(userMessage.trim())) {
+    const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
+    const summaryReply = `Here's your order so far:\n\n${recap}`;
+    console.log(`[chat-sms] cart-summary shortcut fired (conv=${conversation.id})`);
+    return jsonResponse({ reply: summaryReply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
