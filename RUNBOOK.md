@@ -1234,12 +1234,24 @@ showed the shop and its 220 items fine — Zio's option data was real (140
 groups, 889 choices, verified via a direct service-role query) but invisible
 through `qa_ro` because it wasn't in `visible_shop_ids()`'s allowlist yet
 (fixed migration 116; the allowlist is `is_test = true` OR a hardcoded slug
-list — currently `not-just-bagels`, `zio-s-pizzeria`).
+list — currently `not-just-bagels`, `zio-s-pizzeria`). Migration 116 alone
+was NOT enough: `option_groups`/`option_choices` had their own independent
+copy of the old filter baked directly into the view (not a call to the
+function), so updating the function didn't touch them — proven by Jason's
+own proof query (`select ... from qa_ro.option_groups where id = '<a real
+row>'`) still returning 0 rows after 116 landed. Migration 117 rewrote both
+views to actually reference `visible_shop_ids()` instead of duplicating its
+logic, closing that gap for real. Verified live: the same proof query now
+returns the row.
 
-- **Scoped by `visible_shop_ids()`** (only test shops + the named real ones
-  above): `option_groups`, `option_choices`.
-- **Scoped by an inline, slightly different allowlist** (`is_test = true` OR
-  slug IN `not-just-bagels`/`njb-test-clone-11353`): `orders_ro`,
+- **Scoped by an actual call to `visible_shop_ids()`** (single source of
+  truth, only test shops + the named real ones above): `option_groups`,
+  `option_choices` (fixed migration 117).
+- **Scoped by their OWN independent copy of a similar-but-not-identical
+  allowlist** (`is_test = true` OR slug IN `not-just-bagels`/
+  `njb-test-clone-11353`) — NOT wired to `visible_shop_ids()`, so adding a
+  shop to that function does nothing for these two until they're fixed the
+  same way 117 fixed option_groups/option_choices: `orders_ro`,
   `ticket_send_log_ro`.
 - **NOT scoped at all — every shop visible, real or test**: `shops_all`,
   `shops_config`, `menus`, `menu_items`, `menu_item_option_coverage`,
