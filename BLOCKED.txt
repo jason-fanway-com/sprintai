@@ -754,3 +754,51 @@ guards, 36 compile-menu.test.ts), 0 ignored, 0 failed, real creds (`set -a; sour
 independently verifying now (live-data spot checks, price-delta correctness, grep for any
 option_groups/option_choices write path, regression-guard correctness). Will commit+push and
 flip this entry to done the moment Melvin's back — not sitting on it.
+
+[ZIO'S MATCHER — 2 mispaired items investigated, Melvin-verified, /private/tmp/zios/ scratch
+files only, did NOT touch matches.json or the live Firecrawl scrape/its rows]
+2026-09-07 ~19:55 UTC — Not blocked. Root cause found by reading build_matches3.py (the
+script that actually produced the current matches.json, confirmed by reproducing it
+byte-for-byte against a scratch copy of the data): VERIFIED_FUZZY is a hand-curated alias
+dict, not a fuzzy-string algorithm, and it had two wrong entries — 'Bruchetta Pizza' [sic,
+real DB typo] -> 'Bruschetta Pan Pizza' and "Zio's Special Pan Pizza" -> "Zio's Special
+Pizza" — each colliding with an already-correctly-matched sibling DB row for the same Slice
+product. The real bug: when an alias resolves to a Slice name with exactly one candidate
+card, the script picks it with ZERO price cross-check (`if len(candidates)==1: chosen =
+candidates[0]`, no verification) — the price-agreement check only runs in the sibling branch
+for names with multiple candidate cards. A wrong manual alias with a uniquely-named target
+sails through silently, which is exactly what happened here.
+What the 2 DB items actually are: checked live DB (menu_items, correctly scoped to Zio's
+own menu_id, not the shared multi-tenant table's global rows) — both active=true,
+is_available=true, same import batch/timestamp as every other Zio's row, i.e. NOT stale
+duplicates. Distinct descriptions from their sibling (topping lists nearly identical,
+crust style differs — genuine "regular vs Pan-crust variant of the same specialty pie").
+Checked all 274 real Slice cards by name: Slice has no plain "Bruschetta Pizza" and no
+"Zio's Special Pan Pizza" at all — only the sibling crust variant of each. Two real menu
+items with no live Slice-sourced option data available; per "missing beats wrong," staying
+unmatched is correct, not a placeholder state to fix later.
+Fix applied: current live matches.json already correctly excludes both (was never touched —
+confirmed byte-identical before/after). The actual fix is removing the 2 wrong aliases from
+VERIFIED_FUZZY in build_matches3.py (the live generator) and build_matches.py/2.py
+(superseded, fixed for hygiene so a future accidental re-run of an old copy doesn't
+reintroduce this), and documenting both items in DOCUMENTED_SKIP_NO_SLICE_SOURCE with the
+investigation inline — this was a silent, unexplained absence before; now it's an auditable
+decision. Re-ran the fixed script against a scratch copy of the data (never touched the live
+matches.json or went near the running Firecrawl process): output is byte-for-byte identical
+to the current live matches.json, proving the fix changes nothing else.
+Audit of the other 198 matches for the same failure class (qualifier word dropped/added
+between db_name and slice_name — Pan/Sicilian/Grandma/Neapolitan/Brooklyn/thin/thick/square/
+round/deep dish/stuffed/gluten free/small/medium/large/personal/family/sheet): 0 found.
+Secondary, lower-severity finding from the same audit, not part of what was asked: 5 exact-
+name matches have small price drift between our DB and Slice's live price (Bruschetta
+$7.69/$7.99, Grandma Cheese Pizza $24.99/$23.99, Mike's Hot Honey Pepperoni Sicilian
+$24.99/$23.99, Brooklyn Pizza 18 $24.99/$23.99, Chef Salad $12.10/$11.99) — names match
+exactly, so these read as ordinary price staleness, not mispairings; noting for whoever owns
+the price-diff check Jason already ran, not treating as part of this task.
+Melvin independently re-verified: re-read build_matches3.py's fixed state and agreed on the
+mechanism, independently reproduced the byte-identical matches.json from a separate scratch
+copy (own SHA-256), independently queried the live DB for both flagged items (caught and
+corrected their own first-pass mistake — queried the shared multi-tenant menu_items table
+without scoping to Zio's own menu_id first, got noisy results, re-scoped and confirmed),
+hand spot-checked 12 of the 198 pairs against raw db-items.json/cards.json, and ran their own
+independent qualifier-word scan across all 198 — 0 mismatches, matching mine.
