@@ -1227,6 +1227,32 @@ is_first_session), `test_runs`, `test_case_results`, `test_run_queue`, `issues`,
 `menu_item_option_coverage`, `ticket_send_log_ro`, `order_carts_ro`,
 `orders_ro`, `shops_config`, `menu_edit_log`.
 
+**Shop scoping is NOT consistent across these views — check this table before
+trusting a zero-row result.** Found 2026-09-07 the hard way: `qa_ro.option_groups`
+returned 0 rows for Zio's Pizzeria while `qa_ro.shops_all`/`qa_ro.menu_items`
+showed the shop and its 220 items fine — Zio's option data was real (140
+groups, 889 choices, verified via a direct service-role query) but invisible
+through `qa_ro` because it wasn't in `visible_shop_ids()`'s allowlist yet
+(fixed migration 116; the allowlist is `is_test = true` OR a hardcoded slug
+list — currently `not-just-bagels`, `zio-s-pizzeria`).
+
+- **Scoped by `visible_shop_ids()`** (only test shops + the named real ones
+  above): `option_groups`, `option_choices`.
+- **Scoped by an inline, slightly different allowlist** (`is_test = true` OR
+  slug IN `not-just-bagels`/`njb-test-clone-11353`): `orders_ro`,
+  `ticket_send_log_ro`.
+- **NOT scoped at all — every shop visible, real or test**: `shops_all`,
+  `shops_config`, `menus`, `menu_items`, `menu_item_option_coverage`,
+  `menu_edit_log`, `issues`, `order_carts_ro`, `order_cart_lines`,
+  `test_runs`, `test_case_results`, `test_run_queue`, `test_transcripts`,
+  `public_tester_sessions`.
+
+When onboarding a new real shop: it will show up immediately in the unscoped
+views, but will read as *empty* — not absent, empty, a real difference — in
+`option_groups`/`option_choices`/`orders_ro`/`ticket_send_log_ro` until it's
+added to the relevant allowlist. Don't conclude "no data" from one of the
+scoped views without cross-checking an unscoped one first.
+
 If `DATABASE_URL` is missing from a service environment, the fix is to source
 that file — do not ask an agent to run the query.
 
