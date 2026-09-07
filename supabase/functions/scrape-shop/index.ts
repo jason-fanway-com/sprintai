@@ -732,7 +732,8 @@ async function tryAggregatorRung(
   return { success: true, itemCount: inserted, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "ok", items: inserted } };
 }
 
-Deno.serve({ port: Number(Deno.env.get("LOCAL_TEST_PORT") ?? "8000") }, async (req: Request) => {
+const localTestPort = Deno.env.get("LOCAL_TEST_PORT");
+const scrapeShopHandler = async (req: Request) => {
   const startedAt = Date.now();
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -1149,4 +1150,10 @@ Deno.serve({ port: Number(Deno.env.get("LOCAL_TEST_PORT") ?? "8000") }, async (r
     }).eq("id", shop_id);
     return jsonResponse({ error: "Crawl failed: " + errMsg }, 500);
   }
-});
+};
+
+if (localTestPort) {
+  Deno.serve({ port: Number(localTestPort) }, scrapeShopHandler);
+} else {
+  Deno.serve(scrapeShopHandler);
+}
