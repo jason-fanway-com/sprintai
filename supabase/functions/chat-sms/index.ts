@@ -4352,6 +4352,81 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 7c (2026-09-06, Jason — live QA): proactive same-message category resolution ──
+  // Identical input ("chicken caesar salad"), three fresh sessions, three
+  // different journeys: sometimes the model asked "salad or wrap?" even
+  // though "salad" already disambiguates; sometimes it added the wrong
+  // thing; sometimes it invented a dressing nobody asked about. All three
+  // are the LLM improvising on a decision the data already answers. GUARD 7
+  // /7b only catch this AFTER the LLM has already acted (ambiguous add_item
+  // rolled back, or a free-text question asked) — this runs BEFORE the
+  // LLM/tool loop, on the customer's fresh message, using the exact same
+  // categoryWordMatches() the reactive guards already trust. If the message
+  // names a duplicate-name item family AND a category word in that SAME
+  // message resolves to exactly one candidate, resolve and add it directly
+  // — the LLM never gets a turn to be inconsistent about something that
+  // isn't ambiguous. A bare "chicken caesar" with no category word supplies
+  // no signal (0 matches) and is untouched — genuine ambiguity still asks,
+  // same as before.
+  if (!cart.pending_disambiguation) {
+    const byName7c = new Map<string, EffectiveMenuItem[]>();
+    for (const mi of effectiveMenu) {
+      const key = mi.name.trim().toLowerCase();
+      const arr = byName7c.get(key) ?? [];
+      arr.push(mi);
+      byName7c.set(key, arr);
+    }
+    const userMsgLower7c = userMessage.toLowerCase();
+    for (const [name7c, candidates7c] of byName7c) {
+      if (candidates7c.length < 2) continue;
+      const nameRe7c = new RegExp(`\\b${name7c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (!nameRe7c.test(userMsgLower7c)) continue;
+      const categoryMatches7c = candidates7c.filter(c => categoryWordMatches(c.category, userMessage));
+      if (categoryMatches7c.length !== 1) continue; // no signal, or still genuinely ambiguous — let the existing flow handle it
+      const resolved7c = categoryMatches7c[0];
+
+      const localCartItems = [...cart.cart_json];
+      const addResult7c = await executeTool(
+        "add_item", { menu_item_id: resolved7c.id, quantity: 1 },
+        localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+      );
+      if (!addResult7c.ok) break; // never swallow a real failure here — fall through to the normal loop
+
+      const addedLine7c = localCartItems.find(i => (i as CartItem).menu_item_id === resolved7c.id) as CartItem | undefined;
+      const pending7c = addedLine7c?.pending_options ?? [];
+      const feeAlreadyDisclosed7c = !!cart.fee_disclosed_at;
+      let reply7c: string;
+      if (pending7c.length > 0) {
+        // Same rule as the is_default fix and the missing-options humanizer:
+        // ask deterministically, with the REAL recorded choices (GUARD 8's
+        // own reason to exist — the model recalling an 18-choice list from a
+        // ~17k-token prompt is exactly the kind of thing this file no longer
+        // trusts an LLM to do reliably), never invent or default a choice
+        // that was never in the data.
+        const askText7c = renderMissingOptionsPrompt([{ name: resolved7c.name, missingGroups: pending7c }]);
+        const choiceClauses7c = pending7c
+          .map(groupName => {
+            const group = resolved7c.option_groups?.find(g => g.name === groupName);
+            return group && group.choices.length > 0 ? `Choices for ${group.name}: ${group.choices.map(c => c.name).join(", ")}.` : "";
+          })
+          .filter(Boolean)
+          .join(" ");
+        reply7c = choiceClauses7c ? `${askText7c} ${choiceClauses7c}` : askText7c;
+      } else {
+        const footer7c = renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed7c);
+        const resolvedWord7c = categoryDisplayWord(resolved7c.category);
+        reply7c = `Got it — ${resolved7c.name}${resolvedWord7c ? ` ${resolvedWord7c}` : ""} added.${footer7c ? `\n\n${footer7c}` : ""} Anything else?`;
+      }
+      if (!feeAlreadyDisclosed7c) {
+        await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+      }
+      console.log(`[chat-sms] GUARD 7c (proactive category resolution) tripped (conv=${conversation.id}). "${name7c}" -> ${resolved7c.name} (${resolved7c.category ?? "no category"}).`);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply7c);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply7c); return emptyTwiml(); }
+      return jsonResponse({ reply: reply7c, cart: localCartItems, phase: "building", session_id: sessionId });
+    }
+  }
+
   // ── Pending option-answer resolution (DEFECT 1, 2026-09-06 P0) ──────────
   // A required option group left open on a cart line (e.g. add_item stored
   // pending_options: ["Temp"] on a cheeseburger and the reply asked "how do
