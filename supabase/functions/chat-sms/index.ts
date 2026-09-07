@@ -5539,8 +5539,22 @@ Deno.serve(async (req: Request) => {
     for (const ci of touchedThisTurn12) {
       const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
       if (!menuItem) continue;
+      // P0 REGRESSION FIX (2026-09-07, live on Vito's canary, cheeseburger
+      // temp flow): a group still listed in pending_options is, by
+      // definition, being ASKED about this turn — the reply necessarily
+      // names every one of its choices ("Rare, medium rare, medium, medium
+      // well, or well done?") right alongside the base item's own "added"
+      // confirmation. That is not a false claim; it is the question GUARD
+      // 12 exists to make sure gets asked correctly. Without this
+      // exclusion, GUARD 12 fired on EVERY first-add of ANY item with a
+      // still-open required group, menu-wide — not a Cheese-Burger-specific
+      // bug, a structural one. Only a group that is NOT (or no longer)
+      // pending — i.e. was expected to be resolved and wasn't — is real
+      // grounds for "the reply confirmed something unresolved."
+      const pendingGroupNames = new Set((ci.pending_options ?? []).map(g => g.toLowerCase()));
       const selectedNames = new Set(Object.values(ci.options ?? {}).flat().map(v => v.toLowerCase()));
       const unselectedChoiceNames = (menuItem.option_groups ?? [])
+        .filter(g => !pendingGroupNames.has(g.name.toLowerCase()))
         .flatMap(g => g.choices.map(c => c.name))
         .filter(name => !selectedNames.has(name.toLowerCase()));
       if (unselectedChoiceNames.length === 0) continue;
