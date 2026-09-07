@@ -112,6 +112,59 @@ data and reporting garbage. Watching git log + this file for item 3's
 commit; will run the live pipeline and post the item 9 report as its own
 message the moment it lands.
 
+[ITEM 3 — Archetype library + infer step, spec §11 item 3]
+2026-09-07 ~17:55 UTC — Not blocked, LANDING NOW. archetypes.ts (12 archetypes
+per Appendix A, exact SlotRule/Archetype shape from §4.2) + infer step
+(classifyCategory + inferCategory) done, Melvin-verified (PASS, second pass
+after a first-pass FAIL got two real bugs fixed — see below), committed and
+pushing this message.
+Real-data run, all 3 shops (live tests in archetypes.test.ts --filter
+"live:"): 20/20 Vito's categories, 14/14 NJB, 20/20 Zio's classify+infer
+without throwing. 13/54 categories across all three fall to 'other'
+(reported, not silently dropped) — real coverage gaps in v0: Vito's
+"Appetizers"/"By the Slice"/"Quesadillas", Zio's "Chicken or Veal"/"Soup"/
+"Desserts"/"Seafood"/"Baked Dishes"/"Side Orders", NJB "Loukoumades"/"Yiayia's
+Greek Corner"/"Extras & Add-Ins"/"Sides"/"From The Fryer"/"Homemade Cream
+Cheese Spreads" — none of these are covered by any v0 archetype's match
+list; flagging "Chicken or Veal" (13 Zio's items, real protein-choice dishes)
+as the best P1 candidate for a new archetype.
+Blocking questions generated: Vito's 5 (bread×3 cats, temp×1, side×1 — note
+temp is only 1/14 Angus Burgers items since Vito's already has real
+hand-built Temp groups for the other 13, correctly recognized as `stated`
+via a bind-first fix below), NJB 10 (bagel_type, spread, bread×4, egg_style,
+toast, egg_side, dressing), Zio's 7 (dressing, bread×5, temp).
+Two real bugs found+fixed after Melvin's first (FAIL) pass, both confirmed
+closed on Melvin's second pass (PASS): (1) burger/steak's temp and
+sandwich's protein owner_question templates referenced {display_name}/
+{choices_or}, which renderQuestionText never fills — would have shipped a
+literal unrendered "{...}" string to a real owner via SMS/web; fixed by
+switching to {category}-only templates. (2) NJB's real "Bacon, Sausage, Ham
+or Pork Roll Omelette Platter" (Omelette & Egg Platters) has TWO "choice of
+... or ..." clauses in its description; normalize.ts's first-match-only
+regex captures the meat clause, and the archetype's description-sourced
+binding for the toast slot was blindly trusting that as "stated" — silently
+excluding the item from a real toast question with the WRONG clause's data
+attached (a P3 "missing beats wrong" violation). Fixed with a
+looksLikeCleanChoiceList() guard (rejects a clause with an unbalanced paren,
+the tell that a split clipped mid-clause) before trusting any name/
+description-sourced binding.
+Also added /\bgyros?\b/i to the sandwich archetype's match list (not in
+Appendix A's literal table, but Appendix B's own worked example walks a gyro
+through this exact archetype, and both Zio's and NJB have real Gyro items
+that were otherwise falling to 'other' — a design-doc-internal
+inconsistency, flagging it here rather than silently picking a side).
+LLM-fallback note (per task's ask): classify is pure keyword-rule in v0 as
+built; the "other" categories above are exactly where an LLM fallback would
+help (per spec §3 stage 4, "LLM only for categories the rules can't
+place") — did NOT build that fallback, it's explicitly P1-adjacent per the
+task, flagging the need is the deliverable here.
+DB-write side (INSERT into owner_questions) NOT wired yet — item 3's
+scope per the task was the pure classify/infer logic + real-data
+validation, verified standalone; item 4's compiler (in flight, separate
+session) is the natural caller once it's landed. archetypes.ts itself
+never touches option_groups/option_choices — confirmed by grep, by Melvin,
+and by a standing unit test that greps the file's own source for it.
+
 [ITEM — conv-cancel-item 500 fix]
 2026-09-07 ~17:42 UTC — Not blocked. Root cause confirmed (Jason's find from real
 function_logs): index.ts E1 GUARD warn line referenced conversation.id, out of scope
