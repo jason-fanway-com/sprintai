@@ -33,6 +33,7 @@ import {
   verifyNoWrongPriceCharge,
   verifyTenantIsolationNoLeak,
   verifyStopOptOutHonored,
+  verifyRequiredOptionsCovered,
 } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
 
@@ -75,12 +76,12 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 // 1. Generate all cases from the shop's real menu
 console.log("Generating cases...");
-const { cases, shop, menuItemCount, libraryCount, cartOpsCount, conversationalCount, derivedCount, hoursClosedCount } =
+const { cases, shop, menuItemCount, libraryCount, cartOpsCount, conversationalCount, derivedCount, hoursClosedCount, categoryCoverageCount } =
   await generateCases({ supabaseUrl: SUPABASE_URL, serviceRoleKey: SERVICE_ROLE_KEY, shopId: SHOP_ID });
 
 console.log(`  Shop: ${shop.name} (${shop.id})`);
 console.log(`  Menu items: ${menuItemCount}`);
-console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOpsCount} cart-ops + ${derivedCount} derived + ${hoursClosedCount} hours-closed + ${conversationalCount} conversational)`);
+console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOpsCount} cart-ops + ${categoryCoverageCount} category-coverage + ${derivedCount} derived + ${hoursClosedCount} hours-closed + ${conversationalCount} conversational)`);
 console.log("");
 
 // Build shop menu name set for hallucination guard
@@ -102,11 +103,34 @@ const menuNames = await (async () => {
   return new Set<string>((items ?? []).map((i: { name: string }) => i.name));
 })();
 
+// Build the shop's required-option-groups-by-item map (menu_item_id -> required
+// group names, active items on the shop's current menu only), used by
+// verifyRequiredOptionsCovered below.
+const requiredOptionGroupsByItem = await (async () => {
+  const map = new Map<string, string[]>();
+  if (!shopMenuId) return map;
+  const { data: rows } = await supabase
+    .from("option_groups")
+    .select("name, menu_item_id, display_order, menu_items!inner(menu_id, active)")
+    .eq("required", true)
+    .eq("menu_items.menu_id", shopMenuId)
+    .eq("menu_items.active", true)
+    .order("display_order");
+  for (const row of (rows ?? []) as { name: string; menu_item_id: string }[]) {
+    const arr = map.get(row.menu_item_id) ?? [];
+    arr.push(row.name);
+    map.set(row.menu_item_id, arr);
+  }
+  return map;
+})();
+
 // 2. Run every case
 const results: ProofCaseResult[] = [];
 let passCount = 0;
 let failCount = 0;
 let noMoneyInvariantCount = 0;
+let requiredOptionsInvokedCount = 0;
+let requiredOptionsRanCount = 0;
 
 for (let i = 0; i < cases.length; i++) {
   const c = cases[i];
@@ -168,6 +192,35 @@ for (let i = 0; i < cases.length; i++) {
       passed = false;
       const failed = cartOps.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
       reason = `cartops: ${failed.join("; ")}`;
+    }
+  }
+
+  // Line count: whenever the fixture declares expectedLineCount, a non-empty final
+  // cart is expected — computed before the required-options check so it can be
+  // passed through and used to distinguish a real empty-cart bug from a legit skip.
+  const expectedLineCount = !isConversationalCase(c) ? (c as TestCase).expectedLineCount : undefined;
+  const expectNonEmptyFinalCart = typeof expectedLineCount === "number" && expectedLineCount > 0;
+
+  // Required options: grade whenever server cart was produced — same gate as cartOps
+  if (passed && hasCart) {
+    const roc = verifyRequiredOptionsCovered(run, requiredOptionGroupsByItem, expectNonEmptyFinalCart);
+    appliedInvariants.push(`required-options-covered:${roc.passed ? "PASS" : "FAIL"}${roc.applied ? "" : ":skipped"}`);
+    requiredOptionsInvokedCount++;
+    if (roc.applied) {
+      requiredOptionsRanCount++;
+    }
+    if (!roc.passed) {
+      passed = false;
+      reason = `required-options-covered: ${roc.detail}`;
+    }
+  }
+  if (passed && expectedLineCount !== undefined) {
+    const finalTurn = (run.transcript ?? [])[(run.transcript ?? []).length - 1];
+    const finalCart = (finalTurn?.cart as unknown[] | undefined) ?? [];
+    appliedInvariants.push(`line-count:${finalCart.length === expectedLineCount ? "PASS" : "FAIL"}`);
+    if (finalCart.length !== expectedLineCount) {
+      passed = false;
+      reason = `line-count: expected ${expectedLineCount} cart line(s), got ${finalCart.length}`;
     }
   }
 
@@ -279,6 +332,11 @@ for (let i = 0; i < cases.length; i++) {
 const total = results.length;
 console.log("");
 console.log(`PROOF: ${passCount}/${total} pass`);
+const requiredOptionsSkippedCount = requiredOptionsInvokedCount - requiredOptionsRanCount;
+console.log(
+  `Required-options-covered: ran on ${requiredOptionsRanCount}/${requiredOptionsInvokedCount} cases ` +
+    `(${requiredOptionsSkippedCount} skipped — no required-option cart lines or no expectedLineCount declared)`,
+);
 if (noMoneyInvariantCount > 0) {
   console.log(`Cases with no money invariant applied: ${noMoneyInvariantCount}`);
 }

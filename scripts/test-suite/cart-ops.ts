@@ -225,7 +225,7 @@ export interface StatedTotalResult {
 export function verifyStatedTotal(run: RunResult): StatedTotalResult {
   const transcript = run.transcript;
   if (!transcript.length) {
-    return { passed: true, detail: "No transcript — skipping stated-total check", applied: false };
+    return { passed: false, detail: "No transcript — this check requires a completed run; a transcript-less call is a harness bug, not a legitimate skip", applied: true };
   }
 
   // Scan assistant replies in reverse for a quoted total with corresponding cart
@@ -774,7 +774,7 @@ export async function verifyStopOptOutHonored(
 
   const transcript = runResult.transcript ?? [];
   if (transcript.length === 0) {
-    return { ...base, passed: true, detail: "No transcript — skipping.", applied: false };
+    return { ...base, passed: false, detail: "No transcript — this check requires a completed run; a transcript-less call is a harness bug, not a legitimate skip", applied: true };
   }
 
   // Attempt DB check: look for sms_opt_outs row tied to this session/tenant.
@@ -952,7 +952,7 @@ export async function verifyCheckoutFinalize(
 ): Promise<InvariantResult> {
   const transcript = run.transcript;
   if (!transcript.length) {
-    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: true, detail: "No transcript — skipping checkout finalize check", applied: false };
+    return { id: "checkout_finalize", description: "order_carts row reaches confirmed, total_cents matches", passed: false, detail: "No transcript — this check requires a completed run; a transcript-less call is a harness bug, not a legitimate skip", applied: true };
   }
 
   // Find the last quoted total from bot replies
@@ -1241,6 +1241,100 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
     caseId: run.caseId,
     passed: invariants.every((inv) => inv.passed),
     invariants,
+  };
+}
+
+// ── Required Options Coverage Verifier ────────────────────────────────────
+
+/**
+ * General invariant (applies to every shop): the final turn's cart_json must
+ * carry a non-empty selection for every required option group on every line
+ * item that has one. Catches the bot reaching checkout with an item whose
+ * required customization (e.g. a "Temp" group on a chicken sandwich) was
+ * never actually answered.
+ *
+ * requiredGroupsByItem: menu_item_id -> required option-group names for that
+ * item, on the shop's current active menu. Items not present in the map (no
+ * required groups) are never checked — this only fails lines with a real gap.
+ *
+ * expectNonEmptyFinalCart: pass true when the case's own fixture (e.g.
+ * expectedLineCount > 0) asserts the run should end with cart lines. An
+ * empty final cart is then a hard failure, not a skip — it means the harness
+ * or the product silently lost the order. Omit/false for cases that may
+ * legitimately end empty (e.g. "customer removes everything").
+ */
+export function verifyRequiredOptionsCovered(
+  run: RunResult,
+  requiredGroupsByItem: Map<string, string[]>,
+  expectNonEmptyFinalCart?: boolean,
+): InvariantResult {
+  const id = "required_options_covered";
+  const description = "Every required option group on a cart line has a non-empty selected value";
+  const transcript = run.transcript;
+  if (!transcript.length) {
+    return {
+      id,
+      description,
+      passed: false,
+      detail: "No transcript — this check requires a completed run; a transcript-less call is a harness bug, not a legitimate skip",
+      applied: true,
+    };
+  }
+
+  const finalTurn = transcript[transcript.length - 1];
+  const finalCart = (finalTurn?.cart as CartItemLike[] | undefined) ?? [];
+  if (finalCart.length === 0) {
+    if (expectNonEmptyFinalCart) {
+      return {
+        id,
+        description,
+        passed: false,
+        detail: "expected a non-empty final cart (expectedLineCount set) but cart is empty — harness or product bug, investigate the transcript",
+        applied: true,
+      };
+    }
+    return {
+      id,
+      description,
+      passed: true,
+      detail: "SKIPPED: final cart empty and case does not declare expectedLineCount — nothing to verify",
+      applied: false,
+    };
+  }
+
+  let checkedAny = false;
+  const violations: string[] = [];
+
+  for (const line of finalCart) {
+    const menuItemId = line.menu_item_id;
+    if (!menuItemId) continue;
+    const requiredGroups = requiredGroupsByItem.get(menuItemId);
+    if (!requiredGroups || requiredGroups.length === 0) continue;
+
+    checkedAny = true;
+    const options = line.options ?? {};
+    for (const groupName of requiredGroups) {
+      const selected = options[groupName];
+      if (!Array.isArray(selected) || selected.length === 0) {
+        violations.push(
+          `Line "${line.name ?? menuItemId}" is missing a selection for required group "${groupName}"`,
+        );
+      }
+    }
+  }
+
+  if (violations.length > 0) {
+    return { id, description, passed: false, detail: violations.join("; "), applied: true };
+  }
+
+  return {
+    id,
+    description,
+    passed: true,
+    detail: checkedAny
+      ? "All required option groups have a non-empty selection on every cart line"
+      : "SKIPPED: no cart line has a required option group",
+    applied: checkedAny,
   };
 }
 

@@ -47,6 +47,8 @@ export interface TestCase {
   hoursMode?: "open" | "closed";
   /** Expected item subtotal in cents for deterministic total-verification override (menu-derived cases only). */
   expectedItemCents?: number;
+  /** Expected number of distinct cart lines in the final turn's cart_json (line count, not summed quantity). */
+  expectedLineCount?: number;
   /** True when this case's correction turn genuinely expects the cart to shrink (reduce/remove).
    *  Gates correction_reflected invariant — only applies when explicitly set by the fixture.
    *  Conversational cases never set this; reduction intent is NOT inferred from NL text. */

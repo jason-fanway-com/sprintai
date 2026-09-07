@@ -182,12 +182,16 @@ Deno.test("P3: tenant-isolation — cross-tenant item leak → FAIL", async () =
 // verifyStopOptOutHonored
 // ══════════════════════════════════════════════════════════════════════════
 
-Deno.test("P3: stop-opt-out — empty transcript → applied:false PASS", async () => {
+Deno.test("P3: stop-opt-out — empty transcript is a harness bug, not a legitimate skip → FAIL", async () => {
+  // 2026-09-06: a transcript-less call used to report passed:true (fail-open —
+  // the check silently never ran, indistinguishable from a clean STOP-honored
+  // run). This check exists to gate a compliance-critical path (STOP opt-out),
+  // so "could not verify" must never look like "verified clean."
   const supabase = mockSupabase({}) as any;
   const run = makeRunResult([]);
   const result = await verifyStopOptOutHonored({ id: "test-so-1" }, run, supabase);
-  if (result.passed !== true) throw new Error(`Expected passed=true, got ${result.passed}`);
-  if (result.applied !== false) throw new Error(`Expected applied=false, got ${result.applied}`);
+  if (result.passed !== false) throw new Error(`Expected passed=false, got ${result.passed}`);
+  if (result.applied !== true) throw new Error(`Expected applied=true, got ${result.applied}`);
 });
 
 Deno.test("P3: stop-opt-out — STOP acknowledged → PASS", async () => {

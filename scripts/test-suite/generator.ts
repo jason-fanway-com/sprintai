@@ -13,6 +13,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { LIBRARY_CASES, CONVERSATIONAL_CASES, type TestCase, type ConversationalCase, type AnyCase, type Turn, type SuccessCriterion } from "./library.ts";
 import { buildCartOpsCases } from "./cart-ops.ts";
 import { HOURS_CLOSED_CASES } from "./hours-closed.ts";
+import { buildCategoryCoverageCases } from "./category-coverage.ts";
 
 // ── DB Types ────────────────────────────────────────────────────────────────
 
@@ -544,6 +545,7 @@ export interface GenerateCasesResult {
   conversationalCount: number;
   derivedCount: number;
   hoursClosedCount: number;
+  categoryCoverageCount: number;
 }
 
 /** Optional helper to avoid duplicates while building */
@@ -583,6 +585,7 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
       conversationalCount: CONVERSATIONAL_CASES.length,
       derivedCount: 0,
       hoursClosedCount: HOURS_CLOSED_CASES.length,
+      categoryCoverageCount: 0,
     };
   }
 
@@ -693,8 +696,13 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
   // ═══ CartOps cases (shop-aware, built from real menu items) ══════════
   const cartOpsCases = buildCartOpsCases(activeItems);
 
+  // ═══ Category-coverage cases (one realistic order per category) ══════
+  const categoryCoverageCases = await buildCategoryCoverageCases(
+    input.shopId, input.supabaseUrl, input.serviceRoleKey,
+  );
+
   return {
-    cases: [...derivedCases, ...LIBRARY_CASES, ...cartOpsCases, ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
+    cases: [...derivedCases, ...LIBRARY_CASES, ...cartOpsCases, ...categoryCoverageCases, ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
     shop: { id: shop.id, name: shop.name, tenant_id: shop.tenant_id },
     menuItemCount: activeItems.length,
     libraryCount: LIBRARY_CASES.length,
@@ -702,5 +710,6 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
     conversationalCount: CONVERSATIONAL_CASES.length,
     derivedCount: derivedCases.length,
     hoursClosedCount: HOURS_CLOSED_CASES.length,
+    categoryCoverageCount: categoryCoverageCases.length,
   };
 }

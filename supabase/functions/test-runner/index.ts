@@ -18,7 +18,7 @@ import { generateCases } from "../_shared/test-suite/generator.ts";
 import { runCase } from "../_shared/test-suite/runner.ts";
 import { judgeCase } from "../_shared/test-suite/judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "../_shared/test-suite/scorecard.ts";
-import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence, verifyNoWrongPriceCharge, verifyTenantIsolationNoLeak, verifyStopOptOutHonored } from "../_shared/test-suite/cart-ops.ts";
+import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence, verifyNoWrongPriceCharge, verifyTenantIsolationNoLeak, verifyStopOptOutHonored, verifyRequiredOptionsCovered } from "../_shared/test-suite/cart-ops.ts";
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
 import { persistResults } from "../_shared/test-suite/persist.ts";
 // fix.ts NOT imported here — root-cause generation is a SEPARATE
@@ -181,6 +181,7 @@ Deno.serve(async (_req: Request) => {
 
     // Load menu names once per tick for hallucination guard + P3 invariants
     const { menuNames, menuId: shopMenuId } = await loadMenuNames(supabase, shopId);
+    const requiredOptionGroupsByItem = await loadRequiredOptionGroupsByItem(supabase, shopMenuId);
 
     const runConfig = {
       supabaseUrl,
@@ -214,6 +215,7 @@ Deno.serve(async (_req: Request) => {
       // ── Deterministic invariants (THE gate — capability dispatch) ─────
 
       const expectedItemCents = "expectedItemCents" in tc ? (tc as { expectedItemCents?: number }).expectedItemCents : undefined;
+      const expectedLineCount = "expectedLineCount" in tc ? (tc as { expectedLineCount?: number }).expectedLineCount : undefined;
       const expectsCheckout = "expects_checkout" in tc ? (tc as { expects_checkout?: boolean }).expects_checkout === true : false;
       const hoursMode = "hoursMode" in tc ? (tc as { hoursMode?: string }).hoursMode : undefined;
       const hasCart = (runResult.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
@@ -237,6 +239,39 @@ Deno.serve(async (_req: Request) => {
           detPassed = false;
           const failed = cartOpsVerify.invariants.filter((inv) => !inv.passed).map((inv) => inv.detail);
           detReasons.push(`cartops: ${failed.join("; ")}`);
+        }
+      }
+
+      // Required options: grade whenever server cart was produced — same gate as cartOps
+      const expectNonEmptyFinalCart = typeof expectedLineCount === "number" && expectedLineCount > 0;
+      if (hasCart) {
+        const roc = verifyRequiredOptionsCovered(runResult, requiredOptionGroupsByItem, expectNonEmptyFinalCart);
+        appliedInvariants.push(`required-options-covered:${roc.passed ? "PASS" : "FAIL"}${roc.applied ? "" : ":skipped"}`);
+        if (roc.applied) anyInvariantApplied = true;
+        if (!roc.passed) {
+          console.log(`  Required-options-covered FAIL: ${roc.detail}`);
+          detPassed = false;
+          detReasons.push(`required-options-covered: ${roc.detail}`);
+        } else if (roc.applied) {
+          console.log(`  Required-options-covered PASS`);
+        } else {
+          console.log(`  Required-options-covered SKIPPED: ${roc.detail}`);
+        }
+      }
+
+      // Line count: grade whenever the fixture declares expectedLineCount
+      if (expectedLineCount !== undefined) {
+        const finalTurn = (runResult.transcript ?? [])[(runResult.transcript ?? []).length - 1];
+        const finalCart = (finalTurn?.cart as any[] | undefined) ?? [];
+        const lineCountOk = finalCart.length === expectedLineCount;
+        appliedInvariants.push(`line-count:${lineCountOk ? "PASS" : "FAIL"}`);
+        anyInvariantApplied = true;
+        if (!lineCountOk) {
+          console.log(`  Line-count FAIL: expected ${expectedLineCount}, got ${finalCart.length}`);
+          detPassed = false;
+          detReasons.push(`line-count: expected ${expectedLineCount} cart line(s), got ${finalCart.length}`);
+        } else {
+          console.log(`  Line-count PASS`);
         }
       }
 
@@ -417,6 +452,17 @@ Deno.serve(async (_req: Request) => {
       const scorecard = buildScorecard(scored as ScoredCase[]);
       console.log(formatScorecard(scorecard, shopName));
 
+      const rocEntries = (scored as ScoredCase[])
+        .flatMap((s) => s.appliedInvariants ?? [])
+        .filter((a) => a.startsWith("required-options-covered:"));
+      const rocInvokedCount = rocEntries.length;
+      const rocRanCount = rocEntries.filter((a) => !a.endsWith(":skipped")).length;
+      const rocSkippedCount = rocInvokedCount - rocRanCount;
+      console.log(
+        `Required-options-covered: ran on ${rocRanCount}/${rocInvokedCount} cases ` +
+          `(${rocSkippedCount} skipped — no required-option cart lines or no expectedLineCount declared)`,
+      );
+
       const persistResult = await persistResults({
         supabaseUrl,
         serviceRoleKey,
@@ -552,4 +598,22 @@ async function loadMenuNames(supabase: any, shopId: string): Promise<{ menuNames
     .eq("menu_id", menuId)
     .eq("active", true);
   return { menuNames: new Set<string>((items ?? []).map((i: { name: string }) => i.name)), menuId };
+}
+
+async function loadRequiredOptionGroupsByItem(supabase: any, menuId: string): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (!menuId) return map;
+  const { data: rows } = await supabase
+    .from("option_groups")
+    .select("name, menu_item_id, display_order, menu_items!inner(menu_id, active)")
+    .eq("required", true)
+    .eq("menu_items.menu_id", menuId)
+    .eq("menu_items.active", true)
+    .order("display_order");
+  for (const row of (rows ?? []) as { name: string; menu_item_id: string }[]) {
+    const arr = map.get(row.menu_item_id) ?? [];
+    arr.push(row.name);
+    map.set(row.menu_item_id, arr);
+  }
+  return map;
 }
