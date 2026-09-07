@@ -1,5 +1,8 @@
-2026-09-07 ~11:15 UTC — Not blocked on Jason. Fix applied (proof.ts:199 crash guard),
-regression suite green (37/37), Melvin verification in flight (independent). Waiting on
-Melvin only; will commit+push this item alone the moment that lands, then relaunch the
-142-case run. No open ask for Jason right now beyond the two standing items already
-reported (mtest patch decision, conv-cancel-item 500 dashboard logs).
+2026-09-07 ~16:57 UTC — Not blocked. Status:
+- Item 1 (migration 113, conversation-ready-menu P0): DEPLOYED. bot_state column
+  confirmed live in the Supabase DB via REST API (HTTP 200). Deadline met.
+- proof.ts crash guard: committed ba6efd7, pushed, Melvin-confirmed.
+- 142-case proof re-run: relaunching now (prior run crashed at 106/142 due to this bug).
+- Open awaiting Jason: mtest named-removal patch (your call), conv-cancel-item 500
+  stack trace (Dashboard logs → chat-sms, 12:53 UTC 2026-09-07, session 1a7bf06f).
+- Migration 114 (item 7): not yet applied to live DB, not part of item 1 deadline.
