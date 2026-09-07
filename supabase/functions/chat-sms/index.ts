@@ -1747,7 +1747,7 @@ async function runOrderingLoop(
           || /\b(?:cancel\s+(?:my\s+)?order|cancel\s+(?:everything|all|it\s+all)|forget\s+(?:it|the whole|everything)|start\s+over|wipe\s+(?:the\s+)?(?:cart|it|everything|all))\b/i.test(e1msg);
         const isAdditive = /\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(e1msg);
         if (isAdditive && !isExplicitRestart) {
-          console.warn(`[chat-sms] E1 GUARD: suppressed clear_cart — additive user intent (cartId=${cartId}, cart has ${cart.length} items). Message: ${JSON.stringify(userMessage).slice(0, 120)}`);
+          console.warn(`[chat-sms] E1 GUARD: suppressed clear_cart — additive user intent (conv=${conversation.id}, cart has ${cart.length} items). Message: ${JSON.stringify(userMessage).slice(0, 120)}`);
           toolResults.push({
             type:        "tool_result",
             tool_use_id: toolBlock.id!,
