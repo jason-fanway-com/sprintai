@@ -54,6 +54,64 @@ same scrutiny applied to Melvin's own methodology, not just its conclusion.
 Committing normalize.test.ts fix now; still not imported by any caller (item 4
 compiler will wire it in) — deploy bar for item 2 stays "committed+pushed."
 
+[ITEM 4 — Compiler, spec §11]
+2026-09-07 ~17:15 UTC — Not blocked. compile-menu built (supabase/functions/
+_shared/compile-menu.ts pure logic + compile-menu.test.ts 31/31 + compile-menu/
+index.ts edge function). Wires in item 2's normalize.ts directly (per the
+17:35 ITEM 2 note: "compiler/item 4 will wire it in") — display_name/
+product_key now come from the normalizer, not the item-1 naive backfill.
+Normalizer-derived "X or Y"/"choice of" slots are carried as synthetic,
+non-persisted groups (ids `derived:<item>:<n>`) feeding ask_plan only —
+DELIBERATELY never written to option_groups/option_choices, because
+chat-sms's buildEffectiveMenu reads those tables directly for every active
+item with no provenance awareness, so a real inserted row is live order-
+taking surface the instant it exists. Confirmed via dry run this is not
+theoretical: NJB/Zio's are is_test=false with subscription_status=none but
+NJB has a live phone_number_e164 already provisioned — not worth the risk
+for what P0 needs today.
+Real-data dry run (read-only, no writes) against all 3 shops:
+- Vito's (221 items, existing hand-built option_groups): idempotent=true,
+  219 orderable / 2 display_only, ALL 8 §8.2 invariants pass (display_name
+  qualification from item 2 resolved the collisions that failed inv.3/4
+  before the normalizer was wired in).
+- NJB (170 items, ZERO pre-existing option_groups): idempotent=true, 170/170
+  orderable, only invariant 4 fails (2 items, non-unique lexicon term —
+  expected pre-item-3, no archetype-level disambiguation yet).
+- Zio's (220 items, ZERO pre-existing option_groups): idempotent=true,
+  220/220 orderable, invariant 4 fails on 3 items, same reason.
+Two real data-quality bugs found in item 2's normalize.ts during this run
+(not fixed here — that file is already committed+Melvin-verified, not mine
+to touch without coordinating): (a) splitOrList mishandles an Oxford comma
+before the final "or" — "choice of bagel, bread, or roll" (real NJB text,
+50 items affected) produces a spurious choice "Or Roll" instead of "Roll";
+(b) "Choice of pasta: Spaghetti, linguine..." (real Zio's text, 8 items)
+keeps "pasta:" glued onto the first choice ("Pasta: Spaghetti" instead of
+"Spaghetti") because the colon isn't stripped before the comma/or split.
+Both will show up verbatim in the item 9 report's real ask_plans — flagging
+here first so item 2's owner sees it before Jason does.
+Melvin verification in flight now (independent, adversarial — idempotency,
+bot_state vs §8.2 on real Vito's data, canonical step order). Will commit+
+push the instant Melvin confirms, per the same standing rule every other
+item in this file follows.
+
+[ITEM 9 — Read-only compile on NJB + Zio's, spec §11 (report-only per
+Jason's sequencing change — no write to any live sequencer/cart/checkout
+path)]
+2026-09-07 ~17:15 UTC — BLOCKED on item 3 (archetype library + infer,
+writes owner_questions). archetypes.ts/archetypes.test.ts exist in the
+working tree (~930 lines) but are NOT YET COMMITTED — item 3 substantially
+in progress, not landed. The item 9 report's required section 4 ("the FULL
+owner_questions list generated for each shop — every row") is necessarily
+empty until infer actually runs against NJB/Zio's and writes those rows;
+running compile-menu for real against these two shops before that would
+report a report with an honest-but-useless empty owner_questions section
+and a bot_state picture that doesn't reflect what the archetype classifier
+would actually flag as kitchen-critical/price-critical. Per my instructions,
+waiting for item 3 to land for real rather than running against incomplete
+data and reporting garbage. Watching git log + this file for item 3's
+commit; will run the live pipeline and post the item 9 report as its own
+message the moment it lands.
+
 [ITEM — conv-cancel-item 500 fix]
 2026-09-07 ~17:42 UTC — Not blocked. Root cause confirmed (Jason's find from real
 function_logs): index.ts E1 GUARD warn line referenced conversation.id, out of scope
@@ -62,3 +120,70 @@ in runOrderingLoop. Fixed to use cartId (in-scope param). New regression test
 0 regressions). Melvin verification in flight (independent, adversarial). Will
 commit+push the instant Melvin confirms. Confirmed chat-sms-mtest has the identical
 bug, NOT touched (same standing "your call" bucket as the named-removal mtest patch).
+
+[ITEM 7 — Overrides trigger + migration from owner_edited, spec §9/§11]
+2026-09-07 ~17:55 UTC — Not blocked, done and independently reviewed. Migration
+114_menu_overrides_trigger.sql (capture_menu_override() trigger on menu_items/
+option_groups/option_choices + one-time owner_edited backfill) implemented, then
+sent through an independent QA pass (no self-review) before commit, per the
+standing rule. QA found 5 real issues, none of which my own isolated-Postgres
+functional testing (compiler-actor exclusion, no-actor exclusion, owner-edit
+capture on item/group/choice, excluded-column exclusion, backfill + backfill
+idempotency — all passing) would have caught, since that testing ran as the DB
+owner and bypassed grants entirely:
+1. HIGH, fixed: capture_menu_override() had no SECURITY DEFINER. menu_items/
+   option_groups/option_choices already carry owner-facing RLS UPDATE/DELETE for
+   `authenticated` (real owner sessions via admin-dashboard/ShopDetail.tsx and
+   admin-chat/index.ts, not just service-role edge functions), but 113 revokes
+   INSERT on menu_overrides from authenticated — every real owner edit would
+   have failed outright. Added SECURITY DEFINER + pinned empty search_path
+   (same convention as 018's bump_conversation_last_message_at), fully
+   schema-qualified every table reference. Re-verified live: a real
+   `authenticated`-role login role with grants only on the 3 source tables
+   (none on menu_overrides) now successfully captures an override.
+2. MEDIUM, fixed: backfill dedup (NOT EXISTS checks) matched only on
+   (entity_type, entity_key, field) with no menu_id scope, but import_key is
+   only unique per-menu (migration 010) — two shops selling identically-named
+   items could silently skip one shop's legitimate backfill row. Added
+   mo.menu_id = mi.menu_id to all 3 dedup checks.
+3. MEDIUM, fixed (was going to be a documented deferral, turned out to be a bug
+   I had to fix instead): no DELETE handling at all, despite §9 explicitly
+   modeling owner deletions as field='*'/value=null suppression overrides, and
+   despite real hard-delete call sites in admin-dashboard and admin-chat. Added
+   AFTER DELETE to all 3 triggers. First version crashed the owner's entire
+   DELETE transaction on cascade (deleting a menu_item cascades to its
+   option_groups/option_choices via FK; the cascaded child's trigger fires
+   after its parent menu_items row is already gone, so shop_id/menu_id can't
+   resolve and the NOT NULL insert raised) — caught this myself by testing the
+   cascade case directly, not by the QA pass. Fixed: skip silently when
+   shop_id/menu_id can't resolve, since the item's own (correctly-keyed)
+   suppression row is what actually matters; documented in the migration header.
+4. LOW/MEDIUM, documented not fixed: renaming a group/choice that's still on
+   the slot_key-less name-fallback path orphans its prior overrides under the
+   old key. Only affects the window before the compiler populates slot_key, or
+   owner-created groups that never get one. Noted in the migration header as a
+   known, deliberate non-fix rather than left silent.
+5. LOW, fixed: v_excluded for menu_items was missing real importer/compiler
+   bookkeeping columns (source, source_ref, flag_review, flag_reason,
+   prompt_for, upsell, row_type — confirmed real via migrations 050/102, not
+   hallucinated) — inert today only because nothing sets app.actor yet, but
+   would have leaked into owner overrides the moment something does.
+All fixes re-verified end-to-end against a fresh scratch Postgres loaded with
+the real prior migrations (001/003/006/010/050/097/102/113/114): full
+regression suite green, plus new tests for the SECURITY DEFINER fix (real
+authenticated-role session, no direct menu_overrides grant) and DELETE
+(direct delete + the cascade case, confirmed no crash post-fix).
+Also found, NOT fixed (out of scope for item 7, flagging for the RUNBOOK):
+13 `.down.sql` files across the migration history (015 through 112) match
+`supabase db reset`'s forward-migration glob and get applied as forward
+migrations in filename sort order, breaking a from-scratch `supabase start`/
+`db reset` today. Worked around locally by stashing them during testing and
+restoring immediately after (confirmed git status clean, no down-file
+changes persisted). Not touched further — repo-wide migration-history fix,
+not mine to make unilaterally on a shared branch mid-sprint.
+Committing supabase/migrations/114_menu_overrides_trigger.sql + this note now,
+per the standing rule (commit+push the instant QA confirms). Not applied to
+the live DB — that's a separate, later deploy step, same bar item 1 held
+(commit ≠ deploy). menu-entity-key.ts/its test are item 2's committed work
+(7fb4fd7), not mine — I only referenced them per the migration's own header,
+didn't touch or re-commit them.
