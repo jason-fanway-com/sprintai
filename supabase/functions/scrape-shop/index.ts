@@ -47,6 +47,20 @@ const MENU_MAX_TOKENS = 16_000;
 // This is a DESIRED ceiling, not the timeout actually used — see remainingBudgetMs()
 // below, which clamps it to whatever's left of the platform's wall clock.
 const LLM_TIMEOUT_MS = 90_000;
+// Measured 2026-09-07 against familypizzeriarestaurantmenu.com (vigil 72d197cc): the
+// page-scrape loop is NOT the bottleneck on this site — Firecrawl /map found only 1
+// page and scraping it took ~3s. The entire 135s run was spent inside the single
+// extractMenuItems() OpenRouter call, which was still generating when the deadline-aware
+// budget aborted it. A direct, unconstrained re-measurement of the same call (same
+// content, same prompt, no internal timeout) confirmed it: OpenRouter's HTTP response
+// starts in ~1s, but the body — the model's token-by-token generation of a 240-item JSON
+// array — takes on the order of two minutes to finish streaming. Output token count, not
+// network or scrape time, is what doesn't fit in the wall clock on a big menu. Splitting
+// the extraction into several smaller concurrent calls (below) cuts each call's output
+// size proportionally, so the parallel batch finishes in roughly 1/N the time a single
+// giant call would take, instead of shrinking what gets scraped.
+const MENU_CHUNK_TARGET_CHARS = 8_000;
+const MENU_MAX_CHUNKS = 4;
 // Menu extraction generates far more output than hours/context (up to 300 items at
 // MENU_MAX_TOKENS=16k). Measured 2026-09-05 on a real 150-item menu (biaggiopizza.com):
 // the model needed ~121s to finish, so a 90s timeout was aborting the fetch mid-generation
@@ -390,10 +404,34 @@ async function extractOpenHours(
   }
 }
 
-/** Extract menu items via OpenRouter (Phase 5b).
- *  Returns an array of { name, price_cents, category, description }. */
-async function extractMenuItems(
-  combinedText: string,
+/** Split text for concurrent menu extraction into roughly-equal pieces, breaking at a
+ *  blank line near each target boundary (rather than mid-line) so a menu item's name and
+ *  price are never split across two calls. Returns [text] unchanged when it's already
+ *  small enough that one call's output won't be the bottleneck. */
+function splitTextForMenuExtraction(text: string, targetChars: number, maxChunks: number): string[] {
+  if (text.length <= targetChars) return [text];
+  const chunkCount = Math.min(maxChunks, Math.ceil(text.length / targetChars));
+  const chunkSize = Math.ceil(text.length / chunkCount);
+  const chunks: string[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    let end = Math.min(pos + chunkSize, text.length);
+    if (end < text.length) {
+      const breakAt = text.lastIndexOf("\n\n", end);
+      if (breakAt > pos + chunkSize * 0.5) end = breakAt;
+    }
+    chunks.push(text.slice(pos, end));
+    pos = end;
+  }
+  return chunks;
+}
+
+/** One OpenRouter call asking for menu items found in `text`. Shared by the chunked
+ *  extractMenuItems() below — each chunk gets its own call, run concurrently, so the
+ *  wall-clock cost of a big menu is the slowest single chunk's generation time, not the
+ *  sum of every item in the menu. */
+async function extractMenuItemsSingleCall(
+  text: string,
   openRouterKey: string,
   anthropicKey: string,
   startedAt: number,
@@ -414,7 +452,7 @@ async function extractMenuItems(
         model: openRouterKey ? "anthropic/claude-sonnet-4-6" : "claude-sonnet-4-6",
         max_tokens: MENU_MAX_TOKENS,
         response_format: { type: "json_object" },
-        messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + combinedText.substring(0, 55_000) }],
+        messages: [{ role: "user", content: MENU_EXTRACT_PROMPT + "\n\n" + text }],
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -433,6 +471,37 @@ async function extractMenuItems(
     console.error("[scrape-shop] LLM menu extraction error:", err);
     return null;
   }
+}
+
+/** Extract menu items via OpenRouter (Phase 5b).
+ *  Returns an array of { name, price_cents, category, description }.
+ *  Splits large input into concurrent chunks (see MENU_CHUNK_TARGET_CHARS) so a big
+ *  menu's total output-token cost is paid in parallel instead of by one call that can
+ *  outlive the function's wall clock — see the comment above MENU_CHUNK_TARGET_CHARS. */
+async function extractMenuItems(
+  combinedText: string,
+  openRouterKey: string,
+  anthropicKey: string,
+  startedAt: number,
+): Promise<Array<{ name: string; price_cents: number; category: string; description: string }> | null> {
+  const text = combinedText.substring(0, 55_000);
+  const chunks = splitTextForMenuExtraction(text, MENU_CHUNK_TARGET_CHARS, MENU_MAX_CHUNKS);
+  const chunkResults = await Promise.all(
+    chunks.map(chunk => extractMenuItemsSingleCall(chunk, openRouterKey, anthropicKey, startedAt)),
+  );
+
+  const merged: Array<{ name: string; price_cents: number; category: string; description: string }> = [];
+  const seen = new Set<string>();
+  for (const items of chunkResults) {
+    if (!items) continue;
+    for (const item of items) {
+      const key = `${(item.name ?? "").trim().toLowerCase()}|${item.price_cents}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+  return merged.length > 0 ? merged.slice(0, 300) : null;
 }
 
 /** Fetch a candidate menu PDF and hand it to parse-menu-pdf, which does the
@@ -663,7 +732,7 @@ async function tryAggregatorRung(
   return { success: true, itemCount: inserted, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "ok", items: inserted } };
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve({ port: Number(Deno.env.get("LOCAL_TEST_PORT") ?? "8000") }, async (req: Request) => {
   const startedAt = Date.now();
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -721,8 +790,11 @@ Deno.serve(async (req: Request) => {
   let pages: string[];
   let pdfCandidates: string[] = [];
   try {
+    const __mapT0 = Date.now();
     const allLinks = await discoverPages(shop.website_url, firecrawlKey);
+    console.log(`[scrape-shop][TIMING] /map took ${Date.now() - __mapT0}ms, elapsed=${Date.now() - startedAt}ms, links=${allLinks.length}`);
     pages = prioritizePages(allLinks, shop.website_url.replace(/\/$/, ""));
+    console.log(`[scrape-shop][TIMING] prioritized pages: ${JSON.stringify(pages)}`);
     // Ranked but not yet sliced to MAX_PDF_CANDIDATES — homepage-HTML PDF links
     // (below) still need to be merged in before the final cut.
     pdfCandidates = findMenuPdfCandidates(allLinks);
@@ -746,7 +818,9 @@ Deno.serve(async (req: Request) => {
   for (let i = 0; i < pages.length; i++) {
     const pageUrl = pages[i];
     const includeRaw = i === 0; // only homepage for structured data
+    const __t0 = Date.now();
     const { markdown, structured, pdfLinks, aggregatorLinks } = await scrapePage(pageUrl, firecrawlKey, includeRaw);
+    console.log(`[scrape-shop][TIMING] page ${i} ${pageUrl} took ${Date.now() - __t0}ms, elapsed=${Date.now() - startedAt}ms`);
     if (markdown.trim()) results.push(`## Source: ${pageUrl}\n\n${markdown}`);
     if (structured) structuredContext = structured;
     if (pdfLinks.length) homepagePdfLinks = pdfLinks;
