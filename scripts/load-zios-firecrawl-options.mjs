@@ -171,8 +171,7 @@ function extractGroupsFromDialog() {
   return groups;
 }
 
-function buildGroupRows(match, rawGroups) {
-  const basePriceCents = match.db_price_cents;
+function buildGroupRows(match, rawGroups, basePriceCents) {
   const out = [];
   for (const g of rawGroups) {
     const parsedChoices = g.choices.map(c => {
@@ -289,8 +288,34 @@ async function main() {
   }
   console.log(`${APPLY ? 'APPLY' : 'DRY RUN'} — ${entries.length} matched items to process (of ${Object.keys(matches).length} total matches, ${alreadyDone.size} already done)`);
 
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
+  let browser = await chromium.launch();
+
+  // Per-item page creation with browser-context crash recovery. A shared page
+  // died mid-loop at Hawaiian Pizza (apply7) and took the entire run. This
+  // creates a fresh page per item and, on "closed/destroyed" errors, relaunches
+  // the browser and retries that single item — one crash costs one extra scrape,
+  // not the whole session.
+  async function parseHtmlWithBrowser(html) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let pg;
+      try {
+        pg = await browser.newPage();
+        await pg.setContent(html, { waitUntil: 'domcontentloaded' });
+        const groups = await pg.evaluate(extractGroupsFromDialog);
+        await pg.close();
+        return groups;
+      } catch (e) {
+        if (pg) { try { await pg.close(); } catch (_) {} }
+        if (attempt === 0 && /closed|destroyed/i.test(e.message)) {
+          console.log('  [browser] context crashed — relaunching and retrying...');
+          try { await browser.close(); } catch (_) {}
+          browser = await chromium.launch();
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
 
   const extractLog = [];
   let attempted = 0, scraped = 0, failed = 0, rateLimited = 0;
@@ -300,7 +325,7 @@ async function main() {
     attempted++;
     process.stdout.write(`  [${match.category}] ${match.db_name} (slice#${match.slice_id}) ... `);
     const url = `${MENU_URL}?view_product=${match.slice_id}`;
-    const result = await firecrawlScrape(url);
+    let result = await firecrawlScrape(url);
 
     if (result.rateLimited) {
       // Free-plan cap is 12 req/min. Retry with backoff up to 3 times.
@@ -336,15 +361,30 @@ async function main() {
       continue;
     }
     scraped++;
-    await page.setContent(result.html, { waitUntil: 'domcontentloaded' });
-    const rawGroups = await page.evaluate(extractGroupsFromDialog);
+    const rawGroups = await parseHtmlWithBrowser(result.html);
     if (!rawGroups) {
       itemsNoDialog++;
       console.log('no dialog in rendered HTML (no configurable options)');
       extractLog.push({ menuItemId, match, groups: [], noDialog: true });
       continue;
     }
-    const groupRows = buildGroupRows(match, rawGroups);
+    // STANDING CHECK — Slice is live restaurant pricing, our DB copy is a
+    // scrape of unknown age. If they disagree, trust Slice: self-heal the
+    // DB row's base price and use the Slice figure (not the stale one) for
+    // every delta computed below. Prevents the exact silent-drift class of
+    // bug found manually in 5 items on 2026-09-07 (e.g. Brooklyn Pizza 18
+    // priced $24.99 in our DB vs $23.99 live on Slice).
+    const sliceBaseCents = Math.round(match.slice_price * 100);
+    let basePriceCents = match.db_price_cents;
+    if (APPLY && sliceBaseCents !== match.db_price_cents) {
+      console.log(`  PRICE DRIFT: DB had $${(match.db_price_cents / 100).toFixed(2)}, Slice states $${(sliceBaseCents / 100).toFixed(2)} for "${match.db_name}" — updating DB to Slice price.`);
+      const healRes = await supabase('PATCH', `menu_items?id=eq.${menuItemId}`, { price_cents: sliceBaseCents }, 'return=representation');
+      if (healRes === null || healRes.length === 0) {
+        throw new WriteAbortError(`price self-heal FAILED for "${match.db_name}" (item ${menuItemId})`, { menuItemId, sliceBaseCents });
+      }
+      basePriceCents = sliceBaseCents;
+    }
+    const groupRows = buildGroupRows(match, rawGroups, basePriceCents);
     const nChoices = groupRows.reduce((s, g) => s + g.choices.length, 0);
     if (groupRows.length) itemsWithGroups++;
     totalGroups += groupRows.length;
