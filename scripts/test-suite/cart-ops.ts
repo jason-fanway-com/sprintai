@@ -354,7 +354,9 @@ export function verifyHallucinationGuard(
       const rawName = m[1].trim();
       const claimedName = rawName.toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
-      if (isQuestionOrFragment(claimedName)) continue;
+      const followingText = reply.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 80);
+      if (isQuestionOrFragment(claimedName, followingText)) continue;
+      if (isTransactionalClaim(claimedName)) continue;
       claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${rawName}" claimed via "added X": "${reply.slice(0, 80)}..."`);
@@ -367,7 +369,11 @@ export function verifyHallucinationGuard(
       const claimedName = m[1].trim().toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
       // Skip question/sentence fragments captured after "got it —" (not item claims)
-      if (isQuestionOrFragment(claimedName)) continue;
+      const followingText = reply.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 80);
+      if (isQuestionOrFragment(claimedName, followingText)) continue;
+      // Hard-exempt known transactional phrases (name/pickup/total/payment link)
+      // rather than relying on the generic fragment filters to catch every phrasing.
+      if (isTransactionalClaim(claimedName)) continue;
       claimCount++;
       if (!menuNameCheck(claimedName, menuNorm)) {
         unknownClaims.push(`"${m[1].trim()}" claimed via "got it X": "${reply.slice(0, 80)}..."`);
@@ -456,10 +462,26 @@ const FRAGMENT_BOUNDARY_MARKERS = [
   "your cart", "anything else", "want",
 ];
 
-export function isQuestionOrFragment(claimed: string): boolean {
+/** Contractions ("what's", "isn't", "won't") normalized to the leading word
+ * their uncontracted form would have, so QUESTION_LEADERS / ACKNOWLEDGMENT_LEADERS
+ * catch "what's your name" the same way they catch "what is your name". */
+const NT_CONTRACTIONS: Record<string, string> = {
+  "don't": "do", "doesn't": "does", "didn't": "did",
+  "isn't": "is", "aren't": "are", "wasn't": "was", "weren't": "were",
+  "can't": "can", "won't": "will", "shouldn't": "should",
+  "wouldn't": "would", "couldn't": "could",
+};
+
+function normalizeContraction(word: string): string {
+  const lower = word.toLowerCase();
+  if (NT_CONTRACTIONS[lower]) return NT_CONTRACTIONS[lower];
+  return lower.replace(/'(s|re|ll|d|ve)$/, "");
+}
+
+export function isQuestionOrFragment(claimed: string, followingText: string = ""): boolean {
   const words = claimed.split(/\s+/);
-  const first = words[0] ?? "";
-  // Question-leader words
+  const first = normalizeContraction(words[0] ?? "");
+  // Question-leader words (contraction-normalized: "what's" → "what")
   if (QUESTION_LEADERS.has(first)) return true;
   // Acknowledgement/discourse phrases ("noted provolone", "no toasting")
   if (ACKNOWLEDGMENT_LEADERS.has(first)) return true;
@@ -472,7 +494,30 @@ export function isQuestionOrFragment(claimed: string): boolean {
   if (/[.?!]/.test(claimed)) return true;
   // Word count > 4 — real item names are ≤4 words
   if (words.length > 4) return true;
+  // Defense in depth: if the clause immediately following the captured span
+  // is a question (its next sentence terminator is "?"), this is never an
+  // item claim — regardless of what leading word got captured.
+  if (followingText) {
+    const terminator = followingText.match(/[.!?]/);
+    if (terminator && terminator[0] === "?") return true;
+  }
   return false;
+}
+
+/** Known-safe transactional phrases that are never item claims — hard-exempted
+ * outright rather than relying on the generic fragment heuristics above to
+ * keep catching every phrasing. Covers: asking for the customer's name,
+ * confirming pickup, quoting a total, sending/confirming the payment link. */
+const TRANSACTIONAL_SAFE_PATTERNS: RegExp[] = [
+  /\bname\b/i,               // "what's your name for the order"
+  /\bpick\s*-?up\b/i,        // pickup confirmation
+  /\bpayment\s*link\b/i,     // "here's your payment link"
+  /\blink\s+to\s+(?:pay|complete)/i, // "link to pay/complete your order"
+  /\btotal\b/i,              // total quoting ("your total is", "grand total")
+];
+
+export function isTransactionalClaim(claimed: string): boolean {
+  return TRANSACTIONAL_SAFE_PATTERNS.some((p) => p.test(claimed));
 }
 
 /** Check if a normalized claimed item name matches any menu entry. */

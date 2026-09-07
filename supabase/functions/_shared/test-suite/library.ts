@@ -534,6 +534,53 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     ],
   },
   {
+    // ── Named-item removal (2026-09-07 production bug fix) ─────────────────
+    // Before this fix, "remove the pizza" always removed the LAST item
+    // regardless of what was named. All three cases below are cartops-critical
+    // money-path regressions that must stay green.
+    id: "conv-named-remove-middle",
+    category: "conversational",
+    criticality: "critical",
+    label: "Remove named middle item — not last item — from multi-item cart",
+    persona: "Customer who orders two items and then changes their mind about the first one.",
+    goal: "Order a large cheese pizza, then garlic knots. Then say 'remove the pizza'. Expect only the garlic knots remain.",
+    max_turns: 4,
+    seed_message: "I'd like a large cheese pizza and some garlic knots",
+    expectCartShrink: true,
+    success_criteria: [
+      { id: "pizza_removed", description: "Bot removes the large cheese pizza, not the garlic knots", check_id: "lost_cart" },
+      { id: "knots_remain", description: "Garlic knots remain in the cart after removal", check_id: "wrong_item_added" },
+    ],
+  },
+  {
+    id: "conv-named-remove-not-in-cart",
+    category: "conversational",
+    criticality: "critical",
+    label: "Named remove for item not in cart — bot should clarify, not crash or silently mutate",
+    persona: "Customer who accidentally tries to remove an item they never ordered.",
+    goal: "Order garlic knots. Then say 'remove the pizza'. Expect the bot to tell you there's no pizza in your cart.",
+    max_turns: 4,
+    seed_message: "Can I get garlic knots please",
+    success_criteria: [
+      { id: "no_crash", description: "Bot does not crash or silently remove the garlic knots", check_id: "lost_cart" },
+      { id: "clarifies_missing", description: "Bot tells the customer the named item is not in the cart", check_id: "wrong_item_added" },
+    ],
+  },
+  {
+    id: "conv-named-remove-ambiguous",
+    category: "conversational",
+    criticality: "normal",
+    label: "Ambiguous named remove — two cart lines share the stem — bot asks which one",
+    persona: "Customer who orders two sizes of the same item and wants to remove one but is vague.",
+    goal: "Order a small cheese pizza and a large cheese pizza. Then say 'remove the cheese pizza'. Expect the bot to ask which one, not silently guess.",
+    max_turns: 4,
+    seed_message: "I want a small cheese pizza and a large cheese pizza",
+    success_criteria: [
+      { id: "bot_asks_which", description: "Bot asks which pizza to remove rather than guessing", check_id: "wrong_item_added" },
+      { id: "no_silent_removal", description: "Neither pizza is removed without the customer specifying", check_id: "lost_cart" },
+    ],
+  },
+  {
     id: "conv-full-checkout-flow",
     category: "conversational",
     criticality: "normal",

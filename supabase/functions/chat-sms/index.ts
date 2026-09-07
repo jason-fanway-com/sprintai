@@ -4561,11 +4561,20 @@ Deno.serve(async (req: Request) => {
     // treated as corrections at all — same as "that's it"/"checkout" today,
     // they simply aren't matched below and fall through to the normal
     // LLM/tool loop with the cart untouched.
+    // Named-item removal: "remove the pizza", "drop my garlic knots", etc.
+    // Capture the item name text so we can resolve it against the cart — a
+    // boolean .test() would throw the name away and always remove the last
+    // item regardless of what the customer said.
+    const namedRemoveMatch = norm.match(
+      /^(?:remove the|remove my|drop the|drop my|take off the|take off my|cancel the|cancel my|get rid of the|scratch the)\s+(.+)$/i
+    );
+    const capturedName = namedRemoveMatch ? namedRemoveMatch[1].trim() : null;
+
     const isCorrection = cartItems.length > 0 && (
       /^(just want one|make it one|just one|only one|one is fine|just 1|make it 1|one of those|one of them|just the one|actually just one|actually one)$/i.test(norm) ||
       /^(i just want|i only want|i want just|ill take just|ill take one|ill have just|i just need|i wanted just|i meant just|give me just|let me get just)\s+(one|1)$/i.test(norm) ||
       /^(remove one|remove that|remove it|take it off|take that off|scratch that)$/i.test(norm) ||
-      /^(remove the|remove my|drop the|drop my|take off the|take off my)\s+.+$/i.test(norm)
+      capturedName !== null
     );
     if (isCorrection) {
       // Bucket 2 (removal, 2026-09-06): requires an actual removal verb.
@@ -4579,13 +4588,62 @@ Deno.serve(async (req: Request) => {
       // of removing the item. Fixed here since it's the same verb check.
       const isRemove = /^(remove|delete|drop|take\s+(?:it|that|this|them)\s+off|take off|cancel|scratch|get rid of)\b/i.test(norm);
       if (isRemove && cartItems.length > 0) {
-        // Remove the last item from the cart
-        const lastItem = cartItems[cartItems.length - 1];
-        const mid = (lastItem as CartItem).menu_item_id;
-        if (mid) {
-          await executeTool("remove_item", { menu_item_id: mid }, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
-          correctionApplied = true;
-          console.log(`[chat-sms] Correction (remove): removed "${(lastItem as CartItem).name}" from cart (conv=${conversation.id})`);
+        if (capturedName) {
+          // Named-item removal: resolve the captured name against cart lines.
+          // Use the same stem-based matching that pending-disambiguation uses
+          // (stemWord is already imported from that module).
+          const STOPWORDS_REMOVE = new Set(["the","and","for","with","one","a","an","of","by","my"]);
+          function namedRemoveStems(text: string): Set<string> {
+            return new Set(
+              text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+                .filter(w => w.length >= 3 && !STOPWORDS_REMOVE.has(w))
+                .map(stemWord)
+            );
+          }
+          const queryStems = namedRemoveStems(capturedName);
+          const matches = cartItems.filter(item => {
+            const name = (item as CartItem).name;
+            if (!name) return false;
+            const itemStems = namedRemoveStems(name);
+            // Match if every query stem appears in the item name stems, or vice versa.
+            return [...queryStems].some(s => itemStems.has(s));
+          });
+
+          if (matches.length === 0) {
+            // Item named but not in cart — tell the customer plainly.
+            const cartNames = cartItems.map(i => `"${(i as CartItem).name}"`).join(", ");
+            const reply = `I don't see "${capturedName}" in your cart — you currently have: ${cartNames}. Did you mean one of those?`;
+            console.log(`[chat-sms] Named remove: "${capturedName}" not found in cart (conv=${conversation.id})`);
+            await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+            if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+            return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+          } else if (matches.length > 1) {
+            // Ambiguous — multiple cart lines match the name, ask which one.
+            const listStr = matches.map((item, i) => `${i + 1}) ${(item as CartItem).name}`).join("  ");
+            const reply = `Which one did you want to remove? ${listStr}. Reply with the number.`;
+            console.log(`[chat-sms] Named remove: "${capturedName}" matched ${matches.length} cart lines, asking (conv=${conversation.id})`);
+            await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+            if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+            return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+          } else {
+            // Exactly one match — remove that specific item.
+            const target = matches[0] as CartItem;
+            const mid = target.menu_item_id;
+            if (mid) {
+              await executeTool("remove_item", { menu_item_id: mid }, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
+              correctionApplied = true;
+              console.log(`[chat-sms] Named remove: removed "${target.name}" (matched query "${capturedName}") from cart (conv=${conversation.id})`);
+            }
+          }
+        } else {
+          // Bare removal (no name captured): remove the last item, unchanged behavior.
+          const lastItem = cartItems[cartItems.length - 1];
+          const mid = (lastItem as CartItem).menu_item_id;
+          if (mid) {
+            await executeTool("remove_item", { menu_item_id: mid }, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode);
+            correctionApplied = true;
+            console.log(`[chat-sms] Correction (remove): removed "${(lastItem as CartItem).name}" from cart (conv=${conversation.id})`);
+          }
         }
       } else {
         // Reduce last item to quantity 1

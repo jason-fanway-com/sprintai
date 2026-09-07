@@ -35,11 +35,21 @@ Deno.test("RED: old isCorrection treated a bare 'no thanks' as a correction", ()
 // The NEW regexes now in index.ts (GREEN).
 const NEW_IS_AMBIGUOUS_BARE_DECLINE = (norm: string) =>
   /^(never ?mind|forget that)$/i.test(norm);
-const NEW_IS_CORRECTION = (norm: string) =>
-  /^(just want one|make it one|just one|only one|one is fine|just 1|make it 1|one of those|one of them|just the one|actually just one|actually one)$/i.test(norm) ||
-  /^(i just want|i only want|i want just|ill take just|ill take one|ill have just|i just need|i wanted just|i meant just|give me just|let me get just)\s+(one|1)$/i.test(norm) ||
-  /^(remove one|remove that|remove it|take it off|take that off|scratch that)$/i.test(norm) ||
-  /^(remove the|remove my|drop the|drop my|take off the|take off my)\s+.+$/i.test(norm);
+// Named-item removal now captured via namedRemoveMatch (expanded to cover
+// cancel the/my, get rid of the, scratch the in addition to original verbs).
+// The 4th isCorrection condition is now `capturedName !== null` rather than
+// a bare .test() call — mirrored here as a helper to keep tests in sync.
+const NAMED_REMOVE_RE = /^(?:remove the|remove my|drop the|drop my|take off the|take off my|cancel the|cancel my|get rid of the|scratch the)\s+(.+)$/i;
+const NEW_IS_CORRECTION = (norm: string) => {
+  const namedRemoveMatch = norm.match(NAMED_REMOVE_RE);
+  const capturedName = namedRemoveMatch ? namedRemoveMatch[1].trim() : null;
+  return (
+    /^(just want one|make it one|just one|only one|one is fine|just 1|make it 1|one of those|one of them|just the one|actually just one|actually one)$/i.test(norm) ||
+    /^(i just want|i only want|i want just|ill take just|ill take one|ill have just|i just need|i wanted just|i meant just|give me just|let me get just)\s+(one|1)$/i.test(norm) ||
+    /^(remove one|remove that|remove it|take it off|take that off|scratch that)$/i.test(norm) ||
+    capturedName !== null
+  );
+};
 const NEW_IS_REMOVE = (norm: string) =>
   /^(remove|delete|drop|take\s+(?:it|that|this|them)\s+off|take off|cancel|scratch|get rid of)\b/i.test(norm);
 
@@ -66,6 +76,22 @@ const BUCKET_2_REMOVAL = [
 
 for (const phrase of BUCKET_2_REMOVAL) {
   Deno.test(`GREEN bucket 2 (removal): "${phrase}" still removes the last item`, () => {
+    const n = norm(phrase);
+    assertEquals(NEW_IS_CORRECTION(n), true);
+    assertEquals(NEW_IS_REMOVE(n), true);
+  });
+}
+
+// New named-item verb forms added in 2026-09-07 fix (cancel/get rid of/scratch the).
+const BUCKET_2_NEW_NAMED_VERBS = [
+  "cancel the wings",
+  "cancel my salad",
+  "get rid of the large pizza",
+  "scratch the garlic knots",
+];
+
+for (const phrase of BUCKET_2_NEW_NAMED_VERBS) {
+  Deno.test(`GREEN bucket 2 (new named-verb): "${phrase}" is recognized as a named removal`, () => {
     const n = norm(phrase);
     assertEquals(NEW_IS_CORRECTION(n), true);
     assertEquals(NEW_IS_REMOVE(n), true);
