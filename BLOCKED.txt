@@ -1200,3 +1200,30 @@ result size) so this can't silently drop data on any menu with enough groups
 to hit this. Will re-run compile-menu against Zio's ONLY after the fix,
 re-run the exact query above, and run it twice back to back for the
 idempotency proof, per your instructions. NOT touching Vito's or NJB.
+
+[COMPILE RUN — RESOLVED, real numbers, both Melvin checks in flight]
+2026-09-07 — Fixed, redeployed, re-run. Final live numbers (confirmed via your
+exact query, run by me):
+  bot_state=orderable: 203
+  bot_state=blocked:   17  (11 pending "bread on Wraps", 6 pending "temp on
+                             Burgers" — 2 real owner questions, not a bug)
+Root cause: compile-menu/index.ts's fetchAllRows() fetched option_choices via
+ONE .in("option_group_id", groupIds) call with ~492 UUIDs — the request URL
+is long enough that the fetch fails outright (TypeError: fetch failed,
+reproduced independently against the live DB). The old error handling
+silently swallowed this and returned zero choices for those groups, so 183
+items were wrongly marked blocked ("zero active choices") when they have
+real, stated choices. Response still said ok:true — no signal anything failed.
+FIX (committed b448444): fetchAllRows now throws on any fetch error instead
+of returning partial data; new fetchAllRowsBatchedIn() chunks .in() value
+lists into batches of 150, applied to option_groups/option_choices fetches
+and the lexicon stale-term deactivate. 6/6 new unit tests. Redeployed.
+Re-ran compile-menu against Zio's twice post-fix: 0 diffs between runs
+(idempotency proven, excluding compiled_at). Confirmed Vito's (224 items) and
+NJB (170 items) both still 100% bot_state='blocked'/ask_plan=null — completely
+untouched, only ever invoked with Zio's shop_id.
+Two Melvin verifications running in parallel: item 8 mechanism + Vito's
+safety (from ~19:05 UTC), and this compile-menu fix (just spawned). Will
+report both the moment they land.
+203/220 (92.3%) clears the spec's ≥90%-orderable go-live threshold (§12
+decision 2) even before the 2 remaining owner questions are answered.

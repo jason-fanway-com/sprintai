@@ -9,15 +9,23 @@
 // it is unit-testable in isolation, matching the convention of
 // pending-disambiguation.ts / phantom-add-guard.ts.
 //
-// SCOPE OF THIS INCREMENT (stated explicitly, see PIVOT entry in BLOCKED.txt
-// 2026-09-07): resolves SLOT groups only (kind="slot", ask_mode "ask" /
-// "auto_single" / "apply_default"). Modifier groups (kind="modifier",
-// ask_mode "offer_once" / "on_request") are left to the existing legacy
-// add_item code path even for compiled items — that is not where bugs
-// 1/2/5/7 live (all four are slot-resolution bugs: size not applied, a
-// generic Slice group name leaking to the customer, a resolved slot not
-// pricing, and the bot unable to see a real stated choice list). Proactive
-// offer_once sequencing is a distinct, smaller follow-up.
+// SCOPE (revised 2026-09-07 when bug 4 — "buffalo chicken pizza with
+// pepperoni" silently dropping the topping and its $3.00 price — was
+// escalated as urgent, same session as bugs 1/2/5/7): SLOT groups
+// (kind="slot") get the full sequencer treatment — ask/auto_single/
+// apply_default, always applying the real price_delta_cents, always the
+// single next question. MODIFIER groups (kind="modifier") are matched
+// REACTIVELY: if the current message names a real, compiled choice, it's
+// applied with its real price (spec Appendix B's worked example: "large
+// pepperoni pizza" -> product + size + toppings Pepperoni pre-filled, no
+// question asked). What's still NOT built here: the proactive offer_once
+// question ("Any toppings on the X? Say which, or 'no' for plain.") for a
+// modifier the customer never mentions, and unverified-request tracking for
+// a mentioned modifier that doesn't match any real choice (the legacy
+// path's `unverified_requests` has no compiled-path equivalent yet). Both
+// are documented follow-ups, not silent gaps — a modifier never named this
+// turn is simply not applied, same as today's legacy behavior for an
+// unprompted extra.
 //
 // Reuses significantStems/stemWord from pending-disambiguation.ts rather
 // than reimplementing a second matcher, per the standing rule from the
@@ -163,8 +171,26 @@ export function resolveAskPlan(
   let totalDeltaCents = 0;
 
   for (const step of askPlan.steps) {
-    if (step.kind !== "slot") continue;
     if (alreadyResolvedGroupIds.has(step.group_id)) continue;
+
+    // Modifiers (bug 4, 2026-09-07: "buffalo chicken pizza with pepperoni"
+    // silently dropped the topping and its $3.00 price): apply reactively,
+    // with the real compiled price, when the SAME message names a real
+    // modifier choice — spec Appendix B's worked example ("large pepperoni
+    // pizza": product + size + toppings Pepperoni pre-filled, no question
+    // asked). Never gates `nextStep` — modifiers never block checkout or
+    // get asked proactively here (the full offer_once "ask once" proactive
+    // question is a separate, documented follow-up; this is strictly
+    // narrower: match-if-mentioned-this-turn, same as a slot, minus the
+    // asking).
+    if (step.kind === "modifier") {
+      const matched = matchChoiceInText(step.choices, customerText);
+      if (matched) {
+        resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
+        totalDeltaCents += matched.price_delta_cents;
+      }
+      continue;
+    }
 
     if (step.ask_mode === "auto_single" && step.choices.length === 1) {
       const choice = step.choices[0];

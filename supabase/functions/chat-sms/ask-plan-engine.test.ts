@@ -189,7 +189,7 @@ Deno.test("resolveAskPlan: already-resolved groups are skipped (multi-turn conti
   assertEquals(result.nextStep, null);
 });
 
-Deno.test("resolveAskPlan: modifier steps (offer_once) are never touched by this engine (explicit scope cut)", () => {
+Deno.test("resolveAskPlan: bug 4 fix — a modifier named in the same message is applied with its real price (spec Appendix B worked example)", () => {
   const plan: AskPlan = {
     ...SIZE_ASK_PLAN,
     steps: [
@@ -199,10 +199,39 @@ Deno.test("resolveAskPlan: modifier steps (offer_once) are never touched by this
     ],
   };
   const result = resolveAskPlan(plan, "large with pepperoni", new Set(), new Map());
-  // Only the slot (size) is resolved; the modifier step is never in
-  // `resolved` regardless of whether the text mentions it.
+  assertEquals(result.resolved.length, 2);
+  const bySlotKey = Object.fromEntries(result.resolved.map(r => [r.slot_key, r.choice]));
+  assertEquals(bySlotKey["size"].id, "c-large");
+  assertEquals(bySlotKey["toppings"].id, "c-pep");
+  assertEquals(result.totalDeltaCents, 800); // $5.00 size delta + $3.00 pepperoni
+});
+
+Deno.test("resolveAskPlan: a modifier NOT mentioned this turn is simply not applied (never a question, never a guess)", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    steps: [
+      SIZE_STEP,
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.offer_once",
+        choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }] },
+    ],
+  };
+  const result = resolveAskPlan(plan, "large", new Set(), new Map());
   assertEquals(result.resolved.length, 1);
-  assertEquals(result.resolved[0].group_id, "grp-size");
+  assertEquals(result.resolved[0].slot_key, "size");
+  assertEquals(result.nextStep, null); // modifiers never become the "next question"
+});
+
+Deno.test("resolveAskPlan: an already-applied modifier (from a prior turn) is not re-matched or double-charged", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    steps: [
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.offer_once",
+        choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }] },
+    ],
+  };
+  const result = resolveAskPlan(plan, "and also pepperoni again", new Set(["grp-top"]), new Map());
+  assertEquals(result.resolved.length, 0);
+  assertEquals(result.totalDeltaCents, 0);
 });
 
 Deno.test("allSlotsResolved: true only when every slot group_id is present, ignores modifier groups", () => {
