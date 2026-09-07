@@ -1230,3 +1230,21 @@ option-price revert. Common thread — whoever wrote the "sad path" handling cor
 assumed it was the only path that needed it. When adding state that a later turn or
 process depends on, ask whether the HAPPY path reaches the same code, not just the
 one you're staring at while fixing the bug in front of you.
+
+## Watch-for: unreproduced cart-emptying on "looks good" — 2026-09-06 (NOT a confirmed defect)
+
+Jason, live-testing Vito's Pizza: after ordering a Caesar salad, "looks good" once
+returned "Your cart is empty. What would you like to order?" — the cart emptied
+itself. Could not reproduce in 3 follow-up attempts; no transcript captured. Not
+logged as a defect because it isn't confirmed — logged here because if it resurfaces
+in a real tester transcript, it should be recognized immediately as a recurrence,
+not treated as new.
+
+Same family as the "no thanks" cart-line deletion fixed earlier today
+(commit `50407e2`) and the GUARD 9 cart-doubling P0 (`0398d99`/`7405a13`) — all three
+are the cart silently changing shape on an affirmation/closing message the customer
+did not intend as a cart edit. If this recurs: get the actual conversation_id and
+turn sequence before touching code; three prior incidents in this exact family were
+each traced to a different guard (GUARD 4's fuzzy upsell text, GUARD 9's mutated-
+array wiring, the "no thanks" deletion path) — don't assume it's the same guard as
+last time without checking.
