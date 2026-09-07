@@ -104,11 +104,21 @@ function slugify(text: string): string {
 // all) is left as a single non-slot clause by the caller's `\bor\b` guard,
 // and "Beef, Chicken or Lamb" splits correctly instead of treating "Chicken
 // or Lamb" as one item.
+//
+// Oxford-comma phrasing ("bagel, bread, or roll", real NJB text) puts "or"
+// at the very START of the last comma segment ("or roll"), so `\s+or\s+`
+// never matches it (there's no leading whitespace to match at the start of
+// a trimmed string) and the whole "or roll" segment falls through as one
+// choice, title-casing to "Or Roll" — a bogus option a customer would
+// actually see/hear. When the mid-segment split finds nothing, strip a
+// leading "or " instead.
 function splitOrList(clause: string): string[] {
   const commaParts = clause.split(",").map(s => s.trim()).filter(Boolean);
   if (commaParts.length === 0) return [];
   const lastIdx = commaParts.length - 1;
-  const orParts = commaParts[lastIdx].split(/\s+or\s+/i).map(s => s.trim()).filter(Boolean);
+  const last = commaParts[lastIdx];
+  const midSplit = last.split(/\s+or\s+/i).map(s => s.trim()).filter(Boolean);
+  const orParts = midSplit.length > 1 ? midSplit : [last.replace(/^or\s+/i, "")];
   return [...commaParts.slice(0, lastIdx), ...orParts];
 }
 
@@ -143,8 +153,31 @@ function extractOrClauseFromName(name: string): { strippedName: string; choices:
 // requirement is what keeps this from inventing a slot out of "choice of
 // pasta, garlic knots, side salad" — real Vito's text where the three
 // things are all included, not alternatives to pick one of.
+//
+// A second, higher-priority pattern: ANY parenthetical list of 2+
+// comma-separated items in the description is its own unambiguous
+// structural signal, whether or not "choice of" or a trailing "or" is
+// present — real NJB text has both variants: "choice of flavored cream
+// cheese (Walnut Raisin, Scallion, ..., Chocolate Chip)" AND, on a
+// differently-worded item selling the same flavors on their own, "Flavored
+// homemade cream cheese spread (Walnut Raisin, Scallion, ..., Chocolate
+// Chip), sold by the pound" — no "choice of" at all. A parenthetical
+// enumeration is a stronger, more general signal than either keyword, so
+// this isn't anchored to "choice of" the way the plain-clause fallback
+// below has to be. Checked first; both rules coexist. Swept both NJB and
+// Zio's full menus for this exact shape (any description parenthetical
+// with 2+ comma items) before generalizing this way — every real instance
+// found across both menus was a genuine choice list, none were an
+// unrelated aside (e.g. an allergen note) that this would wrongly capture.
 function extractChoiceOfFromDescription(description: string | null): { choices: string[] } {
   if (!description) return { choices: [] };
+
+  const parenMatch = description.match(/\(([^()]+)\)/);
+  if (parenMatch) {
+    const parenChoices = splitOrList(parenMatch[1]).map(titleCase);
+    if (parenChoices.length >= 2) return { choices: parenChoices };
+  }
+
   const m = description.match(/choice of\s+([^.;]+)/i);
   if (!m) return { choices: [] };
   const clause = m[1].trim();

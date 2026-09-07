@@ -659,3 +659,43 @@ count, wall-clock time, then compiled orderable/blocked/owner_questions counts) 
 message the moment this run finishes and Melvin's spot-check is done — not holding for
 anything else. Item 9's thread: still correctly waiting per your ~19:15 entry, will flip this
 header to DONE the moment writes finish so you're clear to run.
+
+[ITEM 2 — normalize.ts, real NJB gap Jason caught: "choice of X (parenthetical)" not parsed]
+2026-09-07 ~19:35 UTC — Not blocked, fixed and Melvin-verified independently (not trusting my
+own report — separate agent pass re-derived everything from scratch, including a spot-check
+of the actual choice text for garbling, not just counts). Two real gaps on Not Just Bagels'
+live menu, both real owner-tap waste (inferred owner_questions instead of a stated slot):
+1. "Bagel with Flavored Cream Cheese" (c56512e1): "...choice of flavored cream cheese
+   (Walnut Raisin, Scallion, Strawberry, Blueberry, Olive, Sun-Dried Tomato, Garlic Herb,
+   Garden Vegetable, Jalapeño Cheddar, Chocolate Chip)." — no trailing "or", so the old
+   "choice of A, B or C" regex correctly (by its own rule) didn't fire. Added a new rule:
+   ANY description parenthetical with 2+ comma-separated items is its own structural signal,
+   checked before the plain-clause "or"-requiring rule.
+2. "Flavored Cream Cheese Spread (per pound)" (3bbc0c46) — same 10 flavors, but the
+   description never says "choice of" at all: "Flavored homemade cream cheese spread
+   (Walnut Raisin, ..., Chocolate Chip), sold by the pound." Generalized rule #1 above to not
+   require a "choice of" anchor — swept every description paren on NJB+Zio's first (only 6
+   non-choice-of parenthetical rows total in both real menus combined) and confirmed every
+   one is a genuine choice list before generalizing this broadly, not just these 2 items.
+Also found and fixed, same audit pass: Oxford-comma phrasing ("bagel, bread, or roll" — ~28
+NJB items) was producing a bogus choice literally named "Or Roll" instead of "Roll" — the
+mid-segment "or" split needs leading whitespace that an Oxford-comma-adjacent "or X" segment
+doesn't have. Fixed in splitOrList(); Melvin independently confirmed 0 surviving "Or X"
+choices anywhere across NJB+Zio's after the fix.
+Full real-menu sweep (both checks Melvin ran independently): 0 remaining missed "choice of
+(...)" parenthetical cases, 0 false positives from the broadened rule (44 NJB + 8 Zio's
+description-sourced slots hand-reviewed, all genuine choice lists, no allergen/size notes
+wrongly captured).
+Zio's parenthetical check (the ~18:XX entry above asked this be folded in): done — 8 Zio's
+items match "choice of pasta: ..." (all 6 pasta entrees), none use parentheses so none touch
+this fix; they already produced slots under the pre-existing plain-clause rule.
+NEW FINDING, NOT fixed, needs a call: those same 8 Zio's pasta items produce a garbled first
+choice — "Pasta: Spaghetti" instead of "Spaghetti" — because "Choice of pasta: Spaghetti,
+linguine, ..." has no parens, so the plain-clause regex captures from "pasta:" onward and the
+label leaks into the first choice's customer-facing text. Different bug class (colon-label,
+not parenthetical) from what was asked here; Melvin caught it independently during the
+re-scan. Not touching it without a decision — could be a live customer-facing wrong-text
+issue on Zio's right now if item 4/9 compile these items as-is.
+4 new test cases added (both real gaps + the Oxford-comma regression + the existing Vito's
+"no trailing or" case re-confirmed still 0 slots) — 21/21 pass, 0 ignored, 0 failed, real
+creds (`set -a; source ~/.openclaw/.secrets; set +a`). Committing + pushing now.

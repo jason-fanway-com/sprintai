@@ -115,6 +115,59 @@ Deno.test("'choice of A, B, C' with NO trailing 'or' does NOT become a slot (rea
   assertEquals(out[0].slots.length, 0);
 });
 
+Deno.test("'choice of <label> (A, B, ..., Z)' becomes a slot even with no trailing 'or' — the parenthetical is its own structural signal (real NJB text)", () => {
+  // Real text, item id c56512e1-51f4-43ba-bb31-7a1069157ae8: a customer-caught
+  // gap where this produced an inferred owner_questions row instead of a
+  // stated slot, spending an owner tap that wasn't needed. Distinguishable
+  // from the Vito's case directly above by the parenthetical enumeration
+  // right after "choice of" — both rules must coexist.
+  const out = normalizeMenuItems([
+    row({
+      name: "Bagel with Flavored Cream Cheese",
+      description: "Bagel with choice of flavored cream cheese (Walnut Raisin, Scallion, Strawberry, Blueberry, Olive, Sun-Dried Tomato, Garlic Herb, Garden Vegetable, Jalapeño Cheddar, Chocolate Chip).",
+      category: "Bagels",
+    }),
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].source, "description");
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), [
+    "Walnut Raisin", "Scallion", "Strawberry", "Blueberry", "Olive",
+    "Sun-Dried Tomato", "Garlic Herb", "Garden Vegetable", "Jalapeño Cheddar", "Chocolate Chip",
+  ]);
+});
+
+Deno.test("a bare description parenthetical list becomes a slot even with NO 'choice of' anchor at all (real NJB text, PO-flagged second instance)", () => {
+  // Real text, item id 3bbc0c46-f41e-477e-a1a2-d84236bafcaf: same 10 flavors
+  // as the "Bagel with Flavored Cream Cheese" case above, sold as its own
+  // line item with different wording that never says "choice of" — "Flavored
+  // homemade cream cheese spread (Walnut Raisin, ..., Chocolate Chip), sold
+  // by the pound." The parenthetical enumeration alone is the signal.
+  const out = normalizeMenuItems([
+    row({
+      name: "Flavored Cream Cheese Spread (per pound)",
+      description: "Flavored homemade cream cheese spread (Walnut Raisin, Scallion, Strawberry, Blueberry, Olive, Sun-Dried Tomato, Garlic Herb, Garden Vegetable, Jalapeño Cheddar, Chocolate Chip), sold by the pound.",
+      category: "Homemade Cream Cheese Spreads",
+    }),
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].source, "description");
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), [
+    "Walnut Raisin", "Scallion", "Strawberry", "Blueberry", "Olive",
+    "Sun-Dried Tomato", "Garlic Herb", "Garden Vegetable", "Jalapeño Cheddar", "Chocolate Chip",
+  ]);
+});
+
+Deno.test("Oxford-comma 'A, B, or C' does not leak a bogus 'Or C' choice (real NJB text, found auditing the parenthetical fix)", () => {
+  // Real text: "on choice of bagel, bread, or roll." The comma before "or"
+  // put "or roll" as its own comma segment with no *leading* whitespace for
+  // the mid-segment `\s+or\s+` split to match, so it fell through unsplit
+  // and title-cased to the customer-facing "Or Roll" instead of "Roll".
+  const out = normalizeMenuItems([
+    row({ name: "Grilled Cheese", description: "Grilled cheese on choice of bagel, bread, or roll.", category: "Sandwiches" }),
+  ]);
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
+});
+
 // ---- display_name rules -----------------------------------------------------
 
 Deno.test("display_name drops a category suffix that restates the item's own category", () => {
