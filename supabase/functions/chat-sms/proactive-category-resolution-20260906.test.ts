@@ -2,31 +2,39 @@
 // salad"), three fresh sessions, three different journeys. Vito's Pizza
 // (Jack's Slice menu) has two active menu_items both literally named
 // "Chicken Caesar" — one in category "Salads" (required Dressing option
-// group, no is_default choice set), one in category "Wraps" (dressing baked
-// into the fixed recipe, no option group at all). GUARD 7/7b (the existing
-// same-name disambiguation guards) only react AFTER the LLM has already
-// acted — an ambiguous add_item rolled back, or a free-text question asked
-// — which is exactly why the journey varied: the model sometimes asked
-// "salad or wrap?" even though "salad" already disambiguates, and sometimes
-// added the wrong thing or invented a dressing nobody named.
+// group, no is_default choice set), one in category "Wraps" (required Wrap
+// Type option group). GUARD 7/7b (the existing same-name disambiguation
+// guards) only react AFTER the LLM has already acted — an ambiguous
+// add_item rolled back, or a free-text question asked — which is exactly
+// why the journey varied.
 //
 // GUARD 7c runs BEFORE the LLM/tool loop, on the customer's fresh message,
 // using the SAME categoryWordMatches() the reactive guards already trust
 // (imported for real from pending-disambiguation.ts, which already has its
-// own dedicated test file — not re-tested here). If the message names a
-// duplicate-name item family AND a category word in that SAME message
-// resolves to exactly one candidate, it resolves and adds directly. A bare
-// "chicken caesar" with no category word supplies no signal (0 matches) and
-// is left alone — genuine ambiguity still asks, unchanged.
+// own dedicated test file — not re-tested here).
+//
+// This guard's gate went through THREE rounds the same evening:
+// 1. Original: name + category word match, no gate at all.
+// 2. QA found it added on plain questions ("how much is the chicken caesar
+//    salad?") — added a DENY-LIST of question shapes ("?", a leading
+//    interrogative).
+// 3. QA found the deny-list was still under-inclusive ("price on...",
+//    "wondering about...", "tell me about...", "curious if... is gluten
+//    free", "...whats in it" — no leading interrogative, no "?"). A
+//    deny-list of question forms is whack-a-mole by construction.
+// FINAL: replaced with an ALLOW-LIST — require a POSITIVE signal to add
+// (explicit order-intent phrase, OR the message being essentially JUST the
+// item name/category, optionally with a simple "no/with/without/extra
+// <thing>" modifier clause). Any other leftover content word means it's
+// not a bare order and falls through to the model.
 //
 // The actual add_item call, executeTool, sendSms etc. are real I/O and not
-// re-tested here (that's what the shared executeTool/is_default tests
-// already cover) — this file tests the pure "which candidate, if any, does
+// re-tested here — this file tests the pure "which candidate, if any, does
 // this message resolve to" decision, copied verbatim from index.ts, plus
 // wiring assertions against the live file.
 
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { categoryWordMatches } from "./pending-disambiguation.ts";
+import { categoryDisplayWord, categoryWordMatches, stemWord } from "./pending-disambiguation.ts";
 
 const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
 
@@ -36,16 +44,9 @@ interface Candidate {
   category: string | null;
 }
 
-// Copied verbatim from GUARD 7c's resolution logic in index.ts, including:
-// (a) the adjacency-based negation check (QA-found: "I don't want the
-// chicken caesar salad" would have been ADDED despite the negation),
-// deliberately adjacency-based (negation immediately before the ITEM NAME,
-// same pattern GUARD 4 v2's negation-filter uses) so "chicken caesar salad,
-// no croutons please" — negation about an unrelated topping — still resolves;
-// (b) the question gate (QA-found LIVE, the more serious gap: "how much is
-// the chicken caesar salad?" was being silently ADDED, never answered).
-// Order-intent phrases are always allowed through even with a "?", since
-// customers politely phrase real orders as questions.
+const FILLER_WORDS = new Set(["a", "an", "the", "i", "want", "please", "get", "order", "one", "some", "and", "also", "plus", "for", "me", "ill", "id", "like", "that"]);
+
+// Copied verbatim from GUARD 7c's resolution logic in index.ts.
 function resolveByCategoryWord(userMessage: string, candidates: Candidate[], name: string): Candidate | null {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const negRe = new RegExp(
@@ -53,14 +54,26 @@ function resolveByCategoryWord(userMessage: string, candidates: Candidate[], nam
     "i",
   );
   if (negRe.test(userMessage)) return null;
-  const hasOrderIntent = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we)\s+(?:get|have|order|grab))\b/i.test(userMessage);
-  if (!hasOrderIntent) {
-    const looksLikeQuestion = /\?/.test(userMessage) || /^\s*(?:how|what|is|are|does|do|did|was|were|will|can\s+you|could\s+you)\b/i.test(userMessage);
-    if (looksLikeQuestion) return null;
-  }
   const categoryMatches = candidates.filter(c => categoryWordMatches(c.category, userMessage));
   if (categoryMatches.length !== 1) return null;
-  return categoryMatches[0];
+  const resolved = categoryMatches[0];
+
+  const hasOrderIntent = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we|you)\s+(?:get|have|order|grab|add))\b/i.test(userMessage);
+  if (!hasOrderIntent) {
+    const itemStems = new Set(resolved.name.toLowerCase().split(/\s+/).map(stemWord));
+    const categoryStem = resolved.category ? stemWord(categoryDisplayWord(resolved.category)) : null;
+    const cleaned = userMessage.toLowerCase().replace(/\b(?:no|with|without|extra)\s+\w+/g, " ");
+    const words = cleaned.replace(/[^a-z0-9\s']/g, " ").split(/\s+/).filter(Boolean);
+    const leftover = words.filter(w => {
+      if (FILLER_WORDS.has(w)) return false;
+      const s = stemWord(w);
+      if (itemStems.has(s)) return false;
+      if (categoryStem && s === categoryStem) return false;
+      return true;
+    });
+    if (leftover.length > 0) return null;
+  }
+  return resolved;
 }
 
 const CHICKEN_CAESAR_SALAD: Candidate = { id: "salad-id", name: "Chicken Caesar", category: "Salads" };
@@ -77,6 +90,11 @@ Deno.test("GUARD 7c decision: 'can I get a chicken caesar wrap' resolves to the 
   assertEquals(resolved?.id, "wrap-id");
 });
 
+Deno.test("GUARD 7c decision: 'i want a caesar salad' resolves via the category word alone (Jason's own literal test phrase)", () => {
+  const resolved = resolveByCategoryWord("i want a caesar salad", CANDIDATES, "chicken caesar");
+  assertEquals(resolved?.id, "salad-id");
+});
+
 Deno.test("GUARD 7c decision: a bare 'chicken caesar' with no category word supplies no signal — genuinely ambiguous, untouched", () => {
   const resolved = resolveByCategoryWord("chicken caesar", CANDIDATES, "chicken caesar");
   assertEquals(resolved, null);
@@ -87,8 +105,6 @@ Deno.test("GUARD 7c decision: is deterministic — the same message always resol
   assert(results.every(r => r === "salad-id"), `every run must resolve identically, got: ${JSON.stringify(results)}`);
 });
 
-// QA-found before ship: without the decline check, this would add the item
-// the customer just said they DIDN'T want.
 Deno.test("GUARD 7c decision: 'I don't want the chicken caesar salad' is a decline, never an add", () => {
   const resolved = resolveByCategoryWord("I don't want the chicken caesar salad", CANDIDATES, "chicken caesar");
   assertEquals(resolved, null);
@@ -100,7 +116,6 @@ Deno.test("GUARD 7c decision: 'no chicken caesar wrap for me' is a decline, neve
 });
 
 Deno.test("GUARD 7c decision: a genuine order is not mistaken for a decline just because 'no' appears elsewhere", () => {
-  // sanity check the decline check isn't so broad it eats real orders
   const resolved = resolveByCategoryWord("chicken caesar salad, no croutons please", CANDIDATES, "chicken caesar");
   assertEquals(resolved?.id, "salad-id");
 });
@@ -117,29 +132,52 @@ Deno.test("QA regression: widened negation catches 'don't add'", () => {
   assertEquals(resolveByCategoryWord("don't add the chicken caesar wrap", CANDIDATES, "chicken caesar"), null);
 });
 
-// QA (Melvin, 2026-09-06, live-fired against v254 before this fix): a
-// customer ASKING ABOUT a duplicate-name item was being silently ADDED to
-// the cart and never answered. Headline finding — this is the more serious
-// gap, worse than the negation one.
-Deno.test("QA regression LIVE-FOUND: 'how much is the chicken caesar salad?' is a question, never an add", () => {
+// QA round 2 (Melvin) — live-fired against v254, headline finding.
+Deno.test("QA regression round 2: 'how much is the chicken caesar salad?' is a question, never an add", () => {
   assertEquals(resolveByCategoryWord("how much is the chicken caesar salad?", CANDIDATES, "chicken caesar"), null);
 });
 
-Deno.test("QA regression LIVE-FOUND: 'is the chicken caesar salad gluten free?' is a question, never an add", () => {
+Deno.test("QA regression round 2: 'is the chicken caesar salad gluten free?' is a question, never an add", () => {
   assertEquals(resolveByCategoryWord("is the chicken caesar salad gluten free?", CANDIDATES, "chicken caesar"), null);
 });
 
-Deno.test("QA regression LIVE-FOUND: 'do you have a chicken caesar wrap?' is a question, never an add", () => {
+Deno.test("QA regression round 2: 'do you have a chicken caesar wrap?' is a question, never an add", () => {
   assertEquals(resolveByCategoryWord("do you have a chicken caesar wrap?", CANDIDATES, "chicken caesar"), null);
 });
 
-Deno.test("question gate: order-intent phrasing is allowed through even with a question mark", () => {
+// QA round 3 (Melvin) — live-fired against v256, the deny-list's own
+// under-inclusiveness. All five confirmed live as silent adds before this fix.
+Deno.test("QA regression round 3: 'price on the chicken caesar salad' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("price on the chicken caesar salad", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression round 3: 'wondering about the chicken caesar salad' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("wondering about the chicken caesar salad", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression round 3: 'tell me about the chicken caesar wrap' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("tell me about the chicken caesar wrap", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression round 3: 'curious if the chicken caesar salad is gluten free' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("curious if the chicken caesar salad is gluten free", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression round 3: 'the chicken caesar salad, whats in it' is a question (trailing interrogative, no '?'), never an add", () => {
+  assertEquals(resolveByCategoryWord("the chicken caesar salad, whats in it", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("positive-signal gate: order-intent phrasing is allowed through even with a question mark", () => {
   assertEquals(resolveByCategoryWord("can I get a chicken caesar wrap?", CANDIDATES, "chicken caesar")?.id, "wrap-id");
   assertEquals(resolveByCategoryWord("I'll have the chicken caesar salad, please?", CANDIDATES, "chicken caesar")?.id, "salad-id");
 });
 
-Deno.test("question gate: a bare statement with no '?' and no interrogative opener still resolves", () => {
+Deno.test("positive-signal gate: a bare statement with no '?' and no interrogative opener still resolves", () => {
   assertEquals(resolveByCategoryWord("chicken caesar salad", CANDIDATES, "chicken caesar")?.id, "salad-id");
+});
+
+Deno.test("positive-signal gate: 'can you add...' is order intent, not wrongly blocked as a question", () => {
+  assertEquals(resolveByCategoryWord("can you add a chicken caesar wrap", CANDIDATES, "chicken caesar")?.id, "wrap-id");
 });
 
 // ── Wiring regression guards against the live file ─────────────────────────
@@ -197,11 +235,22 @@ function negBlockIsAdjacencyBased(block: string): boolean {
   return snippet.includes("${escapedName7c}");
 }
 
-Deno.test("GUARD 7c wiring: a question about the item is checked before resolving, order-intent phrases exempted", () => {
+Deno.test("GUARD 7c wiring: positive-signal gate — an allow-list, not a deny-list of question shapes", () => {
   const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
-  assert(block.includes("hasOrderIntent7c"), "must check for order-intent phrasing before gating on question shape");
-  assert(block.includes("looksLikeQuestion7c"), "must gate on question shape (a '?' or an interrogative opener)");
-  assert(block.includes("if (looksLikeQuestion7c) continue"), "a message that looks like a question (and isn't order-intent) must fall through, never be added");
+  assert(block.includes("hasOrderIntent7c"), "must check for explicit order-intent phrasing");
+  assert(block.includes("leftover7c"), "must compute leftover content words after stripping filler/item/category words");
+  assert(block.includes("if (leftover7c.length > 0) continue"), "any leftover content word must fall through to the model — the allow-list, not a deny-list of question forms");
+  assert(!block.includes("looksLikeQuestion7c"), "the old deny-list approach must be gone, not left alongside the new one");
+});
+
+Deno.test("GUARD 7c wiring: 'no/with/without/extra <thing>' modifier clauses are stripped before the leftover check, so real modifiers don't block a bare order", () => {
+  const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
+  assert(block.includes('replace(/\\b(?:no|with|without|extra)\\s+\\w+/g'), "must strip simple modifier clauses before computing leftover content words");
+});
+
+Deno.test("GUARD 7c wiring: item/category words are stripped by STEM, not exact match, so plurals and case don't defeat the filter", () => {
+  const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
+  assert(block.includes("stemWord(categoryDisplayWord(resolved7c.category))"), "the category word must be stemmed the same way categoryWordMatches already does");
 });
 
 Deno.test("GUARD 7c wiring: a real executeTool failure falls through to the normal loop rather than silently swallowing it", () => {

@@ -23,6 +23,7 @@ import {
   categoryWordMatches,
   isPendingDisambiguationDeclined,
   resolvePendingDisambiguation,
+  stemWord,
   type PendingCandidate,
   type PendingDisambiguation,
 } from "./pending-disambiguation.ts";
@@ -4399,22 +4400,40 @@ Deno.serve(async (req: Request) => {
         `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|(?:don['’]?t|do\\s+not|dont)\\s+(?:want|need|get|add))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName7c}\\b`,
       );
       if (negRe7c.test(userMsgLower7c)) continue;
-      // FIX (QA-found LIVE before ship — the more serious gap): a customer
-      // ASKING ABOUT a duplicate-name item ("how much is the chicken caesar
-      // salad?", "is the chicken caesar salad gluten free?", "do you have a
-      // chicken caesar wrap?") was being silently ADDED to the cart, never
-      // answered. Order-intent phrases ("I'll have", "can I get") are always
-      // allowed through even with a "?" (customers politely phrase real
-      // orders as questions); anything else containing "?" or opening on a
-      // bare interrogative is left to the model to actually answer.
-      const hasOrderIntent7c = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we)\s+(?:get|have|order|grab))\b/i.test(userMessage);
-      if (!hasOrderIntent7c) {
-        const looksLikeQuestion7c = /\?/.test(userMessage) || /^\s*(?:how|what|is|are|does|do|did|was|were|will|can\s+you|could\s+you)\b/i.test(userMessage);
-        if (looksLikeQuestion7c) continue;
-      }
       const categoryMatches7c = candidates7c.filter(c => categoryWordMatches(c.category, userMessage));
       if (categoryMatches7c.length !== 1) continue; // no signal, or still genuinely ambiguous — let the existing flow handle it
       const resolved7c = categoryMatches7c[0];
+      // FIX (QA-found LIVE before ship, TWO rounds): a customer ASKING ABOUT
+      // a duplicate-name item was being silently ADDED and never answered.
+      // Round 1's fix was a deny-list of question shapes ("?", a leading
+      // interrogative) — QA found a THIRD round of leaks past it: "price on
+      // the chicken caesar salad", "wondering about...", "tell me about...",
+      // "curious if... is gluten free", "...whats in it" (interrogative not
+      // leading, or no interrogative word at all). A deny-list of question
+      // forms is whack-a-mole by construction. Replaced with an allow-list:
+      // require a POSITIVE signal to add — either an explicit order-intent
+      // phrase, or the message being essentially JUST the item name/category
+      // (optionally with a simple "no/with/without/extra <thing>" modifier
+      // clause, e.g. "chicken caesar salad, no croutons please"). Any other
+      // leftover content word (a verb, a question word, an inquiry noun)
+      // means this isn't a bare order — fall through and let the model
+      // actually answer it.
+      const hasOrderIntent7c = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we|you)\s+(?:get|have|order|grab|add))\b/i.test(userMessage);
+      if (!hasOrderIntent7c) {
+        const FILLER_WORDS_7C = new Set(["a", "an", "the", "i", "want", "please", "get", "order", "one", "some", "and", "also", "plus", "for", "me", "ill", "id", "like", "that", "some"]);
+        const itemStems7c = new Set(resolved7c.name.toLowerCase().split(/\s+/).map(stemWord));
+        const categoryStem7c = resolved7c.category ? stemWord(categoryDisplayWord(resolved7c.category)) : null;
+        const cleaned7c = userMessage.toLowerCase().replace(/\b(?:no|with|without|extra)\s+\w+/g, " ");
+        const words7c = cleaned7c.replace(/[^a-z0-9\s']/g, " ").split(/\s+/).filter(Boolean);
+        const leftover7c = words7c.filter(w => {
+          if (FILLER_WORDS_7C.has(w)) return false;
+          const s = stemWord(w);
+          if (itemStems7c.has(s)) return false;
+          if (categoryStem7c && s === categoryStem7c) return false;
+          return true;
+        });
+        if (leftover7c.length > 0) continue; // leftover content word — not a bare order, leave it to the model
+      }
 
       const localCartItems = [...cart.cart_json];
       const addResult7c = await executeTool(
