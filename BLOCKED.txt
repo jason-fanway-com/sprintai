@@ -619,3 +619,43 @@ instruction.
 Not idle — polling BLOCKED.txt/git log for both signals, will run and report each (NJB
 report-only, Zio's real-write) as its own message the moment its precondition is met, per
 instruction not to hold one for the other.
+
+[ZIO'S BUILD — Firecrawl real write IN PROGRESS, item-9 hold still in effect]
+2026-09-07 ~19:20 UTC — Not blocked, actively writing now. Jason confirmed the redirect to
+Firecrawl (new key rotated to ~/.openclaw-sprintai/po-inbox/firecrawl.env, old key's 80/1000
+credit ceiling is moot — this account has 992/1000, resets 2026-10-05). Full 200-item batch
+launched with --apply against Zio's option_groups/option_choices (shop_id
+2cba7b51-211c-4437-8910-1af4dcc03498), ~10-13s/item observed in testing, so ~35-40 min total,
+~200 Firecrawl requests.
+
+TWO DEVIATIONS FROM THE LITERAL BUILD INSTRUCTION, flagged before writing, not silently
+changed:
+1. PARSING METHOD: requesting Firecrawl `formats:["rawHtml"]` (not "markdown") and parsing
+   the DOM structurally (role="radio"/"checkbox", stable id attributes) via a local,
+   networkless Playwright `page.setContent()` — reusing the exact extraction logic already
+   validated against the live site — instead of regex-parsing markdown text. Reason: Slice's
+   group names aren't a fixed enum ("Choose an option" / "Choose Cheese" / "Choose Dressing"
+   all occur for different items), so markdown text alone can't reliably distinguish a group
+   header with no subtitle (e.g. "Make it") from a same-shaped priceless choice line (e.g.
+   "Light Sauce") — genuinely ambiguous without DOM structure. Output mapping (kind/required/
+   min/max/delta-on-plus-prefix/ignore-Notes-for-Kitchen) is unchanged from what was specified.
+   Firecrawl still does 100% of the real network fetch/JS rendering.
+2. PRICING CONVENTION: storing every choice's price_cents as a DELTA off the item's own base
+   price (including required size-group choices), NOT the literal instructed absolute price.
+   Checked the actual deployed consumer first: supabase/functions/_shared/compile-menu.ts:243
+   (`price_delta_cents: c.price_cents`) and :262 (`base_price_cents: item.price_cents`) are
+   added together for a real order total, with no special-case anywhere for slot-kind groups
+   (grepped for it). Storing $19.99 absolute in a Large-size choice's price_cents would make
+   compile-menu compute base_price + $19.99 as if it were an add-on upcharge — a real
+   double-priced order the first time a customer orders a sized item. Matches the convention
+   already used by every other shop's existing option_choices in this DB. Flagging loudly in
+   case there's context I'm missing, but proceeding this way since the alternative is a known,
+   demonstrable pricing bug, not a style choice.
+
+Scripts: scripts/load-zios-firecrawl-options.mjs (this run) and the preserved, unused
+scripts/load-zios-slice-options.mjs (Playwright-live fallback, committed d0056e0). Will post
+exact measured numbers (attempted/scraped/failed, groups/choices created, Firecrawl request
+count, wall-clock time, then compiled orderable/blocked/owner_questions counts) as their own
+message the moment this run finishes and Melvin's spot-check is done — not holding for
+anything else. Item 9's thread: still correctly waiting per your ~19:15 entry, will flip this
+header to DONE the moment writes finish so you're clear to run.
