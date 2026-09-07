@@ -593,3 +593,29 @@ resume the already-working browser-automation path (zero marginal API cost, ~8-1
 clock for all 200 items at human-pace rate limiting, already correctness-verified against 9
 diverse items across 4 categories) vs. some hybrid. Not making that call unilaterally either
 way since it's a real cost/build tradeoff, not a technical one.
+
+[ITEM 9 RE-RUN — NJB report-only + Zio's real-write, standing by]
+2026-09-07 ~19:15 UTC — Not blocked, waiting on two upstream threads before acting, per
+Jason's explicit instruction (via PO): NJB is carrier-live, never touched without Jason
+watching — report-only re-run only after BOTH land:
+  1. Normalizer fix for the "choice of X (parenthetical list)" pattern (e.g. "Bagel with
+     Flavored Cream Cheese") — NOT YET in git log as of a77e62a/d0056e0.
+  2. Archetype/infer fix: bagel-type should bind directly to NJB's existing 26-item Bagels
+     category instead of asking a question — NOT YET landed.
+Checked both git log and this file; neither fix is present yet. Watching for both.
+
+Zio's real-write is separately blocked: the Slice-data population thread (see the
+~18:40 entry immediately above this one) hit a real cost blocker — Firecrawl's 1000/mo
+plan only has 80 credits left and Zio's alone needs ~200-274 calls, so that thread is
+sitting on an unresolved cost/build tradeoff for Jason (Firecrawl upgrade vs. resume the
+already-working browser-automation reader vs. hybrid), not a "done" signal. Will not run
+Zio's for real until that thread posts done, per the standing coordination rule — mid-write
+compilation would read against a half-populated option_groups table.
+
+Also flagged to check for: the same parenthetical "choice of X" pattern possibly existing on
+Zio's menu too — folding that into Zio's numbers once the Slice-data thread reports, per
+instruction.
+
+Not idle — polling BLOCKED.txt/git log for both signals, will run and report each (NJB
+report-only, Zio's real-write) as its own message the moment its precondition is met, per
+instruction not to hold one for the other.
