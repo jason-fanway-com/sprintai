@@ -1,0 +1,5 @@
+2026-09-07 ~11:15 UTC — Not blocked on Jason. Fix applied (proof.ts:199 crash guard),
+regression suite green (37/37), Melvin verification in flight (independent). Waiting on
+Melvin only; will commit+push this item alone the moment that lands, then relaunch the
+142-case run. No open ask for Jason right now beyond the two standing items already
+reported (mtest patch decision, conv-cancel-item 500 dashboard logs).

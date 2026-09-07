@@ -196,7 +196,7 @@ for (let i = 0; i < cases.length; i++) {
   const expectsCheckout = !isConversationalCase(c) && (c as TestCase).expects_checkout === true;
   const hoursMode = !isConversationalCase(c) ? (c as TestCase).hoursMode : undefined;
   const expectedItemCents = (!isConversationalCase(c) ? (c as TestCase).expectedItemCents : undefined) ?? 0;
-  const hasCart = (run.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
+  const hasCart = (run.transcript ?? []).some((t: any) => ((t.cart as any[] | undefined) ?? []).length > 0);
 
   let passed = true;
   let reason = "";
