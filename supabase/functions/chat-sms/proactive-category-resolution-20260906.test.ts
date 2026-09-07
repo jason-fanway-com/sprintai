@@ -36,22 +36,28 @@ interface Candidate {
   category: string | null;
 }
 
-// Copied verbatim from GUARD 7c's resolution logic in index.ts, including
-// the adjacency-based negation check added before ship (QA-found: "I don't
-// want the chicken caesar salad" also names the item + a category word, and
-// would have been ADDED despite the negation without this check). Deliberately
-// adjacency-based (negation immediately before the ITEM NAME), same pattern
-// GUARD 4 v2's negation-filter already uses — a bare co-occurrence check
-// (decline word ANYWHERE + item word ANYWHERE) would wrongly suppress
-// "chicken caesar salad, no croutons please", where the negation is about an
-// unrelated topping, nowhere near the item name.
+// Copied verbatim from GUARD 7c's resolution logic in index.ts, including:
+// (a) the adjacency-based negation check (QA-found: "I don't want the
+// chicken caesar salad" would have been ADDED despite the negation),
+// deliberately adjacency-based (negation immediately before the ITEM NAME,
+// same pattern GUARD 4 v2's negation-filter uses) so "chicken caesar salad,
+// no croutons please" — negation about an unrelated topping — still resolves;
+// (b) the question gate (QA-found LIVE, the more serious gap: "how much is
+// the chicken caesar salad?" was being silently ADDED, never answered).
+// Order-intent phrases are always allowed through even with a "?", since
+// customers politely phrase real orders as questions.
 function resolveByCategoryWord(userMessage: string, candidates: Candidate[], name: string): Candidate | null {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const negRe = new RegExp(
-    `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|don['’]t\\s+(?:want|need|get))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName}\\b`,
+    `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|(?:don['’]?t|do\\s+not|dont)\\s+(?:want|need|get|add))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName}\\b`,
     "i",
   );
   if (negRe.test(userMessage)) return null;
+  const hasOrderIntent = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we)\s+(?:get|have|order|grab))\b/i.test(userMessage);
+  if (!hasOrderIntent) {
+    const looksLikeQuestion = /\?/.test(userMessage) || /^\s*(?:how|what|is|are|does|do|did|was|were|will|can\s+you|could\s+you)\b/i.test(userMessage);
+    if (looksLikeQuestion) return null;
+  }
   const categoryMatches = candidates.filter(c => categoryWordMatches(c.category, userMessage));
   if (categoryMatches.length !== 1) return null;
   return categoryMatches[0];
@@ -97,6 +103,43 @@ Deno.test("GUARD 7c decision: a genuine order is not mistaken for a decline just
   // sanity check the decline check isn't so broad it eats real orders
   const resolved = resolveByCategoryWord("chicken caesar salad, no croutons please", CANDIDATES, "chicken caesar");
   assertEquals(resolved?.id, "salad-id");
+});
+
+Deno.test("QA regression: widened negation catches 'dont' without an apostrophe", () => {
+  assertEquals(resolveByCategoryWord("dont want the chicken caesar salad", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression: widened negation catches 'do not want'", () => {
+  assertEquals(resolveByCategoryWord("do not want the chicken caesar salad", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression: widened negation catches 'don't add'", () => {
+  assertEquals(resolveByCategoryWord("don't add the chicken caesar wrap", CANDIDATES, "chicken caesar"), null);
+});
+
+// QA (Melvin, 2026-09-06, live-fired against v254 before this fix): a
+// customer ASKING ABOUT a duplicate-name item was being silently ADDED to
+// the cart and never answered. Headline finding — this is the more serious
+// gap, worse than the negation one.
+Deno.test("QA regression LIVE-FOUND: 'how much is the chicken caesar salad?' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("how much is the chicken caesar salad?", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression LIVE-FOUND: 'is the chicken caesar salad gluten free?' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("is the chicken caesar salad gluten free?", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("QA regression LIVE-FOUND: 'do you have a chicken caesar wrap?' is a question, never an add", () => {
+  assertEquals(resolveByCategoryWord("do you have a chicken caesar wrap?", CANDIDATES, "chicken caesar"), null);
+});
+
+Deno.test("question gate: order-intent phrasing is allowed through even with a question mark", () => {
+  assertEquals(resolveByCategoryWord("can I get a chicken caesar wrap?", CANDIDATES, "chicken caesar")?.id, "wrap-id");
+  assertEquals(resolveByCategoryWord("I'll have the chicken caesar salad, please?", CANDIDATES, "chicken caesar")?.id, "salad-id");
+});
+
+Deno.test("question gate: a bare statement with no '?' and no interrogative opener still resolves", () => {
+  assertEquals(resolveByCategoryWord("chicken caesar salad", CANDIDATES, "chicken caesar")?.id, "salad-id");
 });
 
 // ── Wiring regression guards against the live file ─────────────────────────
@@ -150,9 +193,16 @@ Deno.test("GUARD 7c wiring: a negation immediately before the item name is check
 function negBlockIsAdjacencyBased(block: string): boolean {
   const idx = block.indexOf("const negRe7c = new RegExp(");
   if (idx === -1) return false;
-  const snippet = block.slice(idx, idx + 300);
+  const snippet = block.slice(idx, idx + 600);
   return snippet.includes("${escapedName7c}");
 }
+
+Deno.test("GUARD 7c wiring: a question about the item is checked before resolving, order-intent phrases exempted", () => {
+  const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
+  assert(block.includes("hasOrderIntent7c"), "must check for order-intent phrasing before gating on question shape");
+  assert(block.includes("looksLikeQuestion7c"), "must gate on question shape (a '?' or an interrogative opener)");
+  assert(block.includes("if (looksLikeQuestion7c) continue"), "a message that looks like a question (and isn't order-intent) must fall through, never be added");
+});
 
 Deno.test("GUARD 7c wiring: a real executeTool failure falls through to the normal loop rather than silently swallowing it", () => {
   const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");

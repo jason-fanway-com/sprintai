@@ -4393,9 +4393,25 @@ Deno.serve(async (req: Request) => {
       // suppressed. A declined message is left to the normal LLM/tool loop,
       // exactly as it was before this guard existed.
       const negRe7c = new RegExp(
-        `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|don['’]t\\s+(?:want|need|get))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName7c}\\b`,
+        // WIDENED (QA-found): "dont" (no apostrophe) and "do not" are at
+        // least as common in real SMS as the apostrophized form; "add" joins
+        // want/need/get since "don't add the salad" is an equally common phrasing.
+        `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|(?:don['’]?t|do\\s+not|dont)\\s+(?:want|need|get|add))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName7c}\\b`,
       );
       if (negRe7c.test(userMsgLower7c)) continue;
+      // FIX (QA-found LIVE before ship — the more serious gap): a customer
+      // ASKING ABOUT a duplicate-name item ("how much is the chicken caesar
+      // salad?", "is the chicken caesar salad gluten free?", "do you have a
+      // chicken caesar wrap?") was being silently ADDED to the cart, never
+      // answered. Order-intent phrases ("I'll have", "can I get") are always
+      // allowed through even with a "?" (customers politely phrase real
+      // orders as questions); anything else containing "?" or opening on a
+      // bare interrogative is left to the model to actually answer.
+      const hasOrderIntent7c = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we)\s+(?:get|have|order|grab))\b/i.test(userMessage);
+      if (!hasOrderIntent7c) {
+        const looksLikeQuestion7c = /\?/.test(userMessage) || /^\s*(?:how|what|is|are|does|do|did|was|were|will|can\s+you|could\s+you)\b/i.test(userMessage);
+        if (looksLikeQuestion7c) continue;
+      }
       const categoryMatches7c = candidates7c.filter(c => categoryWordMatches(c.category, userMessage));
       if (categoryMatches7c.length !== 1) continue; // no signal, or still genuinely ambiguous — let the existing flow handle it
       const resolved7c = categoryMatches7c[0];
