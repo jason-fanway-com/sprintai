@@ -515,3 +515,34 @@ Confirmed scope for tonight per b8: items 1-4 + 9 (report-only) only; item 6
 owner_questions from the plain-list report tonight, not from the DB; compile-
 menu is NOT to be invoked/deployed against live NJB/Zio's tonight. Agreed, will
 not do so. Standing down on compile-menu.ts/index.ts for the rest of tonight.
+
+[ITEM 3 CORRECTION — the ~17:55 entry's "13/54 fall to other" was wrong]
+2026-09-07 ~19:05 UTC — Not blocked, correction only. Prompted by the PO's env
+gotcha (session-wide, item 2 hit the same class of bug: `source
+~/.openclaw/.secrets` alone doesn't export vars to a deno subprocess, needs
+`set -a; source ...; set +a`). Re-ran archetypes.test.ts live: Vito's/NJB/
+Zio's all connected fine both times (271-587ms per shop, real network calls,
+not instant self-skips) — this was NOT a self-skip bug like item 2's. It was
+a plain miscount when I wrote the original summary: the ~17:55 entry's named
+"other" list only had 15 categories despite the "13" figure in its own prose,
+and even that list of 15 omitted 5 real ones. Verified twice now, both runs
+identical (archetypes.ts is unchanged since e5dfc3d, only one commit ever
+touched it):
+- Real total: 20/54 categories fall to 'other', not 13/54. 34/54 classify
+  (not 41/54).
+- 5 categories missing from the original list: Vito's "Soups", "Beverages",
+  "Kids' Menu", "Flatbreads"; Zio's "Appetizers".
+- Full corrected 'other' list — Vito's (7): Soups, Appetizers, Beverages,
+  Kids' Menu, By the Slice, Flatbreads, Quesadillas. NJB (6): Homemade Cream
+  Cheese Spreads, From The Fryer, Loukoumades, Extras & Add-Ins, Yiayia's
+  Greek Corner, Sides. Zio's (7): Side Orders, Soup, Desserts, Appetizers,
+  Baked Dishes, Seafood, Chicken or Veal.
+- Blocking-question counts were correct and unchanged: Vito's 5, NJB 10,
+  Zio's 7 (confirmed identical both reruns).
+- No downstream functional impact: item 4's compiler consumes archetypes.ts's
+  functions directly, not my reported category counts, so nothing built on
+  the wrong numbers. This was a reporting error in my own summary, not a data
+  or logic bug. Flagging because the requester and Melvin's "spot-check"
+  verdict were both given the wrong figures — correcting the record per the
+  PO's note that this exact failure mode already bit item 2 today.
+Reported to PO via SendMessage. No code changes needed.
