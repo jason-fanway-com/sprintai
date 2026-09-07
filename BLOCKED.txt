@@ -546,3 +546,50 @@ touched it):
   verdict were both given the wrong figures — correcting the record per the
   PO's note that this exact failure mode already bit item 2 today.
 Reported to PO via SendMessage. No code changes needed.
+
+[ZIO'S BUILD — REDIRECTED to Firecrawl, browser-automation path stopped]
+2026-09-07 ~18:40 UTC — Not blocked. Per Jason's direction (via PO), stopped the bespoke
+Playwright browser-reader (had a working, bug-fixed extraction script — see git history if
+ever revisited — killed the running process, no DB writes had happened yet, zero rows
+touched) and tested the cheaper existing-plumbing path first: Firecrawl /scrape (already
+wired into scrape-shop) with JS rendering, against a real Slice product URL directly:
+`https://slicelife.com/restaurants/pa/allentown/18104/zio-s-pizza-allentown/menu?view_product=4090936`
+(Buffalo Chicken Pizza).
+
+RESULT: YES, clean. `POST /v1/scrape` with `{"formats":["markdown"],"waitFor":5000}` (no
+stealth/proxy mode — plain JS rendering) returned markdown containing all 3 required
+elements: (a) size group "Choose an option" / "Required, select only one" / Small 14'' $19.99
+/ Medium 16'' $22.99 / Large 18'' $24.99; (b) full 24-item topping list with upcharges
+(Extra Cheese +$4.00 ... Grilled Chicken +$4.00); (c) "Make it" / "Light Sauce". Matches
+Jason's own browser observation exactly. Cloudflare did NOT block it — no stealth/proxy mode
+was enabled or needed, so no escalation-to-Jason trigger here.
+
+COST — the number that actually decides this: 1 credit per /scrape call (measured directly:
+credit-usage endpoint showed 80 -> 79 after one call), ~8.1s wall-clock per call. Checked
+account balance via `/v1/team/credit-usage`: **80 credits remaining out of a 1000/month plan,
+billing period ends 2026-09-30 (23 days out).** Zio's alone has 274 Slice products (200 of
+Zio's 220 DB items cleanly matched to them, see below) — a full Zio's pass needs ~200-274
+calls. At 80 credits left, THIS SHOP ALONE cannot be completed this billing period, let alone
+"per prospect x thousands of restaurants" per the North Star math — 1 shop already blows the
+monthly budget by ~2.5x, before any other real production scrape-shop usage this month (which
+is presumably what already burned 920 of the 1000 credits). This is a real, hard viability
+blocker for Firecrawl at current plan tier — not a guess, measured directly. Only 2 credits
+spent on this test (both scrapes above); stopping further Firecrawl calls now rather than
+burning the remaining 79 chasing more validation, since the plan-tier ceiling is the actual
+blocker, not the technical approach.
+
+Separately, already-completed matching work (done before the redirect, still valid and
+reusable regardless of which fetch method wins): 200/220 of Zio's active DB menu_items
+matched by name (+ price/category disambiguation for shared display names, e.g. two
+different "Mussels Marinara" rows) to a specific real Slice product id. 20 documented skips:
+13 are the "Chicken or Veal" category's protein-collapsed rows (DB has one row "Marsala",
+Slice splits it into separately-priced "Chicken Marsala"/"Veal Marsala" — ambiguous, belongs
+to item 2/item 4's slot-handling, not this reader), 7 have no Slice-side counterpart at all
+(Beef Patty, Double Burger, Iced Tea, Soda 2 L, Italian Wedding soup, Gnocchi Pasta, Tuna
+Provolone Wrap). Zero ambiguous/unresolved matches in the 200.
+
+NEXT: awaiting direction — upgrade the Firecrawl plan tier (Jason's call, real money) vs.
+resume the already-working browser-automation path (zero marginal API cost, ~8-15 min wall
+clock for all 200 items at human-pace rate limiting, already correctness-verified against 9
+diverse items across 4 categories) vs. some hybrid. Not making that call unilaterally either
+way since it's a real cost/build tradeoff, not a technical one.
