@@ -41,7 +41,7 @@ export function stemWord(word: string): string {
 
 const STOPWORDS = new Set(["the", "and", "for", "with", "one", "a", "an", "of", "by"]);
 
-function significantStems(text: string): Set<string> {
+export function significantStems(text: string): Set<string> {
   return new Set(
     text
       .toLowerCase()
@@ -193,6 +193,34 @@ export function resolvePendingDisambiguation(
   }
 
   return null;
+}
+
+// 2026-09-07 (production removal bug): stored cart-line names are the raw
+// variant label ("Cheese - Large (16\")"), not the customer's word for the
+// dish ("pizza") — a literal-name-only matcher for "remove the pizza" finds
+// nothing on a real cart, even though every human reading the line knows
+// exactly which item that is. Two independent signals catch it, either one
+// sufficient: the message names the item's MENU CATEGORY (same stem-matcher
+// GUARD 7's disambiguation flow already uses — "pizza" <-> category "Pizza"),
+// or the message shares a significant word-stem with the item's own stored
+// NAME ("large" <-> "Cheese - Large (16\")", "knots" <-> "Garlic Knots").
+// Deliberately separate from resolvePendingDisambiguation (which answers a
+// different question — "which of these N already-offered candidates did the
+// customer just pick" — and is relied on by the live disambiguation re-ask
+// flow); this only ever narrows a removal request against the current cart,
+// so it can evolve independently without risking that flow's behavior.
+export function resolveNamedCartRemoval(
+  capturedName: string,
+  candidates: PendingCandidate[],
+): PendingCandidate[] {
+  const queryStems = significantStems(capturedName);
+  if (queryStems.size === 0) return [];
+  return candidates.filter(c => {
+    if (categoryWordMatches(c.category, capturedName)) return true;
+    const nameStems = significantStems(c.name);
+    for (const s of queryStems) if (nameStems.has(s)) return true;
+    return false;
+  });
 }
 
 function replyNumbers(count: number): string {

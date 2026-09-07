@@ -22,6 +22,7 @@ import {
   categoryDisplayWord,
   categoryWordMatches,
   isPendingDisambiguationDeclined,
+  resolveNamedCartRemoval,
   resolvePendingDisambiguation,
   stemWord,
   type PendingCandidate,
@@ -4607,24 +4608,31 @@ Deno.serve(async (req: Request) => {
       if (isRemove && cartItems.length > 0) {
         if (capturedName) {
           // Named-item removal: resolve the captured name against cart lines.
-          // Use the same stem-based matching that pending-disambiguation uses
-          // (stemWord is already imported from that module).
-          const STOPWORDS_REMOVE = new Set(["the","and","for","with","one","a","an","of","by","my"]);
-          function namedRemoveStems(text: string): Set<string> {
-            return new Set(
-              text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
-                .filter(w => w.length >= 3 && !STOPWORDS_REMOVE.has(w))
-                .map(stemWord)
-            );
-          }
-          const queryStems = namedRemoveStems(capturedName);
-          const matches = cartItems.filter(item => {
-            const name = (item as CartItem).name;
-            if (!name) return false;
-            const itemStems = namedRemoveStems(name);
-            // Match if every query stem appears in the item name stems, or vice versa.
-            return [...queryStems].some(s => itemStems.has(s));
+          // Stored cart-line names are the raw variant label ("Cheese - Large
+          // (16\")"), not the word a customer actually uses ("pizza") — a
+          // name-only match misses that entirely. resolveNamedCartRemoval
+          // also checks the item's MENU CATEGORY (joined here from
+          // effectiveMenu by menu_item_id), the same category-stem-match
+          // GUARD 7's disambiguation flow already relies on.
+          const menuByIdForRemoval = new Map(effectiveMenu.map(mi => [mi.id, mi]));
+          // Index-paired with cartItems (not menu_item_id-keyed) — two cart
+          // lines can legitimately share a menu_item_id (e.g. two separately
+          // customized orders of the same pizza), and matching back by id
+          // alone would resolve both when only one was named.
+          const removalCandidates: PendingCandidate[] = cartItems.map(item => {
+            const ci = item as CartItem;
+            return {
+              menu_item_id: ci.menu_item_id,
+              name: ci.name ?? "",
+              category: menuByIdForRemoval.get(ci.menu_item_id)?.category ?? null,
+              price_cents: ci.price_cents,
+            };
           });
+          const resolvedIdx = new Set(
+            resolveNamedCartRemoval(capturedName, removalCandidates)
+              .map(m => removalCandidates.indexOf(m)),
+          );
+          const matches = cartItems.filter((_, i) => resolvedIdx.has(i));
 
           if (matches.length === 0) {
             // Item named but not in cart — tell the customer plainly.

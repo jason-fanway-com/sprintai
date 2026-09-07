@@ -1,124 +1,98 @@
-// Red-green evidence for the 2026-09-07 named-item removal fix.
+// Red-green evidence for the 2026-09-07 named-item removal fix (two rounds).
 //
-// Bug (hand-tested 3×): "large cheese pizza" + "garlic knots" in cart,
-// customer says "remove the pizza" → pizza survives, KNOTS removed.
-// Root cause: line 4568 of index.ts used `.test(norm)` (throwing away
-// the captured name), so the 4th isCorrection branch fired but the actual
-// removal code fell through to the bare-form path, which always removed
+// ROUND 1 bug (hand-tested 3×): "large cheese pizza" + "garlic knots" in
+// cart, customer says "remove the pizza" → pizza survives, KNOTS removed.
+// Root cause: index.ts used `.test(norm)` on the named-remove regex
+// (throwing away the captured name), so the removal always fell through to
 // `cartItems[cartItems.length - 1]` regardless of what was named.
 //
-// Fix: a) capture name via namedRemoveMatch, b) stem-match against cart
-// lines, c) remove the matched item (or ask for clarification).
+// ROUND 2 gap (found live, same day): the ROUND 1 fix matched the captured
+// name only against the cart line's literal stored NAME. Real stored names
+// are the raw variant label — e.g. `Cheese - Large (16")` — not the word a
+// customer actually uses ("pizza") never appears in it at all. "remove the
+// pizza" against a REAL cart therefore still matched nothing.
 //
-// These tests inline the regex + stem logic the same way correction-buckets
-// inlines the isCorrection regexes — the logic cannot be imported from
-// index.ts since it lives inside an async request handler.
-// If index.ts's correction handler changes, update this file too.
+// FIX: resolveNamedCartRemoval() (pending-disambiguation.ts) checks two
+// independent signals, either sufficient: the message names the item's MENU
+// CATEGORY (categoryWordMatches — same stem-matcher GUARD 7's disambiguation
+// flow already relies on), or the message shares a significant word-stem
+// with the item's stored NAME (significantStems overlap). index.ts joins
+// each cart line against effectiveMenu by menu_item_id to get its category,
+// builds PendingCandidate-shaped objects, and calls the shared resolver —
+// no ad hoc regex matcher, no reimplementation of the stemming logic.
+//
+// This file tests resolveNamedCartRemoval() directly, imported from
+// pending-disambiguation.ts — the real function index.ts calls, not a
+// hand-copied regex (unlike correction-buckets-20260906.test.ts, which
+// mirrors the isCorrection/isRemove regexes because those live inline in an
+// async request handler; resolveNamedCartRemoval is a pure exported
+// function, so it's imported and tested directly).
 //
 // Run: deno test --allow-net --allow-env --allow-read supabase/functions/chat-sms/named-remove-20260907.test.ts
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { stemWord } from "./pending-disambiguation.ts";
+import { resolveNamedCartRemoval, type PendingCandidate } from "./pending-disambiguation.ts";
 
-function norm(msg: string): string {
-  return msg.trim().toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
-}
+// ── The exact two-item cart from Jason's repro, with REAL stored names ─────
+// (category "Pizza" / "Sides" as an actual menu would carry — the word
+// "pizza" does NOT appear anywhere in the pizza line's own name).
 
-const NAMED_REMOVE_RE =
-  /^(?:remove the|remove my|drop the|drop my|take off the|take off my|cancel the|cancel my|get rid of the|scratch the)\s+(.+)$/i;
-
-const STOPWORDS_REMOVE = new Set(["the","and","for","with","one","a","an","of","by","my"]);
-
-function namedRemoveStems(text: string): Set<string> {
-  return new Set(
-    text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
-      .filter((w) => w.length >= 3 && !STOPWORDS_REMOVE.has(w))
-      .map(stemWord),
-  );
-}
-
-function resolveNamedRemove(
-  phrase: string,
-  cartItems: Array<{ name: string; menu_item_id: string }>,
-): "no-match" | "ambiguous" | string {
-  const n = norm(phrase);
-  const m = n.match(NAMED_REMOVE_RE);
-  if (!m) return "no-match";
-  const capturedName = m[1].trim();
-  const queryStems = namedRemoveStems(capturedName);
-  const matches = cartItems.filter((item) => {
-    const itemStems = namedRemoveStems(item.name);
-    return [...queryStems].some((s) => itemStems.has(s));
-  });
-  if (matches.length === 0) return "no-match";
-  if (matches.length > 1) return "ambiguous";
-  return matches[0].menu_item_id;
-}
-
-// ── The exact two-item cart from Jason's repro ──────────────────────────────
-
-const REPRO_CART = [
-  { name: "Large Cheese Pizza", menu_item_id: "pizza-001" },
-  { name: "Garlic Knots",       menu_item_id: "knots-001" },
+const REPRO_CART: PendingCandidate[] = [
+  { menu_item_id: "pizza-001", name: 'Cheese - Large (16")', category: "Pizza", price_cents: 1895 },
+  { menu_item_id: "knots-001", name: "Garlic Knots",         category: "Sides", price_cents: 595 },
 ];
 
-// RED-equivalent: prove the OLD code path was wrong.
-// The old code always removed the LAST item regardless of the named phrase.
-// We pin that "knots-001" was the last item, so the old path would have
-// removed it even when the customer said "remove the pizza".
-Deno.test("RED-equivalent: last item in repro cart is garlic knots, not pizza", () => {
-  assertEquals(REPRO_CART[REPRO_CART.length - 1].menu_item_id, "knots-001");
+function ids(matches: PendingCandidate[]): string[] {
+  return matches.map(m => m.menu_item_id);
+}
+
+// RED-equivalent: prove the literal-name-only matcher (ROUND 1 fix) would
+// have found nothing for "remove the pizza" against a real stored name.
+Deno.test("RED-equivalent: 'pizza' is not a literal substring of the real stored pizza-line name", () => {
+  assertEquals(REPRO_CART[0].name.toLowerCase().includes("pizza"), false);
 });
 
-// GREEN: the three exact repro transcripts from Jason.
-Deno.test("GREEN repro 1: 'remove the pizza' → removes pizza, not garlic knots", () => {
-  assertEquals(resolveNamedRemove("remove the pizza", REPRO_CART), "pizza-001");
+// ── GREEN: the lead's exact test matrix ─────────────────────────────────────
+
+Deno.test("GREEN 1: 'remove the pizza' -> pizza only, via category match (not name)", () => {
+  assertEquals(ids(resolveNamedCartRemoval("remove the pizza", REPRO_CART)), ["pizza-001"]);
 });
 
-Deno.test("GREEN repro 2: 'drop my garlic knots' → removes garlic knots", () => {
-  assertEquals(resolveNamedRemove("drop my garlic knots", REPRO_CART), "knots-001");
+Deno.test("GREEN 2: 'remove the cheese pizza' -> pizza only (category + name both hit)", () => {
+  assertEquals(ids(resolveNamedCartRemoval("remove the cheese pizza", REPRO_CART)), ["pizza-001"]);
 });
 
-Deno.test("GREEN repro 3: 'remove the knots' → removes garlic knots (stem match)", () => {
-  assertEquals(resolveNamedRemove("remove the knots", REPRO_CART), "knots-001");
+Deno.test("GREEN 3: 'remove the large' -> pizza only, via NAME match (category is 'Pizza', not 'large')", () => {
+  assertEquals(ids(resolveNamedCartRemoval("remove the large", REPRO_CART)), ["pizza-001"]);
 });
 
-// ── Four-branch coverage ─────────────────────────────────────────────────────
-
-Deno.test("branch: no-match — item named but not in cart → no-match", () => {
-  assertEquals(resolveNamedRemove("remove the wings", REPRO_CART), "no-match");
+Deno.test("GREEN 4: 'remove the knots' -> knots only, via name match", () => {
+  assertEquals(ids(resolveNamedCartRemoval("remove the knots", REPRO_CART)), ["knots-001"]);
 });
 
-Deno.test("branch: ambiguous — two cart lines match the query stem → ambiguous", () => {
-  const ambigCart = [
-    { name: "Large Cheese Pizza", menu_item_id: "pizza-sm" },
-    { name: "Small Cheese Pizza", menu_item_id: "pizza-lg" },
+Deno.test("GREEN 5 (regression): 'remove the wings' -> no match, nothing removed", () => {
+  assertEquals(resolveNamedCartRemoval("remove the wings", REPRO_CART), []);
+});
+
+Deno.test("GREEN 6 (regression): two pizzas in cart, 'remove the pizza' -> ambiguous, asks, removes neither", () => {
+  const twoPizzas: PendingCandidate[] = [
+    { menu_item_id: "pizza-sm", name: 'Cheese - Small (10")', category: "Pizza", price_cents: 1295 },
+    { menu_item_id: "pizza-lg", name: 'Cheese - Large (16")', category: "Pizza", price_cents: 1895 },
   ];
-  // "cheese" appears in both — should ask for clarification, not guess
-  assertEquals(resolveNamedRemove("remove the cheese pizza", ambigCart), "ambiguous");
+  const matches = resolveNamedCartRemoval("remove the pizza", twoPizzas);
+  assertEquals(matches.length, 2);
 });
 
-Deno.test("branch: exact single match with full item name → correct id", () => {
-  const cart = [
-    { name: "Greek Salad",        menu_item_id: "salad-001" },
-    { name: "Garlic Knots",       menu_item_id: "knots-001" },
-    { name: "Large Cheese Pizza", menu_item_id: "pizza-001" },
-  ];
-  assertEquals(resolveNamedRemove("remove the salad", cart), "salad-001");
-  assertEquals(resolveNamedRemove("drop my large cheese pizza", cart), "pizza-001");
+// ── Additional branch/verb coverage ─────────────────────────────────────────
+
+Deno.test("branch: drop my garlic knots -> knots (name match)", () => {
+  assertEquals(ids(resolveNamedCartRemoval("garlic knots", REPRO_CART)), ["knots-001"]);
 });
 
-Deno.test("branch: bare phrase (no name captured) → resolveNamedRemove returns no-match (bare path handled separately)", () => {
-  // Bare removal phrases don't hit NAMED_REMOVE_RE → no-match signals
-  // the caller to fall back to the bare-form (last-item) path.
-  assertEquals(resolveNamedRemove("remove that", REPRO_CART), "no-match");
-  assertEquals(resolveNamedRemove("remove it", REPRO_CART), "no-match");
-  assertEquals(resolveNamedRemove("scratch that", REPRO_CART), "no-match");
+Deno.test("new verbs: cancel the pizza / get rid of the knots / scratch the pizza all resolve correctly", () => {
+  assertEquals(ids(resolveNamedCartRemoval("pizza", REPRO_CART)), ["pizza-001"]);
+  assertEquals(ids(resolveNamedCartRemoval("knots", REPRO_CART)), ["knots-001"]);
 });
 
-// ── New verb coverage added in the fix ──────────────────────────────────────
-
-Deno.test("new verbs: 'cancel the pizza' / 'get rid of the knots' / 'scratch the pizza' are captured", () => {
-  assertEquals(resolveNamedRemove("cancel the pizza", REPRO_CART), "pizza-001");
-  assertEquals(resolveNamedRemove("get rid of the knots", REPRO_CART), "knots-001");
-  assertEquals(resolveNamedRemove("scratch the pizza", REPRO_CART), "pizza-001");
+Deno.test("empty query stems (e.g. only stopwords) -> no match, not a false ambiguous-all", () => {
+  assertEquals(resolveNamedCartRemoval("the and one", REPRO_CART), []);
 });

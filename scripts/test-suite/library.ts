@@ -567,6 +567,25 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     ],
   },
   {
+    // 2026-09-07 gap found live: the real stored cart-line name for a large
+    // cheese pizza is "Cheese - Large (16\")" — the word "pizza" never
+    // appears in it, and neither does "large" appear in the menu CATEGORY
+    // ("Pizza"). Only a name-token-stem match (not category) resolves this.
+    id: "conv-named-remove-name-only-match",
+    category: "conversational",
+    criticality: "critical",
+    label: "Remove by a word that's in the stored NAME but not the category — must resolve via name-stem match, not category",
+    persona: "Customer who orders a pizza and knots, then removes the pizza by referring to its size rather than saying 'pizza'.",
+    goal: "Order a large cheese pizza and garlic knots. Then say 'remove the large'. Expect only the garlic knots remain.",
+    max_turns: 4,
+    seed_message: "Can I get a large cheese pizza and garlic knots",
+    expectCartShrink: true,
+    success_criteria: [
+      { id: "pizza_removed_by_name", description: "Bot removes the large cheese pizza when named by size ('large'), not by category word", check_id: "lost_cart" },
+      { id: "knots_remain", description: "Garlic knots remain in the cart after removal", check_id: "wrong_item_added" },
+    ],
+  },
+  {
     id: "conv-named-remove-ambiguous",
     category: "conversational",
     criticality: "normal",
