@@ -301,6 +301,7 @@ Deno.serve(async (req: Request) => {
       name: g.name,
       required: g.kind === "slot",
       choiceNames: (choicesByGroup.get(g.id) ?? []).map(c => c.display_name ?? c.name),
+      provenance: g.provenance,
     }));
     return {
       id: row.id,

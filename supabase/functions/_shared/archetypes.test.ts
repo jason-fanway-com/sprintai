@@ -111,6 +111,50 @@ Deno.test("burger: temp is kitchen_critical and excludes chicken/veggie/turkey i
   assertEquals(q!.proposal.choices, ["Rare", "Medium rare", "Medium", "Medium well", "Well done"]);
 });
 
+Deno.test("burger: a real platform-sourced (stated) group on the item suppresses the temp question, even though it doesn't bind the temp slot itself", () => {
+  const beef = item({
+    name: "Bacon Cheeseburger", category: "Burgers",
+    extractedGroups: [
+      { name: "Choose an option", required: true, choiceNames: ["Plain", "With Bacon"], provenance: "stated" },
+      { name: "Add Extra", required: false, choiceNames: ["Extra Cheese"], provenance: "stated" },
+    ],
+  });
+  const result = inferCategory("Burgers", [beef]);
+  assertEquals(result.questions.find(q => q.slot_key === "temp"), undefined);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "temp");
+  assertEquals(outcome!.kind, "advisory");
+  assertEquals(outcome!.choices, ["Rare", "Medium rare", "Medium", "Medium well", "Well done"]);
+});
+
+Deno.test("burger: a hand-built/owner_confirmed group (not 'stated') does NOT suppress the temp question — gate is stated-only", () => {
+  const beef = item({
+    name: "Bacon Cheeseburger", category: "Burgers",
+    extractedGroups: [
+      { name: "Add Extra", required: false, choiceNames: ["Extra Cheese"], provenance: "owner_confirmed" },
+    ],
+  });
+  const result = inferCategory("Burgers", [beef]);
+  assertExists(result.questions.find(q => q.slot_key === "temp"));
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "temp")!.kind, "proposed");
+});
+
+Deno.test("sandwich: a real stated group suppresses the unbound bread question for that item only, mixed category unaffected for the rest", () => {
+  const hasStatedElsewhere = item({
+    name: "Turkey Club", category: "Cold Sandwiches",
+    extractedGroups: [{ name: "Choose an option", required: true, choiceNames: ["Regular"], provenance: "stated" }],
+  });
+  const noSourceData = item({ name: "Ham & Cheese", category: "Cold Sandwiches" });
+  const result = inferCategory("Cold Sandwiches", [hasStatedElsewhere, noSourceData]);
+  const q = result.questions.find(q => q.slot_key === "bread");
+  assertExists(q);
+  assertEquals(q!.items_affected, 1); // only Ham & Cheese, which has no source data at all
+  assert(q!.proposal.exclusions.includes("Turkey Club"));
+  assertEquals(
+    result.slotOutcomes.find(o => o.slot_key === "bread" && o.item_id === hasStatedElsewhere.id)!.kind,
+    "advisory",
+  );
+});
+
 Deno.test("steak: 'steak' regex is word-bounded, does not match 'cheesesteak' item names", () => {
   const cheesesteak = item({ name: "Cheesesteak", category: "Hot Sandwiches" });
   // category resolves this to sandwich, not steak, and even a direct
@@ -465,10 +509,10 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
   const items = (rows ?? []) as { id: string; name: string; description: string | null; category: string | null; price_cents: number; size_label: string | null }[];
 
   const ids = items.map(i => i.id);
-  const groups: { id: string; name: string; required: boolean; menu_item_id: string }[] = [];
+  const groups: { id: string; name: string; required: boolean; menu_item_id: string; provenance: string }[] = [];
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
-    const { data } = await supabase.from("option_groups").select("id,name,required,menu_item_id").in("menu_item_id", chunk);
+    const { data } = await supabase.from("option_groups").select("id,name,required,menu_item_id,provenance").in("menu_item_id", chunk);
     groups.push(...((data ?? []) as typeof groups));
   }
   const groupIds = groups.map(g => g.id);
@@ -484,10 +528,10 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
     list.push(c.name);
     choicesByGroup.set(c.option_group_id, list);
   }
-  const groupsByItem = new Map<string, { name: string; required: boolean; choiceNames: string[] }[]>();
+  const groupsByItem = new Map<string, { name: string; required: boolean; choiceNames: string[]; provenance: string }[]>();
   for (const g of groups) {
     const list = groupsByItem.get(g.menu_item_id) ?? [];
-    list.push({ name: g.name, required: g.required, choiceNames: choicesByGroup.get(g.id) ?? [] });
+    list.push({ name: g.name, required: g.required, choiceNames: choicesByGroup.get(g.id) ?? [], provenance: g.provenance });
     groupsByItem.set(g.menu_item_id, list);
   }
 

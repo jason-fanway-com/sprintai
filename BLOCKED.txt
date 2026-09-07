@@ -862,3 +862,60 @@ verified it directly: reproduced the failure with the exact old query shape, con
 fix's queries return the full real counts I already validated independently against the
 DB, and confirmed NJB's report is bit-for-bit unchanged). Flagging for whoever reviews this
 next rather than claiming Melvin sign-off I didn't get.
+
+[ITEM 9 (follow-up) — stated-provenance gate, real architecture fix per PO's request, DONE]
+2026-09-07 ~20:15 UTC — Not blocked. PO's diagnosis was correct and verified independently
+before coding: Zio's real Slice groups ("Choose an option" required, "Add Extra" optional,
+"Choose Cheese" on the 2 Cold Subs items that have it) are genuinely stated-provenance and
+genuinely never invent a bread/temp choice the restaurant doesn't offer online, across all
+6 remaining owner-question categories checked by hand.
+
+Fix, in archetypes.ts's inferCategory ladder (not a Zio's patch): a new step 5.5 — if an
+item already has ANY option_groups row with provenance='stated', archetype inference stops
+guessing for that item's still-unbound slots (new "advisory" SlotOutcomeKind, no blocking
+owner_questions row) instead of falling through to universal_choices/kitchen_critical/
+price_critical. Gate checks provenance==='stated' specifically, not 'owner_confirmed' —
+confirmed live that Vito's 223 option_groups are 100% owner_confirmed, 0% stated, so it's
+completely unaffected either way. ExtractedGroup gained an optional provenance field; the
+two real callers (compile-menu/index.ts, item-9 report script) now populate it from a
+column both already SELECTed for other reasons. Added 3 new unit tests (gate fires on
+unrelated stated data; gate does NOT fire on owner_confirmed; mixed-category case proves
+the question still fires for an item with zero source data next to one that's covered).
+
+Real numbers (live DB, not adjusted to hit a target):
+- Zio's: 163/220 -> 217/220 orderable (98.6%), 6 owner_questions -> 2. Invariant 8 (90%
+  gate) now PASSES on its own, threshold untouched.
+- NJB: unchanged, 100/170 (58.8%), 8 owner_questions, verified bit-for-bit identical (no
+  platform-sourced groups exist for NJB, so the gate is a genuine no-op there).
+- Vito's: unchanged, confirmed live (0 stated groups, 223 owner_confirmed).
+- Zio's did NOT reach 220/220: 3 items (Cheese Burger, Double Burger, Tuna Provolone Wrap)
+  have ZERO option_groups rows at all -- Slice never published option data for them, same
+  "missing beats wrong" class already documented for 2 Zio's pizza items. Not touched to
+  force the number up, per standing instruction.
+
+Invariant 4 (3 violations, all Zio's, pre-existing and unrelated to this fix -- confirmed
+byte-identical to the prior report before this fix landed): one mechanism, 3 instances.
+compile-menu.ts's lexicon rule 2 (strip a trailing category-noun suffix off a qualified
+name, e.g. "Chicken Caesar Salad" -> also index "Chicken Caesar") produces a term that
+collides with a DIFFERENT plain-named item's own full name: "Zio's" (Chicken or Veal)
+collides with "Zio's Salad" and "Zio's Panini" stripping down to "zios"; "Shrimp
+Parmigiana" (Seafood) collides with "Shrimp Parmigiana Sub" stripping to the same term;
+"Eggplant Parmigiana" (Baked Dishes) collides with "Eggplant Parmigiana Sub" the same way.
+The qualified item always keeps its own full name as a unique fallback term; the plain
+entree does not, so it's the one left with zero unique terms. NJB has 1 more of the same
+class (One Egg (Side)), out of scope for the "3 items" ask. Not fixed -- reported only, per
+instruction; full detail with item IDs/prices in the report.
+
+Full suite: 73/73 passed (34 archetypes.test.ts baseline + 3 new + compile-menu.test.ts's
+36), typechecked clean on all 4 touched files.
+
+Melvin independently verified (fresh context, adversarial, did not trust any number or
+comment as given): re-derived the gate's exact position/logic from the diff; ran the test
+suite itself (73/0); independently queried Vito's live (0 stated, confirmed); independently
+re-ran the report script after reading it to confirm zero writes (same 217/220 and 100/170
+numbers); spot-checked all 57 Zio's items across the 6 affected categories by hand (54 with
+real stated groups, confirmed none of the 54 still blocked); independently confirmed all 3
+remaining-blocked items have zero option_groups rows, not a bug. Verdict: "does exactly
+what it claims, safely... no discrepancies found."
+
+Report: docs/reports/2026-09-07-item9-zios-stated-provenance-gate.md

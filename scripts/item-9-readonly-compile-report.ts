@@ -220,6 +220,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
       name: g.name,
       required: g.required,
       choiceNames: (choicesByGroup.get(g.id) ?? []).map(c => c.name),
+      provenance: g.provenance,
     }));
     return {
       id: r.id,

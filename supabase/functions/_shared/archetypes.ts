@@ -21,13 +21,24 @@
 //   5. default_from_name matches the item name  -> default            — no question,
 //                                                                        recorded as an
 //                                                                        exclusion
+//   5.5. item already has ANY platform-sourced -> advisory (no question, no
+//        (provenance='stated') option_group,     owner tap) — see
+//        just not one THIS slot bound to         hasStatedProvenanceGroup below
 //   6. universal_choices exists                 -> proposed  (needs owner tap)
 //   7. kitchen_critical || price_critical        -> needs_question (needs owner tap)
 //   8. none of the above                         -> skip (Appendix A's "no slot, no
 //                                                    question" case — pasta type on a
 //                                                    place that doesn't say)
 // Steps 6/7 are the only ones that ever contribute to an owner_questions row, one row
-// per (category, slot_key), scoped per §5.1 "category first, item second".
+// per (category, slot_key), scoped per §5.1 "category first, item second". Step 5.5
+// (added after real Zio's Slice data landed) exists because a platform feed like Slice
+// publishes every required/optional group the restaurant actually offers online — if an
+// item already has one or more such groups and this slot still isn't bound to one of
+// them, archetype inference has no business inventing a question on top of live,
+// restaurant-sourced data. That's guessing over a real answer, not caution (P3 "missing
+// beats wrong" is about gaps in the data, not about second-guessing data that exists).
+// Items with NO stated-provenance groups at all (no platform source, e.g. Not Just
+// Bagels) are completely unaffected — steps 6/7 still apply to them exactly as before.
 //
 // `size` and `count` are special-cased outside this ladder entirely (Appendix B: "size
 // stated by rows; toppings quoted" — no question ever). They're resolved from sibling
@@ -88,6 +99,12 @@ export interface ExtractedGroup {
   // family category — matching the sandwich archetype's /bread|roll/i
   // purely because "Rolls" contains "roll"). See findBoundGroup.
   sourceArchetype?: ArchetypeKey;
+  // The option_groups row's own provenance column, when this ExtractedGroup
+  // was built from a real per-item group (undefined for category-derived
+  // candidates, which were never a real row). Used only by
+  // hasStatedProvenanceGroup's step-5.5 gate below — never interpreted any
+  // other way here (see file header: this module writes nothing).
+  provenance?: string;
 }
 
 export interface InferItemInput {
@@ -440,7 +457,7 @@ function getArchetype(key: ArchetypeKey): Archetype {
 // testing. Writes nothing; the caller decides whether/how to persist.
 // ============================================================
 
-export type SlotOutcomeKind = "stated" | "default" | "not_applicable" | "proposed" | "needs_question" | "skip";
+export type SlotOutcomeKind = "stated" | "default" | "not_applicable" | "proposed" | "needs_question" | "skip" | "advisory";
 
 export interface SlotOutcome {
   item_id: string;
@@ -551,6 +568,17 @@ function looksLikeCleanChoiceList(choices: string[]): boolean {
   });
 }
 
+// Step 5.5's gate (see file header): true iff this item has at least one
+// REAL per-item option_group sourced from a platform feed (Slice, or any
+// future adapter) rather than archetype guesswork or a hand-built/owner-
+// confirmed row. Deliberately checks the item's OWN extractedGroups only,
+// not categoryCandidateGroups — a candidate built from a sibling category
+// (e.g. "Bagels" as NJB's bagel_type list) was never a row on THIS item, so
+// it says nothing about whether the platform already spoke for this item.
+function hasStatedProvenanceGroup(item: InferItemInput): boolean {
+  return item.extractedGroups.some(g => g.provenance === "stated");
+}
+
 function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchetype: ArchetypeKey): SlotOutcome {
   const base = { item_id: item.id, slot_key: slot.slot_key };
 
@@ -586,6 +614,13 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
   if (slot.default_from_name && slot.default_from_name.test(item.name)) {
     const m = item.name.match(slot.default_from_name);
     return { ...base, kind: "default", default_choice: m?.[0] };
+  }
+
+  if (hasStatedProvenanceGroup(item)) {
+    return {
+      ...base, kind: "advisory",
+      ...(slot.universal_choices ? { choices: slot.universal_choices } : {}),
+    };
   }
 
   if (slot.universal_choices) {
@@ -624,7 +659,7 @@ export function inferCategory(category: string, items: InferItemInput[]): Catego
     const exclusions = items
       .filter((_, idx) => {
         const kind = outcomesForSlot[idx].kind;
-        return kind === "not_applicable" || kind === "default" || kind === "stated";
+        return kind === "not_applicable" || kind === "default" || kind === "stated" || kind === "advisory";
       })
       .map(i => i.name);
 
