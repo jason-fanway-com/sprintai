@@ -84,6 +84,35 @@ console.log(`  Menu items: ${menuItemCount}`);
 console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOpsCount} cart-ops + ${categoryCoverageCount} category-coverage + ${derivedCount} derived + ${hoursClosedCount} hours-closed + ${conversationalCount} conversational)`);
 console.log("");
 
+// Write a test_runs row at the START of the run — same table the queue path
+// (supabase/functions/test-runner + _shared/test-suite/persist.ts) writes,
+// but that path only inserts once, at completion. A CLI run invoked directly
+// (nohup'd, no test_run_queue job) previously left qa_ro.test_runs silent for
+// its entire duration — a 61-minute run on 2026-09-06 wrote nothing until it
+// either finished or died, so there was no way to tell "still running" from
+// "never started" from the DB alone. This makes the run visible immediately,
+// and the update at the bottom of this file flips it to a final status.
+let testRunRowId: string | null = null;
+try {
+  const { data: runRow, error: runRowErr } = await supabase
+    .from("test_runs")
+    .insert({
+      shop_id: SHOP_ID,
+      tenant_id: (shop as { tenant_id?: string }).tenant_id ?? null,
+      total: cases.length,
+      status: "running",
+      notes: `CLI proof.ts run against ${shop.name} (local/manual invocation, not the queue path)`,
+    })
+    .select("id")
+    .single();
+  if (runRowErr) throw runRowErr;
+  testRunRowId = (runRow as { id: string }).id;
+  console.log(`  test_runs row: ${testRunRowId} (status=running)`);
+} catch (e) {
+  console.warn(`  WARNING: failed to write start-of-run test_runs row: ${(e as Error).message}`);
+}
+console.log("");
+
 // Build shop menu name set for hallucination guard
 let shopMenuId = "";
 const menuNames = await (async () => {
@@ -344,6 +373,25 @@ if (failCount > 0) {
   console.log(`Failures:`);
   for (const r of results.filter((r) => !r.passed)) {
     console.log(`  ✗ ${r.caseId}: ${r.reason}`);
+  }
+}
+
+// Flip the start-of-run test_runs row (if it was written) to a final status.
+if (testRunRowId) {
+  try {
+    const { error: updateErr } = await supabase
+      .from("test_runs")
+      .update({
+        status: passCount === total ? "completed" : "failed",
+        total,
+        passed: passCount,
+        failed: failCount,
+        overall_pass_pct: total > 0 ? Math.round((passCount / total) * 10000) / 100 : null,
+      })
+      .eq("id", testRunRowId);
+    if (updateErr) throw updateErr;
+  } catch (e) {
+    console.warn(`WARNING: failed to update test_runs row ${testRunRowId} at completion: ${(e as Error).message}`);
   }
 }
 

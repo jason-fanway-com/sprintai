@@ -95,3 +95,52 @@ Deno.test("multi-group item: one of two required groups missing still FAILS", ()
   assertEquals(r.applied, true);
   assertEquals(r.passed, false);
 });
+
+// ── Phase gate (2026-09-07): distinguish "reached checkout with a required
+// option still missing" (real failure) from "conversation ended mid-question,
+// no checkout attempted" (nothing to grade yet — a single-turn generated case
+// that never got a chance to answer the bot's own follow-up question). ──
+
+function runWithPhase(cart: unknown, phase: string): RunResult {
+  return { transcript: [{ reply: "Which sauce would you like?", cart, phase }] } as unknown as RunResult;
+}
+
+Deno.test("phase gate: missing required group with phase 'building' (mid-question) is INCOMPLETE, not FAIL", () => {
+  const requiredGroups = new Map([[BACON_CHEESEBURGER_ID, ["Temp"]]]);
+  const cart = [
+    { menu_item_id: BACON_CHEESEBURGER_ID, name: "Bacon Cheeseburger", quantity: 1, price_cents: 1099, options: {} },
+  ];
+  const r = verifyRequiredOptionsCovered(runWithPhase(cart, "building"), requiredGroups);
+  assertEquals(r.applied, false);
+  assertEquals(r.passed, true);
+});
+
+Deno.test("phase gate: missing required group with phase 'review' (mid-question) is INCOMPLETE, not FAIL", () => {
+  const requiredGroups = new Map([[BACON_CHEESEBURGER_ID, ["Temp"]]]);
+  const cart = [
+    { menu_item_id: BACON_CHEESEBURGER_ID, name: "Bacon Cheeseburger", quantity: 1, price_cents: 1099, options: {} },
+  ];
+  const r = verifyRequiredOptionsCovered(runWithPhase(cart, "review"), requiredGroups);
+  assertEquals(r.applied, false);
+  assertEquals(r.passed, true);
+});
+
+Deno.test("phase gate: missing required group with phase 'checkout' (checkout reached) still FAILS", () => {
+  const requiredGroups = new Map([[BACON_CHEESEBURGER_ID, ["Temp"]]]);
+  const cart = [
+    { menu_item_id: BACON_CHEESEBURGER_ID, name: "Bacon Cheeseburger", quantity: 1, price_cents: 1099, options: {} },
+  ];
+  const r = verifyRequiredOptionsCovered(runWithPhase(cart, "checkout"), requiredGroups);
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, false);
+});
+
+Deno.test("phase gate: missing required group with phase 'confirmed' (payment done) still FAILS", () => {
+  const requiredGroups = new Map([[BACON_CHEESEBURGER_ID, ["Temp"]]]);
+  const cart = [
+    { menu_item_id: BACON_CHEESEBURGER_ID, name: "Bacon Cheeseburger", quantity: 1, price_cents: 1099, options: {} },
+  ];
+  const r = verifyRequiredOptionsCovered(runWithPhase(cart, "confirmed"), requiredGroups);
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, false);
+});

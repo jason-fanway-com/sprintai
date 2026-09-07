@@ -73,3 +73,58 @@ Deno.test("correct total via P1 '$11.98 total' matches a $10.99 cart", () => {
   assertEquals(r.applied, true);
   assertEquals(r.passed, true);
 });
+
+// ── RED→GREEN (2026-09-07): label-then-amount receipt format must not let
+// "$0.99\nTotal" (fee line immediately followed by the Total line) be
+// mistaken for the real total. findQuotedTotal's old Pattern 1 used \s*,
+// which crosses the newline between the fee line and the Total line below
+// it, matching "$0.99\nTotal" and returning 99 cents instead of the real
+// total on the Total line itself. ──
+
+Deno.test("receipt format: Wings item — 'Total $17.98' on its own line, not '$0.99' from the fee line above", () => {
+  const cart = [{ name: "Wings (Bone-In) - 10 Pieces", quantity: 1, price_cents: 1699 }];
+  const reply =
+    `Wings (Bone-In) - 10 Pieces (Wing Flavor: Hot)  $16.99\n` +
+    `Subtotal                                         $16.99\n` +
+    `Service fee                                       $0.99\n` +
+    `Total                                            $17.98`;
+  const r = verifyStatedTotal(run(reply, cart));
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, true);
+});
+
+Deno.test("receipt format: Cheese pizza — 'Total $13.94' extracted correctly", () => {
+  const cart = [{ name: "Cheese - Small (10\")", quantity: 1, price_cents: 1295 }];
+  const reply =
+    `Cheese - Small (10")            $12.95\n` +
+    `Subtotal                        $12.95\n` +
+    `Service fee                      $0.99\n` +
+    `Total                           $13.94`;
+  const r = verifyStatedTotal(run(reply, cart));
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, true);
+});
+
+Deno.test("receipt format: Cali Fries — 'Total $10.98' extracted correctly", () => {
+  const cart = [{ name: "Cali Fries", quantity: 1, price_cents: 999 }];
+  const reply =
+    `Cali Fries                       $9.99\n` +
+    `Subtotal                         $9.99\n` +
+    `Service fee                      $0.99\n` +
+    `Total                           $10.98`;
+  const r = verifyStatedTotal(run(reply, cart));
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, true);
+});
+
+Deno.test("receipt format: wrong stated total on the Total line still FAILS (guard not weakened)", () => {
+  const cart = [{ name: "Cali Fries", quantity: 1, price_cents: 999 }];
+  const reply =
+    `Cali Fries                       $9.99\n` +
+    `Subtotal                         $9.99\n` +
+    `Service fee                      $0.99\n` +
+    `Total                           $99.99`;
+  const r = verifyStatedTotal(run(reply, cart));
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, false);
+});

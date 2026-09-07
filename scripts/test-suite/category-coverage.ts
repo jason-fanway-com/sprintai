@@ -71,6 +71,48 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
 }
 
+/**
+ * Natural, singular phrase to disambiguate an item by category in a customer
+ * message — e.g. "the House salad" vs "the House stromboli". Vito's real
+ * menu reuses bare names across categories ("House" is both a Salad and a
+ * Stromboli; "Buffalo Chicken" is both a Pizza and a Flatbread; "Buffalo
+ * Chicken Cheesesteak" is a Homemade Panini AND a Hot Sandwich) — ordering by
+ * the bare name alone is genuinely ambiguous on the real menu, not just to
+ * this harness, and the bot correctly asks a clarifying question the script
+ * doesn't anticipate (2026-09-07 investigation of category-coverage-salads /
+ * -flatbreads / -homemade-paninis: all three failed this way, not from a
+ * missing-required-option gap).
+ */
+const CATEGORY_ORDER_QUALIFIER: Record<string, string> = {
+  "Pizza": "pizza",
+  "Wings": "wings",
+  "Angus Burgers & Specialty": "burger",
+  "Cold Sandwiches": "cold sandwich",
+  "Hot Sandwiches": "hot sandwich",
+  "Homemade Paninis": "panini",
+  "Wraps": "wrap",
+  "Salads": "salad",
+  "Flatbreads": "flatbread",
+  "Stromboli": "stromboli",
+  "Appetizers": "appetizer",
+};
+
+/**
+ * True when another active item on the shop's menu, in a DIFFERENT category,
+ * shares (or is prefixed by) this item's exact name — e.g. "Buffalo Chicken"
+ * (Flatbreads) vs "Buffalo Chicken - Small (10")" (Pizza). A prefix match
+ * counts because that's exactly the pattern the bot's own disambiguation
+ * questions reveal it collides on.
+ */
+function isNameAmbiguousAcrossCategories(item: ActiveItemRow, allItems: ActiveItemRow[]): boolean {
+  const name = item.name.trim().toLowerCase();
+  return allItems.some((other) => {
+    if (other.id === item.id || other.category === item.category) return false;
+    const otherName = other.name.trim().toLowerCase();
+    return otherName === name || otherName.startsWith(`${name} `) || name.startsWith(`${otherName} `);
+  });
+}
+
 export async function buildCategoryCoverageCases(
   shopId: string,
   supabaseUrl: string,
@@ -149,8 +191,14 @@ export async function buildCategoryCoverageCases(
     const item = withRequired ?? itemsInCategory[0];
     const requiredGroups = groupsByItem.get(item.id) ?? [];
 
+    const ambiguous = isNameAmbiguousAcrossCategories(item, activeItems);
+    const qualifier = CATEGORY_ORDER_QUALIFIER[category];
+    const orderMessage = ambiguous && qualifier
+      ? `Hi, can I get the ${item.name} ${qualifier}?`
+      : `Hi, can I get a ${item.name}?`;
+
     const turns: Turn[] = [
-      { role: "customer", message: `Hi, can I get a ${item.name}?` },
+      { role: "customer", message: orderMessage },
     ];
 
     const answeredGroupNames: string[] = [];

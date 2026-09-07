@@ -153,11 +153,21 @@ function findQuotedTotal(text: string): { cents: number; raw: string } | null {
   const cleaned = text
     .replace(/\([^)]*service fee[^)]*\)/gi, "")
     .replace(/(?:\+\s*|includes?\s+)?\$0[.,]\d{2}\s*(?:service\s+)?fee/gi, "");
-  // Pattern 1: amount immediately BEFORE the word total — "$8.98 total", "$8.98 due"
-  let m = cleaned.match(/\$(\d+[.,]\d{2})\s*(?:total|due|to pay|owed?)/i);
+  // Pattern 1: amount immediately BEFORE the word total — "$8.98 total", "$8.98 due".
+  // [ \t]* (not \s*) so this can never cross a newline — a formatted receipt like
+  // "Service fee   $0.99\nTotal   $17.98" must NOT let "$0.99" match against the
+  // "Total" on the FOLLOWING line (2026-09-07: was matching that, returning 99
+  // cents instead of the real total).
+  let m = cleaned.match(/\$(\d+[.,]\d{2})[ \t]*(?:total|due|to pay|owed?)/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
-  // Pattern 2: "Subtotal: $X.XX ( + $0.99 service fee )" → add the fee back
-  m = cleaned.match(/(?:subtotal|items? total)[:\s]*\$(\d+[.,]\d{2})/i);
+  // Pattern 1b: label-then-amount receipt line — "Total    $17.98" on its own
+  // line. Anchored to the start of the line (after optional whitespace) so it
+  // can never match "Subtotal    $16.99" (which starts with "Sub", not "Total").
+  m = cleaned.match(/^[ \t]*total[ \t]*\$(\d+[.,]\d{2})[ \t]*$/im);
+  if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0].trim() };
+  // Pattern 2: "Subtotal: $X.XX ( + $0.99 service fee )" → add the fee back.
+  // [ \t:]* (not [:\s]*) so this can't cross a newline either.
+  m = cleaned.match(/(?:subtotal|items? total)[ \t:]*\$(\d+[.,]\d{2})/i);
   if (m) {
     const sub = Math.round(parseFloat(m[1].replace(",", "")) * 100);
     return { cents: sub + 99, raw: `subtotal ${m[0]} + $0.99 fee` };
@@ -171,10 +181,12 @@ function findQuotedTotal(text: string): { cents: number; raw: string } | null {
   //      disambiguation question or options list ("did you mean the Greek Salad
   //      ($10.99)?") is ~40 chars from any greeting keyword and is NOT a total.
   //   \btotal\b so it never matches inside "Subtotal" (handled above).
-  m = cleaned.match(/(?:\btotal\b|\bcomes? to\b|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)\D{0,15}\$?(\d+[.,]\d{2})/i);
+  //   [^\n\d]{0,15} (not \D{0,15}) so the gap can't cross a newline — \D
+  //   matches \n too, which would let this reach a price on a following line.
+  m = cleaned.match(/(?:\btotal\b|\bcomes? to\b|that'll be|that will be|you owe|grand total|order total|adds up to|comes out to)[^\n\d]{0,15}\$?(\d+[.,]\d{2})/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
-  // Pattern 4: Checkout link text with amount
-  m = cleaned.match(/(?:pay|charge|amount)[:\s]*\$(\d+[.,]\d{2})/i);
+  // Pattern 4: Checkout link text with amount. [ \t:]* so this can't cross a newline.
+  m = cleaned.match(/(?:pay|charge|amount)[ \t:]*\$(\d+[.,]\d{2})/i);
   if (m) return { cents: Math.round(parseFloat(m[1].replace(",", "")) * 100), raw: m[0] };
   return null;
 }
@@ -1283,6 +1295,14 @@ export function verifyRequiredOptionsCovered(
 
   const finalTurn = transcript[transcript.length - 1];
   const finalCart = (finalTurn?.cart as CartItemLike[] | undefined) ?? [];
+  // Only a case that actually reached checkout (or later) had a real chance to
+  // resolve every required group — a case whose last turn is still "greeting",
+  // "building", or "review" simply hasn't gotten there yet. Phase is undefined
+  // for fixture-based unit tests (no live bot phase to report); treat that the
+  // same as "reached checkout" so those fixtures keep their original strict
+  // behavior instead of being silently downgraded to incomplete.
+  const finalPhase = finalTurn?.phase;
+  const conversationIncomplete = finalPhase === "greeting" || finalPhase === "building" || finalPhase === "review";
   if (finalCart.length === 0) {
     if (expectNonEmptyFinalCart) {
       return {
@@ -1324,6 +1344,15 @@ export function verifyRequiredOptionsCovered(
   }
 
   if (violations.length > 0) {
+    if (conversationIncomplete) {
+      return {
+        id,
+        description,
+        passed: true,
+        detail: `INCOMPLETE (not a failure — conversation ended in phase "${finalPhase}" before reaching checkout): ${violations.join("; ")}`,
+        applied: false,
+      };
+    }
     return { id, description, passed: false, detail: violations.join("; "), applied: true };
   }
 
