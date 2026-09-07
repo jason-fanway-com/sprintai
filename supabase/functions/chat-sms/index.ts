@@ -5556,16 +5556,35 @@ Deno.serve(async (req: Request) => {
     // fee applies, persisted so it never repeats after that — and again at
     // checkout (separate code path below, unconditional on this flag).
     const feeAlreadyDisclosed = !!(guardCartRow as any)?.fee_disclosed_at;
-    // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
-    // that matters — the customer is being asked for their pickup name,
-    // which is the last step before checkout, regardless of whether GUARD 2
-    // forced that ask or the model asked on its own initiative (the common
-    // case; GUARD 2 is only a backstop). A count-and-total footer here is
-    // exactly the gap Luca's $37 double-charge exposed: he only caught it
-    // because he happened to read a number, not because the bot itemized
-    // anything. This replaces the plain footer with the full receipt only
-    // at this one moment; every other turn keeps the short footer as before.
-    if (!hasPickupName && isAskingForPickupName(reply)) {
+    // HARD GATE (2026-09-06, Jason — "the required-options gate is
+    // intermittent... put the check where the cart is finalized, not on the
+    // route the customer happened to take"): GUARD 2's re-ask only fires
+    // when impliesOrderConfirmation() matches the customer's exact wording
+    // (itself just fixed for "thats it" — see guard9-unconsented-affirmation.ts)
+    // — any FUTURE phrasing gap, or the model independently deciding to ask
+    // for the name on its own (the common path per the recap fix above),
+    // has the same reachability problem the recap had. This is the
+    // unconditional backstop: whatever produced this reply, if ANY cart
+    // line still has an unresolved required option, the reply can never be
+    // a name-ask — checkout cannot proceed while the recap it's about to
+    // show has a hole in it. Checked first, ahead of the recap logic below.
+    const anyPendingOptions = guardCart.some(i => ((i as CartItem).pending_options?.length ?? 0) > 0);
+    if (anyPendingOptions && isAskingForPickupName(reply)) {
+      const pendingForPrompt = guardCart
+        .filter(i => ((i as CartItem).pending_options?.length ?? 0) > 0)
+        .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! }));
+      console.warn(`[chat-sms] HARD GATE (name-ask with unresolved required options) tripped (conv=${conversation.id}). Overriding reply that asked for the name while options were still pending.`);
+      reply = renderMissingOptionsPrompt(pendingForPrompt);
+    } else if (!hasPickupName && isAskingForPickupName(reply)) {
+      // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
+      // that matters — the customer is being asked for their pickup name,
+      // which is the last step before checkout, regardless of whether GUARD 2
+      // forced that ask or the model asked on its own initiative (the common
+      // case; GUARD 2 is only a backstop). A count-and-total footer here is
+      // exactly the gap Luca's $37 double-charge exposed: he only caught it
+      // because he happened to read a number, not because the bot itemized
+      // anything. This replaces the plain footer with the full receipt only
+      // at this one moment; every other turn keeps the short footer as before.
       reply = `${reply}\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}`;
     } else {
       const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);

@@ -279,6 +279,28 @@ Deno.test("impliesOrderConfirmation (real fn): 'Looks good' is a bare affirmatio
   assert(impliesOrderConfirmation("Looks good"));
 });
 
+// QA (Jason, 2026-09-06, live 6-session test — the checkout-gate "coin
+// flip"): "thats it" (no apostrophe) silently missed this function's
+// alternation, so GUARD 2's deterministic pending-options re-ask never even
+// got a chance to fire on that turn — the whole checkout decision fell to
+// the model's own judgment, which is exactly why the same two words in
+// produced different outcomes across sessions. Fixed by making the
+// apostrophe optional, same pattern this function already used correctly
+// for "let's go"/"let's do it".
+Deno.test("impliesOrderConfirmation (real fn): 'thats it' (no apostrophe) is a bare affirmation", () => {
+  assert(impliesOrderConfirmation("thats it"));
+});
+
+Deno.test("impliesOrderConfirmation (real fn): 'thats all' (no apostrophe) is a bare affirmation", () => {
+  assert(impliesOrderConfirmation("thats all"));
+});
+
+Deno.test("impliesOrderConfirmation (real fn): apostrophized forms still work", () => {
+  assert(impliesOrderConfirmation("that's it"));
+  assert(impliesOrderConfirmation("that's all"));
+  assert(impliesOrderConfirmation("that is it"));
+});
+
 // ── Integration-shape regression: the EXACT bug QA found ───────────────────
 // Reproduces the real code's array-mutation shape, not cleanly-separated
 // fixtures: a `cartItemsSim` array that gets mutated IN PLACE the way

@@ -41,7 +41,14 @@ export interface Guard9CartLine {
 export function impliesOrderConfirmation(text: string): boolean {
   if (!text) return false;
   const norm = text.toLowerCase().trim();
-  return /\b(?:yes|yeah|yep|yup|confirm|sure|place (?:the |my |an )?order|check out|checkout|that[' ]s it|that is it|looks good|all good|go ahead|proceed|go for it|do it|send it|pay|ready|done|that[' ]s all|that is all|all set|i'?m ready|i'?m done|good to go|let'?s go|let'?s do it|place it|ring it up|finalize|submit)\b/i.test(norm) ||
+  // FIX (2026-09-06, Jason — live QA, the checkout-gate "coin flip"): "that's
+  // it"/"that's all" required the apostrophe (or a literal space) to match —
+  // "thats it" (no apostrophe, extremely common in real SMS) silently missed
+  // every alternation here, leaving that turn's whole checkout decision to
+  // the model's own judgment instead of this deterministic backstop. Same
+  // optional-apostrophe pattern this function already uses correctly for
+  // "let's go"/"let's do it" below.
+  return /\b(?:yes|yeah|yep|yup|confirm|sure|place (?:the |my |an )?order|check out|checkout|that'?s it|that is it|looks good|all good|go ahead|proceed|go for it|do it|send it|pay|ready|done|that'?s all|that is all|all set|i'?m ready|i'?m done|good to go|let'?s go|let'?s do it|place it|ring it up|finalize|submit)\b/i.test(norm) ||
     /^(?:ok|okay|k|kk|fine|perfect|great|awesome|excellent|fantastic|sounds good|good|yes please|do it|let's do this)[.!]?$/i.test(norm);
 }
 
