@@ -6,3 +6,16 @@
 - Open awaiting Jason: mtest named-removal patch (your call), conv-cancel-item 500
   stack trace (Dashboard logs → chat-sms, 12:53 UTC 2026-09-07, session 1a7bf06f).
 - Migration 114 (item 7): not yet applied to live DB, not part of item 1 deadline.
+
+[SPIKE — Slice/Zio's investigation, separate one-day budget, investigation only]
+2026-09-07 ~17:20 UTC — Not blocked. Zio's Pizza (Allentown) on Slice: CONFIRMED full
+option-group/modifier data is reachable via a real, stable, unauthenticated-to-user Slice
+API call. Investigation done, no adapter built. Reporting result now; will pick up Toast
+next if asked.
+
+[ITEM 2 — Normalizer, spec §11]
+2026-09-07 ~17:35 UTC — Not blocked. Normalizer (normalize.ts) + entity keys
+(menu-entity-key.ts) done, Melvin-verified (32/32 tests incl. 4 live tests against
+Vito's 224-row menu), committed 7fb4fd7, pushing now. Meets spec bar: pizza rows fold
+well under raw count, Gyro (Beef or Chicken) → slot, Chicken Caesar collides/qualifies
+across Salads/Wraps. Not yet imported by any caller (compiler/item 4 will wire it in).
