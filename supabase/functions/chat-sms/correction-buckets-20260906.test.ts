@@ -33,8 +33,11 @@ Deno.test("RED: old isCorrection treated a bare 'no thanks' as a correction", ()
 });
 
 // The NEW regexes now in index.ts (GREEN).
+// 2026-09-07: "forget it" added — same idiom family as "forget that", and
+// left ambiguous (asked, not guessed) for the same reason; see
+// correction-negative-close-20260907.test.ts for the live repro.
 const NEW_IS_AMBIGUOUS_BARE_DECLINE = (norm: string) =>
-  /^(never ?mind|forget that)$/i.test(norm);
+  /^(never ?mind|forget (?:it|that))$/i.test(norm);
 // Named-item removal now captured via namedRemoveMatch (expanded to cover
 // cancel the/my, get rid of the, scratch the in addition to original verbs).
 // The 4th isCorrection condition is now `capturedName !== null` rather than
@@ -111,7 +114,8 @@ for (const phrase of ["delete that", "cancel that", "get rid of it"]) {
 }
 
 // ── Bucket 3: AMBIGUOUS — must ask, not guess or silently delete ───────────
-const BUCKET_3_AMBIGUOUS = ["never mind", "nevermind", "forget that"];
+// "forget it" added 2026-09-07 — see correction-negative-close-20260907.test.ts.
+const BUCKET_3_AMBIGUOUS = ["never mind", "nevermind", "forget that", "forget it"];
 
 for (const phrase of BUCKET_3_AMBIGUOUS) {
   Deno.test(`GREEN bucket 3 (ambiguous): "${phrase}" is flagged for clarification, not correction`, () => {

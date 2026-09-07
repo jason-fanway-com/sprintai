@@ -4568,17 +4568,22 @@ Deno.serve(async (req: Request) => {
   {
     const norm = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // Bucket 3 (ambiguous, 2026-09-06 — "no thanks" deleted the only line):
-    // bare "never mind" / "forget that" with items already in the cart and no
-    // pending disambiguation question open. These two phrases are genuinely
-    // ambiguous — "I'm done" after "anything else?" or "don't add that" after
-    // a proposed item — but must NEVER be read as "delete something I already
-    // ordered" as a side effect of guessing wrong. Ask instead of guessing,
-    // and never hand this to the LLM either (it can guess wrong the same way).
+    // Bucket 3 (ambiguous, 2026-09-06 — "no thanks" deleted the only line;
+    // "forget it" added 2026-09-07 — same idiom family as "forget that",
+    // reproduced live wiping the WHOLE cart via the LLM, not just the last
+    // line, because it also disabled Guard P2's restore-safety-net below —
+    // see that guard's comment): bare "never mind" / "forget that" / "forget
+    // it" with items already in the cart and no pending disambiguation
+    // question open. These phrases are genuinely ambiguous — "I'm done"
+    // after "anything else?" or "don't add that" after a proposed item —
+    // but must NEVER be read as "delete something I already ordered" as a
+    // side effect of guessing wrong. Ask instead of guessing, and never hand
+    // this to the LLM either (it can guess wrong the same way — reproduced
+    // live: "forget it" alone made the model reply "Done - cart's cleared").
     // A named-item form ("forget the salad") is not covered here — see the
     // named-item regexes below and isPendingDisambiguationDeclined upstream.
     const isAmbiguousBareDecline = cartItems.length > 0 && !cart.pending_disambiguation &&
-      /^(never ?mind|forget that)$/i.test(norm);
+      /^(never ?mind|forget (?:it|that))$/i.test(norm);
     if (isAmbiguousBareDecline) {
       console.log(`[chat-sms] Ambiguous bare decline (conv=${conversation.id}): "${userMessage}" with ${cartItems.length} cart item(s), no pending question open. Asking instead of guessing.`);
       const reply = "Just to make sure — did you want to remove your last item, or are you all set and ready to checkout?";
@@ -4872,9 +4877,26 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Proof Guard P2 (2026-08-30): Cart must persist across turns ────
+  // FIX (2026-09-07, negative-close live bug ae7f3351): "never.?mind" and
+  // "forget it" used to count as an unambiguous cancel signal here, which
+  // means once the model itself decided to wipe the cart on one of those
+  // phrases, this guard treated the wipe as deliberate and did NOT restore
+  // it. But both phrases are the exact SAME idiom bucket 3 above already
+  // documents as genuinely ambiguous ("I'm done" vs. "cancel everything") —
+  // reproduced live: "nah forget it" with 2 real items wiped the cart to 0
+  // and the model replied "Cart's cleared!", and this guard's own
+  // isCancelSignal check let that wipe stand instead of restoring it,
+  // because "forget it" matched. Bare "never mind" / "forget it" are now
+  // intercepted before the LLM ever runs (bucket 3 above), but a compound
+  // message ("nah forget it, that's all") doesn't match that bare-phrase
+  // regex and still reaches the model — this guard is the backstop for
+  // that case, so it must not treat the same ambiguous words as
+  // authorization to skip restoring. Only unambiguous cancel language
+  // remains: cancel/reset/start over, and "forget the whole (thing)" /
+  // "forget everything" (a scope word makes those unambiguous).
   if (!checkoutUrl) {
     const userMsgLower = userMessage.toLowerCase();
-    const isCancelSignal = /cancel|reset|never.?mind|start.?over|forget (?:it|the whole|everything)/i.test(userMsgLower);
+    const isCancelSignal = /cancel|reset|start.?over|forget (?:the whole|everything)/i.test(userMsgLower);
     if (cartItems.length > 0 && guardCart.length === 0 && !isCancelSignal) {
       console.warn(`[chat-sms] PROOF-P2 tripped (conv=${conversation.id}): cart wiped from ${cartItems.length} items to 0 without cancel signal. Restoring.`);
       cart.cart_json = [...cartItems];
