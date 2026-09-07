@@ -295,3 +295,46 @@ Lesson for me: `git add <specific-file>` only stages that file, but `git commit`
 pathspec commits the ENTIRE index — on a shared repo with concurrent agents, that means
 checking `git status` for pre-existing staged files immediately before every commit, or using
 `git commit -- <path>` (pathspec form, commits only that path's changes, leaves rest staged).
+
+[PAUSED BY PRIORITY, NOT BLOCKED — 2026-09-07 priority recut]
+2026-09-07 ~13:25 EDT — Jason cut items 5/6/7/8 from today's scope to focus on 1/2/3/4 and
+the read-only compile run (9). Item 7 needs no further action here: it was already done,
+independently reviewed, committed (4109b69), and pushed before this recut — see the
+"ITEM 7" entry above. Wrapping up cleanly per the recut instruction and stopping.
+
+While wrapping up I found af7e17f (a different thread's commit, self-reported two entries
+above) had put item 4's unreviewed compile-menu.ts/compile-menu.test.ts/compile-menu/index.ts
+on origin/main — and my own docs-only push (94fee1e, adding the conversation-ready-menu
+design doc) carried af7e17f's content to origin along with it as its ancestor, without me
+noticing at push time. Separately, my own chat-sms E1 guard fix (39dcf69, "conv-cancel-item
+500 fix" above — Melvin verification was left in flight and never confirmed) also rode along
+on a later push for the same reason: pushing a commit publishes every ancestor, and on a
+shared branch with another thread committing in real time, "what's ahead of origin" and
+"what I personally just finished" had quietly diverged.
+
+Fixed both, non-destructively, once noticed:
+- 96d0d5c: `git rm --cached` on the 3 compile-menu files only (index/history, not the
+  working tree — that thread's session showed live unstaged edits to those exact files
+  at the time, so the on-disk files were left untouched to avoid clobbering in-progress
+  work). Un-publishes item 4 from origin/main; content fully recoverable at af7e17f for
+  that thread to re-land once its own Melvin pass confirms.
+- 20ff875: `git revert 39dcf69` (clean revert commit, not a reset/force-push) for the
+  chat-sms E1 guard fix + its regression test. This does roll the working-tree file back
+  to the pre-fix line, unlike the compile-menu case — that's fine here since this fix was
+  this session's own paused work, not another thread's live edit, and the fix is fully
+  intact in history at 39dcf69 (cherry-pick or un-revert to bring it back once Melvin
+  confirms).
+
+Net effect: origin/main now carries only independently-verified work (through item 3, plus
+item 7, plus the design doc). Nothing is lost — both reverted diffs are fully recoverable
+from their original commits. Local main is at 20ff875, equal to origin/main, no outstanding
+local WIP commits of mine. The compile-menu files sitting untracked-with-edits on disk right
+now belong to the other (item 4) thread; not touched further, not mine to commit.
+
+Flagging the root cause for whoever's coordinating threads: this repo's working directory
+and .git are shared live between concurrent agent sessions with no worktree isolation, so
+`git commit` (whole-index capture) and `git push <sha>:main` (whole-ancestor-chain publish)
+can each silently carry another thread's in-flight, unverified work along with your own.
+Worth considering per-thread git worktrees for concurrent sessions on this repo.
+
+Not blocked — paused by priority. Stopping on item 7 here until told to resume.
