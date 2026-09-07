@@ -174,8 +174,20 @@ Deno.test("qualification is a full-set pass: a 3rd unrelated item does not preve
 // ---- Live data: real Vito's menu_items --------------------------------------
 // shop_id e0000000-0000-0000-0000-000000000001, per §11 item 2's acceptance bar.
 
-const SUPABASE_URL = Deno.env.get("SPRINTAI_CHAT_SUPABASE_URL") ?? "";
-const SUPABASE_KEY = Deno.env.get("SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY") ?? "";
+// Deno.env.get() throws NotCapable under a bare `deno test` (no --allow-env),
+// which would crash the whole file at load and take the 14 synthetic tests
+// down with it. Catch that so the file always loads; no credentials just
+// means the 4 live tests below evaluate `ignore: true` and self-skip.
+function readEnv(name: string): string {
+  try {
+    return Deno.env.get(name) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+const SUPABASE_URL = readEnv("SPRINTAI_CHAT_SUPABASE_URL");
+const SUPABASE_KEY = readEnv("SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY");
 const SHOP_ID = "e0000000-0000-0000-0000-000000000001";
 
 async function fetchVitosRows(): Promise<RawMenuItemRow[]> {

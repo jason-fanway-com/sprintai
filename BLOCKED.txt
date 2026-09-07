@@ -19,3 +19,46 @@ next if asked.
 Vito's 224-row menu), committed 7fb4fd7, pushing now. Meets spec bar: pizza rows fold
 well under raw count, Gyro (Beef or Chicken) → slot, Chicken Caesar collides/qualifies
 across Salads/Wraps. Not yet imported by any caller (compiler/item 4 will wire it in).
+
+[ITEM 2 CORRECTION — the ~17:35 entry above was wrong, Jason caught it]
+2026-09-07 ~17:10 UTC — Not blocked, genuinely fixed now. The 4 live tests that
+prove the spec's acceptance bar were silently `ignore`d in the run behind the
+17:35 entry (env vars not sourced), and separately the file crashed on load
+under a bare `deno test` (Deno.env.get() at module top level, no --allow-env).
+Both fixed in normalize.test.ts: env reads wrapped in try/catch (module always
+loads; live tests self-skip with no creds, same pattern as the safety-gate-
+channel.test.ts fix) + confirmed `source ~/.openclaw/.secrets` alone doesn't
+export vars to a child process, needs `set -a; source ...; set +a`. Full run,
+0 ignored, 0 failed, real numbers (independently re-verified twice by Melvin
+after Melvin's own first pass had a bug — see below):
+- Pizza: 62 raw rows -> 22 distinct product_keys (well under raw, ~2.8x fold).
+- Gyro (Beef or Chicken): 2 rows (Salads, Sandwiches), each -> slot [Beef,
+  Chicken], display_name "Gyro Salad" / "Gyro Sandwich" after qualification.
+- Chicken Caesar: Salads row -> "Chicken Caesar Salad", Wraps row -> "Chicken
+  Caesar Wrap". Collided, qualified correctly.
+- Cross-category display_name collisions across all 224 normalized items: 0.
+Checked qa_ro (~/.sprintai-readonly-env) per Jason's suggestion before falling
+back to service-role: it does expose qa_ro.menus/menu_items with the needed
+columns, but only via a direct Postgres connection (DATABASE_URL/PG*), not a
+Supabase REST key — fetchVitosRows() uses supabase-js, which needs an
+anon/service-role API key, and qa_ro exposes none. Using it would mean
+rewriting fetchVitosRows() to a Postgres client, out of scope for this fix.
+Stuck with the service-role pattern already used in this file; noting why
+rather than silently defaulting to it.
+Melvin note: Melvin's first independent pass misreported pizza as 64/24 (off
+by 2 both counts) — traced to a category filter that wasn't exact-match and
+picked up 2 rows from "Pizza Finish (Buffalo Chicken)". Re-ran with a strict
+`category === "Pizza"` filter and reproduced 62/22, matching mine exactly.
+Recording this so "Melvin verified it" isn't taken as infallible without the
+same scrutiny applied to Melvin's own methodology, not just its conclusion.
+Committing normalize.test.ts fix now; still not imported by any caller (item 4
+compiler will wire it in) — deploy bar for item 2 stays "committed+pushed."
+
+[ITEM — conv-cancel-item 500 fix]
+2026-09-07 ~17:42 UTC — Not blocked. Root cause confirmed (Jason's find from real
+function_logs): index.ts E1 GUARD warn line referenced conversation.id, out of scope
+in runOrderingLoop. Fixed to use cartId (in-scope param). New regression test
+(e1-guard-crash-20260907.test.ts, 4/4 pass) + full chat-sms suite green (291/291,
+0 regressions). Melvin verification in flight (independent, adversarial). Will
+commit+push the instant Melvin confirms. Confirmed chat-sms-mtest has the identical
+bug, NOT touched (same standing "your call" bucket as the named-removal mtest patch).
