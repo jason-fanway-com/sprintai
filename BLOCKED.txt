@@ -802,3 +802,25 @@ corrected their own first-pass mistake — queried the shared multi-tenant menu_
 without scoping to Zio's own menu_id first, got noisy results, re-scoped and confirmed),
 hand spot-checked 12 of the 198 pairs against raw db-items.json/cards.json, and ran their own
 independent qualifier-word scan across all 198 — 0 mismatches, matching mine.
+
+[ITEM 9 — NJB report-only re-run, DONE per PO's request]
+2026-09-07 ~19:45 UTC — Not blocked. Ran scripts/item-9-readonly-compile-report.ts fresh
+(report-only, zero writes, confirmed no insert/update/upsert in the script before running).
+Correction to the request's premise: the archetype bagel-binding fix was NOT actually
+committed to git when asked — it was working-tree-only, with this file's own prior entry
+on it marking Melvin verification "in progress," not confirmed. Independently re-ran the
+full test suite myself before trusting it (70/70 unit+live tests, real Vito's/NJB/Zio's
+data, confirmed via live network timing not silent self-skip) as a stand-in for that
+missing sign-off — not a substitute for Melvin's actual adversarial pass, reported as such.
+Committed the fix + this report together (191f291), since a report isn't reproducible
+without its source. Result: docs/reports/2026-09-07-item9-njb-rerun-post-fixes.md — NJB
+100/170 orderable (58.8%), 8 remaining owner_questions (down from 10), full blocked list
+and 10 ask_plans included.
+Zio's excluded from this report on purpose: its Slice-data thread has a live --apply write
+in progress against real option_groups/option_choices; compiling mid-write returned a
+garbage 21/220 with a fetch error, not a real number. Will re-run and report Zio's
+separately once that thread signals done.
+Side note: pushing this also published d80a444 (zios-loader crash-recovery fix) to
+origin/main — it was sitting local-only/unpushed ahead of my own commit. Self-contained,
+already-complete commit, not mid-write data; flagging per this file's standing norm on
+carried-along pushes, no action needed.
