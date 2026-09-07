@@ -5,6 +5,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   findPendingOptionQuestion,
+  resolveAdditionalGroupSelections,
   resolvePendingOptionAnswer,
   type PendingOptionChoice,
 } from "./pending-option.ts";
@@ -78,4 +79,89 @@ Deno.test("findPendingOptionQuestion: ignores lines with no menu_item_id (bundle
   const menuById = new Map<string, { name: string; option_groups?: { name: string; choices: PendingOptionChoice[] }[] }>();
   const cart = [{ pending_options: ["Temp"] }];
   assertEquals(findPendingOptionQuestion(cart, menuById), null);
+});
+
+// BUG 4 (2026-09-07, Jason, Zio's live verification): "buffalo chicken pizza
+// with pepperoni" left Size pending and dropped Pepperoni entirely — real
+// Slice option data, Buffalo Chicken Pizza genuinely has an "Add Toppings"
+// group with Pepperoni at +$3.00. resolveAdditionalGroupSelections is the
+// deterministic backstop that finds a named choice from a group OTHER than
+// the one a caller is already resolving.
+const BUFFALO_CHICKEN_PIZZA = {
+  name: "Buffalo Chicken Pizza",
+  option_groups: [
+    { name: "Size", choices: [{ name: "Small", price_cents: 0 }, { name: "Large", price_cents: 500 }] },
+    { name: "Add Toppings", choices: [{ name: "Pepperoni", price_cents: 300 }, { name: "Mushroom", price_cents: 200 }] },
+  ],
+};
+
+Deno.test("resolveAdditionalGroupSelections: finds Pepperoni in 'buffalo chicken pizza with pepperoni' while Size is untouched", () => {
+  const result = resolveAdditionalGroupSelections(
+    "buffalo chicken pizza with pepperoni",
+    BUFFALO_CHICKEN_PIZZA,
+    new Set(),
+  );
+  assertEquals(result.length, 1);
+  assertEquals(result[0].group_name, "Add Toppings");
+  assertEquals(result[0].choice.name, "Pepperoni");
+  assertEquals(result[0].choice.price_cents, 300);
+});
+
+Deno.test("resolveAdditionalGroupSelections: excludeGroupName skips the group a caller is already resolving via another path", () => {
+  // "medium with pepperoni" resolving Size elsewhere — Size itself must not
+  // also be returned here even though 'medium' isn't one of these choices.
+  const result = resolveAdditionalGroupSelections(
+    "large with pepperoni",
+    BUFFALO_CHICKEN_PIZZA,
+    new Set(),
+    "Size",
+  );
+  assertEquals(result.length, 1);
+  assertEquals(result[0].group_name, "Add Toppings");
+  assertEquals(result[0].choice.name, "Pepperoni");
+});
+
+Deno.test("resolveAdditionalGroupSelections: skips groups already in alreadySelected", () => {
+  const result = resolveAdditionalGroupSelections(
+    "buffalo chicken pizza with pepperoni",
+    BUFFALO_CHICKEN_PIZZA,
+    new Set(["Add Toppings"]),
+  );
+  assertEquals(result.length, 0);
+});
+
+Deno.test("resolveAdditionalGroupSelections: no mention of any real choice returns empty", () => {
+  const result = resolveAdditionalGroupSelections(
+    "just the buffalo chicken pizza please",
+    BUFFALO_CHICKEN_PIZZA,
+    new Set(),
+  );
+  assertEquals(result.length, 0);
+});
+
+Deno.test("resolveAdditionalGroupSelections: item name words don't false-positive as a choice ('chicken' isn't a topping here)", () => {
+  const menuItem = {
+    name: "Chicken Caesar",
+    option_groups: [
+      { name: "Dressing", choices: [{ name: "Chicken", price_cents: 0 }, { name: "Caesar", price_cents: 0 }] },
+    ],
+  };
+  // "i want a chicken caesar salad" names the DISH, not the dressing choice —
+  // both choice names happen to be substrings of the item's own name.
+  const result = resolveAdditionalGroupSelections("i want a chicken caesar salad", menuItem, new Set());
+  assertEquals(result.length, 0);
+});
+
+Deno.test("resolveAdditionalGroupSelections: only one group per call, so naming two choices from the SAME group still returns just that group's single best match", () => {
+  // "pepperoni and mushroom" both name real choices in the same "Add
+  // Toppings" group — resolvePendingOptionAnswer requires ALL of a choice's
+  // stems to be present and returns null on a multi-way tie within one
+  // group, so the deterministic rule here is "resolve unambiguous groups,
+  // never guess within one" rather than silently picking the first mention.
+  const result = resolveAdditionalGroupSelections(
+    "buffalo chicken pizza with pepperoni and mushroom",
+    BUFFALO_CHICKEN_PIZZA,
+    new Set(),
+  );
+  assertEquals(result, []);
 });

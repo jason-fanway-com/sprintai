@@ -365,7 +365,7 @@ function computeBotState(
 // ============================================================
 // §6.2 lexicon generation — rules 1, 2, 3, 6 only (P0 scope, see header).
 // ============================================================
-function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
+function itemLexiconTerms(item: CompileItem, primaryTermOwners?: Map<string, string>): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
@@ -377,6 +377,13 @@ function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   // display_name was qualified with its trailing category noun ("Chicken
   // Caesar Salad"), also index the unqualified form ("Chicken Caesar") so a
   // customer who doesn't say the category word still resolves.
+  //
+  // Guard: skip this alias when the stripped form is already another item's
+  // OWN primary name (e.g. "Zio's Salad" stripping to "Zio's" would otherwise
+  // collide with a real, distinct entree literally named "Zio's"; "Shrimp
+  // Parmigiana Sub" stripping to "Shrimp Parmigiana" collides with the real
+  // Seafood entree of that name). A convenience alias must never shadow a
+  // genuine, differently-owned item — real data surfaced 4 such cases.
   if (item.category) {
     const noun = categoryNoun(item.category);
     if (noun) {
@@ -384,7 +391,11 @@ function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
       if (suffixRe.test(displayName)) {
         const stripped = displayName.replace(suffixRe, "").trim();
         if (stripped && stripped.toLowerCase() !== displayName.toLowerCase()) {
-          terms.push({ term: normaliseTerm(stripped), target_type: "item", target_id: item.id, provenance: "stated" });
+          const strippedTerm = normaliseTerm(stripped);
+          const owner = primaryTermOwners?.get(strippedTerm);
+          if (!owner || owner === item.id) {
+            terms.push({ term: strippedTerm, target_type: "item", target_id: item.id, provenance: "stated" });
+          }
         }
       }
     }
@@ -509,14 +520,19 @@ export function applyOverrides(
 // ============================================================
 // Per-item + whole-menu compile.
 // ============================================================
-export function compileItem(item: CompileItem, questions: PendingQuestion[], compiledAt: string): CompiledItem {
+export function compileItem(
+  item: CompileItem,
+  questions: PendingQuestion[],
+  compiledAt: string,
+  primaryTermOwners?: Map<string, string>,
+): CompiledItem {
   const { bot_state, bot_state_reason } = computeBotState(item, questions);
   return {
     item_id: item.id,
     bot_state,
     bot_state_reason,
     ask_plan: buildAskPlan(item, compiledAt),
-    lexicon_terms: itemLexiconTerms(item),
+    lexicon_terms: itemLexiconTerms(item, primaryTermOwners),
   };
 }
 
@@ -761,11 +777,20 @@ export function compileMenu(
   compiledAt: string,
   acknowledgedDisplayOnly: boolean,
 ): { items: CompiledItem[]; categoryLexicon: LexiconTerm[]; invariants: MenuInvariantResult[] } {
+  // Menu-wide map of each item's own Rule-1 (primary, unqualified) term to
+  // its id — lets itemLexiconTerms suppress a Rule-2 alias that would
+  // otherwise collide with a different item's real name (see itemLexiconTerms).
+  const primaryTermOwners = new Map<string, string>();
+  for (const i of items) {
+    const displayName = (i.display_name ?? i.name).trim();
+    if (displayName) primaryTermOwners.set(normaliseTerm(displayName), i.id);
+  }
+
   // Every item gets the FULL candidate list — findBlockingQuestion (inside
   // compileItem) does the scope matching per item (by item id, category, or
   // one of the item's own group/choice ids), so there is no need to
   // pre-partition questions by item here.
-  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt));
+  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, primaryTermOwners));
   const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
 
   const categories = new Set(items.map(i => i.category).filter((c): c is string => !!c));

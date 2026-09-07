@@ -6,6 +6,7 @@
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   categoryWordMatches,
+  displayGroupName,
   extractPriceCentsFromMessage,
   isPendingDisambiguationDeclined,
   matchOrdinalPosition,
@@ -141,4 +142,24 @@ Deno.test("renderDisambiguationReask: impossible by construction to repeat the i
   // immediately preceding one either.
   const third = renderDisambiguationReask(BLT_CANDIDATES, second);
   assertNotEquals(second, third);
+});
+
+// BUG 2 (2026-09-07, Jason, Zio's live verification, exact repro): "what
+// choose an option you'd like on the Buffalo Chicken Pizza" — a real Slice
+// import artifact leaking into a customer-facing reply.
+Deno.test("displayGroupName: 'Choose an option' (Zio's real live group name) is replaced", () => {
+  assertEquals(displayGroupName("Choose an option"), "option");
+});
+
+Deno.test("displayGroupName: case/whitespace-insensitive on the generic label", () => {
+  assertEquals(displayGroupName("  CHOOSE AN OPTION  "), "option");
+  assertEquals(displayGroupName("Select One"), "option");
+  assertEquals(displayGroupName("please select"), "option");
+});
+
+Deno.test("displayGroupName: a real, informative group name is returned unchanged", () => {
+  assertEquals(displayGroupName("Sauce"), "Sauce");
+  assertEquals(displayGroupName("Wing Flavor"), "Wing Flavor");
+  assertEquals(displayGroupName("Bread Type"), "Bread Type");
+  assertEquals(displayGroupName("Size"), "Size");
 });

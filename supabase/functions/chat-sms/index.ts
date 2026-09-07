@@ -21,6 +21,7 @@ import { stripInventedActions } from "./invented-action-guard.ts";
 import {
   categoryDisplayWord,
   categoryWordMatches,
+  displayGroupName,
   isPendingDisambiguationDeclined,
   resolveNamedCartRemoval,
   resolvePendingDisambiguation,
@@ -30,9 +31,11 @@ import {
 } from "./pending-disambiguation.ts";
 import {
   findPendingOptionQuestion,
+  resolveAdditionalGroupSelections,
   resolvePendingOptionAnswer,
 } from "./pending-option.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
+import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2087,9 +2090,15 @@ function isAskingForPickupName(text: string): boolean {
  */
 function renderMissingOptionsPrompt(items: Array<{ name: string; missingGroups: string[] }>): string {
   const clauses = items.map(item => {
-    const groups = item.missingGroups.length > 1
-      ? `${item.missingGroups.slice(0, -1).join(", ")} and ${item.missingGroups[item.missingGroups.length - 1]}`
-      : item.missingGroups[0];
+    // BUG 2 fix (2026-09-07): missingGroups holds the RAW group name as
+    // stored in pending_options (must stay raw there — it's matched by
+    // exact string elsewhere) but a Slice import artifact like "Choose an
+    // option" must never be read aloud to the customer. Sanitize only here,
+    // at render time.
+    const displayGroups = item.missingGroups.map(displayGroupName);
+    const groups = displayGroups.length > 1
+      ? `${displayGroups.slice(0, -1).join(", ")} and ${displayGroups[displayGroups.length - 1]}`
+      : displayGroups[0];
     return `what ${groups.toLowerCase()} you'd like on the ${item.name}`;
   });
   const joined = clauses.length > 1
@@ -4482,7 +4491,7 @@ Deno.serve(async (req: Request) => {
         const choiceClauses7c = pending7c
           .map(groupName => {
             const group = resolved7c.option_groups?.find(g => g.name === groupName);
-            return group && group.choices.length > 0 ? `Choices for ${group.name}: ${group.choices.map(c => c.name).join(", ")}.` : "";
+            return group && group.choices.length > 0 ? `Choices for ${displayGroupName(group.name)}: ${group.choices.map(c => c.name).join(", ")}.` : "";
           })
           .filter(Boolean)
           .join(" ");
@@ -4524,9 +4533,27 @@ Deno.serve(async (req: Request) => {
       const resolvedChoice = resolvePendingOptionAnswer(userMessage, pendingQuestion.choices);
       if (resolvedChoice) {
         const localCartItems = [...cart.cart_json];
+        // BUG 4 fix (2026-09-07): the answer to the pending required group
+        // ("medium") may name an ADDITIONAL real choice from a different,
+        // non-pending group in the same message ("medium with pepperoni") —
+        // scan the item's other groups for that too, so it lands in the SAME
+        // modify_item call instead of silently vanishing because only the
+        // one pending group was ever resolved here.
+        const pendingLine = (cart.cart_json as CartItem[]).find(i => i.menu_item_id === pendingQuestion.menu_item_id);
+        const pendingMenuItem = menuById.get(pendingQuestion.menu_item_id);
+        const additionalSelections = pendingMenuItem
+          ? resolveAdditionalGroupSelections(
+              userMessage,
+              pendingMenuItem,
+              new Set(Object.keys(pendingLine?.options ?? {})),
+              pendingQuestion.group_name,
+            )
+          : [];
+        const resolvedOptions: Record<string, string[]> = { [pendingQuestion.group_name]: [resolvedChoice.name] };
+        for (const sel of additionalSelections) resolvedOptions[sel.group_name] = [sel.choice.name];
         const modResult = await executeTool(
           "modify_item",
-          { menu_item_id: pendingQuestion.menu_item_id, options: { [pendingQuestion.group_name]: [resolvedChoice.name] } },
+          { menu_item_id: pendingQuestion.menu_item_id, options: resolvedOptions },
           localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
         );
         const feeAlreadyDisclosed = !!cart.fee_disclosed_at;
@@ -4537,11 +4564,17 @@ Deno.serve(async (req: Request) => {
         const footer = modResult.ok
           ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed)
           : "";
+        // Reply must name every choice actually applied this turn, not just
+        // the one group this block set out to resolve — otherwise it under-
+        // states what's on the order (BUG 4: additional named choices must
+        // never be applied silently, same "code decides what's true" rule
+        // as never claiming one that wasn't applied).
+        const appliedNames = [resolvedChoice.name, ...additionalSelections.map(s => s.choice.name)].join(", ");
         const reply = !modResult.ok
           ? "Sorry, I had trouble setting that — mind trying again?"
           : nextQuestion
-            ? `Got it — ${resolvedChoice.name}. For the ${nextQuestion.item_name}: what ${nextQuestion.group_name.toLowerCase()} — ${nextQuestion.choices.map(c => c.name).join(", ")}?${footer ? `\n\n${footer}` : ""}`
-            : `Got it — ${resolvedChoice.name} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`;
+            ? `Got it — ${appliedNames}. For the ${nextQuestion.item_name}: what ${displayGroupName(nextQuestion.group_name).toLowerCase()} — ${nextQuestion.choices.map(c => c.name).join(", ")}?${footer ? `\n\n${footer}` : ""}`
+            : `Got it — ${appliedNames} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`;
         if (modResult.ok && !feeAlreadyDisclosed) {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
         }
@@ -5293,6 +5326,123 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 11 (2026-09-07, Jason: BUG 4): named-but-unapplied optional
+  // choice on an item added this turn ──────────────────────────────────────
+  // Real, verified repro against live Slice option data (Zio's Buffalo
+  // Chicken Pizza genuinely has an "Add Toppings" group with Pepperoni at
+  // +$3.00): "buffalo chicken pizza with pepperoni" adds the item with Size
+  // left pending (a required group) — pepperoni never lands in `options`
+  // because add_item only ever resolves what the model explicitly passes in
+  // its own tool call, and the model's free-text reply sometimes claims it
+  // was applied ("I'll note pepperoni for the kitchen") without any tool
+  // call carrying it at all. A topping named in the SAME message as an item
+  // with another still-open required group must not be dropped just because
+  // that other group isn't resolved yet.
+  //
+  // Deterministic backstop: for any item added THIS turn that still has an
+  // open required group, scan its OTHER option groups for a choice the
+  // customer's own message unambiguously names and apply it now — reusing
+  // the exact same stem-overlap matcher the pending-answer resolver above
+  // uses (resolveAdditionalGroupSelections -> resolvePendingOptionAnswer),
+  // never a second, weaker matcher. Runs BEFORE GUARD 8 so a group resolved
+  // here is no longer "missing" by the time GUARD 8 decides what to enumerate.
+  {
+    const beforeIds11 = new Set(
+      cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => (i as CartItem).menu_item_id),
+    );
+    const addedThisTurn11 = guardCart.filter(
+      i => (i as CartItem).menu_item_id && !beforeIds11.has((i as CartItem).menu_item_id) && (i as CartItem).pending_options?.length,
+    ) as CartItem[];
+
+    let applied11 = false;
+    const appliedDesc11: string[] = [];
+    for (const added of addedThisTurn11) {
+      const menuItem = effectiveMenu.find(mi => mi.id === added.menu_item_id);
+      if (!menuItem) continue;
+      const alreadySelected = new Set(Object.keys(added.options ?? {}));
+      const additional = resolveAdditionalGroupSelections(userMessage, menuItem, alreadySelected);
+      for (const sel of additional) {
+        added.options = { ...(added.options ?? {}), [sel.group_name]: [sel.choice.name] };
+        added.price_cents += sel.choice.price_cents;
+        added.pending_options = (added.pending_options ?? []).filter(p => p !== sel.group_name);
+        if (added.pending_options.length === 0) added.pending_options = undefined;
+        appliedDesc11.push(`${menuItem.name}: ${sel.group_name}=${sel.choice.name}`);
+        applied11 = true;
+      }
+    }
+    if (applied11) {
+      console.warn(`[chat-sms] GUARD 11 (named-but-unapplied optional choice) tripped (conv=${conversation.id}). Applied: ${appliedDesc11.join(", ")}`);
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+    }
+  }
+
+  // ── Guard 12 (2026-09-07, Jason: BUG 4 hardening): reply confirms a choice
+  // that isn't actually in cart_json ────────────────────────────────────────
+  // Jason's own repro was worse than the pepperoni-drop GUARD 11 fixes: after
+  // the pending required group resolved, the bot flatly said "Small Buffalo
+  // Chicken Pizza with pepperoni - got it" with ZERO pepperoni charge. GUARD
+  // 11 above now applies any choice it CAN unambiguously resolve from the
+  // customer's own words — but a name that doesn't match a real choice
+  // unambiguously (hallucinated, misspelled, or genuinely ambiguous between
+  // two choices) is never applied, and the reply must not confirm it as if
+  // it were. Same "model phrases, code decides" principle as the
+  // hallucination guard: cart_json is the source of truth for what's on the
+  // order, never the model's sentence.
+  //
+  // Deliberately APPEND-ONLY, not a sentence-removal rewrite (the riskier
+  // approach invented-action-guard.ts uses elsewhere): surgically detecting
+  // "which sentence is the false claim" in free text is exactly the kind of
+  // fragile regex surgery that has cost real incidents in this file before.
+  // Appending an honest correction after whatever the model already said is
+  // strictly safer — the customer still ends up told the truth — and the ask
+  // is preserved via `unverified_requests` (the same existing mechanism
+  // add_item already uses for an unrecognized customer ask) so the shop
+  // still sees it on the ticket instead of it silently vanishing.
+  {
+    const beforeById12 = new Map(
+      cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => [(i as CartItem).menu_item_id, i as CartItem]),
+    );
+    const touchedThisTurn12 = guardCart.filter(i => {
+      const ci = i as CartItem;
+      if (!ci.menu_item_id) return false;
+      const before = beforeById12.get(ci.menu_item_id);
+      return !before || JSON.stringify(before.options ?? null) !== JSON.stringify(ci.options ?? null);
+    }) as CartItem[];
+
+    const flaggedAsks12: Array<{ item: CartItem; ask: string }> = [];
+    for (const ci of touchedThisTurn12) {
+      const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
+      if (!menuItem) continue;
+      const selectedNames = new Set(Object.values(ci.options ?? {}).flat().map(v => v.toLowerCase()));
+      const unselectedChoiceNames = (menuItem.option_groups ?? [])
+        .flatMap(g => g.choices.map(c => c.name))
+        .filter(name => !selectedNames.has(name.toLowerCase()));
+      if (unselectedChoiceNames.length === 0) continue;
+
+      let replyLower12 = reply.toLowerCase();
+      for (const w of menuItem.name.toLowerCase().split(/\s+/).filter(Boolean)) {
+        replyLower12 = replyLower12.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+      }
+      const claimsConfirmation12 = /\b(?:got it|note[ds]?|add(?:ed|ing)?|noting|i['’]ll)\b/i.test(replyLower12);
+      if (!claimsConfirmation12) continue;
+      for (const name of unselectedChoiceNames) {
+        const nameRe = new RegExp(`\\b${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+        if (nameRe.test(replyLower12)) flaggedAsks12.push({ item: ci, ask: name });
+      }
+    }
+
+    if (flaggedAsks12.length > 0) {
+      for (const { item, ask } of flaggedAsks12) {
+        const existing = item.unverified_requests ?? [];
+        if (!existing.includes(ask)) item.unverified_requests = [...existing, ask];
+      }
+      console.warn(`[chat-sms] GUARD 12 (confirmation claims unresolved choice) tripped (conv=${conversation.id}). Flagged: ${flaggedAsks12.map(f => `${f.item.name}:${f.ask}`).join(", ")}`);
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      const asksText = [...new Set(flaggedAsks12.map(f => f.ask))].join(", ");
+      reply = `${reply} Just to be clear — I couldn't confirm "${asksText}" as an option here, so it isn't priced or on the order yet; I've flagged it for the shop.`;
+    }
+  }
+
   // ── Guard 8: pending-options reply doesn't name the actual choices ──────
   // add_item is 100% ID-based and correctly stores pending_options + the full
   // choice list in effectiveMenu/the system prompt — but surfacing "what
@@ -5327,7 +5477,7 @@ Deno.serve(async (req: Request) => {
         if (!group || group.choices.length === 0) continue;
         const namesReplyMentions = group.choices.some(c => replyLower.includes(c.name.toLowerCase()));
         if (namesReplyMentions) continue;
-        missingClauses.push(`Choices for ${group.name}: ${group.choices.map(c => c.name).join(", ")}.`);
+        missingClauses.push(`Choices for ${displayGroupName(group.name)}: ${group.choices.map(c => c.name).join(", ")}.`);
       }
     }
     if (missingClauses.length > 0) {
@@ -5390,7 +5540,17 @@ Deno.serve(async (req: Request) => {
         if (JSON.stringify(beforeChosen ?? null) === JSON.stringify(chosen)) continue; // resolved on an earlier turn — already vetted then
         const defaultChoice = group.choices.find(c => c.is_default && c.price_cents === 0);
         if (defaultChoice && chosen.length === 1 && chosen[0] === defaultChoice.name) continue; // our own deterministic default-fill
-        if (chosen.some(v => msgLower10.includes(v.toLowerCase()))) continue; // genuinely customer-stated this turn
+        // BUG (2026-09-07, found while live-testing GUARD 11 against Zio's):
+        // this was a literal substring check against the FULL choice name
+        // ("large 18''"), which a customer never types verbatim ("large").
+        // GUARD 11 above resolves that correctly via the file's real
+        // stem-matcher (resolvePendingOptionAnswer) — then GUARD 10 here,
+        // running later, saw no literal "large 18''" substring, decided it
+        // was never customer-stated, and reverted GUARD 11's own correct
+        // resolution back to pending. Fixed by using the SAME matcher GUARD
+        // 11 (and the rest of this file) already relies on, instead of a
+        // second, weaker check.
+        if (chosen.some(v => resolvePendingOptionAnswer(msgLower10, [{ name: v, price_cents: 0 }]) !== null)) continue; // genuinely customer-stated this turn
         console.warn(`[chat-sms] GUARD 10 (unconsented option selection) tripped (conv=${conversation.id}). "${menuItem.name}" ${group.name}="${chosen.join(", ")}" was not named by the customer this turn and is not a recorded default; reverting to pending.`);
         const revertedCents = group.choices.filter(c => chosen.includes(c.name)).reduce((s, c) => s + c.price_cents, 0);
         delete options10[group.name];
@@ -5497,6 +5657,57 @@ Deno.serve(async (req: Request) => {
       reply = guardCart.length > 0
         ? "Got it! Anything else, or are you all set?"
         : "Your cart is empty. What would you like to order?";
+    }
+  }
+
+  // ── Guard 13 (2026-09-07, Jason: quantity-doubling on an unrelated reply
+  // while a required option is still pending) ──────────────────────────────
+  // CONFIRMED live against Zio's (session zios-bug3-repro-6-512ad83d...):
+  // turn 1 "large buffalo chicken pizza" -> cart qty=1, $19.99; turn 2
+  // "pickup" (a single, non-retried message, nothing to do with the pizza or
+  // its options) -> cart qty=2, $19.99. Root cause: the system prompt tells
+  // the model to call add_item immediately for an item with a pending
+  // required option (correct, turn 1), but nothing forbids the model from
+  // reaching for add_item AGAIN on a LATER, unrelated turn while that option
+  // is still open. add_item's own phantom-add guard only engages when the
+  // repeat call carries new `options` resolving the pending group — a repeat
+  // call with NO options falls to the plain existing-line match (same
+  // menu_item_id, options both undefined) and stacks quantity, exactly like
+  // a genuine "add another one" would.
+  //
+  // Distinct from GUARD 9 above: GUARD 9 only evaluates on a BARE
+  // AFFIRMATION (impliesOrderConfirmation — "yes", "looks good", ...); this
+  // bug's trigger ("pickup") is not an affirmation at all, so GUARD 9 never
+  // sees it. Deterministic backstop, mirroring GUARD 9's own before/after
+  // diff shape: any line that (a) already had an open required option
+  // BEFORE this turn, (b) grew in quantity this turn, (c) has IDENTICAL
+  // options before and after (nothing was actually resolved), and (d) was
+  // never named in the customer's own message this turn (so a genuine
+  // "another one, please" — which DOES name the item — is never reverted)
+  // is unconsented growth; revert the quantity to what it was before this
+  // turn's tool loop ran.
+  {
+    const menuItemNames13 = buildMenuItemNames(effectiveMenu);
+    const namedThisTurn13 = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuItemNames13,
+    );
+    const isNamedThisTurn13 = (itemName: string): boolean => {
+      const itemLower = itemName.toLowerCase();
+      return [...namedThisTurn13].some(n => {
+        const n2 = n.toLowerCase();
+        return n2.includes(itemLower) || itemLower.includes(n2);
+      });
+    };
+
+    const guard13Reverts = computeGuard13(cartSnapshotBeforeTurn, guardCart, isNamedThisTurn13);
+    if (guard13Reverts.length > 0) {
+      const revertedDesc13 = guard13Reverts.map(({ item, priorQty }) => `${(item as CartItem).name} qty ${(item as CartItem).quantity} -> ${priorQty}`).join(", ");
+      console.warn(`[chat-sms] GUARD 13 (unconsented quantity growth on pending item) tripped (conv=${conversation.id}). Message "${userMessage}" never named the item(s); reverted: ${revertedDesc13}`);
+      for (const { item, priorQty } of guard13Reverts) {
+        (item as CartItem).quantity = priorQty;
+      }
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
     }
   }
 

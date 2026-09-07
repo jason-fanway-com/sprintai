@@ -82,6 +82,35 @@ export function categoryDisplayWord(category: string | null | undefined): string
   return w;
 }
 
+// BUG 2 (2026-09-07, Jason, Zio's live verification): "what choose an
+// option you'd like on the Buffalo Chicken Pizza" — Slice's import leaves
+// several option groups with a generic, meaningless label ("Choose an
+// option", confirmed live on Zio's real size groups for both the Buffalo
+// Chicken Pizza and the Chicken Cheesesteak Sub) instead of a real name like
+// "Size". That label is an internal import artifact, not something a
+// customer should ever be read aloud — same category of leak
+// categoryDisplayWord already guards against for raw DB category strings.
+// Deliberately conservative: a genuinely GOOD imported group name ("Sauce",
+// "Wing Flavor", "Dressing") is returned unchanged. Only a name matching a
+// known generic/boilerplate label is replaced, with the plain, ungrammatical-
+// nowhere fallback "option" ("what option you'd like on the X" reads fine;
+// "what choose an option you'd like" does not). This does not attempt to
+// infer a smarter label (e.g. "size") from the group's choices — that's the
+// conversation-ready-menu compiler's job (item 4/9, display_name column,
+// not yet populated for Zio's) once it has actually run; this is the
+// zero-dependency stopgap that stops the raw internal string from leaking
+// today, independent of whether/when that compiler runs.
+const GENERIC_OPTION_GROUP_LABELS = new Set([
+  "choose an option", "choose one option", "select an option", "select one",
+  "select one option", "please select", "please choose", "please select one",
+  "options", "option", "choose one", "make a selection", "make your selection",
+]);
+
+export function displayGroupName(groupName: string): string {
+  const norm = groupName.trim().toLowerCase();
+  return GENERIC_OPTION_GROUP_LABELS.has(norm) ? "option" : groupName;
+}
+
 // DEFECT 2 (2026-09-06 live QA): "forget the salad" was reaching
 // resolvePendingDisambiguation's category-word check unfiltered — "salad"
 // stem-matched the Salads candidate and got added, exactly the opposite of

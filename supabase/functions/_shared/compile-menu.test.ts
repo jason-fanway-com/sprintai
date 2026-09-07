@@ -244,6 +244,56 @@ Deno.test("lexicon rule 2: category-qualified display_name also indexes the unqu
   assert(terms.some(t => t.term === "chicken caesar"));
 });
 
+Deno.test("lexicon rule 2 guard: a stripped alias is dropped when it collides with a different item's own real name (real Zio's/NJB gap)", () => {
+  // Real gap found via item 9's invariant 4 report: "Zio's Salad" stripping
+  // "Salad" collides with a genuine, distinct entree literally named "Zio's";
+  // "Shrimp Parmigiana Sub" stripping "Sub" collides with the Seafood entree
+  // "Shrimp Parmigiana". Passing compileItem the owner map directly here
+  // (compileMenu's own wiring is covered by the end-to-end test below).
+  const entree = item({ display_name: "Zio's", category: "Chicken or Veal" });
+  const salad = item({ display_name: "Zio's Salad", category: "Salads" });
+  const owners = new Map([["zios", entree.id]]);
+  const entreeTerms = compileItem(entree, [], "t", owners).lexicon_terms;
+  const saladTerms = compileItem(salad, [], "t", owners).lexicon_terms;
+  assert(entreeTerms.some(t => t.term === "zios" && t.target_id === entree.id));
+  assert(!saladTerms.some(t => t.term === "zios"), "alias 'zios' must not be generated for a different item");
+  assert(saladTerms.some(t => t.term === "zios salad"), "the item's own rule-1 term must still be generated");
+});
+
+Deno.test("lexicon rule 2 guard: an alias is still generated when nothing else owns the stripped term", () => {
+  const it = item({ display_name: "Chicken Caesar Salad", category: "Salads" });
+  const owners = new Map<string, string>(); // no collision registered
+  const terms = compileItem(it, [], "t", owners).lexicon_terms;
+  assert(terms.some(t => t.term === "chicken caesar"));
+});
+
+Deno.test("compileMenu end-to-end: the Zio's/Shrimp Parmigiana/Eggplant Parmigiana collisions resolve and both items keep a unique term", () => {
+  const entree = item({ display_name: "Zio's", category: "Chicken or Veal" });
+  const salad = item({ display_name: "Zio's Salad", category: "Salads" });
+  const panini = item({ display_name: "Zio's Panini", category: "Paninis" });
+  const seafood = item({ display_name: "Shrimp Parmigiana", category: "Seafood" });
+  const sub = item({ display_name: "Shrimp Parmigiana Sub", category: "Hot Subs" });
+  const { items: compiled } = compileMenu([entree, salad, panini, seafood, sub], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const entreeHasUniqueZios = byId.get(entree.id)!.lexicon_terms.some(t => t.term === "zios");
+  const saladHasZios = byId.get(salad.id)!.lexicon_terms.some(t => t.term === "zios");
+  const paniniHasZios = byId.get(panini.id)!.lexicon_terms.some(t => t.term === "zios");
+  assert(entreeHasUniqueZios);
+  assert(!saladHasZios);
+  assert(!paniniHasZios);
+
+  const seafoodHasUniqueTerm = byId.get(seafood.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana");
+  const subHasShrimpParmigiana = byId.get(sub.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana");
+  assert(seafoodHasUniqueTerm);
+  assert(!subHasShrimpParmigiana);
+
+  // Invariant 4 must now pass for both real-menu-shaped entrees (all 5 items
+  // orderable here since none has any option groups to block on).
+  const inv4 = compileMenu([entree, salad, panini, seafood, sub], [], "t", false).invariants.find(i => i.invariant === 4)!;
+  assert(inv4.pass, `invariant 4 should pass, violations: ${inv4.violations.join(", ")}`);
+});
+
 Deno.test("lexicon rule 3: category noun singular + plural -> category target", () => {
   const terms = categoryLexiconTerms("Salads");
   assertEquals(terms.map(t => t.term).sort(), ["salad", "salads"]);

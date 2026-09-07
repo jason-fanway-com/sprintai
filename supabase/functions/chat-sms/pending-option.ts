@@ -129,3 +129,52 @@ export function findPendingOptionQuestion(
   }
   return null;
 }
+
+export interface ResolvedGroupSelection {
+  group_name: string;
+  choice: PendingOptionChoice;
+}
+
+/**
+ * BUG 4 fix (2026-09-07, Jason: "a topping named in the same turn as an
+ * unresolved required slot gets dropped rather than deferred"). Real repro:
+ * "buffalo chicken pizza with pepperoni" adds the item with Size left
+ * pending (a required group) — pepperoni (a real, non-required "Add
+ * Toppings" choice) never lands in `options` because add_item/modify_item
+ * each only resolve the one group a caller explicitly names. A customer who
+ * names an additional real choice in the SAME message must not have it
+ * silently vanish just because another group on the same item is still
+ * open.
+ *
+ * Scans every group on the item other than `excludeGroupName` (a group a
+ * caller is already resolving through a separate path, so it is not matched
+ * twice here) and other than any group name in `alreadySelected`, and
+ * returns any additional group/choice pairs the message unambiguously
+ * names — reusing resolvePendingOptionAnswer's own stem-overlap +
+ * maximal-specificity matching per group, never a second, weaker matcher.
+ * Strips the item's own name first (same trap GUARD 8/GUARD 10 in index.ts
+ * already guard against: "Buffalo Chicken Pizza" must not read as naming a
+ * "Chicken" choice just because the word appears in the item name).
+ */
+export function resolveAdditionalGroupSelections(
+  message: string,
+  menuItem: { name: string; option_groups?: ReadonlyArray<{ name: string; choices: PendingOptionChoice[] }> },
+  alreadySelected: ReadonlySet<string>,
+  excludeGroupName?: string,
+): ResolvedGroupSelection[] {
+  const itemNameWords = menuItem.name.toLowerCase().split(/\s+/).filter(Boolean);
+  let strippedMessage = message;
+  for (const w of itemNameWords) {
+    strippedMessage = strippedMessage.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ");
+  }
+
+  const resolved: ResolvedGroupSelection[] = [];
+  for (const group of menuItem.option_groups ?? []) {
+    if (group.name === excludeGroupName) continue;
+    if (alreadySelected.has(group.name)) continue;
+    if (group.choices.length === 0) continue;
+    const choice = resolvePendingOptionAnswer(strippedMessage, group.choices);
+    if (choice) resolved.push({ group_name: group.name, choice });
+  }
+  return resolved;
+}

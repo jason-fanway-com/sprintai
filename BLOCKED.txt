@@ -919,3 +919,195 @@ remaining-blocked items have zero option_groups rows, not a bug. Verdict: "does 
 what it claims, safely... no discrepancies found."
 
 Report: docs/reports/2026-09-07-item9-zios-stated-provenance-gate.md
+
+[Zio's live verification — 5 scenarios, 2026-09-07 ~18:00 UTC]
+STOP-class finding on Scenario 4 (cheese burger — should be BLOCKED item):
+  Bot added it to cart at $10.99 without any block or honesty message.
+  This is the honesty failure Jason specifically flagged as most important.
+  NOT a harness issue — real product behavior. REPORTING, not fixing without sign-off.
+
+Scenario 1 (large buffalo chicken pizza):
+  Bot: "Got the Buffalo Chicken Pizza added! I don't have the options list for this one though
+  - what option were you looking for? And is this for pickup or delivery?  1 item - $20.98
+  total (subtotal $19.99 + $0.99 service fee)"
+  Cart: Buffalo Chicken Pizza qty=1 price=1999¢ opts={}
+  ISSUE: Did not apply the $5.00 Large delta ($24.99 expected before fee). Admitted it lacks
+  option data but added at base price $19.99 anyway instead of blocking.
+
+Scenario 2 (buffalo chicken pizza with pepperoni):
+  Bot: "Added the Buffalo Chicken Pizza! I wasn't able to add pepperoni as a topping - it
+  doesn't look like that option is available on this one. Also, this pizza has a required
+  choice I don't have the options for - do you know what you'd like for that?"
+  Cart: Buffalo Chicken Pizza qty=1 price=1999¢ opts={}
+  PARTIAL: Correctly declined pepperoni (not on menu). But still added at base $19.99
+  without size/required option, admitted lack of data without blocking.
+
+Scenario 3 (chicken cheesesteak sub → large):
+  Turn 1: Added at $10.99, admitted no option list.
+  Turn 2: "large" → applied option label "Choose an option: Large" but price stayed 1099¢.
+  ISSUE: Large should be $18.99 ($8.00 delta). Price delta not applied.
+
+Scenario 4 (cheese burger — CRITICAL):
+  Bot: "Got it - one Cheese Burger added. Are you ordering pickup or delivery today?
+  1 item - $11.98 total (subtotal $10.99 + $0.99 service fee)"
+  Cart: Cheese Burger qty=1 price=1099¢
+  FAIL — honesty rule violated. Blocked item added without any honest-decline message.
+
+Scenario 5 (full order — pizza + sub + cannoli → thats it):
+  All 3 items added at base prices (no size/option deltas applied).
+  "thats it" → bot refused to proceed: "I still need to know what choose an option you'd
+  like on the Buffalo Chicken Pizza, the Chicken Cheesesteak Sub, and the Cannoli."
+  (The phrase "choose an option" leaked as literal text — option group label exposed raw.)
+  Cart stayed at 3 items, no checkout reached.
+
+PROOF RUN (143 cases): 141/143 pass (up from 102/139 on first run).
+  Failure 1: menu-single-517 hallucination-guard — "This'll be" captured as item name
+    ("Spicy Crispy Chicken with crab fries - got it! This'll be for pickup."). New pattern
+    in gotPat matching "This'll be" as a claimed item. Harness bug candidate — needs
+    transcript read to confirm. NOT auto-fixing per scope freeze.
+  Failure 2: conv-named-remove-ambiguous — turn 3 is a name/question ("1...") but cart
+    shrunk from 2 to 1 items. The ambiguous-named-remove case may have a real product
+    behavior mismatch or a conversational simulator quirk. Needs transcript investigation.
+    NOT auto-fixing.
+
+E1 guard 500 fix: committed 1c8b29b (regression test), fix itself in 2671f2c.
+  chat-sms-mtest still has the unfixed version — awaiting your call.
+
+[URGENT — Bug 3 CONFIRMED, quantity doubling, direct overcharge risk]
+2026-09-07 — Reproduced independently. Session zios-bug3-repro-6-512ad83d-3be0-48d5-bc50-316e058a8d6e:
+  turn 1 "large buffalo chicken pizza" -> cart: qty=1, price_cents=1999
+  turn 2 "pickup" (single message, no duplicate/retry) -> cart: qty=2, price_cents=1999 (same unit price)
+Reproduced on 1 of 5 total pickup/delivery-answer attempts against Zio's (attempts 1-3
+with "pickup" and attempt 5 with "delivery" did NOT double; attempt 6 doubled on the
+FIRST send of "pickup", no retry involved). Intermittent, not deterministic — but real,
+and it silently doubles the charge for the customer if it reaches checkout. THIS IS THE
+MOST SEVERE OF THE 3 ZIO'S BUGS. Investigating root cause now (matches the shape of the
+2026-09-06 P0 cart-doubling class). NOT auto-fixing product code without sign-off — will
+report root cause the moment I have it, separately from bugs 1/2 and the 5-scenario suite.
+
+[URGENT — Bug 3 ROOT CAUSE FOUND, still NOT fixed, awaiting sign-off]
+Root cause (confirmed by code review, supabase/functions/chat-sms/index.ts):
+  1. Line 748 (system prompt) tells the LLM: when adding an item with a pending
+     required option, "call add_item IMMEDIATELY... The item is already in the
+     cart at its base price." This is correct for the FIRST turn.
+  2. Nothing in the prompt forbids the LLM from calling add_item AGAIN on a LATER
+     turn for the same item while its required option is still pending — even
+     when the customer's message (e.g. "pickup") has nothing to do with the item
+     or its options.
+  3. executeTool's add_item merge logic (~line 940-970): the "PHANTOM-ADD GUARD"
+     (2026-09-06 fix, comment ~line 921) only engages when the incoming add_item
+     call carries actual `options` resolving the pending group. When the LLM's
+     redundant add_item call carries NO options (as happens when the customer's
+     message is just "pickup"), it falls to the plain "existing" match: same
+     menu_item_id + JSON.stringify(options) both undefined -> MATCH -> quantity
+     += 1. This is legitimate merge behavior for a genuine "add another one" but
+     is wrongly triggered here by an LLM re-confirmation call that was never a
+     real second order.
+  This is a gap adjacent to, but distinct from, the 2026-09-06 GUARD 9 incident
+  (that one was bare-affirmation-triggered from a stale upsell offer in history;
+  this one is triggered by the model re-issuing add_item on an UNRELATED
+  pickup/delivery answer while an option is still pending). Reproduces roughly
+  1 in 4-5 times in my testing — nondeterministic because it depends on whether
+  the LLM chooses to reissue add_item that turn.
+NOT fixed — this is real production code on the money path, same rigor as every
+other item today. Needs your sign-off on approach:
+  (a) prompt fix: explicitly forbid add_item for an item already in cart with
+      open pending_options unless the customer's CURRENT message requests
+      another unit — cheap, but same class of fix that already regressed once
+      (LLM prompt-only fixes are the weaker lever per earlier session guidance).
+  (b) deterministic guard (preferred, matches GUARD 9's precedent): before
+      running the tool loop, snapshot cart; after, if any line's quantity grew
+      via an add_item call carrying no new options AND the item already had
+      pending_options AND the current user message doesn't request another
+      unit of it, revert the increment (mirror GUARD 9's before/after diff
+      approach, using cartSnapshotBeforeTurn, not the mutated cartItems).
+Awaiting your call on (a)/(b) before touching this file again.
+
+[Zio's — final report: bugs 1/2 confirmed, blocked-item gating not wired yet]
+Bug 1 CONFIRMED, every scenario: named size ("large", "medium") is never resolved to
+a price delta or even accepted as an option value. Bot always replies "I'm not sure
+what options are available... what were you thinking for X" even after the customer
+states the exact size in plain English. cart price stays at base ($19.99/$10.99) with
+pending_options=["Choose an option"] forever. Root cause is the general one flagged
+under bug 2: the item's option group is literally named "Choose an option" (Slice's
+generic label) with real choices (size tiers) behind it, and there's no deterministic
+resolver matching customer text ("large"/"medium") against those choices at add time —
+it's left entirely to the LLM, which cannot see the actual choice list because the
+option-group NAME gives it nothing to go on and the prompt only says "ask casually."
+
+Bug 2 CONFIRMED, byte-identical to your repro: "what choose an option you'd like on
+the X" leaks Slice's raw generic group name to the customer in every transcript
+(scenarios A, D here; 1, 2, 3, 5 from the earlier run). Affects ~92/220 Zio's items
+per your estimate.
+
+NEW FINDING — "genuinely blocked" items are not actually blocked on the live bot at
+all right now, for ANY item, ANY shop: buildEffectiveMenu() (index.ts ~line 381-405)
+does not SELECT or reference bot_state anywhere — grep confirms zero references to
+bot_state in chat-sms/index.ts. The item-1 migration added the column (default
+'blocked') but nothing in the live order-taking path reads it yet; that wiring is
+explicitly scoped to item 4 (compiler)/item 9 per the spec, both still in progress by
+other threads per BLOCKED.txt above. Result: "double burger" and "cheese burger" were
+added to cart identically to every other under-specified item (base price + generic
+pending-option apology) — there is currently no "decline honestly, this one's not
+orderable" path in the live bot for ANYTHING. This is not a regression I introduced
+and not new scope for me — flagging so it's not mistaken for a 4th new bug distinct
+from bugs 1/2, and so whoever owns item 9's wiring knows the live gate is a hard zero
+today, not "mostly working."
+
+Full transcripts (Test A pepperoni, B medium/large, C double burger, D multi-item) are
+in this session's raw output — available on request, not pasted here to keep this file
+scannable.
+
+STATUS: bugs 1, 2, 3 all confirmed real, all on product code (chat-sms/index.ts +
+Slice-menu compiler), NONE fixed — awaiting your sign-off on approach per the bug 3
+note above. Bug 3 (doubling) is the only one that's an active overcharge risk; bugs 1/2
+are a bad-but-safe experience (wrong price undercounted in customer's favor, never
+overcharges, and required-options gate correctly blocks checkout so no wrong charge
+reaches Stripe). Blocked-item gating gap is a missing feature, not a regression.
+
+[BUG 3 (bot_state gating) — STOP before wiring, found a landmine, need a call]
+2026-09-07 ~21:04 UTC — Blocked pending your decision on BUG 3 specifically (BUG 4,
+bugs 1/2, and the quantity-doubling guard are NOT blocked — proceeding on those now).
+
+Queried the live DB directly (service role, both shops) before writing any code, per
+the pre-mortem habit. Finding: bot_state = 'blocked' for 100% of active menu_items at
+BOTH shops right now — 221/221 at Vito's, 220/220 at Zio's. Not a computed signal: for
+every sampled row (including Double Burger) ask_plan and bot_state_reason are BOTH
+null, which only happens pre-compile — the write-back half of the compiler
+(compile-menu/index.ts, item 4, deployed) has never actually been invoked against
+either shop's live menu. Item 9's report is read-only by design and doesn't call it.
+So bot_state today carries zero real signal for any item at either shop — it's just
+the column's untouched default, not "the compiler looked and said no."
+
+Why this matters: wiring add_item to refuse on bot_state='blocked', exactly as
+specified, would refuse EVERY item at BOTH shops the moment it's deployed — including
+Vito's, which is explicitly not supposed to be touched at all. This isn't a
+Double-Burger-specific fix yet; it would be an outage of the live canary on deploy.
+
+Also relevant: another thread is actively mid-edit on compile-menu.ts /
+compile-menu.test.ts in this same working tree right now (uncommitted, untracked
+docs/reports/2026-09-07-item9-invariant4-lexicon-fix.md) — I'm leaving that alone per
+standing rule, but it means I shouldn't be the one to unilaterally invoke the
+write-back compiler against Zio's either; that's the same subsystem they're actively
+changing, and running it mid-edit risks stale logic or a race with their own planned
+invocation.
+
+What I need from you: sign-off on one of —
+  (a) someone (that other thread, most likely, since they own the compiler right now)
+      runs compile-menu's real write-back against Zio's ONLY, we verify Double Burger
+      lands on a real, correct bot_state, then I wire + deploy the add_item gate
+      scoped so it only applies to menus that have actually been compiled (I'll detect
+      that via "does any item on this menu have non-null ask_plan" so an uncompiled
+      menu — i.e. Vito's, today — behaves exactly as it does now, zero change); or
+  (b) same as (a) but explicitly deferred until Vito's is compiled too, so the gate
+      applies everywhere at once instead of being Zio's-only for a while; or
+  (c) you tell me to hold BUG 3 entirely until item 8/9's sequencing work lands
+      naturally, and I just report this finding without shipping a gate at all.
+
+Not acting on any of these unilaterally — this is exactly the kind of first-time,
+production-wide behavior change the standing rules ask me to flag rather than guess.
+
+Meanwhile: continuing on BUG 4 (topping deferred-apply + confirmation hardening),
+Zio's bugs 1/2 (size resolution + generic option-label leak), and the quantity-
+doubling guard — none of those depend on bot_state and none touch Vito's differently
+than they do now.
