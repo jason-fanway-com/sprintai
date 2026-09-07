@@ -13,6 +13,36 @@ option-group/modifier data is reachable via a real, stable, unauthenticated-to-u
 API call. Investigation done, no adapter built. Reporting result now; will pick up Toast
 next if asked.
 
+[SPIKE CORRECTION — the ~17:20 entry above mischaracterized the call, Jason caught it]
+2026-09-07 ~18:10 UTC — Not blocked, correction only. Jason verified himself: the Slice
+product-types call is NOT unauthenticated. `GET .../menus/{shopId}/product-types` without
+the x-api-key header returns `403 {"message":"Forbidden","type":"INVALID_API_KEY"}`. The
+~17:20 phrase "unauthenticated-to-user" was true of the human visitor's experience (no
+login, no visible auth step) but false of the actual HTTP request, which does require a key
+— the page's own JS bundle just supplies it automatically. That distinction matters for
+what we're allowed to build: see the HARD RULE below.
+HARD RULE, no exceptions, per Jason directly: do NOT extract Slice's client API key from
+their JS bundle and reuse it programmatically. No code, no prototype, not even offered as
+an option in a report. Materially different from reading a rendered public page. If this
+ever becomes the plan, Jason makes that call explicitly and in writing first.
+Superseded by the build task below — see [ZIO'S BUILD — browser-rendered option data].
+
+[ZIO'S BUILD — browser-rendered option data, Zio's Pizzeria (shop_id
+2cba7b51-211c-4437-8910-1af4dcc03498), spec §11 items 1/2/4]
+2026-09-07 ~18:15 UTC — Not blocked, starting now. Building a real-browser reader (Playwright,
+no API-key reuse) against Zio's public Slice menu: ld+json for the product list, then a real
+page navigation to `?view_product=<id>` per item to read the rendered modifier modal (group
+name, required/select-one-vs-many as Slice itself states it, choices, upcharges). Writing
+result rows to Zio's own option_groups/option_choices with provenance='stated' and
+source_span = the actual rendered text. COORDINATION FLAG for item-4/item-9: item 4's dry run
+already confirmed Zio's has ZERO pre-existing option_groups rows (safe starting state) and
+item 9 is blocked on item 3 landing, so no live reader should be hitting Zio's option tables
+right now — but if item 3 lands and item 9 starts its real compile run on Zio's while this is
+still writing, STOP and let me finish first; I'll flip this entry to done the moment writes
+are complete so item 9 can safely follow. Will report items in / groups / choices / orderable
+counts as its own message the instant Zio's is compiled, per Jason's ask, with Melvin spot-
+checking 5 items against the live rendered page by hand before it's called done.
+
 [ITEM 2 — Normalizer, spec §11]
 2026-09-07 ~17:35 UTC — Not blocked. Normalizer (normalize.ts) + entity keys
 (menu-entity-key.ts) done, Melvin-verified (32/32 tests incl. 4 live tests against
