@@ -5186,6 +5186,80 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 10 (2026-09-06, Jason): unconsented option selection ──────────
+  // Live 5-session test, same input: "sometimes added with no dressing
+  // mentioned at all, sometimes asks (correct — no default exists),
+  // sometimes invents one ('with Caesar dressing - added!')." The model can
+  // supply add_item/modify_item options that pass a required group's
+  // validation (a real recorded choice name, e.g. "Caesar" on an item
+  // literally called "Chicken Caesar") without the customer ever having
+  // named it — indistinguishable from a genuine selection by add_item alone,
+  // since both produce the identical `options: { Dressing: ["Caesar"] }`.
+  // The only code-driven way an option may be set with no customer
+  // selection is deterministic default-fill (is_default, see add_item) —
+  // anything else that changed THIS TURN and wasn't customer-stated is
+  // invented and reverts to pending, same shape as GUARD 9 reverting a
+  // phantom cart add. Runs BEFORE GUARD 2 (below) so its pending-options
+  // re-ask sees the corrected state, not the model's invented one.
+  {
+    const beforeById10 = new Map(
+      cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => [(i as CartItem).menu_item_id, i as CartItem]),
+    );
+    const msgLowerBase10 = userMessage.toLowerCase();
+    let reverted10 = false;
+    for (const item of guardCart) {
+      const ci = item as CartItem;
+      if (!ci.menu_item_id || !ci.options) continue;
+      const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
+      if (!menuItem) continue;
+      const before10 = beforeById10.get(ci.menu_item_id);
+      // Strip the item's own name so naming the ITEM never counts as naming
+      // a CHOICE — same trap GUARD 8 already guards against ("Chicken
+      // Caesar added!" must not read as enumerating a "Caesar" dressing).
+      // WORD-level, not just the exact full name: "i want a caesar salad"
+      // (Jason's actual test phrase) never contains the literal substring
+      // "chicken caesar", so a full-name strip is a no-op and "caesar"
+      // would wrongly read as the customer having named the Caesar dressing
+      // — when they were only describing the dish. Strip every individual
+      // word of the item's name, whole-word, wherever it appears.
+      const itemNameWords10 = menuItem.name.toLowerCase().split(/\s+/).filter(Boolean);
+      let msgLower10 = msgLowerBase10;
+      for (const w10 of itemNameWords10) {
+        msgLower10 = msgLower10.replace(new RegExp(`\\b${w10.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+      }
+      // Local non-optional handle: narrowed once here rather than per-group,
+      // so reverting one group's choice this iteration can't turn the FIELD
+      // undefined out from under a later group's lookup in the same item
+      // (two required groups, both invented, would otherwise throw).
+      const options10 = ci.options;
+      for (const group of menuItem.option_groups ?? []) {
+        if (!group.required) continue;
+        const chosen = options10[group.name];
+        if (!chosen || chosen.length === 0) continue;
+        const beforeChosen = before10?.options?.[group.name];
+        if (JSON.stringify(beforeChosen ?? null) === JSON.stringify(chosen)) continue; // resolved on an earlier turn — already vetted then
+        const defaultChoice = group.choices.find(c => c.is_default && c.price_cents === 0);
+        if (defaultChoice && chosen.length === 1 && chosen[0] === defaultChoice.name) continue; // our own deterministic default-fill
+        if (chosen.some(v => msgLower10.includes(v.toLowerCase()))) continue; // genuinely customer-stated this turn
+        console.warn(`[chat-sms] GUARD 10 (unconsented option selection) tripped (conv=${conversation.id}). "${menuItem.name}" ${group.name}="${chosen.join(", ")}" was not named by the customer this turn and is not a recorded default; reverting to pending.`);
+        const revertedCents = group.choices.filter(c => chosen.includes(c.name)).reduce((s, c) => s + c.price_cents, 0);
+        delete options10[group.name];
+        ci.price_cents -= revertedCents;
+        ci.pending_options = [...new Set([...(ci.pending_options ?? []), group.name])];
+        reverted10 = true;
+      }
+      if (ci.options && Object.keys(ci.options).length === 0) ci.options = undefined;
+    }
+    if (reverted10) {
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      reply = renderMissingOptionsPrompt(
+        guardCart
+          .filter(i => ((i as CartItem).pending_options?.length ?? 0) > 0)
+          .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! })),
+      );
+    }
+  }
+
   // ── Guard 9: unconsented cart growth on a bare affirmation ──────────────
   // P0 INCIDENT (2026-09-06, Jason's tester "Luca"): GUARD 4's fuzzy-match
   // upsell line ("Did you also want Chicken Bacon Ranch (Flatbreads), Chicken
