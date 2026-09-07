@@ -105,13 +105,13 @@ async function supabase(method, pathAndQuery, body, prefer) {
 }
 
 let firecrawlRequestCount = 0;
-async function firecrawlScrape(url) {
+async function firecrawlScrape(url, waitForMs = 8000) {
   const key = getFirecrawlKey();
   firecrawlRequestCount++;
   const res = await fetch(`${FIRECRAWL_BASE}/scrape`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, formats: ['rawHtml'], waitFor: 8000 }),
+    body: JSON.stringify({ url, formats: ['rawHtml'], waitFor: waitForMs }),
   });
   if (res.status === 429) return { rateLimited: true };
   if (!res.ok) return { error: `HTTP ${res.status}` };
@@ -361,12 +361,25 @@ async function main() {
       continue;
     }
     scraped++;
-    const rawGroups = await parseHtmlWithBrowser(result.html);
+    let rawGroups = await parseHtmlWithBrowser(result.html);
     if (!rawGroups) {
-      itemsNoDialog++;
-      console.log('no dialog in rendered HTML (no configurable options)');
-      extractLog.push({ menuItemId, match, groups: [], noDialog: true });
-      continue;
+      // False negative found in production: Cheeseburger's dialog (18 extras/
+      // toppings) consistently failed to render within the default 8s waitFor
+      // and was wrongly recorded as "no options" 6 runs in a row — confirmed
+      // by direct re-fetch with waitFor=12000 showing a full dialog. One retry
+      // with a longer wait before concluding an item truly has no options.
+      console.log('no dialog on first pass — retrying with longer wait...');
+      const retryResult = await firecrawlScrape(url, 12000);
+      if (!retryResult.error && !retryResult.rateLimited) {
+        rawGroups = await parseHtmlWithBrowser(retryResult.html);
+      }
+      if (!rawGroups) {
+        itemsNoDialog++;
+        console.log('no dialog in rendered HTML (no configurable options)');
+        extractLog.push({ menuItemId, match, groups: [], noDialog: true });
+        continue;
+      }
+      console.log('  dialog found on retry');
     }
     // STANDING CHECK — Slice is live restaurant pricing, our DB copy is a
     // scrape of unknown age. If they disagree, trust Slice: self-heal the
