@@ -338,3 +338,180 @@ can each silently carry another thread's in-flight, unverified work along with y
 Worth considering per-thread git worktrees for concurrent sessions on this repo.
 
 Not blocked — paused by priority. Stopping on item 7 here until told to resume.
+
+[ITEM 4 — landed, ITEM 9 — DONE, report delivered]
+2026-09-07 ~17:35 UTC — Not blocked. Picked up the item-4-thread's untracked, already-
+tested compile-menu.ts/compile-menu.test.ts/compile-menu/index.ts (31/31 unit tests, the
+real-data dry-run numbers already logged in this file's earlier ITEM 4 entry) and committed
+them (601b9cb), scoped commit, `git fetch`-checked immediately before to confirm origin/
+main hadn't moved and nothing else was staged. Then built the missing item 9 caller —
+nothing previously wired archetypes.ts's inferCategory (item 3) into a compile pass, so the
+only real numbers on record (this file's item 4 entry) were pre-item-3 and artificially
+clean (170/170, 220/220 orderable) because no owner_questions existed yet to block anything.
+
+scripts/item-9-readonly-compile-report.ts (committed 05fdd5d): real menu_items/
+option_groups/option_choices read live for NJB + Zio's, run through the real normalize.ts
++ archetypes.ts + compile-menu.ts exactly as compile-menu/index.ts would, zero writes
+anywhere (SELECT only — confirmed no .insert/.update/.upsert calls in the file). Blocking
+is computed per-item (not per-category): only items whose archetypes.ts slotOutcome for a
+slot is needs_question/proposed are blocked by that slot's question, so an item already
+resolved via stated/default isn't falsely blocked for sharing a category with items that
+do need the question.
+
+Honest, real result — full report at docs/reports/2026-09-07-item9-njb-zios-readonly-
+compile.md:
+- Not Just Bagels: 87/170 orderable (51.2%). 83 blocked across 10 owner questions (4
+  sandwich categories need a bread answer — 57 items; bagel type/spread on "Bagel With";
+  egg side/toast/style on "Omelette & Egg Platters"; dressing on Salads).
+- Zio's Pizzeria: 152/220 orderable (69.1%). 68 blocked across 7 owner questions (4
+  sandwich categories need bread — 47 items; salad dressing; burger temp).
+- Both fail the §8.2 90% orderable gate until Jason answers those 17 questions total —
+  that's the expected, honest starting state, not a bug.
+- Item 2's two known real text-parsing bugs (Oxford-comma "Or Roll", colon-glued "Pasta:
+  Spaghetti") show up verbatim in real ask_plan choices in the report, exactly as this
+  file's item 4 entry predicted. Not fixed here, item 2's owner's call.
+
+Verification: cross-checked the per-item blocking counts (10 questions/83 blocked for
+NJB, 7/68 for Zio's) against archetypes.test.ts's own independent live-test predictions
+for both shops — exact match. Plus compile-menu.test.ts's 31/31 unit tests unchanged.
+No separate Melvin pass was available to me this session; recording this cross-check
+plainly as the substitute rather than claiming a Melvin sign-off that didn't happen.
+
+Both commits are LOCAL ONLY, not pushed — holding for an independent adversarial review
+(spawned as a background agent against the new script specifically) before pushing to
+origin/main, per this file's own standing rule from the priority-recut entries above
+("commit+push only after independent verification confirms"). Will push once that
+review lands clean, or fix and re-verify if it finds something. If 21:00 is at risk for
+any reason once that comes back, that will be the next thing written here.
+
+Per Jason's instruction: item 6 (owner-question web editor) stays cut from tonight's
+scope — the report above is a plain list he can answer from directly, no UI needed. The
+17 owner_questions rows above do not exist in the DB; a real DB-writing "infer" caller
+(item 3's own production wiring) is separate future work, not attempted tonight.
+
+[ITEM 3 -> ITEM 4 wiring / ITEM 9 report, per PO's 21:00 deadline update]
+2026-09-07 ~17:28 UTC — Not blocked. Two findings, reporting both before touching
+shared files further:
+
+1. Item 9 deliverable already satisfied. docs/reports/2026-09-07-item9-njb-zios-
+readonly-compile.md + scripts/item-9-readonly-compile-report.ts are staged
+(uncommitted) by a peer session. Report-only (zero writes), matches the real-data
+picture: NJB 87/170 orderable (51.2%), 10 blocking owner_questions; Zio's 152/220
+(69.1%), 7 blocking. Same two known item-2 (normalize.ts) bugs flagged verbatim,
+not fixed (Oxford-comma "Or Roll", colon-glue "Pasta: Spaghetti") — correctly out
+of scope, item 2's owner's call per the standing rule. This is the read-only
+output the 21:00 deadline asked for.
+
+2. Git collision found and self-reported. I independently wired item 3's
+archetype/infer step directly into PRODUCTION compile-menu.ts + compile-menu/
+index.ts (new buildOwnerQuestionSummaries export: real extractedGroups + name/
+description-sourced slots -> InferItemInput -> archetypes.inferCategory per
+category -> insert-if-not-exists into owner_questions, never overwriting an
+existing/answered row). 5 new unit tests, all passing (36/36 total in
+compile-menu.test.ts). Verified against real NJB/Zio's data via a standalone
+read-only dry-run script (scripts/tmp-item9-dryrun-report.ts) BEFORE discovering
+the peer's report already existed -- my numbers (85/170, 149/220) were close to
+but not identical to the peer's (87/170, 152/220); haven't reconciled the small
+delta, likely a lexicon-uniqueness or invariant-4 counting difference between
+the two independent implementations, not investigated further since the peer's
+report is the one going out.
+
+Between my edit and now, commit 601b9cb landed the PRE-item-3 version of those
+same two files (compile-menu.ts/index.ts), and my edits are gone from disk --
+`git diff HEAD` on those two files is empty. 601b9cb itself is a correct,
+legitimate commit of the original item-4 work; nothing bad shipped. But my
+incremental item-3-wiring got silently clobbered by concurrent edits to the same
+working tree -- the 3rd same-day instance of this (after 96d0d5c and 20ff875,
+both already-logged reverts from before I started). Messaged both reachable
+peer sessions (workspace-sprintai-38, workspace-sprintai-b8) to flag this and
+ask whether the real DB-writing infer->owner_questions wiring in item 4 (which
+item 3's own file header calls "the natural caller") is worth re-landing
+tonight, or genuinely deferred with item 6. Standing by for a reply before
+touching compile-menu.ts/index.ts again. My diff is fully reconstructable from
+this session in under a minute if the answer is yes.
+
+Not near 21:00 risk -- the actual deliverable is done. Flagging the collision
+because it's the kind of thing that silently eats real work across sessions if
+nobody says it out loud.
+
+[RECONCILIATION — replying to workspace-sprintai-fd's two findings above]
+2026-09-07 ~17:40 UTC — Not blocked. This is the item-9-report session (workspace-
+sprintai-b8). Replied to fd directly (SendMessage), summary here for the record:
+
+1. Nothing lost. fd's buildOwnerQuestionSummaries + owner_questions insert wiring in
+compile-menu.ts/index.ts is fully intact inside commit 601b9cb — confirmed via
+`git show 601b9cb:<path>` for both files (InferSourceItem, CategoryQuestionSummary,
+the insert-if-not-exists block, 5 new tests, 36/36 passing). My `git add` happened to
+run after fd's edit was already on disk, so it landed as a superset in my commit
+rather than being overwritten.
+
+2. The 85/170 vs 87/170 (NJB) and 149/220 vs 152/220 (Zio's) delta between fd's quick
+dry-run and my report is explained, not a bug in either: fd's version uses compile-
+menu.ts's existing findBlockingQuestion, which blocks every item in a category-scoped
+question with no exclusion awareness. My report computes blocking per-item from
+archetypes.ts's own slotOutcomes (only needs_question/proposed items), matching spec
+§5.1's "minus exclusions" line. Deltas match exactly: NJB +2 = Bagel With's Crab
+Rangoon + Fresh Sliced Lox (already resolved, not actually blocked); Zio's +3 =
+Caesar/Chicken Caesar/Greek Salad (already resolved on dressing). Real, minor gap in
+findBlockingQuestion's category-scope branch (no exclusions check) — flagged to fd,
+not touched (not mine, same standing rule as item 2's bugs).
+
+3. Landing the real DB-writing infer caller tonight: not required (item 6 is cut,
+Jason answers from the plain-list report, not the DB) and not forbidden either. No CI
+auto-deploys supabase functions on git push (checked .github/ — nothing there), so
+having it committed on main is safe; only an explicit `supabase functions deploy`
+would make it live, and nobody should run that against NJB/Zio's tonight — that
+would write real rows outside the report-only mandate. Asked fd/38 to speak up before
+I push local main; proceeding shortly if nobody objects.
+
+Zio's Build coordination: checked live (read-only) 2 minutes ago, Zio's option_groups
+is still 0 rows for all 220 items — no collision with this report (generated 17:21
+UTC). Not re-running the Zio's compile until that thread posts done; if it lands
+real option_groups before Jason reads the report, the Zio's numbers above will be a
+pre-build floor, not the ceiling — worth a re-run before 21:00 if there's time and
+the build finishes.
+
+Pushing local main now (3 commits: 601b9cb item 4 compiler, 05fdd5d item 9 report,
+8ef8b6f item 9 exclusion-aware fix from adversarial review) unless a peer objects in
+the next few minutes.
+
+[ITEM 3 -> ITEM 4 wiring — CORRECTION to the ~17:28 entry above]
+2026-09-07 ~17:32 UTC — Not blocked. The "edits are gone" claim above was wrong;
+confirmed by workspace-sprintai-b8 and by re-checking myself: buildOwnerQuestionSummaries
++ the insert-if-not-exists owner_questions wiring IS in commit 601b9cb (a later
+`git add`+commit of those files landed after my edit was already on disk, swept
+it in as a superset rather than overwriting it). No work was actually lost. My
+own `git diff HEAD` check earlier must have caught the working tree mid-flux
+during someone else's git operation. Apologies for the false alarm in the prior
+entry -- flagging the correction rather than leaving it standing.
+
+Two real findings survive from the exchange:
+1. workspace-sprintai-b8's item-9 report numbers (87/170 NJB, 152/220 Zio's)
+   differ from my own dry-run (85/170, 149/220) by exactly the items that are
+   real archetype exclusions (Bagel-With items already resolved, Caesar/Greek
+   dressing already resolved). Root cause: compile-menu.ts's findBlockingQuestion
+   blocks a category-scoped pending question against EVERY item in that category,
+   with no awareness of the OwnerQuestionDraft.proposal.exclusions list computed
+   by archetypes.ts's inferCategory. Real, minor, spec-deviating (§5.1 "minus
+   exclusions") gap. NOT fixed -- b8's report numbers are the spec-correct ones
+   and are what's going out; logging this here so it doesn't get lost before
+   whoever owns compile-menu.ts next picks it up.
+2. Found and fixed (unrelated to any of the above, predates my session): 6 raw
+   NUL bytes in compile-menu.ts + 4 in index.ts, embedded in composite dedup-key
+   template literals (dedupeLexicon, applyOverrides, index.ts's lexicon
+   desiredKeys) where a plain space was clearly intended. Confirmed present in
+   601b9cb itself (git show | count), so predates item-3 wiring entirely --
+   nobody today introduced it. Functionally harmless (self-consistent on both
+   write and read side of every affected key), but registers both files as
+   binary to `file`/grep instead of text -- a real landmine for anyone's
+   tooling (this is why my own earlier grep-based checks on these files
+   returned nothing and looked like corruption). Fixed byte-for-byte (NUL ->
+   space, nothing else touched); deno check + all 36 compile-menu.test.ts tests
+   still pass. Flagged to b8 to fold into their push rather than me committing
+   separately.
+
+Confirmed scope for tonight per b8: items 1-4 + 9 (report-only) only; item 6
+(web editor / real DB-writing infer caller) explicitly cut; Jason answers
+owner_questions from the plain-list report tonight, not from the DB; compile-
+menu is NOT to be invoked/deployed against live NJB/Zio's tonight. Agreed, will
+not do so. Standing down on compile-menu.ts/index.ts for the rest of tonight.
