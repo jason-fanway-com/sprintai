@@ -270,3 +270,28 @@ the live DB — that's a separate, later deploy step, same bar item 1 held
 (commit ≠ deploy). menu-entity-key.ts/its test are item 2's committed work
 (7fb4fd7), not mine — I only referenced them per the migration's own header,
 didn't touch or re-commit them.
+
+[MISTAKE — my own commit swept up item 4's staged files, flagging it]
+2026-09-07 ~18:20 UTC — Self-reported, not blocked, no data lost. Committing my BLOCKED.txt
+correction (commit af7e17f) also swept in item 4's already-staged-but-not-yet-committed
+compile-menu.ts/compile-menu.test.ts/compile-menu/index.ts, because `git add BLOCKED.txt` +
+`git commit` commits the whole index, not just the path I added — those 3 files were sitting
+staged from item 4's own session at the time. I did not write or review that code. I then
+made it worse for a moment: tried to fix it with `git reset --soft HEAD~1`, which actually
+undid a DIFFERENT thread's real commit (39dcf69, chat-sms E1 guard fix) since two more
+commits had landed on top of mine in the meantime — caught immediately, restored with
+`git reset --soft 39dcf69` before anything was lost (soft reset never touches the working
+tree, so nothing was at risk of deletion, only which commit these files sit under). Confirmed
+via `git diff` after restore: working tree matches HEAD exactly, zero content lost or changed.
+Left the history as-is rather than rebasing to split it out — nothing has been pushed
+(confirmed via `git fetch`, origin/main is still at e5dfc3d), but another thread was actively
+committing on top of local HEAD in real time, and rewriting shared history under a live
+concurrent writer is a worse risk than an untidy commit boundary. Net effect: item 4's files
+are committed (content unreviewed by me, unchanged from what item 4 staged) one commit
+earlier than that thread intended. If item 4's own Melvin verification was still in flight
+when this happened, that verification should still run against this same committed content
+before anyone treats it as done — the commit landing early doesn't substitute for that check.
+Lesson for me: `git add <specific-file>` only stages that file, but `git commit` with no
+pathspec commits the ENTIRE index — on a shared repo with concurrent agents, that means
+checking `git status` for pre-existing staged files immediately before every commit, or using
+`git commit -- <path>` (pathspec form, commits only that path's changes, leaves rest staged).
