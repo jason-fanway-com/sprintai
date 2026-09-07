@@ -569,6 +569,38 @@ with 30s/turn timeout + 2 retries + backoff — never hangs the whole run).
 An LLM fix script (`fix.ts`) auto-generates root-cause analysis for failures.
 Spec: `docs/specs/2026-08-30-proof-acceptance-engine.md`.
 
+`category-coverage.ts` (2026-09-06) is an 11-category realistic-order case
+generator wired into Proof and the production test-runner identically, plus
+two new deterministic invariants: `verifyRequiredOptionsCovered` (every
+required option group on a cart line must have a non-empty selection before
+checkout) and `expectedLineCount` (cart line count matches what was actually
+ordered — no phantom additions). All four money-relevant invariants
+(`verifyStatedTotal`, `verifyStopOptOutHonored`, `verifyCheckoutFinalize`,
+`verifyRequiredOptionsCovered`) now report `passed:false` on a transcript-less
+run — they used to report `passed:true`, because `proof.ts`'s aggregate only
+ever read `.passed` and never `.applied`, so a harness failure that produced
+no transcript was indistinguishable from a clean pass (a fail-open defect,
+found before it shipped).
+
+**Safety gate is channel-aware (`safety-gate.ts`, 2026-09-07).**
+`enforceSafetyGate(shop, channel)` used to refuse to run against ANY
+`protected` or phoned shop unconditionally — which meant Proof could never
+gate a shop once it had gone live with a real phone number, exactly when a
+go-live gate matters most. The gate now takes an explicit `channel: "web" |
+"sms"`. `"web"` skips both checks: this test harness only ever POSTs JSON to
+`chat-sms`, which hard-routes that to `channel="web"` and never calls Twilio
+for it, so a web-channel run cannot reach a real diner's phone no matter what
+`protected`/`phone_number_e164` say. `"sms"` keeps both checks completely
+unchanged — any caller that can actually reach SMS must state so and gets the
+full gate. No default value on the parameter, so a future caller must declare
+its channel rather than silently inheriting "safe". Extracted to its own leaf
+module (`scripts/test-suite/safety-gate.ts`, mirrored in
+`supabase/functions/_shared/test-suite/`) with zero top-level side effects, so
+`deno test` on the gate's own test file runs without a permission prompt.
+Practical effect: Proof can now run its full battery, including the new
+category-coverage cases, against Vito's Pizza itself (protected + real
+phone) via this harness — not just against a phone-less QA twin.
+
 ### QA-twin creator
 
 `scripts/create-qa-twin.py` clones any shop as an unprotected, phone-less,

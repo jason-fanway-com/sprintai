@@ -236,6 +236,23 @@ architecture behind the ordering conversation is still finding these the hard wa
 live phrasing at a time, not from a spec written in advance — worth factoring into any
 timeline that assumes the ordering flow is done hardening.
 
+### Added 2026-09-07 — the go-live quality gate can now actually gate a live shop
+
+Proof (the deterministic, code-graded acceptance suite an owner has to pass before
+go-live) could previously only run against a phone-less QA twin — the safety gate
+that exists to stop the test harness from ever texting a real diner refused to run
+against ANY shop flagged `protected` or carrying a real phone number, full stop.
+That's a real structural gap: the one moment a go-live gate matters most is exactly
+when a shop has gone live and picked up a phone number, and Proof couldn't touch it
+then. Fixed by making the gate ask what it actually needs to know — can this specific
+call reach a real phone? — rather than what the shop's row says in general; the test
+harness only ever talks to the bot over the same channel the web chat fallback uses,
+which structurally cannot dial out, so that path is now allowed through while a real
+SMS-capable path stays fully blocked. Proof can now certify Vito's Pizza itself, not
+just a stand-in. Not yet live in the autonomous server-side runner — the fix is
+committed but the `test-runner` edge function hasn't been redeployed with it yet, so
+today's 60-second autonomous QA loop is still running the old, more restrictive gate.
+
 - **MVP is live** with one test shop. The ordering flow works end-to-end:
   customer texts → AI conversation → cart → Stripe checkout → receipt.
 - **Stripe subscription billing is live.** `create-subscription` edge function

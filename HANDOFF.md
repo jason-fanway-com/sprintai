@@ -159,6 +159,36 @@ before assuming any of them are missing or present.
   **uncommitted** in the working tree as of this writing (confirmed passing,
   5/5, when run directly).
 
+## State as of 2026-09-07 04:00
+
+Supersedes the 20:45 snapshot above for anything it contradicts. Two commits
+landed overnight, both in `scripts/test-suite/` and its
+`supabase/functions/_shared/test-suite/` mirror — no chat-sms or admin-facing
+change.
+
+1. The `category-coverage.ts` generator and the two new invariants noted
+   above (`verifyRequiredOptionsCovered`, `expectedLineCount`) are now
+   **committed** (`fe37f88`), not uncommitted. Also fixed a fail-open defect
+   here: `verifyStatedTotal`, `verifyStopOptOutHonored`, `verifyCheckoutFinalize`,
+   and `verifyRequiredOptionsCovered` all used to report `passed:true` on a
+   transcript-less run — now `passed:false`, since a check that can't see
+   what happened hasn't verified anything.
+2. `1412ef1` made the test-suite safety gate channel-aware (`safety-gate.ts`):
+   a `"web"`-channel run (which is all this harness ever does — it POSTs
+   JSON to `chat-sms`, never Twilio) now skips the protected/phone checks
+   that previously blocked Proof from running against any shop with a real
+   phone number. This closes the exact structural gap `fe37f88`'s commit
+   message flagged as "not fixed here" — Proof can now gate Vito's Pizza
+   itself, not just a phone-less QA twin.
+
+**Still NOT deployed**: `test-runner` (Supabase edge function) was last
+deployed 2026-09-04 14:22 UTC, version 28 — both commits above post-date that
+deploy, so the live autonomous test-runner is running the OLD code (no
+category-coverage cases, no fail-open fix, old unconditional safety gate).
+`supabase functions deploy test-runner` has not been run. The CLI-driven
+`scripts/test-suite/` path picks up both changes immediately since it runs
+from the working tree.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a
