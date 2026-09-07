@@ -1,0 +1,376 @@
+// Item 8 (docs/specs/2026-09-07-conversation-ready-menu-design.md §7/§11
+// item 8): the deterministic sequencer + resolver for items that have been
+// compiled (non-null `ask_plan`, produced by
+// supabase/functions/_shared/compile-menu.ts, item 4).
+//
+// Per §7's contract: "Sequencer: input = cart line + ask_plan; output = the
+// single next step or complete." and "The model phrases; code decides."
+// (P1). This module is pure — no I/O, no Supabase client, no LLM call — so
+// it is unit-testable in isolation, matching the convention of
+// pending-disambiguation.ts / phantom-add-guard.ts.
+//
+// SCOPE OF THIS INCREMENT (stated explicitly, see PIVOT entry in BLOCKED.txt
+// 2026-09-07): resolves SLOT groups only (kind="slot", ask_mode "ask" /
+// "auto_single" / "apply_default"). Modifier groups (kind="modifier",
+// ask_mode "offer_once" / "on_request") are left to the existing legacy
+// add_item code path even for compiled items — that is not where bugs
+// 1/2/5/7 live (all four are slot-resolution bugs: size not applied, a
+// generic Slice group name leaking to the customer, a resolved slot not
+// pricing, and the bot unable to see a real stated choice list). Proactive
+// offer_once sequencing is a distinct, smaller follow-up.
+//
+// Reuses significantStems/stemWord from pending-disambiguation.ts rather
+// than reimplementing a second matcher, per the standing rule from the
+// named-item-removal fix earlier this session ("reuse the resolution
+// primitives, don't hand-roll a new ad hoc regex matcher").
+
+import { significantStems } from "./pending-disambiguation.ts";
+import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
+
+export interface EngineChoice {
+  id: string;
+  display: string;
+  price_delta_cents: number;
+}
+
+export interface ResolvedSlot {
+  group_id:  string;
+  slot_key:  string | null;
+  choice:    EngineChoice;
+}
+
+export interface EngineResult {
+  // Every slot step that could be resolved this turn (auto_single applied
+  // silently, apply_default applied from the caller-supplied default map,
+  // ask/apply_default-fallback resolved from customer text when it matched).
+  resolved: ResolvedSlot[];
+  // The single next step the customer still needs to answer, or null if
+  // every slot step is resolved. Never more than one at a time (§7, §2.2).
+  nextStep: CompiledStep | null;
+  // Sum of resolved slots' price_delta_cents. Caller adds this to
+  // ask_plan.base_price_cents (+ any modifier deltas handled separately by
+  // the legacy path) to get the cart line's price_cents.
+  totalDeltaCents: number;
+}
+
+/**
+ * Match free customer text against a step's real, compiled choice list.
+ * Deterministic: normalizes both sides to significant stems (reusing the
+ * same stemmer as cart-line/category resolution elsewhere in this
+ * codebase) and requires the match to be unambiguous. Never guesses between
+ * two plausible choices — returns null rather than pick one, matching the
+ * "missing beats wrong" principle (spec P3).
+ */
+export function matchChoiceInText(choices: EngineChoice[], text: string): EngineChoice | null {
+  if (!text || choices.length === 0) return null;
+  const textStems = significantStems(text);
+  if (textStems.size === 0) return null;
+
+  const hits: EngineChoice[] = [];
+  for (const choice of choices) {
+    const choiceStems = significantStems(choice.display);
+    if (choiceStems.size === 0) continue;
+    // Every stem the choice display contributes must appear in the
+    // customer's text (so "large" matches a choice displayed "Large" or
+    // "Large 18 inch", but "large" alone never matches "Extra Large").
+    const allPresent = [...choiceStems].every(s => textStems.has(s));
+    if (allPresent) hits.push(choice);
+  }
+
+  if (hits.length === 1) return hits[0];
+  // Ambiguous (0 or >1 hits) — the sequencer will ask, not guess.
+  return null;
+}
+
+/** Appendix C: identical wording every run. The LLM never rewrites these. */
+const TEMPLATE_QUESTIONS: Record<string, string> = {
+  temp:      "How would you like the {display_name} cooked? {choices}.",
+  bread:     "What bread for the {display_name}? {choices}.",
+  dressing:  "Which dressing on the {display_name}? {choices}.",
+  size:      "What size {display_name}? {choices_with_prices}.",
+  flavor:    "Which flavor for the {display_name}? {choices}.",
+  protein:   "{choices_or} for the {display_name}?",
+  bagel:     "Which bagel? {choices}.",
+};
+
+/** `{choices}` renders <=6 as "a, b, or c"; more truncates to 5 + "or something else". */
+export function renderChoiceList(choices: EngineChoice[], withPrices: boolean): string {
+  const names = choices.map(c =>
+    withPrices && c.price_delta_cents !== 0
+      ? `${c.display} ${formatDelta(c.price_delta_cents)}`
+      : withPrices
+      ? `${c.display} (no extra charge)`
+      : c.display,
+  );
+  if (names.length > 6) return `${names.slice(0, 5).join(", ")}, or something else`;
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} or ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, or ${names[names.length - 1]}`;
+}
+
+function formatDelta(cents: number): string {
+  const dollars = (Math.abs(cents) / 100).toFixed(2);
+  return cents >= 0 ? `+$${dollars}` : `-$${dollars}`;
+}
+
+/**
+ * Render the exact, deterministic question for a still-open slot step. The
+ * LLM's job is to relay this text verbatim (plus, on the first turn only,
+ * one warm sentence before it) — never to invent its own wording or option
+ * names (spec P5, Appendix C).
+ */
+export function renderStepQuestion(step: CompiledStep, displayName: string): string {
+  const key = step.slot_key ?? "";
+  const template = TEMPLATE_QUESTIONS[key];
+  if (template) {
+    return template
+      .replace("{display_name}", displayName)
+      .replace("{choices_with_prices}", renderChoiceList(step.choices, true))
+      .replace("{choices_or}", renderChoiceList(step.choices, false))
+      .replace("{choices}", renderChoiceList(step.choices, false));
+  }
+  // Generic fallback for a slot_key not in the fixed Appendix C list —
+  // still fully deterministic, still built only from compiled choices.
+  const label = key ? key.replace(/_/g, " ") : "option";
+  return `What ${label} would you like for the ${displayName}? ${renderChoiceList(step.choices, true)}.`;
+}
+
+/**
+ * The sequencer + resolver core. Walks `ask_plan.steps` in canonical order
+ * (already sorted by the compiler). For each SLOT step not yet in
+ * `alreadyResolvedGroupIds`:
+ *   - auto_single  -> apply its one choice silently (it's a fact, not a
+ *     question, spec §2.2).
+ *   - apply_default -> apply the group's default choice if the caller
+ *     supplied one via `defaultChoiceIdByGroup` (chat-sms/index.ts looks
+ *     this up from option_groups.default_choice_id, since CompiledStep does
+ *     not itself carry which choice is default). If no default is known,
+ *     falls back to `ask` rather than silently picking a choice — missing
+ *     beats wrong (spec P3).
+ *   - ask          -> try resolving from `customerText`; if it doesn't
+ *     match unambiguously, this step becomes `nextStep`.
+ * Modifier steps (offer_once/on_request) are skipped entirely — see the
+ * module-level scope note above.
+ */
+export function resolveAskPlan(
+  askPlan: AskPlan,
+  customerText: string,
+  alreadyResolvedGroupIds: Set<string>,
+  defaultChoiceIdByGroup: Map<string, string>,
+): EngineResult {
+  const resolved: ResolvedSlot[] = [];
+  let nextStep: CompiledStep | null = null;
+  let totalDeltaCents = 0;
+
+  for (const step of askPlan.steps) {
+    if (step.kind !== "slot") continue;
+    if (alreadyResolvedGroupIds.has(step.group_id)) continue;
+
+    if (step.ask_mode === "auto_single" && step.choices.length === 1) {
+      const choice = step.choices[0];
+      resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice });
+      totalDeltaCents += choice.price_delta_cents;
+      continue;
+    }
+
+    if (step.ask_mode === "apply_default") {
+      const defaultId = defaultChoiceIdByGroup.get(step.group_id);
+      const defaultChoice = defaultId ? step.choices.find(c => c.id === defaultId) : undefined;
+      if (defaultChoice) {
+        resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: defaultChoice });
+        totalDeltaCents += defaultChoice.price_delta_cents;
+        continue;
+      }
+      // No default resolvable from the data we have — fall through to
+      // matching customer text / asking, same as a plain "ask" step.
+    }
+
+    const matched = matchChoiceInText(step.choices, customerText);
+    if (matched) {
+      resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
+      totalDeltaCents += matched.price_delta_cents;
+      continue;
+    }
+
+    if (!nextStep) nextStep = step;
+  }
+
+  return { resolved, nextStep, totalDeltaCents };
+}
+
+/** True iff every SLOT step in the plan has a resolution (ignores modifiers). */
+export function allSlotsResolved(askPlan: AskPlan, resolvedGroupIds: Set<string>): boolean {
+  return askPlan.steps.every(step => step.kind !== "slot" || resolvedGroupIds.has(step.group_id));
+}
+
+// ── Structural types for the add_item integration (deliberately minimal —
+// index.ts's real CartItem/EffectiveMenuItem satisfy these by structure,
+// no explicit cast needed at the call site). ──────────────────────────────
+
+export interface CompiledCartLine {
+  menu_item_id: string;
+  name: string;
+  quantity: number;
+  price_cents: number;
+  modifiers: string[];
+  options?: Record<string, string[]>;
+  pending_options?: string[];
+  ask_plan_selections?: Record<string, string>;
+}
+
+export interface CompiledMenuItem {
+  ask_plan: AskPlan;
+  bot_state?: string | null;
+  option_groups?: Array<{ id: string; name: string; default_choice_id?: string | null }>;
+}
+
+export interface CompiledAddItemResult {
+  ok: boolean;
+  result: unknown;
+  cartChanged: boolean;
+}
+
+/**
+ * The full add_item integration for a compiled item (spec §7/§11 item 8).
+ * Extracted as a pure function (cart is mutated in place, matching this
+ * codebase's existing executeTool convention, but there is no I/O here —
+ * the caller is responsible for `saveCart` when `cartChanged` is true) so
+ * it is directly importable and testable, rather than requiring a
+ * hand-copied mirror of inline switch-case logic.
+ *
+ * Scope: SLOT groups only. See this file's header comment for why
+ * modifier/offer_once handling is deliberately out of scope here.
+ */
+export function applyCompiledAddItem(
+  cart: CompiledCartLine[],
+  menuItem: CompiledMenuItem,
+  menuItemId: string,
+  quantity: number,
+  customerMessage: string,
+  shopPhone: string | null | undefined,
+): CompiledAddItemResult {
+  const askPlan = menuItem.ask_plan;
+  const itemGroups = menuItem.option_groups ?? [];
+
+  if (menuItem.bot_state === "blocked" || menuItem.bot_state === "display_only") {
+    const phoneSuffix = shopPhone ? ` — you can call the shop at ${shopPhone}` : "";
+    return {
+      ok: false,
+      cartChanged: false,
+      result: { declined: true, error: `The ${askPlan.display_name} isn't available to order by text yet${phoneSuffix}.` },
+    };
+  }
+
+  const defaultChoiceIdByGroup = new Map<string, string>();
+  for (const g of itemGroups) {
+    if (g.default_choice_id) defaultChoiceIdByGroup.set(g.id, g.default_choice_id);
+  }
+
+  // A cart line for this item is a CONTINUATION (same order, still
+  // resolving) iff it exists and doesn't yet have every slot filled.
+  // Mirrors the legacy PHANTOM-ADD GUARD's reasoning for the new selections
+  // shape: filling a pending slot updates the waiting line; it never spawns
+  // a duplicate (spec: "filling a pending group is a resolution of the SAME
+  // order, not a repeat order").
+  const continuationIdx = cart.findIndex(ci => {
+    if (ci.menu_item_id !== menuItemId || !ci.ask_plan_selections) return false;
+    return !allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections)));
+  });
+
+  const priorSelections = continuationIdx >= 0 ? { ...cart[continuationIdx].ask_plan_selections } : {};
+  const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
+
+  const engineResult = resolveAskPlan(askPlan, customerMessage, alreadyResolvedGroupIds, defaultChoiceIdByGroup);
+
+  const newSelections: Record<string, string> = { ...priorSelections };
+  for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
+
+  const resolvedOptions: Record<string, string[]> = {};
+  let priceCents = askPlan.base_price_cents;
+  for (const step of askPlan.steps) {
+    const choiceId = newSelections[step.group_id];
+    if (!choiceId) continue;
+    const choice = step.choices.find(c => c.id === choiceId);
+    if (!choice) continue;
+    priceCents += choice.price_delta_cents;
+    const group = itemGroups.find(g => g.id === step.group_id);
+    if (group) resolvedOptions[group.name] = [choice.display];
+  }
+
+  const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name) : null;
+  const pendingGroupNames = engineResult.nextStep
+    ? [itemGroups.find(g => g.id === engineResult.nextStep!.group_id)?.name ?? engineResult.nextStep.slot_key ?? "option"]
+    : undefined;
+
+  // Bug-3-class guard (2026-09-07 quantity-doubling incident): a redundant
+  // add_item call for an item ALREADY fully resolved, carrying text that
+  // resolves nothing new (e.g. the LLM re-calling add_item after the
+  // customer just answered an unrelated pickup/delivery question), must be
+  // a no-op — never a phantom duplicate line, never a quantity bump. This
+  // is the compiled path's answer to the exact incident described in
+  // BLOCKED.txt's "Bug 3 ROOT CAUSE FOUND" entry: the legacy path's
+  // vulnerability was matching on `options` equality, which a no-new-info
+  // call satisfies trivially; here the gate is "did the engine actually
+  // learn anything new this turn," which a no-op call never does.
+  const fullyResolvedExistingIdx = continuationIdx < 0 && engineResult.resolved.length === 0
+    ? cart.findIndex(ci =>
+        ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
+        allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))))
+    : -1;
+  if (fullyResolvedExistingIdx >= 0) {
+    const existingLine = cart[fullyResolvedExistingIdx];
+    const total = cart.reduce((s, i) => s + i.price_cents * i.quantity, 0);
+    return {
+      ok: true,
+      cartChanged: false,
+      result: {
+        added: askPlan.display_name,
+        price_cents: existingLine.price_cents,
+        cart_total_cents: total,
+        next_question: null,
+        instruction: `${askPlan.display_name} is already in the cart with every required option resolved — this call added nothing. Do not ask about options for this item again.`,
+      },
+    };
+  }
+
+  if (continuationIdx >= 0) {
+    const line = cart[continuationIdx];
+    line.ask_plan_selections = newSelections;
+    line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+    line.price_cents = priceCents;
+    line.pending_options = pendingGroupNames;
+  } else {
+    // A genuine new add: merge into an existing FULLY-resolved line with
+    // identical selections (real "another one, same way"), else push a
+    // new line.
+    const fullyResolved = allSlotsResolved(askPlan, new Set(Object.keys(newSelections)));
+    const identicalExisting = fullyResolved ? cart.findIndex(ci =>
+      ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
+      JSON.stringify(Object.entries(ci.ask_plan_selections).sort()) === JSON.stringify(Object.entries(newSelections).sort())
+    ) : -1;
+    if (identicalExisting >= 0) {
+      cart[identicalExisting].quantity += quantity;
+    } else {
+      cart.push({
+        menu_item_id: menuItemId, name: askPlan.display_name, quantity, price_cents: priceCents,
+        modifiers: [], options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+        pending_options: pendingGroupNames, ask_plan_selections: newSelections,
+      });
+    }
+  }
+
+  const total = cart.reduce((s, i) => s + i.price_cents * i.quantity, 0);
+  return {
+    ok: true,
+    cartChanged: true,
+    result: {
+      added: askPlan.display_name,
+      price_cents: priceCents,
+      cart_total_cents: total,
+      next_question: nextQuestion,
+      instruction: nextQuestion
+        ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${nextQuestion}"`
+        : "All required options are resolved. Do not ask about options for this item again.",
+    },
+  };
+}

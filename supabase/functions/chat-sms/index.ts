@@ -36,6 +36,8 @@ import {
 } from "./pending-option.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
+import type { AskPlan } from "../_shared/compile-menu.ts";
+import { applyCompiledAddItem, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -100,6 +102,12 @@ interface OptionGroup {
   min_select: number;
   max_select: number;
   choices: OptionChoice[];
+  // Item 8 (spec §7/§11): looked up separately from ask_plan because
+  // CompiledStep does not itself carry which choice is the group's default
+  // (see ask-plan-engine.ts header comment) — the apply_default sequencer
+  // path needs this to resolve a default deterministically instead of
+  // falling back to asking.
+  default_choice_id?: string | null;
 }
 
 interface EffectiveMenuItem {
@@ -115,6 +123,14 @@ interface EffectiveMenuItem {
   // description saying "Choose flavor(s)" with no list and invented one.
   prompt_for?:    string | null;
   option_groups?: OptionGroup[];
+  // Item 8: compiler output (supabase/functions/_shared/compile-menu.ts).
+  // Null until compile-menu has actually been run for this item — every
+  // item at every shop is null today (see BLOCKED.txt PIVOT entry,
+  // 2026-09-07). The compiled-engine path in executeTool's add_item case is
+  // a no-op whenever ask_plan is null, regardless of the shop flag.
+  ask_plan?:        AskPlan | null;
+  bot_state?:       string | null;
+  bot_state_reason?: string | null;
 }
 
 interface CartItem {
@@ -130,6 +146,15 @@ interface CartItem {
   // NEVER treated as a validated menu selection and NEVER priced — surfaced
   // to a human (chat + kitchen ticket) as an unverified ask, e.g. "Flavor: Boosenberry".
   unverified_requests?: string[];
+  // Item 8 (spec §7/§11): group_id -> choice_id for slots resolved via the
+  // compiled ask_plan engine. Authoritative source of truth for a compiled
+  // line's price and pending question — price_cents/options/pending_options
+  // above are still populated (for receipt/checkout code that doesn't know
+  // about this path) but are DERIVED from this map on every compiled-path
+  // add_item call, never hand-adjusted. Absent entirely for legacy-path
+  // lines (i.e. every line at every shop until a menu is compiled AND the
+  // shop flag is set — see ask-plan-engine.ts).
+  ask_plan_selections?: Record<string, string>;
 }
 
 interface BundleItem {
@@ -171,6 +196,9 @@ interface Shop {
   latitude:                 number | null;
   longitude:                number | null;
   delivery_radius_mi:       number | null;
+  // Item 8 (spec §7/§11 item 8). Default false in the DB (migration 118) —
+  // must stay false for Vito's. See ask-plan-engine.ts.
+  compiled_ordering_engine_enabled?: boolean;
 }
 
 interface OrderCart {
@@ -397,10 +425,10 @@ async function buildEffectiveMenu(
 
   if (!menu) return { menu: [], soldOutNames: [] };
 
-  const items = await fetchAllRows<{ id: string; name: string; description: string | null; price_cents: number; category: string; modifiers_json: Array<{ name: string; price_cents: number }> | null; prompt_for: string | null }>(() =>
+  const items = await fetchAllRows<{ id: string; name: string; description: string | null; price_cents: number; category: string; modifiers_json: Array<{ name: string; price_cents: number }> | null; prompt_for: string | null; ask_plan: AskPlan | null; bot_state: string | null; bot_state_reason: string | null }>(() =>
     supabase
       .from("menu_items")
-      .select("id, name, description, price_cents, category, modifiers_json, prompt_for")
+      .select("id, name, description, price_cents, category, modifiers_json, prompt_for, ask_plan, bot_state, bot_state_reason")
       .eq("menu_id", menu!.id)
       .eq("active", true)
       .order("display_order", { ascending: true })
@@ -411,10 +439,10 @@ async function buildEffectiveMenu(
 
   // Load option groups and choices for these menu items
   const itemIds = items.map(i => i.id);
-  const optionGroupsData = await fetchAllRows<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number; display_order: number }>(() =>
+  const optionGroupsData = await fetchAllRows<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number; display_order: number; default_choice_id: string | null }>(() =>
     supabase
       .from("option_groups")
-      .select("id, menu_item_id, name, required, min_select, max_select, display_order")
+      .select("id, menu_item_id, name, required, min_select, max_select, display_order, default_choice_id")
       .in("menu_item_id", itemIds)
       .order("display_order", { ascending: true })
       .order("id", { ascending: true }),
@@ -453,6 +481,7 @@ async function buildEffectiveMenu(
       min_select: g.min_select,
       max_select: g.max_select,
       choices: choicesByGroup[g.id] || [],
+      default_choice_id: g.default_choice_id ?? null,
     });
   }
 
@@ -478,6 +507,9 @@ async function buildEffectiveMenu(
       modifiers_json: item.modifiers_json,
       prompt_for:     item.prompt_for ?? null,
       option_groups:  groupsByItem[item.id] || [],
+      ask_plan:         item.ask_plan ?? null,
+      bot_state:        item.bot_state ?? null,
+      bot_state_reason: item.bot_state_reason ?? null,
     }));
 
   return { menu: effectiveItems, soldOutNames };
@@ -794,6 +826,16 @@ async function executeTool(
   testMode:  boolean = false,
   deliveryFeeCents?: number | null,
   shopGeo?: { lat: number; lng: number; radiusMi: number } | null,
+  // Item 8 (spec §7/§11 item 8). All three default to falsy/undefined at
+  // every existing call site except the main tool loop in runOrderingLoop —
+  // so every OTHER caller of executeTool (remove_item/modify_item/
+  // submit_order call sites elsewhere in this file) is unaffected by this
+  // param addition, and add_item itself is a no-op change unless
+  // compiledEngineEnabled is true AND the target item has a compiled
+  // ask_plan (see the branch at the top of the "add_item" case below).
+  compiledEngineEnabled?: boolean,
+  customerMessage?: string,
+  shopPhone?: string | null,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -813,6 +855,29 @@ async function executeTool(
       if (!menuItem) {
         return { ok: false, result: { error: `Item ID "${menu_item_id}" not found in the available menu. Use an exact ID from the menu list.` } };
       }
+
+      // ── Item 8: compiled ordering engine (spec §7/§11 item 8) ──────────
+      // Gate: shop flag AND this item has actually been compiled (non-null
+      // ask_plan). Both are false for every item at every shop today (see
+      // BLOCKED.txt PIVOT entry, 2026-09-07) — this branch is provably
+      // unreachable until a shop is explicitly flagged in the DB AND its
+      // menu has been compiled. Vito's is never flagged; nothing below this
+      // block (the entire legacy path) is touched by this change. Logic
+      // lives in ask-plan-engine.ts's applyCompiledAddItem so it is
+      // directly unit-testable rather than requiring a hand-copied mirror.
+      if (compiledEngineEnabled && menuItem.ask_plan) {
+        const engineOutcome = applyCompiledAddItem(
+          cart as unknown as CompiledCartLine[],
+          menuItem as unknown as CompiledMenuItem,
+          menu_item_id,
+          quantity as number,
+          customerMessage ?? "",
+          shopPhone,
+        );
+        if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
+        return { ok: engineOutcome.ok, result: engineOutcome.result };
+      }
+
       const validMods    = menuItem.modifiers_json?.map(m => m.name) ?? [];
       let inputMods      = (modifiers as string[]).slice();
 
@@ -1584,6 +1649,9 @@ async function runOrderingLoop(
   deliveryFeeCents?: number | null,
   shopGeo?:      { lat: number; lng: number; radiusMi: number } | null,
   correctionApplied?: boolean,
+  // Item 8 (spec §7/§11 item 8) — see executeTool's matching params.
+  compiledEngineEnabled?: boolean,
+  shopPhone?: string | null,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
@@ -1786,6 +1854,9 @@ async function runOrderingLoop(
         testMode,
         deliveryFeeCents,
         shopGeo ?? null,
+        compiledEngineEnabled,
+        userMessage,
+        shopPhone,
       );
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
       // all. When add_item failed the model narrated it to the customer ("that's
@@ -4830,6 +4901,7 @@ Deno.serve(async (req: Request) => {
   } else {
     const loopResult = await runOrderingLoop(
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
+      shop.compiled_ordering_engine_enabled === true, shop.phone_number_e164 ?? null,
     );
     reply = loopResult.reply;
     // Defect 1 (2026-09-05): the model may still promise to "check with the
