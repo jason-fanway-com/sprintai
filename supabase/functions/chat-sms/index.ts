@@ -4379,8 +4379,23 @@ Deno.serve(async (req: Request) => {
     const userMsgLower7c = userMessage.toLowerCase();
     for (const [name7c, candidates7c] of byName7c) {
       if (candidates7c.length < 2) continue;
-      const nameRe7c = new RegExp(`\\b${name7c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      const escapedName7c = name7c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const nameRe7c = new RegExp(`\\b${escapedName7c}\\b`);
       if (!nameRe7c.test(userMsgLower7c)) continue;
+      // FIX (QA-found before ship): "I don't want the chicken caesar salad"
+      // also names the item + a category word — without this check it would
+      // have been ADDED despite the negation. Adjacency-based, same pattern
+      // GUARD 4 v2's negation-filter already uses (immediately before the
+      // item name, not just co-occurring anywhere in the message) — that
+      // matters here: "chicken caesar salad, no croutons please" must still
+      // resolve and add (the negation is about a topping, nowhere near the
+      // item name), which a bare co-occurrence check would have wrongly
+      // suppressed. A declined message is left to the normal LLM/tool loop,
+      // exactly as it was before this guard existed.
+      const negRe7c = new RegExp(
+        `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|don['’]t\\s+(?:want|need|get))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName7c}\\b`,
+      );
+      if (negRe7c.test(userMsgLower7c)) continue;
       const categoryMatches7c = candidates7c.filter(c => categoryWordMatches(c.category, userMessage));
       if (categoryMatches7c.length !== 1) continue; // no signal, or still genuinely ambiguous — let the existing flow handle it
       const resolved7c = categoryMatches7c[0];

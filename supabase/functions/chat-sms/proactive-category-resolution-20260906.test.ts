@@ -36,8 +36,22 @@ interface Candidate {
   category: string | null;
 }
 
-// Copied verbatim from GUARD 7c's resolution logic in index.ts.
-function resolveByCategoryWord(userMessage: string, candidates: Candidate[]): Candidate | null {
+// Copied verbatim from GUARD 7c's resolution logic in index.ts, including
+// the adjacency-based negation check added before ship (QA-found: "I don't
+// want the chicken caesar salad" also names the item + a category word, and
+// would have been ADDED despite the negation without this check). Deliberately
+// adjacency-based (negation immediately before the ITEM NAME), same pattern
+// GUARD 4 v2's negation-filter already uses — a bare co-occurrence check
+// (decline word ANYWHERE + item word ANYWHERE) would wrongly suppress
+// "chicken caesar salad, no croutons please", where the negation is about an
+// unrelated topping, nowhere near the item name.
+function resolveByCategoryWord(userMessage: string, candidates: Candidate[], name: string): Candidate | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const negRe = new RegExp(
+    `\\b(?:no|not|remove|skip|drop|scratch|cancel(?:ling)?|don['’]t\\s+(?:want|need|get))\\s+(?:the\\s+)?(?:any\\s+)?${escapedName}\\b`,
+    "i",
+  );
+  if (negRe.test(userMessage)) return null;
   const categoryMatches = candidates.filter(c => categoryWordMatches(c.category, userMessage));
   if (categoryMatches.length !== 1) return null;
   return categoryMatches[0];
@@ -48,23 +62,41 @@ const CHICKEN_CAESAR_WRAP: Candidate = { id: "wrap-id", name: "Chicken Caesar", 
 const CANDIDATES = [CHICKEN_CAESAR_SALAD, CHICKEN_CAESAR_WRAP];
 
 Deno.test("GUARD 7c decision: 'chicken caesar salad' resolves to the Salads candidate every time", () => {
-  const resolved = resolveByCategoryWord("chicken caesar salad", CANDIDATES);
+  const resolved = resolveByCategoryWord("chicken caesar salad", CANDIDATES, "chicken caesar");
   assertEquals(resolved?.id, "salad-id");
 });
 
 Deno.test("GUARD 7c decision: 'can I get a chicken caesar wrap' resolves to the Wraps candidate every time", () => {
-  const resolved = resolveByCategoryWord("can I get a chicken caesar wrap", CANDIDATES);
+  const resolved = resolveByCategoryWord("can I get a chicken caesar wrap", CANDIDATES, "chicken caesar");
   assertEquals(resolved?.id, "wrap-id");
 });
 
 Deno.test("GUARD 7c decision: a bare 'chicken caesar' with no category word supplies no signal — genuinely ambiguous, untouched", () => {
-  const resolved = resolveByCategoryWord("chicken caesar", CANDIDATES);
+  const resolved = resolveByCategoryWord("chicken caesar", CANDIDATES, "chicken caesar");
   assertEquals(resolved, null);
 });
 
 Deno.test("GUARD 7c decision: is deterministic — the same message always resolves the same way", () => {
-  const results = Array.from({ length: 20 }, () => resolveByCategoryWord("chicken caesar salad", CANDIDATES)?.id);
+  const results = Array.from({ length: 20 }, () => resolveByCategoryWord("chicken caesar salad", CANDIDATES, "chicken caesar")?.id);
   assert(results.every(r => r === "salad-id"), `every run must resolve identically, got: ${JSON.stringify(results)}`);
+});
+
+// QA-found before ship: without the decline check, this would add the item
+// the customer just said they DIDN'T want.
+Deno.test("GUARD 7c decision: 'I don't want the chicken caesar salad' is a decline, never an add", () => {
+  const resolved = resolveByCategoryWord("I don't want the chicken caesar salad", CANDIDATES, "chicken caesar");
+  assertEquals(resolved, null);
+});
+
+Deno.test("GUARD 7c decision: 'no chicken caesar wrap for me' is a decline, never an add", () => {
+  const resolved = resolveByCategoryWord("no chicken caesar wrap for me", CANDIDATES, "chicken caesar");
+  assertEquals(resolved, null);
+});
+
+Deno.test("GUARD 7c decision: a genuine order is not mistaken for a decline just because 'no' appears elsewhere", () => {
+  // sanity check the decline check isn't so broad it eats real orders
+  const resolved = resolveByCategoryWord("chicken caesar salad, no croutons please", CANDIDATES, "chicken caesar");
+  assertEquals(resolved?.id, "salad-id");
 });
 
 // ── Wiring regression guards against the live file ─────────────────────────
@@ -108,6 +140,19 @@ Deno.test("GUARD 7c wiring: a still-pending required option is asked through the
   assert(block.includes("renderMissingOptionsPrompt([{ name: resolved7c.name, missingGroups: pending7c }])"), "must ask via the shared humanizer, same as GUARD 2 and D1");
   assert(block.includes("group.choices.map(c => c.name).join"), "must list the real recorded choices, not leave the customer guessing");
 });
+
+Deno.test("GUARD 7c wiring: a negation immediately before the item name is checked before resolving (adjacency-based, not bare co-occurrence)", () => {
+  const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
+  assert(block.includes("negRe7c.test(userMsgLower7c)) continue"), "a negated mention of the item must fall through to the normal loop, never be added");
+  assert(negBlockIsAdjacencyBased(block), "the negation check must require the decline word immediately before the escaped item name, not just co-occurrence anywhere in the message");
+});
+
+function negBlockIsAdjacencyBased(block: string): boolean {
+  const idx = block.indexOf("const negRe7c = new RegExp(");
+  if (idx === -1) return false;
+  const snippet = block.slice(idx, idx + 300);
+  return snippet.includes("${escapedName7c}");
+}
 
 Deno.test("GUARD 7c wiring: a real executeTool failure falls through to the normal loop rather than silently swallowing it", () => {
   const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
