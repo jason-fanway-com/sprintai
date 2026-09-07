@@ -189,6 +189,13 @@ category-coverage cases, no fail-open fix, old unconditional safety gate).
 `scripts/test-suite/` path picks up both changes immediately since it runs
 from the working tree.
 
+**CLOSED 2026-09-07 07:05 EDT** — deployed `test-runner` v29, confirmed live
+via `supabase functions list` (ACTIVE, version 29, deployed 2026-09-07
+11:05:07 UTC). `deno check` clean pre-deploy, working tree clean. The
+pg_cron-driven autonomous Proof suite now runs `fe37f88` (category-coverage
+invariants + fail-open fix) and `1412ef1` (channel-aware safety gate), not
+the stale 09-04 code.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a
