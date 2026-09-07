@@ -422,7 +422,7 @@ function dedupeLexicon(terms: LexiconTerm[]): LexiconTerm[] {
   const seen = new Set<string>();
   const out: LexiconTerm[] = [];
   for (const t of terms) {
-    const key = `${t.target_type} ${t.target_id} ${t.term}`;
+    const key = `${t.target_type} ${t.target_id} ${t.term}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(t);
@@ -458,7 +458,7 @@ export function applyOverrides(
 
   const byKey = new Map<string, OverrideRow[]>();
   for (const o of overrides) {
-    const k = `${o.entity_type} ${o.entity_key}`;
+    const k = `${o.entity_type} ${o.entity_key}`;
     const list = byKey.get(k);
     if (list) list.push(o); else byKey.set(k, [o]);
   }
@@ -471,7 +471,7 @@ export function applyOverrides(
     return out;
   };
 
-  const itemFields = lastWriteWins(byKey.get(`item ${itemEntityKey}`));
+  const itemFields = lastWriteWins(byKey.get(`item ${itemEntityKey}`));
   if (itemFields.has("*")) return { ...item, active: false };
 
   const next: CompileItem = { ...item };
@@ -482,7 +482,7 @@ export function applyOverrides(
   next.groups = item.groups
     .map(g => {
       const gKey = groupEntityKeys.get(g.id);
-      const gFields = gKey ? lastWriteWins(byKey.get(`group ${gKey}`)) : new Map<string, unknown>();
+      const gFields = gKey ? lastWriteWins(byKey.get(`group ${gKey}`)) : new Map<string, unknown>();
       if (gFields.has("*")) return null;
       const nextGroup: CompileGroup = { ...g };
       if (gFields.has("default_choice_id")) nextGroup.default_choice_id = gFields.get("default_choice_id") as string;
@@ -491,7 +491,7 @@ export function applyOverrides(
       nextGroup.choices = g.choices
         .map(c => {
           const cKey = choiceEntityKeys.get(c.id);
-          const cFields = cKey ? lastWriteWins(byKey.get(`choice ${cKey}`)) : new Map<string, unknown>();
+          const cFields = cKey ? lastWriteWins(byKey.get(`choice ${cKey}`)) : new Map<string, unknown>();
           if (cFields.has("*")) return null;
           const nextChoice: CompileChoice = { ...c };
           if (cFields.has("price_cents")) nextChoice.price_cents = cFields.get("price_cents") as number;

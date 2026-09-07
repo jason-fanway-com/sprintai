@@ -495,7 +495,7 @@ Deno.serve(async (req: Request) => {
     ...result.items.flatMap(c => c.lexicon_terms),
     ...result.categoryLexicon,
   ];
-  const desiredKeys = new Set(desiredTerms.map(t => `${t.term} ${t.target_type} ${t.target_id}`));
+  const desiredKeys = new Set(desiredTerms.map(t => `${t.term} ${t.target_type} ${t.target_id}`));
 
   if (desiredTerms.length > 0) {
     await supabase.from("lexicon").upsert(
@@ -520,7 +520,7 @@ Deno.serve(async (req: Request) => {
     .eq("active", true);
   const staleIds = (existingLexicon ?? [])
     .filter((row: { term: string; target_type: string; target_id: string }) =>
-      !desiredKeys.has(`${row.term} ${row.target_type} ${row.target_id}`))
+      !desiredKeys.has(`${row.term} ${row.target_type} ${row.target_id}`))
     .map((row: { id: string }) => row.id);
   if (staleIds.length > 0) {
     await supabase.from("lexicon").update({ active: false }).in("id", staleIds);
