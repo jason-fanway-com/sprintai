@@ -1227,3 +1227,45 @@ safety (from ~19:05 UTC), and this compile-menu fix (just spawned). Will
 report both the moment they land.
 203/220 (92.3%) clears the spec's ≥90%-orderable go-live threshold (§12
 decision 2) even before the 2 remaining owner questions are answered.
+
+[ITEM 8 — LIVE ON ZIO'S, real numbers, bug 5 gap found+fixed, one upstream gap flagged]
+2026-09-07 — Flipped shops.compiled_ordering_engine_enabled=true for Zio's ONLY
+(Vito's stays false) to run my own live verification before the final Melvin pass.
+FOUND AND FIXED a real gap while testing: bug 5 (slot resolved without price) was
+still live for the SEPARATE-TURN answer flow ("chicken cheesesteak sub" then
+"large" as two messages) — item 8's compiled branch only lived inside the
+add_item tool case; the existing deterministic "answer a pending question"
+handler (~line 4600, pre-dates item 8, calls modify_item directly) never routed
+through the compiled engine, so it recorded the choice NAME but not its price.
+Confirmed live: two-turn answer stayed at $10.99 instead of $18.99, while the
+one-turn "a large chicken cheesesteak sub" was already correct. Fixed by adding
+an identically-gated compiled branch to that handler (same shop-flag +
+menuItem.ask_plan gate, same no-op-for-Vito's guarantee). Redeployed, re-verified
+live: two-turn "large" now correctly applies $8.00, total $19.98. 345/345 suite
+still green, deno check clean (same 4 pre-existing errors).
+FULL 5-SCENARIO RE-RUN, live against Zio's, post-fix (real transcripts):
+  1. "large buffalo chicken pizza" -> $24.99 exact (base $19.99 + $5.00 large). CORRECT.
+  2. "buffalo chicken pizza with pepperoni" -> size question rendered deterministically
+     with real prices (Large +$5/Medium +$3/Small no extra) — CORRECT for the slot.
+     Pepperoni itself did NOT apply — see upstream gap below, not an item-8 bug.
+  3. "chicken cheesesteak sub" -> "large" (two turns) -> $19.98 total ($18.99+$0.99).
+     CORRECT (this is the gap just fixed).
+  4. "double burger" -> honest decline, lists real alternative burgers, never
+     invents an option or adds it. CORRECT (bug 3 fixed).
+  5. Full order (pizza+sub+cannoli, "thats it") -> $49.96 total, arithmetic exact
+     (2499+1899+499=4897, +99 fee=4996). Cannoli's own pending option correctly
+     blocks "thats it" from false-confirming — no premature checkout. CORRECT.
+UPSTREAM GAP FOUND (not fixing, not mine to fix, flagging clearly): "Add
+Toppings" (25 choices, kind=modifier, includes real pizza toppings) exists on
+Buffalo Chicken Pizza but ask_mode=null in the DB — compile-menu's
+stepEligible() only includes a modifier in ask_plan.steps when
+ask_mode='offer_once', which the item-3 archetype/infer step is supposed to
+set for pizza-archetype toppings groups. archetype is null for every Zio's
+item (confirmed earlier), so infer never bound this group — it's invisible to
+the sequencer/resolver through no fault of item 8's own logic. This is item
+3's territory (archetype classification), a separate, already-known-incomplete
+piece — not touching it without sign-off, per the same discipline as
+everything else today.
+Spawning one final Melvin pass now covering: the bug-5 modify_item fix, live
+5-scenario Zio's results, Vito's re-confirmation post-redeploy, and the
+toppings/archetype gap diagnosis. Will report the moment it lands.

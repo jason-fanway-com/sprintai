@@ -37,7 +37,7 @@ import {
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, allSlotsResolved, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -4597,6 +4597,60 @@ Deno.serve(async (req: Request) => {
   // aren't a recorded required option group, so the key never diverges).
   // Resolving here calls modify_item directly; add_item is never reachable
   // this turn for this item, so it cannot create a second line.
+  // Item 8 (spec §7/§11 item 8, bug 5 fix — 2026-09-07): the block above
+  // this comment is the LEGACY pending-answer resolver — it calls
+  // modify_item, which has no ask_plan/price_delta_cents awareness, so
+  // answering a compiled item's pending slot ("large", on a separate turn
+  // from the add) recorded the choice NAME but never applied its real
+  // price. Confirmed live: "chicken cheesesteak sub" then "large" (two
+  // turns) stayed at $10.99 instead of $18.99, while "a large chicken
+  // cheesesteak sub" (one turn) correctly applied the $8.00 delta via
+  // add_item's own compiled branch — the gap was specifically this
+  // separate-turn answer path, which every real conversation uses at least
+  // once per item. Gated identically to add_item's branch: shop flag AND
+  // the pending line's item has a non-null ask_plan. Structurally
+  // unreachable for any uncompiled item/shop, including Vito's.
+  const compiledOrderingEngineEnabled = shop.compiled_ordering_engine_enabled === true;
+  if (compiledOrderingEngineEnabled) {
+    const menuById8 = new Map(effectiveMenu.map(mi => [mi.id, mi]));
+    const pendingCompiledLine = (cart.cart_json as CartItem[]).find(ci => {
+      if (!ci.ask_plan_selections) return false;
+      const mi = menuById8.get(ci.menu_item_id);
+      return mi?.ask_plan && !allSlotsResolved(mi.ask_plan, new Set(Object.keys(ci.ask_plan_selections)));
+    });
+    if (pendingCompiledLine) {
+      const menuItem8 = menuById8.get(pendingCompiledLine.menu_item_id)!;
+      const localCartItems8 = [...cart.cart_json] as unknown as CompiledCartLine[];
+      const outcome = applyCompiledAddItem(
+        localCartItems8,
+        menuItem8 as unknown as CompiledMenuItem,
+        pendingCompiledLine.menu_item_id,
+        1,
+        userMessage,
+        shop.phone_number_e164,
+      );
+      if (outcome.cartChanged) {
+        await saveCart(supabase, cart.id, localCartItems8 as unknown as AnyCartItem[], "building");
+        const feeAlreadyDisclosed8 = !!cart.fee_disclosed_at;
+        const footer8 = renderLedgerFooter(localCartItems8 as unknown as AnyCartItem[], "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed8);
+        const r8 = outcome.result as { instruction?: string; next_question?: string | null };
+        const reply8 = r8.next_question
+          ? `Got it — ${r8.next_question}${footer8 ? `\n\n${footer8}` : ""}`
+          : `Got it!${footer8 ? `\n\n${footer8}` : ""} Anything else?`;
+        if (!feeAlreadyDisclosed8) {
+          await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+        }
+        console.log(`[chat-sms] Item 8 compiled pending-answer resolved (conv=${conversation.id}): "${pendingCompiledLine.name}" turn="${userMessage}".`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply8);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply8); return emptyTwiml(); }
+        return jsonResponse({ reply: reply8, cart: localCartItems8, phase: "building", session_id: sessionId });
+      }
+      // Not resolved this turn (customer's message didn't match any pending
+      // choice) — fall through to the legacy resolver below, then the
+      // LLM/tool loop, same as the uncompiled path already does.
+    }
+  }
+
   {
     const menuById = new Map(effectiveMenu.map(mi => [mi.id, mi]));
     const pendingQuestion = findPendingOptionQuestion(cart.cart_json as CartItem[], menuById);
@@ -4901,7 +4955,7 @@ Deno.serve(async (req: Request) => {
   } else {
     const loopResult = await runOrderingLoop(
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
-      shop.compiled_ordering_engine_enabled === true, shop.phone_number_e164 ?? null,
+      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null,
     );
     reply = loopResult.reply;
     // Defect 1 (2026-09-05): the model may still promise to "check with the
