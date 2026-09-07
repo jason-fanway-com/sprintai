@@ -79,6 +79,16 @@ const CORS_HEADERS = {
 // Same pagination fix as chat-sms/public-menu's fetchAllRows — PostgREST
 // caps a single response at 1000 rows silently. See those files' comments
 // for the incident this guards against.
+//
+// 2026-09-07 incident (Zio's first real compile run): this used to swallow
+// a fetch error (`if (error) { console.error(...); break; }`) and return
+// whatever partial rows it had — silently. Zio's option_choices fetch (see
+// IN_BATCH_SIZE below for why) failed outright with a network-level
+// `TypeError: fetch failed`, so it returned ZERO choices for every group,
+// and the compiler wrote bot_state='blocked' for 183 items that actually
+// have real, stated choices. The report still said `ok: true`. A compiler
+// whose entire job is correctness must never write plausible-looking wrong
+// data on a fetch failure — it must fail the whole run loudly instead.
 const FETCH_PAGE_SIZE = 1000;
 async function fetchAllRows<T>(
   queryBuilder: () => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
@@ -88,13 +98,31 @@ async function fetchAllRows<T>(
   for (;;) {
     const { data, error } = await (queryBuilder() as any).range(from, from + FETCH_PAGE_SIZE - 1);
     if (error) {
-      console.error(`[compile-menu] fetchAllRows error at offset ${from}:`, error.message);
-      break;
+      throw new Error(`fetchAllRows failed at offset ${from}: ${error.message}`);
     }
     if (!data || data.length === 0) break;
     rows.push(...data);
     if (data.length < FETCH_PAGE_SIZE) break;
     from += FETCH_PAGE_SIZE;
+  }
+  return rows;
+}
+
+// A `.in("col", ids)` filter with enough UUIDs makes the request URL long
+// enough to fail outright (reproduced live: ~492 UUIDs on Zio's option
+// groups threw `TypeError: fetch failed`, not a graceful PostgREST error —
+// see the fetchAllRows comment above for the incident this caused). Batch
+// the ID list itself, not just the result page, for any `.in()` filter
+// whose value list scales with menu size rather than a fixed small set.
+const IN_BATCH_SIZE = 150;
+async function fetchAllRowsBatchedIn<T, K>(
+  ids: K[],
+  queryBuilder: (batch: K[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_BATCH_SIZE) {
+    const batch = ids.slice(i, i + IN_BATCH_SIZE);
+    rows.push(...await fetchAllRows(() => queryBuilder(batch)));
   }
   return rows;
 }
@@ -230,22 +258,22 @@ Deno.serve(async (req: Request) => {
   }
 
   const itemIds = itemRows.map(i => i.id);
-  const groupRows = await fetchAllRows<OptionGroupRow>(() =>
+  const groupRows = await fetchAllRowsBatchedIn<OptionGroupRow, string>(itemIds, batch =>
     supabase
       .from("option_groups")
       .select("id, menu_item_id, name, kind, slot_key, min_select, max_select, kitchen_critical, price_critical, default_choice_id, ask_mode, provenance, display_order, import_key")
-      .in("menu_item_id", itemIds)
+      .in("menu_item_id", batch)
       .order("display_order", { ascending: true })
       .order("id", { ascending: true }),
   );
 
   const groupIds = groupRows.map(g => g.id);
   const choiceRows = groupIds.length > 0
-    ? await fetchAllRows<OptionChoiceRow>(() =>
+    ? await fetchAllRowsBatchedIn<OptionChoiceRow, string>(groupIds, batch =>
         supabase
           .from("option_choices")
           .select("id, option_group_id, name, display_name, price_cents, is_default, provenance, import_key")
-          .in("option_group_id", groupIds)
+          .in("option_group_id", batch)
           .order("display_order", { ascending: true })
           .order("id", { ascending: true }),
       )
@@ -526,8 +554,10 @@ Deno.serve(async (req: Request) => {
     .filter((row: { term: string; target_type: string; target_id: string }) =>
       !desiredKeys.has(`${row.term} ${row.target_type} ${row.target_id}`))
     .map((row: { id: string }) => row.id);
-  if (staleIds.length > 0) {
-    await supabase.from("lexicon").update({ active: false }).in("id", staleIds);
+  for (let i = 0; i < staleIds.length; i += IN_BATCH_SIZE) {
+    const batch = staleIds.slice(i, i + IN_BATCH_SIZE);
+    const { error } = await supabase.from("lexicon").update({ active: false }).in("id", batch);
+    if (error) throw new Error(`lexicon deactivate batch failed: ${error.message}`);
   }
 
   return new Response(

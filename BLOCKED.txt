@@ -1111,3 +1111,92 @@ Meanwhile: continuing on BUG 4 (topping deferred-apply + confirmation hardening)
 Zio's bugs 1/2 (size resolution + generic option-label leak), and the quantity-
 doubling guard — none of those depend on bot_state and none touch Vito's differently
 than they do now.
+
+[PIVOT — Item 8, deterministic sequencer/resolver, spec §7]
+2026-09-07 — Not blocked, starting now. Stopping any wording-polish work (none was in
+flight). Building item 8 per spec §7: LLM stops deciding options, it only phrases what
+the compiled ask_plan/bot_state/lexicon has already resolved. Feature-flagged per shop —
+Vito's stays on the exact current path, byte-identical, zero behavior change. Zio's runs
+the new path. Orienting on the spec now before writing code.
+
+[PIVOT — item 8 hits the SAME landmine already escalated above as "BUG 3 (bot_state
+gating)" — these two threads are entangled, flagging before going further]
+2026-09-07 — Independently confirmed (before writing code, same pre-mortem habit) what
+the BUG 3 entry above already found: ask_plan is null and bot_state='blocked' (the
+untouched default) for 100% of Zio's 220 items. The compiler (item 4) has never been
+invoked against Zio's live data — only dry-run reads. Raw Slice option_groups/choices
+DO exist (13 groups sampled across 5 items, consistent with ~490/3413 total), but
+nothing downstream of extraction has run: archetype is null, ask_plan is null, lexicon
+has 0 rows for Zio's menu.
+CONSEQUENCE FOR ITEM 8: the sequencer/resolver I'm building reads ask_plan/lexicon/
+bot_state by contract (spec §7) — there is currently NOTHING for it to read on Zio's.
+Building the mechanism itself doesn't require live compiled data (I can and will unit-
+test it against fixtures shaped exactly like compile-menu.ts's real output), but it
+CANNOT be demonstrated end-to-end against live Zio's conversations, and bugs 3/4/5/7
+CANNOT actually be fixed by wiring item 8 alone, until the compiler is actually run
+against Zio's — which is precisely the decision already sitting with you under "BUG 3
+(bot_state gating) — STOP before wiring" above. These are not two separate blockers;
+they're the same one. Whatever you decide there (a/b/c) also determines when item 8
+can go live on Zio's.
+PROCEEDING NOW, not blocked: building the sequencer + resolver as pure, importable,
+fully unit-tested modules against fixture ask_plan/lexicon data matching compile-
+menu.ts's real shape, plus the feature-flag wiring into chat-sms — gated so it is a
+guaranteed no-op on any menu with zero compiled items (which today is BOTH shops), so
+none of this changes live behavior anywhere until compiled data exists. This makes the
+mechanism ready to flip on the instant the compile question above is resolved, without
+me touching the compiler or its write-back myself (same reason the other thread gave:
+another thread is actively mid-edit on compile-menu.ts right now).
+
+[ITEM 8 — deterministic sequencer/resolver, spec §7/§11 item 8]
+2026-09-07 ~19:05 UTC — Not blocked. Built ask-plan-engine.ts (pure, 19/19 unit
+tests) + wired into chat-sms/index.ts add_item, gated on shops.
+compiled_ordering_engine_enabled (migration 118, applied live, default false —
+both shops currently false) AND item.ask_plan non-null. Scope: SLOT resolution
+only (bugs 1/5/7's exact shape) — modifier/offer_once stays on legacy path,
+documented as a deliberate cut. Committed locally (6343e40), NOT pushed —
+awaiting Melvin.
+Also extended GUARD 13 test coverage to the full phrase family Jason asked for
+(pickup/delivery/takeout/for here/to go/yes/sure/ok/sounds good/that works/
+looks good/bare name) — 24/24 pass, pushed (b2e2cbb, test-only, zero prod risk).
+Verified live myself, per your ask: Vito's Caesar disambiguation ("1" and "the
+salad one") both resolve correctly, $13.94 total for a single Chicken Caesar
+Salad — I don't have the exact multi-item combination that produces your
+$22.43 reference total, so I can't confirm that specific number, but the
+underlying mechanism (both answer forms, dressing pending_options, price) shows
+no change from before today's bugs-2/4 fixes landed. Also confirmed live: a
+plain Vito's "large cheese pizza" + "pickup" sequence does NOT double quantity
+(guard13 held it at 1) — the exact incident class from earlier today, now
+guarded on Vito's too.
+REMAINING BLOCKER FOR "ready for Jason to run his 7 cases on Zio's": Zio's has
+zero compiled ask_plan/lexicon data (unchanged from the earlier BUG 3 bot_state
+finding) — my new engine has nothing to read on live Zio's until that compile
+step happens, which is the same pending decision already escalated above. Item
+8's mechanism is built, tested, and safe to flip on the moment that lands.
+Spawning Melvin now for independent verification of item 8 + the Vito's-safety
+claim before push.
+
+[COMPILE RUN — REAL NUMBERS, GAP FOUND, root cause identified, fixing now]
+2026-09-07 — Ran compile-menu against Zio's ONLY (shop_id 2cba7b51-...), as authorized.
+Query you specified, run by me just now:
+  bot_state=orderable: 20
+  bot_state=blocked:  200
+This is NOT near the projected 217 orderable. Saying so plainly, not explaining it away.
+ROOT CAUSE FOUND (reproduced independently, not guessed): supabase/functions/
+compile-menu/index.ts's fetchAllRows() fetches option_choices via
+`.in("option_group_id", groupIds)` where groupIds has ~492 UUIDs for Zio's
+(492 real groups, 3430 real choices confirmed live in the DB via direct SQL).
+That `.in()` list is long enough that the HTTP request itself fails
+(`TypeError: fetch failed` — reproduced this exact error myself against the
+live DB with the identical query shape). fetchAllRows's error handling
+(`if (error) { console.error(...); break; }`) SILENTLY swallows this and
+returns an empty array instead of throwing — so the compiler proceeded
+believing ~183 items' option groups had ZERO choices (bot_state_reason:
+"slot X has zero active choices") when they actually have 1-3 real, stated
+choices each, confirmed by direct query. This is a real bug in compile-menu's
+I/O layer, not a data problem — Slice's real Zio's data is fine.
+FIXING NOW: batching the .in() value list (same shape as fetchAllRows'
+existing row-pagination, applied to the FILTER SIZE instead of just the
+result size) so this can't silently drop data on any menu with enough groups
+to hit this. Will re-run compile-menu against Zio's ONLY after the fix,
+re-run the exact query above, and run it twice back to back for the
+idempotency proof, per your instructions. NOT touching Vito's or NJB.
