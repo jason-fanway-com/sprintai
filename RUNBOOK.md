@@ -1223,9 +1223,30 @@ psql "$DATABASE_URL"            # interactive
 The role can SELECT only inside schema `qa_ro`. No writes, no DDL, no `public`.
 Useful views: `test_transcripts`, `public_tester_sessions` (device +
 is_first_session), `test_runs`, `test_case_results`, `test_run_queue`, `issues`,
-`menus`, `menu_items`, `option_groups`, `option_choices`,
-`menu_item_option_coverage`, `ticket_send_log_ro`, `order_carts_ro`,
-`orders_ro`, `shops_config`, `menu_edit_log`.
+`menus`, `menu_items`, `option_groups`, `option_choices`, `lexicon`,
+`owner_questions`, `menu_item_option_coverage`, `ticket_send_log_ro`,
+`order_carts_ro`, `orders_ro`, `shops_config`, `menu_edit_log`.
+
+**Column exposure matters as much as row scoping — a view can hide columns from
+a table it otherwise shows fine.** Found 2026-09-07: `qa_ro.menu_items` showed
+25 of the real table's 37 columns and silently dropped every Phase-0 compiler
+column (`display_name`, `product_key`, `archetype`, `bot_state`,
+`bot_state_reason`, `ask_plan`, `name_provenance`, `price_provenance`,
+`source_span`) — so a query that looked like it worked (0 rows filtered, no
+error) just never showed the thing being asked about. Same shape bug as the
+row-scoping issue above, one layer down. Fixed same day: those 9 columns added
+to `qa_ro.menu_items`; `qa_ro.option_groups`/`option_choices` extended with
+their own missing Phase-0 columns (`kind`, `slot_key`, `kitchen_critical`,
+`price_critical`, `default_choice_id`, `ask_mode`, `provenance`,
+`source_span` / `display_name`, `is_default`, `provenance`, `source_span`);
+`qa_ro.lexicon` and `qa_ro.owner_questions` created from scratch — they had
+no `qa_ro` view at all before this, meaning the owner-question list and
+lexicon terms were only ever reachable through a report script, never
+independently. `confidence_score`/`source`/`source_ref` on `menu_items` are
+still not exposed — pre-existing gap, predates this spec, not fixed here.
+When adding a new compiler-output column anywhere: add it to the `qa_ro` view
+in the SAME migration, not later — this is the second time a real column
+existed and was invisible through the one read-only path meant to verify it.
 
 **Shop scoping is NOT consistent across these views — check this table before
 trusting a zero-row result.** Found 2026-09-07 the hard way: `qa_ro.option_groups`
