@@ -143,7 +143,8 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
     supabase.from("option_groups")
       .select("id, menu_item_id, name, kind, slot_key, min_select, max_select, kitchen_critical, price_critical, default_choice_id, ask_mode, provenance, display_order, import_key, required")
       .in("menu_item_id", itemIds)
-      .order("display_order", { ascending: true }),
+      .order("display_order", { ascending: true })
+      .order("id", { ascending: true }),
   );
   const groupIds = groupRows.map(g => g.id);
   const choiceRows = groupIds.length > 0
@@ -151,7 +152,8 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
         supabase.from("option_choices")
           .select("id, option_group_id, name, display_name, price_cents, is_default, provenance, import_key")
           .in("option_group_id", groupIds)
-          .order("display_order", { ascending: true }),
+          .order("display_order", { ascending: true })
+          .order("id", { ascending: true }),
       )
     : [];
 
@@ -210,12 +212,18 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
     };
   });
 
+  // §5.1: "category or set first, item second" — an item with no category
+  // has no scope to ask a question against, so it's excluded from infer
+  // entirely (matches compile-menu.ts's buildOwnerQuestionSummaries
+  // contract exactly: `if (!item.category || !item.category.trim()) continue`).
+  // It still gets compiled/counted in items-in/orderable below via
+  // compileItems, which is built from the full itemRows list separately.
   const byCategory = new Map<string, InferItemInput[]>();
   for (const it of inferInputs) {
-    const cat = it.category ?? "(uncategorized)";
-    const list = byCategory.get(cat) ?? [];
+    if (!it.category || !it.category.trim()) continue;
+    const list = byCategory.get(it.category) ?? [];
     list.push(it);
-    byCategory.set(cat, list);
+    byCategory.set(it.category, list);
   }
 
   // item_id -> slot_key -> the OwnerQuestionDraft that actually applies to
