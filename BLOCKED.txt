@@ -824,3 +824,41 @@ Side note: pushing this also published d80a444 (zios-loader crash-recovery fix) 
 origin/main — it was sitting local-only/unpushed ahead of my own commit. Self-contained,
 already-complete commit, not mid-write data; flagging per this file's standing norm on
 carried-along pushes, no action needed.
+
+[ITEM 9 — Zio's real number, DONE per PO's request. Real script bug found+fixed en route]
+2026-09-07 ~20:00 UTC — Not blocked. PO reported Zio's Slice write finished (490 groups,
+3413 choices) and asked for the real Zio's number. Independently verified the write claim
+against the live DB myself before trusting it (chunked count query, matched exactly: 490/
+3413) — same discipline as the last correction, don't take a completion claim on faith.
+
+Re-ran scripts/item-9-readonly-compile-report.ts and got 20/220 orderable — nearly
+identical to the earlier "mid-write" 21/220 I'd reported to the PO as a stale snapshot.
+That explanation was wrong. Root-caused it instead of re-reporting the same number: a
+`fetch error: TypeError: fetch failed` was present in BOTH runs. Reproduced directly —
+the script's single `.in("option_group_id", groupIds)` call with all 490 real ids in one
+request fails outright at the transport layer ("stream error detected: unspecific protocol
+error") once Zio's had enough real groups to hit a size limit; confirmed by hand with the
+identical query shape. fetchAllRows caught that error, logged one line, and silently
+returned whatever partial (here: effectively empty) rows it had — so every item with any
+option group read as having zero choices and fell to blocked. This was never a mid-write
+artifact; it was a script bug that would have hit ANY shop once its real option data grew
+past a few hundred groups, not just Zio's.
+
+Fixed: fetchAllRows now throws instead of swallowing a fetch error, and a new
+fetchRowsInIdBatches helper chunks any large `.in()` id list into batches of 100 —
+generalized so this doesn't reappear at restaurant #47 or #10,000, not just patched for
+today's exact Zio's count. Re-verified NJB unchanged (100/170, 58.8%, matches the just-
+committed report exactly) before trusting the new Zio's number.
+
+Real result: docs/reports/2026-09-07-item9-zios-rerun-post-slice-load.md — Zio's
+**163/220 orderable (74.1%)**, 57 blocked across 6 owner_questions (bread on Hot Subs/
+Paninis/Wraps/Cold Subs/Baskets & Gyros, temp on Burgers), full blocked list + 10 real
+ask_plans included, real Slice-sourced choices (e.g. burger temp: Rare/Medium rare/
+Medium/Medium well/Well done).
+
+No Melvin pass on this (report-only, per original standing instruction; the script fix
+itself is small enough — a swallowed-error catch removed, an .in() chunked — that I
+verified it directly: reproduced the failure with the exact old query shape, confirmed the
+fix's queries return the full real counts I already validated independently against the
+DB, and confirmed NJB's report is bit-for-bit unchanged). Flagging for whoever reviews this
+next rather than claiming Melvin sign-off I didn't get.

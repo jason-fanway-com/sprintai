@@ -68,6 +68,12 @@ const SHOPS: Record<string, string> = {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
 const PAGE_SIZE = 1000;
+// A single `.in(col, ids)` filter with a few hundred UUIDs can exceed the
+// underlying HTTP transport's request-size tolerance and fail outright
+// (confirmed directly: 490 ids -> "TypeError: fetch failed" / "stream error
+// detected"). Chunking keeps every single request small regardless of shop size.
+const IN_CLAUSE_CHUNK_SIZE = 100;
+
 // deno-lint-ignore no-explicit-any
 async function fetchAllRows<T>(qb: () => PromiseLike<{ data: T[] | null; error: any }>): Promise<T[]> {
   const rows: T[] = [];
@@ -75,13 +81,27 @@ async function fetchAllRows<T>(qb: () => PromiseLike<{ data: T[] | null; error: 
   for (;;) {
     const { data, error } = await (qb() as any).range(from, from + PAGE_SIZE - 1);
     if (error) {
-      console.error("fetch error:", error.message ?? error);
-      break;
+      // Fail loud: a swallowed fetch error here previously returned a silently
+      // truncated (sometimes empty) result set, which then read as real
+      // blocking in the report instead of a fetch failure.
+      throw new Error(`fetch failed: ${error.message ?? error}`);
     }
     if (!data || data.length === 0) break;
     rows.push(...data);
     if (data.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
+  }
+  return rows;
+}
+
+async function fetchRowsInIdBatches<T>(
+  ids: string[],
+  queryFor: (chunk: string[]) => PromiseLike<{ data: T[] | null; error: any }>, // deno-lint-ignore no-explicit-any
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + IN_CLAUSE_CHUNK_SIZE);
+    rows.push(...await fetchAllRows(() => queryFor(chunk)));
   }
   return rows;
 }
@@ -141,19 +161,19 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
   }
 
   const itemIds = itemRows.map(i => i.id);
-  const groupRows = await fetchAllRows<OptionGroupRow>(() =>
+  const groupRows = await fetchRowsInIdBatches<OptionGroupRow>(itemIds, chunk =>
     supabase.from("option_groups")
       .select("id, menu_item_id, name, kind, slot_key, min_select, max_select, kitchen_critical, price_critical, default_choice_id, ask_mode, provenance, display_order, import_key, required")
-      .in("menu_item_id", itemIds)
+      .in("menu_item_id", chunk)
       .order("display_order", { ascending: true })
       .order("id", { ascending: true }),
   );
   const groupIds = groupRows.map(g => g.id);
   const choiceRows = groupIds.length > 0
-    ? await fetchAllRows<OptionChoiceRow>(() =>
+    ? await fetchRowsInIdBatches<OptionChoiceRow>(groupIds, chunk =>
         supabase.from("option_choices")
           .select("id, option_group_id, name, display_name, price_cents, is_default, provenance, import_key")
-          .in("option_group_id", groupIds)
+          .in("option_group_id", chunk)
           .order("display_order", { ascending: true })
           .order("id", { ascending: true }),
       )
