@@ -1382,3 +1382,70 @@ not redone:
      for them"). No entry found showing this was resolved since. Still open,
      genuinely lower priority than tonight's NJB questions — not started, flagging
      rather than picking it up unprompted.
+
+[BACKLOG ef07866d — scrape-shop silent chunk-failure/truncation data loss]
+2026-09-08 ~00:40 UTC — Not blocked, fixed and deployed. extractMenuItems()
+(supabase/functions/scrape-shop/index.ts) splits a shop's page text into up to
+MENU_MAX_CHUNKS concurrent LLM calls and merges the results. Two silent-loss paths:
+(1) a chunk that errored/timed out came back `null` and was dropped with
+`if (!items) continue` — no trace of which/how many chunks failed; Melvin measured
+this dropping ~25% of items on some real sites while crawl_status still reported
+"done". (2) a merge over the 300-item cap was silently sliced with no truncated
+flag. Both let a "done" status hide a genuinely incomplete menu — same class of
+dishonesty as the earlier false-done bug in this same crawl path.
+FIX: pulled the merge loop out of index.ts into a new zero-side-effect leaf module,
+supabase/functions/scrape-shop/menu-extraction.ts (mergeMenuChunkResults,
+shouldFlagMenuExtractionIncomplete, buildMenuExtractionNote), same pattern
+RUNBOOK.md documents for safety-gate.ts — index.ts calls Deno.serve() at module
+scope so it can't be `deno test`-imported directly. extractMenuItems() now returns
+{ items, chunksTotal, chunksFailed, truncated } instead of a bare array. All 3 call
+sites (rung-1 website ~934, rung-3 google ~688, rung-4 aggregator ~722) updated;
+only the rung-1 website insert path (the one this backlog item is about) sets the
+new signal, scoped there deliberately since rungs 3/4 run their own independent
+extractMenuItems() calls with their own provenance.
+New additive, nullable columns on shops (migration 120 + matching down pair in
+supabase/migrations-down/): menu_extraction_incomplete boolean default false,
+menu_extraction_note text. Set ONLY when menuHasUsableItems=true AND (chunksFailed>0
+OR truncated) for the rung-1 insert — happy-path runs never touch these columns.
+crawl_status/crawl_error meaning is UNCHANGED (retry/skip logic elsewhere depends on
+those exactly as-is) — this is a separate, non-blocking signal only. Also surfaced
+menu_extraction_chunks_failed / menu_extraction_truncated in the function's JSON
+response for tooling visibility (always present, not gated).
+Tests: supabase/functions/scrape-shop/menu-extraction.test.ts, 11 new cases —
+forced-null-chunk counted as a failure (not dropped), all-chunks-null reports full
+failure with no items, >300 merged items sets truncated=true and slices to the cap,
+happy path (no failures, under cap) sets neither flag, dedup behavior unchanged,
+plus direct coverage of shouldFlagMenuExtractionIncomplete/buildMenuExtractionNote.
+Full existing suite re-run file-by-file (the documented pattern here — files with
+top-level Deno.serve() collide on a real port if `deno test`-ed together in one
+process): 46/48 files clean, same 2 pre-existing environment-only failures before
+and after this change (pending-options-one-at-a-time.test.ts needs a real
+SUPABASE_URL not set in this shell; ticket-reliability.test.ts hits an
+already-bound port via issue-detector/index.ts's top-level Deno.serve()) — neither
+touches scrape-shop. `deno check` on the 3 touched files: 0 errors, before and
+after.
+DEPLOYED: migration 120 applied directly via the Supabase Management API (project
+rvdqfxtrskxekfkqnegx) — NOT via `supabase db push`, because `supabase migration
+list --linked` shows migration 118 (compiled_ordering_engine_flag, a concurrent
+session's in-flight work also in this shared repo) is local-only, not yet on
+remote; `db push` applies every pending migration in order and would have pushed
+118 prematurely. Verified via direct query: menu_extraction_incomplete/
+menu_extraction_note both present on shops with the expected types/defaults.
+scrape-shop function itself redeployed (`supabase functions deploy scrape-shop`).
+LIVE VERIFIED (real path, not synthetic): force-recrawled shop 2fafca31-77dd-4c07-
+889e-758ac0eea431 ("P2 Rehearsal Diner", is_test=true, jacksslice.com) against the
+deployed function — real Firecrawl scrape + real OpenRouter extraction, no mocks.
+Finished crawl_status="done", menu_extraction_incomplete=false, note=null (correct:
+this site's menu is small enough for one chunk, no failure, no truncation — the
+happy path is confirmed live and unregressed).
+NOT live-verified: an actual forced chunk failure or a real >300-item menu. Could
+not find or safely construct a real site guaranteed to hit either condition in this
+session without fabricating the very signal under test (which the culture rule
+against manufactured proof rules out) or spinning up a new tenant/shop purely to
+gamble on a live outcome. That gap is covered at the unit level instead, directly
+against the same mergeMenuChunkResults/shouldFlagMenuExtractionIncomplete functions
+the deployed code calls (not a mirror/copy) — see the 11 test cases above.
+Handing to Melvin for independent adversarial verification before this is closed.
+Out of scope, not touched (per the task): the (name, price_cents) dedup key, and
+anything under chat-sms/, compile-menu/, or _shared/compile-menu* (concurrent
+session's active work in this shared repo).

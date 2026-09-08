@@ -6,6 +6,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { parseLlmJson } from "../_shared/llm-json.ts";
+import {
+  buildMenuExtractionNote,
+  mergeMenuChunkResults,
+  shouldFlagMenuExtractionIncomplete,
+  type MergedMenuResult,
+} from "./menu-extraction.ts";
 
 const CLAUDE_API   = "https://api.anthropic.com/v1/messages";
 const SONNET_MODEL = "claude-sonnet-4-6";
@@ -483,25 +489,13 @@ async function extractMenuItems(
   openRouterKey: string,
   anthropicKey: string,
   startedAt: number,
-): Promise<Array<{ name: string; price_cents: number; category: string; description: string }> | null> {
+): Promise<MergedMenuResult> {
   const text = combinedText.substring(0, 55_000);
   const chunks = splitTextForMenuExtraction(text, MENU_CHUNK_TARGET_CHARS, MENU_MAX_CHUNKS);
   const chunkResults = await Promise.all(
     chunks.map(chunk => extractMenuItemsSingleCall(chunk, openRouterKey, anthropicKey, startedAt)),
   );
-
-  const merged: Array<{ name: string; price_cents: number; category: string; description: string }> = [];
-  const seen = new Set<string>();
-  for (const items of chunkResults) {
-    if (!items) continue;
-    for (const item of items) {
-      const key = `${(item.name ?? "").trim().toLowerCase()}|${item.price_cents}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(item);
-    }
-  }
-  return merged.length > 0 ? merged.slice(0, 300) : null;
+  return mergeMenuChunkResults(chunkResults, 300);
 }
 
 /** Fetch a candidate menu PDF and hand it to parse-menu-pdf, which does the
@@ -685,7 +679,7 @@ async function tryGoogleListingRung(
   if (!markdown.trim()) {
     return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_content", url: websiteUri } };
   }
-  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
+  const { items } = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
   if (!items || items.length === 0) {
     return { success: false, itemCount: 0, rungLog: { rung: 3, source: "google", result: "no_priced_items", url: websiteUri } };
   }
@@ -719,7 +713,7 @@ async function tryAggregatorRung(
     return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_content" } };
   }
 
-  const items = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
+  const { items } = await extractMenuItems(markdown.substring(0, MAX_COMBINED_CHARS), openRouterKey, anthropicKey, startedAt);
   if (!items || items.length === 0) {
     return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_priced_items" } };
   }
@@ -931,13 +925,20 @@ const scrapeShopHandler = async (req: Request) => {
   // Extract structured hours (Phase 5) and menu items (Phase 5b) via LLM
   const openHours = await extractOpenHours(combinedText, openRouterKey, anthropicKey, startedAt);
   const menuLinkUrls = pages.filter(u => /menu|food|drink|order/i.test(u));
-  const menuItemsRaw = await extractMenuItems(combinedText, openRouterKey, anthropicKey, startedAt);
+  const { items: menuItemsRaw, chunksFailed: menuChunksFailed, chunksTotal: menuChunksTotal, truncated: menuTruncated } =
+    await extractMenuItems(combinedText, openRouterKey, anthropicKey, startedAt);
 
   // Phase 5b: Auto-populate menu items (idempotent: only if menu is empty).
   // Resolved BEFORE the status update so crawl_status reflects what actually landed,
   // not just that the HTTP round-trip completed (the "false success" bug).
   let menuInserted = 0;
   let menuHasUsableItems = false; // true if the shop ends this run with >=1 menu item
+  // Additive, non-blocking honesty signal (does NOT touch crawl_status/crawl_error,
+  // which retry/skip logic elsewhere depends on exactly as-is): set only when the
+  // rung-1 website extraction above dropped a chunk or got truncated AND still ended
+  // up "usable" — i.e. a "done" status that's actually hiding missing items.
+  let menuExtractionIncomplete = false;
+  let menuExtractionNote: string | null = null;
 
   // Resolve the shop's existing menu FIRST, unconditionally. A shop that already has
   // items (owner-entered, or from a prior run / extract-menu-items) is not "partial"
@@ -986,6 +987,11 @@ const scrapeShopHandler = async (req: Request) => {
         } else {
           menuInserted = rows.length;
           menuHasUsableItems = true;
+          if (shouldFlagMenuExtractionIncomplete(menuHasUsableItems, menuChunksFailed, menuTruncated)) {
+            menuExtractionIncomplete = true;
+            menuExtractionNote = buildMenuExtractionNote(menuChunksFailed, menuChunksTotal, menuTruncated);
+            console.warn(`[scrape-shop] Menu extraction incomplete for shop ${shop_id}: ${menuExtractionNote}`);
+          }
         }
       }
     }
@@ -1119,6 +1125,10 @@ const scrapeShopHandler = async (req: Request) => {
     menu_links: menuLinkUrls,
   };
   if (openHours) updatePayload.open_hours = openHours;
+  if (menuExtractionIncomplete) {
+    updatePayload.menu_extraction_incomplete = true;
+    updatePayload.menu_extraction_note = menuExtractionNote;
+  }
 
   const { error: updateErr } = await supabase
     .from("shops").update(updatePayload).eq("id", shop_id);
@@ -1140,6 +1150,8 @@ const scrapeShopHandler = async (req: Request) => {
     menu_items_inserted: menuInserted,
     menu_source: finalSource,
     rungs_tried: rungsTried,
+    menu_extraction_chunks_failed: menuChunksFailed,
+    menu_extraction_truncated: menuTruncated,
   });
   } catch (err) {
     console.error("[scrape-shop] Unhandled crawl error:", err);
