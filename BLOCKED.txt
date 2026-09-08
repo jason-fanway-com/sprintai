@@ -1947,3 +1947,55 @@ Committed f6ea8c7, pushed to main.
 
 Handing to Melvin for independent adversarial verification against these
 exact acceptance criteria before this is closed.
+
+[ITEM 3 follow-up #7 — CHANGED THE SHAPE, per Jason's explicit direction.
+GUARD 17 and the prompt-nudge are both retired for the unambiguous case;
+a deterministic pre-check is now authoritative. Acceptance bar met: 3/3
+identical, independently confirmed. Real code, real deploy, real cleanup.]
+2026-09-08 ~05:00 UTC — Not blocked, this thread is done. Jason was right
+that a post-hoc corrector has no reliable version — confirmed it myself:
+his own 3 fresh runs still showed non-determinism and one self-contradiction
+even after the prompt-nudge fix. Rebuilt this the way he asked: same
+pattern as the ask_plan slot lookup that already makes "large buffalo
+chicken pizza" deterministic on Zio's, not a text-repair pass.
+
+`resolveZeroOptionAttributeChange` (zero-option-attribute-hint.ts) runs
+BEFORE any LLM call for the turn. Exactly one zero-option cart item +
+change language referencing it -> render a fixed reply, never generate
+one: a real same-category alternative item offered by name/price if one
+exists, else a single plain decline + a DIRECT (non-LLM) set_note call so
+the kitchen note and the claim can never drift apart again (closes the
+notes-mismatch gap from the prompt-nudge attempt too, for this path). Two
+or more zero-option items in cart is a genuine ambiguity left to the old
+nudge/GUARD-17 fallback — disjoint scenario, not "both running in parallel
+for the same case."
+
+TWO real bugs found and fixed BEFORE this shipped, both caught by actually
+driving the deployed endpoint, not by trusting the design:
+  - Without a relevance check, "switch my order to delivery" (bagel
+    already in cart) would have matched the change-verb regex and
+    hijacked the WHOLE turn with a bogus "can't change the bagel" reply,
+    silently dropping the customer's real request. Fixed: require a real
+    word from the item's own name to also appear in the message.
+  - First live run was 3/3 deterministic but WRONG every time — "an
+    everything bagel" contains "bagel," the item's own generic word
+    shared by every "Bagel With X" item, so the alternative search
+    grabbed an arbitrary same-category item ("Bagel With Butter"). Fixed:
+    exclude the item's own name-words from the descriptor search; only
+    "everything" (not already in the item's name) counts.
+
+ACCEPTANCE MET, verified twice independently: 3 fresh sessions, identical
+scenario, 3/3 byte-identical correct replies: "I can't change that on the
+Bagel With Plain Cream Cheese - it doesn't have that option." Kitchen note
+verified written and matching, by direct DB query, both times. Also
+verified live: an unrelated "switch to delivery" turn is NOT hijacked
+(Bug A fix holds), Zio's real-options pizza path is unaffected, and a
+DIFFERENT phrasing of the same request ("change the bagel type to
+everything") still produces the correct, non-contradictory answer — the
+fix generalizes beyond the one exact tested sentence.
+
+16 new/updated tests (both real bugs have their own regression test), full
+suite 425/425. All test conversations/carts created during both rounds of
+verification confirmed deleted from NJB's and Zio's live tables after use.
+
+Committed e2a98eb, pushed to main.
