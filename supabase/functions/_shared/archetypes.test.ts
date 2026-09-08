@@ -157,8 +157,14 @@ Deno.test("sandwich: a real stated group suppresses the unbound bread question f
 });
 
 Deno.test("sandwich: a required singleton group with provenance='inferred' suppresses the bread question (5.5b) — real Zio's Gyro shape", () => {
+  // 2026-09-08: "Gyro" now short-circuits to not_applicable via the
+  // sandwich archetype's generalized bread-form-in-name applies_when
+  // guard (nameStatesBreadForm includes "gyro") before ever reaching
+  // 5.5b's required-singleton-group check — same "no question either
+  // way" result, just via the more direct guard now. Renamed the item so
+  // this test still exercises 5.5b itself, not the name guard.
   const gyro = item({
-    name: "Gyro", category: "Baskets & Gyros",
+    name: "Zio's Basket", category: "Baskets & Gyros",
     description: "Sliced gyro meat with lettuce, tomato, onions & tzatziki sauce, served with fries.",
     extractedGroups: [{ name: "Type", required: true, choiceNames: ["Gyros"], provenance: "inferred" }],
   });
@@ -234,6 +240,32 @@ Deno.test("sandwich: a wrap-named item never gets a bread question regardless of
   assertEquals(result.questions.find(q => q.slot_key === "bread"), undefined);
   for (const outcome of result.slotOutcomes.filter(o => o.slot_key === "bread")) {
     assertEquals(outcome.kind, "not_applicable");
+  }
+});
+
+Deno.test("sandwich: a name that states its own bread form never gets a bread question, no option group or description needed (generalized bread-form-in-name guard) — real Zio's Hot/Cold Subs shape", () => {
+  const steakSub = item({ name: "Steak Sub", category: "Hot Subs" });
+  const hamCheeseSub = item({ name: "Ham & Cheese Sub", category: "Cold Subs" });
+  const chickenCheesesteakSub = item({ name: "Chicken Cheesesteak Sub", category: "Hot Subs" });
+  const hoagie = item({ name: "Italian Hoagie", category: "Cold Subs" });
+  const hero = item({ name: "Meatball Hero", category: "Hot Subs" });
+  const panini = item({ name: "Turkey Panini", category: "Hot Sandwiches" });
+  const items = [steakSub, hamCheeseSub, chickenCheesesteakSub, hoagie, hero, panini];
+  const result = inferCategory("Hot Subs", items);
+  assertEquals(result.questions.find(q => q.slot_key === "bread"), undefined);
+  for (const it of items) {
+    const outcome = result.slotOutcomes.find(o => o.slot_key === "bread" && o.item_id === it.id)!;
+    assertEquals(outcome.kind, "not_applicable");
+  }
+});
+
+Deno.test("sandwich: a name that does NOT state a bread form still gets the bread question (generalized guard must not overreach) — real NJB Reuben/Chicken Cutlet shape", () => {
+  const reuben = item({ name: "Reuben", category: "Hot Sandwiches" });
+  const chickenCutlet = item({ name: "Chicken Cutlet", category: "Cold Sandwiches" });
+  for (const [it, category] of [[reuben, "Hot Sandwiches"], [chickenCutlet, "Cold Sandwiches"]] as const) {
+    const result = inferCategory(category, [it]);
+    assertExists(result.questions.find(q => q.slot_key === "bread"));
+    assertEquals(result.slotOutcomes.find(o => o.slot_key === "bread")!.kind, "needs_question");
   }
 });
 
@@ -448,24 +480,26 @@ Deno.test("bind guard: a category matching the pattern only by its HEADING, not 
       { name: "Pepperoni", priceCents: 999 },
       { name: "Meat Lovers", priceCents: 999 },
     ]],
-    // "Subs" (not "Wraps") -- 2026-09-08: this test's target item must not
-    // itself be wrap-named, since a real wrap-named item now short-circuits
-    // to not_applicable via the sandwich archetype's own wrap applies_when
-    // guard (see archetypes.ts) before ever reaching the bind step this
-    // test exists to exercise. Swapped to a plain sub/hoagie item — the
-    // Stromboli Rolls/Flatbreads false-positive-bind scenario is identical
-    // either way, it's the item's OWN category/name that must not matter.
-    ["Subs", [{ name: "Chicken Caesar Sub", priceCents: 895 }]],
+    // "Sandwiches" (not "Wraps"/"Subs") -- 2026-09-08: this test's target
+    // item must not itself name a bread form (sub/hoagie/wrap/etc.), since
+    // that now short-circuits to not_applicable via the sandwich
+    // archetype's generalized bread-form-in-name applies_when guard (see
+    // nameStatesBreadForm in archetypes.ts) before ever reaching the bind
+    // step this test exists to exercise. Swapped to a plain sandwich item —
+    // the Stromboli Rolls/Flatbreads false-positive-bind scenario is
+    // identical either way, it's the item's OWN category/name that must
+    // not matter.
+    ["Sandwiches", [{ name: "Chicken Caesar Sandwich", priceCents: 895 }]],
   ]);
   const candidates = buildCategoryCandidateGroups(priceItems);
   // "Stromboli Rolls" classifies as pizza (an unrelated named archetype) —
   // fails the archetype-coherence guard even before item-support is checked.
   assertEquals(candidates.get("Stromboli Rolls")!.sourceArchetype, "pizza");
   const subItems = [item({
-    name: "Chicken Caesar Sub", category: "Subs",
-    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Subs"),
+    name: "Chicken Caesar Sandwich", category: "Sandwiches",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Sandwiches"),
   })];
-  const result = inferCategory("Subs", subItems);
+  const result = inferCategory("Sandwiches", subItems);
   const outcome = result.slotOutcomes.find(o => o.slot_key === "bread")!;
   assertEquals(outcome.kind, "needs_question"); // NOT wrongly bound to Stromboli Rolls
   assertExists(result.questions.find(q => q.slot_key === "bread"));
@@ -477,16 +511,16 @@ Deno.test("bind guard: item-level support blocks a category that classifies 'oth
       { name: "BBQ Chicken", priceCents: 1050 },
       { name: "Margherita", priceCents: 1050 },
     ]],
-    // "Subs", not "Wraps" -- see comment in the test above.
-    ["Subs", [{ name: "Chicken Caesar Sub", priceCents: 895 }]],
+    // "Sandwiches", not "Wraps"/"Subs" -- see comment in the test above.
+    ["Sandwiches", [{ name: "Chicken Caesar Sandwich", priceCents: 895 }]],
   ]);
   const candidates = buildCategoryCandidateGroups(priceItems);
   assertEquals(candidates.get("Flatbreads")!.sourceArchetype, "other"); // passes the archetype guard...
   const subItems = [item({
-    name: "Chicken Caesar Sub", category: "Subs",
-    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Subs"),
+    name: "Chicken Caesar Sandwich", category: "Sandwiches",
+    categoryCandidateGroups: [...candidates.values()].filter(g => g.name !== "Sandwiches"),
   })];
-  const result = inferCategory("Subs", subItems);
+  const result = inferCategory("Sandwiches", subItems);
   const outcome = result.slotOutcomes.find(o => o.slot_key === "bread")!;
   assertEquals(outcome.kind, "needs_question"); // ...but 0/2 items mention bread/roll, so no bind
 });

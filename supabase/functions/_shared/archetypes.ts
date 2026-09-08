@@ -203,6 +203,22 @@ function notChickenVeggieTurkey(item: InferItemInput): boolean {
   return !/\b(chicken|veggie|vegetarian|turkey)\b/i.test(item.name);
 }
 
+// A sandwich item whose own NAME already names its bread form -- "Steak
+// Sub", "Ham & Cheese Sub", "Chicken Cheesesteak Sub" -- states the fact
+// the same way a wrap does (2026-09-08, ac8f69d's wrap guard, generalized
+// here rather than adding a third one-off): there's no separate bread
+// choice to ask about, the name IS the answer. Confirmed against real
+// Zio's data (PO audit, 2026-09-08): 24 Hot/Cold Subs items carry zero
+// bread option_group and no description mentioning bread at all -- every
+// one of them names its own form ("... Sub"). Genuine open gaps ("Chicken
+// Cutlet", "Turkey Melt", "Reuben") name neither a sandwich vessel nor a
+// specific bread, so they correctly fall through and keep asking.
+const BREAD_FORM_IN_NAME_PATTERN = /\b(subs?|hoagies?|heroe?s?|grinders?|wraps?|gyros?|paninis?|bagels?|rolls?|pitas?|baguettes?|croissants?)\b/i;
+
+function nameStatesBreadForm(item: InferItemInput): boolean {
+  return BREAD_FORM_IN_NAME_PATTERN.test(item.name);
+}
+
 // ============================================================
 // ARCHETYPE LIBRARY v0 (Appendix A) — 11 named archetypes + the bundled
 // side/dessert/kids/other catch-all as `other`. Order matters: it is the
@@ -275,18 +291,13 @@ export const ARCHETYPES: Archetype[] = [
         owner_question: "Do customers pick a protein (e.g. beef or chicken) on {category}?", order: 2,
       },
       {
-        // Wrap guard added 2026-09-08 (NJB audit, ac8f69d): a wrap IS the
-        // bread -- there's no separate bread slot to ask about, the same
-        // structural mismatch burger's temp slot already excludes via
-        // notChickenVeggieTurkey. Real NJB data proves the point: all 10
-        // Wraps-category items either say "...in a wrap" (a fixed vessel,
-        // not a choice) or don't mention bread at all, and none has a real
-        // bread option_group. Matches on the item's own NAME (not just
-        // category) so a wrap sold from a non-"Wraps"-named category still
-        // gets excluded.
+        // Bread-form-in-name guard, generalized 2026-09-08 (PO audit,
+        // this commit) from the wrap-only guard ac8f69d introduced --
+        // same shape as burger's notChickenVeggieTurkey. See
+        // nameStatesBreadForm's own comment for the full rationale.
         slot_key: "bread", kitchen_critical: true, price_critical: false,
         bind_to_list_named: /bread|roll/i,
-        applies_when: item => !/\bwraps?\b/i.test(item.name),
+        applies_when: item => !nameStatesBreadForm(item),
         owner_question: "Do customers pick a bread on {category}?", order: 4,
       },
     ],
