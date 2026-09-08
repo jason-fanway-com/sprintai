@@ -2923,3 +2923,180 @@ before touching anything, consistent with this morning's same discipline.
 
 Handing back to OrderFare/PO for Melvin's independent verification and a
 decision on the NJB follow-up + the Type importer fix.
+
+════════════════════════════════════════════════════════════════════════
+2026-09-08 ~12:10 UTC -- P0 dispatch (outside consultant PO), Zio's
+multi-item order: silent drop, ignored size, false Got-it, unexplained
+total jump, infinite loop. Jason personally ran this on Zio's in the Test
+Kitchen and called it "very bad." Real transcript pulled from `messages`
+table, conversation_id=b3dc366c-5e8a-47e2-930b-c384c9778dda, 2026-09-08
+11:31-11:40 UTC. Coordinated per standing convention: checked git log/
+status/BLOCKED.txt first, found a concurrent thread (item8-zios-followup3)
+mid-edit on ask-plan-engine.ts/index.ts (verbatim-question enforcement,
+Choices-for-X dedup) -- did not revert or stash it, built additively on
+top; it committed (8329eb9, ac8f69d) partway through this session and my
+diff re-verified clean against the new HEAD before I committed my own
+work (e1fca95).
+
+PO's own diagnosis, confirmed correct by direct code reading: item 8's
+compiled engine itself is NOT the defect here (the Appendix C size
+template rendered correctly, verbatim). All 5 defects are upstream, in the
+add-item orchestration around the engine. Did NOT touch
+compiled_ordering_engine_enabled for Zio's or Vito's.
+
+ROOT CAUSES + FIXES (all 5, code-level, in commit e1fca95):
+
+D1 -- SILENT ITEM DROP ("1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" -> only
+3 landed, Pepperoni never mentioned). Root cause: there is NO standalone
+"Pepperoni Pizza" menu item at Zio's -- pepperoni only exists as an "Add
+Toppings" choice on the Neapolitan Cheese Pizza (verified directly against
+menu_items/option_choices). The LLM simply never called add_item for
+"pepp" -- no error, no question, no trace. This is an LLM tool-calling gap
+(there is no deterministic customer-word -> menu_item_id resolver anywhere
+in the add path today), not a lexicon lookup miss -- confirmed the
+`lexicon` table exists but is write-only from compile-menu and is never
+read by chat-sms at request time (grepped supabase/functions/), so it
+could not have helped here regardless.
+  Fix (unresolved-item-segment-guard.ts): NOT a guesser. A word-overlap
+  detector was built and thrown out first -- it false-positived on "plain"
+  (the customer's word for the base cheese pizza shares literally zero
+  letters with "Neapolitan Cheese Pizza," so text overlap can't tell
+  "resolved via semantic knowledge" apart from "genuinely dropped").
+  Shipped version compares COUNT instead of identity: a quantity-list
+  message ("1 X, 1 Y, 1 Z") whose segment count exceeds the number of NEW
+  compiled cart lines actually added this turn surfaces a plain "one of
+  those didn't go through -- could you tell me again exactly what you'd
+  like?" -- never names a specific item or alternative (that fuzzy-
+  suggestion shape is exactly what caused GUARD 4's P0 upsell incident on
+  2026-09-06, deliberately not repeated). Gated on newLineCount>0 so a pure
+  correction turn (0 new lines) can never trip it.
+
+D2 -- STATED ATTRIBUTE IGNORED TWICE ("I want 4 large pizzas" stated
+before any items existed; asked for size 3x anyway, even after "I told you
+I wanted 4 large" restated it). Root-caused as mode (a) from the dispatch
+-- a CARRY-FORWARD gap, not mode (b) a matcher gap: matchChoiceInText's
+stemming was verified to already match plain "large" against "Large 18''"
+correctly the moment both are in the SAME turn (this is exactly what
+happened turn 3, resolving the Cheese Pizza's own Size). The bug is that
+resolveAskPlan only ever sees chat-sms/index.ts's raw CURRENT-turn text,
+so "large" -- stated one full message earlier, before any items existed to
+attach it to -- was invisible by the time the 3 add_item calls ran.
+BLAST RADIUS: narrow, not universal. It is NOT "all 78 Zio's size groups
+are broken" -- matching itself is correct everywhere; the gap is
+specifically the two-message shape (attribute stated before any item
+exists, items named in a LATER message). Any single-turn order ("large
+pepperoni pizza") already worked before this fix, per ask-plan-engine.ts's
+own existing bug-1 regression test.
+  Fix (stated-attribute-carryforward.ts): buildCompiledMatchText widens the
+  text handed to the compiled engine's slot/modifier matching to include
+  the immediately preceding customer turn (bounded to exactly one turn
+  back, same discipline as GUARD 7's one-prior-turn category check --
+  never the whole history). New `compiledMatchText` param on executeTool,
+  consumed ONLY by the compiled-engine branch -- the legacy path's
+  `customerMessage` (which Vito's reactive modifier matcher also reads) is
+  completely untouched, so this cannot regress Vito's.
+
+D3 -- FALSE "Got it!" WITH NO ACTION (bare "Got it!" after a turn that
+resolved ONE thing while 2 other cart lines sat pending from an earlier
+turn, completely unaddressed). Root cause: the existing per-call
+compiledStepQuestions/enforceVerbatimStepQuestion mechanism (item 8
+follow-up 3, this session) only knows about a question a call THIS turn
+left open -- it has zero visibility into a line that was already pending
+and simply never got add_item'd again this turn.
+  Fix (pending-question-followthrough.ts): findUnaddressedPendingLine scans
+  the FINAL post-turn cart (after DB reload) for any compiled line with a
+  pending option nobody asked about this turn and appends its real,
+  deterministic question (renderStepQuestion) if the reply doesn't already
+  contain it.
+
+D4 -- TOTAL MOVED $2.74, NO EXPLANATION. Fully accounted for, NOT a
+separate money defect: $2.74 is exactly the Large-size price_delta_cents
+on the Neapolitan Cheese Pizza's own Size group (verified directly against
+option_choices: Large 18''=274 cents), resolving in the same turn as D2's
+fix target. One residual I could NOT fully close: reverse-computing the
+FIRST reported subtotal ($58.23) from base prices left a $3.00 gap I
+could not attribute to any turn's literal text via exact-stem matching,
+and order_carts only retains the latest snapshot (no per-turn price
+history table exists) to check directly. Flagging as unresolved rather
+than asserting a cause I can't verify -- does not change the D2 fix or the
+$2.74 delta explanation, which is solid.
+
+D5 -- INFINITE LOOP ON UNPARSED ANSWER ("no, I said 4 pizzas" and "oh
+brother..." both hit the identical Hawaiian Size question byte-for-byte;
+customer gave up). matchChoiceInText correctly declined to guess on both
+(neither contains a size word) -- the real bug is nothing tracked "this is
+the SAME question repeating," so it never escalated.
+  Fix (pending-question-followthrough.ts, same module as D3):
+  isRepeatedQuestion checks the two most recent assistant turns for the
+  identical rendered question; when true, the follow-through guard appends
+  a phone-number handoff instead of looping a 3rd time. Same class as the
+  2026-09-06 caesar-loop fix.
+
+LOWER PRIORITY, REPORT ONLY per dispatch -- delivery flow: customer gave
+full address ("123 nelson st phoenix AZ") -> asked for zip separately ->
+rejected with NO reason -> only on the SECOND attempt (a different, fully
+out-of-area address) did the real reason appear ("we're in Allentown PA,
+~3mi radius"). Should lead with the distance reason immediately on the
+FIRST rejection. Not fixed -- out of scope for this dispatch's do-fix list,
+needs separate go-ahead.
+
+TESTS: 16 new (stated-attribute-carryforward.test.ts x6, pending-question-
+followthrough.test.ts x9 -- wait, x9 is the file total, split
+findUnaddressedPendingLine/isRepeatedQuestion -- unresolved-item-segment-
+guard.test.ts x7), all in isolated pure modules per this codebase's
+extraction convention (matches reactive-modifier-match.ts /
+pending-disambiguation.ts). 456 -> 472 passing, 0 failed. `deno check`:
+same 4 pre-existing type errors as HEAD (shop.delivery_radius_mi possibly
+null x2, OrderPhase string assignment x2), none introduced -- confirmed by
+running check before and after.
+
+DEPLOYED: chat-sms function, commit e1fca95, pushed to origin/main. Live
+sanity-checked against the real production endpoint (POST shop_id=Zio's,
+no test flag, genuinely production) -- confirmed the deploy is live and
+honest.
+
+LIVE ACCEPTANCE BATTERY -- BLOCKED BY REAL SHOP HOURS, same class of
+blocker the item8-zios-followup3 thread hit this morning, not a shortcut
+taken. Verified directly against shops.open_hours: Zio's is 10:00-22:00
+America/New_York every day, current time ~08:04-08:10 EDT -- genuinely
+closed, opens in ~110 minutes. Per this project's standing rule against
+manufacturing the signal under test and index.ts's own hard-gate ("test
+mode is FORBIDDEN when the Supabase key is live"), did not attempt to
+force it. The 10x Zio's 4-pizza battery and the mandatory Vito's
+cheeseburger regression (Vito's opens 11:00 ET, also closed right now)
+are the one open item, not silently treated as done.
+
+REMAINING FOR WHOEVER PICKS THIS UP AFTER 10:00/11:00 ET TODAY
+(2026-09-08):
+  Zio's x10 (opens 10:00 ET), pickup:
+    for i in $(seq 1 10); do
+      SID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+      curl -s -X POST "$SUPABASE_URL/functions/v1/chat-sms" \
+        -H "Content-Type: application/json" -H "Authorization: Bearer $ANON_KEY" \
+        -d "{\"shop_id\":\"2cba7b51-211c-4437-8910-1af4dcc03498\",\"session_id\":\"$SID\",\"message\":\"I want 4 large pizzas\",\"channel\":\"web\"}"
+      curl -s -X POST "$SUPABASE_URL/functions/v1/chat-sms" \
+        -H "Content-Type: application/json" -H "Authorization: Bearer $ANON_KEY" \
+        -d "{\"shop_id\":\"2cba7b51-211c-4437-8910-1af4dcc03498\",\"session_id\":\"$SID\",\"message\":\"1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers\",\"channel\":\"web\"}"
+    done
+  Expect: 4 line items, all Large, zero size questions, total = 4 large
+  prices + $0.99 fee, all 10 runs identical. NOTE: use the full word
+  "pepperoni" (not "pepp") in the acceptance phrasing -- per D1's fix
+  above, "pepp" is EXPECTED to now produce an honest clarifying question
+  (that IS the fix; it is no longer a silent drop) rather than silently
+  resolving, so "pepp" alone will not hit the "zero questions" bar. This
+  is a deliberate, correct behavior change, not a gap in the fix -- flag
+  to the PO if the literal word "pepp" was intended to auto-resolve
+  without ever asking, since that would require guessing a specific
+  resolution, which the dispatch explicitly ruled out.
+  Vito's regression (opens 11:00 ET), shop_id=e0000000-0000-0000-0000-
+  000000000001, one session: "cheeseburger" -> "medium" -> "thats it".
+  Expect byte-identical to established baseline: one line "Temp: Medium",
+  $8.49 + $0.99 = $9.48. compiled_ordering_engine_enabled reconfirmed
+  false for Vito's right now (2026-09-08 ~12:10 UTC), untouched.
+
+Handing to Melvin now for independent adversarial verification of the 5
+root-causes/fixes above (especially D2's blast-radius claim -- narrow vs
+universal -- and D4's partial residual) from the code and tests directly,
+not from this session's word. The live 10x battery + Vito's regression
+remain the one flagged, time-gated remainder, same as this morning's
+precedent.
