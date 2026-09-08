@@ -197,6 +197,17 @@ by hand — were exactly the ones most likely to fail. Fixed 2026-09-06 (`scrape
 every step of the read now fits inside the platform's real time limit instead of hoping it
 finishes first. Not yet re-measured against the same 20 sites.
 
+**2026-09-07 addition — the fallback for a site the automated reader can't handle costs real
+vendor credits, and they're running low.** When Zio's Pizzeria's options couldn't be read
+automatically, onboarding fell back to a one-off script (Firecrawl + Playwright) hand-run
+against that one restaurant's site. Real bugs in that script were found and fixed the same
+day, but a second fallback attempt for the same shop was abandoned mid-task, blocked on
+Firecrawl API credits (80 of 1000 left on the account). This is the same "6/20 sites pass"
+gap named above, now with a visible cost ceiling: the manual path that covers the other
+two-thirds isn't free, and at current usage the account runs out before many more
+restaurants can go through it. Worth a vendor-plan decision before the next few shops
+onboard, not after the credits run out mid-onboarding.
+
 ### Added 2026-09-05 (later) — menu sourcing has a deliberate last resort, and it's weak
 
 A source-priority order was set: the restaurant's own website, then an owner-provided

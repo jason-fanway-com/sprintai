@@ -196,6 +196,67 @@ pg_cron-driven autonomous Proof suite now runs `fe37f88` (category-coverage
 invariants + fail-open fix) and `1412ef1` (channel-aware safety gate), not
 the stale 09-04 code.
 
+## State as of 2026-09-07 22:30
+
+Supersedes the 04:00 snapshot above for anything it contradicts. This was a large
+day (~65 commits) dominated by a new "conversation-ready-menu Phase 0"
+schema/compiler subsystem plus the usual chat-sms guard-chain churn. Full detail in
+`docs/DAILY.md`'s `## 2026-09-07` entry; this section is the live-vs-committed
+summary only.
+
+### What is LIVE right now (new since 04:00)
+
+- `chat-sms` (v282) — the self-contradiction ordering fix
+  (`zero-option-attribute-hint.ts`, runs before the model composes a reply, not
+  after) plus GUARD 12/13/16/17 work from today. Live-verified against real NJB
+  conversations, independently re-verified by a second reviewer.
+- `scrape-shop` (v76) — chunk-drop/truncation honesty signal (migration 120
+  columns) and the wall-clock-timeout chunking fix, with its own same-day
+  `Deno.serve` regression caught and fixed before this deploy.
+- `compile-menu` (v4) — exists and is callable, but is **stale relative to main**:
+  it predates today's `normalize.ts` multi-clause parser fix. Do not invoke it
+  against a real shop's menu until it is redeployed, or it will re-run the old
+  parser and can re-corrupt data the way it did on Zio's before the `.in()`-batching
+  fix (183 items wrongly marked `blocked` from one silently-failed 492-ID query).
+- `test-runner` (v29) — includes category-wide order coverage and the
+  channel-aware safety gate (both closed out in the 04:00 entry above). Does **not**
+  include the three Proof false-failure fixes or the undefined-cart guard committed
+  later the same day (see below).
+
+### What is committed but NOT deployed
+
+- `396c85d` (3 classes of Proof harness false-failures) and `ba6efd7` (undefined-
+  cart guard) post-date the `test-runner` v29 deploy — the pg_cron-driven
+  autonomous Proof suite is running without them. Only the CLI-driven
+  `scripts/test-suite/` path has them (it runs from the working tree).
+- `chat-sms-mtest`'s share of the menu-option-caps fix (`fe85bb4`) — the deployed
+  mtest function is a full day older than that commit.
+- The new item-8 compiled ordering engine (`ask-plan-engine.ts`, migration 118's
+  `compiled_ordering_engine_enabled` flag) is deployed in `chat-sms` but **on for
+  no shop** — every shop defaults `false`, and Vito's (the canary) must never be
+  flipped on per the column's own SQL comment. Treat this as shipped-but-inert
+  until a shop is explicitly turned on.
+- `planOwnerQuestionsRefresh` — built and live-verified against Not Just Bagels
+  (found 3 stale `priority` values, a display-order-only bug) but **not applied**
+  to NJB's real data pending an explicit sign-off decision.
+
+### New standing operational risk: a live P0 shipped from the guard chain today
+
+GUARD 12 briefly flagged every pending required-option question as a false claim —
+live, on Vito's Pizza, the production canary — before being caught and fixed same
+day (`bc2e0bc`). This is the guard-chain fragility risk already named in the
+2026-09-06 handoff, now with a concrete production instance: a new guard broke
+correct behavior on the shop real customers use. No process change has been made
+in response yet; flagging so it isn't quietly repeated.
+
+### Open decision needed from Jason
+
+`order_carts.notes` sometimes isn't actually written even when the bot's reply
+says a kitchen note was recorded — confirmed live on NJB (~1 in 3 turns, direct DB
+query, not inferred). Same class of bug as the self-contradiction fix just shipped,
+but in the notes field, with real kitchen-facing impact. Not fixed; needs a
+priority call, not silent absorption into the backlog.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a

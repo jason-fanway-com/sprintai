@@ -1365,6 +1365,42 @@ verified either way this pass — they only affect `qa_ro` views, reachable sole
 `~/.sprintai-readonly-env` on Jason's Mac. Check `qa_ro.schema_migrations` (added by
 111) directly before assuming any of them are missing.
 
+## `.down.sql` files break `supabase db reset`/`db push`'s forward-migration glob — naming convention — 2026-09-07
+
+BLOCKED.txt (item 7, 2026-09-07 ~18:20 UTC entry) found 13 pre-existing
+`.down.sql` rollback scripts (015 through 112) living in `supabase/migrations/`
+alongside their forward migrations. The CLI's migration scanner (confirmed via
+`supabase migration list`'s own "file name must match pattern `<timestamp>_
+name.sql`" skip-message for non-conforming files) only checks that a filename
+starts with digits and ends in `.sql` — it does **not** special-case `.down.sql`.
+So every one of those 13 files gets picked up and replayed as its own forward
+migration, in filename sort order, on a from-scratch `supabase start`/`db reset`.
+Confirmed live: `supabase migration list` shows duplicate version rows (e.g. two
+`118` rows) for exactly this reason before the fix below.
+
+Migration 118 (`shops_compiled_ordering_engine_flag`) would have been the 14th.
+Fixed by moving its down-script out of the scanned directory entirely, rather
+than renaming within it (an extension trick like `.sql.down` is fragile — easy
+for a future migration to typo back into `.down.sql` and reintroduce the bug):
+
+**Convention going forward:** rollback scripts live in `supabase/migrations-down/
+<version>_<name>.down.sql` — a sibling directory the CLI never scans (verified:
+`supabase migration list` no longer shows a phantom row for 118 after the move,
+and no skip-warning either, since the directory isn't touched at all). Do **not**
+put a `.down.sql` file back in `supabase/migrations/`, even temporarily.
+
+The 13 pre-existing offenders (015–112) are **not fixed** — this is a repo-wide
+migration-history change on a shared branch, not something to do unilaterally
+mid-sprint (same call BLOCKED.txt's item-7 entry made). They still break a
+from-scratch `db reset` today; the documented workaround is stashing them during
+local reset testing and restoring immediately after.
+
+Separately: migration 118's own forward file (`118_shops_compiled_ordering_engine_
+flag.sql`) shows the same "applied live, missing from `supabase migration list`"
+drift as migrations 105–111 above — its trigger/column is live (confirmed
+directly against the DB) but the remote tracking row is blank. Same operating
+rule applies: verify against the actual schema, not the tracker.
+
 ## Edge function index — missing rows, 2026-09-06
 
 The "Edge function index" table above predates several now-deployed functions:
@@ -1374,3 +1410,41 @@ customer-facing), `public-tester` (Test Kitchen), `judge-transcript`, and
 `scripts/test-suite/run.ts`'s target URL) are all `ACTIVE` per `supabase functions
 list` but not in the table. Not fixed here — noted so the index isn't mistaken for
 current.
+
+## Batch `.in()` filters over ~150 IDs — 2026-09-07
+
+A single Supabase `.in()` filter call with ~492 UUIDs failed silently at the
+transport layer during `compile-menu`'s first real run against Zio's Pizzeria
+(`b448444`) — no thrown error, the caller just got back an empty/partial result and
+183 real menu items got wrongly written as `bot_state='blocked'`. The same class of
+bug independently hit `scripts/item-9-readonly-compile-report.ts` on the same
+shop's 490-ID list (`63e7da6`), undercounting orderable items as 21/220 instead of
+163/220. Neither call site threw; both silently returned less data than requested.
+
+**Standing rule:** any new script or function issuing `.in()` against
+`option_groups`/`option_choices`/`menu_items` for a shop's full ID list must batch
+at ~150 IDs per call and must make the fetch helper throw on error rather than
+swallow it. Do not assume a large `.in()` call either succeeds or fails loudly —
+on this project it has done neither.
+
+## `compile-menu` — deployed version can be stale relative to `main`, check before invoking
+
+`compile-menu` mutates live data (`menu_items.display_name/product_key/bot_state/
+bot_state_reason/ask_plan`, `lexicon`, insert-only `owner_questions`) — it is not a
+read-only report. Because it's deployed manually (`supabase functions deploy
+compile-menu`), the live version can lag behind `main` after a same-day parser or
+logic fix, and invoking a stale deploy against a real shop's menu re-runs the old
+logic against real data. Before calling the live endpoint for a real compile, check
+`supabase functions list`'s `compile-menu` `UPDATED_AT` against the latest commit
+touching `supabase/functions/compile-menu/` or `supabase/functions/_shared/
+compile-menu.ts`/`normalize.ts`/`archetypes.ts` — if the commit is newer, redeploy
+first.
+
+## `shops.compiled_ordering_engine_enabled` (migration 118) — do not flip on for Vito's
+
+Gates the new deterministic ask_plan sequencer/resolver (`ask-plan-engine.ts`) in
+`chat-sms`. Defaults `false` for every shop. Vito's Pizza is the canary shop and
+must keep running the legacy LLM-guessed option path byte-for-byte — per the
+column's own SQL comment, it must never be set `true`. Enabling it for any shop is
+a deliberate, explicit data change made after sign-off, never bundled into a schema
+migration.

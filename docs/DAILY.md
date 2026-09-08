@@ -398,3 +398,216 @@ claims on this project going forward.
   running it directly: `required-options-guard.test.ts` passes 5/5. Wired into
   `scripts/test-suite/proof.ts` and `supabase/functions/test-runner/index.ts`, but
   neither file nor the new scripts are staged or committed as of this writing.
+
+## 2026-09-07
+
+Commit range `f5cd463..057b375`, ~65 commits, 79 files, +18.3k/-206 lines. The bulk
+of the day is a new schema/compiler subsystem ("conversation-ready-menu Phase 0")
+built spec-item-by-item, plus the usual chat-sms guard-chain churn — including one
+live P0 regression shipped and fixed same day. Facts below are read from the actual
+diffs, not the commit messages.
+
+### New subsystem: conversation-ready-menu Phase 0 (migrations 113–120 + `compile-menu`)
+
+A new edge function, `supabase/functions/compile-menu/index.ts` (584 lines), plus
+migrations 113–120, implement items 1–9 of
+`docs/specs/2026-09-07-conversation-ready-menu-design.md`. This is **not** a
+read-only report generator — read the code, not the "report" framing in some of the
+early commit messages:
+
+- **Writes it makes**: on every active `menu_items` row it overwrites
+  `display_name`, `product_key`, `bot_state`, `bot_state_reason`, and `ask_plan`.
+  It upserts `lexicon` rows and deactivates stale ones. It **inserts** new
+  `owner_questions` rows but never updates or deletes an existing one — the one
+  place in this function that deliberately protects a human's prior answer from
+  being clobbered.
+- **What it deliberately does not touch**: `option_groups`/`option_choices`. Those
+  tables are read directly by `chat-sms`'s live order-taking path
+  (`buildEffectiveMenu`) with no awareness of provenance, so anything the compiler
+  derives stays a synthetic, non-persisted "derived:" slot feeding `ask_plan` only.
+- **A real production bug, found and fixed the same day** (`b448444`): a single
+  `.in()` filter with ~492 UUIDs failed silently at the transport layer, and 183 of
+  Zio's Pizzeria's real menu items got wrongly written as `bot_state='blocked'`
+  before anyone noticed. Fixed by batching `.in()` calls to 150 IDs and making the
+  fetch helper throw instead of swallow. The same silent-truncation bug pattern hit
+  a separate reporting script (`63e7da6`, `scripts/item-9-readonly-compile-report.ts`)
+  and undercounted Zio's orderable items as 21/220 instead of the real 163/220.
+- **Deployed but stale.** `compile-menu` has a live version (v4, per
+  `supabase functions list` history cited in the commits), but by the end of this
+  range that deployed version still predates the `normalize.ts` multi-clause parser
+  fix (`a292618`) committed hours earlier — invoking the live HTTP endpoint today
+  would re-run the old, buggy parser against real data. Nobody had redeployed it as
+  of the last commit in range. **Not Just Bagels was never actually compiled this
+  entire day** — it stayed at 170/170 `bot_state='blocked'`, `ask_plan=null`
+  throughout, blocked on an explicit sign-off decision about applying
+  `planOwnerQuestionsRefresh` (see below), not on a bug.
+- **`planOwnerQuestionsRefresh`** (`c5deb20`): a new pure function that reconciles
+  pending `owner_questions` against a fresh archetype/infer computation
+  (update-if-key-still-there, delete-if-key-gone, never touch a row someone already
+  answered). A dry run against NJB found 3 rows where a human had already
+  hand-corrected `items_affected` but the derived `priority` value
+  (`items_affected × 4`) was never recalculated — a display-order bug only, not a
+  blocking bug. Built and verified live; **not applied** to NJB's real data pending
+  sign-off.
+
+### Migration 118 (`compiled_ordering_engine_enabled`) and migration 120 (`menu_extraction_incomplete`)
+
+Both add columns to `shops`. `supabase migration list` reports both as **not
+applied on the remote** as of this writing (local migration file present, remote
+tracking row blank) — this matches a migration-tracker-drift problem already
+documented in RUNBOOK for migrations 105–111. For 118 specifically, an RUNBOOK note
+written today states the column was checked directly against the database and is
+in fact live, despite the blank tracker row; I have not independently re-verified
+that claim, and I found no equivalent direct-DB confirmation for 120's two columns
+(`menu_extraction_incomplete`, `menu_extraction_note`) — their live-or-not status
+is genuinely unverified here. Migrations 113–117 and 119 show local+remote agreement
+and are applied.
+
+118's flag is real, wired code, not a stub: `chat-sms/index.ts` reads
+`shop.compiled_ordering_engine_enabled` (line 208, 4755) to gate the new
+deterministic ask_plan sequencer/resolver (`ask-plan-engine.ts`, added this range,
+413 lines: `matchChoiceInText`, `renderStepQuestion`, `resolveAskPlan`,
+`applyCompiledAddItem`, `allSlotsResolved`), called from both `add_item` and a
+separate-turn pending-answer path. The column's own SQL comment states the default
+is `false` for every shop and that Vito's — the canary shop — "must never be set
+true." **No shop has this flag on.** The entire item-8 engine is committed,
+deployed, and structurally inert today.
+
+### chat-sms guard chain: one live P0 regression, plus the self-contradiction fix
+
+The guard chain (now GUARD 12, 13, 16, 17 touched or added today, on top of guards
+from prior days) is still the dominant source of both new capability and new bugs
+in `chat-sms/index.ts`, same pattern flagged in yesterday's entry.
+
+- **GUARD 12 P0 regression, live on Vito's canary, fixed same day** (`bc2e0bc`):
+  GUARD 12 was flagging *every* pending required-option question as an unresolved
+  false claim — a real live bug on the production canary shop, not caught before
+  merge. Root cause: the guard conflated "the bot is asking about a choice" with
+  "the bot falsely confirmed a choice." Fix excludes any group already in
+  `pending_options` from the unresolved-claim set. This is a concrete instance of
+  the guard-chain fragility already named in the 2026-09-06 entry — a new guard
+  broke an existing, correct behavior on the shop that customers actually use.
+- **GUARD 17** (`9fcb7ed`, 5 revisions per its own code comments documenting v1–v5
+  failure modes): detects a change-verb plus a named foreign descriptor near a
+  zero-option item in the bot's *reply*, then appends a correction. Real, wired,
+  matches its commit message.
+- **GUARD 16** (`f679e1d`, +312 lines): a safety net for the compiled path — checks
+  whether a reply names a real modifier choice absent from `ask_plan_selections`.
+  Since the compiled path is gated off for every shop (see above), this guard is
+  currently a no-op in production.
+- **The self-contradiction ordering fix** (`4a65802`, `057b375`): the actual
+  architecture change here is moving the fix from "correct the claim after
+  composing it" to "give the model an honest heads-up before it composes." New
+  module `zero-option-attribute-hint.ts` runs before `buildSystemPrompt`: if the
+  customer's message uses change language against a cart item with
+  `ask_plan.steps.length === 0`, the model gets an explicit instruction that turn
+  to give one honest reply, not a claim-then-correction. This is a genuinely
+  different mechanism from GUARD 17 (prevention vs. after-the-fact correction), not
+  a bigger version of the same guard. Building it surfaced its own bug: GUARD 17
+  didn't recognize an already-honest denial and appended a needless correction onto
+  it, recreating the exact bug it was meant to prevent — fixed with a same-sentence
+  negation check (v6). Both pieces are reported deployed and independently
+  re-verified by a second reviewer against live NJB data (5 + 3 live repros,
+  synthetic sessions cleaned up after).
+- **New, unfixed, flagged gap: `order_carts.notes` sometimes isn't actually
+  written.** Found live-verifying the fix above: in roughly 1 in 3 turns, the bot's
+  reply says a preference was noted for the kitchen, but the `notes` column is
+  confirmed (via direct DB query against real NJB data) to be stale or empty. This
+  is the same claim-vs-actual-state honesty bug as the original self-contradiction,
+  just in a different field, and it has real kitchen-facing impact (wrong item
+  made). **Not fixed as of end of range** — explicitly left as a decision point for
+  Jason on priority, not silently absorbed.
+- **Other chat-sms fixes, verified as real and narrowly scoped**: `a894cd7`
+  ("forget it" no longer wipes the cart), `73953d0` (required options asked
+  one-at-a-time, not dropped across sequential `modify_item` calls), `2671f2c`
+  (one-line `ReferenceError` fix — `conversation.id` used where `cartId` was in
+  scope — regression from an earlier same-day revert, now covered by a regression
+  test), `fe85bb4` (stop printing meaningless option caps like "pick up to 32
+  toppings"), `a7e6daa` (contraction handling in the hallucination guard + a named-
+  item-removal fix). **`8bdf49f` is explicit, honest WIP**: its own commit message
+  says named-item removal ("remove the pizza") still fails to match and instructs
+  not to deploy it — this is a real gap left open, not an oversold fix.
+
+### Test-suite / Proof harness: real fixes, but the live cron runner is a day behind main
+
+- **"Channel-aware" safety gate** (`1412ef1`): before today, the harness's
+  protected-shop check had no way to say "this is a web-channel test call," so
+  testing a real shop (like Vito's) required manually nulling out its
+  `protected`/`phone_number_e164` DB fields before a run and remembering to restore
+  them after — a manual, error-prone toggle ("flag-flipping"). Now an explicit
+  `channel: "web" | "sms"` parameter is required; `"web"` (all this harness ever
+  sends) skips those checks by construction, `"sms"` is unchanged.
+- **Category-wide order coverage** (`fe37f88`): a new generator
+  (`scripts/test-suite/category-coverage.ts`) builds one realistic order per real
+  menu category straight from live `menu_items`/`option_groups`/`option_choices`
+  data (no hardcoded item names), checked by two new invariants
+  (`verifyRequiredOptionsCovered`, `expectedLineCount`).
+- **Fail-open money checks, fixed** (`fe37f88`): four verification functions
+  (`verifyStatedTotal`, `verifyStopOptOutHonored`, `verifyCheckoutFinalize`,
+  `verifyRequiredOptionsCovered`) used to return `passed: true` whenever a run
+  produced no transcript at all — meant as "nothing to check," but `proof.ts` only
+  ever reads `.passed`, so a crashed/timed-out run was indistinguishable from a
+  clean pass. Now `passed: false` on a missing transcript.
+- **Three classes of Proof harness false-failures fixed** (`396c85d`, out of 37
+  flagged in a 139-case run): a total-amount regex that could match across a line
+  break on multi-line receipts; the required-options invariant failing cases that
+  were still mid-conversation (never reached checkout); and generated single-turn
+  test cases that ordered an item with required options but never scripted an
+  answer turn. A fourth failure class (a retried message causing a duplicate cart
+  line) was investigated and left unfixed, flagged as possibly a real product bug.
+- **test-runner v29 is deployed but already one step behind main.** v29 (deployed
+  2026-09-07 11:05:07 UTC, confirmed via `supabase functions list`) includes
+  `fe37f88` and `1412ef1`. It does **not** include `396c85d` (the three
+  false-failure fixes) or `ba6efd7` (a guard against `proof.ts` crashing on an
+  undefined cart from a timed-out turn) — both committed after the v29 deploy, with
+  no later deploy on record. The pg_cron-driven autonomous Proof suite is currently
+  running with those bugs still present; only the CLI-driven `scripts/test-suite/`
+  path (which runs from the working tree) has the fixes.
+
+### scrape-shop: an honesty-signal fix, and a same-day regress/fix pair
+
+- **`c8f91d7`**: `extractMenuItems()` splits a large menu's text into concurrent
+  chunks (smaller, parallel AI calls instead of one big slow one) and merges the
+  results. Until today, a chunk that errored or timed out was silently dropped, and
+  a merge over the 300-item cap was silently truncated — either way the run could
+  still report `crawl_status='done'` over a menu missing real items, with no
+  signal anywhere. Fix extracts the merge logic into a testable pure module
+  (`menu-extraction.ts`, with a real unit test file) and adds migration 120's two
+  columns as a non-blocking honesty signal, deliberately not touching
+  `crawl_status`/`crawl_error`, which other retry logic depends on.
+- **`0c654ec` → `683a7ec`, same-day regress and fix**: `0c654ec` chunks
+  `extractMenuItems()` calls to beat the function's wall-clock timeout on large
+  menus (one real site went from 0 imported items to 240 after the fix, per live
+  measurement) — but its own commit message says "do NOT deploy, leave for Jason to
+  review," because it also changed `Deno.serve(handler)` to
+  `Deno.serve({port}, handler)` for every environment, an unverified form against
+  the real Supabase runtime, not just local testing. `683a7ec` gates that change so
+  deployed behavior is byte-identical to before and only local test runs get a
+  port. Net: real, live-measured fix, shipped same day, but only after catching its
+  own deploy-shaped regression first.
+
+### Zio's Pizzeria: one-off backfill scripts, not codebase changes — and a vendor constraint worth flagging
+
+`9b9af9b`, `d80a444`, and `feb390b` only touch
+`scripts/load-zios-firecrawl-options.mjs`, a standalone Node script (Firecrawl +
+Playwright) written to backfill one restaurant's option data, not a change to the
+reusable `scrape-shop` pipeline. Real bugs were found and fixed within it (a shared
+browser context that crashed mid-run, a `const` reassignment that would have
+thrown, a menu item that needed a longer wait before being correctly read as having
+options) — legitimate fixes, but scoped to Zio's onboarding, not general
+reliability. `d0056e0` documents an abandoned fallback script for the same task,
+explicitly blocked on **Firecrawl running low on API credits (80 of 1000 left)** —
+a real vendor-cost constraint on the onboarding pipeline, not a code issue, worth
+tracking if more restaurants need this same manual backfill path.
+
+### Deploy/migration audit for this range
+
+Deployed and current with the last commit touching them in this range: `chat-sms`
+(v282), `scrape-shop` (v76), `compile-menu` (v4 — see "stale" note above),
+`public-menu` (v8), `test-runner` (v29 — see "one step behind" note above).
+**Committed but not deployed**: `chat-sms-mtest` — its last change in this range
+(`fe85bb4`, part of the menu-option-caps fix) is dated a full day after the
+function's live version (18) was last updated, so the deployed test-harness
+variant does not have that fix. Lower stakes than the primary bot since it's a test
+double, but worth knowing before trusting an mtest run against today's menu-display
+change.
