@@ -4122,3 +4122,96 @@ NOT DONE, awaiting sign-off on this dry-run output before proceeding:
 Zio's constraint check (nothing written this entry, but reconfirmed):
 compiled_ordering_engine_enabled=true (unchanged, this is Zio's normal
 live state, distinct from the Vito's/NJB constraint which requires false).
+
+================================================================================
+2026-09-08 ~17:45 UTC (13:45 ET) -- ITEM A: ZIO'S SIZE-FOLD -- APPLIED, THEN
+EMERGENCY-REVERTED. Standing rollback rule triggered ("an orderable item
+stops being orderable"). Zio's is currently back in its pre-fold structural
+state. NOT applied. NJB recompile and the 10x acceptance test were NOT
+started -- stopped before either per "flag immediately, don't wait for a
+final summary."
+================================================================================
+
+PO reviewed the dry-run output reported this afternoon and approved it
+exactly as shown (61 explode/142 new, 17 in-place, 220->301, 0 anomalies).
+Re-ran the dry run fresh immediately before applying -- identical numbers,
+confirming no other thread had touched Zio's menu_items/option_groups in
+between. Applied: 142 inserted, 61 retired, 17 singleton size_label
+updates, 78 Size groups + 159 option_choices deleted (rollback JSON
+exported first, /tmp/zios-size-fold-rollback-2026-09-08T17-40-41-622Z.json).
+Independently verified post-apply: active=301, inactive=61, remaining Size
+groups=0, Taco Pizza correctly split into 3 active rows with size_label set
+-- the fold itself is clean and matches the signed-off plan exactly.
+
+compile-menu was redeployed first (its live version, ac8f69d/2026-09-08
+12:00:29 UTC, predated this morning's NJB archetype fix commit 1e47f97/
+17:06 UTC -- would have run stale logic against both Zio's and NJB
+otherwise, per RUNBOOK's "deployed version can be stale" note). 74/74
+relevant unit tests (normalize/size-fold/archetypes) passed before deploy.
+
+Recompiled Zio's (POST /functions/v1/compile-menu, {shop_id}). ok=true,
+301 items, but bot_state distribution was 250 orderable / 51 blocked --
+NOT the ~3 pre-existing violations (Double Burger, Gyro, Chicken Gyro)
+this morning's compile had. All 51 new blocks were Hot Subs (32) and Cold
+Subs (16) sub items plus the pre-existing Double Burger (1), reason "slot
+bread pending owner question: Do customers pick a bread on {category}?" --
+two owner_questions rows (Hot Subs/bread, Cold Subs/bread) with
+created_at exactly matching this compile's timestamp, i.e. brand new, not
+previously pending.
+
+Zero pizza items were among the 51 -- the fold's own target (size
+resolution on pizzas) was unaffected and would have passed the PO's
+acceptance test. But 51 items that were orderable this morning were not
+orderable after this compile, on shops.compiled_ordering_engine_enabled
+=true production data (Zio's live channel) -- the standing rollback rule
+("an orderable item stops being orderable... revert first, report after")
+applies regardless of whether the affected items were the ones under test.
+Stopped immediately; did not proceed to NJB recompile, the 10x acceptance
+run, or the Vito's regression step.
+
+ROOT-CAUSE ISOLATION (the one check done before reverting, needed to know
+what to revert -- not a full investigation): wrote
+scripts/rollback-zios-size-fold-20260908.ts, dry-ran it (matched exactly:
+61 explode/17 singleton/142 new rows found, 0 warnings), then applied it --
+restores the 78 option_groups + 159 option_choices from the rollback
+export, deletes the 142 new per-size rows, reactivates the 61 retired
+originals, clears size_label on the 17 singletons. Independently verified
+Zio's is back to exactly 220 active items. Recompiled AGAIN against this
+now-pre-fold data to test whether the bread-blocking was fold-caused or
+pre-existing: still ok=true, but 195 orderable / 25 blocked (16 Hot Subs +
+8 Cold Subs + Double Burger) -- MORE than this morning's 3, but roughly
+HALF of the folded run's 51. Conclusion: the size-fold did not cause this
+gap -- it doubled its visible surface (each sub item split into 2 size
+rows, so the same category-wide bread question now blocks twice as many
+rows), but the underlying gap is real and pre-existing: Hot Subs and Cold
+Subs items carry zero bread option_groups and empty/minimal descriptions,
+and this appears to be the first time compile-menu has actually been run
+against Zio's since several archetype commits landed earlier today
+(ac8f69d guard 5.5b and its siblings, deployed 12:00:29 UTC) -- the gap
+was dormant, not introduced by this session's code.
+
+CURRENT LIVE STATE: Zio's menu_items/option_groups are back to the
+pre-fold structure (220 active items, 78 Size groups intact). bot_state
+across those 220 items reflects the SECOND (post-rollback) compile run
+just described (195 orderable / 25 blocked), not this morning's 3-
+violation baseline -- there is no snapshot of this morning's exact
+per-item bot_state to restore to, and re-running compile-menu at all
+(required to make anything, including the fold, live) will reproduce this
+same Hot Subs/Cold Subs classification every time until the underlying
+gap is addressed. This is the safest state achievable without further
+guessing. Vito's (compiled_ordering_engine_enabled=false, Cheese Burger
+price_cents=849) and NJB (compiled_ordering_engine_enabled=false)
+independently reconfirmed unchanged throughout.
+
+NOT DONE, blocked on PO decision: re-applying the size-fold (code is
+correct and ready, plan proven twice), the NJB recompile, the 10x Zio's
+pizza acceptance run, and the Vito's regression re-check (all deferred --
+none were started once the Hot Subs/Cold Subs finding came up). Options
+for the PO to choose from, not decided here: (1) answer/backfill the Hot
+Subs and Cold Subs bread owner questions first (real gap, 24 base items),
+then re-run the fold + both recompiles together; (2) accept the newly-
+surfaced blocked state as correct/expected compiler behavior and proceed
+with the fold + NJB recompile now, blocked subs items will just wait on
+those two owner-question answers same as any other genuinely blocked
+item; (3) something else. Commit 2af6373 (rollback script + full writeup
+in commit message) pushed to main.
