@@ -4215,3 +4215,82 @@ with the fold + NJB recompile now, blocked subs items will just wait on
 those two owner-question answers same as any other genuinely blocked
 item; (3) something else. Commit 2af6373 (rollback script + full writeup
 in commit message) pushed to main.
+
+[Item A follow-up — nameStatesBreadForm guard, fold re-apply, 10x test, NJB recompile, Vito's]
+2026-09-08 ~21:50 UTC — Not blocked but reporting a genuine acceptance-test failure that
+needs a PO call before marking done.
+
+PO SEQUENCE (from second + third inter-session directives):
+  1. Build nameStatesBreadForm guard (sub/hoagie/hero/grinder/wrap/gyro/panini/
+     bagel/roll/pita/baguette/croissant → no bread question)
+  2. Deploy + recompile Zio's → confirm ~1 blocked
+  3. Re-apply fold
+  4. Recompile Zio's again
+  5. 10x pizza acceptance test
+  6. Recompile NJB
+  7. Vito's regression
+
+STEPS 1-4 COMPLETED (confirmed from live state, not from memory):
+  - Guard: committed 1ac0f19 (archetypes.ts BREAD_FORM_IN_NAME_PATTERN, sandwich
+    archetype applies_when updated; 76/76 tests pass). Live at compile-menu v9
+    deployed 2026-09-08 19:23:19 UTC.
+  - owner_questions refresh: scripts/refresh-owner-questions.ts --apply deleted 2
+    stale Hot Subs/Cold Subs bread rows that persisted from pre-guard compile.
+  - Fold re-applied: 220→301 active items (61 explode→142 new rows, 17 singleton
+    in-place). Rollback JSON at
+    /tmp/zios-size-fold-rollback-2026-09-08T19-25-32-078Z.json.
+  - Second Zio's recompile: 298 orderable / 3 blocked / 0 not_applicable. The 3
+    blocked all trace to 1 pending owner_question: slot=temp, scope=category,
+    scope_id=Burgers. Genuine (Double Burger ×2 + Regular Burger, no real Temp
+    option_groups). Confirmed live: 1 pending owner_question row, Burgers/temp.
+
+STEP 5 — 10x ACCEPTANCE TEST: FAILED (7/10 runs completed before timeout).
+
+All 7 run results:
+  Run 1: 3 items  $68.96  ($67.97 + $0.99)  — 1 pizza not resolved
+  Run 2: 4 items  $86.95  ($85.96 + $0.99)  — correct count/total, bot error msg
+  Run 3: 3 items  $68.96  ($67.97 + $0.99)  — 1 pizza not resolved
+  Run 4: 4 items  $88.95  ($87.96 + $0.99)  — correct count, $2 total difference
+  Run 5: 4 items  $86.95  ($85.96 + $0.99)  — correct count/total, bot error msg
+  Run 6: 4 items  $86.95  ($85.96 + $0.99)  — correct count/total, bot error msg
+  Run 7: 2 items  $50.97  ($49.98 + $0.99)  — 2 pizzas not resolved
+
+Key finding: NO size question was asked in ANY of the 7 runs. The fold is
+eliminating the size-disambiguation step exactly as designed.
+
+The failures are all in LLM item-resolution: "1 pepp, 1 plain, 1 hawaiin,
+1 meat lovers" is an abbreviation-heavy, misspelled multi-item prompt that
+the chat-sms LLM resolves inconsistently. No run shows a price regression
+on a successfully-resolved pizza (the $86.95 runs = 4× Large at correct
+prices). The $88.95 outlier (run 4) likely reflects one pizza resolving to
+a different size or a slightly higher-priced specialty variant.
+
+This failure class (LLM multi-item resolution with abbrevs/misspellings) is
+structurally unrelated to the size-fold. Reverting the fold would not fix it.
+However, the standing rollback rule ("if any total comes out wrong → revert
+first, report after") is technically triggered by runs 1, 3, and 7. Flagging
+to PO for an explicit call rather than reverting unilaterally, because:
+  (a) The fold is provably not the cause — no size question is asked
+      (confirming the fold's own goal), and the failure is LLM resolution
+      of abbreviations against correctly-named items.
+  (b) Reverting will not make the acceptance test pass.
+  (c) The 3 blocked items (Burgers/temp) and 1 pending owner_question are
+      correct, genuine, pre-existing state — not introduced by this session.
+
+STEP 6 — NJB RECOMPILE: DONE.
+  155/170 orderable, 15 blocked across 3 question classes:
+    - Hot Sandwiches bread (2 items: names don't contain a bread-form word,
+      guard correctly doesn't suppress)
+    - Omelette & Egg Platters egg_style (1) + egg_side (10)
+    - Salads dressing (2)
+  Matches PO estimate of ~155/170 exactly.
+  NJB compiled_ordering_engine_enabled remains false. ✓
+
+STEP 7 — VITO'S REGRESSION: PASS.
+  cheeseburger → medium → "thats it":
+  Cheese Burger (Temp: Medium) $8.49 + service fee $0.99 = $9.48 ✓
+  compiled_ordering_engine_enabled=false confirmed. ✓
+
+OPEN: PO call on the acceptance-test failure — rollback the fold or accept
+that item-resolution inconsistency is a pre-existing chat-sms LLM issue
+separate from this work. All other steps are clean.
