@@ -1269,3 +1269,116 @@ everything else today.
 Spawning one final Melvin pass now covering: the bug-5 modify_item fix, live
 5-scenario Zio's results, Vito's re-confirmation post-redeploy, and the
 toppings/archetype gap diagnosis. Will report the moment it lands.
+
+[P0 FIXED — Vito's canary cheeseburger regression, GUARD 12]
+2026-09-07 — Root cause found and fixed within minutes of your report.
+GUARD 12 ("confirmation claims unresolved choice", added earlier today for
+BUG 4 hardening) was firing on the FIRST-turn add of ANY item with a still-
+open required option group, menu-wide — not Cheese-Burger-specific, a
+structural regression. It checked "does the reply contain a confirmation
+word (added/got it/noted) AND does it name this choice" — but ASKING a
+multiple-choice question necessarily names every choice, and "Cheese Burger
+added" (confirming the BASE item) sits in the same reply as "How would you
+like it cooked? Rare, medium rare..." (asking about Temp) — so all 5 real
+choices got wrongly flagged as unresolved claims and moved to
+unverified_requests every single time.
+FIX: exclude any group still in the cart line's own pending_options from
+GUARD 12's check — a still-pending group is by definition being asked
+about, not confirmed. Preserves the guard's real purpose (Jason's actual
+BUG 4 repro: a choice claimed as applied that was never pending at all).
+Committed bc2e0bc, deployed, PUSHED (didn't wait for Melvin given the
+live-canary severity — verifying myself was the bar, matching the urgency
+in your message). Verified live, 3 fresh cheeseburger sessions, all clean,
+plus the full answer-flow, the pizza/pickup no-doubling check, and Chicken
+Caesar disambiguation — all still correct. 5 new regression tests, 350/350
+full suite.
+NOT MY MISTAKE, CONFIRMED: this predates my item-8 work entirely — item 8's
+own branches are gated on Vito's ask_plan being non-null, which is null
+(you confirmed your accidental compile-menu-on-Vito's revert already, and
+I independently verified item 8 never touches Vito's regardless). This was
+GUARD 12, a same-day, unrelated change.
+Spawning Melvin now for independent confirmation of this fix (in parallel,
+not blocking — already deployed and verified by me). Returning to the item
+8 / Zio's final verification pass next, exactly as instructed.
+
+[ITEM 3 follow-up — NJB real infer run, owner_questions ONLY, DONE + independently
+re-verified. Fresh dispatch, prior session on this exact task lost its reply channel
+before reporting — building on its work, not redoing it.]
+2026-09-08 ~00:20 UTC — Not blocked. Confirmed the prior session's
+scripts/njb-infer-only-20260907.ts had ALREADY run for real against NJB (shop_id
+b0000000-0000-0000-0000-000000000001, menu_id b5d0ba65-0923-4408-9094-7e26c9983eea) —
+8 owner_questions rows exist in the live DB, all created at the same timestamp
+(2026-09-08T00:06:17Z), before I was dispatched. Did not trust that on sight: re-ran the
+same script myself against live NJB data (0 new inserts — its own 8 fresh drafts match
+the 8 existing rows exactly, proving idempotency) and independently queried the DB
+directly (not via any report script) to confirm the hard rule held:
+  - owner_questions for NJB: 8 rows, all scope_type='category', kind='exists',
+    blocking=true, status='pending'. Untouched by anything else.
+  - option_groups for NJB: 0 (confirmed via a direct query over all 170 NJB
+    menu_item ids) — the infer step never wrote a live group/choice row.
+  - menu_items for NJB: 170/170 still bot_state='blocked', ask_plan=null,
+    product_key=null across a sample — i.e. compile-menu was NEVER invoked against
+    NJB. Only the owner_questions insert happened. Lexicon: 0 rows for NJB menu_id.
+  - Zio's owner_questions unchanged at 2 (spot-checked count only) — did not touch
+    Zio's or Vito's at all this task.
+Deleted a duplicate script I wrote before finding the prior session's existing
+scripts/njb-infer-only-20260907.ts (same logic, mine was redundant) — that script is
+the one being kept/committed.
+
+FULL owner_questions list for NJB (8 rows, all pending, all blocking=true, all
+kind='exists') — this is the complete list Jason is taking to the real NJB owner:
+
+1. [Breakfast Sandwiches] slot=bread — items_affected 20, priority 80
+   Q: "Do customers pick a bread on Breakfast Sandwiches?"
+   Proposed choices: (none — owner must supply)
+2. [Cold Sandwiches] slot=bread — items_affected 15, priority 60
+   Q: "Do customers pick a bread on Cold Sandwiches?"
+   Proposed choices: (none — owner must supply)
+3. [Hot Sandwiches] slot=bread — items_affected 12, priority 48
+   Q: "Do customers pick a bread on Hot Sandwiches?"
+   Proposed choices: (none — owner must supply)
+4. [Wraps] slot=bread — items_affected 10, priority 40
+   Q: "Do customers pick a bread on Wraps?"
+   Proposed choices: (none — owner must supply)
+5. [Omelette & Egg Platters] slot=egg_side — items_affected 11, priority 44
+   Q: "Do customers pick a side on Omelette & Egg Platters?"
+   Proposed choices: (none — owner must supply)
+6. [Omelette & Egg Platters] slot=toast — items_affected 3, priority 12
+   Q: "Do customers pick a toast/bread on Omelette & Egg Platters?"
+   Proposed choices: (none — owner must supply)
+   Excluded (already resolved, no question needed): Two Eggs Any Style Platter,
+   Bacon/Sausage/Ham or Pork Roll Omelette Platter, Western Omelette Platter,
+   Spinach & Feta Cheese Omelette Platter, Penny's Spicy Omelette Platter, Meat
+   Lovers' Omelette Platter, Lox & Onions Omelette Platter, Lean Omelette Platter
+7. [Salads] slot=dressing — items_affected 2, priority 8
+   Q: "Do customers pick a dressing on Salads?"
+   Proposed choices: (none — owner must supply)
+   Excluded: Caesar Salad, Greek Salad
+8. [Omelette & Egg Platters] slot=egg_style — items_affected 1, priority 4
+   Q: "How would customers like their eggs cooked on Omelette & Egg Platters?"
+   Proposed choices: Scrambled, Over easy, Over medium, Over hard, Sunny side up,
+   Poached
+   Excluded: Bacon/Sausage/Ham or Pork Roll Omelette Platter, Cheese Omelette
+   Platter, Veggie Omelette Platter, Western Omelette Platter, Spinach & Feta
+   Cheese Omelette Platter, Penny's Spicy Omelette Platter, Meat Lovers' Omelette
+   Platter, Lox & Onions Omelette Platter, Lean Omelette Platter, Build Your Own
+   Omelette Platter
+
+Matches the earlier item-9 read-only report's prediction exactly ("8 remaining
+owner_questions, down from 10" — docs/reports/2026-09-07-item9-njb-rerun-post-
+fixes.md) — same numbers, now real rows instead of a dry-run projection.
+Committing scripts/njb-infer-only-20260907.ts + this BLOCKED.txt entry now, pushing.
+NOT running compile-menu against NJB — that stays blocked on Jason's answers to
+these 8 questions, per his explicit sequencing rule (questions first, answers
+second, compile third).
+
+Queued items checked per this task's ask, both already handled by other sessions,
+not redone:
+  a) GUARD 15 (blocked-item alternative-suggestion filter) — already landed,
+     committed f679e1d alongside GUARD 16. Nothing to do.
+  b) Zio's 2 remaining owner_questions (Cheese Burger/Double Burger/Tuna Provolone
+     Wrap — see the ~20:15 UTC entry above: "Zio's did NOT reach 220/220: 3 items
+     ... have ZERO option_groups rows at all -- Slice never published option data
+     for them"). No entry found showing this was resolved since. Still open,
+     genuinely lower priority than tonight's NJB questions — not started, flagging
+     rather than picking it up unprompted.
