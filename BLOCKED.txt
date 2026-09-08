@@ -4031,3 +4031,94 @@ false (unchanged).
 NOT YET DONE: ITEM A (Zio's size-fold) -- separate entry to follow once the
 dry run is built and run, per the dispatch's hard gate ("show me the dry-run
 output before the apply").
+
+================================================================================
+2026-09-08 ~17:20 UTC (13:20 ET) -- ITEM A: ZIO'S SIZE-FOLD, DRY RUN ONLY,
+STOPPED AT THE PO'S HARD GATE. No writes made to Zio's or anywhere else in
+this entry. Per the PO's own words: "Show me the dry-run output before the
+apply. That is my only gate and it is a five-minute one."
+================================================================================
+
+Built exactly per plan ec35040:
+  - supabase/functions/_shared/size-fold.ts: new pure decision function
+    planSizeFold(item, choices) -- given an item + its Size group's
+    choices, returns a plan: >=2 choices -> one explode_insert action per
+    choice (name="<base> - <size label>", price_cents = base + choice's
+    delta, size_label = size label, category/description cloned,
+    retiresOriginal=true); exactly 1 choice -> a singleton_update action
+    (size_label set directly on the existing row, no new row,
+    retiresOriginal=false) -- same singleton-is-a-fact-not-a-question
+    principle as archetypes.ts's guard 5.5b. 6 new unit tests
+    (size-fold.test.ts), all passing, real Zio's shapes (Taco Pizza 3-size,
+    Italian Hot Dog Sub 2-size, Mike's Hot Honey Pepperoni Sicilian
+    singleton).
+  - scripts/fold-zios-sizes.ts: I/O shell, dry-run by default (matches
+    refresh-owner-questions.ts convention). Exports the 78 Size
+    option_groups + their option_choices to a timestamped rollback JSON
+    file BEFORE deleting them, on --apply.
+  - scripts/load-zios-slice-options.mjs: wired the SAME planSizeFold
+    function in (foldSizeGroupIfPresent, called from main()'s per-item
+    loop before writeItem) so a future Slice re-scrape folds size at
+    import time instead of reproducing the un-folded shape. Node 22's
+    native TS type-stripping imports the .ts module directly (verified:
+    `node -e "import('.../size-fold.ts')"` resolves fine) -- no build step
+    needed. node --check passes; deno check passes on both new .ts files.
+
+DIAGNOSIS RE-CONFIRMED LIVE (ec35040's estimates corrected against exact
+counts, not a discrepancy in the fix):
+  - 78 required, single-select "Size"-named option_groups confirmed exactly
+    (matches ec35040's own count).
+  - Choice-count distribution: 17 singleton (1 choice), 41 two-choice, 20
+    three-choice, 0 with any other count -- ec35040's own estimate ("~5 w/
+    1... handful w/ other counts") undercounted the singleton bucket (real:
+    17, not ~5) and overstated the existence of odd counts (real: none,
+    clean 1/2/3 split only). Zero anomalies (0-choice required Size groups).
+  - All 78 items: import_key=null, source='manual' -- no risk of colliding
+    with the (menu_id, import_key) unique constraint when inserting new
+    rows with import_key left null.
+
+DRY-RUN OUTPUT (scripts/fold-zios-sizes.ts, no --apply):
+  active menu_items: 220
+  required Size-named option_groups: 78
+  option_choices across those groups: 159
+  plan: 61 items explode into 142 new rows (originals retired), 17 items
+  get size_label set in place (no new rows), 0 anomalies
+
+  Sample explode (before -> after):
+    "Italian Hot Dog Sub" (2 choices) ->
+      + "Italian Hot Dog Sub - Medium 12''" size_label="Medium 12''" price_cents=1099
+      + "Italian Hot Dog Sub - Large 16''" size_label="Large 16''" price_cents=1899
+      original row -> active=false
+    "Taco Pizza" (3 choices) ->
+      + "Taco Pizza - Small 14''" size_label="Small 14''" price_cents=1999
+      + "Taco Pizza - Medium 16''" size_label="Medium 16''" price_cents=2299
+      + "Taco Pizza - Large 18''" size_label="Large 18''" price_cents=2499
+      original row -> active=false
+
+  Sample singleton (size_label set in place, no new row):
+    "Plain Pan Pizza" -> size_label="18''"
+    "Brooklyn Pizza 18" -> size_label="Large 18\""
+    "Mike's Hot Honey Pepperoni Sicilian" -> size_label="Large 18\""
+
+  Net active item count: 220 -> 301 (61 retired, 142 new, 17 updated in
+  place, 0 untouched anomalies) -- ec35040's own "~310-320" estimate was a
+  touch high; 301 is the real, live-computed number.
+
+NOT DONE, awaiting sign-off on this dry-run output before proceeding:
+  - --apply (the actual writes: 142 inserts, 61 retirements, 17 size_label
+    updates, 78 option_group + 159 option_choice deletions with a rollback
+    JSON export written first)
+  - The post-apply recompile of Zio's (explicitly named in the dispatch --
+    "the fold does nothing for a live customer until the lexicon is
+    rebuilt"). Zio's compile-menu invocations have precedent as a routine,
+    previously-authorized operation for this shop specifically (unlike
+    NJB) -- will proceed once the apply itself is signed off.
+  - Live verification: "large cheese pizza" and similar size-stated
+    utterances resolving without a question post-fold+recompile, Vito's
+    unaffected (spot-checked again this session anyway even though nothing
+    was written to Vito's: compiled_ordering_engine_enabled=false, Cheese
+    Burger price_cents=849 -- both unchanged).
+
+Zio's constraint check (nothing written this entry, but reconfirmed):
+compiled_ordering_engine_enabled=true (unchanged, this is Zio's normal
+live state, distinct from the Vito's/NJB constraint which requires false).

@@ -28,6 +28,16 @@
  * Idempotent via import_key (menu-scoped per migration 010), safe to re-run
  * — matches the load-vitos-sandwich-options.py convention in this repo.
  *
+ * Size-fold (2026-09-08, ec35040 item A): a required singleton "Size"-named
+ * group is Slice's own per-item size UI, the same shape the one-time
+ * scripts/fold-zios-sizes.ts backfill already exploded for the 78 groups
+ * live at that time. Any FUTURE scrape (a Zio's re-run after a menu change,
+ * or a new Slice-sourced shop) must fold size at import time too, or the
+ * un-folded shape comes right back the next time this script runs. See
+ * foldSizeGroupIfPresent below -- it uses the exact same pure decision
+ * function (supabase/functions/_shared/size-fold.ts) as the one-time
+ * backfill, so the two can never drift into different fold rules.
+ *
  * Usage:
  *   node scripts/load-zios-slice-options.mjs                # dry run, writes /tmp/zios-extract.json
  *   node scripts/load-zios-slice-options.mjs --apply         # writes to DB
@@ -37,6 +47,7 @@ import { chromium } from 'playwright';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { planSizeFold } from '../supabase/functions/_shared/size-fold.ts';
 
 const SUPABASE_URL = 'https://rvdqfxtrskxekfkqnegx.supabase.co';
 const SHOP_ID = '2cba7b51-211c-4437-8910-1af4dcc03498';
@@ -229,6 +240,55 @@ function buildGroupRows(match, rawGroups) {
   return out;
 }
 
+function isSizeGroup(g) {
+  return g.kind === 'slot' && g.required && /size/i.test(g.name);
+}
+
+// Splits the Size group (if any) out of groupRows and folds it into
+// menu_items rows via the shared planSizeFold decision function, instead of
+// writing it as an option_group like every other group. Returns the
+// remaining (non-size) groups for the normal writeItem path. Only writes
+// when apply=true -- during a dry run this still computes and returns the
+// plan so it shows up in the per-item log, matching every other write path
+// in this script.
+async function foldSizeGroupIfPresent(menuItemId, groupRows, apply) {
+  const sizeGroupIdx = groupRows.findIndex(isSizeGroup);
+  if (sizeGroupIdx === -1) return { remainingGroups: groupRows, sizeFoldPlan: null };
+  const sizeGroup = groupRows[sizeGroupIdx];
+  const remainingGroups = groupRows.filter((_, i) => i !== sizeGroupIdx);
+
+  const [item] = await supabase('GET',
+    `menu_items?id=eq.${menuItemId}&select=id,menu_id,name,category,description,price_cents`);
+  if (!item) {
+    console.error(`    FAILED size-fold: menu_item ${menuItemId} not found`);
+    return { remainingGroups, sizeFoldPlan: null };
+  }
+
+  const sourceItem = { id: item.id, name: item.name, category: item.category, description: item.description, price_cents: item.price_cents };
+  const sourceChoices = sizeGroup.choices.map(c => ({ id: null, name: c.name, display_name: c.name, price_cents: c.price_cents }));
+  const plan = planSizeFold(sourceItem, sourceChoices);
+
+  if (!apply) return { remainingGroups, sizeFoldPlan: plan };
+
+  if (plan.retiresOriginal) {
+    const insertRows = plan.actions
+      .filter(a => a.kind === 'explode_insert')
+      .map(a => ({ menu_id: item.menu_id, name: a.name, category: a.category, description: a.description, price_cents: a.price_cents, size_label: a.size_label, active: true, source: 'manual' }));
+    const inserted = await supabase('POST', 'menu_items', insertRows, 'return=representation');
+    if (!inserted || inserted.length !== insertRows.length) { console.error(`    FAILED size-fold insert for "${item.name}"`); return { remainingGroups, sizeFoldPlan: plan }; }
+    // return=representation so a successful-but-empty-body ambiguity (PATCH's
+    // default Prefer is return=minimal, a 204 with no body) can't be
+    // misread as the same `null` the helper returns on a real HTTP error.
+    const retired = await supabase('PATCH', `menu_items?id=eq.${item.id}`, { active: false }, 'return=representation');
+    if (!retired || retired.length !== 1) console.error(`    FAILED to retire original "${item.name}" after size-fold`);
+  } else if (plan.actions[0]?.kind === 'singleton_update') {
+    const updated = await supabase('PATCH', `menu_items?id=eq.${item.id}`, { size_label: plan.actions[0].size_label }, 'return=representation');
+    if (!updated || updated.length !== 1) console.error(`    FAILED singleton size_label update for "${item.name}"`);
+  }
+
+  return { remainingGroups, sizeFoldPlan: plan };
+}
+
 async function writeItem(menuItemId, groupRows) {
   let written = 0;
   for (const g of groupRows) {
@@ -268,7 +328,7 @@ async function main() {
   });
 
   const extractLog = [];
-  let totalGroups = 0, totalChoices = 0, itemsWithGroups = 0, itemsNoModal = 0;
+  let totalGroups = 0, totalChoices = 0, itemsWithGroups = 0, itemsNoModal = 0, itemsSizeFolded = 0;
 
   for (const [menuItemId, match] of entries) {
     process.stdout.write(`  [${match.category}] ${match.db_name} (slice#${match.slice_id}) ... `);
@@ -288,7 +348,18 @@ async function main() {
       await sleep(jitter(1500, 1500));
       continue;
     }
-    const groupRows = buildGroupRows(match, result.groups);
+    let groupRows = buildGroupRows(match, result.groups);
+    const { remainingGroups, sizeFoldPlan } = await foldSizeGroupIfPresent(menuItemId, groupRows, APPLY);
+    if (sizeFoldPlan) {
+      itemsSizeFolded++;
+      const desc = sizeFoldPlan.retiresOriginal
+        ? `folded into ${sizeFoldPlan.actions.length} size rows`
+        : `size_label set (${sizeFoldPlan.actions[0]?.size_label})`;
+      console.log(`  size-fold: ${desc}`);
+      extractLog.push({ menuItemId, match, sizeFold: sizeFoldPlan });
+    }
+    groupRows = remainingGroups;
+
     const nChoices = groupRows.reduce((s, g) => s + g.choices.length, 0);
     if (groupRows.length) itemsWithGroups++;
     totalGroups += groupRows.length;
@@ -311,6 +382,7 @@ async function main() {
   console.log(`Items processed: ${entries.length}`);
   console.log(`Items with >=1 option group: ${itemsWithGroups}`);
   console.log(`Items with no modal (no options): ${itemsNoModal}`);
+  console.log(`Items size-folded (Size group converted to rows, not written as an option_group): ${itemsSizeFolded}`);
   console.log(`Total groups: ${totalGroups}, total choices: ${totalChoices}`);
   console.log(`Extract log written to ${EXTRACT_OUT}`);
   if (!APPLY) console.log('\nDRY RUN — pass --apply to write to the DB.');
