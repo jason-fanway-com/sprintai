@@ -18,7 +18,12 @@ import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
 import { dayWindows } from "../_shared/hours.ts";
 import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 import { stripInventedActions } from "./invented-action-guard.ts";
-import { buildZeroOptionAttributeChangeHint } from "./zero-option-attribute-hint.ts";
+import {
+  buildZeroOptionAttributeChangeHint,
+  resolveZeroOptionAttributeChange,
+  renderZeroOptionAttributeChangeReply,
+  type ZeroOptionMenuItemFull,
+} from "./zero-option-attribute-hint.ts";
 import {
   categoryDisplayWord,
   categoryWordMatches,
@@ -5076,24 +5081,69 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ reply: summaryReply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
 
+  // ── Deterministic zero-option attribute-change handler ───────────────────
+  // (2026-09-08, real NJB bagel-switch self-contradiction). Two prior shapes
+  // were tried and rejected after live-verifying them, both correctly: a
+  // post-hoc corrector (GUARD 17, below) that can only ever produce a
+  // claim-then-retraction when it fires or an unguarded false claim when it
+  // doesn't — 6 revisions, never a clean single sentence — and a before-
+  // composition prompt NUDGE (the hint just below this block) that changed
+  // the odds but stayed probabilistic: still non-deterministic across fresh
+  // runs, and GUARD 17 would occasionally mis-fire on the honest denial the
+  // nudge DID produce, recreating the same self-contradiction on a message
+  // that never needed correcting.
+  //
+  // This is the actual fix, same shape as the ask_plan slot lookup that
+  // already makes "large buffalo chicken pizza" deterministic on Zio's: for
+  // the UNAMBIGUOUS case (exactly one zero-option item in the cart), detect
+  // the request BEFORE any LLM call for the turn and RENDER a fixed reply
+  // instead of generating one — the words "switched"/"noted"/"got it"
+  // attached to a change that didn't happen are never produced, because no
+  // free-form generation runs for this part of the turn at all. If a real
+  // alternative catalog item matches what the customer described, it's
+  // offered by name and price; otherwise a plain, single decline. Either
+  // way the kitchen note (when there's no alternative) is written via a
+  // DIRECT tool call here, not left to the model to remember — closing the
+  // separate notes-mismatch gap the nudge shape surfaced and never fixed
+  // (the claim "I've noted it" and the actual note can no longer drift
+  // apart, because this code writes both).
+  //
+  // Two or more zero-option items in the cart is a genuine ambiguity this
+  // resolver isn't built to guess at ("which one do you mean") -- that
+  // residual case intentionally still falls through to the hint/GUARD-17
+  // fallback below. The two paths cover disjoint scenarios (exactly-one vs.
+  // 2+ zero-option cart items) and never both fire for the same turn.
+  if (!correctionApplied && !nameSubmitCheckoutUrl && cart.phase === "building" && cartItems.length > 0) {
+    const zeroOptionMenu: ZeroOptionMenuItemFull[] = effectiveMenu.map(mi => ({
+      id: mi.id, ask_plan: mi.ask_plan, category: mi.category, price_cents: mi.price_cents,
+    }));
+    const resolution = resolveZeroOptionAttributeChange(
+      userMessage,
+      cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
+      zeroOptionMenu,
+    );
+    if (resolution) {
+      if (!resolution.alternative) {
+        await executeTool(
+          "set_note",
+          { note: `Customer requested for "${resolution.itemDisplayName}": ${resolution.rawRequest}` },
+          cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+        );
+      }
+      const detReply = renderZeroOptionAttributeChangeReply(resolution);
+      console.log(`[chat-sms] deterministic zero-option attribute-change handler fired (conv=${conversation.id}), item=${resolution.itemDisplayName}, alternative=${resolution.alternative?.name ?? "none"}`);
+      return jsonResponse({ reply: detReply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    }
+  }
+
   // ── Run ordering loop ─────────────────────────────────────────────────────
   // Rebuild system prompt with potentially corrected cart
   //
-  // BEFORE-COMPOSITION honesty check (2026-09-08, real NJB bagel-switch
-  // self-contradiction — Jason's own diagnosis: "this is an ordering
-  // problem, not a wording problem"). GUARD 17 (below, post-turn) catches a
-  // false "Switched to..." claim AFTER the model has already written it,
-  // and can only ever APPEND a correction — producing exactly the
-  // claim-then-retraction pattern Jason flagged as self-contradictory, no
-  // matter how honest the retraction itself is. This runs BEFORE the
-  // model's first call of the turn: if the customer's message uses change
-  // language and the cart already has a zero-option item, the model gets an
-  // explicit heads-up in ITS OWN context before composing anything, so its
-  // tool calls and its final text are both written already knowing it can't
-  // claim a change happened — one coherent message, not two contradictory
-  // ones. GUARD 17 remains as the deterministic backstop for whenever the
-  // model doesn't act on this (prompt compliance is probabilistic, never
-  // guaranteed) -- this is prevention, not a replacement for it.
+  // BEFORE-COMPOSITION honesty check (2026-09-08) — FALLBACK ONLY for the
+  // ambiguous 2+-zero-option-item case the deterministic handler above
+  // doesn't cover. See that block's comment and this hint function's own
+  // history in zero-option-attribute-hint.ts for why it's a fallback, not
+  // the primary mechanism, for the unambiguous case.
   const zeroOptionHint = buildZeroOptionAttributeChangeHint(
     userMessage,
     cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
