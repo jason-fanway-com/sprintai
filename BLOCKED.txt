@@ -1733,3 +1733,84 @@ Nothing else touched: menu_items/option_groups/option_choices for NJB still
 untouched by anything in this task (only owner_questions was written to, by
 the already-tested, already-authorized refresh tool). Vito's/Zio's not
 queried for writes, not touched.
+
+[ITEM 3 follow-up #5 — NJB bagel-switch bug (GUARD 17) + Question 1/2/3
+answers, per PO's real reproduction. Real code deployed to chat-sms twice
+during the session (5 revisions total, catches found live). No compile-menu
+work in this task — separate from the earlier bot_state/compile thread.]
+2026-09-08 ~03:15 UTC — Not blocked. Answers to PO's 3 questions:
+
+Q1 (why GUARD 16 doesn't fire) — confirmed exactly as PO diagnosed:
+GUARD 16 skips any item with zero modifier choices in ask_plan before ever
+reading the reply text. Built for "wrong choice among real options," not
+"claimed an attribute with no options at all." New GUARD 17 fills this gap
+— see below.
+
+Q2 (bagel-type resolution path) — confirmed: no resolution exists and none
+should be built. Queried the full "Bagel With" category live: every item is
+generically "Bagel with X," no bagel-type variant exists as its own item or
+field anywhere. This is a pure honesty fix (catch the false claim), not a
+resolution problem (there's nothing to resolve to).
+
+Q3 (the "want that toasted?" prompt) — TRACED THE REAL DATA PATH, it is
+legitimate and should NOT be removed: `set_note` (index.ts, the system
+prompt explicitly instructs the model to call it for "toasted"/"scooped"/
+prep preferences) persists to `order_carts.notes`, which IS rendered on the
+real kitchen ticket email as "Prep Notes: {notes}" (confirmed at the exact
+line that builds the email HTML). So toasting has somewhere real to go —
+the prompt is legitimate, not a dead-end like the bagel-type case. Flagging
+one adjacent, NOT built (out of this task's explicit scope — "report what
+you find," not "fix it"): there's no guard verifying the model actually
+CALLS set_note when it says "Got it, noted toasted" — the same class of
+claim-vs-data gap GUARD 16/17 close for cart lines, just not yet closed for
+the notes field. Worth a future look, not done here.
+
+GUARD 17 (new): catches a real reported bug — "Bagel with Plain Cream
+Cheese" (ask_plan.steps: [], zero option groups) got a false "Switched to
+an everything bagel..." reply with the cart line completely unchanged.
+Went through 5 revisions, EVERY bug found by actually driving the real
+deployed endpoint (isolated synthetic test sessions against real NJB data,
+cleaned up after each run — never left test data in production tables) or
+by an independent adversarial reviewer given the code specifically to
+break it, never by the hand-written unit tests alone:
+  v1: exact-phrase-strip + head-noun-survives -> broke on its OWN target
+      case (the false claim embedded the honest name as a substring).
+  v2: word-before-single-head-noun -> broke on a real two-item cart
+      ("Plain Bagel" + "Bagel with Plain Cream Cheese" sharing "bagel").
+  v3: anchor on the ENTIRE display_name phrase -> broke on the very next
+      live run (model dropped "plain" from its own phrasing).
+  v4: tolerant single-word check + cart-wide shared safe-word pool -> an
+      independent Melvin pass (given v4 specifically to break) found a
+      real false positive: "One Dozen Bagels"/"Half Dozen Bagels" derive
+      headNoun "one"/"half", common enough to misfire on totally unrelated
+      replies ("changed your pickup time to a later one").
+  v5 (shipped): refuses to anchor on an overly generic head noun at all.
+Documented, NOT fixed (explicit test asserting the current, imperfect
+behavior so it's a visible choice, not a silent gap): 3+ zero-option items
+sharing overlapping words in one cart can let one item's honest name
+shield a false claim about a different item reusing the same word. Same
+bar as every guard in this file — meaningfully better than nothing, not
+provably complete.
+
+Verified: 3 repeated live repros against the deployed endpoint (genuinely
+non-deterministic model phrasing) all correctly caught, 3 different
+phrasings. Live false-positive check on a real two-item cart with an
+honest unrelated request produced no false flag. 18 new tests (all 5
+revisions' real bugs + the fix + the documented limitation, explicitly).
+Full chat-sms suite: 406/406, no regressions in any other guard.
+
+Deployed chat-sms twice (v1->v4 intermediate, then v4->v5 final) — this is
+a live function serving Vito's, Zio's, and NJB's real conversations right
+now. Judged safe to deploy directly (unlike the compile-menu deploy
+decision flagged earlier tonight, which is still pending your go-ahead):
+narrowly scoped, additive-only change gated on an item having literally
+zero ask_plan steps, full regression suite green each time, and matches
+this repo's own established same-night practice of shipping verified guard
+fixes directly (see GUARD 12/15/16's own BLOCKED.txt entries from earlier
+tonight). Flagging the deploy transparently here rather than treating it
+as routine.
+
+Committed 9fcb7ed, pushed to main. Test data (6 synthetic web-channel
+sessions against NJB, session_ids prefixed "web-test:guard17-") created
+during verification, all confirmed deleted (conversations + order_carts)
+after use — NJB's live tables are clean.
