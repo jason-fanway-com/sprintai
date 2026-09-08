@@ -1449,3 +1449,130 @@ Handing to Melvin for independent adversarial verification before this is closed
 Out of scope, not touched (per the task): the (name, price_cents) dedup key, and
 anything under chat-sms/, compile-menu/, or _shared/compile-menu* (concurrent
 session's active work in this shared repo).
+
+[ITEM 3 follow-up #2 — normalize.ts multi-clause "choice of" parser fix, NJB
+infer re-run, owner_questions STILL infer-only. Fresh dispatch continuing the
+prior NJB infer session (8 questions landed, committed 478e399). Real gap
+found by Jason reviewing real NJB text: "Turkey Bacon, Egg & Cheese" desc is
+literally "Turkey bacon, egg & cheese on choice of bagel, bread, or roll." —
+this exact Oxford-comma/2-way/labeled-parenthetical/quantity shape family.]
+2026-09-08 ~01:10 UTC — Not blocked, but leaving a real decision point open
+for Jason (see bottom). Fixed the real root-cause bug, not just the 4
+requested parser shapes:
+
+ROOT CAUSE: normalize.ts's description parser only ever looked at the FIRST
+"choice of ..." occurrence in a description. Real NJB text states TWO in the
+same item ("Choice of meat (Bacon, Ham, Sausage, or Pork Roll) on choice of
+bagel, bread, or roll." — Meat Only Breakfast Sandwich; "Omelette with choice
+of meat (...). Served with ... and choice of bagel or toast." — Bacon/
+Sausage/Ham/Pork Roll Omelette Platter). The old parser silently fed the
+MEAT clause to whatever slot wanted the description data — for the Omelette
+item this was one step from binding the `toast` slot to a meat list, exactly
+what archetypes.test.ts's own "Melvin finding, Bug 2" synthetic guard warns
+against (that guard's fixture never actually matched what normalize.ts
+produced — confirmed by tracing it for real).
+
+FIX (supabase/functions/_shared/normalize.ts): now finds EVERY "choice of"
+anchor per description, resolves each clause independently:
+  - "choice of A, B, or C" / "A or B" (bare list) -> unlabeled slot.
+  - "choice of X (A, B, C, or D)" -> slot LABELED "X" (e.g. "meat").
+  - "choice of N <thing>" -> new NormalizedModifier (max_select N), not a
+    slot. "choice of 1 meat, 1 cheese & 2 vegetables" decomposes into 3
+    modifiers (meat/1, cheese/1, vegetable/2) since every segment parses.
+  - Bare unparseable clauses ("choice of cheese", "choice of bread" with no
+    list) correctly produce nothing — not force-parsed, stay real gaps.
+New `pickDescriptionSlot()` picks the unlabeled clause over a labeled one
+when an item states 2 — every current archetype slot (bread/toast) wants the
+bare enumeration, never the named sub-clause.
+
+archetypes.ts: added "bread" to DESCRIPTION_SOURCED_SLOTS (was only
+side/toast) — the sandwich archetype's bread slot could never resolve from a
+stated description list before this, regardless of what normalize.ts held.
+Also fixed archetypes.test.ts's live 3-shop report, which was calling a
+STALE hand-rolled regex reimplementation (predating even the Oxford-comma
+fix) instead of the real normalize.ts functions — it was silently
+under-reporting for years, now wired to the real code.
+
+REGRESSION CHECK (live data, not assumed): Vito's and Zio's produce
+byte-IDENTICAL inferCategory output before/after this change (confirmed via
+git stash A/B) — neither has an item with 2+ "choice of" occurrences, and no
+sandwich-category item in either has ANY description-sourced clause, so the
+new "bread" wiring has zero effect on them. 41/41 compile-menu.test.ts,
+67/67 normalize.test.ts + archetypes.test.ts (incl. live tests against all
+3 real shops) all green. New test fixtures added for all 4 requested shapes
+plus the 2 real two-clause items and the 2 real zero-output items (8 new
+tests in normalize.test.ts).
+
+INDEPENDENT VERIFICATION (Melvin role, fresh agent, no access to my
+reasoning): hand-traced all 8 real description shapes against the code
+directly, ran the suite itself, re-queried the DB itself. Verdict: "the code
+change itself is correct and safe... all 8 real-description cases behave
+exactly as specified... Vito's/Zio's are provably unaffected." Full report
+available in that agent's transcript.
+
+RE-RAN NJB INFER (scripts/njb-infer-only-20260907.ts, updated to use
+pickDescriptionSlot, same hard rule as before — owner_questions ONLY, real
+run against live DB): freshly-computed set is 7 questions (down from 8) —
+[Omelette & Egg Platters]/toast fully resolves and drops out entirely.
+[Breakfast Sandwiches]/bread, [Cold Sandwiches]/bread, [Hot Sandwiches]/bread
+all shrink (not vanish — see below). [Wraps]/bread, [Salads]/dressing,
+[Omelette & Egg Platters]/egg_style, /egg_side stay open exactly as before
+(confirmed against real text, not assumed):
+
+  Breakfast Sandwiches bread: 20 -> 2 unstated (Avocado Crush — fixed wheat
+    toast, no choice stated; Lean Wrap — it's a wrap, no bread choice stated)
+  Cold Sandwiches bread:      15 -> 2 unstated (Sloppy Joe - Turkey/Roast
+    Beef — both say "on rye bread", fixed, never "choice of")
+  Hot Sandwiches bread:       12 -> 11 unstated (only Grilled Cheese states
+    an actual bread list; Turkey Melt/Tuna Melt say bare "choice of bread"
+    with NO list at all — correctly still real questions, not force-parsed)
+  Wraps bread:                 10 -> 10 (confirmed: ZERO Wraps items state
+    any bread list anywhere — genuinely stays open, not assumed)
+  Omelette toast:               3 -> 0 (drops out entirely, exactly as hoped)
+  Omelette egg_style/egg_side, Salads dressing: unchanged, no source text.
+
+CORRECTION TO THE PRE-FIX PREDICTION: the ask assumed Breakfast Sandwiches
+bread and Cold Sandwiches bread would ALSO drop out entirely (3-4 questions
+total). Real data says otherwise — verified live, not assumed: 4 real items
+across those two categories (Avocado Crush, Lean Wrap, both Sloppy Joes)
+genuinely never state a bread CHOICE, only a fixed bread. Real gap, correctly
+still surfaced. Net count is 7 questions, not 3-4 — still a real improvement
+(8 -> 7 rows, 84 fewer total items_affected across the shrunk categories),
+just not as large as hoped.
+
+*** DECISION POINT FOR JASON — did NOT act on this without sign-off ***
+The 8 owner_questions rows currently LIVE in the DB are now STALE relative
+to the fresh computation above. Confirmed by direct query + by re-running
+the real infer script for real (0 new inserts — every fresh key already
+exists, so the insert-if-not-exists script can never self-correct this):
+  - [Omelette & Egg Platters]/toast: still sitting in the DB
+    (items_affected=3, status=pending) even though the fix says this
+    question is now fully answered by the menu text and shouldn't exist.
+  - [Breakfast Sandwiches]/bread: DB says items_affected=20, correct is 2.
+  - [Cold Sandwiches]/bread: DB says items_affected=15, correct is 2.
+  - [Hot Sandwiches]/bread: DB says items_affected=12, correct is 11.
+All 4 rows are still status='pending' (nothing answered yet, so no owner
+answer is at risk). I did NOT update or delete these rows myself — the infer
+pipeline is deliberately insert-only everywhere in this codebase (protects a
+real owner answer from ever being clobbered by a re-run), and updating/
+deleting an existing owner_questions row is a different, more invasive
+write than anything this task authorized ("owner_questions rows ONLY," never
+"mutate an existing row"). If Jason takes the CURRENT 8-question list to the
+NJB owner as-is, one question (toast) is unnecessary and three will overstate
+how many items are affected. Recommend either (a) explicitly authorize
+updating items_affected/exclusions on the 3 bread rows and removing the
+toast row before the owner conversation, or (b) take the list as-is and treat
+the toast answer as a freebie / mentally discount the 3 bread counts — but
+this should be a conscious choice, not a silent gap.
+
+option_groups/option_choices for NJB: still 0 (re-confirmed via direct
+query). menu_items for NJB: still 170/170 bot_state='blocked', ask_plan=null
+(re-confirmed, all 170, not a sample). Zio's/Vito's: untouched, not queried
+for writes (read-only regression checks only, per the task's explicit "do
+not touch" rule).
+
+Committed a292618 (normalize.ts, normalize.test.ts, archetypes.ts,
+archetypes.test.ts, compile-menu/index.ts, njb-infer-only script, item-9
+report script), pushed to main. Did not touch chat-sms/, compile-menu.ts, or
+compile-menu.test.ts — active concurrent session's work in this shared repo,
+confirmed their diffs don't overlap with mine before committing.
