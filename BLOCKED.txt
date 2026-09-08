@@ -1999,3 +1999,59 @@ suite 425/425. All test conversations/carts created during both rounds of
 verification confirmed deleted from NJB's and Zio's live tables after use.
 
 Committed e2a98eb, pushed to main.
+
+[ITEM 3 follow-up #8 — combined the deterministic decline with real kitchen-
+note capture, per Jason's refinement ask. Small fix, both real bugs (write
+overwrite risk, unchecked write result) closed before shipping. Verified
+twice independently, including a real append-not-overwrite live sequence.]
+2026-09-08 ~05:45 UTC — Not blocked, this thread is done. The deterministic
+decline logic itself is untouched (Jason confirmed that part 3/3, no
+changes there). What was missing: the kitchen-note capture the retired
+prompt-nudge version had (real, verified via the Prep Notes ticket render).
+Root cause of "notes: null": the deterministic response never included a
+`notes` field in its JSON at all — the earlier direct-write test (this
+session, a few messages back) had already shown the actual DB write was
+fine; the payload just didn't surface it, which is exactly what a
+verification harness checking the API response would see as missing.
+
+FIX: one combined, still-deterministic sentence — "I can't change that on
+the <item> — it doesn't have that option, but I'll pass it to the kitchen
+as a note." Two real things had to be fixed to say this honestly, not just
+add the words:
+  1. Replaced the generic set_note tool call (unconditionally OVERWRITES
+     order_carts.notes, never checks the write's own error result) with a
+     direct write that APPENDS to any existing note. Real risk avoided:
+     reusing set_note here would have silently destroyed an earlier
+     legitimate note (e.g. "toasted," set two turns earlier) the moment a
+     customer also hit this decline path later in the same order.
+  2. HARD CONDITION honored: the sentence only mentions the kitchen note
+     when the write's own error result confirms it landed — checked, not
+     assumed. A failed write renders the plain decline, zero mention of
+     notes.
+
+VERIFIED TWICE, independently: 3 fresh sessions, byte-identical turn-2
+replies, `order_carts.notes` correctly populated (direct DB query, not
+inferred from the API) all 3 times, both by me and by a second reviewer
+given the task cold. The reviewer additionally ran a real 3-turn append
+sequence live (add bagel -> "toasted please" sets a real note via the
+system's own TOASTED PROMPT convention -> "make it an everything bagel"
+triggers the decline) and confirmed BOTH notes survived, correctly
+semicolon-joined: "Plain bagel with cream cheese, toasted; Customer
+requested for...everything bagel" — the append-not-overwrite fix holds
+under a real multi-turn scenario, not just the isolated case.
+
+One unrelated flake surfaced during my own testing and ruled out: a single
+turn-1 add_item call that never went through (empty cart, upstream of and
+unrelated to anything in this task — confirmed by direct DB query, not a
+regression here). Retried clean; not something I'm fixing under this task
+since it's outside the zero-option-attribute-change code path entirely,
+noting it here in case it recurs and someone else is chasing it later.
+
+6 new/updated tests, full chat-sms suite 428/428. Committed cbe9e48, pushed
+to main. All test conversations/carts (7 across both verification rounds)
+confirmed deleted from NJB's live tables.
+
+This closes the full self-contradiction thread from tonight: GUARD 17
+(6 revisions, retired for this case) -> prompt nudge (verified
+non-deterministic, retired) -> deterministic resolver (3/3, shipped) ->
+this note-capture refinement (3/3, shipped). Nothing open on this thread.
