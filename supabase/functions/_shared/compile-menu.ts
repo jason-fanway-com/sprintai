@@ -75,6 +75,19 @@ export interface PendingQuestion {
   blocking: boolean;
   status: QuestionStatus;
   question_text: string;
+  // §5.2's own exclusions list (archetypes.ts's inferCategory, one entry
+  // per raw item.name that already resolved to not_applicable/default/
+  // stated/advisory for THIS question's specific slot). Populated from the
+  // owner_questions row's `proposal.exclusions` column. Required by
+  // findBlockingQuestion below — without it, a single item.9 stated-
+  // provenance gap ("items_affected": 1 on the DB row) blanket-blocks every
+  // OTHER item in the category too, since a category-scoped question
+  // otherwise has no way to say which items it actually still applies to
+  // (2026-09-07 regression: Zio's Burgers/temp and Wraps/bread both dropped
+  // to items_affected:1 once the stated-provenance gate landed, but 17
+  // items stayed bot_state='blocked' menu-wide because this field didn't
+  // exist yet to let the 5-of-6 Burgers and 9-of-10 Wraps items opt out).
+  exclusions: string[];
 }
 
 export interface CompileItem {
@@ -244,17 +257,20 @@ function buildStep(g: CompileGroup): CompiledStep {
   };
 }
 
-// A group produces a proactive step iff it's a slot (always asked/applied in
-// some form) or a modifier explicitly flagged offer_once (§2.2: modifiers
-// are "never asked proactively... except a single offer_once open question").
-// on_request modifiers are reactive-only and never appear in ask_plan.steps.
-function stepEligible(g: CompileGroup): boolean {
-  if (g.kind === "slot") return true;
-  return deriveAskMode(g) === "offer_once";
-}
-
+// Every group produces a step: slots are always asked/applied in some form,
+// and modifiers — regardless of offer_once vs on_request — must be present
+// so ask-plan-engine.ts's resolveAskPlan can reactively match a modifier the
+// customer names in the same message as the item (bug 4, 2026-09-07: "large
+// buffalo chicken pizza with pepperoni" silently dropped the topping because
+// an unset ask_mode defaulted to on_request, which used to be excluded from
+// ask_plan.steps entirely — not just unasked-proactively, but UNMATCHABLE,
+// since resolveAskPlan only ever walks askPlan.steps). ask_mode still governs
+// whether a modifier is ever proactively offered (offer_once, not yet built
+// — see ask-plan-engine.ts's header) vs strictly reactive (on_request); both
+// are equally eligible to be matched when mentioned, per §2.2's own
+// "reactive-only" wording for on_request — this just makes that wording true.
 export function buildAskPlan(item: CompileItem, compiledAt: string): AskPlan {
-  const orderedGroups = sortGroupsCanonical(item.groups).filter(stepEligible);
+  const orderedGroups = sortGroupsCanonical(item.groups);
   return {
     compiled_at: compiledAt,
     compiler_version: COMPILER_VERSION,
@@ -273,7 +289,7 @@ function findBlockingQuestion(item: CompileItem, questions: PendingQuestion[]): 
   const hits = questions.filter(q => {
     if (!q.blocking) return false;
     if (q.scope_type === "item") return q.scope_id === item.id;
-    if (q.scope_type === "category") return item.category != null && q.scope_id === item.category;
+    if (q.scope_type === "category") return item.category != null && q.scope_id === item.category && !q.exclusions.includes(item.name);
     if (q.scope_type === "group") return item.groups.some(g => g.id === q.scope_id);
     if (q.scope_type === "choice") return item.groups.some(g => g.choices.some(c => c.id === q.scope_id));
     return false;
@@ -769,6 +785,128 @@ export function buildOwnerQuestionSummaries(items: InferSourceItem[]): CategoryQ
   }
 
   return summaries.sort((a, b) => a.category.localeCompare(b.category));
+}
+
+// ============================================================
+// Refresh — keeps existing `owner_questions` rows in sync with a fresh
+// infer computation (2026-09-08, real incident: NJB's normalize.ts parser
+// fix changed what buildOwnerQuestionSummaries produces, but the existing
+// insert-if-not-exists step can only ADD a brand-new (scope_type, scope_id,
+// slot_key) key — it has no way to notice that a key's items_affected
+// shrank, or that a key stopped being produced at all, so 4 rows sat stale
+// in front of a real restaurant owner until someone caught it by hand).
+// Pure, like everything else in this file — writes nothing; the caller
+// (a script or index.ts) executes the returned update/delete list.
+//
+// THE ONE INVARIANT THIS MUST NEVER BREAK: a row whose status isn't
+// 'pending' (answered, dismissed, asked, expired) carries a REAL owner
+// action and is never touched by either path, full stop — regardless of
+// what a fresh computation says about its key. This is what makes refresh
+// safe to run repeatedly and safe to run after an owner has started
+// answering: it can only ever change a question nobody has acted on yet.
+// ============================================================
+
+export interface ExistingOwnerQuestionRow {
+  id: string;
+  scope_type: QuestionScopeType;
+  scope_id: string;
+  slot_key: string | null;
+  status: QuestionStatus;
+  question_text: string;
+  items_affected: number;
+  priority: number;
+  blocking: boolean;
+  proposal: OwnerQuestionDraft["proposal"] | null;
+}
+
+export interface OwnerQuestionUpdate {
+  id: string;
+  question_text: string;
+  items_affected: number;
+  priority: number;
+  blocking: boolean;
+  proposal: OwnerQuestionDraft["proposal"];
+}
+
+export interface OwnerQuestionRefreshPlan {
+  toUpdate: OwnerQuestionUpdate[];
+  toDelete: { id: string }[];
+}
+
+function ownerQuestionKey(scope_type: string, scope_id: string, slot_key: string | null): string {
+  return `${scope_type}|${scope_id}|${slot_key ?? ""}`;
+}
+
+// A plain JSON.stringify comparison on `proposal` is order-sensitive on
+// object keys, but a Postgres JSONB column does NOT preserve the original
+// JS key insertion order on round-trip (real bug, caught dry-running this
+// against live NJB data: every row came back "changed" even when
+// semantically identical, because the DB returned `{source, choices,
+// exclusions}` for a value inserted as `{choices, source, exclusions}`).
+// Object keys are sorted recursively before comparing; array ELEMENT order
+// still matters (exclusions/choices are meaningfully ordered lists, not
+// sets) — only key order within an object is order-independent.
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// Same key shape buildOwnerQuestionSummaries/the insert step already use
+// (scope_type, scope_id, slot_key) — a fresh draft and an existing row
+// "are the same question" iff this key matches, regardless of anything
+// else about their content.
+export function planOwnerQuestionsRefresh(
+  existingRows: ExistingOwnerQuestionRow[],
+  freshDrafts: OwnerQuestionDraft[],
+): OwnerQuestionRefreshPlan {
+  const freshByKey = new Map(freshDrafts.map(d => [ownerQuestionKey(d.scope_type, d.scope_id, d.slot_key), d]));
+  const toUpdate: OwnerQuestionUpdate[] = [];
+  const toDelete: { id: string }[] = [];
+
+  for (const row of existingRows) {
+    // Case 3 (the invariant): anything not still 'pending' is untouched by
+    // either path below, unconditionally — checked first, before the key is
+    // even looked up, so there's no path through this function that reads a
+    // non-pending row's content and acts on it.
+    if (row.status !== "pending") continue;
+
+    const fresh = freshByKey.get(ownerQuestionKey(row.scope_type, row.scope_id, row.slot_key));
+
+    if (!fresh) {
+      // Case 2: this key no longer exists in a fresh computation at all
+      // (e.g. the source text now answers it, or it's no longer kitchen/
+      // price-critical) — remove it rather than leave an unnecessary ask.
+      toDelete.push({ id: row.id });
+      continue;
+    }
+
+    // Case 1: still a real question at this key, but its content may have
+    // drifted (items_affected shrank/grew, the rendered question text or
+    // proposal changed, priority/blocking recomputed differently). Only
+    // queued when something actually differs, so a no-op refresh run
+    // produces an empty plan rather than rewriting every row every time.
+    const changed = row.question_text !== fresh.question_text
+      || row.items_affected !== fresh.items_affected
+      || row.priority !== fresh.priority
+      || row.blocking !== fresh.blocking
+      || canonicalJson(row.proposal) !== canonicalJson(fresh.proposal);
+    if (changed) {
+      toUpdate.push({
+        id: row.id,
+        question_text: fresh.question_text,
+        items_affected: fresh.items_affected,
+        priority: fresh.priority,
+        blocking: fresh.blocking,
+        proposal: fresh.proposal,
+      });
+    }
+  }
+
+  return { toUpdate, toDelete };
 }
 
 export function compileMenu(

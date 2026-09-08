@@ -12,12 +12,15 @@ import {
   categoryLexiconTerms,
   compileItem,
   compileMenu,
+  planOwnerQuestionsRefresh,
   type CompileGroup,
   type CompileItem,
+  type ExistingOwnerQuestionRow,
   type InferSourceItem,
   type OverrideRow,
   type PendingQuestion,
 } from "./compile-menu.ts";
+import type { OwnerQuestionDraft } from "./archetypes.ts";
 
 function inferSourceItem(overrides: Partial<InferSourceItem> = {}): InferSourceItem {
   return {
@@ -130,7 +133,7 @@ Deno.test("canonical order: size, protein, temp, bread, dressing, side, then off
   assertEquals(plan.steps.map(s => s.slot_key), ["size", "protein", "temp", "bread", "dressing", "side", "toppings"]);
 });
 
-Deno.test("on_request modifiers never appear as steps", () => {
+Deno.test("on_request modifiers appear as steps, ordered last (reactive-match only, bug 4 fix)", () => {
   const it = item({
     groups: [
       group({ slot_key: "addons", kind: "modifier", ask_mode: "on_request", choices: [choice()] }),
@@ -138,7 +141,8 @@ Deno.test("on_request modifiers never appear as steps", () => {
     ],
   });
   const plan = buildAskPlan(it, "2026-09-07T00:00:00Z");
-  assertEquals(plan.steps.map(s => s.slot_key), ["size"]);
+  assertEquals(plan.steps.map(s => s.slot_key), ["size", "addons"]);
+  assertEquals(plan.steps[1].ask_mode, "on_request");
 });
 
 // ---- ask_mode derivation -----------------------------------------------------
@@ -165,9 +169,11 @@ Deno.test("ask_mode: modifier with pre-set offer_once passes through", () => {
   assertEquals(buildAskPlan(it, "t").steps[0].ask_mode, "offer_once");
 });
 
-Deno.test("ask_mode: modifier with no pre-set ask_mode defaults to on_request (excluded from steps)", () => {
+Deno.test("ask_mode: modifier with no pre-set ask_mode defaults to on_request (still a step, reactive-match only)", () => {
   const it = item({ groups: [group({ slot_key: "addons", kind: "modifier", ask_mode: null, choices: [choice()] })] });
-  assertEquals(buildAskPlan(it, "t").steps.length, 0);
+  const plan = buildAskPlan(it, "t");
+  assertEquals(plan.steps.length, 1);
+  assertEquals(plan.steps[0].ask_mode, "on_request");
 });
 
 // ---- bot_state ---------------------------------------------------------------
@@ -201,25 +207,37 @@ Deno.test("bot_state: blocked when a kitchen-critical slot is inferred/unconfirm
 
 Deno.test("bot_state: blocked when a pending blocking owner_question is scoped to the item", () => {
   const it = item();
-  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "bread", blocking: true, status: "pending", question_text: "Bread?" };
+  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "bread", blocking: true, status: "pending", question_text: "Bread?", exclusions: [] };
   assertEquals(compileItem(it, [q], "t").bot_state, "blocked");
 });
 
 Deno.test("bot_state: blocked when a pending blocking owner_question is scoped to the item's category", () => {
   const it = item({ category: "Sandwiches" });
-  const q: PendingQuestion = { scope_type: "category", scope_id: "Sandwiches", slot_key: "bread", blocking: true, status: "pending", question_text: "Bread?" };
+  const q: PendingQuestion = { scope_type: "category", scope_id: "Sandwiches", slot_key: "bread", blocking: true, status: "pending", question_text: "Bread?", exclusions: [] };
+  assertEquals(compileItem(it, [q], "t").bot_state, "blocked");
+});
+
+Deno.test("bot_state: orderable when a category-scoped blocking question EXCLUDES this item by name (2026-09-07 regression: item 9's stated-provenance gate reduced Zio's Burgers/Wraps to 1 genuinely-unresolved item each, but 17 items stayed blocked menu-wide because the exclusions list computed by archetypes.ts's inferCategory was never consulted here)", () => {
+  const it = item({ name: "Cheese Burger", category: "Burgers" });
+  const q: PendingQuestion = { scope_type: "category", scope_id: "Burgers", slot_key: "temp", blocking: true, status: "pending", question_text: "Temp?", exclusions: ["Cheese Burger", "Mamma Mia Burger"] };
+  assertEquals(compileItem(it, [q], "t").bot_state, "orderable");
+});
+
+Deno.test("bot_state: still blocked for a category-scoped question when this item is NOT in the exclusions list", () => {
+  const it = item({ name: "Double Burger", category: "Burgers" });
+  const q: PendingQuestion = { scope_type: "category", scope_id: "Burgers", slot_key: "temp", blocking: true, status: "pending", question_text: "Temp?", exclusions: ["Cheese Burger", "Mamma Mia Burger"] };
   assertEquals(compileItem(it, [q], "t").bot_state, "blocked");
 });
 
 Deno.test("bot_state: display_only when the blocking owner_question was dismissed", () => {
   const it = item();
-  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "bread", blocking: true, status: "dismissed", question_text: "Bread?" };
+  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "bread", blocking: true, status: "dismissed", question_text: "Bread?", exclusions: [] };
   assertEquals(compileItem(it, [q], "t").bot_state, "display_only");
 });
 
 Deno.test("bot_state: non-blocking pending question does not affect the item", () => {
   const it = item();
-  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "confirm_alias", blocking: false, status: "pending", question_text: "Alias?" };
+  const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "confirm_alias", blocking: false, status: "pending", question_text: "Alias?", exclusions: [] };
   assertEquals(compileItem(it, [q], "t").bot_state, "orderable");
 });
 
@@ -442,17 +460,167 @@ Deno.test("infer end-to-end: a fresh menu with zero pre-existing owner_questions
   assertEquals(tempQ.proposal.exclusions, ["Veggie Burger"]);
 
   const pendingQuestions: PendingQuestion[] = [
-    { scope_type: tempQ.scope_type, scope_id: tempQ.scope_id, slot_key: tempQ.slot_key, blocking: tempQ.blocking, status: "pending", question_text: tempQ.question_text },
+    { scope_type: tempQ.scope_type, scope_id: tempQ.scope_id, slot_key: tempQ.slot_key, blocking: tempQ.blocking, status: "pending", question_text: tempQ.question_text, exclusions: tempQ.proposal.exclusions },
   ];
-  const cheeseburger = item({ display_name: "Cheeseburger", category: "Burgers" });
-  const veggieBurger = item({ display_name: "Veggie Burger", category: "Burgers" });
+  const cheeseburger = item({ name: "Cheeseburger", display_name: "Cheeseburger", category: "Burgers" });
+  const veggieBurger = item({ name: "Veggie Burger", display_name: "Veggie Burger", category: "Burgers" });
   const { items: compiled } = compileMenu([cheeseburger, veggieBurger], pendingQuestions, "t", false);
   const cheeseburgerState = compiled.find(c => c.item_id === cheeseburger.id)!;
   const veggieState = compiled.find(c => c.item_id === veggieBurger.id)!;
-  // Both fall under the category-scoped question (compileMenu's blocking
-  // match is scope-based, not per-item aware of applies_when) -- this is
-  // the honest limitation flagged by §5.1's own "except: ..." UX line, not
-  // a bug in this wiring: the owner sees the exclusion list when answering.
+  // FIXED 2026-09-07 (was: both blocked menu-wide — see git history for the
+  // "honest limitation" this used to document). Live incident on Zio's
+  // exposed the real cost: the stated-provenance gate correctly reduced
+  // Burgers/temp and Wraps/bread to 1 genuinely-unresolved item each, but 17
+  // items stayed bot_state='blocked' because findBlockingQuestion's
+  // category-scope match ignored the exclusions list the compiler itself
+  // had already computed. Cheeseburger (needs_question) is still blocked;
+  // Veggie Burger (excluded by applies_when, listed in the question's own
+  // exclusions) is now correctly orderable.
   assertEquals(cheeseburgerState.bot_state, "blocked");
-  assertEquals(veggieState.bot_state, "blocked");
+  assertEquals(veggieState.bot_state, "orderable");
+});
+
+// ---- planOwnerQuestionsRefresh (2026-09-08, real NJB incident) -------------
+// A parser/archetype improvement changes what buildOwnerQuestionSummaries
+// produces for a menu that's already been inferred once. The existing
+// insert-if-not-exists step can only ADD a new (scope_type, scope_id,
+// slot_key) key — it can't notice that an existing key's items_affected
+// shrank, or that a key stopped being produced entirely. Real incident: a
+// normalize.ts fix left 4 NJB owner_questions rows stale (one that should
+// have been deleted, three with inflated items_affected) until caught and
+// fixed by hand. This function is the reusable fix for that gap — the exact
+// 3 cases below are the full contract, and case 3 (never touch a non-
+// pending row) is the one that must never break.
+
+function existingRow(overrides: Partial<ExistingOwnerQuestionRow> = {}): ExistingOwnerQuestionRow {
+  return {
+    id: crypto.randomUUID(),
+    scope_type: "category",
+    scope_id: "Breakfast Sandwiches",
+    slot_key: "bread",
+    status: "pending",
+    question_text: "Do customers pick a bread on Breakfast Sandwiches?",
+    items_affected: 20,
+    priority: 80,
+    blocking: true,
+    proposal: { choices: [], source: "archetype:sandwich", exclusions: [] },
+    ...overrides,
+  };
+}
+
+function freshDraft(overrides: Partial<OwnerQuestionDraft> = {}): OwnerQuestionDraft {
+  return {
+    scope_type: "category",
+    scope_id: "Breakfast Sandwiches",
+    slot_key: "bread",
+    kind: "exists",
+    question_text: "Do customers pick a bread on Breakfast Sandwiches?",
+    proposal: { choices: [], source: "archetype:sandwich", exclusions: [] },
+    blocking: true,
+    priority: 80,
+    items_affected: 20,
+    ...overrides,
+  };
+}
+
+Deno.test("refresh case 1: a pending row whose key still exists gets its content updated to match the fresh draft", () => {
+  const stale = existingRow({ items_affected: 20, priority: 80 });
+  const fresh = freshDraft({ items_affected: 2, priority: 8 });
+  const plan = planOwnerQuestionsRefresh([stale], [fresh]);
+  assertEquals(plan.toDelete, []);
+  assertEquals(plan.toUpdate, [{
+    id: stale.id,
+    question_text: fresh.question_text,
+    items_affected: 2,
+    priority: 8,
+    blocking: fresh.blocking,
+    proposal: fresh.proposal,
+  }]);
+});
+
+Deno.test("refresh case 1 (no-op): a pending row's `proposal` with the SAME content but different JS key insertion order is not a change (real bug: Postgres JSONB doesn't preserve insertion order on round-trip — a naive JSON.stringify diff flagged every real NJB row as changed even when nothing differed)", () => {
+  const row = existingRow({
+    // as a DB round-trip actually returned it, real NJB data
+    proposal: { source: "archetype:salad", choices: [], exclusions: ["Caesar Salad", "Greek Salad"] },
+  });
+  const fresh = freshDraft({
+    // as buildOwnerQuestionSummaries actually constructs it (different key order)
+    proposal: { choices: [], source: "archetype:salad", exclusions: ["Caesar Salad", "Greek Salad"] },
+  });
+  const plan = planOwnerQuestionsRefresh([row], [fresh]);
+  assertEquals(plan.toUpdate, []);
+  assertEquals(plan.toDelete, []);
+});
+
+Deno.test("refresh case 1: an `exclusions` array with the SAME items in a DIFFERENT order IS a real change (order is meaningful for a list, unlike object key order)", () => {
+  const row = existingRow({ proposal: { choices: [], source: "archetype:salad", exclusions: ["Caesar Salad", "Greek Salad"] } });
+  const fresh = freshDraft({ proposal: { choices: [], source: "archetype:salad", exclusions: ["Greek Salad", "Caesar Salad"] } });
+  const plan = planOwnerQuestionsRefresh([row], [fresh]);
+  assertEquals(plan.toUpdate.length, 1);
+});
+
+Deno.test("refresh case 1 (no-op): a pending row whose key still exists with IDENTICAL content produces an empty plan", () => {
+  const row = existingRow();
+  const fresh = freshDraft();
+  const plan = planOwnerQuestionsRefresh([row], [fresh]);
+  assertEquals(plan.toUpdate, []);
+  assertEquals(plan.toDelete, []);
+});
+
+Deno.test("refresh case 2: a pending row whose key no longer appears in the fresh computation at all gets deleted (real NJB 'Omelette & Egg Platters'/toast — fully resolved by the parser fix, not just shrunk)", () => {
+  const stale = existingRow({ scope_id: "Omelette & Egg Platters", slot_key: "toast", items_affected: 3 });
+  // fresh computation only produced OTHER keys this round -- toast's key is
+  // simply absent, not present-with-zero.
+  const fresh = freshDraft({ scope_id: "Omelette & Egg Platters", slot_key: "egg_side", items_affected: 11 });
+  const plan = planOwnerQuestionsRefresh([stale], [fresh]);
+  assertEquals(plan.toDelete, [{ id: stale.id }]);
+  assertEquals(plan.toUpdate, []);
+});
+
+Deno.test("refresh case 3 (the invariant): a row with any non-'pending' status is NEVER touched, even when its key would otherwise update or delete", () => {
+  for (const status of ["answered", "dismissed", "asked", "expired"] as const) {
+    const answered = existingRow({ status, items_affected: 20 });
+    // Would be an update if this row were pending (items_affected differs).
+    const updateCandidate = planOwnerQuestionsRefresh([answered], [freshDraft({ items_affected: 2 })]);
+    assertEquals(updateCandidate.toUpdate, [], `status=${status} must not be updated`);
+    assertEquals(updateCandidate.toDelete, [], `status=${status} must not be deleted (update case)`);
+
+    // Would be a delete if this row were pending (key absent from fresh set).
+    const deleteCandidate = planOwnerQuestionsRefresh([answered], [freshDraft({ scope_id: "Other Category" })]);
+    assertEquals(deleteCandidate.toUpdate, [], `status=${status} must not be updated (delete case)`);
+    assertEquals(deleteCandidate.toDelete, [], `status=${status} must not be deleted`);
+  }
+});
+
+Deno.test("refresh: a brand-new fresh draft with no matching existing row is not this function's concern (no update, no delete, no crash) -- that's the separate insert-if-not-exists step's job", () => {
+  const row = existingRow({ scope_id: "Salads", slot_key: "dressing", items_affected: 2 });
+  const fresh = [
+    freshDraft({ scope_id: "Salads", slot_key: "dressing", items_affected: 2 }), // unchanged, matches `row`
+    freshDraft({ scope_id: "Wraps", slot_key: "bread", items_affected: 10 }), // brand new key, no existing row
+  ];
+  const plan = planOwnerQuestionsRefresh([row], fresh);
+  assertEquals(plan.toUpdate, []);
+  assertEquals(plan.toDelete, []);
+});
+
+Deno.test("refresh: mixed batch — one update, one delete, one untouched non-pending, one untouched matching-pending, all in a single call (real NJB shape)", () => {
+  const breadStale = existingRow({ scope_id: "Cold Sandwiches", slot_key: "bread", items_affected: 15, priority: 60 });
+  const toastStale = existingRow({ scope_id: "Omelette & Egg Platters", slot_key: "toast", items_affected: 3, priority: 12 });
+  const dressingAnswered = existingRow({ scope_id: "Salads", slot_key: "dressing", status: "answered", items_affected: 2 });
+  const eggSidePending = existingRow({ scope_id: "Omelette & Egg Platters", slot_key: "egg_side", items_affected: 11, priority: 44 });
+
+  const fresh = [
+    freshDraft({ scope_id: "Cold Sandwiches", slot_key: "bread", items_affected: 2, priority: 8 }),
+    // no "toast" draft at all -- fully resolved this round
+    freshDraft({ scope_id: "Salads", slot_key: "dressing", items_affected: 99 }), // would differ, but row is answered
+    freshDraft({ scope_id: "Omelette & Egg Platters", slot_key: "egg_side", items_affected: 11, priority: 44 }), // unchanged
+  ];
+
+  const plan = planOwnerQuestionsRefresh(
+    [breadStale, toastStale, dressingAnswered, eggSidePending],
+    fresh,
+  );
+  assertEquals(plan.toUpdate.map(u => u.id), [breadStale.id]);
+  assertEquals(plan.toUpdate[0].items_affected, 2);
+  assertEquals(plan.toDelete, [{ id: toastStale.id }]);
 });
