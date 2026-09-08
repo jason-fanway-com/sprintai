@@ -48,3 +48,21 @@ Deno.test("more new lines than segments named (e.g. a bundle) never produces a n
   const result = countUnresolvedSegments("1 pepperoni", before, after);
   assertEquals(result, 0);
 });
+
+Deno.test("an ordinal ('1st time ordering') is not miscounted as a quantity segment (2026-09-08 adversarial review)", () => {
+  const before: unknown[] = [];
+  const after = [{}]; // "2 pizzas please" correctly landed as one line, qty 2
+  const result = countUnresolvedSegments("1st time ordering, 2 pizzas please", before, after);
+  assertEquals(result, 0);
+});
+
+Deno.test("ordinals 2nd/3rd/4th are also excluded from the quantity-segment count", () => {
+  assertEquals(countUnresolvedSegments("2nd time here, 3rd order this week, 4th time trying pizza", [], []), 0);
+});
+
+Deno.test("a genuine numeric quantity is still counted even when an ordinal appears elsewhere in the same message", () => {
+  const before: unknown[] = [];
+  const after = [{}]; // only 1 of the 2 named items landed
+  const result = countUnresolvedSegments("1st time ordering, 1 pepperoni, 1 plain", before, after);
+  assertEquals(result, 1);
+});

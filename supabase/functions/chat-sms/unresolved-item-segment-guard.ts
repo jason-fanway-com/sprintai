@@ -40,7 +40,14 @@ export function countUnresolvedSegments(
   const segments = currentMessage
     .split(/,| and /i)
     .map(s => s.trim())
-    .filter(s => /^\d/.test(s)); // only count segments that actually state a quantity
+    // Only count segments that actually state a quantity — a leading digit
+    // run followed by a word boundary. \b after \d+ is what excludes an
+    // ordinal ("1st time ordering", "2nd thing") from being misread as a
+    // quantity: there's no boundary between a digit and the letter suffix
+    // it's glued to, so "1st"/"2nd"/"3rd"/"4th" never match, only a genuine
+    // bare count like "2 pizzas" does (2026-09-08, adversarial review —
+    // "1st time ordering, 2 pizzas please" was miscounted as 2 segments).
+    .filter(s => /^\d+\b/.test(s));
   if (segments.length < 2) return 0;
 
   const newLineCount = Math.max(cartAfter.length - cartBefore.length, 0);

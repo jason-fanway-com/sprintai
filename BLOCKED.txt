@@ -3170,3 +3170,176 @@ unit tests, verbatim-enforcement logic per ask-plan-engine tests, null
 slot_key mapping against Appendix C, Vito's/NJB compiled_engine_enabled
 untouched, commit completeness). Time-gated live batteries flagged as open
 items.
+
+================================================================================
+2026-09-08 ~12:30 UTC — P0 Zio's D1 RE-DIAGNOSIS + real fix (PO dispatch,
+"merge" reframing, item 8's compiled engine now live on Zio's)
+================================================================================
+
+DISPATCH: routed from the PO (OrderFare), replacing the prior "silent drop"
+framing from this morning's e1fca95/2fc45ff pass. PO reproduced deterministically:
+"1 pepp" and "1 plain" MERGED into ONE cart line (Neapolitan Cheese Pizza +
+{"Add Toppings": ["Pepperoni"]}) instead of two lines — nothing was dropped.
+Coordinated per standing convention: checked git log/status/BLOCKED.txt first.
+Found the concurrent "item 8 follow-up 3 RETRY" thread had landed (69cf1b1)
+since this morning's pass — critically, it recorded live DB confirmation that
+Zio's compiled_ordering_engine_enabled is now TRUE (grep "Zio's: true" above).
+That single fact changed the whole diagnosis: e1fca95's D1 fix
+(unresolved-item-segment-guard.ts) was reasoned about against the LEGACY
+add_item path; Zio's Neapolitan Cheese Pizza item is compiled (non-null
+ask_plan), so it actually runs through applyCompiledAddItem
+(ask-plan-engine.ts), a code path e1fca95 never touched.
+
+REAL ROOT CAUSE, found by direct empirical test (not guessed) — wrote a
+throwaway script calling applyCompiledAddItem twice in a row with the shared
+turn-wide message and confirmed it merges before writing any fix, then
+confirmed the fix un-merges it: ask-plan-engine.ts's resolveAskPlan resolves
+MODIFIER-kind steps (e.g. "Add Toppings") by reactively stem-matching the
+customer's WHOLE-TURN text against every choice's display name
+(matchChoiceInText) — independently, fresh, on EVERY add_item call in a
+turn, using the SAME shared text every time. That reuse is correct and
+intentional for SLOT groups (D2's stated-attribute-carryforward.ts: "large"
+stated once should carry to every pizza named after it) but wrong for
+MODIFIERS: when the turn's raw text contains "pepperoni" anywhere, BOTH the
+call meant to represent "1 pepperoni" and the call meant to represent
+"1 plain" reactively picked it up, computed IDENTICAL ask_plan_selections,
+and applyCompiledAddItem's pre-existing identicalExisting dedup (working
+exactly as designed, given wrong inputs) silently stacked them into ONE line
+— the "plain" order vanished with zero error, zero question, zero trace.
+This is a genuine engine-level defect, not pizza-specific and not "pepp"-
+specific: any shop on the compiled engine with 2+ segments of the same base
+item in one message, where a modifier is named for only one of them, hits
+this.
+
+FIXES SHIPPED (uncommitted at time of writing this entry, see diff):
+
+1. THE REAL FIX — ask-plan-engine.ts: resolveAskPlan and applyCompiledAddItem
+   both gained an optional `consumedModifierChoiceIds: Set<string>` param.
+   index.ts's runOrderingLoop creates ONE Set per customer turn
+   (consumedModifierChoiceIdsForTurn) and threads it through executeTool ->
+   applyCompiledAddItem's ONE call site inside the compiled add_item branch.
+   A modifier choice already granted to an earlier NEW line this turn is not
+   eligible to be reactively re-matched by a later add_item call for the
+   same base item — left unresolved instead (missing beats wrong, same
+   principle apply_default already uses). This makes the two calls'
+   selections diverge, so they produce two real lines instead of a false
+   merge. Scoped by choice.id (unique per item+group+choice in this schema —
+   two different items' own topping groups can never collide), so a
+   genuinely different item wanting the same-named topping is unaffected
+   (tested). The OTHER applyCompiledAddItem call site in index.ts (separate-
+   turn pending-answer resolution, "Item 8 compiled pending-answer resolved")
+   deliberately does not get this param — it only ever touches one pending
+   line per invocation, never exposed to this defect.
+   Known, accepted narrower residual: a customer who explicitly wants the
+   SAME topping on two DIFFERENTLY-SIZED pizzas in one message ("1 large
+   pepperoni and 1 small pepperoni") will now have the second one silently
+   miss the topping instead of merging — strictly better than today's
+   merge (item count is now correct, only an addon might be missing on a
+   rare repeated-topping-across-a-list shape), not a total fix for that
+   narrower case. Not in scope of the reported P0.
+
+2. THE ORIGINAL SYMPTOM-LEVEL FIX (kept, still useful, engine-agnostic) —
+   enumeration-shortfall-retry.ts (new): reuses countUnresolvedSegments
+   (unchanged) at a NEW point — mid-turn, inside runOrderingLoop's existing
+   attempt loop, right where the model thinks it's done — instead of only
+   post-turn. When segments named > new cart lines this turn, the model gets
+   up to 2 more attempts with an explicit count-mismatch hint before falling
+   through to the unchanged post-turn GUARD (index.ts, same
+   countUnresolvedSegments call as e1fca95 shipped this morning — kept as
+   the final honest backstop for whatever can't be resolved, e.g. a
+   genuinely off-menu item). This is what makes the retry loop actually try
+   again instead of just apologizing once.
+   Tightened per adversarial review (see below): countUnresolvedSegments'
+   segment filter now requires \d+\b, not just \d — "1st time ordering, 2
+   pizzas please" no longer miscounts "1st" as a quantity segment.
+
+3. "pepp" RESOLUTION (PO's explicit, already-made call, implemented as
+   directed) — new system prompt rule "COMPOSING A TOPPING-ONLY PIZZA
+   REQUEST" (index.ts, after OPTION GROUNDING): within an established pizza
+   context, a bare topping word with no standalone menu item composes onto
+   the shop's base cheese pizza (never a same-word-containing different
+   product like Pepperoni Calzone/Stromboli), and the reply must state the
+   full composition, never the bare base item name alone. THIS REVERSES
+   e1fca95/2fc45ff's explicitly-flagged decision from this morning
+   ("'pepp' is EXPECTED to now produce an honest clarifying question... a
+   deliberate, correct behavior change... flag to the PO if the literal
+   word 'pepp' was intended to auto-resolve without ever asking") — flagged
+   this morning as needing exactly this sign-off, and the sign-off is this
+   dispatch itself: "RESOLVE 'pepp' — lead's judgment, already made,
+   implement this," followed by the explicit compose-not-guess rule and the
+   hard requirement that the composition be stated, never silent. Recording
+   the reversal and its authorization here per this morning's own request,
+   since adversarial review (below) correctly flagged that nothing in the
+   repo linked the two without this entry.
+
+4. LEXICON DATA-QUALITY FIX (real bug, confirmed DEAD CODE — never fixes
+   anything for D1 itself) — compile-menu.ts: PO also asked to fix or
+   remove the "bare 'pepperoni' -> item lexicon row is a coin-flip across
+   multiple items" bug. Confirmed via grep: the `lexicon` table is written
+   by compile-menu/index.ts and read ONLY by a QA read-only view
+   (migrations/119) — chat-sms never reads it at request time, so this bug
+   has zero live-traffic impact today, but is real: two different items
+   ("Pepperoni Stromboli", "Pepperoni Calzone") each independently strip
+   their own category noun down to the identical bare alias "pepperoni" via
+   Rule 2, and nothing deduped a term claimed by two DIFFERENT items (only
+   collision against a DIFFERENT item's Rule-1 primary name was guarded,
+   pre-existing Guard A). Fixed with a symmetric Guard B: a new
+   rule2CandidateTerm helper + a rule2TermOwners collision map (built once
+   per compileMenu call) drops a Rule-2 alias claimed by 2+ items for ALL
+   of them, not just the loser of an arbitrary iteration order. Both items'
+   own full names (Rule 1) are untouched.
+
+BLAST RADIUS (PO explicitly asked, item 1) — checked with tests using sub
+and salad language, not just pizza: countUnresolvedSegments/
+decideShortfallRetry are category-blind by construction (count segments vs
+count new cart lines, never inspect item names/categories) — confirmed via
+"blast radius — subs"/"blast radius — salads" tests in
+enumeration-shortfall-retry.test.ts, same pass/fail behavior as the pizza
+case. The DEEPER compiled-engine modifier-cross-contamination bug (fix #1
+above) is likewise not pizza-specific — it fires for ANY compiled item with
+a modifier/topping-style option group whenever 2+ segments of the same base
+item land in one turn's text with a modifier named for only one of them.
+Not exercised end-to-end for subs/salads in this pass (no compiled sub/salad
+item with a modifier group was on hand to construct a fixture from without
+live DB access) — flagging as the one blast-radius claim that's reasoned by
+construction/code-reading rather than a passing test on real sub/salad data,
+for whoever runs the live battery to keep in mind if a sub/salad multi-item
+order is included.
+
+ADVERSARIAL REVIEW (two independent passes, both via general-purpose agent,
+not this session's own word):
+  Pass 1 (against the retry-loop + prompt-rule + lexicon fix, before the
+  real ask-plan-engine.ts root-cause fix existed): verdict "ship with
+  fixes" — flagged (a) the "pepp" reversal needed a documented sign-off
+  (addressed in item 3 above) and (b) the ordinal false-positive tightening
+  (addressed, shipped). Cleared the lexicon fix as structurally sound after
+  independently re-deriving the Guard A/Guard B interaction algebraically.
+  Pass 2 (against the ask-plan-engine.ts consumedModifierChoiceIds fix,
+  specifically probing choice-id uniqueness, the same-topping-two-different-
+  sizes regression, turn-scoping correctness, and interaction with the
+  shortfall-retry mechanism): dispatched, in progress — this entry will be
+  amended or a follow-up entry added once it reports back. Do not treat
+  fix #1 as independently verified until that follow-up lands.
+
+TESTS: full run at time of writing —
+  supabase/functions/chat-sms/: 492 passed, 0 failed (was 472 this morning;
+    +20 across enumeration-shortfall-retry.test.ts (11), ask-plan-engine.test.ts
+    D1 additions (6), unresolved-item-segment-guard.test.ts ordinal tests (3)).
+  supabase/functions/_shared/: 203 passed, 0 failed, 7 ignored (includes
+    compile-menu.test.ts's 2 new Guard B tests).
+  deno check supabase/functions/chat-sms/index.ts: same 4 pre-existing
+    errors as HEAD (shop.delivery_radius_mi possibly null x2, OrderPhase
+    string assignment x2), none introduced.
+
+NOT YET DONE: commit, deploy, or the live acceptance battery — Zio's opens
+10:00 ET (still ~90 min out as of this entry), Vito's 11:00 ET. Per this
+project's standing rule against manufacturing the signal under test, holding
+all three until (a) pass 2 of adversarial review reports back, and (b) real
+shop hours arrive. Acceptance battery command block from e1fca95's entry
+above still applies UNCHANGED except the "use full word pepperoni, not
+'pepp'" caveat is now OBSOLETE per item 3's reversal — re-run with the
+LITERAL "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" wording (matching the
+original real transcript and this dispatch's acceptance criteria verbatim)
+once shops are open, expect FOUR lines / all Large / zero size questions /
+zero pepp-disambiguation questions / correct total, ten consecutive
+identical runs, plus the unchanged Vito's $9.48 regression check.

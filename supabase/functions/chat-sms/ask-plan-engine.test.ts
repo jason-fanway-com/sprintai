@@ -11,6 +11,9 @@ import {
   resolveAskPlan,
   allSlotsResolved,
   enforceVerbatimStepQuestion,
+  applyCompiledAddItem,
+  type CompiledCartLine,
+  type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
 
 // Fixture matching Jason's real Zio's repro: Buffalo Chicken Pizza with a
@@ -268,6 +271,40 @@ Deno.test("resolveAskPlan: an already-applied modifier (from a prior turn) is no
   assertEquals(result.totalDeltaCents, 0);
 });
 
+Deno.test("resolveAskPlan: D1 fix — a modifier choice already in consumedModifierChoiceIds is not re-matched, even though the text still names it", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    steps: [
+      SIZE_STEP,
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.offer_once",
+        choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }] },
+    ],
+  };
+  const consumed = new Set(["c-pep"]);
+  const result = resolveAskPlan(plan, "large with pepperoni", new Set(), new Map(), consumed);
+  // Size still resolves normally — only the already-consumed modifier is skipped.
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].slot_key, "size");
+  assertEquals(result.totalDeltaCents, 500);
+});
+
+Deno.test("resolveAskPlan: consumedModifierChoiceIds does not affect an UNRELATED choice in the same group", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    steps: [
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.offer_once",
+        choices: [
+          { id: "c-pep", display: "Pepperoni", price_delta_cents: 300 },
+          { id: "c-mush", display: "Mushroom", price_delta_cents: 250 },
+        ] },
+    ],
+  };
+  const consumed = new Set(["c-pep"]);
+  const result = resolveAskPlan(plan, "with mushroom", new Set(), new Map(), consumed);
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].choice.id, "c-mush");
+});
+
 Deno.test("allSlotsResolved: true only when every slot group_id is present, ignores modifier groups", () => {
   const plan: AskPlan = {
     ...SIZE_ASK_PLAN,
@@ -333,4 +370,93 @@ Deno.test("enforceVerbatimStepQuestion: reply has real warmth AND a wrong price 
   const modelReply = `Great choice! Turkey Sub added to your order. What size, medium or large (large is $8 more)?`;
   const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
   assertEquals(result, `Great choice! Turkey Sub added to your order. ${TURKEY_QUESTION}`);
+});
+
+// ─── applyCompiledAddItem: D1 fix, the real Zio's "1 pepperoni, 1 plain,
+// 1 hawaiian, 1 meat lovers" merge (2026-09-08 P0, PO re-diagnosis) ────────
+//
+// Empirically confirmed before this fix: two add_item calls in one turn for
+// the SAME base item (one meaning "pepperoni", one meaning "plain") both
+// receive the SAME whole-turn customerMessage (index.ts computes it once
+// per turn and reuses it for every add_item call — correct for slots like
+// size, wrong for modifiers). Both calls reactively matched "Pepperoni" from
+// the shared text, computed IDENTICAL ask_plan_selections, and the existing
+// identicalExisting quantity-stack logic (working exactly as designed, given
+// wrong inputs) silently merged them into ONE line — the customer's "plain"
+// pizza vanished with no error, no question, no trace.
+
+const TOPPING_ASK_PLAN: AskPlan = {
+  compiled_at: "2026-09-08T00:00:00Z",
+  compiler_version: 1,
+  display_name: "Neapolitan Cheese Pizza",
+  base_price_cents: 1500,
+  steps: [
+    { group_id: "grp-size", slot_key: "size", kind: "slot", ask_mode: "ask", prompt_template: "size.ask",
+      choices: [{ id: "c-med", display: "Medium", price_delta_cents: 0 }, { id: "c-large", display: "Large 18''", price_delta_cents: 274 }] },
+    { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
+      choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-mush", display: "Mushroom", price_delta_cents: 250 }] },
+  ],
+  recap_template: "",
+  ticket_template: "",
+};
+
+function cheesePizzaMenuItem(): CompiledMenuItem {
+  return {
+    ask_plan: TOPPING_ASK_PLAN,
+    bot_state: "orderable",
+    option_groups: [{ id: "grp-size", name: "Size" }, { id: "grp-top", name: "Add Toppings" }],
+  };
+}
+
+Deno.test("applyCompiledAddItem: D1 real repro — without consumedModifierChoiceIds, 'pepperoni' then 'plain' merge into ONE line (documents the pre-fix defect)", () => {
+  const cart: CompiledCartLine[] = [];
+  const turnText = "I want 4 large pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers";
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null); // no consumed set passed
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null);
+  assertEquals(cart.length, 1, "documents the bug: both calls collapse into one line when nothing tracks consumption");
+  assertEquals(cart[0].quantity, 2);
+});
+
+Deno.test("applyCompiledAddItem: D1 fix — WITH consumedModifierChoiceIds, 'pepperoni' then 'plain' produce TWO distinct lines", () => {
+  const cart: CompiledCartLine[] = [];
+  const turnText = "I want 4 large pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers";
+  const consumed = new Set<string>();
+  const r1 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
+  const r2 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
+  assertEquals(cart.length, 2, "each named item must get its own cart line");
+  assert(r1.cartChanged && r2.cartChanged);
+  const withPepperoni = cart.filter(c => c.options?.["Add Toppings"]?.includes("Pepperoni"));
+  const withoutPepperoni = cart.filter(c => !c.options?.["Add Toppings"]);
+  assertEquals(withPepperoni.length, 1, "exactly one line should carry the Pepperoni topping");
+  assertEquals(withoutPepperoni.length, 1, "exactly one line should be the plain cheese pizza with no topping");
+  assertEquals(withPepperoni[0].price_cents, 1500 + 274 + 300); // base + Large size delta + pepperoni delta
+  assertEquals(withoutPepperoni[0].price_cents, 1500 + 274); // base + Large size delta only
+});
+
+Deno.test("applyCompiledAddItem: D1 fix — a genuinely DIFFERENT base item in the same turn is unaffected by the consumed set", () => {
+  const cart: CompiledCartLine[] = [];
+  const turnText = "1 pepperoni pizza, 1 pepperoni calzone";
+  const consumed = new Set<string>();
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
+  const calzoneAskPlan: AskPlan = { ...TOPPING_ASK_PLAN, display_name: "Calzone", steps: [
+    { group_id: "grp-calzone-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
+      choices: [{ id: "c-calzone-pep", display: "Pepperoni", price_delta_cents: 350 }] },
+  ] };
+  const calzoneMenuItem: CompiledMenuItem = { ask_plan: calzoneAskPlan, bot_state: "orderable", option_groups: [{ id: "grp-calzone-top", name: "Add Toppings" }] };
+  applyCompiledAddItem(cart, calzoneMenuItem, "calzone-id", 1, turnText, null, consumed);
+  assertEquals(cart.length, 2);
+  assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"), "the pizza's own Pepperoni choice id is unrelated to the calzone's — must still apply");
+  assert(cart[1].options?.["Add Toppings"]?.includes("Pepperoni"), "a different item's own topping choice id is a different choice id — must still apply independently");
+});
+
+Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order (no list, same item twice with the same topping) still stacks quantity when there's no consumed-set collision risk (single call, quantity=2)", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  // A single add_item call with quantity=2 (the normal QUANTITY PARSING path,
+  // e.g. "2 pepperoni pizzas") must still produce ONE line with quantity 2 —
+  // this fix must not break ordinary quantity stacking.
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 2, "2 pepperoni pizzas", null, consumed);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].quantity, 2);
+  assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"));
 });

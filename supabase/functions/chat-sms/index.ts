@@ -50,6 +50,7 @@ import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
 import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
+import { decideShortfallRetry } from "./enumeration-shortfall-retry.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -824,6 +825,7 @@ RULES:
 - When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If they say "7 sesame and 7 plain" and a dozen bundle is active, that is 14 bagels which completes the dozen. Just add them.
 - While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
 - OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
+- COMPOSING A TOPPING-ONLY PIZZA REQUEST (CRITICAL): some shops have no standalone menu item for a topping named alone (e.g. no "Pepperoni Pizza" item at all — pepperoni only exists as a topping choice on the base cheese pizza). When the customer is clearly ordering pizzas (they said "pizza"/"pizzas" earlier in this conversation, or this item is one of several pizzas named together in the same list) and names a bare topping with no matching standalone item, compose it as ONE add_item call: the shop's base/cheese pizza item PLUS that topping selected in its topping option group. Do NOT guess a different item just because its name happens to contain the topping word — a Calzone or Stromboli or any other product with "Pepperoni" in ITS OWN name is a completely different product, not a plain pepperoni pizza, and must never be substituted for one. Do NOT drop the topping and silently add only the base pizza. Always state the full composition in your reply so the customer knows what they're getting — e.g. "Large Cheese Pizza with Pepperoni added", never just "Cheese Pizza added" when a topping was requested. "Plain" or "cheese" alone (no topping named) composes to the base cheese pizza with no toppings added. If there is no established pizza context at all (nothing about pizza said anywhere in this conversation, the item stands alone), ask instead of guessing which product the customer means.
 - WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask - never guess, never imply a list exists, and never offer to go find out. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "I don't have the dressing list for that one - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
 - NEVER CLAIM AN ACTION YOU DO NOT TAKE (CRITICAL): you can do exactly two things - read the menu above and call the tools listed below. You cannot check with the kitchen, ask the owner, ask anyone, look anything up, call, walk back, confirm with staff, or go find out and come back. Never say or imply that you will. Banned in every wording: "let me check", "I'll check with the kitchen", "let me ask", "I'll find out", "let me confirm", "let me look that up", "one moment", "give me a sec", "I'll get back to you", "hold on while I". When you do not know something, say you do not know it and ask the customer in the same breath, then keep the order moving. Good: "I don't have the flavor list for these - what flavor would you like?" Never: "Let me check with the kitchen on which ones we have." Inventing an action is the same lie as inventing an option, and worse, because it is a lie about yourself. The one thing you may promise is what the tools actually do: adding an item, saving a note, sending the payment link.
 - NEVER NARRATE A TECHNICAL FAILURE TO THE CUSTOMER: if a tool call comes back with an error, that is between you and the system. A customer ordering dinner has no use for "that's giving me a system hiccup", "there's a glitch on my end", "an error came back", or "the system won't let me". Say the plain human version instead - "I can't add the large cheese right now" - and immediately offer the closest real thing on the menu. Never invent a technical excuse for something you simply could not find.
@@ -897,6 +899,29 @@ async function executeTool(
   // too. Falls back to `customerMessage` when not supplied (every call site
   // except the main tool loop).
   compiledMatchText?: string,
+  // D1 fix (2026-09-08 P0, see ask-plan-engine.ts's resolveAskPlan header):
+  // shared across every add_item call in ONE turn (created once per turn by
+  // runOrderingLoop, threaded through unchanged) so a reactively-matched
+  // modifier choice (e.g. a topping) already granted to an earlier NEW cart
+  // line this turn can't silently re-attach itself to a later, different
+  // add_item call for the same base item — the exact mechanism behind the
+  // "1 pepperoni, 1 plain" merge. Undefined at every call site except the
+  // main tool loop, matching compiledEngineEnabled/customerMessage/etc above.
+  consumedModifierChoiceIds?: Set<string>,
+  // D1 fix, legacy-path symmetric case (2026-09-08 P0): the LEGACY add_item
+  // branch's matchReactiveExtras call (below) has the identical shape of
+  // defect as the compiled path's modifier reactive-match — it re-scans the
+  // SAME turn-wide customerMessage on every add_item call this turn with no
+  // memory of what a PRIOR call this turn already reactively claimed. Same
+  // fix, same per-turn Set pattern, keyed by `${menu_item_id}::${lowercased
+  // name}` (unlike the compiled path's choice.id, legacy candidates are
+  // plain strings with no stable id, and different items legitimately using
+  // the same modifier NAME — "Pepperoni" on both a pizza and a calzone —
+  // must remain independent, hence the item-id prefix). Not exercised by
+  // Zio's today (Zio's Neapolitan Cheese Pizza is compiled), but real for
+  // any legacy-path shop (e.g. Vito's) ordering 2+ of the same base item in
+  // one message where only one segment names a modifier.
+  consumedReactiveExtraKeys?: Set<string>,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -934,6 +959,7 @@ async function executeTool(
           quantity as number,
           compiledMatchText ?? customerMessage ?? "",
           shopPhone,
+          consumedModifierChoiceIds,
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
@@ -1003,9 +1029,19 @@ async function executeTool(
       // non-required option_groups' choices (toppings/add-ons — required/
       // slot-like groups such as size are untouched, they stay on the
       // existing pending/ask flow). See reactive-modifier-match.ts.
+      // D1 fix (2026-09-08 P0): a reactive match already granted to an
+      // EARLIER new cart line for this SAME item this turn must not be
+      // reactively re-claimed by this call too (see param doc above) —
+      // union it into alreadyNamed so matchReactiveExtras naturally skips it.
+      const turnConsumedForThisItem = consumedReactiveExtraKeys
+        ? new Set([...consumedReactiveExtraKeys]
+            .filter(k => k.startsWith(`${menu_item_id}::`))
+            .map(k => k.slice(menu_item_id.length + 2)))
+        : undefined;
       const reactiveAlreadyNamed = new Set<string>([
         ...inputMods.map(m => m.toLowerCase()),
         ...Object.values(inputOptions).flat().map(v => v.toLowerCase()),
+        ...(turnConsumedForThisItem ?? []),
       ]);
       const reactiveCandidates: ReactiveCandidate[] = [
         ...(menuItem.modifiers_json ?? []).map(m => ({ groupName: null, name: m.name, price_cents: m.price_cents })),
@@ -1019,6 +1055,7 @@ async function executeTool(
           if (!inputOptions[m.groupName]) inputOptions[m.groupName] = [];
           if (!inputOptions[m.groupName].includes(m.name)) inputOptions[m.groupName].push(m.name);
         }
+        consumedReactiveExtraKeys?.add(`${menu_item_id}::${m.name.toLowerCase()}`);
       }
 
       const invalidMods  = inputMods.filter(m => !validMods.includes(m));
@@ -1815,6 +1852,21 @@ async function runOrderingLoop(
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
 
+  // D1 fix (2026-09-08 P0, PO re-diagnosis, see enumeration-shortfall-retry.ts):
+  // snapshot the cart BEFORE this turn touches it so a mid-turn count check
+  // can tell how many NEW lines this whole turn produced, cumulative across
+  // every attempt below — not just the latest fetch.
+  const cartSnapshotAtTurnStart = cart.slice();
+  let shortfallRetries = 0;
+  const MAX_SHORTFALL_RETRIES = 2;
+
+  // D1 fix (2026-09-08 P0, see ask-plan-engine.ts's resolveAskPlan header):
+  // one Set for the WHOLE turn, mutated in place by every compiled-path
+  // add_item call this turn (across every attempt below) — prevents a
+  // reactively-matched modifier (e.g. a topping) from being granted to more
+  // than one NEW cart line for the same base item in a single turn.
+  const consumedModifierChoiceIdsForTurn = new Set<string>();
+
   const messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [
     ...history,
     { role: "user", content: userMessage },
@@ -1955,6 +2007,24 @@ async function runOrderingLoop(
     // and, with no text, the customer got "I couldn't process that". Always
     // execute pending tools; only return once the model stops calling them.
     if (toolBlocks.length === 0) {
+      // D1 fix (2026-09-08 P0, PO re-diagnosis, see enumeration-shortfall-
+      // retry.ts): the model thinks it's done, but if this turn's message
+      // was a quantity list ("1 X, 1 Y, ...") and fewer distinct cart lines
+      // exist now than segments were named, give it one more attempt with an
+      // explicit count mismatch before accepting the turn as finished. This
+      // is what actually fixes the "1 pepp, 1 plain" -> one merged line
+      // defect — not just detecting it after the fact (that's still
+      // index.ts's post-turn GUARD below, unchanged, as the final backstop).
+      const shortfallDecision = decideShortfallRetry(
+        userMessage, cartSnapshotAtTurnStart, cart, shortfallRetries, MAX_SHORTFALL_RETRIES,
+      );
+      if (shortfallDecision.shouldRetry) {
+        shortfallRetries++;
+        console.warn(`[chat-sms] D1: enumeration shortfall retry ${shortfallRetries}/${MAX_SHORTFALL_RETRIES} (cartId=${cartId})`);
+        messages.push({ role: "assistant", content });
+        messages.push({ role: "user", content: shortfallDecision.hint! });
+        continue;
+      }
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
       if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
@@ -2039,6 +2109,7 @@ async function runOrderingLoop(
         userMessage,
         shopPhone,
         compiledMatchTextForTurn,
+        consumedModifierChoiceIdsForTurn,
       );
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
       // all. When add_item failed the model narrated it to the customer ("that's

@@ -231,6 +231,29 @@ export function resolveAskPlan(
   customerText: string,
   alreadyResolvedGroupIds: Set<string>,
   defaultChoiceIdByGroup: Map<string, string>,
+  // D1 fix (2026-09-08 P0, PO re-diagnosis — Zio's "1 pepperoni, 1 plain,
+  // 1 hawaiian, 1 meat lovers" merge): `customerText` is the WHOLE turn's
+  // message (or the whole turn plus one prior turn — see
+  // stated-attribute-carryforward.ts), reused unchanged for every add_item
+  // call this turn — correct for slots (an attribute stated once should
+  // apply to every item named after it, e.g. "large" for a whole pizza
+  // list), but WRONG for modifiers: a topping named ONCE for ONE item in an
+  // enumerated list would otherwise reactively re-attach itself to every
+  // OTHER add_item call for the same base item this turn, since
+  // matchChoiceInText has no way to know which segment of the list it's
+  // being asked about. Confirmed empirically: two same-item add_item calls
+  // ("1 pepperoni" then "1 plain") both resolved identical selections
+  // (Size + Add Toppings: Pepperoni) and silently merged into ONE line via
+  // the existing identicalExisting quantity-stack below — the customer's
+  // "plain" pizza vanished. A modifier choice already granted to an earlier
+  // NEW cart line THIS TURN (tracked by the caller in
+  // `consumedModifierChoiceIds`, mutated in place across every add_item
+  // call in the turn) is not eligible to be reactively re-matched — this
+  // call's resolution for that step is left unresolved instead (missing
+  // beats wrong, same principle as apply_default falling back to `ask`
+  // above), which naturally makes the two calls' selections diverge and
+  // produces two real, separate cart lines instead of a false merge.
+  consumedModifierChoiceIds?: Set<string>,
 ): EngineResult {
   const resolved: ResolvedSlot[] = [];
   let nextStep: CompiledStep | null = null;
@@ -251,7 +274,7 @@ export function resolveAskPlan(
     // asking).
     if (step.kind === "modifier") {
       const matched = matchChoiceInText(step.choices, customerText);
-      if (matched) {
+      if (matched && !consumedModifierChoiceIds?.has(matched.id)) {
         resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
         totalDeltaCents += matched.price_delta_cents;
       }
@@ -340,6 +363,17 @@ export function applyCompiledAddItem(
   quantity: number,
   customerMessage: string,
   shopPhone: string | null | undefined,
+  // D1 fix (2026-09-08 P0, see resolveAskPlan's header comment above for the
+  // full explanation): shared across every add_item call in ONE turn — the
+  // caller (index.ts's runOrderingLoop) creates this once per turn and
+  // passes the SAME Set to every call, so a modifier choice already granted
+  // to an earlier NEW line this turn can't be reactively re-claimed by a
+  // later, otherwise-identical-looking add_item call for the same base
+  // item. Optional/undefined at the other call site (index.ts's separate-
+  // turn pending-answer resolution) — that path only ever touches one
+  // pending line per invocation, never multiple add_item calls sharing one
+  // turn's text, so it isn't exposed to this defect and doesn't need it.
+  consumedModifierChoiceIds?: Set<string>,
 ): CompiledAddItemResult {
   const askPlan = menuItem.ask_plan;
   const itemGroups = menuItem.option_groups ?? [];
@@ -372,10 +406,23 @@ export function applyCompiledAddItem(
   const priorSelections = continuationIdx >= 0 ? { ...cart[continuationIdx].ask_plan_selections } : {};
   const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
 
-  const engineResult = resolveAskPlan(askPlan, customerMessage, alreadyResolvedGroupIds, defaultChoiceIdByGroup);
+  const engineResult = resolveAskPlan(askPlan, customerMessage, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds);
 
   const newSelections: Record<string, string> = { ...priorSelections };
   for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
+
+  // Record every modifier choice this call resolved as consumed for the
+  // rest of this turn (see param doc above) — BEFORE the merge/dedup logic
+  // below runs, so it applies regardless of whether this call ends up
+  // pushing a new line, filling a continuation, or (now correctly avoided
+  // for the reported defect) still finding an identical existing line for
+  // some other legitimate reason.
+  if (consumedModifierChoiceIds) {
+    for (const r of engineResult.resolved) {
+      const step = askPlan.steps.find(s => s.group_id === r.group_id);
+      if (step?.kind === "modifier") consumedModifierChoiceIds.add(r.choice.id);
+    }
+  }
 
   const resolvedOptions: Record<string, string[]> = {};
   let priceCents = askPlan.base_price_cents;

@@ -312,6 +312,37 @@ Deno.test("compileMenu end-to-end: the Zio's/Shrimp Parmigiana/Eggplant Parmigia
   assert(inv4.pass, `invariant 4 should pass, violations: ${inv4.violations.join(", ")}`);
 });
 
+Deno.test("lexicon rule 2 guard B: a stripped alias claimed by TWO different items (not a Rule-1 name) is dropped for both (real Zio's 'pepperoni' gap, 2026-09-08 P0)", () => {
+  // Real Zio's shape: "Pepperoni Stromboli" and "Pepperoni Calzone" each
+  // strip their own category noun to "pepperoni" independently — neither
+  // collides with another item's Rule-1 primary name (Guard A), so without
+  // Guard B both would write an active lexicon row for the identical term
+  // "pepperoni" pointing at two different target_ids, a coin-flip for any
+  // future reader of the table.
+  const stromboli = item({ display_name: "Pepperoni Stromboli", category: "Strombolis" });
+  const calzone = item({ display_name: "Pepperoni Calzone", category: "Calzones" });
+  const { items: compiled } = compileMenu([stromboli, calzone], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni"),
+    "ambiguous alias must not be written for the Stromboli");
+  assert(!byId.get(calzone.id)!.lexicon_terms.some(t => t.term === "pepperoni"),
+    "ambiguous alias must not be written for the Calzone");
+  // Each item's own full name (Rule 1) must still be generated — only the
+  // ambiguous shared alias is dropped, not the item's real identity.
+  assert(byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni stromboli"));
+  assert(byId.get(calzone.id)!.lexicon_terms.some(t => t.term === "pepperoni calzone"));
+});
+
+Deno.test("lexicon rule 2 guard B: a stripped alias claimed by only ONE item is still generated", () => {
+  const stromboli = item({ display_name: "Pepperoni Stromboli", category: "Strombolis" });
+  const sausage = item({ display_name: "Sausage Stromboli", category: "Strombolis" });
+  const { items: compiled } = compileMenu([stromboli, sausage], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+  assert(byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni"));
+  assert(byId.get(sausage.id)!.lexicon_terms.some(t => t.term === "sausage"));
+});
+
 Deno.test("lexicon rule 3: category noun singular + plural -> category target", () => {
   const terms = categoryLexiconTerms("Salads");
   assertEquals(terms.map(t => t.term).sort(), ["salad", "salads"]);

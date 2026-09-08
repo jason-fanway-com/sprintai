@@ -381,7 +381,29 @@ function computeBotState(
 // ============================================================
 // §6.2 lexicon generation — rules 1, 2, 3, 6 only (P0 scope, see header).
 // ============================================================
-function itemLexiconTerms(item: CompileItem, primaryTermOwners?: Map<string, string>): LexiconTerm[] {
+// Rule 2 helper — the stripped/qualified alias this item's display name
+// would produce ("Pepperoni Stromboli" in category Stromboli -> "pepperoni"),
+// or null if there's nothing to strip. Shared between the menu-wide
+// collision pre-passes in compileMenu (primaryTermOwners, rule2TermOwners)
+// and the actual per-item emission below so "what Rule 2 computes" can never
+// drift between the two call sites.
+function rule2CandidateTerm(item: CompileItem): string | null {
+  const displayName = (item.display_name ?? item.name).trim();
+  if (!displayName || !item.category) return null;
+  const noun = categoryNoun(item.category);
+  if (!noun) return null;
+  const suffixRe = new RegExp(`\\s+${noun}s?$`, "i");
+  if (!suffixRe.test(displayName)) return null;
+  const stripped = displayName.replace(suffixRe, "").trim();
+  if (!stripped || stripped.toLowerCase() === displayName.toLowerCase()) return null;
+  return normaliseTerm(stripped);
+}
+
+function itemLexiconTerms(
+  item: CompileItem,
+  primaryTermOwners?: Map<string, string>,
+  rule2TermOwners?: Map<string, Set<string>>,
+): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
@@ -394,25 +416,35 @@ function itemLexiconTerms(item: CompileItem, primaryTermOwners?: Map<string, str
   // Caesar Salad"), also index the unqualified form ("Chicken Caesar") so a
   // customer who doesn't say the category word still resolves.
   //
-  // Guard: skip this alias when the stripped form is already another item's
-  // OWN primary name (e.g. "Zio's Salad" stripping to "Zio's" would otherwise
-  // collide with a real, distinct entree literally named "Zio's"; "Shrimp
-  // Parmigiana Sub" stripping to "Shrimp Parmigiana" collides with the real
-  // Seafood entree of that name). A convenience alias must never shadow a
-  // genuine, differently-owned item — real data surfaced 4 such cases.
+  // Guard A: skip this alias when the stripped form is already another
+  // item's OWN primary name (e.g. "Zio's Salad" stripping to "Zio's" would
+  // otherwise collide with a real, distinct entree literally named "Zio's";
+  // "Shrimp Parmigiana Sub" stripping to "Shrimp Parmigiana" collides with
+  // the real Seafood entree of that name). A convenience alias must never
+  // shadow a genuine, differently-owned item — real data surfaced 4 such
+  // cases.
+  //
+  // Guard B (2026-09-08, PO dispatch): skip this alias when TWO OR MORE
+  // DIFFERENT items independently strip to the SAME term via this same Rule
+  // 2 — e.g. Zio's "Pepperoni Stromboli" and "Pepperoni Calzone" both strip
+  // their category noun to "pepperoni", and nothing in the upsert
+  // (`onConflict: menu_id,term,target_type,target_id`) dedupes two DIFFERENT
+  // target_ids under the identical term — so `lexicon` ends up with two
+  // active `term='pepperoni', target_type='item'` rows pointing at two
+  // different products, a coin-flip for whichever reader picks one. Guard A
+  // alone doesn't catch this because neither alias collides with a Rule-1
+  // primary name — they only collide with EACH OTHER. Same principle as
+  // Guard A, applied symmetrically: an ambiguous alias must not be written
+  // for ANY of its claimants, not just skipped for the loser of an arbitrary
+  // order.
   if (item.category) {
-    const noun = categoryNoun(item.category);
-    if (noun) {
-      const suffixRe = new RegExp(`\\s+${noun}s?$`, "i");
-      if (suffixRe.test(displayName)) {
-        const stripped = displayName.replace(suffixRe, "").trim();
-        if (stripped && stripped.toLowerCase() !== displayName.toLowerCase()) {
-          const strippedTerm = normaliseTerm(stripped);
-          const owner = primaryTermOwners?.get(strippedTerm);
-          if (!owner || owner === item.id) {
-            terms.push({ term: strippedTerm, target_type: "item", target_id: item.id, provenance: "stated" });
-          }
-        }
+    const strippedTerm = rule2CandidateTerm(item);
+    if (strippedTerm) {
+      const owner = primaryTermOwners?.get(strippedTerm);
+      const claimants = rule2TermOwners?.get(strippedTerm);
+      const ambiguousAcrossItems = !!claimants && claimants.size > 1;
+      if ((!owner || owner === item.id) && !ambiguousAcrossItems) {
+        terms.push({ term: strippedTerm, target_type: "item", target_id: item.id, provenance: "stated" });
       }
     }
   }
@@ -541,6 +573,7 @@ export function compileItem(
   questions: PendingQuestion[],
   compiledAt: string,
   primaryTermOwners?: Map<string, string>,
+  rule2TermOwners?: Map<string, Set<string>>,
 ): CompiledItem {
   const { bot_state, bot_state_reason } = computeBotState(item, questions);
   return {
@@ -548,7 +581,7 @@ export function compileItem(
     bot_state,
     bot_state_reason,
     ask_plan: buildAskPlan(item, compiledAt),
-    lexicon_terms: itemLexiconTerms(item, primaryTermOwners),
+    lexicon_terms: itemLexiconTerms(item, primaryTermOwners, rule2TermOwners),
   };
 }
 
@@ -924,11 +957,24 @@ export function compileMenu(
     if (displayName) primaryTermOwners.set(normaliseTerm(displayName), i.id);
   }
 
+  // Menu-wide map of each Rule-2 stripped alias to every DISTINCT item id
+  // that would independently produce it (e.g. both "Pepperoni Stromboli" and
+  // "Pepperoni Calzone" strip to "pepperoni") — lets itemLexiconTerms drop an
+  // alias claimed by more than one item instead of silently writing two
+  // active rows under the same term (see itemLexiconTerms Guard B).
+  const rule2TermOwners = new Map<string, Set<string>>();
+  for (const i of items) {
+    const t = rule2CandidateTerm(i);
+    if (!t) continue;
+    if (!rule2TermOwners.has(t)) rule2TermOwners.set(t, new Set());
+    rule2TermOwners.get(t)!.add(i.id);
+  }
+
   // Every item gets the FULL candidate list — findBlockingQuestion (inside
   // compileItem) does the scope matching per item (by item id, category, or
   // one of the item's own group/choice ids), so there is no need to
   // pre-partition questions by item here.
-  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, primaryTermOwners));
+  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, primaryTermOwners, rule2TermOwners));
   const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
 
   const categories = new Set(items.map(i => i.category).filter((c): c is string => !!c));
