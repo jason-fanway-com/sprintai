@@ -2055,3 +2055,50 @@ This closes the full self-contradiction thread from tonight: GUARD 17
 (6 revisions, retired for this case) -> prompt nudge (verified
 non-deterministic, retired) -> deterministic resolver (3/3, shipped) ->
 this note-capture refinement (3/3, shipped). Nothing open on this thread.
+
+[OVERNIGHT QUEUE item 1/5 — Zio's 2 blocked items re-checked on Slice.
+Real find: one was a genuine miss (name mismatch, not a render timeout),
+one is confirmed genuinely absent. Both resolved correctly, no forcing.]
+2026-09-08 ~06:15 UTC — DONE, moving to item 2.
+
+Corrected the framing before acting: this was NOT the same failure mode as
+Cheese Burger (a modal-render timeout on a MATCHED product). Both Double
+Burger and Tuna Provolone Wrap were never matched to a Slice product at
+all in the original pass (`skipped-documented.json`: "not found on Slice
+menu" for both). Re-verified live, right now, not from the ~16h-old cache
+(fresh Playwright page-text scan of the real Zio's Slice menu):
+
+  - Double Burger ($13.99): CONFIRMED genuinely absent. Zero occurrences
+    of "double" anywhere on the live page. Slice's real Burgers section
+    has exactly 5 items (Burger $9.99, Cheeseburger $10.99, BBQ
+    Cheeseburger $10.99, Mama Mia Burger $10.99, Zio's Deluxe Burger
+    $10.99) — no price or name match for a $13.99 double-patty item.
+    Correctly stays as the real, single remaining Zio's owner_question
+    (Burgers/temp, items_affected=1) — not a Slice-data gap, a genuine
+    "does the owner want a temp question on this burger" gap, unrelated.
+
+  - Tuna Provolone Wrap ($10.99): REAL MISS, not a genuine absence. The
+    original matcher required close name similarity and never considered
+    Slice's "Tuna Wrap" ($10.99, same Wraps section) a match for the DB's
+    "Tuna Provolone Wrap" — but opened the actual Slice product and
+    confirmed by description: "Lettuce, tomato, onions, mayo." — word for
+    word the same as the DB item's own description ("Lettuce, tomato,
+    onions & mayo"), same price, "Provolone Cheese" listed as a real
+    +$0.75 Add Extra choice (consistent with the DB name baking the
+    cheese into the item's own title while Slice treats it as an addable
+    extra). Genuinely the same real item under a different display name.
+
+Captured for real: 2 groups, 19 choices (Choose an Option: Wrap: required
+slot; Add Extra: 18-choice modifier, real prices $0-$2.00) written via the
+same proven script/pattern as Cheese Burger, then recompiled. Also found
+and fixed a SEPARATE stale-data issue this surfaced: the Wraps/bread
+owner_question's exclusions list (10 names) predated this item's data and
+didn't include it, so it stayed blocked after the option_groups write.
+Ran the already-built refresh-owner-questions.ts tool (dry-run then
+--apply) -- correctly computed 0 updates, 1 delete (the question is now
+fully answered, deleted). Recompiled again: Zio's now 219/220 orderable
+(was 217/220 at the start of tonight, 218/220 after just the write, 219/220
+after the refresh+recompile). Zero forcing -- every number came from real,
+verified data at each step.
+
+Nothing touched beyond Zio's. NJB and Vito's untouched by this item.
