@@ -1576,3 +1576,73 @@ archetypes.test.ts, compile-menu/index.ts, njb-infer-only script, item-9
 report script), pushed to main. Did not touch chat-sms/, compile-menu.ts, or
 compile-menu.test.ts — active concurrent session's work in this shared repo,
 confirmed their diffs don't overlap with mine before committing.
+
+[ITEM 3 follow-up #3 — reusable owner_questions refresh function, per PO's
+instruction after PO's own manual one-time fix landed (7 rows correct,
+verified live). Built + tested + Melvin-verified. NJB data itself NOT
+re-touched by this task, except see the new finding at the bottom.]
+2026-09-08 ~01:45 UTC — Not blocked. Built `planOwnerQuestionsRefresh`
+(supabase/functions/_shared/compile-menu.ts) — pure function, 3 cases exactly
+as specified:
+  1. Pending row, key still in fresh computation -> update items_affected/
+     question_text/priority/blocking/proposal to match.
+  2. Pending row, key gone from fresh computation entirely -> delete.
+  3. Any non-'pending' row (answered/dismissed/asked/expired) -> untouched
+     by either path, unconditionally, checked before the key lookup even
+     runs. This is the invariant; it must never break.
+
+Real bug caught BEFORE trusting this, by actually dry-running it against
+live NJB data rather than only trusting hand-built unit tests: a naive
+`JSON.stringify(a) !== JSON.stringify(b)` diff on the `proposal` field
+flagged every single real row as "changed" even when nothing had changed,
+because Postgres JSONB does not preserve original JS key insertion order on
+round-trip (inserted as {choices, source, exclusions}, read back as {source,
+choices, exclusions} — same content). Fixed with a `canonicalJson()` helper
+that sorts object keys recursively but leaves array element order alone
+(exclusions/choices order IS meaningful, unlike object key order) — both
+directions covered by new tests (same-content-different-key-order = no-op;
+same-items-different-array-order = real change).
+
+scripts/refresh-owner-questions.ts is the reusable I/O shell — any shop_id,
+dry-run by default (prints the full plan), only writes on --apply, and the
+write path filters status='pending' server-side too (belt and suspenders
+against a read/write race). Never touches menu_items/option_groups/
+option_choices. Deliberately NOT wired into compile-menu/index.ts's live
+compile path — that runs on every shop's every compile including already-
+live Vito's/Zio's, and auto-applying a refresh there on every future compile
+is a separate, bigger decision than building the reusable function itself;
+flagging this as a follow-up decision point, not assuming it should be wired
+in silently.
+
+9 new tests, all green (49/49 compile-menu.test.ts, 116/116 full regression
+across normalize/archetypes/compile-menu). Independently verified (Melvin
+role, fresh agent, no access to my reasoning): hand-traced all 6 required
+scenarios against the real code, ran the suite itself, live-dry-ran the
+script against real NJB data and diffed the owner_questions table before/
+after byte-for-byte to confirm zero writes in dry-run mode. Verdict: "safe
+to consider verified."
+
+*** NEW FINDING, not applied — flagging for a decision, same discipline as
+before ***: the live dry run against NJB right now (post your manual 7-row
+fix) shows the data is NOT fully self-consistent yet:
+  UPDATE [Breakfast Sandwiches]/bread: items_affected 2 -> 2 (already
+    correct), priority 80 -> 8 (STILL STALE — computed from the old
+    items_affected=20, never recalculated when you updated the count)
+  UPDATE [Cold Sandwiches]/bread:      items_affected 2 -> 2 (correct),
+    priority 60 -> 8 (stale, from old items_affected=15)
+  UPDATE [Hot Sandwiches]/bread:       items_affected 11 -> 11 (correct),
+    priority 48 -> 44 (stale, from old items_affected=12)
+0 deletes (the toast row is already gone, confirmed). Priority = items_affected
+× 4 for a kitchen_critical bread slot (§5.2 formula) — these 3 rows' priority
+column just wasn't recomputed when items_affected was hand-corrected. Doesn't
+change whether a question is asked (blocking is unaffected, still true on all
+3), only its RELATIVE ORDER if question priority is ever used to sequence
+what the owner sees first. Low-stakes, but real staleness the new tool exists
+specifically to catch. Have NOT run --apply — that's a one-line, well-tested,
+dry-run-verified action, but I'm not executing a real write against live NJB
+production data without an explicit go-ahead, same bar as everything else
+tonight. Say the word and I'll run
+`deno run --allow-env --allow-net scripts/refresh-owner-questions.ts b0000000-0000-0000-0000-000000000001 --apply`
+and report the result.
+
+Committed c5deb20, pushed to main.
