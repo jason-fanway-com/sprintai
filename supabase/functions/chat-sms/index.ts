@@ -38,6 +38,7 @@ import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-af
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, allSlotsResolved, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -409,6 +410,36 @@ async function fetchAllRows<T>(queryBuilder: () => PromiseLike<{ data: T[] | nul
   return rows;
 }
 
+// A `.in("col", ids)` filter with enough UUIDs makes the request URL long
+// enough to fail outright (same defect already found and fixed in
+// compile-menu/index.ts's own fetchAllRows: ~492 UUIDs on Zio's option
+// groups threw `TypeError: fetch failed`, not a graceful PostgREST error).
+// Ported here 2026-09-07 after live-testing the stated-provenance gate fix
+// surfaced the EXACT same failure on THIS file's own unbatched
+// `option_choices` fetch below — confirmed live via the platform's own
+// function logs: "fetchAllRows error at offset 0: TypeError: error sending
+// request... option_choices?...&option_group_id=in.(492 UUIDs)". Every
+// group's `choices` array came back empty menu-wide on Zio's as a result —
+// not just the newly-orderable items — silently breaking GUARD 10's
+// is_default lookup (reverting every compiled-engine auto-resolved slot
+// back to pending, since `group.choices.find(...)` on an empty array can
+// never find a default) and any legacy-path choice/price validation that
+// depends on `option_groups[].choices` being populated. Batches the ID
+// list itself, not just the result page, for any `.in()` filter whose
+// value list scales with menu size rather than a fixed small set.
+const IN_BATCH_SIZE = 150;
+async function fetchAllRowsBatchedIn<T, K>(
+  ids: K[],
+  queryBuilder: (batch: K[]) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_BATCH_SIZE) {
+    const batch = ids.slice(i, i + IN_BATCH_SIZE);
+    rows.push(...await fetchAllRows(() => queryBuilder(batch)));
+  }
+  return rows;
+}
+
 async function buildEffectiveMenu(
   supabase:     SupabaseClient,
   shopId:       string,
@@ -437,26 +468,35 @@ async function buildEffectiveMenu(
 
   if (!items.length) return { menu: [], soldOutNames: [] };
 
-  // Load option groups and choices for these menu items
+  // Load option groups and choices for these menu items. Both `.in()` value
+  // lists scale with menu size (one entry per active item / per group), so
+  // both go through fetchAllRowsBatchedIn — see its header comment: a menu
+  // Zio's-sized (492 groups) makes the option_choices URL long enough to
+  // fail outright, silently emptying every group's `choices` menu-wide, not
+  // just for the newly-large item set.
   const itemIds = items.map(i => i.id);
-  const optionGroupsData = await fetchAllRows<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number; display_order: number; default_choice_id: string | null }>(() =>
-    supabase
-      .from("option_groups")
-      .select("id, menu_item_id, name, required, min_select, max_select, display_order, default_choice_id")
-      .in("menu_item_id", itemIds)
-      .order("display_order", { ascending: true })
-      .order("id", { ascending: true }),
+  const optionGroupsData = await fetchAllRowsBatchedIn<{ id: string; menu_item_id: string; name: string; required: boolean; min_select: number; max_select: number; display_order: number; default_choice_id: string | null }, string>(
+    itemIds,
+    batch =>
+      supabase
+        .from("option_groups")
+        .select("id, menu_item_id, name, required, min_select, max_select, display_order, default_choice_id")
+        .in("menu_item_id", batch)
+        .order("display_order", { ascending: true })
+        .order("id", { ascending: true }),
   );
 
   const groupIds = optionGroupsData.map(g => g.id);
   const optionChoicesData = groupIds.length > 0
-    ? await fetchAllRows<{ id: string; option_group_id: string; name: string; price_cents: number; is_default: boolean; display_order: number }>(() =>
-        supabase
-          .from("option_choices")
-          .select("id, option_group_id, name, price_cents, is_default, display_order")
-          .in("option_group_id", groupIds)
-          .order("display_order", { ascending: true })
-          .order("id", { ascending: true }),
+    ? await fetchAllRowsBatchedIn<{ id: string; option_group_id: string; name: string; price_cents: number; is_default: boolean; display_order: number }, string>(
+        groupIds,
+        batch =>
+          supabase
+            .from("option_choices")
+            .select("id, option_group_id, name, price_cents, is_default, display_order")
+            .in("option_group_id", batch)
+            .order("display_order", { ascending: true })
+            .order("id", { ascending: true }),
       )
     : [];
 
@@ -875,6 +915,34 @@ async function executeTool(
           shopPhone,
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
+        // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
+        // suggested Burger/Cheese Burger/Zio's Deluxe Burger/Mamma Mia Burger/
+        // BBQ Cheese Burger — every single Burgers item was bot_state='blocked'
+        // at the time, same pending owner question affecting the whole
+        // category). The model was drawing alternatives from the full menu
+        // text in the system prompt, which carries no bot_state signal at all,
+        // so it can only ever suggest by category coincidence, never by
+        // orderability. General pattern, not Burgers-specific: whenever a
+        // compiled item is declined, hand the model a REAL, code-computed list
+        // of bot_state='orderable' siblings in the same category (possibly
+        // empty) and tell it to use ONLY that list — never its own menu
+        // recall — so a whole-category block can never surface a same-category
+        // blocked item as a false alternative.
+        if (!engineOutcome.ok && (engineOutcome.result as { declined?: boolean })?.declined) {
+          const orderableAlternatives = menu
+            .filter(m => m.category === menuItem.category && m.id !== menu_item_id && m.bot_state === "orderable")
+            .map(m => m.name);
+          return {
+            ok: false,
+            result: {
+              ...(engineOutcome.result as Record<string, unknown>),
+              orderable_alternatives: orderableAlternatives,
+              instruction: orderableAlternatives.length > 0
+                ? `Do not suggest any item name from your own menu knowledge. If offering an alternative, offer ONLY from this exact list: ${orderableAlternatives.join(", ")}.`
+                : "Do not suggest any alternative item by name — nothing in this category is currently orderable by text. Only offer the phone number.",
+            },
+          };
+        }
         return { ok: engineOutcome.ok, result: engineOutcome.result };
       }
 
@@ -902,6 +970,33 @@ async function executeTool(
           }
         } else {
           inputOptions[key] = vals;
+        }
+      }
+
+      // ── Reactive modifier/topping match (bug 4, 2026-09-07) ────────────
+      // "buffalo chicken pizza with pepperoni" silently dropped the topping
+      // and its $3.00 price: this legacy path applies ONLY what the LLM's
+      // tool call names in `modifiers`/`options`, with no fallback onto the
+      // customer's own words. Catch anything the LLM's call missed by
+      // matching customerMessage against real modifiers_json entries and
+      // non-required option_groups' choices (toppings/add-ons — required/
+      // slot-like groups such as size are untouched, they stay on the
+      // existing pending/ask flow). See reactive-modifier-match.ts.
+      const reactiveAlreadyNamed = new Set<string>([
+        ...inputMods.map(m => m.toLowerCase()),
+        ...Object.values(inputOptions).flat().map(v => v.toLowerCase()),
+      ]);
+      const reactiveCandidates: ReactiveCandidate[] = [
+        ...(menuItem.modifiers_json ?? []).map(m => ({ groupName: null, name: m.name, price_cents: m.price_cents })),
+        ...itemGroups.filter(g => !g.required).flatMap(g =>
+          g.choices.map(c => ({ groupName: g.name, name: c.name, price_cents: c.price_cents }))),
+      ];
+      for (const m of matchReactiveExtras(reactiveCandidates, customerMessage ?? "", reactiveAlreadyNamed)) {
+        if (m.groupName === null) {
+          if (!inputMods.includes(m.name)) inputMods.push(m.name);
+        } else {
+          if (!inputOptions[m.groupName]) inputOptions[m.groupName] = [];
+          if (!inputOptions[m.groupName].includes(m.name)) inputOptions[m.groupName].push(m.name);
         }
       }
 
@@ -1145,6 +1240,34 @@ async function executeTool(
           unverifiedNote = `NOTE: ${unverifiedThisCall.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection — it was saved only as an unverified customer request for the shop to confirm. Do not tell the customer it was selected/noted as a menu choice; say it will be passed along to the shop for confirmation, or ask them to choose once options are available.`;
         }
       }
+      // ── Reactive modifier/topping match (bug 4, 2026-09-07) ────────────
+      // Same gap as add_item, on the separate-turn path ("large buffalo
+      // chicken pizza" then, next turn, "add pepperoni"): catch anything
+      // customerMessage names that the LLM's modify_item call itself
+      // didn't. See reactive-modifier-match.ts / add_item's identical block.
+      {
+        const modifyItemGroups = menuItem?.option_groups || [];
+        const reactiveAlreadyNamed = new Set<string>([
+          ...newModifiers.map(m => m.toLowerCase()),
+          ...Object.values(newOptions ?? {}).flat().map(v => v.toLowerCase()),
+        ]);
+        const reactiveCandidates: ReactiveCandidate[] = [
+          ...(menuItem?.modifiers_json ?? []).map(m => ({ groupName: null, name: m.name, price_cents: m.price_cents })),
+          ...modifyItemGroups.filter(g => !g.required).flatMap(g =>
+            g.choices.map(c => ({ groupName: g.name, name: c.name, price_cents: c.price_cents }))),
+        ];
+        for (const m of matchReactiveExtras(reactiveCandidates, customerMessage ?? "", reactiveAlreadyNamed)) {
+          if (m.groupName === null) {
+            if (!newModifiers.includes(m.name)) newModifiers.push(m.name);
+          } else {
+            const merged = { ...(newOptions ?? {}) };
+            if (!merged[m.groupName]) merged[m.groupName] = [];
+            if (!merged[m.groupName].includes(m.name)) merged[m.groupName].push(m.name);
+            newOptions = merged;
+          }
+        }
+      }
+
       const invalidMods = newModifiers.filter(m => !validMods.includes(m));
       if (invalidMods.length > 0) return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}` } };
       (cart[idx] as CartItem).modifiers = newModifiers;
@@ -1652,7 +1775,7 @@ async function runOrderingLoop(
   // Item 8 (spec §7/§11 item 8) — see executeTool's matching params.
   compiledEngineEnabled?: boolean,
   shopPhone?: string | null,
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase }> {
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
 
@@ -1663,6 +1786,14 @@ async function runOrderingLoop(
 
   let checkoutUrl: string | undefined;
   let finalPhase:  OrderPhase | undefined;
+  // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason): categories where a
+  // bot_state='blocked' item was declined this turn — GUARD 15 below (in the
+  // caller, after this function returns the model's free-text reply) uses
+  // this to catch the model suggesting another blocked item from the SAME
+  // category by its own menu recall, since the tool result's own
+  // orderable_alternatives instruction (executeTool's add_item case) is a
+  // prompt-level constraint only, not a guarantee.
+  const declinedBlockedItems: Array<{ category: string; name: string }> = [];
 
   // ── Fix 1 & 2: Deterministic pre-loop guards ──────────────────────────
   //
@@ -1775,7 +1906,7 @@ async function runOrderingLoop(
     // execute pending tools; only return once the model stops calling them.
     if (toolBlocks.length === 0) {
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
-      if (reply) return { reply, checkoutUrl, finalPhase };
+      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
       const soft = cart.length > 0
         ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
@@ -1869,6 +2000,11 @@ async function runOrderingLoop(
       }
       if (result.checkoutUrl) checkoutUrl = result.checkoutUrl;
       if (result.newPhase)    finalPhase  = result.newPhase;
+      if (toolBlock.name === "add_item" && (result.result as { declined?: boolean })?.declined) {
+        const declinedId = (toolBlock.input as { menu_item_id?: string })?.menu_item_id;
+        const declinedItem = declinedId ? menu.find(m => m.id === declinedId) : undefined;
+        if (declinedItem) declinedBlockedItems.push({ category: declinedItem.category, name: declinedItem.name });
+      }
       toolResults.push({
         type:        "tool_result",
         tool_use_id: toolBlock.id!,
@@ -4949,6 +5085,7 @@ Deno.serve(async (req: Request) => {
 
   let reply: string;
   let checkoutUrl: string | undefined;
+  let declinedBlockedItems: Array<{ category: string; name: string }> = [];
   if (nameSubmitCheckoutUrl) {
     reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
     checkoutUrl = nameSubmitCheckoutUrl;
@@ -4958,6 +5095,7 @@ Deno.serve(async (req: Request) => {
       compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null,
     );
     reply = loopResult.reply;
+    declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
     // Defect 1 (2026-09-05): the model may still promise to "check with the
     // kitchen". It checks with nobody. Strip the promise, keep the answer.
     // Applied to model output only — guard-authored replies below are exempt.
@@ -5583,6 +5721,129 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 15 (2026-09-07, Jason): declined item's reply suggests another
+  // BLOCKED item from the same category ────────────────────────────────────
+  // "double burger" -> honest decline, correct — then the reply suggested
+  // Burger/Cheese Burger/Zio's Deluxe Burger/Mamma Mia Burger/BBQ Cheese
+  // Burger, every one of them bot_state='blocked' too (the whole Burgers
+  // category was gated on one pending owner question). executeTool's add_item
+  // case now hands the model a real orderable_alternatives list plus an
+  // explicit "use only this list" instruction, but that is a prompt-level
+  // constraint, not a guarantee — same reasoning as every other guard in this
+  // file (GUARD 8, 12: the model's own recall of the ~17k-token system
+  // prompt is not reliable enough to trust unchecked). General pattern, not
+  // Burgers-specific: whenever ANY item was declined this turn for being
+  // unorderable, a same-category item name that is ALSO bot_state='blocked'
+  // has no business being offered as an alternative — cart_json/bot_state is
+  // the source of truth for what's orderable, never the model's sentence.
+  // Append-only, same as GUARD 12 — never surgically edits the model's own
+  // text.
+  if (declinedBlockedItems.length > 0) {
+    const declinedNames15 = new Set(declinedBlockedItems.map(d => d.name.toLowerCase()));
+    const declinedCategories15 = [...new Set(declinedBlockedItems.map(d => d.category))];
+    // Greedy longest-name-first match+consume, same shape as duplicatedNames/
+    // menuStr's own collision handling elsewhere in this file: many items in
+    // one category share a trailing word ("Burger" is a suffix of "Double
+    // Burger", "Cheese Burger", every burger on the menu), so a naive
+    // per-name \b regex over the RAW reply flags "Burger" every time the
+    // reply merely names "Double Burger" (the item honestly being declined)
+    // or "Veggie Burger" (a real, orderable alternative) — neither is a false
+    // suggestion. Consuming the longest names first (declined or not, any
+    // bot_state) removes their text span before the shorter generic name is
+    // ever tested, so only a genuinely SEPARATE mention of the shorter name
+    // survives to be checked.
+    const categoryItems15 = declinedCategories15
+      .flatMap(category => effectiveMenu.filter(m => m.category === category))
+      .sort((a, b) => b.name.length - a.name.length);
+    const flaggedNames15 = new Set<string>();
+    let working15 = reply.toLowerCase();
+    for (const itemC of categoryItems15) {
+      const nameRe = new RegExp(`\\b${itemC.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+      if (!nameRe.test(working15)) continue;
+      if (itemC.bot_state === "blocked" && !declinedNames15.has(itemC.name.toLowerCase())) flaggedNames15.add(itemC.name);
+      working15 = working15.replace(nameRe, " ");
+    }
+    if (flaggedNames15.size > 0) {
+      console.warn(`[chat-sms] GUARD 15 (blocked item suggested as alternative) tripped (conv=${conversation.id}). Flagged: ${[...flaggedNames15].join(", ")}`);
+      const orderableSiblings = declinedCategories15.flatMap(category =>
+        effectiveMenu.filter(m => m.category === category && m.bot_state === "orderable").map(m => m.name),
+      );
+      reply = orderableSiblings.length > 0
+        ? `${reply} Correction — those aren't actually available to order by text right now either. What IS available in that category: ${[...new Set(orderableSiblings)].join(", ")}.`
+        : `${reply} Correction — none of those are actually available to order by text right now; the shop can help with that one directly.`;
+    }
+  }
+
+  // ── Guard 16 (2026-09-07, Jason: BUG 4 part b): compiled-path modifier
+  // falsely confirmed in reply ──────────────────────────────────────────────
+  // Counterpart to GUARD 12 for compiled-path items. GUARD 12 uses
+  // option_groups (absent for compiled items) to find unselected choices and
+  // flags any that the model claims in its reply. Compiled items store
+  // selections in ask_plan_selections instead, so GUARD 12 silently skips
+  // them. This guard fills that gap: for any compiled item touched this turn,
+  // if the reply names a real modifier choice from the item's ask_plan but
+  // that choice is NOT in ask_plan_selections, the claim is false — append
+  // a correction and track it as unverified_requests (same convention as
+  // GUARD 12/15, append-only, never surgically edits the model's sentence).
+  {
+    const beforeById16 = new Map(
+      cartSnapshotBeforeTurn
+        .filter(i => (i as CartItem).menu_item_id)
+        .map(i => [(i as CartItem).menu_item_id, i as CartItem]),
+    );
+    const touchedCompiled16 = guardCart.filter(i => {
+      const ci = i as CartItem;
+      if (!ci.menu_item_id || !ci.ask_plan_selections) return false;
+      const before = beforeById16.get(ci.menu_item_id);
+      return !before?.ask_plan_selections ||
+        JSON.stringify(before.ask_plan_selections) !== JSON.stringify(ci.ask_plan_selections);
+    }) as CartItem[];
+
+    const flagged16: Array<{ item: CartItem; choiceName: string }> = [];
+    for (const ci of touchedCompiled16) {
+      const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
+      if (!menuItem?.ask_plan) continue;
+      const confirmedDisplays16 = new Set<string>();
+      const allModifierDisplays16: string[] = [];
+      for (const step of menuItem.ask_plan.steps) {
+        if (step.kind !== "modifier") continue;
+        for (const c of step.choices) allModifierDisplays16.push(c.display);
+        const choiceId = ci.ask_plan_selections![step.group_id];
+        if (!choiceId) continue;
+        const choice = step.choices.find(c => c.id === choiceId);
+        if (choice) confirmedDisplays16.add(choice.display.toLowerCase());
+      }
+      if (allModifierDisplays16.length === 0) continue;
+      // Strip the item's display name AS A PHRASE (not word-by-word) so
+      // naming the item itself doesn't read as confirming a modifier choice
+      // that shares a word with the item name (e.g. "Grilled Chicken" topping
+      // on "Buffalo Chicken Pizza" — stripping "chicken" individually would
+      // destroy the modifier's own name; stripping the full phrase "buffalo
+      // chicken pizza" leaves "grilled chicken" detectable).
+      let replyLower16 = reply.toLowerCase();
+      const dn16 = menuItem.ask_plan.display_name.toLowerCase();
+      replyLower16 = replyLower16.replace(
+        new RegExp(`\\b${dn16.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+      if (!/\b(?:got it|note[ds]?|add(?:ed|ing)?|noting|i['']ll|with)\b/i.test(replyLower16)) continue;
+      for (const displayName of allModifierDisplays16) {
+        if (confirmedDisplays16.has(displayName.toLowerCase())) continue;
+        const nameRe = new RegExp(
+          `\\b${displayName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+        if (nameRe.test(replyLower16)) flagged16.push({ item: ci, choiceName: displayName });
+      }
+    }
+    if (flagged16.length > 0) {
+      for (const { item, choiceName } of flagged16) {
+        const existing = item.unverified_requests ?? [];
+        if (!existing.includes(choiceName)) item.unverified_requests = [...existing, choiceName];
+      }
+      console.warn(`[chat-sms] GUARD 16 (compiled modifier falsely confirmed) tripped (conv=${conversation.id}). Flagged: ${flagged16.map(f => `${f.item.name}:${f.choiceName}`).join(", ")}`);
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      const asksText16 = [...new Set(flagged16.map(f => f.choiceName))].join(", ");
+      reply = `${reply} Just to be clear — I couldn't confirm "${asksText16}" as an option here, so it isn't priced or on the order yet; I've flagged it for the shop.`;
+    }
+  }
+
   // ── Guard 8: pending-options reply doesn't name the actual choices ──────
   // add_item is 100% ID-based and correctly stores pending_options + the full
   // choice list in effectiveMenu/the system prompt — but surfacing "what
@@ -5680,6 +5941,23 @@ Deno.serve(async (req: Request) => {
         if (JSON.stringify(beforeChosen ?? null) === JSON.stringify(chosen)) continue; // resolved on an earlier turn — already vetted then
         const defaultChoice = group.choices.find(c => c.is_default && c.price_cents === 0);
         if (defaultChoice && chosen.length === 1 && chosen[0] === defaultChoice.name) continue; // our own deterministic default-fill
+        // SOLE-CHOICE GUARD (2026-09-07, found live-testing the stated-
+        // provenance gate fix against Zio's real menu data): a required
+        // group with exactly ONE active choice can never have an "invented"
+        // selection — there is nothing else it could ever resolve to, so
+        // applying it is a fact, not a decision (same reasoning as the
+        // compiled engine's auto_single ask_mode, spec §2.2). Before this,
+        // any single-choice group whose sole choice wasn't ALSO flagged
+        // is_default (common on Slice-imported data, e.g. Zio's "Choose an
+        // option" -> "Regular") got reverted to pending here, so a newly-
+        // orderable item like Cheese Burger got stuck re-asking "what option
+        // would you like?" forever with no second option to offer. Reached
+        // for the first time only once the provenance gate stopped
+        // menu-wide-blocking these items — not a compiled-path-only fix:
+        // any required single-choice group on the legacy path had the exact
+        // same latent bug, just never exercised because no legacy item with
+        // a non-default sole choice had reached this guard live yet.
+        if (group.choices.length === 1 && chosen.length === 1 && chosen[0] === group.choices[0].name) continue;
         // BUG (2026-09-07, found while live-testing GUARD 11 against Zio's):
         // this was a literal substring check against the FULL choice name
         // ("large 18''"), which a customer never types verbatim ("large").
