@@ -2332,3 +2332,151 @@ tracked blockers from last night's queue, not caused by this write; all 7
 other invariants pass. Turkey Sub confirmed orderable, size step now
 carries slot_key="size", prompt_template="size.ask", real choices Medium
 12'' / Large 16'' +$8.00.
+
+DOUBLE BURGER INVESTIGATION (task step 6, diagnose only, not fixed):
+Independently re-verified BOTH sides right now (2026-09-08 ~10:50 UTC), not
+from last night's cache:
+  - Slice source: fresh WebFetch of the real live Zio's Slice menu
+    (slicelife.com/restaurants/pa/allentown/18104/zio-s-pizza-allentown/menu)
+    just now. Burgers section has exactly 5 items (Burger $9.99, Cheeseburger
+    $10.99, BBQ Cheeseburger $10.99, Mama Mia Burger $10.99, Zio's Deluxe
+    Burger $10.99). Zero occurrences of "double" anywhere on the page.
+    CONFIRMED genuinely absent from Slice, independently, right now.
+  - Live compiled bot_state_reason (menu_items row be5b49d5-...): "slot temp
+    pending owner question: Do customers pick a temperature on Burgers?" --
+    this is real and current, from the compile I just ran.
+Reconciling both: the "absent from Slice" fact and the "temp pending" reason
+are not actually in conflict -- they answer different questions. The
+compiler's OWN stale/missing-item tracking (BotState "stale",
+`item.missing_from_source_since`, compile-menu.ts:368-373) is not wired to
+live data at all right now: the `menu_items` table has no
+`missing_from_source_since` column (confirmed: querying it returns Postgres
+error 42703, column does not exist), and compile-menu/index.ts's own
+menu_items SELECT (line 246) doesn't request it either. So that branch is
+dead code against real data today -- it can never fire, for ANY item, absent
+or not. Double Burger stays `active=true`, `source="manual"` (hand-entered,
+not Slice-imported, no source_span), and gets swept into the Burgers
+category's pending-temp-question block along with every other active Burger,
+same as any real item would be.
+ANSWER for the PO: the item is genuinely unsellable (not on Slice, no
+sourcing evidence it's real inventory) and the "temp pending owner question"
+block is exactly the noise the PO suspected -- answering that owner question
+would flip this specific item to orderable despite it not being real,
+sellable inventory. The two reasons aren't a data race, they're two
+different, both-true facts: real Slice-absence (never tracked/enforced,
+because the tracking column+query don't exist yet) sitting underneath an
+unrelated category-level block (temp) that happens to also cover it. Not
+fixed here per the task's own instruction -- diagnosis only.
+
+GYRO/CHICKEN GYRO: left untouched, confirmed by scope -- no writes were made
+to any Baskets & Gyros item, group, or owner_question this session. Still
+blocked on "bread on Baskets & Gyros" pending owner question, per Jason's
+explicit instruction to leave this for him directly.
+
+COMMIT: fa098f6, pushed to origin/main. Included (all required for
+correctness, not just the named 4): BLOCKED.txt, category-coverage.ts,
+ask-plan-engine.ts + its test (mine), guard16 test (named), index.ts
+(named), reactive-modifier-match.ts + its test (UNTRACKED but a hard
+`import` dependency of index.ts -- confirmed via grep both files reference
+each other; without it, main's index.ts would have a broken import even
+though production runs fine since Deno bundles the local untracked file at
+deploy time regardless of git status), and the 118_..._flag.down.sql
+migrations->migrations-down rename (byte-identical content diff, confirmed,
+completing an already-started reorg -- migrations-down/ already held
+120_....down.sql).
+Left OUT, deliberately, not this task's scope: supabase/.temp/*-version
+(local Supabase CLI cache, not source), scripts/tmp-item-K-*
+(unrelated prior-thread scratch files), scripts/tmp-zio-option-groups-
+before-2026-09-08.json (last night's "Choose an option" thread's own
+leftover snapshot), guard10-sole-choice-20260907.test.ts,
+guard10-unconsented-option-selection.ts (confirmed via grep: not imported
+by index.ts or any test, orphaned/unwired), guard12-false-modifier-claim-
+20260907.test.ts, guard15-blocked-alternative-suggestion-20260907.test.ts
+-- all from an earlier (9/6-9/7) work thread, not required for index.ts to
+build, not named by this dispatch. Verified via `deno check` that index.ts
+has exactly the same 4 pre-existing type errors with vs without my changes
+(confirmed via `git stash` on just the 2 files I edited) -- nothing I
+touched introduced or hid a type error.
+
+LIVE VERIFICATION -- BLOCKED BY REAL SHOP HOURS, not a shortcut taken:
+Deployed chat-sms (includes this fix) and ran the 5x "turkey sub" battery
+against the live production endpoint (POST shop_id+message+session_id to
+$SUPABASE_URL/functions/v1/chat-sms, channel=web, no test flag -- genuinely
+production, no synthetic signal). All 5 runs, fresh session_id each,
+2026-09-08 ~10:38-10:41 UTC:
+
+  Run 1-5 (byte-identical): "Hey! The kitchen is closed right now. Today's
+  hours are 10 a.m.-10 p.m.. Come back during business hours - you'll be
+  happy you did!"
+
+Real reason, verified against the shops row directly: open_hours = 10:00-
+22:00 America/New_York, current time 06:38-06:41 EDT -- Zio's is genuinely
+closed right now (opens in ~3h20m). This is NOT a bug and NOT something I
+routed around: the code's own test-mode bypass (`body.test`/`test_hours`)
+is hard-gated off on any live service-role key per index.ts's own comment
+("HARD-GATE: test mode is FORBIDDEN when the Supabase key is live") and
+per this project's standing rule against manufacturing the signal under
+test, I did not attempt to force it. Same real constraint applies to the
+Vito's regression (step 5) -- Vito's opens 11:00 America/New_York, also
+currently closed.
+
+The compiled-data-level verification IS complete and real (not blocked by
+hours): live compile-menu invoke confirms Turkey Sub's size step now
+carries slot_key="size", prompt_template="size.ask", and the unit tests
+(including 2 new regression tests reproducing the exact drift) pass against
+the real renderStepQuestion function, 636/636. What's NOT yet verified is
+the full live SMS conversational flow end-to-end through the LLM turn.
+
+REMAINING FOR WHOEVER PICKS THIS UP AFTER 10:00/11:00 ET TODAY (2026-09-08):
+  Turkey sub x5 (Zio's, opens 10:00 ET):
+    for i in 1 2 3 4 5; do curl -s -X POST "$SUPABASE_URL/functions/v1/chat-sms" \
+      -H "Content-Type: application/json" \
+      -d "{\"shop_id\":\"2cba7b51-211c-4437-8910-1af4dcc03498\",\"session_id\":\"$(uuidgen)\",\"message\":\"turkey sub\"}"; done
+  Expect the Appendix C size.ask template, identical wording all 5 runs:
+    "What size Turkey Sub? Medium 12'' (no extra charge) or Large 16'' +$8.00."
+  Vito's regression (opens 11:00 ET), same shop_id e0000000-0000-0000-0000-
+  000000000001, one session: "cheeseburger" -> "medium" -> "thats it". Expect
+  byte-identical to established baseline: one line "Temp: Medium", $8.49 +
+  $0.99 = $9.48. Vito's compiled_ordering_engine_enabled reconfirmed false
+  right now (2026-09-08 ~10:50 UTC), untouched this session.
+
+Handing to Melvin now for independent adversarial verification of everything
+that COULD be verified today (slot_key mapping vs Appendix C, the
+authoritative-field refactor, the commit's completeness/correctness, Double
+Burger diagnosis) -- the two live-hours-gated batteries above are flagged
+as the one open item, not silently treated as done.
+
+MELVIN VERDICT (independent adversarial verification, fresh agent, no
+context from this thread beyond commit SHA + claims to check): all 6 items
+CONFIRMED by re-deriving each claim from the live code/DB/tests directly,
+not from this session's word:
+  1. Authoritative-field fix -- confirmed no other site in chat-sms/*.ts or
+     _shared/*.ts decides which question template to render off raw
+     slot_key anymore.
+  2. Both new regression tests confirmed non-vacuous (build a real
+     null-slot_key + populated-prompt_template CompiledStep and assert the
+     Appendix C output).
+  3. Zio's counts confirmed exact (78/60/51/305) by an independent live
+     query; 5 groups spot-checked semantically correct; Turkey Sub's own
+     Size group independently confirmed slot_key="size".
+     ONE NON-BLOCKING GAP SURFACED: the 51 "toppings" groups (kind=modifier)
+     have no TEMPLATE_QUESTIONS["toppings"] entry even though Appendix C
+     defines toppings.offer_once -- currently dead/harmless since offer_once
+     proactive-ask isn't built yet (documented existing follow-up, not
+     something this task introduced), but flagged for whoever builds
+     offer_once next.
+  4. Vito's/NJB confirmed untouched -- Vito's 223 groups all pre-dating
+     today, NJB has zero option_groups rows at all (verified directly by
+     menu_item_id, not just the join filter). Flag states reconfirmed
+     Zio's=true/Vito's=false/NJB=false.
+  5. Commit fa098f6 confirmed = HEAD = origin/main; the 4 deno check errors
+     confirmed to sit in code this commit's diff never touched (grep'd for
+     the exact symbol names in the diff, zero hits).
+  6. Double Burger diagnosis independently re-confirmed both sides (DB row
+     state + live Slice fetch).
+
+This closes everything for today except the two live-hours-gated batteries
+(turkey sub x5, Vito's regression) -- both genuinely blocked by real
+business hours (Zio's opens 10:00 ET, Vito's 11:00 ET), commands to re-run
+them are above. Not treating this as fully done; treating it as done except
+for that one flagged, time-gated remainder.
