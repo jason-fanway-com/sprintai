@@ -3761,3 +3761,138 @@ and-fold approach and its ~310-320 net active-item estimate, (2) the NJB
 dozen-vs-size judgment call, (3) whether to build the shared size-fold.ts
 helper now or scope it to Zio's only for a first pass.
 
+
+================================================================================
+2026-09-08 17:04 UTC — P0 FIXED AND DEPLOYED: Zio's real-money cart-invention
+bug (RESET didn't clear conversation history). Cross-tenant compliance check
+run and CLEAN for this incident, but a real independent tenant-isolation gap
+was found and closed while investigating. Live 10x battery + Vito's
+regression both pass on deployed version 295.
+================================================================================
+
+INCIDENT (witnessed live by Jason, Zio's Test Kitchen, 2026-09-08 16:27-16:30
+UTC): "reset" -> "Session reset..." -> "I want four large pizzas" (zero types
+named) -> bot silently added pepperoni, plain cheese, Hawaiian, and meat
+lovers pizzas, $89.95 total. Asked why, bot replied "Cart is cleared - fresh
+start" -- false, the cart had just been filled. If confirmed, customer pays
+for pizzas never chosen.
+
+ROOT CAUSE #1 (RESET), confirmed by reading code, not inferred: the RESET
+handler (index.ts, was ~4445) only ever updated order_carts.phase='expired'.
+It never touched the conversations row or any messages row. Every turn's LLM
+context is built from the last 40 `messages` rows filtered ONLY by
+conversation_id (index.ts ~4682, no reset-boundary cutoff whatsoever), so
+everything said before a reset is still in the model's context after it.
+
+CONFIRMED AGAINST REAL DB ROWS (not just code-read): pulled the actual
+`messages` for this incident's conversation_id (b3dc366c-5e8a-...). The
+customer said "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" at 11:38 UTC in
+THIS SAME conversation, texted "reset" at 14:44 UTC (same conversation_id,
+same tenant, same session -- reset does not start a new conversation), then
+"I want four large pizzas" at 16:27 UTC pulled those exact four types back
+out of the ~5-hour-old history. This is entirely a same-conversation,
+same-tenant, same-customer staleness bug -- see cross-tenant check below for
+why it is NOT the cross-tenant gap also found during this investigation.
+
+FIX #1 (shipped): RESET now also sets conversations.status='resolved' on the
+current conversation (index.ts RESET handler). Every conversation-lookup
+query in this file (SMS: tenant_id+customer_phone+status='active'; web:
+session_id+channel+status='active') only returns ACTIVE conversations, so
+the very next message from this customer fails to find the resolved one and
+takes the existing isFirstMessage path to create a brand-new conversation
+row -- zero messages, so history load is genuinely empty. Nothing is
+deleted; the old conversation and its messages remain for audit.
+
+CROSS-SESSION / CROSS-TENANT LEAK CHECK (mandatory per task, logged
+regardless of outcome):
+  - Same-tester, cross-session (already demonstrated by the incident itself):
+    CONFIRMED possible before FIX #1 -- a reset did not sever the
+    conversation, so a later session-equivalent turn on the SAME
+    conversation_id inherited earlier state. FIX #1 closes this by ending
+    the conversation on reset.
+  - Cross-tester / cross-tenant for THIS incident specifically: CLEAN.
+    Confirmed via the actual `messages` rows -- every row in the incident's
+    transcript shares one conversation_id and one tenant_id (Zio's) start to
+    finish. No evidence of a different customer's or a different shop's data
+    appearing.
+  - Cross-TENANT as a GENERAL, independently reachable gap (not tied to this
+    incident): FOUND AND FIXED. The web channel's active-conversation lookup
+    (index.ts ~4322) was scoped only by session_id + channel + status +
+    24h window -- NOT by tenant_id/shop_id. shop_id and session_id are two
+    independent, client-supplied fields in the request body with no
+    server-side binding between them. Any client sending the same session_id
+    against a different shop_id (a shared widget, a buggy integration, a
+    test harness reusing a fixed session_id, the web:imsg-* bridge) would
+    have gotten back a DIFFERENT TENANT'S conversation row, and transitively
+    its full message history and cart. chat-sms runs on
+    SUPABASE_SERVICE_ROLE_KEY, so Postgres RLS provides zero protection here.
+    The SMS branch and the lifetime-first-contact check a few lines below
+    already correctly scope by tenant_id -- this looks like an oversight,
+    not a design choice. FIXED: added `.eq("tenant_id", shop.tenant_id)` to
+    the web lookup query, matching the SMS branch's existing pattern.
+  - VERDICT: no cross-tenant leakage occurred in this incident, but a real
+    cross-tenant vulnerability existed independently and is now closed. Per
+    the hard tenant-isolation rule this is logged explicitly rather than
+    folded into a "fixed the bug" summary.
+
+BROADER "invent-rather-than-ask" GUARD -- ATTEMPTED, PULLED, NOT SHIPPED:
+Built GUARD 18 (guard18-zero-grounding-item-invention.ts) as an
+independent-of-reset backstop: revert any brand-new cart line whose name
+isn't grounded anywhere in the customer's current message. Two live
+regressions found in testing before it would have shipped:
+  1. "cheeseburger" (no space) vs registered menu key "cheese burger" (real
+     item "Cheese Burger") -- exact substring match missed it, guard
+     reverted an ordinary order. Fixed with a whitespace/punctuation-
+     insensitive second signal (compactForGrounding).
+  2. FATAL, not fixed: "I want a large pepperoni pizza" on Zio's also got
+     reverted. Zio's pizzas are a base item + Toppings OPTION GROUP --
+     "pepperoni" resolves to selecting the "Pepperoni" choice on a base item
+     literally named e.g. "Neapolitan Cheese Pizza"; the cart line's own
+     `name` never contains "pepperoni", so no name-only grounding check can
+     ever see it. This is Zio's PRIMARY ordering path, not an edge case.
+Guard pulled from index.ts's wiring before deploy. Module + tests kept,
+UNWIRED, as a pinned starting point (test file documents both regressions,
+including one pinned RED on purpose). Do not re-wire without a rework that
+grounds against resolved options/modifiers, not just the base item name.
+
+VITO'S NAME-ASK COPY FIX (Jason's note: "don't list the whole order when
+asking for the name"): INTENTIONALLY NOT DONE. Read the code
+(index.ts ~7181-7191) -- the itemized recap at the name-ask moment is not
+incidental, it's a deliberate 2026-09-06 fix (Jason's own) for a real
+double-charge bug (Luca's $37 error, caught only because he happened to read
+a number). Removing it would reopen that exact bug class. This is a genuine
+conflict between two of Jason's own asks, not a "low-risk, just do it" case
+per the task's own conditional -- flagging for an explicit call rather than
+guessing which one wins.
+
+VERIFICATION:
+  - deno test (chat-sms dir): 512 passed, 0 failed (503 pre-existing + 9 new
+    GUARD 18 unit tests, kept even though the guard is unwired).
+  - deno check: same 4 pre-existing type errors as main, unrelated to this
+    change (delivery_radius_mi nullability, OrderPhase cast) -- confirmed via
+    git stash diff, not introduced here.
+  - Deployed chat-sms to production 3x during this session while iterating
+    on GUARD 18 (v293 -> v294 -> v295 FINAL, the one now live). v295 has the
+    RESET fix + tenant fix, GUARD 18 unwired.
+  - Live 10x acceptance battery against production Zio's (fresh session_id
+    each run): reset -> "I want four large pizzas" -> 10/10 runs ask which
+    pizzas, ZERO items silently added, cart empty every time. Full
+    transcripts captured, available on request (not pasted here to keep this
+    entry readable -- see /tmp/zios_battery_results.json from this session,
+    or rerun the same battery to reconfirm).
+  - Vito's regression (cheeseburger/medium/thats it) re-run on v295: $9.48
+    total, matches expected baseline exactly, name-ask recap still shows
+    (untouched, as intended).
+  - "I want a large pepperoni pizza" on fresh Zio's session, v295: correctly
+    resolves to Neapolitan Cheese Pizza + Pepperoni topping, $21.98 -- this
+    is the exact case GUARD 18 broke; confirmed fixed by pulling it.
+
+Commit: b865d3a (fix(chat-sms): P0 Zio's real-money — RESET didn't clear
+conversation history, cross-tenant scoping gap on web channel). NOT pushed
+to origin (repo already had 1 unpushed commit from the parallel item-8
+thread when this session started; leaving push to PO discretion, same as
+that convention). Melvin QA hand-off: pending, requested to adversarially
+attempt cross-session/cross-tenant leakage with deliberately colliding
+session_id values across two different shop_ids on the web channel, to
+independently verify the tenant-isolation fix actually closes the gap
+described above.
