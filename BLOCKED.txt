@@ -1814,3 +1814,64 @@ Committed 9fcb7ed, pushed to main. Test data (6 synthetic web-channel
 sessions against NJB, session_ids prefixed "web-test:guard17-") created
 during verification, all confirmed deleted (conversations + order_carts)
 after use — NJB's live tables are clean.
+
+[ITEM 3 follow-up #6 — self-contradiction ordering fix, per Jason's exact
+diagnosis. Real architecture change, not a text tweak. Deployed live,
+verified twice independently. One new, real, unfixed gap surfaced and
+flagged prominently below — needs a decision, not silently absorbed.]
+2026-09-08 ~04:00 UTC — Not blocked. Fixed the self-contradiction exactly
+as diagnosed: this was an ordering problem (claim composed, then corrected
+after the fact), not a wording problem.
+
+THE FIX: `zero-option-attribute-hint.ts` (new module) runs BEFORE the
+model's first call of the turn, not after. If the customer's message uses
+change language and the cart already has a zero-option item, the model
+gets an explicit heads-up in ITS OWN system prompt for that turn — it may
+call set_note to record the preference, but must give ONE honest, coherent
+reply, never claim the item itself changed. This is genuinely different
+from GUARD 17 (which only ever runs after composition and can only
+append a correction) — it's prevention, not a smarter correction.
+
+GUARD 17 v6 (found live-verifying the fix above, same session): the hint
+successfully steers the model to an honest denial ("I can't officially
+change the bagel type on that one, but I've noted everything bagel for the
+kitchen") — but GUARD 17 didn't recognize this as honest (it still has a
+change-verb + foreign descriptor, the exact shape it was built to catch)
+and appended its OWN correction onto an ALREADY-honest reply — recreating
+the self-contradiction on a message that never needed fixing. Fixed with a
+same-sentence negation check ("can't"/"unable"/"won't" before the
+change-verb means denial, not claim) — same principle as this codebase's
+own invented-action-guard.ts.
+
+VERIFIED: 5 live repeated repros against the real deployed endpoint
+(isolated synthetic sessions, real NJB data, cleaned up after each run) —
+every single one produced ONE coherent message, no claim-then-retraction.
+Independently re-verified by a fresh reviewer: traced the negation logic
+by hand against the original bug (still caught, not regressed) and a
+cross-sentence case (negation doesn't leak across sentences to shield a
+real claim), ran 3 more of their own live repros (also clean, no
+self-contradiction), confirmed 27 new/updated tests pass and the full
+418-test chat-sms suite is green.
+
+*** NEW FINDING, real, reproducible, NOT fixed — flagging prominently, not
+footnoting it *** — both my own live runs and the independent reviewer's
+separately reproduced this: in roughly 1 in 3 turns, the reply says "I've
+noted X for the kitchen" but `order_carts.notes` is either stale (unchanged
+from before) or was never written at all — confirmed via direct DB query
+against real NJB conversations, not inferred from the API response. This
+is the SAME claim-vs-state honesty pattern as the original bug, just in the
+notes field instead of the cart line — and the independent reviewer's own
+assessment: "functionally worse in the kitchen-facing sense: a lost
+bagel-type note has real operational impact (kitchen makes the wrong item)
+even though the reply itself is not self-contradictory." Their
+recommendation: "should-fix-soon follow-up... a genuine, reproducible
+data-integrity gap worth its own guard/fix, not just a footnote." I agree
+and did NOT build a fix for it in this pass — it wasn't part of what was
+asked this turn, and it deserves its own scoped task rather than a rushed
+addition here. Needs your decision on priority: this can silently cost a
+real NJB customer their stated prep preference with the bot actively
+telling them it was recorded.
+
+Committed 4a65802, pushed to main. Test data (10 synthetic web-channel
+sessions across both my own and the independent reviewer's verification
+runs) all confirmed deleted from NJB's live tables after use.
