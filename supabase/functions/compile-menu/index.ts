@@ -68,7 +68,7 @@ import {
 } from "../_shared/compile-menu.ts";
 import type { ExtractedGroup, OwnerQuestionDraft } from "../_shared/archetypes.ts";
 import { itemEntityKey, groupEntityKey, choiceEntityKey } from "../_shared/menu-entity-key.ts";
-import { normalizeMenuItems, type RawMenuItemRow } from "../_shared/normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "../_shared/normalize.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -324,7 +324,7 @@ Deno.serve(async (req: Request) => {
   const inferSourceItems: InferSourceItem[] = itemRows.map(row => {
     const normalized = normalizedById.get(row.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
-    const descriptionSlot = normalized?.slots.find(s => s.source === "description");
+    const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
     const extractedGroups: ExtractedGroup[] = (groupsByItem.get(row.id) ?? []).map(g => ({
       name: g.name,
       required: g.kind === "slot",
@@ -486,6 +486,14 @@ Deno.serve(async (req: Request) => {
     blocking: q.blocking,
     status: q.status as PendingQuestion["status"],
     question_text: q.question_text,
+    // See PendingQuestion.exclusions' own comment (compile-menu.ts): without
+    // this, findBlockingQuestion's category-scope match has no way to know
+    // which items in the category the gate already resolved via a real
+    // stated-provenance group, and blanket-blocks the whole category on one
+    // item's genuine gap.
+    exclusions: Array.isArray((q.proposal as { exclusions?: unknown } | null)?.exclusions)
+      ? (q.proposal as { exclusions: string[] }).exclusions
+      : [],
   }));
 
   const acknowledgedDisplayOnly =

@@ -41,6 +41,28 @@ export interface NormalizedSlot {
   slot_key: "choice";
   source: "name" | "description";
   choices: NormalizedSlotChoice[];
+  // Set only for a description-sourced slot extracted from "choice of X (A,
+  // B, ...)" — X is the named sub-attribute the parenthetical answers
+  // ("meat", "cheese"), lowercased. Unset for a bare enumeration ("choice
+  // of bagel, bread, or roll") and for name-sourced slots. Real NJB text
+  // states both shapes in the SAME description ("Choice of meat (Bacon,
+  // Ham, Sausage, or Pork Roll) on choice of bagel, bread, or roll.") —
+  // `label` is how a caller picks the bare-enumeration slot over the named
+  // sub-clause when more than one description-sourced slot exists on an
+  // item (see pickDescriptionSlot below).
+  label?: string;
+}
+
+// A "choice of N <thing>" clause ("choice of three veggies", "choice of 1
+// meat, 1 cheese & 2 vegetables") describes a bounded-pick MODIFIER, not a
+// slot — the customer can add up to N of a kind, not pick exactly one from
+// a stated list (there is no list; the count is the only thing stated).
+// `slot_key` is a syntactic guess (singularized, lowercased noun from the
+// clause) for a human to confirm/rename, not a real archetype slot_key.
+export interface NormalizedModifier {
+  slot_key: string;
+  max_select: number;
+  source_span: string;
 }
 
 export interface NormalizedMenuItem {
@@ -52,6 +74,20 @@ export interface NormalizedMenuItem {
   product_key: string;
   display_name: string;
   slots: NormalizedSlot[];
+  modifiers: NormalizedModifier[];
+}
+
+// Picks the description-sourced slot a caller should treat as THIS item's
+// stated answer for a bare-enumeration archetype slot (bread/toast/...).
+// Prefers an unlabeled clause (a direct "choice of A, B, or C" list) over a
+// labeled one (a named sub-clause like "choice of meat (...)") — every
+// current archetype slot that reads from the description wants the bare
+// enumeration, never a named sub-attribute the archetype library doesn't
+// model yet. Falls back to the first (only) slot when none is unlabeled, or
+// to name-sourced choices from name-slotted items — unaffected either way.
+export function pickDescriptionSlot(item: NormalizedMenuItem): NormalizedSlot | undefined {
+  const descriptionSlots = item.slots.filter(s => s.source === "description");
+  return descriptionSlots.find(s => !s.label) ?? descriptionSlots[0];
 }
 
 function titleCaseWord(word: string): string {
@@ -154,36 +190,129 @@ function extractOrClauseFromName(name: string): { strippedName: string; choices:
 // pasta, garlic knots, side salad" — real Vito's text where the three
 // things are all included, not alternatives to pick one of.
 //
-// A second, higher-priority pattern: ANY parenthetical list of 2+
-// comma-separated items in the description is its own unambiguous
-// structural signal, whether or not "choice of" or a trailing "or" is
-// present — real NJB text has both variants: "choice of flavored cream
-// cheese (Walnut Raisin, Scallion, ..., Chocolate Chip)" AND, on a
-// differently-worded item selling the same flavors on their own, "Flavored
-// homemade cream cheese spread (Walnut Raisin, Scallion, ..., Chocolate
-// Chip), sold by the pound" — no "choice of" at all. A parenthetical
-// enumeration is a stronger, more general signal than either keyword, so
-// this isn't anchored to "choice of" the way the plain-clause fallback
-// below has to be. Checked first; both rules coexist. Swept both NJB and
-// Zio's full menus for this exact shape (any description parenthetical
-// with 2+ comma items) before generalizing this way — every real instance
-// found across both menus was a genuine choice list, none were an
-// unrelated aside (e.g. an allergen note) that this would wrongly capture.
-function extractChoiceOfFromDescription(description: string | null): { choices: string[] } {
-  if (!description) return { choices: [] };
+// A description can state MORE THAN ONE "choice of" clause (real NJB:
+// "Choice of meat (Bacon, Ham, Sausage, or Pork Roll) on choice of bagel,
+// bread, or roll." and "Omelette with choice of meat (...). Served with ...
+// and choice of bagel or toast.") — each "choice of" is its own anchor;
+// the clause it introduces runs until the NEXT anchor or a sentence
+// boundary (./;), whichever comes first, with a trailing "on"/"and"
+// connector stripped. Every real two-clause item found sweeping NJB's full
+// menu follows this shape; Vito's and Zio's have zero such items (checked
+// against live data), so this only ever activates on NJB text today.
+//
+// Within one clause, two independent shapes both produce a slot:
+//  1. A parenthetical list right after an optional named label ("meat (A,
+//     B, or C)", or no label at all — "(A, B, ..., Z)"). This is checked
+//     first: a parenthetical enumeration is a stronger, more general
+//     signal than the trailing-"or" requirement below, and real NJB text
+//     has bare-parenthetical items with NO "choice of" anchor at all
+//     ("Flavored homemade cream cheese spread (Walnut Raisin, ...), sold
+//     by the pound") — handled by the anchor-less fallback at the bottom
+//     of this function, since there's nothing to anchor a clause to.
+//  2. A bare "A, B or C" / "A or B" list with no parens, gated on `\bor\b`
+//     the same way as the single-clause version historically was.
+// A clause matching neither is handed to extractModifiersFromClause — a
+// "choice of N <thing>" quantity has no list to become a slot from, but is
+// real structured data (see NormalizedModifier), not a discard.
+function extractDescriptionClauses(description: string | null): {
+  slots: { choices: string[]; label?: string }[];
+  modifiers: NormalizedModifier[];
+} {
+  const slots: { choices: string[]; label?: string }[] = [];
+  const modifiers: NormalizedModifier[] = [];
+  if (!description) return { slots, modifiers };
 
-  const parenMatch = description.match(/\(([^()]+)\)/);
-  if (parenMatch) {
-    const parenChoices = splitOrList(parenMatch[1]).map(titleCase);
-    if (parenChoices.length >= 2) return { choices: parenChoices };
+  const anchorRe = /choice of\s+/gi;
+  const anchorStarts: number[] = [];
+  const contentStarts: number[] = [];
+  let anchorMatch: RegExpExecArray | null;
+  while ((anchorMatch = anchorRe.exec(description))) {
+    anchorStarts.push(anchorMatch.index);
+    contentStarts.push(anchorMatch.index + anchorMatch[0].length);
   }
 
-  const m = description.match(/choice of\s+([^.;]+)/i);
-  if (!m) return { choices: [] };
-  const clause = m[1].trim();
-  if (!/\bor\b/i.test(clause)) return { choices: [] };
-  const choices = splitOrList(clause).map(titleCase);
-  return choices.length >= 2 ? { choices } : { choices: [] };
+  if (anchorStarts.length === 0) {
+    // No "choice of" anywhere — the only remaining signal is a bare
+    // parenthetical enumeration anywhere in the text (real NJB: a cream
+    // cheese flavor list sold as its own line item, no "choice of" at all).
+    const parenMatch = description.match(/\(([^()]+)\)/);
+    if (parenMatch) {
+      const choices = splitOrList(parenMatch[1]).map(titleCase);
+      if (choices.length >= 2) slots.push({ choices });
+    }
+    return { slots, modifiers };
+  }
+
+  for (let i = 0; i < contentStarts.length; i++) {
+    const hardEnd = i + 1 < anchorStarts.length ? anchorStarts[i + 1] : description.length;
+    let clause = description.slice(contentStarts[i], hardEnd);
+    const sentenceEnd = clause.search(/[.;]/);
+    if (sentenceEnd !== -1) clause = clause.slice(0, sentenceEnd);
+    clause = clause.replace(/\s+(on|and)\s*$/i, "").trim();
+    if (!clause) continue;
+
+    const parenMatch = clause.match(/^([^()]*?)\(([^()]+)\)\s*$/);
+    if (parenMatch) {
+      const label = parenMatch[1].trim().toLowerCase();
+      const choices = splitOrList(parenMatch[2]).map(titleCase);
+      if (choices.length >= 2) {
+        slots.push({ choices, ...(label ? { label } : {}) });
+        continue;
+      }
+    }
+
+    if (/\bor\b/i.test(clause)) {
+      const choices = splitOrList(clause).map(titleCase);
+      if (choices.length >= 2) {
+        slots.push({ choices });
+        continue;
+      }
+    }
+
+    modifiers.push(...extractModifiersFromClause(clause));
+  }
+
+  return { slots, modifiers };
+}
+
+const NUMBER_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+
+// "1 meat" / "three veggies" -> a bounded-pick count + a syntactic noun
+// guess. Not anchored to a specific archetype's vocabulary — any clause
+// shaped "<number> <noun phrase>" qualifies.
+function parseQuantityNoun(segment: string): { slot_key: string; max_select: number } | null {
+  const m = segment.trim().match(/^(\d+|one|two|three|four|five)\s+(.+)$/i);
+  if (!m) return null;
+  const max_select = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : NUMBER_WORDS[m[1].toLowerCase()];
+  const slot_key = singularize(m[2].trim().toLowerCase());
+  return slot_key ? { slot_key, max_select } : null;
+}
+
+// A clause that isn't a list ("choice of three veggies") or is a compound
+// of several quantities joined by commas/"&"/"and" ("choice of 1 meat, 1
+// cheese & 2 vegetables", real NJB "Build Your Own Omelette Platter" text)
+// decomposes into one modifier per quantity+noun segment when EVERY segment
+// parses cleanly. A clause with no leading quantity anywhere (e.g. the bare
+// "cheese, mayo, lettuce..." topping list on Chicken Cutlet Sandwich) yields
+// no modifiers — it's an included-toppings clause, not a pick-N modifier,
+// and inventing one would be the same kind of guess §4.3 forbids for slots.
+function extractModifiersFromClause(clause: string): NormalizedModifier[] {
+  const sourceSpan = `choice of ${clause}`;
+
+  // Compound form checked FIRST: "1 meat, 1 cheese & 2 vegetables" would
+  // otherwise match the single-quantity regex greedily on its leading "1"
+  // alone, swallowing the rest of the clause as one bogus noun phrase
+  // instead of decomposing into three modifiers.
+  const segments = clause.split(/\s*(?:,|&|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
+  if (segments.length >= 2) {
+    const parsed = segments.map(parseQuantityNoun);
+    if (parsed.every(p => p !== null)) {
+      return (parsed as { slot_key: string; max_select: number }[]).map(p => ({ ...p, source_span: sourceSpan }));
+    }
+  }
+
+  const whole = parseQuantityNoun(clause);
+  return whole ? [{ ...whole, source_span: sourceSpan }] : [];
 }
 
 // Splits "Cheese - Small (10")" (size_label "Small (10")") into base "Cheese"
@@ -206,14 +335,19 @@ export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[]
   const items: NormalizedMenuItem[] = rows.map(row => {
     const afterCategoryStrip = stripCategorySuffix(row.name, row.category);
     const { strippedName, choices: nameChoices } = extractOrClauseFromName(afterCategoryStrip);
-    const { choices: descChoices } = extractChoiceOfFromDescription(row.description);
+    const { slots: descClauses, modifiers } = extractDescriptionClauses(row.description);
 
     const slots: NormalizedSlot[] = [];
     if (nameChoices.length >= 2) {
       slots.push({ slot_key: "choice", source: "name", choices: nameChoices.map(display_name => ({ display_name })) });
     }
-    if (descChoices.length >= 2) {
-      slots.push({ slot_key: "choice", source: "description", choices: descChoices.map(display_name => ({ display_name })) });
+    for (const clause of descClauses) {
+      slots.push({
+        slot_key: "choice",
+        source: "description",
+        choices: clause.choices.map(display_name => ({ display_name })),
+        ...(clause.label ? { label: clause.label } : {}),
+      });
     }
 
     const { base, sizeAdjective } = stripSizeSuffix(strippedName, row.size_label);
@@ -249,6 +383,7 @@ export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[]
       product_key: productKey,
       display_name: displayName,
       slots,
+      modifiers,
     };
   });
 

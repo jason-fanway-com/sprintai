@@ -17,7 +17,7 @@
  */
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { normalizeMenuItems, type RawMenuItemRow } from "./normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
 
 function row(overrides: Partial<RawMenuItemRow>): RawMenuItemRow {
   return {
@@ -166,6 +166,105 @@ Deno.test("Oxford-comma 'A, B, or C' does not leak a bogus 'Or C' choice (real N
     row({ name: "Grilled Cheese", description: "Grilled cheese on choice of bagel, bread, or roll.", category: "Sandwiches" }),
   ]);
   assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
+});
+
+// ---- Multi-clause descriptions: 4 real NJB shapes (2026-09-08 parser extension) ---
+
+Deno.test("'choice of A, B, or C' (Oxford comma, standalone) becomes a 3-way unlabeled slot (real NJB Breakfast Sandwiches text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Turkey Bacon, Egg & Cheese", description: "Turkey bacon, egg & cheese on choice of bagel, bread, or roll.", category: "Breakfast Sandwiches" }),
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].source, "description");
+  assertEquals(out[0].slots[0].label, undefined);
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
+});
+
+Deno.test("'choice of A or B' (no comma) becomes a 2-way unlabeled slot (real NJB Omelette Platter text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Two Eggs Any Style Platter", description: "Two eggs any style served with home fries or hash brown and choice of bagel or toast.", category: "Omelette & Egg Platters" }),
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].label, undefined);
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+});
+
+Deno.test("'choice of X (A, B, C, or D)' becomes a slot LABELED with X (real NJB 'Meat Side' text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Meat Side", description: "Choice of meat (Bacon, Ham, Sausage, or Pork Roll).", category: "Sides" }),
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].label, "meat");
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bacon", "Ham", "Sausage", "Pork Roll"]);
+});
+
+Deno.test("'choice of N <thing>' becomes a MODIFIER (max_select N), not a slot (real NJB 'Veggie Omelette Platter' text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Veggie Omelette Platter", description: "Omelette with choice of three veggies. Served with home fries or hash brown and choice of bagel or toast.", category: "Omelette & Egg Platters" }),
+  ]);
+  assertEquals(out[0].modifiers.length, 1);
+  assertEquals(out[0].modifiers[0].max_select, 3);
+  assertEquals(out[0].modifiers[0].source_span, "choice of three veggies");
+  // the OTHER "choice of" clause in the same description (bagel or toast)
+  // must still land as its own slot — the modifier and the slot coexist.
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+});
+
+Deno.test("a compound 'choice of 1 A, 1 B & 2 C' decomposes into 3 modifiers when every segment parses cleanly (real NJB 'Build Your Own Omelette Platter' text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Build Your Own Omelette Platter", description: "3 eggs with choice of 1 meat, 1 cheese & 2 vegetables. Served with home fries or hash brown and choice of bagel or toast.", category: "Omelette & Egg Platters" }),
+  ]);
+  assertEquals(out[0].modifiers.map(m => [m.slot_key, m.max_select]), [
+    ["meat", 1], ["cheese", 1], ["vegetable", 2],
+  ]);
+  assertEquals(out[0].slots.length, 1);
+  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+});
+
+Deno.test("a comma list with no leading quantity and no trailing 'or' produces neither a slot nor a modifier (real NJB 'Chicken Cutlet Sandwich' text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Chicken Cutlet Sandwich", description: "Chicken cutlet with choice of cheese, mayo, lettuce, tomatoes and onions on roll.", category: "Hot Sandwiches" }),
+  ]);
+  assertEquals(out[0].slots.length, 0);
+  assertEquals(out[0].modifiers.length, 0);
+});
+
+Deno.test("two bare 'choice of' clauses in one description (no list, no quantity on either) produce neither a slot nor a modifier (real NJB 'Turkey Melt' text)", () => {
+  const out = normalizeMenuItems([
+    row({ name: "Turkey Melt", description: "Turkey with choice of cheese & grilled tomatoes on choice of bread.", category: "Hot Sandwiches" }),
+  ]);
+  assertEquals(out[0].slots.length, 0);
+  assertEquals(out[0].modifiers.length, 0);
+});
+
+Deno.test("two-clause description picks the item's own label-then-bind: pickDescriptionSlot prefers the unlabeled bread list over the labeled meat sub-clause (real NJB 'Meat Only Breakfast Sandwich' text, root cause of the toast/bread mis-bind)", () => {
+  const out = normalizeMenuItems([
+    row({
+      name: "Meat Only Breakfast Sandwich",
+      description: "Choice of meat (Bacon, Ham, Sausage, or Pork Roll) on choice of bagel, bread, or roll.",
+      category: "Breakfast Sandwiches",
+    }),
+  ]);
+  assertEquals(out[0].slots.length, 2);
+  const picked = pickDescriptionSlot(out[0]);
+  assert(picked, "expected a description slot to be picked");
+  assertEquals(picked!.label, undefined);
+  assertEquals(picked!.choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
+});
+
+Deno.test("two-clause description (meat + toast) picks toast, not meat — real NJB 'Bacon, Sausage, Ham or Pork Roll Omelette Platter' text (this exact real item motivated archetypes.test.ts's 'Melvin finding, Bug 2')", () => {
+  const out = normalizeMenuItems([
+    row({
+      name: "Bacon, Sausage, Ham or Pork Roll Omelette Platter",
+      description: "Omelette with choice of meat (Bacon, Sausage, Ham, or Pork Roll). Served with home fries or hash brown and choice of bagel or toast.",
+      category: "Omelette & Egg Platters",
+    }),
+  ]);
+  const picked = pickDescriptionSlot(out[0]);
+  assert(picked, "expected a description slot to be picked");
+  assertEquals(picked!.label, undefined);
+  assertEquals(picked!.choices.map(c => c.display_name), ["Bagel", "Toast"]);
 });
 
 // ---- display_name rules -----------------------------------------------------

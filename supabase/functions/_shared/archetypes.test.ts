@@ -28,6 +28,7 @@ import {
   type InferItemInput,
   type CategoryPriceItem,
 } from "./archetypes.ts";
+import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
 
 function item(overrides: Partial<InferItemInput>): InferItemInput {
   return {
@@ -477,26 +478,6 @@ const SHOPS: Record<string, string> = {
   "Zio's Pizzeria": "2cba7b51-211c-4437-8910-1af4dcc03498",
 };
 
-function extractNameSlot(name: string): string[] | null {
-  const m = name.match(/\(([^()]*\bor\b[^()]*)\)\s*$/i);
-  if (!m) return null;
-  const parts = m[1].split(/\s*,\s*|\s+or\s+/i).map(s => s.trim()).filter(Boolean);
-  return parts.length >= 2 ? parts : null;
-}
-
-function extractDescriptionSlot(description: string | null): string[] | null {
-  if (!description) return null;
-  const m = description.match(/choice of\s+([^.;]+)/i);
-  if (!m) return null;
-  const clause = m[1].trim();
-  if (!/\bor\b/i.test(clause)) return null;
-  const commaParts = clause.split(",").map(s => s.trim()).filter(Boolean);
-  const lastIdx = commaParts.length - 1;
-  const orParts = commaParts[lastIdx].split(/\s+or\s+/i).map(s => s.trim()).filter(Boolean);
-  const parts = [...commaParts.slice(0, lastIdx), ...orParts];
-  return parts.length >= 2 ? parts : null;
-}
-
 // deno-lint-ignore no-explicit-any
 async function loadShopItems(supabase: any, shopId: string): Promise<InferItemInput[]> {
   const { data: menus } = await supabase.from("menus").select("id").eq("shop_id", shopId).limit(1);
@@ -562,18 +543,34 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
   }
   const categoryCandidates = buildCategoryCandidateGroups(priceItemsByCategory);
 
-  return items.map(it => ({
-    id: it.id,
-    name: it.name,
-    description: it.description,
-    category: it.category,
-    productKey: null,
-    siblingCount: siblingCounts.get(`${it.category ?? ""}::${baseNameOf(it.name, it.size_label).toLowerCase()}`) ?? 1,
-    nameSlotChoices: extractNameSlot(it.name),
-    descriptionSlotChoices: extractDescriptionSlot(it.description),
-    extractedGroups: groupsByItem.get(it.id) ?? [],
-    categoryCandidateGroups: [...categoryCandidates.values()].filter(g => g.name !== it.category),
+  // Real normalize.ts output, not a parallel reimplementation — this is
+  // what closed the gap between this report and the actual production
+  // extraction (2026-09-08: the prior hand-rolled regex here predated even
+  // the Oxford-comma fix and never saw more than one "choice of" clause per
+  // item, so it silently under-reported what the real pipeline resolves).
+  const rawForNormalize: RawMenuItemRow[] = items.map(it => ({
+    id: it.id, name: it.name, description: it.description, category: it.category,
+    price_cents: it.price_cents, size_label: it.size_label,
   }));
+  const normalizedById = new Map(normalizeMenuItems(rawForNormalize).map(n => [n.id, n]));
+
+  return items.map(it => {
+    const normalized = normalizedById.get(it.id);
+    const nameSlot = normalized?.slots.find(s => s.source === "name");
+    const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
+    return {
+      id: it.id,
+      name: it.name,
+      description: it.description,
+      category: it.category,
+      productKey: null,
+      siblingCount: siblingCounts.get(`${it.category ?? ""}::${baseNameOf(it.name, it.size_label).toLowerCase()}`) ?? 1,
+      nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
+      descriptionSlotChoices: descriptionSlot ? descriptionSlot.choices.map(c => c.display_name) : null,
+      extractedGroups: groupsByItem.get(it.id) ?? [],
+      categoryCandidateGroups: [...categoryCandidates.values()].filter(g => g.name !== it.category),
+    };
+  });
 }
 
 for (const [shopName, shopId] of Object.entries(SHOPS)) {

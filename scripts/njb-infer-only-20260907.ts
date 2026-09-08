@@ -32,7 +32,7 @@ import {
   type InferSourceItem,
 } from "../supabase/functions/_shared/compile-menu.ts";
 import type { ExtractedGroup } from "../supabase/functions/_shared/archetypes.ts";
-import { normalizeMenuItems, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -136,7 +136,7 @@ const normalizedById = new Map(normalizeMenuItems(rawForNormalize).map(n => [n.i
 const inferSourceItems: InferSourceItem[] = itemRows.map((row: any) => {
   const normalized = normalizedById.get(row.id);
   const nameSlot = normalized?.slots.find(s => s.source === "name");
-  const descriptionSlot = normalized?.slots.find(s => s.source === "description");
+  const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
   const extractedGroups: ExtractedGroup[] = (groupsByItem.get(row.id) ?? []).map((g: any) => ({
     name: g.name,
     required: g.kind === "slot",

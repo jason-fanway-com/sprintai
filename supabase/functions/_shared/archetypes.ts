@@ -179,7 +179,12 @@ export function buildCategoryCandidateGroups(
 // ... stated from 'choice of' parse", eggs "toast"), not archetype data —
 // keeps SlotRule's shape exactly as specified in §4.2.
 const NAME_SOURCED_SLOTS = new Set(["protein"]);
-const DESCRIPTION_SOURCED_SLOTS = new Set(["side", "toast"]);
+// "bread" added 2026-09-08: normalize.ts now extracts EVERY "choice of ..."
+// clause in a description (not just the first) and lets a caller pick the
+// bare-enumeration one via pickDescriptionSlot — closing the real NJB gap
+// where "choice of bagel, bread, or roll" was stated in the source text but
+// never reached this slot because bread wasn't in this set at all.
+const DESCRIPTION_SOURCED_SLOTS = new Set(["side", "toast", "bread"]);
 
 // Slots resolved from sibling product rows, never from a question (see file
 // header). Universal across every archetype that declares one.

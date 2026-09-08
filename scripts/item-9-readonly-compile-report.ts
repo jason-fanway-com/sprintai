@@ -31,7 +31,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { normalizeMenuItems, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 import {
   inferCategory,
   buildCategoryCandidateGroups,
@@ -215,7 +215,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
   const inferInputs: InferItemInput[] = itemRows.map(r => {
     const normalized = normalizedById.get(r.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
-    const descSlot = normalized?.slots.find(s => s.source === "description");
+    const descSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
     const extractedGroups: ExtractedGroup[] = (groupsByItem.get(r.id) ?? []).map(g => ({
       name: g.name,
       required: g.required,
@@ -295,6 +295,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
         blocking: draft.blocking,
         status: "pending",
         question_text: draft.question_text,
+        exclusions: [], // item-scoped: matches by exact item id, exclusions is a no-op here
       });
     }
   }
@@ -305,6 +306,10 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
     pendingQuestions.push({
       scope_type: q.scope_type, scope_id: q.scope_id, slot_key: q.slot_key,
       blocking: q.blocking, status: q.status, question_text: q.question_text,
+      // Mirrors compile-menu/index.ts's own fix — without this, a
+      // category-scoped question blocks every item in the category
+      // regardless of the exclusions list the compiler already computed.
+      exclusions: Array.isArray(q.proposal?.exclusions) ? q.proposal.exclusions : [],
     });
   }
 
