@@ -250,4 +250,56 @@ I did not pick for you. It changes the ladder you specified.
 2. **Rung 3** — drop (A), stub (B, recommended), or spike first (C)?
 3. **Go-live gate** — confirm aggregator-sourced shops should be blocked until reviewed.
 4. **Toast/ChowNow** — they return zero items today. Accept Slice-only for now, or is a
-   rendering scraper in scope?
+   rendering scraper in scope? — **Answered below, 2026-09-08.**
+
+---
+
+## I. Addendum — Toast/ChowNow re-measured, 2026-09-08
+
+Closes open question H4. Vigil 8fb959a1/b00e76f6: close the Toast/ChowNow zero-item gap.
+
+**Finding: the two platforms fail for different reasons, and only one is fixable
+without adding real infrastructure.**
+
+- **ChowNow — fixed.** Its storefront is a client-rendered SPA whose menu hydrates
+  ~1-5s *after* the initial HTML response; a plain Firecrawl scrape (rung 4's
+  behavior before this change) reads the page before that happens and gets an empty
+  shell. Firecrawl's `/scrape` accepts a `waitFor` (ms) parameter that holds the page
+  open before reading it — no headless-render infra of our own needed, no new
+  dependency, no code path change beyond passing a number.
+  Verified against a real, live ChowNow storefront (`order.chownow.com/order/8581/
+  locations/11586`, "The Pizza Shop", 27 Water St) with the exact request the
+  updated `scrapePage()` now sends: `waitFor: 5000` returns the full rendered menu
+  (109 priced items — pizzas, salads, apps, beverages, all with real prices matching
+  what the live page displays). Feeding that markdown through the *existing*
+  `extractMenuItems()` LLM prompt (unchanged, same call rung 1/3 already use)
+  correctly parsed every item and price. Cost: 1 Firecrawl credit per attempt, same
+  as any other rung-4 scrape — `waitFor` does not add to the credit cost.
+  Implementation: `getAggregatorWaitForMs(platform)` in `aggregator-render.ts`
+  returns 5000 for `"chownow"` and 0 (Firecrawl's default, no extra wait/latency)
+  for every other platform — the cost of the wait is scoped to the one platform
+  that needs it.
+- **Toast — not fixable this way, and re-scoped rather than half-fixed.** A direct
+  fetch to a live Toast storefront (`order.toasttab.com/online/pizza-napoli-
+  restaurant`) 403s at Cloudflare before the app even runs. Firecrawl's rendered
+  scrape gets further (its headless browser executes the JS) but the response is a
+  reCAPTCHA challenge page ("Recaptcha requires verification"), not the menu — and
+  this held even with a 5s `waitFor` and Firecrawl's own automatic `enhanced`-proxy
+  retry (`proxy: "auto"`, the default, already retries with enhanced proxies on
+  failure). This is Toast actively detecting and gating automated access, not a
+  rendering timing gap — no `waitFor` value or retry closes it. Solving it for real
+  would mean CAPTCHA-solving, which is a different class of tool (adversarial to
+  the target site, ToS/legal exposure) and was out of scope for this task. Toast
+  gets no `waitFor` in `aggregator-render.ts` (stays at 0) since spending latency
+  there buys nothing — it still returns the honest `no_priced_items` result rung 4
+  already handled correctly (flag-for-review path untouched, no behavior change for
+  Toast beyond the comment explaining *why*).
+
+**Firecrawl credit note:** the account was at 41/1000 free-tier credits at the start
+of this investigation (34/1000 after — 7 spent testing both platforms). This ladder
+already treats Firecrawl calls as a scarce, budgeted resource (see `MAX_PDF_
+CANDIDATES`, `LADDER_FALLBACK_ELAPSED_BUDGET_MS` in `index.ts`); the ChowNow fix
+adds exactly one more `waitFor`-tagged call at the same 1-credit cost as before, no
+new recurring spend. Whoever owns the Firecrawl account should top up before this
+sees real traffic — 34 credits covers roughly 34 more rung-1-or-below scrapes total,
+website onboarding included.

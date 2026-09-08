@@ -12,6 +12,7 @@ import {
   shouldFlagMenuExtractionIncomplete,
   type MergedMenuResult,
 } from "./menu-extraction.ts";
+import { getAggregatorWaitForMs } from "./aggregator-render.ts";
 
 const CLAUDE_API   = "https://api.anthropic.com/v1/messages";
 const SONNET_MODEL = "claude-sonnet-4-6";
@@ -216,11 +217,16 @@ function extractPdfLinksFromHtml(html: string, baseUrl: string): string[] {
 
 /** Rung 4 (LAST RESORT) — known off-domain ordering platforms. Measured
  *  2026-09-05 (docs/specs/2026-09-05-menu-source-priority.md): Slice returns a
- *  usable priced menu; Toast/ChowNow return zero items because their storefront
- *  is a JS app our static scrape can't read (a rendering scraper is out of
- *  scope here). Marketplaces (DoorDash/UberEats/GrubHub) are deliberately
- *  excluded — they mark up restaurant prices, unlike the direct-order/POS
- *  platforms below where the restaurant sets the price. */
+ *  usable priced menu; Toast/ChowNow returned zero items because their
+ *  storefronts are client-rendered SPAs a plain scrape reads before the menu
+ *  hydrates. Re-measured 2026-09-08 (same doc, addendum): ChowNow closes with
+ *  a Firecrawl `waitFor` — see aggregator-render.ts. Toast does not: a direct
+ *  fetch 403s at Cloudflare, and Firecrawl's own rendered scrape (with its
+ *  enhanced-proxy retry) gets served a reCAPTCHA challenge instead of the
+ *  menu — an active anti-bot wall, not a rendering gap, and bypassing it
+ *  (CAPTCHA-solving) is out of scope. Marketplaces (DoorDash/UberEats/GrubHub)
+ *  are deliberately excluded — they mark up restaurant prices, unlike the
+ *  direct-order/POS platforms below where the restaurant sets the price. */
 const AGGREGATOR_DOMAINS: Array<{ pattern: RegExp; platform: string; label: string }> = [
   { pattern: /slicelife\.com|slice\.com/i, platform: "slice",   label: "Slice" },
   { pattern: /toasttab\.com/i,             platform: "toast",   label: "Toast" },
@@ -319,8 +325,12 @@ function prioritizePages(links: string[], baseUrl: string): string[] {
   return sorted.slice(0, MAX_PAGES);
 }
 
-/** Scrape a single page via Firecrawl /scrape (synchronous, fast) */
-async function scrapePage(url: string, apiKey: string, includeRaw = false): Promise<{ markdown: string; structured: string; pdfLinks: string[]; aggregatorLinks: Array<{ url: string; platform: string; label: string }> }> {
+/** Scrape a single page via Firecrawl /scrape (synchronous, fast). `waitForMs`,
+ *  when set, tells Firecrawl to hold the page open that long before reading it —
+ *  needed for client-rendered SPA storefronts (see aggregator-render.ts) whose
+ *  menu hydrates after the initial HTML. Omitted (0) for every other caller so
+ *  the extra latency is only paid where it's needed. */
+async function scrapePage(url: string, apiKey: string, includeRaw = false, waitForMs = 0): Promise<{ markdown: string; structured: string; pdfLinks: string[]; aggregatorLinks: Array<{ url: string; platform: string; label: string }> }> {
   try {
     const formats = includeRaw ? ["markdown", "rawHtml"] : ["markdown"];
     const res = await fetchWithBackoff(`${FIRECRAWL_BASE}/scrape`, {
@@ -329,7 +339,7 @@ async function scrapePage(url: string, apiKey: string, includeRaw = false): Prom
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type":  "application/json",
       },
-      body: JSON.stringify({ url, formats }),
+      body: JSON.stringify({ url, formats, ...(waitForMs > 0 ? { waitFor: waitForMs } : {}) }),
     });
 
     if (!res.ok) return { markdown: "", structured: "", pdfLinks: [], aggregatorLinks: [] };
@@ -695,9 +705,11 @@ async function tryGoogleListingRung(
  *  direct-order platform. Every item lands flagged for owner review: an
  *  aggregator's price is not known to be the restaurant's own price (that's
  *  the whole reason this rung is last), so it must never look as trusted as a
- *  rung-1 import. Toast/ChowNow are expected to return 0 items here — their
- *  storefront is a JS app a static scrape can't read; that's an honest
- *  no_priced_items result, not a bug in this function. */
+ *  rung-1 import. ChowNow gets a Firecrawl `waitFor` so its SPA menu has time
+ *  to hydrate (see aggregator-render.ts). Toast still returns 0 items here —
+ *  it's gated by an active anti-bot wall (Cloudflare + reCAPTCHA), not a
+ *  rendering gap `waitFor` can fix; that's an honest no_priced_items result,
+ *  not a bug in this function. */
 async function tryAggregatorRung(
   // deno-lint-ignore no-explicit-any
   supabase: any,
@@ -708,7 +720,7 @@ async function tryAggregatorRung(
   anthropicKey: string,
   startedAt: number,
 ): Promise<{ success: boolean; itemCount: number; rungLog: RungLog }> {
-  const { markdown } = await scrapePage(aggLink.url, firecrawlKey, false);
+  const { markdown } = await scrapePage(aggLink.url, firecrawlKey, false, getAggregatorWaitForMs(aggLink.platform));
   if (!markdown.trim()) {
     return { success: false, itemCount: 0, rungLog: { rung: 4, source: "aggregator", platform: aggLink.platform, url: aggLink.url, result: "no_content" } };
   }
