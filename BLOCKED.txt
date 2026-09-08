@@ -3352,3 +3352,203 @@ re-run with the LITERAL "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" wording
 verbatim). Expect FOUR lines / all Large / zero size questions / zero
 pepp-disambiguation questions / correct total, ten consecutive identical runs,
 plus the unchanged Vito's $9.48 regression check.
+
+================================================================================
+2026-09-08 14:14 UTC (10:14 ET) — DEPLOY + LIVE BATTERY ATTEMPT — FAILED ON
+RUN 1, STOPPED PER STANDING RULE (no workaround attempted)
+================================================================================
+
+PRE-STATE CONFIRMED: git status clean except supabase/.temp/*-version (non-
+code) and known untracked scratch files (scripts/tmp-item-K-*, guard10-/
+guard12-/guard15-* test fixtures) — none touched. HEAD was 3 commits ahead
+of origin/main: e1fca95, 69cf1b1, f76d84f, 533c560.
+
+PUSH: `git push origin main` succeeded — 2fc45ff..533c560, fast-forward,
+no conflicts.
+
+DEPLOY: `supabase functions deploy chat-sms --project-ref
+rvdqfxtrskxekfkqnegx`. Bundled + deployed clean, no errors. Confirmed via
+`supabase functions list --project-ref rvdqfxtrskxekfkqnegx`:
+  chat-sms | ACTIVE | VERSION 291 | UPDATED_AT 2026-09-08 14:12:09 UTC
+(prior version was 290, UPDATED_AT 2026-09-08 12:04:37 UTC — version number
+and timestamp both advanced, confirming this deploy shipped f76d84f/533c560,
+not a no-op).
+
+LIVE BATTERY: ran against $SPRINTAI_CHAT_SUPABASE_URL/functions/v1/chat-sms,
+shop_id 2cba7b51-211c-4437-8910-1af4dcc03498 (Zio's, real shop hours, no
+test flag), channel=web, fresh uuidgen session_id per run, literal wording
+per dispatch ("I want 4 large pizzas" then "1 pepp, 1 plain, 1 hawaiin, 1
+meat lovers").
+
+RUN 1 (session A3E587A0-D559-4F3D-A367-2836D6FC60F1) — FAIL:
+  Turn 1 raw:
+    {"reply":"Before I get into which pizzas - are you ordering for pickup
+    or delivery today? Also, which pizzas were you thinking? We've got a
+    big selection: cheese, pepperoni, specialty pies, Sicilian, pan pizzas,
+    and more.\n\nMsg & data rates may apply. Reply HELP for help or STOP to
+    unsubscribe.","cart":[],"phase":"greeting","test_mode":false,
+    "notes":null,"session_id":"A3E587A0-...","model":"deepseek/deepseek-v4-pro"}
+  Turn 2 raw:
+    {"reply":"I still need to know what size you'd like on the Neapolitan
+    Cheese Pizza, what size you'd like on the Hawaiian Pizza, and what size
+    you'd like on the Meat Lover's Pizza. What'll it be?\n\n4 items -
+    $71.47 total\n(subtotal $70.48 + $0.99 service fee)",
+    "cart":[
+      {"name":"Neapolitan Cheese Pizza","quantity":2,"modifiers":[],
+       "price_cents":1525,"pending_options":["Size"], ...},
+      {"name":"Hawaiian Pizza","quantity":1,"modifiers":[],"price_cents":1999,
+       "pending_options":["Size"], ...},
+      {"name":"Meat Lover's Pizza","quantity":1,"modifiers":[],
+       "price_cents":1999,"pending_options":["Size"], ...}
+    ],
+    "phase":"building","test_mode":false,"notes":null,
+    "session_id":"A3E587A0-...","model":"deepseek/deepseek-v4-pro"}
+
+  Against the acceptance criteria (FOUR cart lines / all Large / zero size
+  questions / zero pepp-disambiguation questions / correct total), all four
+  bars missed on the first run:
+    - 3 cart lines, not 4 — "1 pepp" and "1 plain" collapsed into ONE
+      "Neapolitan Cheese Pizza" line at quantity:2. This is the SAME merge
+      symptom f76d84f's ask-plan-engine.ts consumedModifierChoiceIds fix
+      was built to eliminate.
+    - modifiers:[] on the merged line — no Pepperoni recorded at all, not
+      even on one of the two units. Worse than a "missing topping on the
+      second unit" residual; this run shows zero trace of "pepp" resolving
+      to anything.
+    - 3 size-clarifying questions asked, not zero — "4 large pizzas" from
+      turn 1 did not carry the Large size forward onto any of the 3 lines
+      (all three show "pending_options":["Size"]). D2's stated-attribute-
+      carryforward evidently did not fire here; turn 1's "large" was stated
+      before any item existed in the cart, which may be outside what that
+      guard covers — not diagnosed further per the stop-on-failure rule.
+    - Total is for 3 items/quantity-2, not 4 real lines, so the "correct
+      total" bar is moot — the cart itself is structurally wrong.
+
+RUN 2 (session 9C35A583-947B-4DFC-AC7B-C6F3C0D69BBF): turn 1 request was
+in flight when the overall battery script hit the 2-minute tool timeout and
+was killed (exit 143). No turn-2 result for run 2. Runs 3-10 never started.
+Stopped here rather than retrying/working around, per the standing rule and
+this dispatch's explicit "if any of the 10 runs don't match expectations,
+STOP — do not attempt a workaround or a fix-on-the-fly."
+
+VITO'S REGRESSION CHECK: NOT RUN. Explicitly out of scope once run 1 of the
+Zio's battery failed — the dispatch's stop condition applies before
+reaching step 6, regardless of Vito's open hours.
+
+VERDICT: Deploy mechanics are confirmed correct (pushed, deployed, version
+advanced). The functional fix (D1 modifier-consumption merge, item 3's
+"pepp" compose rule) does NOT hold under a real live run — same-shape
+failure as the bug it was meant to fix, on the first of ten attempts. Not
+diagnosed beyond what's captured above (no code changes attempted). Handing
+back to the PO/lead; this needs re-diagnosis before any further deploy or
+battery attempt, not a retry.
+
+================================================================================
+2026-09-08 ~15:10 UTC — GENERAL ROUND-TRIP LATENCY: RECLASSIFIED NON-BLOCKING
+(Jason's call via PO), logged here per instruction so it isn't rediscovered
+as a surprise later
+================================================================================
+
+Measured, real numbers: Vito's legacy ~35s, Zio's legacy ~37-51s, for a
+4-pizza multi-item order. Cause: chat-sms's agentic tool loop does one model
+round trip per item added (4 pizzas = ~4 round trips), model is
+deepseek-v4-pro. This is normal agentic-loop cost, not a defect — SMS is
+async, no customer expects an instant reply. NOT a launch blocker. Not
+being optimized further; do not rediscover this as a surprise.
+
+Zio's COMPILED path is a DIFFERENT number: 135-137s on the identical
+input — a ~3x regression against Zio's own legacy baseline (51s), not
+explained by general round-trip cost (see root-cause entry immediately
+below). This ONE number stays in scope, folded into the dropped-line
+investigation, not tracked as a separate latency task.
+
+================================================================================
+2026-09-08 ~15:25 UTC — REAL ROOT CAUSE FOUND: the compiled engine cannot
+resolve "pepp" (or any abbreviation) to a real choice AT ALL — this is why
+the live battery's RUN 1 reproduced the exact pre-D1-fix merge shape despite
+the fix being deployed, and it is the same event driving the 135-137s number
+================================================================================
+
+Confirmed empirically (not inferred) by running the actual deployed
+functions directly against the literal test wording:
+
+  matchChoiceInText(choices=[Pepperoni,...], "...1 pepp, 1 plain...") -> null
+  matchChoiceInText(choices=[Pepperoni,...], "...1 pepperoni, 1 plain...") -> MATCHES "Pepperoni"
+
+significantStems/stemWord (pending-disambiguation.ts) only strips a
+trailing plural — "pepp" stems to "pepp", "Pepperoni" stems to "pepperoni".
+These are different strings; matchChoiceInText's `allPresent` check requires
+literal stem presence, so the reactive text-matcher NEVER resolves an
+abbreviation to a real choice, full stop. This is true with or without this
+morning's consumedModifierChoiceIds fix — that fix only prevents an ALREADY-
+matched choice from being re-matched by a second call; it does nothing when
+NEITHER call ever matches anything, which is exactly what happens on every
+"pepp" (not "pepperoni") run.
+
+Confirmed by code read: executeTool's compiled add_item branch (index.ts,
+~954-963) calls applyCompiledAddItem with `compiledMatchText ?? customerMessage`
+only — the tool call's own `modifiers`/`options` input (what the LLM itself
+tried to pass, e.g. having correctly reasoned "pepp" -> Pepperoni per the
+"COMPOSING A TOPPING-ONLY PIZZA REQUEST" system prompt rule) is destructured
+and then NEVER READ for a compiled item. There is no code path for the
+model's own composed intent to reach ask_plan_selections. The model's only
+way to force a modifier onto a compiled line is to separately call
+modify_item afterward — which is a FULLY legacy, ask_plan-unaware handler
+(confirmed: zero occurrences of ask_plan/compiledEngineEnabled/applyCompiled
+inside the modify_item case) that will happily accept and directly apply an
+explicit `options` param, writing straight to `options`/`price_cents` and
+bypassing ask_plan_selections and consumedModifierChoiceIds entirely.
+
+This explains EVERY observed shape across the different test runs, not just
+one:
+  - quantity:2, modifiers:[] (BLOCKED.txt RUN 1 above, session A3E587A0):
+    neither add_item call for "1 pepp"/"1 plain" ever resolves a topping
+    (matchChoiceInText returns null both times) -> both compute IDENTICAL
+    topping-less selections -> applyCompiledAddItem's identicalExisting
+    dedup correctly (given wrong inputs) merges them to quantity:2. This is
+    the DEFAULT outcome for the literal acceptance-test wording, with or
+    without the D1 fix.
+  - 4 correct lines, Pepperoni split cleanly (order_carts 32b71e14,
+    d3541dd7): only explainable if the model ALSO called modify_item
+    separately to force the option in — a side-channel the design never
+    accounts for, not the intended compose mechanism, and not exercised by
+    any existing test.
+  - 3 lines, one plain cheese pizza with zero options at all (order_carts
+    cf233aae, b4d9d44d, the 137s/135s runs): the model attempted the compose
+    for "1 plain" but never issued a 4th call representing "1 pepperoni" at
+    all — consistent with the model being unable to make its own "pepp"
+    resolution stick via add_item and giving up rather than reaching for
+    modify_item. The shortfall-retry backstop (enumeration-shortfall-retry.ts)
+    correctly detected the count mismatch and retried up to its 2-attempt
+    budget — each retry a full extra round trip carrying the ~28K-token
+    system prompt — before falling through to the honest-decline fallback.
+    THIS retry-and-fail loop is the dominant cost inside the 135-137s figure.
+
+Root cause is one sentence: the compiled engine was designed to accept a
+modifier selection ONLY via reactive text-matching against real choice
+display names (spec P1, "the model phrases, code decides" — deliberate,
+per ask-plan-engine.ts's header), but nothing lets the model's own resolved
+intent (informed by system-prompt rules like the pepp-compose instruction)
+reach the engine directly, and the reactive matcher has no tolerance for
+any wording that doesn't literally contain a real choice's stem.
+
+NOT FIXED — flagging fix direction, not implementing without sign-off, since
+this changes applyCompiledAddItem's core contract for every compiled shop:
+  (a) Let executeTool's compiled add_item branch also honor the tool call's
+      own `options`/`modifiers` input when it names a REAL compiled choice
+      (validated against askPlan.steps, same validation discipline legacy
+      add_item already applies against option_groups) — model-asserted
+      selections take priority, matchChoiceInText stays as a backstop for
+      whatever the model didn't explicitly pass. Symmetric with how legacy
+      add_item already works; most direct fix for the actual gap.
+  (b) Broaden matchChoiceInText to tolerate common abbreviations/prefixes —
+      rejected as a first choice: real false-positive risk on a menu the
+      size of Zio's (494 groups/3449+ choices) where a short abbreviation
+      could prefix-match more than one real choice.
+  (c) Make modify_item compiled-engine-aware (route through
+      ask_plan_selections/consumedModifierChoiceIds like add_item does) —
+      fixes the state-consistency half of this independently of (a)/(b),
+      worth doing regardless of which direction is chosen for the primary
+      gap, since a model that reaches for modify_item on a compiled line
+      today silently desyncs authoritative state either way.
+Awaiting direction before implementing any of the above.
