@@ -2102,3 +2102,17 @@ after the refresh+recompile). Zero forcing -- every number came from real,
 verified data at each step.
 
 Nothing touched beyond Zio's. NJB and Vito's untouched by this item.
+
+[OVERNIGHT QUEUE item 2/5 — GUARD 15 check.]
+2026-09-08 ~06:20 UTC — DONE, moving to item 4 (item 3 saved for last per
+its own sensitivity, item 5 runs after item 4).
+
+Confirmed already landed (commit f679e1d, earlier tonight) and re-read the
+live code just now to confirm it's genuinely general-purpose, not
+Burgers/Zio's-specific: it keys entirely off `declinedBlockedItems`/
+`effectiveMenu`/category and each item's own live `bot_state` field --
+nothing shop-specific anywhere in the guard. This means it ALREADY covers
+NJB automatically, with zero code change needed: the moment an NJB
+conversation declines a blocked item and the model's own reply happens to
+suggest another blocked item from the same category, this guard fires
+exactly the same way it does for Zio's. No work item here.
