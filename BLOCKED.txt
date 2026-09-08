@@ -2148,3 +2148,187 @@ No write made for this item -- both shops' existing compiled state already
 carries the fix; only read queries were run to confirm it. Nothing new
 compiled on NJB beyond what was already authorized and done earlier
 tonight for other reasons.
+
+[ITEM 8 — flip-and-verify dispatch, STOPPED at STEP 0 per the dispatch's own
+stop condition, nothing written, no live orders run]
+2026-09-08 ~09:50 UTC — Dispatched (via main:po:claude) to flip
+shops.compiled_ordering_engine_enabled=true for Zio's ONLY, verify with a
+live order battery against production chat-sms, roll back automatically on
+any deviation. Ran STEP 0 (read-only precondition query, all three shops)
+before touching anything, per the dispatch's own instruction.
+
+RESULT: Zio's compiled_ordering_engine_enabled is ALREADY true, right now
+(Vito's false, NJB false -- those two untouched, confirmed). The dispatch
+itself named this exact possibility as a stop condition ("if Zio's is
+already true, stop and report... do not silently proceed as if this were a
+fresh flip"), so stopping here rather than treating this as a fresh flip
+or silently running the verification battery as if I'd just flipped it.
+
+Tracing why: the "ITEM 8 -- LIVE ON ZIO'S" entry above (2026-09-07, this
+file) flipped it true for that session's own live verification. This
+file has no entry recording a revert. But the 2026-09-07 ~22:38 UTC daily
+journal commit (3a69bfc, docs/DAILY.md) states explicitly: "No shop has
+this flag on. The entire item-8 engine is committed, deployed, and
+structurally inert today" -- so it WAS false as of 22:38 UTC last night.
+Nothing in this file's entries between then and now (the three overnight-
+queue items, all Zio's-scoped but about compile data/lexicon, not this
+flag) mentions touching this column. So: false at 22:38 UTC 9/7, true now
+(~09:50 UTC 9/8), with zero record here of who/what flipped it or why.
+Not guessing at an explanation -- flagging the gap plainly.
+
+SECOND, independent reason to stop, found the same pass: `git status` in
+this repo right now shows UNCOMMITTED, undeployed local changes to the
+exact files this flag gates -- supabase/functions/chat-sms/ask-plan-
+engine.ts and chat-sms/index.ts (plus a modified guard16 test and a
+migrations-down file move). The ask-plan-engine.ts diff itself documents
+a real, substantive change: stepEligible() widened to include on_request
+modifier groups (not just offer_once) for reactive matching -- this is
+precisely the "Add Toppings ask_mode=null, invisible to the sequencer"
+upstream gap the 2026-09-07 LIVE-ON-ZIO'S entry flagged as a known,
+unfixed limitation. Someone (a concurrent session, per this repo's own
+established "another thread is actively mid-edit" pattern used elsewhere
+in this file) appears to be actively working the exact engine I was asked
+to flip on and live-verify, right now, uncommitted. Running a live order
+battery against Zio's in this state risks: (a) verifying behavior that
+isn't what's actually deployed (deployed chat-sms is version 287, 2026-09-08
+04:10:35 UTC -- whether it includes this uncommitted diff or predates it is
+unverified either way), (b) a concurrent deploy landing mid-battery and
+invalidating the "identical wording every run" determinism check the
+dispatch specifically wanted, (c) two sessions racing writes against the
+same live shop.
+
+NOT executing STEP 1 (moot -- already true), NOT running the STEP 3 live
+order battery, NOT evaluating STEP 4 rollback logic against production
+orders while the precondition is this unsettled -- a rollback decision
+needs a known-stable baseline, and there isn't one right now. Zio's flag
+left exactly as found (true) -- not touching it either direction until the
+discrepancy above is resolved, per the same "don't guess, don't act
+unilaterally on a live customer-facing flag" discipline this file has
+followed all night (see BUG 3 gating STOP earlier in this file).
+
+Two things for whoever picks this up next: (1) find out who/what flipped
+Zio's true after 22:38 UTC and whether that was intentional and already
+verified elsewhere (if so, this whole stop was unnecessary and the battery
+can run once that's confirmed); (2) find out what the uncommitted
+ask-plan-engine.ts/index.ts diff is and whether it's safe to commit+deploy
+before live-verifying, or whether it needs to stay untouched because
+another session owns it. Read-only precondition query used for this check
+(scripts/tmp-item8-precheck.ts) deleted after use, no other files touched.
+
+Not spawning Melvin for this -- there is no sequence to verify yet, only a
+precondition finding. Melvin's independent check belongs on whichever
+decision resolves the two open questions above.
+
+[ITEM 8 follow-up — populate Zio's option_groups.slot_key, unify with
+prompt_template, recompile, verify]
+2026-09-08 ~10:38 UTC — Starting. Checked BLOCKED.txt + git status first per
+standing rule. Found the prior item-8 dispatch's stop entry (immediately
+above): flag already true, uncommitted diff in index.ts/ask-plan-engine.ts/
+category-coverage.ts/guard16 test. Read that diff in full before touching
+anything -- it is the GUARD 12/16/17 shared-disclaimer + honestFlaggedClause
+work and the category-coverage generalization fix, entirely unrelated to
+slot_key/prompt_template. Confirmed this task's own dispatch (which named
+these same 4 files and said to commit them, production v287 already running
+this code) as the reason that diff exists uncommitted -- not a second
+concurrent editor. Proceeding.
+
+Independently confirmed the PO's diagnosis by reading the code directly
+(not taking it on faith):
+  - compile-menu/index.ts:415 -- `slot_key: g.slot_key` is a straight
+    passthrough from the option_groups row. No derivation, no fallback.
+  - compile-menu.ts:236-238 `promptTemplateFor` -- DOES fall back to a
+    name-derived key when slot_key is null: `g.slot_key ?? normaliseTerm(
+    g.name)...`. This is why prompt_template can show "size.ask" for a
+    group named "Size" even though slot_key itself stays null underneath --
+    two different derivations of "the same" key, one passthrough one
+    fallback-computed, that's the drift.
+  - ask-plan-engine.ts:142-143 `renderStepQuestion` -- looks up
+    TEMPLATE_QUESTIONS[step.slot_key ?? ""], and step.slot_key is
+    CompiledStep.slot_key (compile-menu.ts:249, `slot_key: g.slot_key`) --
+    the raw passthrough value, NOT prompt_template. Null slot_key -> empty
+    key -> lookup miss -> generic fallback ("What option would you like for
+    the X? ..."), confirmed at ask-plan-engine.ts:151-154.
+Diagnosis confirmed: slot_key (not prompt_template) is what the live
+question-rendering path actually reads, and it's null on all 494 rows, so
+every Zio's slot question renders via the generic fallback regardless of
+what prompt_template says.
+
+slot_key populated for Zio's ONLY (Vito's/NJB untouched -- confirmed by
+scoping every query/write to Zio's menu_id 6c309547-dae1-4ac8-acb6-
+77f2354d6a59 throughout). 494 total option_groups, 189 mapped, 305 left
+null:
+  size      -> 78  (group name "Size")
+  toppings  -> 51  (49 "Add Toppings" + 2 "Choose Toppings" -- verified by
+                     sampling choices: all Pizza/Calzone/Stromboli real
+                     topping lists)
+  dressing  -> 60  (34 "Choose Salad Dressing" + 8 "Choose Dressing" + 4
+                     "Substitute Dressing with" + 14 "Add Extra Dressing"
+                     -- verified by sampling choices: all 4 name variants
+                     resolve to the identical 8-item real dressing list)
+  left null -> 305 (Add Extra 111, Type 107, Make it 37, Choose Pasta 30,
+                     Choose an option 7, Quantity 7, Choose Sauce 3, Choose
+                     Cheese 2, Choose Soda 1)
+
+NOTE on the vocabulary: the dispatch's own list ("size, bread, dressing,
+temp, flavor, protein, bagel, spread, side, toppings") doesn't exactly
+match Appendix C's literal table (docs/specs/2026-09-07-conversation-
+ready-menu-design.md line 595-611), which only has 8 rows (temp, bread,
+dressing, size, flavor, protein, bagel, toppings) -- no spread/side. Both
+ARE real slot_key values used elsewhere (archetypes.ts line 338 "spread"
+for bagel cream cheese, line 303's own TS union includes "side") but
+neither had a TEMPLATE_QUESTIONS entry, so a group tagged spread/side would
+still render via the deterministic generic fallback, not a dedicated
+template. Moot for this write either way -- zero Zio's groups mapped to
+either.
+
+Left null and why, real examples (not guessed):
+  - "Add Extra" / Turkey Wrap (Wraps, 111 groups total): genuinely mixed
+    bucket -- cheese, condiments, sauce, veggies all in one list (sampled:
+    American/Mozzarella/Swiss/Cheddar/Provolone Cheese, Bacon, Jalapenos,
+    Mayo, Oil & Vinegar, Pickles, Sweet Peppers, BBQ Sauce). No single
+    vocab key covers this; the archetype library itself uses different
+    keys for this shape elsewhere (add_ons/extras/add_protein per
+    archetypes.ts) but none of those are in the given 10-key vocabulary
+    either. Guessing "toppings" would have been wrong -- "toppings" per
+    the archetype library specifically means a pizza topping list
+    (bind_to_list_named /topping/i), confirmed distinct from this.
+  - "Type" / Mixto Salad (Salads, 107 groups total): single fixed choice
+    ("Salad") that just re-labels the item itself, not a real customer
+    decision. Same shape confirmed on Panini ("Panini") and Kids Pasta
+    ("Kids") -- a placeholder/self-label group, not any semantic slot.
+  - "Quantity" / Bone In Wings (Appetizers, 7 groups): real choices are
+    counts ("8 Pieces", "14 Pieces") -- semantically "count", but "count"
+    is not in the given vocabulary (it IS a real key elsewhere, e.g.
+    compile-menu.ts's SLOT_RANK). Left null rather than invent.
+
+AUTHORITATIVE FIELD DECISION: prompt_template, not slot_key. Per the design
+doc itself (line 413: "Renders slot questions from prompt_template
+(Appendix C)"), prompt_template was always meant to be what the sequencer
+reads. The actual bug was ask-plan-engine.ts:142 reading step.slot_key
+directly for the TEMPLATE_QUESTIONS lookup, bypassing prompt_template
+(compile-menu.ts's promptTemplateFor, which already had a safe name-based
+fallback for a null slot_key) entirely. Fixed by changing
+renderStepQuestion to derive its lookup key from
+`step.prompt_template.split(".")[0]` instead of `step.slot_key`.
+prompt_template is computed in exactly one place (promptTemplateFor) from
+slot_key with a fallback baked in, and is now the ONLY field the render
+path consults -- slot_key remains the raw semantic tag for canonical
+ordering (SLOT_RANK) and entity-key generation, but is no longer read for
+question rendering, so the two fields cannot structurally disagree about
+what question gets asked again. 2 new regression tests added
+(ask-plan-engine.test.ts) reproducing the exact null-slot_key/derived-
+prompt_template drift and the unrecognized-name fallback. Full targeted
+suite: 636/636 chat-sms+_shared, 55/55 compile-menu+compile-menu.ts, 23/23
+ask-plan-engine.ts (all included in the 636).
+
+Deployed chat-sms (includes this fix + the already-live-since-v287 GUARD
+12/16/17 disclaimer rewrite, confirmed byte-for-byte present in the
+downloaded v287 bundle via `supabase functions download` before deploying
+-- diff-verified, not assumed). Recompiled Zio's via compile-menu (live
+invoke, not code change -- compile-menu itself had no uncommitted diff).
+Result: 220 items, invariant 1 fails with exactly 3 pre-existing violations
+(Double Burger/temp, Gyro+Chicken Gyro/bread) -- same known, already-
+tracked blockers from last night's queue, not caused by this write; all 7
+other invariants pass. Turkey Sub confirmed orderable, size step now
+carries slot_key="size", prompt_template="size.ask", real choices Medium
+12'' / Large 16'' +$8.00.

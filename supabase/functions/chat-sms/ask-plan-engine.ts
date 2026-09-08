@@ -18,14 +18,25 @@
 // REACTIVELY: if the current message names a real, compiled choice, it's
 // applied with its real price (spec Appendix B's worked example: "large
 // pepperoni pizza" -> product + size + toppings Pepperoni pre-filled, no
-// question asked). What's still NOT built here: the proactive offer_once
-// question ("Any toppings on the X? Say which, or 'no' for plain.") for a
-// modifier the customer never mentions, and unverified-request tracking for
-// a mentioned modifier that doesn't match any real choice (the legacy
-// path's `unverified_requests` has no compiled-path equivalent yet). Both
-// are documented follow-ups, not silent gaps — a modifier never named this
-// turn is simply not applied, same as today's legacy behavior for an
-// unprompted extra.
+// question asked). This reactive match requires the modifier's group to
+// actually be a step in askPlan.steps — compile-menu.ts's stepEligible()
+// used to exclude any modifier not pre-classified offer_once (i.e. every
+// modifier with an unset/on_request ask_mode, which is most of them until
+// item 3's archetype infer runs), which made the group invisible here too,
+// not just unasked. Fixed 2026-09-07: stepEligible() now includes every
+// group unconditionally, so an on_request modifier is still never asked
+// proactively (this loop never sets it as `nextStep`) but IS reactively
+// matchable, closing the exact gap bug 4 reported as "still broken."
+// What's still NOT built here: the proactive offer_once question ("Any
+// toppings on the X? Say which, or 'no' for plain.") for a modifier the
+// customer never mentions, and unverified-request tracking for a mentioned
+// modifier that doesn't match any real choice (the legacy path's
+// `unverified_requests` has no compiled-path equivalent yet — GUARD 12 in
+// index.ts covers the false-confirmation half of this from outside the
+// engine, since it checks cart_json against the reply text regardless of
+// which path added the item). Both are documented follow-ups, not silent
+// gaps — a modifier never named this turn is simply not applied, same as
+// today's legacy behavior for an unprompted extra.
 //
 // Reuses significantStems/stemWord from pending-disambiguation.ts rather
 // than reimplementing a second matcher, per the standing rule from the
@@ -126,9 +137,24 @@ function formatDelta(cents: number): string {
  * LLM's job is to relay this text verbatim (plus, on the first turn only,
  * one warm sentence before it) — never to invent its own wording or option
  * names (spec P5, Appendix C).
+ *
+ * AUTHORITATIVE FIELD (2026-09-08, item 8 follow-up): reads `prompt_template`,
+ * not `slot_key`. Before this fix the two could disagree — slot_key is a raw
+ * DB passthrough (compile-menu/index.ts) that stayed null on 494/494 of
+ * Zio's option_groups, while prompt_template is always compiler-derived
+ * (compile-menu.ts's promptTemplateFor) with a name-based fallback baked in
+ * when slot_key is null, so it could read e.g. "size.ask" even while
+ * slot_key itself was still null underneath. Looking up slot_key here meant
+ * the fallback that already existed one function away was never reached.
+ * Deriving the lookup key from prompt_template instead means this function
+ * has exactly one source for "what question is this," computed in exactly
+ * one place (promptTemplateFor) — the two fields can no longer disagree
+ * because only one of them is ever read downstream. slot_key remains the
+ * canonical semantic tag for canonical step ordering (SLOT_RANK) and entity
+ * keys; it is deliberately not consulted here anymore.
  */
 export function renderStepQuestion(step: CompiledStep, displayName: string): string {
-  const key = step.slot_key ?? "";
+  const key = step.prompt_template.split(".")[0] || "";
   const template = TEMPLATE_QUESTIONS[key];
   if (template) {
     return template

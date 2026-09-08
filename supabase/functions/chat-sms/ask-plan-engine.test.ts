@@ -114,6 +114,39 @@ Deno.test("renderStepQuestion: unknown slot_key falls back to a generic determin
   assert(!q.toLowerCase().includes("choose an option"));
 });
 
+// REGRESSION (2026-09-08, item 8 follow-up): the exact drift this fix
+// closes — a group whose slot_key is null (the real state of all 494
+// Zio's option_groups before this task) but whose prompt_template was
+// already correctly compiler-derived from the group name. Before this fix,
+// renderStepQuestion read slot_key directly and always missed, no matter
+// what prompt_template said. Now it reads prompt_template, so a null
+// slot_key no longer defeats a fallback the compiler already computed.
+Deno.test("renderStepQuestion: null slot_key with a compiler-derived prompt_template still hits the Appendix C template (the Zio's turkey sub repro)", () => {
+  const step: CompiledStep = {
+    group_id: "grp-turkey-size", slot_key: null, kind: "slot", ask_mode: "ask",
+    prompt_template: "size.ask",
+    choices: [
+      { id: "c-med", display: 'Medium 12"', price_delta_cents: 0 },
+      { id: "c-lg", display: 'Large 16"', price_delta_cents: 800 },
+    ],
+  };
+  const q = renderStepQuestion(step, "Turkey Sub");
+  assertEquals(q, 'What size Turkey Sub? Medium 12" (no extra charge) or Large 16" +$8.00.');
+});
+
+// Same null-slot_key case, but the group name doesn't resolve to any known
+// Appendix C key — prompt_template's own name-derived fallback becomes the
+// readable label instead of the old bare "option" fallback.
+Deno.test("renderStepQuestion: null slot_key with an unrecognized name-derived prompt_template uses a readable fallback label", () => {
+  const step: CompiledStep = {
+    group_id: "grp-x", slot_key: null, kind: "slot", ask_mode: "ask",
+    prompt_template: "choose_an_option.ask",
+    choices: [{ id: "c-a", display: "Basket", price_delta_cents: 0 }],
+  };
+  const q = renderStepQuestion(step, "Chicken Fingers & Fries");
+  assertEquals(q, "What choose an option would you like for the Chicken Fingers & Fries? Basket (no extra charge).");
+});
+
 Deno.test("resolveAskPlan: 'large buffalo chicken pizza' resolves size to Large with the real $5.00 delta (bug 1)", () => {
   const result = resolveAskPlan(SIZE_ASK_PLAN, "large buffalo chicken pizza", new Set(), new Map());
   assertEquals(result.resolved.length, 1);

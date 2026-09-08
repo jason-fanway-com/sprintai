@@ -1733,7 +1733,7 @@ async function saveCart(
   cartId:   string,
   cart:     AnyCartItem[],
   phase:    OrderPhase,
-): Promise<void> {
+): Promise<boolean> {
   // ── Guard C: phase="checkout" only after a Stripe session exists ──────
   // INVARIANT (Fix 4 — Checkout backstop): No code path may set phase to
   // "checkout" unless submit_order has already created a real Stripe
@@ -1759,9 +1759,24 @@ async function saveCart(
     const r = i as CartItem;
     return s + (r.price_cents * (r.quantity || 1));
   }, 0);
-  await supabase.from("order_carts")
+  const { error } = await supabase.from("order_carts")
     .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal })
     .eq("id", cartId);
+  if (error) console.error(`[chat-sms] saveCart FAILED for cart=${cartId}: ${error.message}`);
+  return !error;
+}
+
+// Shared by every guard that mutates unverified_requests and then wants to
+// tell the customer the shop was notified: that claim is only true if the
+// saveCart() write meant to persist it actually succeeded — same rule
+// zero-option-attribute-hint.ts's renderZeroOptionAttributeChangeReply
+// enforces for the deterministic decline path's kitchen note. One function,
+// used everywhere this claim is rendered, so the rule can't be applied to
+// one call site and silently skipped on the next.
+function honestFlaggedClause(saved: boolean): string {
+  return saved
+    ? " I've flagged it for the shop."
+    : " I wasn't able to save that for the shop just now — worth mentioning it again if it matters.";
 }
 
 // ─── Ordering LLM loop ────────────────────────────────────────────────────────
@@ -4702,10 +4717,22 @@ Deno.serve(async (req: Request) => {
         // trusts an LLM to do reliably), never invent or default a choice
         // that was never in the data.
         const askText7c = renderMissingOptionsPrompt([{ name: resolved7c.name, missingGroups: pending7c }]);
+        // FIX (2026-09-08, live Zio's leak: "Choices for option: Medium 12'',
+        // Large 16''"): when the group's own name is one of the generic
+        // labels ("Choose an option", etc.), displayGroupName resolves it to
+        // the plain fallback "option" — fine inline in a sentence ("what
+        // option you'd like"), but reading as a literal internal debug
+        // string when it's the noun in "Choices for X:". askText7c above
+        // already asks the real question naming the real choices; omitting
+        // this redundant clause when the label is the generic fallback is
+        // strictly better than emitting "Choices for option: ...".
         const choiceClauses7c = pending7c
           .map(groupName => {
             const group = resolved7c.option_groups?.find(g => g.name === groupName);
-            return group && group.choices.length > 0 ? `Choices for ${displayGroupName(group.name)}: ${group.choices.map(c => c.name).join(", ")}.` : "";
+            if (!group || group.choices.length === 0) return "";
+            const label7c = displayGroupName(group.name);
+            if (label7c.toLowerCase() === "option") return "";
+            return `Choices for ${label7c}: ${group.choices.map(c => c.name).join(", ")}.`;
           })
           .filter(Boolean)
           .join(" ");
@@ -5748,6 +5775,16 @@ Deno.serve(async (req: Request) => {
   // is preserved via `unverified_requests` (the same existing mechanism
   // add_item already uses for an unrecognized customer ask) so the shop
   // still sees it on the ticket instead of it silently vanishing.
+  //
+  // GUARD 12/16 shared disclaimer accumulator (2026-09-08 fix, real Zio's
+  // transcript): both guards flag "the customer named this attribute but
+  // it isn't reflected in the cart." They push into this ONE array instead
+  // of each composing and appending its own sentence, so a turn where both
+  // fire on the same item renders exactly one honest disclaimer, built from
+  // a deduped SET of terms — not two disclaimers with the same terms in a
+  // different order (a joined-string comparison would have missed that;
+  // see the dedupe below).
+  const pendingConfirmAsks12_16: string[] = [];
   {
     const beforeById12 = new Map(
       cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => [(i as CartItem).menu_item_id, i as CartItem]),
@@ -5789,8 +5826,33 @@ Deno.serve(async (req: Request) => {
       }
       const claimsConfirmation12 = /\b(?:got it|note[ds]?|add(?:ed|ing)?|noting|i['’]ll)\b/i.test(replyLower12);
       if (!claimsConfirmation12) continue;
+      // ROOT-CAUSE FIX (2026-09-08, real Zio's transcript, Tuna Provolone
+      // Wrap): a choice name must ALSO appear in the CUSTOMER's own message
+      // before it's grounds for "the reply falsely confirmed something
+      // unresolved." Without this, the guard was scanning the bot's own
+      // reply text indiscriminately — including the bot's own stock item
+      // description ("That comes with lettuce, tomato, onions, and mayo"),
+      // which names real unselected choices the customer never asked about
+      // at all. Real blast radius: 158/220 Zio's items and all 170 NJB items
+      // carry a real description the bot can recite, so this fired across
+      // most of both menus, not just this one item. The guard exists to
+      // catch a false claim about what the CUSTOMER asked for, so the
+      // customer's own utterance — not the bot's generated text — is the
+      // only valid source for "the thing that might need confirming."
+      //
+      // The item's own name is stripped from the customer's message first,
+      // same word-by-word treatment already applied to the reply above —
+      // otherwise an item whose NAME happens to contain a real modifier word
+      // (e.g. "Bacon Burger Pizza", where "Bacon" is also an on-request
+      // topping) would look like the customer asked for that modifier just
+      // by naming the item, which they didn't.
+      let userMessageLower12 = userMessage.toLowerCase();
+      for (const w of menuItem.name.toLowerCase().split(/\s+/).filter(Boolean)) {
+        userMessageLower12 = userMessageLower12.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+      }
       for (const name of unselectedChoiceNames) {
         const nameRe = new RegExp(`\\b${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+        if (!nameRe.test(userMessageLower12)) continue;
         if (nameRe.test(replyLower12)) flaggedAsks12.push({ item: ci, ask: name });
       }
     }
@@ -5801,9 +5863,7 @@ Deno.serve(async (req: Request) => {
         if (!existing.includes(ask)) item.unverified_requests = [...existing, ask];
       }
       console.warn(`[chat-sms] GUARD 12 (confirmation claims unresolved choice) tripped (conv=${conversation.id}). Flagged: ${flaggedAsks12.map(f => `${f.item.name}:${f.ask}`).join(", ")}`);
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-      const asksText = [...new Set(flaggedAsks12.map(f => f.ask))].join(", ");
-      reply = `${reply} Just to be clear — I couldn't confirm "${asksText}" as an option here, so it isn't priced or on the order yet; I've flagged it for the shop.`;
+      pendingConfirmAsks12_16.push(...flaggedAsks12.map(f => f.ask));
     }
   }
 
@@ -5911,10 +5971,22 @@ Deno.serve(async (req: Request) => {
       replyLower16 = replyLower16.replace(
         new RegExp(`\\b${dn16.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
       if (!/\b(?:got it|note[ds]?|add(?:ed|ing)?|noting|i['']ll|with)\b/i.test(replyLower16)) continue;
+      // Same root-cause fix as GUARD 12: a modifier display name is only
+      // grounds for a false-claim flag if the CUSTOMER's own message named
+      // it. Otherwise the bot's own reply text (e.g. its stock description
+      // of what an item comes with) can trip this exactly as it did GUARD 12.
+      // Same phrase-stripping as above applied to the customer's own
+      // message too — a real item like "Bacon Burger Pizza" (where "Bacon"
+      // is also a separately orderable on-request topping) must not read as
+      // the customer asking for that topping just by naming the item.
+      let userMessageLower16 = userMessage.toLowerCase();
+      userMessageLower16 = userMessageLower16.replace(
+        new RegExp(`\\b${dn16.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
       for (const displayName of allModifierDisplays16) {
         if (confirmedDisplays16.has(displayName.toLowerCase())) continue;
         const nameRe = new RegExp(
           `\\b${displayName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+        if (!nameRe.test(userMessageLower16)) continue;
         if (nameRe.test(replyLower16)) flagged16.push({ item: ci, choiceName: displayName });
       }
     }
@@ -5924,10 +5996,32 @@ Deno.serve(async (req: Request) => {
         if (!existing.includes(choiceName)) item.unverified_requests = [...existing, choiceName];
       }
       console.warn(`[chat-sms] GUARD 16 (compiled modifier falsely confirmed) tripped (conv=${conversation.id}). Flagged: ${flagged16.map(f => `${f.item.name}:${f.choiceName}`).join(", ")}`);
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-      const asksText16 = [...new Set(flagged16.map(f => f.choiceName))].join(", ");
-      reply = `${reply} Just to be clear — I couldn't confirm "${asksText16}" as an option here, so it isn't priced or on the order yet; I've flagged it for the shop.`;
+      pendingConfirmAsks12_16.push(...flagged16.map(f => f.choiceName));
     }
+  }
+
+  // ── GUARD 12/16 shared disclaimer render (2026-09-08 fix) ─────────────────
+  // Renders once, after both guards have had a chance to push into the same
+  // accumulator. Dedupes on a normalized SET of terms (lowercased key, first-
+  // seen display casing kept, sorted for determinism) rather than the old
+  // per-guard joined string — two guards flagging the same terms in a
+  // different iteration order used to produce two disclaimers ("Mayo,
+  // Lettuce" then "Lettuce, Mayo") because string equality on the
+  // concatenated phrase never matched. The "I've flagged it for the shop"
+  // clause is gated on saveCart's own success (honestFlaggedClause) instead
+  // of being asserted unconditionally.
+  if (pendingConfirmAsks12_16.length > 0) {
+    const seenLower1216 = new Set<string>();
+    const dedupedAsks1216: string[] = [];
+    for (const ask of pendingConfirmAsks12_16) {
+      const key = ask.toLowerCase();
+      if (seenLower1216.has(key)) continue;
+      seenLower1216.add(key);
+      dedupedAsks1216.push(ask);
+    }
+    const cartSaved1216 = await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+    const asksText1216 = dedupedAsks1216.sort((a, b) => a.localeCompare(b)).join(", ");
+    reply = `${reply} Just to be clear — I couldn't confirm "${asksText1216}" as an option here, so it isn't priced or on the order yet;${honestFlaggedClause(cartSaved1216)}`;
   }
 
   // ── Guard 17 (2026-09-08, real NJB transcript): claimed attribute change
@@ -6121,9 +6215,9 @@ Deno.serve(async (req: Request) => {
         if (!existing.includes(note)) item.unverified_requests = [...existing, note];
       }
       console.warn(`[chat-sms] GUARD 17 (zero-option item false attribute-change claim) tripped (conv=${conversation.id}). Flagged: ${flagged17.map(f => f.item.name).join(", ")}`);
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      const cartSaved17 = await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
       const itemNames17 = [...new Set(flagged17.map(f => f.menuItemName))].join(", ");
-      reply = `${reply} Just to be clear — ${itemNames17} doesn't have that kind of option here, so nothing was actually changed; I've flagged it for the shop.`;
+      reply = `${reply} Just to be clear — ${itemNames17} doesn't have that kind of option here, so nothing was actually changed;${honestFlaggedClause(cartSaved17)}`;
     }
   }
 
@@ -6161,7 +6255,25 @@ Deno.serve(async (req: Request) => {
         if (!group || group.choices.length === 0) continue;
         const namesReplyMentions = group.choices.some(c => replyLower.includes(c.name.toLowerCase()));
         if (namesReplyMentions) continue;
-        missingClauses.push(`Choices for ${displayGroupName(group.name)}: ${group.choices.map(c => c.name).join(", ")}.`);
+        // FIX (2026-09-08, live Zio's leak — real transcript: "Turkey Sub
+        // added! Medium 12" or large 16"? ... Choices for option: Medium
+        // 12'', Large 16''"): the model HAD already named the real choices
+        // here — it wrote the inch mark as a straight double-quote ("12")
+        // while the stored choice name uses two apostrophes (12''), so
+        // namesReplyMentions's substring check missed the match. Root data
+        // shape: 199/494 of Zio's option_groups are literally named "Choose
+        // an option" (Vito's has 0), so displayGroupName's generic fallback
+        // fires constantly here — and when it does, the label itself reads
+        // as a leaked internal string ("Choices for option: ...") rather
+        // than useful text. Whether or not the reply-mention check is
+        // exactly right, a generic-labeled clause is never worth emitting:
+        // the deterministic question this guard's sibling code already
+        // asked already lists the real choices, so this is redundant at
+        // best and a debug-string leak at worst. Suppress the clause
+        // entirely rather than try to patch the quote-matching heuristic.
+        const label8 = displayGroupName(group.name);
+        if (label8.toLowerCase() === "option") continue;
+        missingClauses.push(`Choices for ${label8}: ${group.choices.map(c => c.name).join(", ")}.`);
       }
     }
     if (missingClauses.length > 0) {

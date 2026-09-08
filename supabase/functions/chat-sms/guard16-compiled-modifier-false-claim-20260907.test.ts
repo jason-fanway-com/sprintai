@@ -35,11 +35,15 @@ interface CartLineLike {
 interface StepLike { kind: string; group_id: string; choices: { id: string; display: string }[] }
 interface MenuItemLike { id: string; ask_plan: { display_name: string; steps: StepLike[] } | null }
 
-// Mirror of GUARD 16's inner loop logic
+// Mirror of GUARD 16's inner loop logic. `userMessage` defaults to the
+// empty string in legacy call sites below that predate the 2026-09-08 fix
+// requiring the customer to have actually named the attribute; those sites
+// pass it explicitly once updated.
 function guard16FlaggedMirror(
   ci: CartLineLike,
   menuItem: MenuItemLike,
   reply: string,
+  userMessage: string,
 ): string[] {
   if (!menuItem.ask_plan || !ci.ask_plan_selections) return [];
   const confirmedDisplays = new Set<string>();
@@ -57,10 +61,13 @@ function guard16FlaggedMirror(
   const dn = menuItem.ask_plan.display_name.toLowerCase();
   replyLower = replyLower.replace(new RegExp(`\\b${dn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
   if (!/\b(?:got it|note[ds]?|add(?:ed|ing)?|noting|i['']ll|with)\b/i.test(replyLower)) return [];
+  let userMessageLower = userMessage.toLowerCase();
+  userMessageLower = userMessageLower.replace(new RegExp(`\\b${dn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
   const flagged: string[] = [];
   for (const displayName of allModifierDisplays) {
     if (confirmedDisplays.has(displayName.toLowerCase())) continue;
     const nameRe = new RegExp(`\\b${displayName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+    if (!nameRe.test(userMessageLower)) continue;
     if (nameRe.test(replyLower)) flagged.push(displayName);
   }
   return flagged;
@@ -96,21 +103,24 @@ const PEPPERONI_IN_SELECTIONS: CartLineLike = {
 // The exact repro: model says "with pepperoni" but pepperoni is NOT in selections
 Deno.test("GUARD 16: the exact repro — reply claims pepperoni but it's not in ask_plan_selections", () => {
   const reply = "Got it — Large Buffalo Chicken Pizza with pepperoni added!";
-  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply);
+  const userMessage = "large buffalo chicken pizza with pepperoni";
+  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
   assertEquals(flagged, ["Pepperoni"]);
 });
 
 // When pepperoni IS in selections, no false flag
 Deno.test("GUARD 16: confirmed modifier is never flagged", () => {
   const reply = "Got it — Large Buffalo Chicken Pizza with pepperoni added!";
-  const flagged = guard16FlaggedMirror(PEPPERONI_IN_SELECTIONS, PIZZA_MENU_ITEM, reply);
+  const userMessage = "large buffalo chicken pizza with pepperoni";
+  const flagged = guard16FlaggedMirror(PEPPERONI_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
   assertEquals(flagged, []);
 });
 
 // No confirmation keyword → guard skips entirely
 Deno.test("GUARD 16: no confirmation keyword means no check", () => {
   const reply = "Pepperoni is available as a topping on that pizza.";
-  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply);
+  const userMessage = "pepperoni";
+  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
   assertEquals(flagged, []);
 });
 
@@ -119,7 +129,8 @@ Deno.test("GUARD 16: no confirmation keyword means no check", () => {
 // detected as unconfirmed without tripping on the item's own word "chicken".
 Deno.test("GUARD 16: item name stripping prevents item words from blocking modifier detection", () => {
   const reply = "Got it — Buffalo Chicken Pizza added with grilled chicken!";
-  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply);
+  const userMessage = "buffalo chicken pizza with grilled chicken";
+  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
   assert(flagged.includes("Grilled Chicken"), "should flag unconfirmed Grilled Chicken");
   assert(!flagged.includes("Pepperoni"), "pepperoni not in reply → not flagged");
 });
@@ -131,7 +142,8 @@ Deno.test("GUARD 16: slot choices (size) are never flagged even if the size name
     ask_plan_selections: {}, // nothing resolved yet
   };
   const reply = "Got it — adding a Large Buffalo Chicken Pizza!";
-  const flagged = guard16FlaggedMirror(lineNoSize, PIZZA_MENU_ITEM, reply);
+  const userMessage = "large buffalo chicken pizza";
+  const flagged = guard16FlaggedMirror(lineNoSize, PIZZA_MENU_ITEM, reply, userMessage);
   assert(!flagged.some(f => f.toLowerCase().includes("large")), "size choices must never be flagged by GUARD 16");
 });
 
@@ -146,14 +158,80 @@ Deno.test("GUARD 16: item with no modifier steps produces no flags", () => {
   };
   const ci: CartLineLike = { menu_item_id: "some-id", ask_plan_selections: { "g1": "c1" } };
   const reply = "Got it — Option A added!";
-  assertEquals(guard16FlaggedMirror(ci, slotOnlyItem, reply), []);
+  assertEquals(guard16FlaggedMirror(ci, slotOnlyItem, reply, "option a"), []);
 });
 
 // No ask_plan_selections → guard skips (not a compiled line)
 Deno.test("GUARD 16: item with no ask_plan_selections is skipped (legacy-path line)", () => {
   const legacyLine: CartLineLike = { menu_item_id: "8655ccdd-e43b-4a8f-a22d-f2d1ef71615f" };
   const reply = "Got it — with pepperoni added!";
-  assertEquals(guard16FlaggedMirror(legacyLine, PIZZA_MENU_ITEM, reply), []);
+  assertEquals(guard16FlaggedMirror(legacyLine, PIZZA_MENU_ITEM, reply, "pepperoni"), []);
+});
+
+// ROOT-CAUSE REGRESSION (2026-09-08, real Zio's transcript): the bot's own
+// stock description of an item ("comes with mushrooms") must never be
+// mistaken for a customer request. The customer only asked for the pizza —
+// "mushrooms" and "pepperoni" appear ONLY in the bot's own reply text.
+Deno.test("GUARD 16 fix: bot's own item description is not a customer request — no false flag", () => {
+  const reply = "Got it — Large Buffalo Chicken Pizza added. That comes with mushrooms and pepperoni.";
+  const userMessage = "large buffalo chicken pizza";
+  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
+  assertEquals(flagged, []);
+});
+
+// Same fix, but confirms the guard still catches a REAL customer-named ask
+// that the bot falsely confirms — the fix must not make the guard blind to
+// genuine false claims, only to bot-authored description text.
+Deno.test("GUARD 16 fix: customer-named modifier is still caught when falsely confirmed", () => {
+  const reply = "Got it — Large Buffalo Chicken Pizza added with mushrooms.";
+  const userMessage = "large buffalo chicken pizza with mushrooms please";
+  const flagged = guard16FlaggedMirror(PEPPERONI_NOT_IN_SELECTIONS, PIZZA_MENU_ITEM, reply, userMessage);
+  assertEquals(flagged, ["Mushrooms"]);
+});
+
+// REAL-DATA residual gap found while verifying the fix against Zio's and
+// NJB's live menus (2 of 133 items): an item whose own NAME contains a word
+// that is ALSO a separately orderable modifier (e.g. real menu item "Bacon
+// Burger Pizza" — "Bacon" is both baked into the name and an on-request
+// topping). Naming the item alone must not read as asking for that
+// modifier — the item's own display name is stripped from the customer's
+// message first, same phrase-stripping already applied to the reply.
+Deno.test("GUARD 16 fix: a modifier word embedded in the item's own name is not mistaken for a customer request", () => {
+  const baconPizza: MenuItemLike = {
+    id: "bacon-pizza-id",
+    ask_plan: {
+      display_name: "Bacon Burger Pizza",
+      steps: [{ kind: "modifier", group_id: "top-group", choices: [
+        { id: "c-bacon", display: "Bacon" },
+        { id: "c-mush", display: "Mushrooms" },
+      ]}],
+    },
+  };
+  const line: CartLineLike = { menu_item_id: "bacon-pizza-id", ask_plan_selections: {} };
+  const reply = "Got it — Bacon Burger Pizza added. That comes with beef, bacon, and cheese.";
+  const userMessage = "bacon burger pizza";
+  const flagged = guard16FlaggedMirror(line, baconPizza, reply, userMessage);
+  assertEquals(flagged, []);
+});
+
+// Same item, but the customer DOES separately ask for extra bacon beyond
+// what's in the name — still must be caught if falsely confirmed.
+Deno.test("GUARD 16 fix: extra bacon explicitly requested beyond the item name is still caught", () => {
+  const baconPizza: MenuItemLike = {
+    id: "bacon-pizza-id",
+    ask_plan: {
+      display_name: "Bacon Burger Pizza",
+      steps: [{ kind: "modifier", group_id: "top-group", choices: [
+        { id: "c-bacon", display: "Bacon" },
+        { id: "c-mush", display: "Mushrooms" },
+      ]}],
+    },
+  };
+  const line: CartLineLike = { menu_item_id: "bacon-pizza-id", ask_plan_selections: {} };
+  const reply = "Got it — Bacon Burger Pizza added with extra bacon.";
+  const userMessage = "bacon burger pizza with extra bacon";
+  const flagged = guard16FlaggedMirror(line, baconPizza, reply, userMessage);
+  assertEquals(flagged, ["Bacon"]);
 });
 
 // Regression: GUARD 16 exists in index.ts

@@ -25,25 +25,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import type { TestCase, Turn } from "./library.ts";
 
-/**
- * Vito's live categories that should each get one coverage case. There is no
- * literal "Sides" category on this shop's menu — "Appetizers" is used as the
- * sides-equivalent per the task that introduced this file.
- */
-export const CATEGORY_COVERAGE_TARGET_CATEGORIES = [
-  "Pizza",
-  "Wings",
-  "Angus Burgers & Specialty",
-  "Cold Sandwiches",
-  "Hot Sandwiches",
-  "Homemade Paninis",
-  "Wraps",
-  "Salads",
-  "Flatbreads",
-  "Stromboli",
-  "Appetizers",
-];
-
 interface ActiveItemRow {
   id: string;
   name: string;
@@ -131,15 +112,27 @@ export async function buildCategoryCoverageCases(
     .single();
   if (!menu) return [];
 
+  // Real gap, found running this harness against Zio's/NJB for the first
+  // time tonight (2026-09-08): CATEGORY_COVERAGE_TARGET_CATEGORIES is a
+  // literal list of Vito's own category names. Filtering by it here meant
+  // only a shop's categories that happen to share Vito's EXACT spelling
+  // ("Pizza," "Wraps," "Salads") were ever covered — Zio's "Burgers" (not
+  // "Angus Burgers & Specialty"), "Cold Subs"/"Hot Subs" (not "Cold/Hot
+  // Sandwiches"), "Paninis" (not "Homemade Paninis") would have been
+  // silently skipped, and the file's own header claims "menu-agnostic...
+  // works for any shop's category set, not just Vito's" — the
+  // implementation didn't match that claim. Fixed by deriving the category
+  // set from the shop's own active items instead of a fixed list — every
+  // real category with at least one active item gets a case, for any shop.
   const { data: items } = await supabase
     .from("menu_items")
     .select("id, name, category, price_cents, display_order")
     .eq("menu_id", menu.id)
     .eq("active", true)
-    .in("category", CATEGORY_COVERAGE_TARGET_CATEGORIES)
     .order("display_order");
   const activeItems = (items ?? []) as ActiveItemRow[];
   if (activeItems.length === 0) return [];
+  const targetCategories = [...new Set(activeItems.map((i) => i.category))];
 
   const itemIds = activeItems.map((i) => i.id);
   const { data: groups } = await supabase
@@ -178,7 +171,7 @@ export async function buildCategoryCoverageCases(
 
   const cases: TestCase[] = [];
 
-  for (const category of CATEGORY_COVERAGE_TARGET_CATEGORIES) {
+  for (const category of targetCategories) {
     const itemsInCategory = activeItems
       .filter((i) => i.category === category)
       .sort((a, b) => a.display_order - b.display_order);
