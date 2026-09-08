@@ -170,6 +170,46 @@ export function renderStepQuestion(step: CompiledStep, displayName: string): str
 }
 
 /**
+ * ITEM 2 (2026-09-08, PO live verification — "turkey sub" x4 produced 4
+ * different renderings of the same compiled question: different wording,
+ * "(+$8)" vs "(+$8.00)", "-" vs ":" separator, straight vs curly quotes).
+ * `renderStepQuestion`'s output reaches the customer today only via a tool-
+ * result `instruction` telling the LLM to relay it "verbatim" — a prompt
+ * instruction, not a guarantee, and the model reworded it every run. This
+ * is a CODE-level guarantee instead, same mechanical shape as index.ts's
+ * GUARD 8 (programmatically appending a clause the model's own text is
+ * missing): if the model's reply already contains `nextQuestion` byte-for-
+ * byte, it's left alone (a warm lead-in before it is fine — spec Appendix
+ * C, "may add one warm sentence... first turn only"). Otherwise, any
+ * sentence in the model's reply that already named one of the step's real
+ * choices is dropped (that's the model's own paraphrase attempt — keeping
+ * it alongside the canonical line would show the customer two different,
+ * possibly contradictory, renderings of the same question) and the
+ * canonical question is appended after whatever warmth is left. Reuses
+ * `significantStems` (same primitive `matchChoiceInText` above already
+ * uses for choice matching) rather than a new ad hoc quote/format regex —
+ * it strips punctuation, so "12"" vs "12''" no longer causes a false miss.
+ */
+export function enforceVerbatimStepQuestion(
+  modelReply: string,
+  nextQuestion: string,
+  choiceDisplays: string[],
+): string {
+  if (modelReply.includes(nextQuestion)) return modelReply;
+
+  const choiceStems = new Set(choiceDisplays.flatMap(d => [...significantStems(d)]));
+  if (choiceStems.size === 0) return `${modelReply} ${nextQuestion}`.trim();
+
+  const sentences = modelReply.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const keptSentences = sentences.filter(s => {
+    const sentenceStems = significantStems(s);
+    return ![...choiceStems].some(cs => sentenceStems.has(cs));
+  });
+  const leadIn = keptSentences.join(" ").trim();
+  return leadIn ? `${leadIn} ${nextQuestion}` : nextQuestion;
+}
+
+/**
  * The sequencer + resolver core. Walks `ask_plan.steps` in canonical order
  * (already sorted by the compiler). For each SLOT step not yet in
  * `alreadyResolvedGroupIds`:
@@ -420,6 +460,14 @@ export function applyCompiledAddItem(
       price_cents: priceCents,
       cart_total_cents: total,
       next_question: nextQuestion,
+      // ITEM 2: the group name + real choice display names for the open
+      // step, so the caller (index.ts) can enforce `nextQuestion` reaches
+      // the customer byte-for-byte via enforceVerbatimStepQuestion, and so
+      // GUARD 8's "Choices for X" clause can tell it already said these
+      // choices without re-deriving the engine state. Undefined (not a
+      // stale/wrong value) when every slot is resolved.
+      next_question_group: engineResult.nextStep ? pendingGroupNames![0] : undefined,
+      next_question_choices: engineResult.nextStep ? engineResult.nextStep.choices.map(c => c.display) : undefined,
       instruction: nextQuestion
         ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${nextQuestion}"`
         : "All required options are resolved. Do not ask about options for this item again.",

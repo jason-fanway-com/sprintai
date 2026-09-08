@@ -32,6 +32,7 @@ import {
   isPendingDisambiguationDeclined,
   resolveNamedCartRemoval,
   resolvePendingDisambiguation,
+  significantStems,
   stemWord,
   type PendingCandidate,
   type PendingDisambiguation,
@@ -44,7 +45,7 @@ import {
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, allSlotsResolved, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, allSlotsResolved, enforceVerbatimStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1797,7 +1798,7 @@ async function runOrderingLoop(
   // Item 8 (spec §7/§11 item 8) — see executeTool's matching params.
   compiledEngineEnabled?: boolean,
   shopPhone?: string | null,
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }> }> {
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
 
@@ -1816,6 +1817,14 @@ async function runOrderingLoop(
   // orderable_alternatives instruction (executeTool's add_item case) is a
   // prompt-level constraint only, not a guarantee.
   const declinedBlockedItems: Array<{ category: string; name: string }> = [];
+
+  // ITEM 2 (2026-09-08, PO live verification): compiled add_item calls this
+  // turn that left a slot question open — recorded so the caller can force
+  // `next_question` to reach the customer byte-for-byte (enforceVerbatim-
+  // StepQuestion) instead of trusting the model's own free-text reply to
+  // relay it, and so GUARD 8 (in the caller) can tell it was already said
+  // when deciding whether to append its own "Choices for X" clause (item 1).
+  const compiledStepQuestions: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }> = [];
 
   // ── Fix 1 & 2: Deterministic pre-loop guards ──────────────────────────
   //
@@ -1928,7 +1937,7 @@ async function runOrderingLoop(
     // execute pending tools; only return once the model stops calling them.
     if (toolBlocks.length === 0) {
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
-      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems };
+      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
       const soft = cart.length > 0
         ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
@@ -2026,6 +2035,16 @@ async function runOrderingLoop(
         const declinedId = (toolBlock.input as { menu_item_id?: string })?.menu_item_id;
         const declinedItem = declinedId ? menu.find(m => m.id === declinedId) : undefined;
         if (declinedItem) declinedBlockedItems.push({ category: declinedItem.category, name: declinedItem.name });
+      }
+      if (toolBlock.name === "add_item" && result.ok) {
+        const r = result.result as { next_question?: string | null; next_question_group?: string; next_question_choices?: string[] };
+        const addedId = (toolBlock.input as { menu_item_id?: string })?.menu_item_id;
+        if (addedId && r.next_question && r.next_question_group) {
+          compiledStepQuestions.push({
+            menuItemId: addedId, groupName: r.next_question_group,
+            nextQuestion: r.next_question, choiceDisplays: r.next_question_choices ?? [],
+          });
+        }
       }
       toolResults.push({
         type:        "tool_result",
@@ -2334,6 +2353,48 @@ function renderMissingOptionsPrompt(items: Array<{ name: string; missingGroups: 
     ? `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`
     : clauses[0];
   return `I still need to know ${joined}. What'll it be?`;
+}
+
+/**
+ * ITEM 1 (2026-09-08, PO live verification — "Turkey Sub added! What size -
+ * medium 12" or large 16" (+$8)? ... Choices for Size: Medium 12'', Large
+ * 16''"): the real question is never "is this group's display name a
+ * generic Slice import artifact" — it's "did the customer already hear
+ * these choices this turn." The old check (displayGroupName(...) ===
+ * "option") happened to mask the duplicate for generic-named groups
+ * ("Choose an option") but did nothing for a real-named group like "Size" —
+ * which is exactly what fired in the PO's repro, and always would have,
+ * generic-label check or not.
+ *
+ * "Already said" has two sources of truth, checked in order:
+ *   1. Structural (compiled path): `compiledRenderedGroups` records exactly
+ *      which group's canonical question enforceVerbatimStepQuestion just
+ *      placed in `reply` this turn — unambiguous, no text-matching needed.
+ *   2. Textual (legacy path / anything else): every choice's real name is
+ *      already present in the given text. Stem-based (reusing
+ *      `significantStems`, the same primitive `matchChoiceInText` in
+ *      ask-plan-engine.ts uses) rather than a raw substring/quote match —
+ *      the ORIGINAL bug here was "12"" (model's straight quote) failing to
+ *      substring-match "12''" (stored two-apostrophe choice name);
+ *      stemming strips punctuation on both sides so that mismatch can't
+ *      recur.
+ *
+ * The generic-label check is NOT folded into this function — it still runs
+ * as its own, separate anti-leak fallback at each call site (never show the
+ * literal string "Choices for option: ..." to a customer), which is a
+ * different concern (avoiding a raw import-artifact label) from this one
+ * (avoiding a duplicate).
+ */
+function groupChoicesAlreadySaid(
+  menuItemId: string, groupName: string, choiceNames: string[], text: string,
+  compiledRenderedGroups: Map<string, Set<string>>,
+): boolean {
+  if (compiledRenderedGroups.get(menuItemId)?.has(groupName)) return true;
+  const textStems = significantStems(text);
+  return choiceNames.every(name => {
+    const nameStems = significantStems(name);
+    return nameStems.size === 0 || [...nameStems].every(s => textStems.has(s));
+  });
 }
 
 /**
@@ -4176,6 +4237,16 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ITEM 1 (2026-09-08, PO live verification): menu_item_id -> option-group
+  // names whose real choices have already reached the customer this turn via
+  // the compiled path's own canonical wording (populated once runOrderingLoop
+  // returns, below). GUARD 8 (and, defensively, GUARD 7c) reads this to
+  // decide whether its own "Choices for X" clause would be a duplicate — "did
+  // we already say this," not "is the group's display name generic." Declared
+  // here (empty) so both guards see the same variable regardless of which
+  // runs first in the turn.
+  const compiledRenderedGroups = new Map<string, Set<string>>();
+
   if (!conversation) {
     const metadata = userPhone ? { phone: userPhone } : {};
     const { data: newConv, error: convErr } = await supabase
@@ -4717,19 +4788,18 @@ Deno.serve(async (req: Request) => {
         // trusts an LLM to do reliably), never invent or default a choice
         // that was never in the data.
         const askText7c = renderMissingOptionsPrompt([{ name: resolved7c.name, missingGroups: pending7c }]);
-        // FIX (2026-09-08, live Zio's leak: "Choices for option: Medium 12'',
-        // Large 16''"): when the group's own name is one of the generic
-        // labels ("Choose an option", etc.), displayGroupName resolves it to
-        // the plain fallback "option" — fine inline in a sentence ("what
-        // option you'd like"), but reading as a literal internal debug
-        // string when it's the noun in "Choices for X:". askText7c above
-        // already asks the real question naming the real choices; omitting
-        // this redundant clause when the label is the generic fallback is
-        // strictly better than emitting "Choices for option: ...".
+        // ITEM 1 fix (2026-09-08, PO live verification): suppress on "did we
+        // already say this" (groupChoicesAlreadySaid), not "is the name
+        // generic" — see that function's docstring. askText7c (the
+        // deterministic humanizer above) never states real choice names on
+        // its own, so this is realistically always false here today; the
+        // generic-label check remains as its own, separate guard against
+        // ever emitting the literal leaked string "Choices for option: ...".
         const choiceClauses7c = pending7c
           .map(groupName => {
             const group = resolved7c.option_groups?.find(g => g.name === groupName);
             if (!group || group.choices.length === 0) return "";
+            if (groupChoicesAlreadySaid(resolved7c.id, groupName, group.choices.map(c => c.name), askText7c, compiledRenderedGroups)) return "";
             const label7c = displayGroupName(group.name);
             if (label7c.toLowerCase() === "option") return "";
             return `Choices for ${label7c}: ${group.choices.map(c => c.name).join(", ")}.`;
@@ -5209,6 +5279,17 @@ Deno.serve(async (req: Request) => {
     );
     reply = loopResult.reply;
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
+    // ITEM 2 (2026-09-08, PO live verification): force every compiled slot
+    // question opened this turn to reach the customer byte-for-byte. Must run
+    // BEFORE stripInventedActions below — that scrub only touches invented
+    // kitchen-check promises, not this, but ordering the code-authored
+    // canonical text first means downstream guards see the final wording.
+    for (const sq of loopResult.compiledStepQuestions ?? []) {
+      reply = enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);
+      const groups = compiledRenderedGroups.get(sq.menuItemId) ?? new Set<string>();
+      groups.add(sq.groupName);
+      compiledRenderedGroups.set(sq.menuItemId, groups);
+    }
     // Defect 1 (2026-09-05): the model may still promise to "check with the
     // kitchen". It checks with nobody. Strip the promise, keep the answer.
     // Applied to model output only — guard-authored replies below are exempt.
@@ -6253,24 +6334,27 @@ Deno.serve(async (req: Request) => {
       for (const groupName of added.pending_options ?? []) {
         const group = menuItem.option_groups?.find(g => g.name === groupName);
         if (!group || group.choices.length === 0) continue;
-        const namesReplyMentions = group.choices.some(c => replyLower.includes(c.name.toLowerCase()));
-        if (namesReplyMentions) continue;
-        // FIX (2026-09-08, live Zio's leak — real transcript: "Turkey Sub
-        // added! Medium 12" or large 16"? ... Choices for option: Medium
-        // 12'', Large 16''"): the model HAD already named the real choices
-        // here — it wrote the inch mark as a straight double-quote ("12")
-        // while the stored choice name uses two apostrophes (12''), so
-        // namesReplyMentions's substring check missed the match. Root data
-        // shape: 199/494 of Zio's option_groups are literally named "Choose
-        // an option" (Vito's has 0), so displayGroupName's generic fallback
-        // fires constantly here — and when it does, the label itself reads
-        // as a leaked internal string ("Choices for option: ...") rather
-        // than useful text. Whether or not the reply-mention check is
-        // exactly right, a generic-labeled clause is never worth emitting:
-        // the deterministic question this guard's sibling code already
-        // asked already lists the real choices, so this is redundant at
-        // best and a debug-string leak at worst. Suppress the clause
-        // entirely rather than try to patch the quote-matching heuristic.
+        // ITEM 1 fix (2026-09-08, PO live verification — real transcript:
+        // "Turkey Sub added! What size - medium 12" or large 16" (+$8)? ...
+        // Choices for Size: Medium 12'', Large 16''"): the ROOT bug was this
+        // "already said" check itself, not the group's display name. The old
+        // raw-substring version missed the match because the model wrote a
+        // straight double-quote ("12") while the stored choice name uses two
+        // apostrophes (12''). groupChoicesAlreadySaid is stem-based (strips
+        // punctuation on both sides, so that specific mismatch can't recur)
+        // and, for a compiled item, also checks compiledRenderedGroups —
+        // structurally true whenever enforceVerbatimStepQuestion (item 2)
+        // just placed this exact group's canonical question in `reply`, no
+        // text-matching needed. The 2026-09-07 morning fix's generic-label
+        // check (displayGroupName(...) === "option") masked this for
+        // generic-named groups only ("Choose an option", 199/494 of Zio's
+        // option_groups, Vito's has 0) — it never touched a real-named group
+        // like "Size", which is exactly what the PO's repro hit. That
+        // generic-label check still runs below, on its own, as the one thing
+        // it always was: a guard against ever emitting the literal leaked
+        // string "Choices for option: ..." — a different concern (avoiding a
+        // raw import-artifact label) from avoiding a duplicate.
+        if (groupChoicesAlreadySaid(added.menu_item_id, groupName, group.choices.map(c => c.name), replyLower, compiledRenderedGroups)) continue;
         const label8 = displayGroupName(group.name);
         if (label8.toLowerCase() === "option") continue;
         missingClauses.push(`Choices for ${label8}: ${group.choices.map(c => c.name).join(", ")}.`);

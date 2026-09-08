@@ -2480,3 +2480,239 @@ This closes everything for today except the two live-hours-gated batteries
 business hours (Zio's opens 10:00 ET, Vito's 11:00 ET), commands to re-run
 them are above. Not treating this as fully done; treating it as done except
 for that one flagged, time-gated remainder.
+
+[ITEM 8 follow-up 3 -- suppress leftover Choices-clause, enforce verbatim
+template, backfill remaining slot_keys]
+2026-09-08 ~11:20-11:47 UTC (07:20-07:47 EDT) -- Starting. Read git log/status
++ BLOCKED.txt tail per standing rule: fa098f6 (authoritative-field fix +
+189/494 backfill, PO-verified live) confirmed as the current HEAD, nothing
+uncommitted. Three items from the PO, all Zio's-only, priority order.
+
+ITEM 1 -- "Choices for X:" duplicate clause (index.ts guards 7c/:4723 and
+8/:6246). Root cause, confirmed by reading both sites: the suppression test
+was "is displayGroupName(group.name) the generic fallback 'option'", which
+only ever masked the duplicate for Slice's literal "Choose an option" import
+label -- it was NEVER what actually decided whether the clause was
+redundant. The PO's real repro ("Choices for Size: ...") hit a REAL-named
+group ("Size"), which that check was blind to; the true root cause was
+namesReplyMentions's raw substring match missing "12"" (model's straight
+quote) against the stored "12''" (two apostrophes) choice name -- a
+quote-format mismatch, not a label problem. Fixed by replacing the test with
+a new `groupChoicesAlreadySaid` helper (index.ts, module scope): (1)
+structural check -- was this exact group's canonical question just placed in
+`reply` by item 2's fix this turn (via a new `compiledRenderedGroups: Map<
+menu_item_id, Set<group_name>>`, populated where loopResult.
+compiledStepQuestions is consumed, declared once at outer scope so both
+guard 7c and guard 8 read the same instance regardless of which runs first);
+(2) textual check -- every choice's real name already present in the given
+text, STEM-based (reuses `significantStems`, the same primitive
+`matchChoiceInText` in ask-plan-engine.ts already uses for choice matching)
+instead of raw substring, so punctuation/quote-style differences can't
+cause a false miss anymore. The generic-label check (displayGroupName(...)
+=== "option") was NOT removed -- it still runs as its own, separate
+anti-leak fallback at both call sites (never emit the literal string
+"Choices for option: ..."), since that is a different concern (avoiding a
+raw import-artifact label) from avoiding a duplicate, and Vito's guard
+behavior (0 generic-labeled groups, per this morning's own count) is
+provably unaffected by this change either way -- see the "Vito's / legacy
+scoping" test below.
+
+ITEM 2 -- model paraphrase of the compiled size/price template. Root cause:
+`renderStepQuestion`'s output only ever reached the customer via a tool-
+result `instruction` telling the LLM to relay it "verbatim, do not invent
+your own wording" -- a prompt instruction, not a code guarantee, and per the
+PO's 4-live-run repro the model reworded it every time anyway (wording,
+"(+$8)" vs "(+$8.00)", "-" vs ":", straight vs curly quotes). Fixed with a
+new pure, unit-tested function `enforceVerbatimStepQuestion` (ask-plan-
+engine.ts): if the model's reply already contains the canonical
+`next_question` text byte-for-byte, it's left untouched (a warm lead-in
+before it is fine -- spec Appendix C, "may add one warm sentence... first
+turn only"). Otherwise, any sentence in the model's own reply that already
+named one of the step's real choices (stem-matched, same primitive as item
+1) is treated as the model's own wrong-format attempt at the question and
+dropped -- kept alongside the canonical line would show the customer two
+different, possibly contradictory, renderings of the same question -- and
+the canonical question is appended after whatever warmth survives. Wired in:
+applyCompiledAddItem's result now also returns `next_question_group` (the
+real option-group name) and `next_question_choices` (real choice display
+names) alongside the existing `next_question`, so the caller doesn't have to
+re-derive engine state. runOrderingLoop (index.ts) now tracks
+`compiledStepQuestions` (menuItemId + groupName + nextQuestion +
+choiceDisplays) for every add_item call that opened a compiled slot
+question this turn, returned alongside the existing declinedBlockedItems.
+The outer handler applies enforceVerbatimStepQuestion to `reply` for each
+entry BEFORE the existing stripInventedActions scrub, and records the
+enforced group into compiledRenderedGroups for item 1 to consume.
+Note on scope: traced the actual reachable paraphrase surface first, not
+assumed -- the SEPARATE-TURN pending-answer resolver (index.ts ~4784-4822,
+"Item 8 compiled pending-answer resolved") was ALREADY 100% deterministic
+before this fix (it builds `reply8` itself and returns immediately, never
+touching the LLM), so a multi-slot item's SECOND question was never at risk;
+only the FIRST add_item call, routed through the normal LLM tool loop, could
+ever reach the customer as free text. GUARD 7c (:4749) was checked and
+confirmed NOT reachable for this defect -- it calls executeTool without
+passing compiledEngineEnabled/customerMessage, so it always uses the legacy
+option_groups path even for a compiled (Zio's) item; not touched by item 2,
+only by item 1's condition-consistency fix (behavior there is unchanged --
+askText7c never states real choice names either way, verified by the
+"Vito's / legacy scoping" test).
+
+Tests: 4 new Deno.test cases for enforceVerbatimStepQuestion (ask-plan-
+engine.test.ts) covering verbatim-already-correct, the exact PO quote-
+mismatch repro, no-lead-in-survives, and warmth-preserved-price-dropped.
+New file guard-choices-clause-verbatim-20260908.test.ts (8 tests, mirrors
+groupChoicesAlreadySaid per this repo's standing convention for index.ts
+logic -- Deno.serve() at module scope makes it non-importable) covering the
+structural signal, the exact PO repro via stems, partial-mention-still-
+false, Vito's/legacy scoping, and 4 wiring assertions against the real
+index.ts source confirming both call sites and the compiledRenderedGroups
+plumbing actually exist as described, not just in this description. Full
+targeted suite: 499/499 (491 pre-existing + 8 new), 0 failed. `deno check`
+on index.ts: same 4 pre-existing type errors as the clean tree (confirmed
+via git stash on both), zero new errors introduced; ask-plan-engine.ts
+checks clean.
+
+ITEM 3 -- slot_key backfill for the remaining null groups. Investigated with
+a live read-only query (scripts/tmp-item8-followup3-null-slots-
+investigate.mjs, Zio's menu_id 6c309547-...-77f2354d6a59 only) rather than
+trusting the PO's qa_ro breakdown at face value -- confirmed it independently
+and it matched exactly: 147 kind=slot/slot_key=null (Type 107, Choose Pasta
+20, Quantity 7, Choose an option 7, Choose Sauce 3, Choose Cheese 2, Choose
+Soda 1) + 10 kind=modifier/slot_key=null (Choose Pasta) = 157.
+
+Choose Pasta slot-vs-modifier (same name, two different kinds) -- NOT a data
+bug. Verified both sides' required/min_select/max_select directly: the 20
+kind=slot rows are required=true/min=1/max=1 on items where the pasta IS the
+dish (category Pasta, Kids Corner, or a seafood dish whose own name states a
+pasta base e.g. "Pasta with Clam Sauce") -- a real, required, single-select
+core decision. The 10 kind=modifier rows are required=false/min=0/max=6 on
+Seafood entrees where pasta is an OPTIONAL side (Shrimp with Vodka Sauce,
+Calamari Marinara, etc.) -- optional, multi-capable, correctly classified as
+a modifier by the compiler's own required/cardinality-driven kind logic
+(compile-menu.ts). Two legitimate, different real business realities
+sharing one Slice-imported label, both correctly classified already. Per
+the dispatch, modifier-kind stays null (not backfilled); the 20 slot-kind
+rows don't map to any Appendix C key (not size/temp/bread/dressing/flavor/
+protein/bagel/toppings -- pasta SHAPE isn't a flavor) -- left null.
+
+Type (107, the priority) -- investigated by pulling every one of the 107
+rows' real choices, not a sample: ALL 107 have exactly 1 choice (confirmed,
+zero outliers), each with is_default=true. compile-menu.ts line 231 derives
+ask_mode purely from choice cardinality (`n === 1 -> auto_single`),
+independent of slot_key -- so every one of these groups is auto_single
+today AND was before this session, meaning resolveAskPlan applies it
+silently and renderStepQuestion/TEMPLATE_QUESTIONS is never even consulted
+for it, regardless of what slot_key holds. ANSWER for the PO: it is not
+"sub type vs pizza type" as separate real slot categories -- it's uniformly
+ONE structural thing, a self-label placeholder whose single choice is a
+broad dish classification (Appetizer/Pasta/Entree/Salad/Dessert/Gyros/
+Basket/Regular/Bottled/Kids -- loosely tracks the item's own category 76/107
+times, a broader dish-kind label the other 31), never a real customer
+decision, and functionally inert regardless of slot_key. No Appendix C key
+fits "which broad dish kind is this," and it wouldn't matter if one did --
+left null, reported here as the plain finding rather than a smoothed-over
+guess.
+
+Quantity (7) -- 5 are the same auto_single/single-choice pattern as Type
+(Jalapeno Poppers, Mozzarella Sticks, Garlic Knots, Pierogies, Meatballs:
+one fixed piece-count, inert). 2 are real: Bone In Wings (8/14 Pieces,
++$7.00) and Boneless Wings (10/20 Pieces, +$8.00), required=true, a genuine
+count decision with a real price delta. "count"/"quantity" is not in
+Appendix C's 8-key list (exists as a real key elsewhere per this morning's
+note, compile-menu.ts's SLOT_RANK, but has no TEMPLATE_QUESTIONS entry) --
+left null for all 7; the 2 real ones render via the deterministic generic
+fallback today, not silently.
+
+Choose an option (7, the tail of the original 199) -- all 7 are ALSO the
+auto_single/single-choice pattern (Basket, Regular, Bottled) -- left null,
+inert, same reasoning as Type.
+
+Choose Cheese (2, Ham & Cheese Sub / Ham Cheese & Salami Sub) --
+required=true, real 5-way cheese-type choice (American/Mozzarella/Swiss/
+Cheddar/Provolone). Genuinely distinct from "toppings" (per this morning's
+note, that key is reserved for pizza topping lists specifically) and from
+"dressing" -- no Appendix C key fits a sandwich cheese-TYPE slot -- left
+null, reported.
+
+Choose Sauce (3) and Choose Soda (1) -- BACKFILLED, slot_key='flavor',
+provenance='inferred' (matching this morning's convention, confirmed by
+reading the already-backfilled Size rows before writing anything). All 4
+independently confirmed required=true/min=1/max=1 before writing. Pasta
+with Clam Sauce (Red Clam Sauce / White Clam Sauce) and Bone In/Boneless
+Wings (Plain/Hot/Mild/BBQ/Sweet & Hot Sauce -- literal wing FLAVOR) both
+read naturally through Appendix C's generic flavor.ask template ("Which
+flavor for the Bone In Wings? Plain, Hot Sauce, ..."); Soda (Coke/Diet
+Coke/Dr. Pepper/Ginger Ale/Sprite) is as clean a "flavor" match as exists in
+this dataset. Write scoped to exactly these 4 option_group ids (script:
+scripts/tmp-item8-followup3-flavor-backfill.mjs) -- confirmed after writing:
+zero provenance='inferred' rows exist outside Zio's menu_items (checked
+directly, not just via the write's own WHERE clause), Vito's/NJB
+compiled_ordering_engine_enabled reconfirmed false, Zio's true, unchanged.
+
+FINAL NULL COUNT: 153 (was 157) -- Type 107, Choose Pasta 20 (slot) + 10
+(modifier, expected), Quantity 7, Choose an option 7, Choose Cheese 2. Every
+one has a stated reason above (self-label/inert, no vocabulary match, or
+correctly-classified-optional), not a silent gap.
+
+Recompiled Zio's (live invoke, compile-menu had no code change). ok=true,
+220 items. Invariant 1: same exact 3 pre-existing violations as this
+morning (Double Burger, Gyro, Chicken Gyro -- Gyro/Chicken Gyro left
+untouched per Jason's explicit instruction, confirmed zero writes to any
+Baskets & Gyros item/group/owner_question this session). All 7 other
+invariants pass, including invariant 7 ("no active choice has provenance
+'inferred'" -- this backfill wrote group-level provenance, not choice-level,
+by design, matching this morning's convention). Spot-verified compiled
+output directly: Bone In Wings and Boneless Wings each now carry a real
+flavor.ask step (slot_key=flavor) alongside their existing quantity step;
+Soda carries flavor.ask alongside its pre-existing size.ask.
+
+DEPLOY: chat-sms v288 -> v289 (2026-09-08 11:47 UTC), includes items 1+2's
+code fix (item 3 is a live data write via compile-menu, not a code change,
+so it took effect on recompile independent of this deploy).
+
+COMMIT: pending as of this entry (see below) -- includes ask-plan-engine.ts,
+ask-plan-engine.test.ts, index.ts, the new guard-choices-clause-verbatim-
+20260908.test.ts, and this BLOCKED.txt entry. NOT committed (deliberately
+out of scope, unrelated leftover from other threads, confirmed via
+`git status` before touching anything): supabase/.temp/*-version,
+scripts/tmp-item-K-* (prior thread scratch), guard10-sole-choice-
+20260907.test.ts, guard10-unconsented-option-selection.ts, guard12-false-
+modifier-claim-20260907.test.ts, guard15-blocked-alternative-suggestion-
+20260907.test.ts (all pre-existing untracked files from earlier 9/6-9/7
+threads, not touched or required by this session's diff). The two tmp-
+item8-followup3-*.mjs investigation/backfill scripts ARE committed --
+one-time DB scripts, kept for the audit trail same as this morning's
+convention (scripts/tmp-zio-option-groups-before-2026-09-08.json).
+
+LIVE VERIFICATION -- BLOCKED BY REAL SHOP HOURS, same constraint as this
+morning's entry, not a shortcut: current time 2026-09-08 ~07:47 EDT
+(11:47 UTC). Zio's opens 10:00 ET (closed ~2h13m), Vito's opens 11:00 ET
+(closed ~3h13m) -- both independently reconfirmed against the live shops
+table this session, not assumed from the earlier entry. Per this project's
+standing rule against manufacturing the signal under test and the code's
+own hard gate against test-mode on a live service-role key, did not attempt
+to force either battery. Both are deployed and ready; commands to re-run
+once open:
+
+  Turkey sub x5 (Zio's, opens 10:00 ET) -- item 2 verification:
+    for i in 1 2 3 4 5; do curl -s -X POST "$SUPABASE_URL/functions/v1/chat-sms" \
+      -H "Content-Type: application/json" \
+      -d "{\"shop_id\":\"2cba7b51-211c-4437-8910-1af4dcc03498\",\"session_id\":\"$(uuidgen)\",\"message\":\"turkey sub\"}"; done
+  Expect the size/price line byte-identical across all 5 (warm lead-in may
+  vary): "What size Turkey Sub? Medium 12'' (no extra charge) or Large 16''
+  +$8.00." -- and (item 1) no separate "Choices for Size: ..." clause
+  appended after it.
+
+  Vito's regression (opens 11:00 ET), shop_id e0000000-0000-0000-0000-
+  000000000001, one session: "cheeseburger" -> "medium" -> "thats it".
+  Expect byte-identical to established baseline: one line "Temp: Medium",
+  $8.49 + $0.99 = $9.48.
+
+Handing to Melvin now for independent adversarial verification of everything
+that COULD be verified today (guard-suppression correctness on both Zio's
+and Vito's per the mirrored tests, verbatim-enforcement logic per the
+ask-plan-engine tests, the Type/Choose-Pasta investigation findings against
+the live DB directly, the flavor backfill's scoping and the recompile's
+invariants, commit completeness, Vito's/NJB untouched) -- the two live-
+hours-gated batteries above are flagged as the one open item, not silently
+treated as done.

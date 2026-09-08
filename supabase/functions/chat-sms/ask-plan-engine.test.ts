@@ -10,6 +10,7 @@ import {
   renderStepQuestion,
   resolveAskPlan,
   allSlotsResolved,
+  enforceVerbatimStepQuestion,
 } from "./ask-plan-engine.ts";
 
 // Fixture matching Jason's real Zio's repro: Buffalo Chicken Pizza with a
@@ -295,4 +296,41 @@ Deno.test("resolveAskPlan: chicken cheesesteak sub 'large' applies the real $8.0
   assertEquals(result.resolved[0].choice.id, "c-large");
   assertEquals(result.totalDeltaCents, 800);
   assertEquals(subPlan.base_price_cents + result.totalDeltaCents, 1899); // $18.99
+});
+
+// ── Item 2 (2026-09-08, PO live verification): enforceVerbatimStepQuestion ─
+// PO's real repro: "turkey sub" x4 produced 4 different renderings of the
+// same compiled question (different wording, "(+$8)" vs "(+$8.00)", "-" vs
+// ":" separator, straight vs curly quotes). These reproduce that class of
+// paraphrase and assert the canonical text is what survives.
+const TURKEY_QUESTION = "What size Turkey Sub? Medium 12'' (no extra charge) or Large 16'' +$8.00.";
+const TURKEY_CHOICES = ["Medium 12''", "Large 16''"];
+
+Deno.test("enforceVerbatimStepQuestion: model relayed it verbatim — left untouched, warm lead-in preserved", () => {
+  const reply = `Turkey Sub added! ${TURKEY_QUESTION}`;
+  assertEquals(enforceVerbatimStepQuestion(reply, TURKEY_QUESTION, TURKEY_CHOICES), reply);
+});
+
+Deno.test("enforceVerbatimStepQuestion: quote-style paraphrase (the exact PO repro) is dropped, canonical text appended", () => {
+  // Straight double-quote inch marks instead of the stored two-apostrophe
+  // choice names — the exact mismatch that broke the old raw-substring check.
+  const modelReply = `Turkey Sub added! What size - medium 12" or large 16" (+$8)?`;
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  assertEquals(result, `Turkey Sub added! ${TURKEY_QUESTION}`);
+  // The customer must see the canonical line exactly once, never the model's
+  // own paraphrase attempt alongside it.
+  assertEquals(result.split(TURKEY_QUESTION).length - 1, 1);
+  assert(!result.includes("(+$8)?"), "the model's own wrong-format price clause must not survive alongside the canonical one");
+});
+
+Deno.test("enforceVerbatimStepQuestion: reply with no lead-in at all — canonical question stands alone, nothing to duplicate", () => {
+  const modelReply = `Medium or large? Medium's free and large is eight bucks more.`;
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  assertEquals(result, TURKEY_QUESTION);
+});
+
+Deno.test("enforceVerbatimStepQuestion: reply has real warmth AND a wrong price attempt — warmth kept, price attempt dropped", () => {
+  const modelReply = `Great choice! Turkey Sub added to your order. What size, medium or large (large is $8 more)?`;
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  assertEquals(result, `Great choice! Turkey Sub added to your order. ${TURKEY_QUESTION}`);
 });

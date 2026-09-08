@@ -1,0 +1,98 @@
+// ITEM 1 (2026-09-08, PO live verification — real transcript: "Turkey Sub
+// added! What size - medium 12" or large 16" (+$8)? ... Choices for Size:
+// Medium 12'', Large 16''"): GUARD 8 (and its sibling GUARD 7c) appended a
+// redundant "Choices for X:" clause even though the compiled path had
+// already rendered the group's real choices, because the old suppression
+// test was "is the group's display name generic" (displayGroupName(...) ===
+// "option") rather than "did we already say this." That check happened to
+// mask the duplicate for Slice's generic "Choose an option" import labels
+// but never covered a real-named group like "Size" — exactly what the PO's
+// repro hit.
+//
+// This file mirrors `groupChoicesAlreadySaid` (index.ts) verbatim for
+// standalone testing (Deno.serve() is at module scope in index.ts, making it
+// non-importable — same constraint as every other *.test.ts in this
+// directory). `significantStems` IS imported directly since it lives in the
+// importable pending-disambiguation.ts, not re-implemented.
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { significantStems } from "./pending-disambiguation.ts";
+
+const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+
+// Mirror of index.ts's groupChoicesAlreadySaid.
+function groupChoicesAlreadySaidMirror(
+  menuItemId: string, groupName: string, choiceNames: string[], text: string,
+  compiledRenderedGroups: Map<string, Set<string>>,
+): boolean {
+  if (compiledRenderedGroups.get(menuItemId)?.has(groupName)) return true;
+  const textStems = significantStems(text);
+  return choiceNames.every(name => {
+    const nameStems = significantStems(name);
+    return nameStems.size === 0 || [...nameStems].every(s => textStems.has(s));
+  });
+}
+
+const TURKEY_CHOICES = ["Medium 12''", "Large 16''"];
+
+Deno.test("groupChoicesAlreadySaid: structural signal — compiledRenderedGroups says yes regardless of the text passed", () => {
+  const rendered = new Map([["item-1", new Set(["Size"])]]);
+  const result = groupChoicesAlreadySaidMirror("item-1", "Size", TURKEY_CHOICES, "totally unrelated text", rendered);
+  assertEquals(result, true);
+});
+
+Deno.test("groupChoicesAlreadySaid: the exact PO repro — quote-style paraphrase now matches via stems, not raw substring", () => {
+  const replyLower = `turkey sub added! what size - medium 12" or large 16" (+$8)?`;
+  const result = groupChoicesAlreadySaidMirror("item-1", "Size", TURKEY_CHOICES, replyLower, new Map());
+  assert(result, "stem-based match must survive the straight-quote vs stored two-apostrophe mismatch");
+});
+
+Deno.test("groupChoicesAlreadySaid: real choices genuinely never mentioned — false, clause is still needed", () => {
+  const replyLower = `turkey sub added! what size would you like?`;
+  const result = groupChoicesAlreadySaidMirror("item-1", "Size", TURKEY_CHOICES, replyLower, new Map());
+  assertEquals(result, false);
+});
+
+Deno.test("groupChoicesAlreadySaid: only ONE of two choices mentioned — still false (must say ALL choices, not just one)", () => {
+  const replyLower = `turkey sub added! we've got a medium 12'' if you'd like that.`;
+  const result = groupChoicesAlreadySaidMirror("item-1", "Size", TURKEY_CHOICES, replyLower, new Map());
+  assertEquals(result, false);
+});
+
+Deno.test("Vito's / legacy scoping: compiledRenderedGroups is never populated for a non-compiled item, so only the textual check applies — same behavior as before this fix for any real-named group", () => {
+  // Vito's never runs the compiled add_item branch (compiled_ordering_engine_
+  // enabled stays false), so compiledRenderedGroups.get(id) is always
+  // undefined there — the structural fast-path can never fire, and this
+  // falls straight through to the textual check exactly as GUARD 8 always
+  // did. Real-named groups (Vito's has zero generic-labeled groups) behaved
+  // identically before and after this fix: suppressed only if genuinely
+  // already said.
+  const replyLower = `cheeseburger added! how would you like that cooked?`;
+  const result = groupChoicesAlreadySaidMirror("vito-item", "Temp", ["Rare", "Medium", "Well Done"], replyLower, new Map());
+  assertEquals(result, false); // not said -> clause still renders, same as pre-fix behavior
+});
+
+// ── Wiring: the real index.ts source actually uses the new test, at both
+// named call sites, and the generic-label check survives as its OWN,
+// separate anti-leak fallback (not folded into "already said"). ──────────
+Deno.test("GUARD 8 wiring: suppression is decided by groupChoicesAlreadySaid, checked before the generic-label fallback", () => {
+  assert(INDEX_SOURCE.includes("if (groupChoicesAlreadySaid(added.menu_item_id, groupName, group.choices.map(c => c.name), replyLower, compiledRenderedGroups)) continue;"),
+    "GUARD 8 must suppress on the structural/stem-based 'already said' test, not solely on a generic display name");
+  assert(INDEX_SOURCE.includes('const label8 = displayGroupName(group.name);\n        if (label8.toLowerCase() === "option") continue;'),
+    "the generic-label leak guard must still exist as its own fallback, after the already-said check");
+});
+
+Deno.test("GUARD 7c wiring: same already-said test applied ahead of the generic-label fallback", () => {
+  assert(INDEX_SOURCE.includes("if (groupChoicesAlreadySaid(resolved7c.id, groupName, group.choices.map(c => c.name), askText7c, compiledRenderedGroups)) return \"\";"),
+    "GUARD 7c must use the same already-said test as GUARD 8");
+  assert(INDEX_SOURCE.includes('const label7c = displayGroupName(group.name);\n            if (label7c.toLowerCase() === "option") return "";'),
+    "GUARD 7c's generic-label leak guard must still exist");
+});
+
+Deno.test("compiledRenderedGroups wiring: populated from enforceVerbatimStepQuestion's output, in scope before GUARD 7c runs", () => {
+  assert(INDEX_SOURCE.includes("const compiledRenderedGroups = new Map<string, Set<string>>();"),
+    "compiledRenderedGroups must be declared once at outer scope so both GUARD 7c and GUARD 8 see the same instance");
+  assert(INDEX_SOURCE.includes("reply = enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);"),
+    "item 2's enforcement must run and its enforced groups must feed compiledRenderedGroups");
+  assert(INDEX_SOURCE.includes("groups.add(sq.groupName);"),
+    "the enforced group name must be recorded so GUARD 8 can recognize it was already said");
+});
