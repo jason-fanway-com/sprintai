@@ -4318,8 +4318,27 @@ Deno.serve(async (req: Request) => {
     // session no longer welds onto a new one -- it times out and we start a
     // fresh conversation. Within-window same-session reuse is unchanged
     // (started_at >= windowStart for any conversation begun today).
+    //
+    // CRITICAL FIX (2026-09-08, P0 Zio's investigation): this lookup was
+    // scoped ONLY by session_id + channel + status + window -- NOT by
+    // tenant_id. `shop_id` and `session_id` are independent, client-supplied
+    // values in the request body with no server-side binding between them
+    // (see shop_id/sessionId destructure above). Any client that ever sent
+    // the same session_id against a different shop_id (a shared widget, a
+    // buggy integration, a test harness reusing a fixed session_id, the
+    // web:imsg-* bridge) would have this query hand back a DIFFERENT
+    // TENANT'S conversation row -- and, transitively via conversation_id,
+    // that tenant's full message history and cart. This function runs on
+    // SUPABASE_SERVICE_ROLE_KEY, so Postgres RLS provides no protection.
+    // Confirmed NOT the cause of the 2026-09-08 Zio's incident (that
+    // customer's leaked pizza types came from this same conversation_id, same
+    // tenant, same session -- see the RESET fix above) -- but a real,
+    // independently reachable tenant-isolation gap regardless. Scoping by
+    // tenant_id, exactly like the SMS branch below and the lifetime-first-
+    // contact check further down already do, closes it.
     const { data } = await supabase
       .from("conversations").select("id")
+      .eq("tenant_id", shop.tenant_id)
       .eq("session_id", sessionId).eq("channel", "web")
       .eq("status", "active")
       .gte("started_at", windowStart)
@@ -4441,9 +4460,32 @@ Deno.serve(async (req: Request) => {
   // Deep-cloned because cart_json is a nested object graph, not flat.
   const cartSnapshotBeforeTurn: AnyCartItem[] = JSON.parse(JSON.stringify(cart.cart_json ?? []));
 
-  // RESET keyword — expire current cart so next message gets a clean one
+  // RESET keyword — expire current cart AND close out the conversation, so
+  // the next message starts a brand-new conversation with zero history.
+  //
+  // P0 INCIDENT (2026-09-08, Jason live on Zio's): RESET used to expire only
+  // the order_carts row. The conversation row (and every `messages` row in
+  // it) was left untouched, and the LLM's context on every turn is built
+  // from the last 40 `messages` rows filtered ONLY by conversation_id (see
+  // "Load conversation history" below) — no cutoff at a reset boundary. So
+  // "reset" then "I want four large pizzas" (naming zero types) let the
+  // model read this SAME conversation's own turns from hours earlier and
+  // silently add four specific pizzas the customer never named this turn,
+  // while replying "Cart is cleared - fresh start" — false, since the cart
+  // had just been filled. Real money: if confirmed, the customer pays for
+  // pizzas they never chose.
+  //
+  // Fix: mark the conversation `resolved` (not just the cart `expired`).
+  // Every conversation-lookup query in this file (SMS and web) filters on
+  // `status = 'active'`, so the very next message from this customer/session
+  // fails to find this conversation and takes the existing isFirstMessage
+  // path (~line 4380) to create a brand-new conversation row — which has
+  // zero `messages` rows, so the history load below is genuinely empty.
+  // Nothing is deleted (audit trail of the old conversation and its messages
+  // is untouched); the customer just can no longer weld onto it.
   if (userMessage.trim().toUpperCase() === "RESET") {
     await supabase.from("order_carts").update({ phase: "expired", test_mode: false, pending_disambiguation: null }).eq("id", cart.id);
+    await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
     const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -6745,6 +6787,24 @@ Deno.serve(async (req: Request) => {
         : "Your cart is empty. What would you like to order?";
     }
   }
+
+  // GUARD 18 (zero-grounding item invention) was attempted here 2026-09-08 as
+  // a broader backstop for the RESET incident below, independent of the
+  // RESET fix itself. PULLED before shipping: live regression testing found
+  // it reverted ordinary, correctly-resolved orders on ANY item whose
+  // canonical name the customer didn't say verbatim -- e.g. "pepperoni
+  // pizza" on Zio's resolves to a BASE pizza item (e.g. "Neapolitan Cheese
+  // Pizza") plus a Toppings OPTION selecting "Pepperoni"; the cart line's
+  // own `name` never contains "pepperoni" at all, so the guard misread a
+  // perfectly ordinary order as ungrounded and silently dropped it. This
+  // menu shape (base item + topping/option groups) is Zio's primary ordering
+  // path, so the false-positive rate was not an edge case. See
+  // guard18-zero-grounding-item-invention.ts (kept, unwired) and its test
+  // file for the design and both regressions found. Needs a rework that
+  // checks grounding against the item's resolved OPTIONS/modifiers as well
+  // as its base name before this is safe to re-wire -- do not re-enable
+  // without new evidence it no longer false-positives on option-driven
+  // menus.
 
   // ── Guard 13 (2026-09-07, Jason: quantity-doubling on an unrelated reply
   // while a required option is still pending) ──────────────────────────────
