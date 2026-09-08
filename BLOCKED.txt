@@ -1646,3 +1646,90 @@ tonight. Say the word and I'll run
 and report the result.
 
 Committed c5deb20, pushed to main.
+
+[ITEM 3 follow-up #4 — bot_state investigation. Corrected a misdiagnosis
+before writing any new code. Real DB write made (owner_questions refresh,
+already-built/tested tool, --apply run for real). Deploy gap found and
+flagged, NOT acted on without sign-off.]
+2026-09-08 ~02:15 UTC — Not blocked. The proposed computeBotState/
+findBlockingQuestion architecture fix is NOT NEEDED — verified rigorously
+before writing any code, then independently re-verified by a second agent
+who went looking specifically for a case where the existing mechanism fails
+and found none.
+
+WHY "Turkey Bacon, Egg & Cheese" was still blocked: NOT a missing feature.
+findBlockingQuestion already has an `exclusions` mechanism built for exactly
+this ("does this item already have its own resolved answer for this
+category's slot") — shipped earlier the same day (commit bb7bbdb, the real
+Zio's Burgers/Wraps regression). The REAL reason: the live
+`[Breakfast Sandwiches]/bread` owner_questions row's `proposal.exclusions`
+was still `[]` (empty) — nobody had run the refresh tool built in the
+previous task (planOwnerQuestionsRefresh / scripts/refresh-owner-
+questions.ts) since the parser fix landed, so the exclusions list never
+picked up the 18 items that now correctly resolve their own bread choice.
+An empty exclusions list blocks EVERYONE in the category, including items
+with a perfectly correct derived group — that's the entire visible symptom,
+with zero code gap behind it.
+
+SECOND, SEPARATE finding: the DEPLOYED `compile-menu` Supabase Edge Function
+is version 4, last updated 2026-09-07 23:12:17 UTC — this PREDATES the
+normalize.ts/archetypes.ts multi-clause parser fix (committed ~00:45-01:45
+UTC on 2026-09-08, this session, commits a292618/c5deb20). This explains why
+the deleted toast row came back with its OLD broken items_affected=3 after
+you ran a real compile: the deployed function is still running stale
+parsing logic and re-inserted it fresh (its own insert-if-not-exists step
+found the key absent and recomputed it wrong). THIS IS THE ACTUAL BLOCKER
+to a clean, live 132/170 — not a code gap, a deploy gap.
+
+WHAT I DID (verified safe, DB-only, no live function touched):
+1. Ran scripts/refresh-owner-questions.ts --apply for real against NJB.
+   Result, confirmed live: 7 rows (toast deleted again, correctly this
+   time), Breakfast Sandwiches/bread exclusions=18 (incl. "Turkey Bacon, Egg
+   & Cheese", "Meat Only Breakfast Sandwich"), Cold Sandwiches/bread
+   exclusions=13, Hot Sandwiches/bread exclusions=1 ("Grilled Cheese").
+2. Wrote a read-only simulation (no compile-menu HTTP call, no writes) that
+   runs the REAL compileMenu() against current source + the now-correct
+   owner_questions data. Result: 132/170 orderable (up from the 100/170 you
+   reported), 38 blocked, 0 in any other state. Spot-checked every item you
+   named plus a full breakdown by category+reason — all correct against the
+   real menu text:
+     - Turkey Bacon Egg & Cheese, Meat Only Breakfast Sandwich, Grilled
+       Cheese -> orderable (correct, all have a real stated bread list).
+     - Avocado Crush, Lean Wrap, Sloppy Joe x2, Turkey Melt, Tuna Melt ->
+       still blocked (correct — genuinely no bread CHOICE stated, only a
+       fixed one or none at all).
+     - Wraps: all 10 still blocked (correct — zero Wraps items state any
+       bread list anywhere).
+     - Omelette & Egg Platters: all 11 still blocked (correct — egg_side/
+       egg_style still genuinely unanswered; their own bread/toast slot
+       being resolved doesn't help since a DIFFERENT slot on the same item
+       is still open).
+3. Independently verified (Melvin role, fresh agent, given the diagnosis to
+   check adversarially, not just asked to confirm): re-traced the exclusions
+   code path itself, re-queried the live DB itself, wrote its OWN
+   independent compile simulation from scratch, got the identical 132/170
+   and identical per-item results. Explicitly went hunting for a real case
+   where the exclusions mechanism fails to protect an already-resolved item
+   and found none. Flagged one latent (not currently live) fragility worth
+   knowing: exclusions match by item NAME not id — a future menu with a
+   duplicate item name across two categories could misfire. NJB has zero
+   duplicate names today, so not a live risk, just noted for later.
+
+*** REMAINING GATE, did NOT act on it — deploying a live Supabase Edge
+Function shared by Vito's and Zio's is a bigger, different-in-kind action
+than anything else this task authorized, and I'm not doing it without an
+explicit yes ***: the 132/170 number is correct for the CURRENT REPO SOURCE
+CODE, verified two independent ways. It will NOT be what a real compile
+produces if you invoke the deployed HTTP endpoint right now, because that
+endpoint is still running the pre-fix code. To get NJB's actual
+menu_items.bot_state/ask_plan updated to reflect 132/170 for real, the
+`compile-menu` function needs `supabase functions deploy compile-menu`
+(and its shared deps) BEFORE the next real compile call — otherwise the
+next compile will silently under-resolve the same items again (and likely
+re-create the toast row wrong a third time). Say the word and I'll deploy
+and then trigger the real compile and re-verify the live count matches 132.
+
+Nothing else touched: menu_items/option_groups/option_choices for NJB still
+untouched by anything in this task (only owner_questions was written to, by
+the already-tested, already-authorized refresh tool). Vito's/Zio's not
+queried for writes, not touched.
