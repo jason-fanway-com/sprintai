@@ -175,16 +175,50 @@ export function resolveZeroOptionAttributeChange(
 }
 
 /**
+ * The first shipped version of this deterministic decline never mentioned
+ * the kitchen note at all — an honest but incomplete sentence, and it cost
+ * the real, verified capture path the previous (retired) prompt-nudge
+ * shape had (a real order_carts.notes write that showed up on the actual
+ * kitchen ticket email as "Prep Notes"). Jason's own read of it: "it
+ * dropped the kitchen-note capture... which was real and verified."
+ *
+ * Existing notes must be APPENDED to, never overwritten — the generic
+ * set_note tool (index.ts, LLM-driven path) documents itself as "replaces
+ * any previous notes," which is fine when the MODEL is the one deciding to
+ * set a note, but this deterministic path has no such license: silently
+ * discarding a customer's earlier legitimate note (e.g. "toasted," set
+ * two turns ago) to make room for this one would be a NEW, self-inflicted
+ * data-loss bug in the exact same family as the one this whole fix exists
+ * to close.
+ */
+export function combineNotes(existingNotes: string | null | undefined, newNote: string): string {
+  return existingNotes && existingNotes.trim() ? `${existingNotes}; ${newNote}` : newNote;
+}
+
+/**
  * Renders the fixed, deterministic reply for a resolution — never
  * generated, never containing "switched"/"noted"/"got it" attached to a
- * change that didn't happen.
+ * change that didn't happen. `noteWriteSucceeded` is only consulted when
+ * there's no alternative item (the branch that writes a kitchen note) —
+ * HARD CONDITION: the sentence only claims the note was passed along when
+ * the caller has ALREADY confirmed the write actually succeeded (checked
+ * the database update's own error result, not assumed). If the write
+ * failed, this renders the plain decline with no note claim at all —
+ * same "the sentence changes if the write fails" rule as everything else
+ * in this codebase (see e.g. invented-action-guard.ts).
  */
-export function renderZeroOptionAttributeChangeReply(resolution: ZeroOptionResolution): string {
+export function renderZeroOptionAttributeChangeReply(
+  resolution: ZeroOptionResolution,
+  noteWriteSucceeded: boolean,
+): string {
   if (resolution.alternative) {
     const price = (resolution.alternative.priceCents / 100).toFixed(2);
     return `The ${resolution.alternative.name} is a separate item ($${price}) — want me to swap it in?`;
   }
-  return `I can't change that on the ${resolution.itemDisplayName} — it doesn't have that option.`;
+  const decline = `I can't change that on the ${resolution.itemDisplayName} — it doesn't have that option`;
+  return noteWriteSucceeded
+    ? `${decline}, but I'll pass it to the kitchen as a note.`
+    : `${decline}.`;
 }
 
 // ============================================================

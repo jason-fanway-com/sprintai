@@ -22,6 +22,7 @@ import {
   buildZeroOptionAttributeChangeHint,
   resolveZeroOptionAttributeChange,
   renderZeroOptionAttributeChangeReply,
+  combineNotes,
   type ZeroOptionMenuItemFull,
 } from "./zero-option-attribute-hint.ts";
 import {
@@ -5123,16 +5124,29 @@ Deno.serve(async (req: Request) => {
       zeroOptionMenu,
     );
     if (resolution) {
+      // Note write, when there's no alternative to offer: a DIRECT write
+      // (not the generic set_note tool, which unconditionally REPLACES
+      // notes and never checks the update's own error result — fine for
+      // an LLM-driven turn, wrong here on both counts). Appends to any
+      // existing note rather than overwriting it (a customer's earlier
+      // "toasted" note must survive this), and the reply below is only
+      // allowed to claim the note was passed along once this write is
+      // confirmed to have actually succeeded — never assumed.
+      let noteWriteSucceeded = false;
       if (!resolution.alternative) {
-        await executeTool(
-          "set_note",
-          { note: `Customer requested for "${resolution.itemDisplayName}": ${resolution.rawRequest}` },
-          cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
-        );
+        const newNote = `Customer requested for "${resolution.itemDisplayName}": ${resolution.rawRequest}`;
+        const combinedNotes = combineNotes(cart.notes, newNote);
+        const { error: noteError } = await supabase.from("order_carts").update({ notes: combinedNotes }).eq("id", cart.id);
+        if (noteError) {
+          console.error(`[chat-sms] deterministic zero-option note write FAILED (conv=${conversation.id}): ${noteError.message} — reply will not claim the note was recorded`);
+        } else {
+          noteWriteSucceeded = true;
+          cart.notes = combinedNotes;
+        }
       }
-      const detReply = renderZeroOptionAttributeChangeReply(resolution);
-      console.log(`[chat-sms] deterministic zero-option attribute-change handler fired (conv=${conversation.id}), item=${resolution.itemDisplayName}, alternative=${resolution.alternative?.name ?? "none"}`);
-      return jsonResponse({ reply: detReply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      const detReply = renderZeroOptionAttributeChangeReply(resolution, noteWriteSucceeded);
+      console.log(`[chat-sms] deterministic zero-option attribute-change handler fired (conv=${conversation.id}), item=${resolution.itemDisplayName}, alternative=${resolution.alternative?.name ?? "none"}, noteWriteSucceeded=${noteWriteSucceeded}`);
+      return jsonResponse({ reply: detReply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId, notes: cart.notes });
     }
   }
 

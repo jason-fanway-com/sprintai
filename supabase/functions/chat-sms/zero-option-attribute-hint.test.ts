@@ -18,6 +18,7 @@ import {
   buildZeroOptionAttributeChangeHint,
   resolveZeroOptionAttributeChange,
   renderZeroOptionAttributeChangeReply,
+  combineNotes,
   type ZeroOptionCartLine,
   type ZeroOptionMenuItem,
   type ZeroOptionMenuItemFull,
@@ -49,7 +50,7 @@ const PIZZA_MENU_ITEM_FULL: ZeroOptionMenuItemFull = {
 // ============================================================
 
 // The exact real repro
-Deno.test("resolver: the exact real repro — no alternative item exists, renders a plain single-message decline", () => {
+Deno.test("resolver: the exact real repro, note write SUCCEEDED — renders one combined sentence, fact-check + note claim, honestly", () => {
   const resolution = resolveZeroOptionAttributeChange(
     "actually can you make that an everything bagel instead",
     [BAGEL_LINE],
@@ -57,9 +58,42 @@ Deno.test("resolver: the exact real repro — no alternative item exists, render
   );
   assert(resolution, "must resolve");
   assertEquals(resolution!.alternative, null, "no 'Everything Bagel with Cream Cheese' SKU exists in the 'Bagel With' category, so no alternative");
-  const reply = renderZeroOptionAttributeChangeReply(resolution!);
+  const reply = renderZeroOptionAttributeChangeReply(resolution!, true);
+  assertEquals(reply, "I can't change that on the Bagel with Plain Cream Cheese — it doesn't have that option, but I'll pass it to the kitchen as a note.");
+  assert(!/\bswitched\b|\bgot it\b/i.test(reply), "the rendered reply must never contain a claim-shaped word for a CART change that didn't happen");
+});
+
+// HARD CONDITION (2026-09-08, Jason: "the sentence only claims the note
+// when the note write actually succeeded... check the write's return/error
+// before composing the reply, not optimistically").
+Deno.test("resolver: the exact real repro, note write FAILED — must NOT claim the note was passed along", () => {
+  const resolution = resolveZeroOptionAttributeChange(
+    "actually can you make that an everything bagel instead",
+    [BAGEL_LINE],
+    [BAGEL_MENU_ITEM_FULL],
+  );
+  assert(resolution);
+  const reply = renderZeroOptionAttributeChangeReply(resolution!, false);
   assertEquals(reply, "I can't change that on the Bagel with Plain Cream Cheese — it doesn't have that option.");
-  assert(!/switched|noted|got it/i.test(reply), "the rendered reply must never contain a claim-shaped word for a change that didn't happen");
+  assert(!/kitchen|note/i.test(reply), "must not mention the note at all when the write failed — no unverified claim");
+});
+
+// ============================================================
+// combineNotes — appends, never overwrites (real gap: the previous shipped
+// version discarded any pre-existing note, e.g. an earlier "toasted"
+// preference, by writing this one straight over it).
+// ============================================================
+
+Deno.test("combineNotes: no existing note -> the new note stands alone", () => {
+  assertEquals(combineNotes(null, "Customer requested: everything bagel"), "Customer requested: everything bagel");
+  assertEquals(combineNotes(undefined, "Customer requested: everything bagel"), "Customer requested: everything bagel");
+  assertEquals(combineNotes("", "Customer requested: everything bagel"), "Customer requested: everything bagel");
+});
+
+Deno.test("combineNotes: an existing note is PRESERVED, not overwritten — real gap this fix closes", () => {
+  const combined = combineNotes("Toasted", "Customer requested: everything bagel");
+  assertEquals(combined, "Toasted; Customer requested: everything bagel");
+  assert(combined.includes("Toasted"), "an earlier legitimate note must survive");
 });
 
 Deno.test("resolver: a genuinely different SAME-CATEGORY catalog item is offered by name and real price", () => {
@@ -79,8 +113,12 @@ Deno.test("resolver: a genuinely different SAME-CATEGORY catalog item is offered
   );
   assert(resolution);
   assertEquals(resolution!.alternative, { id: "everything-bagel", name: "Everything Bagel", priceCents: 150 });
-  const reply = renderZeroOptionAttributeChangeReply(resolution!);
-  assertEquals(reply, "The Everything Bagel is a separate item ($1.50) — want me to swap it in?");
+  // noteWriteSucceeded is irrelevant when an alternative exists -- no note
+  // is ever written in that branch, so both values must render identically.
+  for (const noteWriteSucceeded of [true, false]) {
+    const reply = renderZeroOptionAttributeChangeReply(resolution!, noteWriteSucceeded);
+    assertEquals(reply, "The Everything Bagel is a separate item ($1.50) — want me to swap it in?");
+  }
 });
 
 Deno.test("resolver: a same-NAME-word item in a DIFFERENT category is not offered as an alternative", () => {
