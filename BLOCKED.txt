@@ -3100,3 +3100,73 @@ universal -- and D4's partial residual) from the code and tests directly,
 not from this session's word. The live 10x battery + Vito's regression
 remain the one flagged, time-gated remainder, same as this morning's
 precedent.
+
+================================================================================
+2026-09-08 ~11:50 UTC — Item 8 follow-up 3 RETRY: state confirmation,
+test verification, git parity check
+================================================================================
+
+CONTEXT: Task "item 8 follow-up 3" (choices-clause dedup, verbatim
+template, 157 null slot_keys) was retried after the prior model session
+timed out before completing Melvin's verification and the live shop
+battery. This entry documents the retry's findings.
+
+STATE CONFIRMED (read from git and DB directly):
+
+  Commits present as expected:
+    8329eb9 -- items 1+2 code fix + item 3 backfill (committed by prior
+               session at 07:48 EDT as intended)
+    ac8f69d -- archetypes 5.5b fix (separate thread)
+    e1fca95 -- D1/D2/D3/D5 Zio's multi-item order fixes (separate thread,
+               committed while this retry was running; previously seen as
+               uncommitted index.ts changes in the working tree at session
+               start -- git clean by time this session reached the commit
+               check)
+    2fc45ff -- D1/D2/D3/D5 BLOCKED.txt docs
+
+  DB null slot_key count (verified live against Supabase):
+    Type/slot:          107 (single-choice auto_single, functionally inert,
+                             left null per prior session's reasoning)
+    Choose Pasta/slot:   20 (real slot, no clean Appendix C key, left null
+                             + reported)
+    Choose Pasta/modifier: 10 (expected null per task scope -- modifier
+                               groups stay null)
+    Choose an option/slot:  7 (all single-choice auto_single, left null)
+    Quantity/slot:          7 (left null, no Appendix C key)
+    Choose Cheese/slot:     2 (left null, no Appendix C key)
+    Total null count: 153 (was 157 before this morning's backfill) ✓
+    Matches prior session's reported final count exactly.
+
+  Shops (compiled_ordering_engine_enabled):
+    Zio's: true ✓
+    Vito's: false ✓ (untouched, reconfirmed live)
+
+TEST RESULTS (run in this retry, all unit -- live shop batteries still
+blocked by hours):
+
+  ask-plan-engine.test.ts:                 27/27 ✓
+  guard-choices-clause-verbatim-20260908.test.ts: 8/8 ✓
+  stated-attribute-carryforward.test.ts:    6/6 ✓
+  pending-question-followthrough.test.ts:   9/9 ✓
+  unresolved-item-segment-guard.test.ts:    7/7 ✓
+  archetypes.test.ts:                      40/40 ✓
+  Total: 97/97, 0 failures.
+
+GIT PARITY: clean (only supabase/.temp/* modified, non-code). Production
+v290 (deployed 12:04 UTC) is in sync with committed HEAD (2fc45ff). No
+production-ahead-of-main issue outstanding.
+
+OPEN ITEMS (time-gated, unchanged from prior session):
+  1. Turkey sub x5 live battery (Zio's, opens 10:00 ET): verifies item 2's
+     verbatim-template enforcement holds under real model inference. Cannot
+     run until shop is open.
+  2. Vito's cheeseburger/medium/"thats it" regression (opens 11:00 ET):
+     verifies item 1/2 changes don't affect Vito's legacy path. Cannot run
+     until shop is open.
+
+Handing to Melvin for independent adversarial verification of what CAN be
+verified now (guard-suppression correctness on both Zio's and Vito's per
+unit tests, verbatim-enforcement logic per ask-plan-engine tests, null
+slot_key mapping against Appendix C, Vito's/NJB compiled_engine_enabled
+untouched, commit completeness). Time-gated live batteries flagged as open
+items.
