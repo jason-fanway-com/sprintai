@@ -1875,3 +1875,75 @@ telling them it was recorded.
 Committed 4a65802, pushed to main. Test data (10 synthetic web-channel
 sessions across both my own and the independent reviewer's verification
 runs) all confirmed deleted from NJB's live tables after use.
+
+[BACKLOG 0232fdb1 — import-menu-csv: owner-edited item never reactivates
+on CSV return, DONE]
+2026-09-08 ~02:35 UTC — Not blocked, fixed, deployed, live-verified.
+Melvin's repro: (1) import a CSV, item X lands active; (2) owner hand-edits
+X in the admin UI (owner_edited=true); (3) re-import a CSV that drops X ->
+correctly deactivates (active=false); (4) re-import a CSV that has X again
+-> X should reactivate but stayed active=false forever, invisible to
+customers, no error, no signal to the owner why. Root cause: the update
+loop's owner_edited branch was `if (u.skippedOwnerEdited) { skippedOwnerEdited++; continue; }`
+(supabase/functions/import-menu-csv/index.ts ~124) — the `continue` skipped
+the `active: true` reactivation write below it along with the content
+writes, conflating "don't clobber the owner's content" with "don't put
+this back on the menu." Those are different questions; the CSV's presence
+of the item answers the second one regardless of the first.
+
+FIX: pulled upsertItem/syncGroups/the update loop out of index.ts into a
+new zero-side-effect module, supabase/functions/import-menu-csv/apply.ts
+(same pattern as menu-extraction.ts/ask-plan-engine.ts elsewhere in this
+repo — index.ts calls Deno.serve() at module scope so it can't be
+`deno test`-imported directly). The new applyToUpdate() still skips
+upsertItem/syncGroups for owner-edited items (content protection
+unchanged) but now runs the `active: true` write unconditionally for every
+item in diff.toUpdate, owner-edited or not. skipped_owner_edited /
+updated counting semantics are unchanged — an owner-edited item still
+counts as skipped, not updated. Out of scope per the task: option_groups/
+option_choices reactivation (syncGroups untouched), and anything under
+chat-sms/, compile-menu/, or _shared/compile-menu* (a concurrent session's
+active work in this shared repo).
+
+Tests: new supabase/functions/import-menu-csv/apply.test.ts, 2 cases built
+on a minimal in-memory Supabase mock (from/select/eq/in/update/insert/
+delete against a real in-memory table, not a parsed-response fixture) —
+one reproduces Melvin's exact 4-step sequence end to end via the real
+diffItems()+applyToUpdate() code paths and asserts both active===true and
+the owner's hand-typed name/price/description are byte-identical after
+step 4; the other confirms a non-owner-edited item still gets its content
+refreshed AND reactivated (no regression to the normal path). Confirmed
+the first test fails against the pre-fix loop (reverted apply.ts locally,
+reran, got the exact "active false" failure Melvin described, restored
+the fix, reran green) — not just written to pass. Pre-existing pure-logic
+suite (menu-pipeline/scripts/test-import-diff.mjs, 7 cases covering
+diffItems/buildImportPlan) re-run unchanged: 7/7 still pass. `deno check`
+on the 2 touched/new files: 0 errors. (index.ts has 2 pre-existing
+`menuId: string | undefined` type errors from before this change,
+confirmed via `git stash` on a clean checkout of main — unrelated to this
+fix, not introduced by it, left alone.)
+
+DEPLOYED: `supabase functions deploy import-menu-csv --project-ref
+rvdqfxtrskxekfkqnegx`.
+
+LIVE VERIFIED (real deployed function, real DB writes, not mocked): created
+a disposable scratch tenant+shop ("Backlog 0232fdb1 Verify <random>",
+is_test=true — same throwaway-shop-per-verification pattern already used
+elsewhere in this project's shops table, e.g. "Promo Verify Shop <id>",
+"AC08 Backdoor Test"; never touched a real or shared test shop). Ran the
+exact 4-step sequence as real HTTP calls to the live import-menu-csv
+endpoint: (1) POST CSV with Buffalo Wings -> inserted, active=true; (2)
+PATCH the row directly to owner_edited=true with a distinct owner-typed
+name/price/description; (3) POST a CSV without Buffalo Wings -> response
+deactivated=1, row confirmed active=false, owner content untouched; (4)
+POST a CSV with Buffalo Wings back -> response updated=1, skipped_owner_edited=1,
+row confirmed active=true AND name/price/description still exactly the
+owner's values from step 2, not the CSV's. Cleaned up immediately after:
+deleted the menu_items rows, the menu, the shop, and the tenant; re-queried
+all four afterward and confirmed empty — no residue on SprintAI-Chat
+(rvdqfxtrskxekfkqnegx).
+
+Committed f6ea8c7, pushed to main.
+
+Handing to Melvin for independent adversarial verification against these
+exact acceptance criteria before this is closed.
