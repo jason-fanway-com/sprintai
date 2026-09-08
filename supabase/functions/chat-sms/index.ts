@@ -5844,6 +5844,160 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Guard 17 (2026-09-08, real NJB transcript): claimed attribute change
+  // on a ZERO-OPTION item ──────────────────────────────────────────────────
+  // GUARD 16 (above) only ever examines items whose ask_plan has at least
+  // one real modifier choice (`if (allModifierDisplays16.length === 0)
+  // continue`) -- it was built to catch "wrong choice among real options,"
+  // not "claimed an attribute that has no options at all." Real reproduction:
+  // NJB's "Bagel with Plain Cream Cheese" has `ask_plan.steps: []` -- a
+  // complete item, zero groups of any kind, nowhere for a bagel TYPE to live
+  // (confirmed against the live "Bagel With" category: every item is
+  // generically "Bagel with X", no bagel-type variant exists as a distinct
+  // item or field anywhere). Customer said "everything bagel" as a follow-up;
+  // the model replied "Got it - switched to an everything bagel with cream
+  // cheese" but the cart line never changed (same menu_item_id, same name,
+  // no modifiers, no options field) -- GUARD 16 skipped it before ever
+  // checking the reply text, since there was no modifier list to check
+  // against. This is a pure honesty fix: there is no different item to
+  // resolve to and no group to store a bagel type in, so the fix is not a
+  // resolution path -- it's catching the false claim itself, the same way
+  // GUARD 16 catches a false claim among real choices.
+  //
+  // Scoped narrowly to avoid over-firing on a legitimate change to a
+  // DIFFERENT item in the same reply. Fires only if a change-claiming verb
+  // ("switched," "changed," "swapped," "instead of," "now a/an/with,"
+  // "make it a/an," "updated to" -- deliberately NOT "added"/"got it"/
+  // "noted," which are honest for a zero-option item that was simply added)
+  // is present ANYWHERE in the reply, AND some word immediately preceding
+  // the item's head noun is neither an article/quantifier/confirmation word
+  // nor a word from ANY cart item's own name (this item's or any other's).
+  //
+  // Revised THREE times against real deployed transcripts before landing
+  // here -- every one of these bugs was only found by actually driving the
+  // live endpoint, never by the hand-written unit tests alone:
+  //   v1 stripped the item's exact display_name phrase from the reply, then
+  //   required a single head noun (the phrase's first word) to survive.
+  //   Defeated by real phrasing on the target repro ("Switched to an
+  //   everything bagel with plain cream cheese!" -- the substring "bagel
+  //   with plain cream cheese" IS the exact display_name, so stripping it
+  //   removed the head noun along with the honest suffix; silent).
+  //   v2 fixed that by checking the word before the head noun directly, but
+  //   a head noun taken from just the phrase's first/last word isn't unique
+  //   across items -- real NJB catalog has "Plain Bagel" AND "Bagel with
+  //   Plain Cream Cheese" both in one order, and an honest recap of both
+  //   ("one Plain Bagel and one Bagel with Plain Cream Cheese -- switched
+  //   your drink to a large iced coffee") let "Plain"/"with" collide across
+  //   the two items' shared word "bagel," wrongly flagging "Plain Bagel."
+  //   v3 anchored on the item's ENTIRE display_name phrase instead of one
+  //   word -- fixed the collision, but broke on the very next live run: the
+  //   model dropped "plain" entirely ("Switched to an everything bagel with
+  //   CREAM CHEESE" -- no "plain"), so the exact-phrase match never fired
+  //   at all on its own target case, a false negative.
+  //   v4 kept v2's tolerant single-head-noun check (so a dropped word like
+  //   "plain" doesn't defeat it) but fixed v2's actual bug directly: the
+  //   "is this word honest" check now excludes every word from EVERY cart
+  //   item's own name, not just the current item's -- "with" preceding
+  //   "bagel" in "...Bagel with Plain Cream Cheese" belongs to THAT item's
+  //   own name, so it's honest context regardless of which zero-option
+  //   item is being checked.
+  //   v5 (this version): an independent adversarial review of v4 (before
+  //   it shipped un-revised) found a real live-menu false positive: NJB's
+  //   "One Dozen Bagels" / "Half Dozen Bagels" derive headNoun17 "one" /
+  //   "half" -- common enough to appear in totally unrelated conversation
+  //   ("changed your pickup time to a later one") and wrongly append a
+  //   confusing correction to an honest reply about something else
+  //   entirely. Fixed by refusing to use an overly generic word as an
+  //   anchor at all (see genericHeadNoun17 below) -- skips the item rather
+  //   than risk a wrong correction; a missed catch on a rarely-reordered
+  //   bulk item is a far smaller cost than injecting bad text into an
+  //   honest reply.
+  //
+  //   KNOWN, ACCEPTED LIMITATION (same review, not fixed -- a genuine
+  //   false NEGATIVE, judged lower-priority than a false positive): three
+  //   or more zero-option items sharing overlapping words in one cart
+  //   (real NJB catalog: "Sesame Bagel," "Poppy Bagel," "Bagel with Plain
+  //   Cream Cheese," etc. -- an everyday order easily has two or more) can
+  //   let an honest OTHER cart item's own name-word (e.g. "sesame")
+  //   shield a genuine false claim about a DIFFERENT item that happens to
+  //   reuse the same shared word ("bagel"). Consistent with every guard in
+  //   this file being an accepted heuristic, not a provably complete
+  //   system -- this fix's bar is "catches the real reported case and
+  //   doesn't inject wrong text into honest replies," not "handles every
+  //   permutation of a dense, overlapping-name multi-item cart."
+  {
+    const zeroOptionChangeClaimRe =
+      /\b(?:switch(?:ed|ing)?|chang(?:e|ed|ing)|swap(?:ped|ping)?|instead\s+of|now\s+(?:a|an|with)|make\s+(?:it|that)\s+an?|updat(?:e|ed|ing)\s+to)\b/i;
+    // Words that legitimately precede an honestly-restated item name and
+    // must never themselves count as a "foreign descriptor" — articles/
+    // quantifiers (a/an/one/two/...) AND common honest-confirmation words
+    // (added/got/confirmed/...), since a reply with no comma before the
+    // item name ("Added Bagel with Plain Cream Cheese to your order") is
+    // exactly as honest as one with a comma ("Got it, Bagel with...").
+    const nonDescriptorWord17 = new Set([
+      "a", "an", "the", "one", "two", "three", "four", "five", "some",
+      "another", "that", "this", "my", "your", "our", "their", "his", "her",
+      "added", "adding", "add", "got", "confirmed", "noted", "noting",
+      "plus", "also", "and", "ordered",
+    ]);
+    // Every word from every cart item's own real name — a word belonging
+    // to ANY item currently in the cart is honest context anywhere in the
+    // reply, not just when it's adjacent to that specific item's own line.
+    const allCartItemWords17 = new Set<string>();
+    for (const otherCi of guardCart.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id))) {
+      const otherMenuItem = effectiveMenu.find(mi => mi.id === otherCi.menu_item_id);
+      const otherDn = otherMenuItem?.ask_plan?.display_name;
+      if (!otherDn) continue;
+      for (const w of otherDn.toLowerCase().split(/\s+/)) {
+        const cleaned = w.replace(/[^a-z0-9]/g, "");
+        if (cleaned) allCartItemWords17.add(cleaned);
+      }
+    }
+    const safeWord17 = new Set([...nonDescriptorWord17, ...allCartItemWords17]);
+    // A head noun this generic is worthless as an anchor -- real NJB items
+    // "One Dozen Bagels" / "Half Dozen Bagels" derive headNoun17 "one" /
+    // "half," common enough to appear in totally unrelated conversation
+    // ("changed your pickup time to a later one") and produce a false
+    // positive that appends "doesn't have that kind of option" onto a reply
+    // about something else entirely. Skip the item rather than risk that —
+    // a missed catch on a rarely-reordered bulk item is a far smaller cost
+    // than injecting a wrong, confusing correction into an honest reply.
+    const genericHeadNoun17 = new Set([
+      "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+      "half", "dozen", "some", "few", "several", "single", "double", "triple",
+    ]);
+    const flagged17: Array<{ item: CartItem; menuItemName: string }> = [];
+    for (const ci of guardCart.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id))) {
+      const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
+      if (!menuItem?.ask_plan || menuItem.ask_plan.steps.length > 0) continue;
+      const dn17 = menuItem.ask_plan.display_name.toLowerCase();
+      const headNoun17 = dn17.split(/\s+/)[0]?.replace(/[^a-z0-9]/g, "");
+      if (!headNoun17 || genericHeadNoun17.has(headNoun17)) continue;
+      const replyLower17 = reply.toLowerCase();
+      if (!zeroOptionChangeClaimRe.test(replyLower17)) continue;
+      const precedingRe17 = new RegExp(`\\b(\\w+)\\s+${headNoun17}\\b`, "g");
+      let match17: RegExpExecArray | null;
+      let foundForeignDescriptor = false;
+      while ((match17 = precedingRe17.exec(replyLower17))) {
+        if (safeWord17.has(match17[1])) continue;
+        foundForeignDescriptor = true;
+        break;
+      }
+      if (foundForeignDescriptor) flagged17.push({ item: ci, menuItemName: menuItem.ask_plan.display_name });
+    }
+    if (flagged17.length > 0) {
+      for (const { item, menuItemName } of flagged17) {
+        const note = `claimed change not possible (no options on this item): ${menuItemName}`;
+        const existing = item.unverified_requests ?? [];
+        if (!existing.includes(note)) item.unverified_requests = [...existing, note];
+      }
+      console.warn(`[chat-sms] GUARD 17 (zero-option item false attribute-change claim) tripped (conv=${conversation.id}). Flagged: ${flagged17.map(f => f.item.name).join(", ")}`);
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      const itemNames17 = [...new Set(flagged17.map(f => f.menuItemName))].join(", ");
+      reply = `${reply} Just to be clear — ${itemNames17} doesn't have that kind of option here, so nothing was actually changed; I've flagged it for the shop.`;
+    }
+  }
+
   // ── Guard 8: pending-options reply doesn't name the actual choices ──────
   // add_item is 100% ID-based and correctly stores pending_options + the full
   // choice list in effectiveMenu/the system prompt — but surfacing "what
