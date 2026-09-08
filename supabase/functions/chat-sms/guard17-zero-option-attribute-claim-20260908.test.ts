@@ -57,12 +57,36 @@ const GENERIC_HEAD_NOUN = new Set([
   "half", "dozen", "some", "few", "several", "single", "double", "triple",
 ]);
 
-// Mirror of GUARD 17's v5 logic. Takes the FULL cart (menu items keyed by
+const NEGATION_RE =
+  /\b(?:can(?:no|['’])?t|cannot|won['’]?t|do(?:n['’]?t| not)|isn['’]?t|am\s+not|i['’]?m\s+not|never|unable|not\s+able|no\s+way\s+to)\b/i;
+
+// v6 fix (2026-09-08, real deployed transcript): the new pre-composition
+// hint (zero-option-attribute-hint.ts, its own tests) successfully steers
+// the model toward an honest denial ("I can't officially change the bagel
+// type on that one, but I've noted everything bagel for the kitchen") --
+// but that sentence still has a change-verb AND a foreign descriptor before
+// the head noun, the exact shape GUARD 17 was built to catch. Without this
+// check, GUARD 17 appended its OWN correction onto a reply that was ALREADY
+// honest, recreating the self-contradiction on a message that never needed
+// fixing. A negation word before the change-verb IN THE SAME SENTENCE means
+// the model is denying the change, not claiming it.
+function hasUnnegatedChangeClaim(text: string): boolean {
+  const changeReGlobal = new RegExp(ZERO_OPTION_CHANGE_CLAIM_RE.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = changeReGlobal.exec(text))) {
+    const sentenceStart = Math.max(text.lastIndexOf(".", m.index), text.lastIndexOf("!", m.index), text.lastIndexOf("?", m.index)) + 1;
+    const before = text.slice(sentenceStart, m.index);
+    if (!NEGATION_RE.test(before)) return true;
+  }
+  return false;
+}
+
+// Mirror of GUARD 17's v6 logic. Takes the FULL cart (menu items keyed by
 // menu_item_id) so the "safe word" set can span every cart item's own name,
 // not just the one being checked — the actual fix for v2's real bug.
 function guard17Flags(cart: { line: CartLineLike; menuItem: MenuItemLike }[], reply: string): string[] {
   const replyLower = reply.toLowerCase();
-  if (!ZERO_OPTION_CHANGE_CLAIM_RE.test(replyLower)) return [];
+  if (!hasUnnegatedChangeClaim(replyLower)) return [];
 
   const allCartItemWords = new Set<string>();
   for (const { menuItem } of cart) {
@@ -109,6 +133,35 @@ const PLAIN_BAGEL_LINE: CartLineLike = { menu_item_id: "plain-bagel", name: "Pla
 function soloCart(line: CartLineLike, menuItem: MenuItemLike) {
   return [{ line, menuItem }];
 }
+
+// v5 -> v6: caught live-verifying the NEW pre-composition hint
+// (zero-option-attribute-hint.ts) — the hint successfully steered the model
+// to an honest denial, but GUARD 17 didn't recognize the denial and
+// appended its own correction anyway, recreating the self-contradiction on
+// an ALREADY-honest reply. This is the specific real transcript that broke.
+Deno.test("GUARD 17 v6: an HONEST denial ('I can't officially change the bagel type on that one, but I've noted everything bagel for the kitchen') must NOT be flagged (real transcript that broke v5)", () => {
+  const reply = "I can't officially change the bagel type on that one, but I've noted everything bagel for the kitchen - they'll take care of it! Want it toasted?";
+  assertEquals(guard17Flags(soloCart(BAGEL_LINE, BAGEL_ITEM), reply), [], "an honest, explicit denial must never be corrected — it was never wrong");
+});
+
+Deno.test("GUARD 17 v6: other negation phrasings ('cannot', 'won't', 'unable to', 'not able to') are equally recognized as honest denials", () => {
+  const variants = [
+    "I cannot change the bagel type on that one, but I've noted everything bagel for the kitchen.",
+    "I won't be able to change that to an everything bagel, but I've noted it for the kitchen.",
+    "I'm unable to change the bagel type, but I noted everything bagel for the kitchen.",
+    "I'm not able to change that to an everything bagel, but I've noted it for the kitchen.",
+  ];
+  for (const reply of variants) {
+    assertEquals(guard17Flags(soloCart(BAGEL_LINE, BAGEL_ITEM), reply), [], `must not flag an honest denial: "${reply}"`);
+  }
+});
+
+// The negation must be in the SAME sentence as the change-verb — a
+// negation elsewhere in the reply must not shield an actual false claim.
+Deno.test("GUARD 17 v6: a negation in a DIFFERENT sentence does not shield a genuine false claim in another sentence", () => {
+  const reply = "We can't do rush orders today. Switched to an everything bagel with plain cream cheese!";
+  assertEquals(guard17Flags(soloCart(BAGEL_LINE, BAGEL_ITEM), reply), ["Bagel with Plain Cream Cheese"], "an unrelated negation must not shield a real false claim in a separate sentence");
+});
 
 // The exact real repro, first form (as relayed)
 Deno.test("GUARD 17: the exact real repro — 'switched to an everything bagel' on a zero-option item", () => {
@@ -284,6 +337,8 @@ Deno.test("regression: GUARD 17 is present in index.ts and has the key structura
     "GUARD 17 must combine articles/quantifiers/confirmation words with all cart items' own words into one safe-word set");
   assert(INDEX_SOURCE.includes("genericHeadNoun17"),
     "GUARD 17 must refuse to anchor on an overly generic head noun ('one', 'half', ...) — real bug: 'One Dozen Bagels'/'Half Dozen Bagels' false-positive on unrelated conversation otherwise");
+  assert(INDEX_SOURCE.includes("hasUnnegatedChangeClaim17") && INDEX_SOURCE.includes("negation17Re"),
+    "GUARD 17 must recognize an honest denial ('can't change', 'unable to') in the SAME sentence as the change-verb and skip it — real bug: the pre-composition hint steers the model to an honest denial that still contains change-verb + foreign-descriptor language, and GUARD 17 must not re-correct an already-honest reply");
   assert(INDEX_SOURCE.includes("foundForeignDescriptor"),
     "GUARD 17 must flag on a genuine foreign descriptor word immediately preceding the head noun");
   assert(

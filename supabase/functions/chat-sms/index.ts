@@ -18,6 +18,7 @@ import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
 import { dayWindows } from "../_shared/hours.ts";
 import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 import { stripInventedActions } from "./invented-action-guard.ts";
+import { buildZeroOptionAttributeChangeHint } from "./zero-option-attribute-hint.ts";
 import {
   categoryDisplayWord,
   categoryWordMatches,
@@ -5077,7 +5078,28 @@ Deno.serve(async (req: Request) => {
 
   // ── Run ordering loop ─────────────────────────────────────────────────────
   // Rebuild system prompt with potentially corrected cart
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable);
+  //
+  // BEFORE-COMPOSITION honesty check (2026-09-08, real NJB bagel-switch
+  // self-contradiction — Jason's own diagnosis: "this is an ordering
+  // problem, not a wording problem"). GUARD 17 (below, post-turn) catches a
+  // false "Switched to..." claim AFTER the model has already written it,
+  // and can only ever APPEND a correction — producing exactly the
+  // claim-then-retraction pattern Jason flagged as self-contradictory, no
+  // matter how honest the retraction itself is. This runs BEFORE the
+  // model's first call of the turn: if the customer's message uses change
+  // language and the cart already has a zero-option item, the model gets an
+  // explicit heads-up in ITS OWN context before composing anything, so its
+  // tool calls and its final text are both written already knowing it can't
+  // claim a change happened — one coherent message, not two contradictory
+  // ones. GUARD 17 remains as the deterministic backstop for whenever the
+  // model doesn't act on this (prompt compliance is probabilistic, never
+  // guaranteed) -- this is prevention, not a replacement for it.
+  const zeroOptionHint = buildZeroOptionAttributeChangeHint(
+    userMessage,
+    cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
+    effectiveMenu,
+  );
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable) + (zeroOptionHint ?? "");
 
   const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
@@ -5901,17 +5923,29 @@ Deno.serve(async (req: Request) => {
   //   "bagel" in "...Bagel with Plain Cream Cheese" belongs to THAT item's
   //   own name, so it's honest context regardless of which zero-option
   //   item is being checked.
-  //   v5 (this version): an independent adversarial review of v4 (before
-  //   it shipped un-revised) found a real live-menu false positive: NJB's
-  //   "One Dozen Bagels" / "Half Dozen Bagels" derive headNoun17 "one" /
-  //   "half" -- common enough to appear in totally unrelated conversation
-  //   ("changed your pickup time to a later one") and wrongly append a
-  //   confusing correction to an honest reply about something else
-  //   entirely. Fixed by refusing to use an overly generic word as an
-  //   anchor at all (see genericHeadNoun17 below) -- skips the item rather
-  //   than risk a wrong correction; a missed catch on a rarely-reordered
-  //   bulk item is a far smaller cost than injecting bad text into an
-  //   honest reply.
+  //   v5: an independent adversarial review of v4 (before it shipped
+  //   un-revised) found a real live-menu false positive: NJB's "One Dozen
+  //   Bagels" / "Half Dozen Bagels" derive headNoun17 "one" / "half" --
+  //   common enough to appear in totally unrelated conversation ("changed
+  //   your pickup time to a later one") and wrongly append a confusing
+  //   correction to an honest reply about something else entirely. Fixed by
+  //   refusing to use an overly generic word as an anchor at all (see
+  //   genericHeadNoun17 below).
+  //   v6 (this version): landed alongside a NEW upstream fix (see the
+  //   "BEFORE-COMPOSITION honesty check" above buildSystemPrompt) that
+  //   steers the model toward an honest denial before it ever composes
+  //   anything. Live-verifying THAT fix immediately surfaced a new GUARD 17
+  //   bug: an honest denial ("I can't officially change the bagel type on
+  //   that one, but I've noted everything bagel for the kitchen") still
+  //   contains a change-verb ("change") and a foreign descriptor
+  //   ("everything") before the head noun -- the exact shape this guard
+  //   was built to catch -- so GUARD 17 appended its OWN correction onto a
+  //   reply that was ALREADY honest, recreating the self-contradiction on a
+  //   message that never needed fixing. Fixed by requiring the change-verb
+  //   NOT be preceded by a negation word ("can't," "unable," "won't," ...)
+  //   in the same sentence (see hasUnnegatedChangeClaim17 below) -- a
+  //   denial is the behavior this whole fix exists to produce, same
+  //   principle as invented-action-guard.ts's own NEGATED check.
   //
   //   KNOWN, ACCEPTED LIMITATION (same review, not fixed -- a genuine
   //   false NEGATIVE, judged lower-priority than a false positive): three
@@ -5966,6 +6000,37 @@ Deno.serve(async (req: Request) => {
       "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
       "half", "dozen", "some", "few", "several", "single", "double", "triple",
     ]);
+    // v6 (2026-09-08, real deployed transcript, found while live-verifying
+    // the NEW pre-composition hint above): the hint successfully steers the
+    // model toward an honest denial ("I can't officially change the bagel
+    // type on that one, but I've noted everything bagel for the kitchen")
+    // -- but that sentence still contains a change-verb ("change") AND a
+    // foreign descriptor ("everything") right before the head noun
+    // ("bagel"), the exact same shape GUARD 17 was built to catch. Without
+    // this check, GUARD 17 appended its OWN "doesn't have that kind of
+    // option" correction onto a reply that was ALREADY honest and coherent
+    // -- recreating Jason's exact self-contradiction complaint on a message
+    // that never needed correcting in the first place. A negation word
+    // ("can't," "won't," "unable," ...) appearing before the change-verb IN
+    // THE SAME SENTENCE means the model is DENYING the change, not claiming
+    // it -- the desired behavior, not the lie. Same principle as invented-
+    // action-guard.ts's own NEGATED check ("a denial is the behaviour we
+    // want, not the lie").
+    const negation17Re = /\b(?:can(?:no|['’])?t|cannot|won['’]?t|do(?:n['’]?t| not)|isn['’]?t|am\s+not|i['’]?m\s+not|never|unable|not\s+able|no\s+way\s+to)\b/i;
+    function hasUnnegatedChangeClaim17(text: string): boolean {
+      const changeReGlobal = new RegExp(zeroOptionChangeClaimRe.source, "gi");
+      let claimMatch: RegExpExecArray | null;
+      while ((claimMatch = changeReGlobal.exec(text))) {
+        const sentenceStart = Math.max(
+          text.lastIndexOf(".", claimMatch.index),
+          text.lastIndexOf("!", claimMatch.index),
+          text.lastIndexOf("?", claimMatch.index),
+        ) + 1;
+        const beforeClaim = text.slice(sentenceStart, claimMatch.index);
+        if (!negation17Re.test(beforeClaim)) return true;
+      }
+      return false;
+    }
     const flagged17: Array<{ item: CartItem; menuItemName: string }> = [];
     for (const ci of guardCart.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id))) {
       const menuItem = effectiveMenu.find(mi => mi.id === ci.menu_item_id);
@@ -5974,7 +6039,7 @@ Deno.serve(async (req: Request) => {
       const headNoun17 = dn17.split(/\s+/)[0]?.replace(/[^a-z0-9]/g, "");
       if (!headNoun17 || genericHeadNoun17.has(headNoun17)) continue;
       const replyLower17 = reply.toLowerCase();
-      if (!zeroOptionChangeClaimRe.test(replyLower17)) continue;
+      if (!hasUnnegatedChangeClaim17(replyLower17)) continue;
       const precedingRe17 = new RegExp(`\\b(\\w+)\\s+${headNoun17}\\b`, "g");
       let match17: RegExpExecArray | null;
       let foundForeignDescriptor = false;
