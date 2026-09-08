@@ -3552,3 +3552,212 @@ this changes applyCompiledAddItem's core contract for every compiled shop:
       gap, since a model that reaches for modify_item on a compiled line
       today silently desyncs authoritative state either way.
 Awaiting direction before implementing any of the above.
+
+================================================================================
+2026-09-08 ~16:30 UTC (12:30 ET) -- ITEM A: SIZE-FOLDING PLAN (plan only, no
+migration/fold code executed) + ITEM B: INVENTED OWNER-QUESTION AUDIT
+(sweep + live re-verification). Both requested by PO at 10:55 ET; this
+thread was overdue after a prior session got pulled onto the item8-
+applyCompiledAddItem P0. Coordinated per standing convention: checked git
+log/status/BLOCKED.txt first -- found item8-applycompileditem-contractfix
+mid-edit on ask-plan-engine.ts/index.ts concurrently; did not touch those
+files or compiled_ordering_engine_enabled for any shop. Read-only DB
+queries only this session -- zero writes.
+================================================================================
+
+--- ITEM B (smaller, done first): INVENTED-QUESTION AUDIT, live-verified ---
+
+The full manufactured-vs-genuine audit the PO wants already exists in this
+file at the ~12:00 UTC "PO course correction on item 3" entry above (search
+"AUDIT: manufactured vs genuine owner_questions") -- it was done by an
+earlier thread this morning, landed in commit ac8f69d (archetypes.ts guard
+5.5b), and deployed (compile-menu). This session's job was to confirm it's
+still current, not redo it -- re-ran the audit live against owner_questions
+directly (service-role query, status='pending', both shops) rather than
+trusting the written record, and it matches byte-for-byte:
+
+ZIO'S: 1 pending row (was 2 before the ac8f69d fix + refresh-owner-
+questions.ts --apply landed this morning). Gyro/Chicken Gyro's "Baskets &
+Gyros/bread" row is GONE from the live table -- confirmed deleted, not just
+documented as fixed. Remaining 1 row:
+  - Burgers/temp (Double Burger, 1 item) -- GENUINE. Zero option_groups of
+    any kind on that item; there is truly no source data to answer from.
+
+NJB: 7 pending rows, live-confirmed identical (same scope_id/slot_key/
+items_affected) to the audit already on file. Item-level totals across the
+7 rows (39 row-sum, 38 UNIQUE items -- the 1 "Two Eggs Any Style Platter"
+item is double-counted, since it sits inside both the egg_style row (1) and
+the egg_side row (11 = all Omelette items)):
+  MANUFACTURED (23 items, 4 rows) -- same-shape defect as Gyro, but NJB has
+  ZERO option_groups at all so it's not a mistagged-provenance case; the
+  root cause here is normalize.ts/archetypes.ts's slot ladder recognizing
+  "choice of A or B" as settling a slot but having no equivalent for a
+  description stating a SINGLE fixed value ("on rye bread", "in a wrap")
+  as ALSO settling it:
+    - Breakfast Sandwiches/bread (2/2): Avocado Crush "wheat toast" (fixed),
+      Lean Wrap "in a wrap" (fixed, also arguably miscategorized -- it's a
+      wrap sitting in a sandwich category)
+    - Cold Sandwiches/bread (2/2): Sloppy Joe - Roast Beef / - Turkey, both
+      "on rye bread" (fixed)
+    - Hot Sandwiches/bread (9/11): Beef Gyro & Grilled Chicken Gyro "on
+      pita"; Big John's, Cheddar Cheeseball Cheesesteak, Chicken Cutlet
+      Sandwich, Cheesesteak all "on roll"; Pizza Bagel "on a bagel";
+      Reuben & Rachel "on grilled rye bread" -- all fixed, not choices
+    - Wraps/bread (10/10): every item says "in a wrap" or doesn't mention
+      bread -- category-level mismatch, the sandwich archetype's generic
+      bread slot doesn't apply to wrap-named items at all (same shape as
+      burger/temp's existing notChickenVeggieTurkey applies_when guard)
+  GENUINE (5 items, 3 rows) -- real gaps, need Jason's answer:
+    - Hot Sandwiches/bread (2/11): Turkey Melt, Tuna Melt both literally
+      say "choice of bread" with no enumerated list
+    - Omelette & Egg Platters/egg_style (1/1): "Two Eggs Any Style Platter"
+    - Salads/dressing (2/2): Chef's Salad, Garden Salad -- no dressing info
+      anywhere in either description
+  GENUINE BY DESIGN (11 items, 1 row) -- Omelette & Egg Platters/egg_side:
+    deliberately never description-bound (archetypes.ts's own comment: a
+    prior double-"choice of" bug proved that binding unsafe here). Not a
+    bug, not this audit's call to change.
+
+BOTTOM LINE FOR JASON: of NJB's 38 blocked items, 23 can be unblocked by a
+code fix alone (zero questions to answer), 5 need a real yes/no answer, and
+11 are intentionally left as a standing "side?" question by design. NJB
+follow-up (the single-fixed-value description recognition + a wrap
+applies_when guard, same test discipline as 5.5b) is scoped but NOT
+authorized/built this session -- recommended as the next NJB-specific
+ticket, separate from item A below.
+
+--- ITEM A: SIZE-FOLDING PLAN (plan only -- no code/data changes made) ---
+
+DIAGNOSIS -- CONFIRMED FOR ZIO'S, CORRECTED FOR NJB:
+
+Zio's: CONFIRMED as stated. Live query: 220 active items, 220 distinct
+product_key (nothing folded), 0 rows with size_label populated, and
+exactly 78 option_groups named "Size" (kind='slot', required=true,
+single-select) each attached to ONE menu_items row -- matches the PO's
+cited "78" exactly. Read scripts/load-zios-slice-options.mjs directly:
+writeItem() only INSERTs into option_groups/option_choices, never touches
+menu_items -- confirms the Slice DOM-scrape importer has no fold step at
+all. Read supabase/functions/_shared/normalize.ts's stripSizeSuffix(): it
+only fires when a row's size_label is ALREADY populated in the "Base -
+SizeLabel" shape (Vito's convention) -- with size_label null and each
+pizza a single row, there is nothing for the existing fold logic to act
+on. Pipeline gap confirmed exactly as diagnosed.
+
+NJB: DIAGNOSIS WAS WRONG ON MECHANISM, same downstream symptom. Live
+query: NJB has ZERO option_groups of ANY kind (not just size -- already
+established fact from the item-3 audit above) AND all 170 rows have
+source='pdf', not Slice -- NJB was never run through the Slice importer,
+so "the Slice importer doesn't fold" cannot be NJB's cause. NJB's real
+size-variant items (10 Loukoumades flavors x Small/Large = 20 rows, e.g.
+"Classic Loukoumades (Small)" / "Classic Loukoumades (Large)" as two
+already-separate menu_items rows -- the RIGHT shape, same as Vito's) never
+got size_label populated by parse-menu-pdf's extraction, and the size text
+sits as a "(Small)"/"(Large)" parenthetical inside `name` rather than
+Vito's "Base - SizeLabel" dash convention stripSizeSuffix expects. Net
+effect on the customer ("large" gets lost) is identical to Zio's, but the
+broken component is different (PDF extraction/backfill, not the Slice
+importer) and the fix is much smaller (no new rows, just a text/column
+correction on ~20-23 existing rows). Flagging this correction per the
+dispatch's own instruction to verify, not just accept, the diagnosis.
+
+PLAN:
+
+(A) Zio's -- explode-and-fold, 78 groups:
+  - New shared helper, e.g. supabase/functions/_shared/size-fold.ts:
+    given a menu_item_id whose required singleton "Size"-named group has
+    >=2 choices, INSERT one new menu_items row per choice (name = "<base>
+    - <size label>", price_cents = base + choice's delta, size_label =
+    size label, category/description/etc cloned from the base row), then
+    set the ORIGINAL row active=false (never delete -- see blast
+    radius/rollback). A group with exactly 1 choice (5 of the 78, e.g.
+    "Mike's Hot Honey Pepperoni Sicilian: Large 18\" only") is a true
+    singleton per the same Guard-5.5b logic already used for owner-
+    question suppression -- no explosion, just set size_label directly on
+    the existing row.
+  - One-time backfill script (e.g. scripts/fold-zios-sizes.ts, dry-run-by-
+    default like refresh-owner-questions.ts's convention) applies this
+    helper against Zio's 78 live groups, then deletes the now-redundant
+    Size option_groups/choices (safe -- see blast radius, nothing
+    references option_group/choice ids by FK).
+  - scripts/load-zios-slice-options.mjs also gets the same helper wired
+    into buildGroupRows()/writeItem() so any FUTURE Slice re-scrape
+    (Zio's re-run, or a new Slice-sourced shop) folds size at import time
+    instead of needing another one-time backfill.
+  - Row-count estimate (not exact -- backfill's own dry-run will report
+    the real number): of 78 groups, ~73 have 2-3 choices (per the live
+    choice-set distribution: 20 groups w/ 3 sizes, ~45 w/ 2, ~5 w/ 1,
+    handful w/ other counts like "Double|Regular", "2 Liter|20oz").
+    Rough net: Zio's active item count grows from 220 to roughly ~310-320
+    after the fold, with 78 original rows retired (active=false, not
+    deleted).
+
+(B) NJB -- text/column correction, ~20-23 rows, no new rows:
+  - One-time backfill script: regex out the trailing "(Small)"/"(Large)"/
+    similar from `name` on NJB's affected rows, write it to size_label,
+    rewrite `name` to the "Base - SizeLabel" convention so the EXISTING
+    normalize.ts fold logic (unchanged) picks it up automatically on the
+    next compile -- no new parsing convention added to normalize.ts.
+  - Open question for Jason, not decided here: "Half Dozen Bagels" / "One
+    Dozen Bagels" (~2-3 rows) are quantity variants, not size in the pizza
+    sense -- folding them the same way is defensible per normalize.ts's
+    own header ("Size/quantity variants... fold") but a customer saying
+    "dozen" reads differently than "large"; flagging for a decision, not
+    assuming.
+  - Root cause of WHY parse-menu-pdf produced this shape in the first
+    place (LLM extraction not following its own size-field instruction,
+    vs. a different/manual import path also tagged source='pdf') not
+    further diagnosed this session -- out of scope for a plan-only pass,
+    and doesn't block the backfill fix regardless of which it was.
+
+BLAST RADIUS (checked live, not just enumerated):
+  - ask_plans / bot_state / bot_state_reason -- all computed at compile
+    time keyed by menu_items.id. New Zio's rows start with none of these
+    until the next compile-menu run touches them; the fold's own
+    procedure must end with a recompile, not leave it implicit.
+  - lexicon table (compile-menu writes it; matchChoiceInText/pending-
+    disambiguation read from it at request time) -- new folded item names
+    ("Neapolitan Cheese Pizza - Large") only enter the lexicon after a
+    post-fold recompile. This is the actual mechanism meant to fix "large"
+    getting lost -- the fold alone does nothing for a live customer until
+    paired with a recompile.
+  - order_carts.cart_json -- CHECKED LIVE (real Zio's rows, most recent 3
+    carts): cart_json embeds `menu_item_id` directly and options as plain
+    strings (`"Size": ["Large 18''"]`) -- there is NO order_carts table
+    referencing option_group_id/option_choice_id at all (confirmed no
+    order_items table exists; carts are the JSON blob). This means: (1)
+    deleting the old Size option_groups/choices after the fold is SAFE --
+    nothing points at those ids; (2) deactivating (not deleting) the
+    original Zio's menu_items rows is REQUIRED -- historical cart_json
+    still holds those ids and any admin/reporting view that re-joins
+    cart_json.menu_item_id back to menu_items for display would break on
+    a hard delete.
+  - ask-plan-engine.ts's compiled Appendix-C size-question template (the
+    mechanism the item8/P0 thread above is mid-fixing) becomes dead code
+    for a folded item -- once size is folded into the item itself there's
+    no more "Size" group to ask about, which is the intended outcome, but
+    worth a live spot-check post-fold that nothing hardcodes "every
+    compiled item has a Size group."
+  - Audit/reporting scripts (item-9-readonly-compile-report.ts, njb-
+    infer-only-20260907.ts, refresh-owner-questions.ts) will show
+    different item/group counts post-fold -- expected, not a bug, just
+    needs a fresh run rather than being read as stale-but-still-valid.
+
+ROLLBACK:
+  - Zio's: fully reversible AS DESIGNED (not by accident) -- the fold
+    never deletes the original menu_items row, only deactivates it, and
+    every deleted Size option_group/choice row gets exported to JSON
+    before deletion (same convention as this morning's /tmp/zios/zios-
+    extract.json dry-run log). Undo = re-activate the 78 original rows,
+    deactivate the new folded rows, re-insert the exported option_groups/
+    choices JSON, recompile.
+  - NJB: trivially reversible -- an UPDATE on ~20-23 existing rows
+    (name + size_label only), no new rows, no deletes. Undo = restore
+    from a pre-migration snapshot of those columns (a single SELECT
+    before the backfill runs), recompile.
+
+NOT executed this session: no migration, no fold logic, no writes beyond
+this file. Handing to PO/Jason for sign-off on: (1) the Zio's explode-
+and-fold approach and its ~310-320 net active-item estimate, (2) the NJB
+dozen-vs-size judgment call, (3) whether to build the shared size-fold.ts
+helper now or scope it to Zio's only for a first pass.
+
