@@ -2116,3 +2116,35 @@ NJB automatically, with zero code change needed: the moment an NJB
 conversation declines a blocked item and the model's own reply happens to
 suggest another blocked item from the same category, this guard fires
 exactly the same way it does for Zio's. No work item here.
+
+[OVERNIGHT QUEUE item 4/5 — Invariant 4 (no unique lexicon term) check.]
+2026-09-08 ~06:35 UTC — DONE (already resolved, confirmed live, no code
+change needed), moving to item 5.
+
+The fix itself already existed in the codebase before tonight (commit
+466e559, 2026-09-07 17:28 -- the itemLexiconTerms "primaryTermOwners"
+guard, with a dedicated test: "compileMenu end-to-end: the Zio's/Shrimp
+Parmigiana/Eggplant Parmigiana collisions resolve and both items keep a
+unique term"). What was actually missing was a RE-COMPILE to apply it to
+live data -- the original report's "not fixed" was accurate at the time it
+was written, but described stale data, not a missing fix.
+
+compile-menu itself is now deployed at version 5 (2026-09-08 01:20:46),
+which postdates the guard fix (commit 466e559, 17:28 the prior evening) --
+so both shops' most recent real compiles already carry it:
+  - Zio's: my own two recompiles for item 1 tonight (Tuna Provolone Wrap)
+    incidentally applied this fix live for the first time. Confirmed via
+    the compile response's own invariants array: invariant 4 pass=true,
+    violations=[]. Independently re-verified with a full read-only sweep
+    of all 219 currently-orderable Zio's items against the live lexicon
+    table (not just the 3 originally-named items) -- 0 violations.
+  - NJB: already compiled earlier tonight (the PO's authorized "ran the
+    compile myself" action), which also postdates the guard fix. Verified
+    "One Egg (Side)" (display_name "One Egg") specifically -- its own
+    term "one egg" has exactly one owner, no collision. Full read-only
+    sweep of all 132 currently-orderable NJB items -- 0 violations.
+
+No write made for this item -- both shops' existing compiled state already
+carries the fix; only read queries were run to confirm it. Nothing new
+compiled on NJB beyond what was already authorized and done earlier
+tonight for other reasons.
