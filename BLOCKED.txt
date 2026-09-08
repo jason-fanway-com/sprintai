@@ -4294,3 +4294,143 @@ STEP 7 — VITO'S REGRESSION: PASS.
 OPEN: PO call on the acceptance-test failure — rollback the fold or accept
 that item-resolution inconsistency is a pre-existing chat-sms LLM issue
 separate from this work. All other steps are clean.
+
+================================================================================
+2026-09-08 21:53 UTC (17:53 ET) -- CUSTOMER CRM (docs/specs/2026-09-03-
+customer-crm.md) -- BUILD GATE OPENED BY JASON TONIGHT, SHIPPED: backend +
+chat personalization (spec open question 1 decision). Owner-facing CRM view
+explicitly deferred, per that same decision.
+
+SHIPPED AND DEPLOYED LIVE:
+- Migration 121_customers.sql: new `customers` table (tenant_id, customer_
+  phone, name, order_count, total_spent_cents, favorite_items jsonb,
+  last_order_id/at), UNIQUE+index on (tenant_id, customer_phone) for AC7's
+  single-indexed-lookup requirement, service-role-only RLS. app_config.
+  customer_retention_months=24 (question 2: configurable, not hardcoded --
+  the PURGE JOB ITSELF IS NOT BUILT, this only makes the config value exist
+  so it isn't a blocker later). shops.customer_personalization_enabled
+  (owner kill switch, default true). Applied via the Management API (same
+  reason as migration 120 earlier today: `db push` cannot be trusted given
+  this project's documented migration-tracker drift -- see RUNBOOK). NOTE:
+  had to reference tenants(id) instead of the spec's implied shops(tenant_id)
+  -- shops.tenant_id has NO unique constraint live (confirmed via
+  pg_constraint), same root cause sms_opt_outs' own tenant_id FK never
+  actually applied. Verified live post-apply: table/columns/indexes/
+  app_config/shops column all confirmed via direct query.
+- _shared/customer-profile.ts: computeFavoriteItemsUpdate (ranks by DISTINCT
+  PAID ORDERS containing an item, not unit count, per AC6), resolveCustomerName
+  (question 3: latest paid pickup_name wins, never regresses a known name to
+  blank), regularEligibility (>=3 orders gate), lookupCustomerContext (the
+  ONE indexed query, AC7), upsertCustomerProfile (fetch-merge-upsert, called
+  from stripe-webhook). 8 unit tests, all green.
+- stripe-webhook/handleOrderPaymentComplete: calls upsertCustomerProfile
+  after marking a cart paid -- the single authoritative "order became paid"
+  event, so there's exactly one writer. Non-fatal on failure (never blocks
+  or rolls back a real Stripe charge).
+- chat-sms/index.ts: single indexed customers lookup per turn (AC7), gated
+  off entirely when opted out (AC3, reuses the existing isOptedOut helper)
+  or shop.customer_personalization_enabled=false. Context injected into
+  buildSystemPrompt only for a genuinely returning customer (has a stored
+  name AND not lifetime-first-contact, AC4) -- name greeting fires once
+  (first message of the conversation window only), never repeated, never a
+  history/count dump (AC5). "The regular" is worded as an OFFER in the
+  prompt, never an instruction to add (AC6).
+- TWO NEW DETERMINISTIC GUARDS (prompt instructions are advisory, not
+  enforcement -- matching this file's own established pattern for every
+  other high-stakes cart rule):
+  - GUARD 19 (guard19-quantity-only-no-item-named.ts): a quantity-only
+    message ("I want four", "the usual amount") that names ZERO menu items
+    gets a FULL cart revert if the model added anything anyway -- this is
+    the SAME shape as today's earlier P0 (commit b865d3a, "reset" then "I
+    want four large pizzas" filled the cart from leaked history), re-guarded
+    here because the CRM deliberately injects prior-order context, which is
+    the same lever that incident's unintentional leak pulled. Named
+    regression test: regression_2026-09-08_reset_inherited_pizzas.
+  - GUARD 20 (guard20-regular-offer-confirmation.ts): the eligible "regular"
+    item can only reach the cart when the bot's own IMMEDIATELY PRECEDING
+    message actually offered it (never a stale offer from earlier -- same
+    "Luca" incident discipline GUARD 9 already applies to upsells) AND the
+    customer's message this turn confirms or explicitly invokes "the
+    regular"/"my usual". "I want the regular" with no prior offer is NOT
+    sufficient by itself -- reverted, forcing the offer-first flow AC6
+    requires. Guard 9/13's own "was this item named this turn" predicates
+    were extended (regularItemAuthorizedThisTurn, one shared function, three
+    call sites) so they don't fight this guard and revert a legitimately
+    confirmed regular-item add as an unrelated unconsented affirmation.
+- Full existing chat-sms suite (36 test files, ~530 cases) re-run file-by-
+  file (this repo's documented pattern -- top-level Deno.serve() collisions
+  across files in one process): 100% green, before and after, zero
+  regressions. `deno check` on chat-sms/index.ts and stripe-webhook/index.ts:
+  same pre-existing error counts before/after my changes (4 and 92
+  respectively, all unrelated nullability/DB-type issues predating tonight,
+  confirmed via git stash diff) -- zero new type errors introduced.
+
+LIVE VERIFIED (real deployed functions, real database, Test Kitchen web
+channel with test:true -- NOT synthetic webhook events, NOT mocks; real SMS
+avoided per Jason's explicit ask to save Telnyx credits, since this channel
+exercises the identical chat-sms code path):
+- AC4/AC5/AC6 real transcript against Not Just Bagels (seeded one realistic
+  returning-customer fixture -- a past resolved conversation + a customers
+  row, 4 paid orders, favorite item eligible): turn 1 "hi" -> "Hey Jason,
+  welcome back! Want your usual - Bagel with Plain Cream Cheese - or
+  something else today?" (name once, one item, zero order-count/history
+  recitation). Turn 2 "I want four" (quantity, ZERO items named) -> "Four of
+  what, Jason? Your usual Bagel with Plain Cream Cheese, or something else?"
+  -- cart stayed EMPTY, model asked rather than guessed. Turn 3 "yes the
+  usual please" (explicit confirmation of the just-made offer) -> 4x Bagel
+  with Plain Cream Cheese actually added, correct price. Nothing reached the
+  cart until the customer's own words confirmed it.
+- AC2 two-tenant isolation: the SAME synthetic phone identity that got the
+  full personalized greeting above, immediately re-used against Vito's
+  Pizza (different tenant_id, zero seeded data there) -> completely cold,
+  generic greeting, no name, no history, no regular offer. Confirmed at the
+  DB level too: exactly one `customers` row exists for that phone, scoped to
+  NJB's tenant_id only.
+- AC3 opt-out suppression: a second seeded returning customer ("Priya", 5
+  orders, eligible regular) got the full personalized greeting; after
+  inserting an sms_opt_outs row for her (tenant_id, customer_phone), the
+  IDENTICAL fresh conversation got a plain "what can I get you" with zero
+  personalization.
+- All seeded test fixtures (customers/conversations/sms_opt_outs rows,
+  synthetic `web:crm-*` phone identities) deleted after verification --
+  confirmed zero residue in the live database.
+- NOT live-forced: an actual live LLM misfire reproducing GUARD 19/20's
+  exact trigger condition (the model behaved correctly in every live turn
+  tried, asking rather than guessing) -- consistent with this file's own
+  precedent for guard shipped-but-not-forced-live (same caveat this repo's
+  own scrape-shop entry from earlier today used for an analogous case).
+  Covered at the unit level instead, directly against the real guard
+  functions (not mirrors) -- see the named regression test above, 21 total
+  new unit tests across customer-profile/guard19/guard20, all passing.
+
+NEW FINDING, UNRELATED TO THIS BUILD, FLAGGING NOW rather than burying it:
+sms_opt_outs' WRITE path (upsertOptOut, used by every live STOP-keyword
+handler in chat-sms) appears BROKEN on production data. Live-tested while
+seeding AC3's fixture: (1) the function's own `.upsert(..., { onConflict:
+"tenant_id, customer_phone" })` fails with Postgres 42P10 (no unique
+constraint on exactly those two columns exists on the live table --
+confirmed via pg_constraint: the only unique constraint is `(phone_number,
+shop_id)`, a legacy pair); AND SEPARATELY (2) `phone_number` is NOT NULL on
+the live table but upsertOptOut never populates it, so even a corrected
+upsert would fail with a NOT NULL violation. upsertOptOut's own error
+handling swallows both (logged, non-fatal, "Telnyx is the backstop" per its
+comment) -- meaning a real customer texting STOP likely gets the compliance
+confirmation text while the durable opt-out record silently fails to save.
+Did not touch this -- out of scope for tonight's build and a schema change
+on a shared compliance-relevant table deserves its own reviewed migration,
+not a rider on this one. Needs a PO/lead decision on priority: this sits
+under the "never message without a recorded, valid opt-out" hard rule.
+
+NOT BUILT TONIGHT (explicitly, per Q1/Q2 scope decisions, not an oversight):
+- Owner-facing CRM view/dashboard (spec's own "Out of scope" + question 1).
+- The customer_retention_months PURGE JOB -- the config value exists
+  (app_config.customer_retention_months=24) but nothing reads it yet.
+- "What did I get last Thursday" date-specific order lookup (spec user
+  story, not one of the 7 acceptance criteria) -- AC6 ("the regular") is
+  built; ad-hoc historical-date queries are not.
+- Real end-to-end SMS sanity check against Vito's live Telnyx number
+  (+16107358315) -- deliberately skipped per Jason's ask to avoid burning
+  credits on routine iteration; the web-channel transcript above exercises
+  the identical code path. Recommend one real SMS check before calling this
+  fully done, at Jason's discretion on timing/cost.
+================================================================================

@@ -10,6 +10,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { deriveConnectStatus } from "../_shared/connect.ts";
 import { guardedSend } from "../_shared/outbound-guard.ts";
+import { upsertCustomerProfile } from "../_shared/customer-profile.ts";
 
 const PLAN_PRICES: Record<string, string> = {
   // Map Stripe price IDs to plan names — update with real Stripe price IDs
@@ -424,7 +425,7 @@ async function handleOrderPaymentComplete(
   // Stub email ticket — log full order details
   const { data: cart } = await supabase
     .from("order_carts")
-    .select("*, shops(name, email_ticket_recipient)")
+    .select("*, shops(name, email_ticket_recipient, tenant_id), conversations(customer_phone)")
     .eq("id", cartId)
     .single();
 
@@ -435,6 +436,32 @@ async function handleOrderPaymentComplete(
   // customer-facing pushes allowed.
   if (cart?.conversation_id) {
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cartId, "payment_confirmed");
+  }
+
+  // Customer CRM (docs/specs/2026-09-03-customer-crm.md) — upsert the
+  // materialized profile from THIS event, the single authoritative "order
+  // just became paid" signal. Non-fatal: a profile-write failure must never
+  // block or roll back a payment that already succeeded with Stripe.
+  if (cart) {
+    const tenantId = (cart.shops as { tenant_id: string } | null)?.tenant_id;
+    const customerPhone = (cart.conversations as { customer_phone: string } | null)?.customer_phone;
+    if (tenantId && customerPhone) {
+      const itemNames = ((cart.cart_json as Array<{ name?: string }> | null) ?? [])
+        .map(i => i.name)
+        .filter((n): n is string => Boolean(n));
+      const result = await upsertCustomerProfile(supabase, {
+        tenantId,
+        customerPhone,
+        pickupName: (cart.pickup_name as string | null) ?? null,
+        totalCents: (cart.total_cents as number | null) ?? 0,
+        itemNames,
+        orderId: cartId,
+        orderAt: new Date().toISOString(),
+      });
+      if (!result.ok) {
+        console.error(`[stripe-webhook] customer-profile upsert failed for cart ${cartId}: ${result.error}`);
+      }
+    }
   }
 
   if (cart) {

@@ -44,6 +44,9 @@ import {
 } from "./pending-option.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
+import { computeGuard19 } from "./guard19-quantity-only-no-item-named.ts";
+import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
@@ -212,6 +215,9 @@ interface Shop {
   // Item 8 (spec §7/§11 item 8). Default false in the DB (migration 118) —
   // must stay false for Vito's. See ask-plan-engine.ts.
   compiled_ordering_engine_enabled?: boolean;
+  // Customer CRM (docs/specs/2026-09-03-customer-crm.md) — owner-level kill
+  // switch for personalization. Default true (migration 121).
+  customer_personalization_enabled?: boolean;
 }
 
 interface OrderCart {
@@ -603,6 +609,7 @@ function buildSystemPrompt(
   deliveryEnabled?: boolean,
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean } | null,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = dayWindows(shop.open_hours?.[today]);
@@ -774,13 +781,38 @@ function buildSystemPrompt(
     ? `\nTEST MODE: Ignore all business-hours restrictions — allow ordering at any time. Do NOT refuse orders based on the current time or TODAY'S HOURS.`
     : "";
 
+  // CUSTOMER CRM (docs/specs/2026-09-03-customer-crm.md). AC3: this block is
+  // simply absent when the customer opted out or personalization is
+  // disabled — the caller (index.ts) never passes customerContext in that
+  // case, so there is nothing here to accidentally leak. AC4/AC5: the name
+  // greeting is offered ONLY on isFirstMessage (the opening turn of this
+  // conversation, never repeated turn after turn), and this block NEVER
+  // states an order count or history — only a name and, when eligible, one
+  // top item. AC6: "the regular" is worded as an OFFER requiring
+  // confirmation, never as a standing instruction to add it — GUARD 20
+  // (below, in index.ts) is the deterministic enforcement of that; this text
+  // is advisory, not the safety mechanism.
+  const customerContextBlock = (() => {
+    if (!customerContext) return "";
+    const nameClause = customerContext.name && customerContext.isFirstMessage
+      ? `This is a RETURNING customer named ${customerContext.name}. Greet them by name once, warmly and briefly (e.g. "Hey ${customerContext.name}, welcome back!") as part of your first reply this conversation. Do NOT repeat their name in every later message this conversation.`
+      : customerContext.name
+        ? `This is a RETURNING customer named ${customerContext.name}. You already greeted them by name earlier this conversation — do not repeat the greeting.`
+        : "";
+    const regularClause = customerContext.regularItem
+      ? ` Their usual order is "${customerContext.regularItem.name}". You MAY offer it (e.g. "want your regular, the ${customerContext.regularItem.name}, or something else today?") — this is an OFFER, not an instruction to add it. NEVER call add_item for this item unless the customer explicitly confirms your offer in their own next message (e.g. "yes", "sounds good", "the usual please") or names the item themselves. If they haven't confirmed yet, just ask — do not add it preemptively.`
+      : "";
+    if (!nameClause && !regularClause) return "";
+    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}`;
+  })();
+
   return `You are the ordering assistant for ${shop.name}. Help customers order for pickup or delivery via text.
 
 You are replying by SMS text message. Plain text only. Never use markdown, tables, headings, or bullet points of any kind - no hyphens, asterisks, or numbers starting a line, and never put each item on its own line. Write lists inline in a sentence, the way a person texts: "Large cheese pizza, french fries, and bone-in wings (hot)". Keep replies under about 300 characters. Write the way a person texts.
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
-TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}
+TODAY'S HOURS: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}${customerContextBlock}
 
 AVAILABLE MENU:
 ${menuStr}
@@ -796,6 +828,7 @@ RULES:
 - MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
+- REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
 - When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"
@@ -4386,6 +4419,32 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Customer CRM lookup (docs/specs/2026-09-03-customer-crm.md) ─────────
+  // AC7: exactly ONE indexed query on (tenant_id, customer_phone) against
+  // `customers` — see lookupCustomerContext, which selects nothing else.
+  // AC2 (tenant isolation): scoped by shop.tenant_id, same key every other
+  // tenant-scoped table in this file uses — a phone that ordered at another
+  // shop can never surface here. AC3 (opt-out): an opted-out (tenant_id,
+  // phone) gets customerContext = null below, same as first-ever contact —
+  // no name, no regular offer, nothing distinguishes it from a cold start.
+  // The web channel's synthetic customerPhone (`web:<sessionId>`) simply
+  // never matches a row — harmless cold start, not a special case.
+  let customerRow: CustomerRow | null = null;
+  let regularItem: RegularOfferContext | null = null;
+  if (shop.customer_personalization_enabled !== false && customerPhone) {
+    const optedOut = await isOptedOut(supabase, shop.tenant_id, customerPhone);
+    if (!optedOut) {
+      customerRow = await lookupCustomerContext(supabase, shop.tenant_id, customerPhone);
+      if (customerRow) regularItem = regularEligibility(customerRow.favorite_items ?? []);
+    }
+  }
+  // AC4: only greet by name on a genuinely returning customer (a stored
+  // name AND not their first-ever contact) — never on a first-ever
+  // conversation, even if a name were somehow already on file.
+  const customerContext = (customerRow && !isLifetimeFirstContact)
+    ? { name: customerRow.name, regularItem, isFirstMessage }
+    : null;
+
   // ITEM 1 (2026-09-08, PO live verification): menu_item_id -> option-group
   // names whose real choices have already reached the customer this turn via
   // the compiled path's own canonical wording (populated once runOrderingLoop
@@ -5432,7 +5491,7 @@ Deno.serve(async (req: Request) => {
     cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
     effectiveMenu,
   );
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable) + (zeroOptionHint ?? "");
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext) + (zeroOptionHint ?? "");
 
   const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
@@ -6742,6 +6801,19 @@ Deno.serve(async (req: Request) => {
   // The diff/decision logic itself lives in guard9-unconsented-affirmation.ts
   // (imported above) — pure, testable against the real function, and with no
   // access to `cartItems` at all so the wiring bug above can't recur here.
+  // CUSTOMER CRM (docs/specs/2026-09-03-customer-crm.md, GUARD 20): the bot's
+  // own IMMEDIATELY PRECEDING message, used to decide whether a "the
+  // regular"/bare-affirmation reply this turn is confirming a FRESH offer
+  // (this turn's message replies to it) or a stale one from earlier in the
+  // conversation — same "Luca" incident shape GUARD 9 already guards
+  // against for upsell offers. `history` was loaded BEFORE this turn's
+  // customer message was saved (see "Load conversation history" above), so
+  // its last entry, if an assistant turn, is exactly the bot's last reply.
+  const priorAssistantMessage = (() => {
+    const last = history[history.length - 1];
+    return last?.role === "assistant" ? (last.content as string) : null;
+  })();
+
   {
     const menuItemNamesG9 = buildMenuItemNames(effectiveMenu);
     const namedThisTurnG9 = extractCustomerReferencedItems(
@@ -6750,10 +6822,19 @@ Deno.serve(async (req: Request) => {
     );
     const isNamedThisTurnG9 = (itemName: string): boolean => {
       const itemLower = itemName.toLowerCase();
-      return [...namedThisTurnG9].some(n => {
+      if ([...namedThisTurnG9].some(n => {
         const n2 = n.toLowerCase();
         return n2.includes(itemLower) || itemLower.includes(n2);
-      });
+      })) return true;
+      // GUARD 20's authorization: a genuinely just-offered-and-confirmed
+      // "regular" counts as named so GUARD 9 doesn't revert it as an
+      // unconsented affirmation-triggered add. See guard20-regular-offer-
+      // confirmation.ts's own header for why this must be the SAME
+      // authorization function used at GUARD 20's own call site below.
+      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
+        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
+      }
+      return false;
     };
 
     const guard9Result = computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, isNamedThisTurnG9);
@@ -6840,10 +6921,14 @@ Deno.serve(async (req: Request) => {
     );
     const isNamedThisTurn13 = (itemName: string): boolean => {
       const itemLower = itemName.toLowerCase();
-      return [...namedThisTurn13].some(n => {
+      if ([...namedThisTurn13].some(n => {
         const n2 = n.toLowerCase();
         return n2.includes(itemLower) || itemLower.includes(n2);
-      });
+      })) return true;
+      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
+        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
+      }
+      return false;
     };
 
     const guard13Reverts = computeGuard13(cartSnapshotBeforeTurn, guardCart, isNamedThisTurn13);
@@ -6854,6 +6939,72 @@ Deno.serve(async (req: Request) => {
         (item as CartItem).quantity = priorQty;
       }
       await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+    }
+  }
+
+  // ── GUARD 19 (2026-09-08, customer-CRM build): quantity-only message,
+  // ZERO menu items named — any cart growth this turn has no grounding in
+  // what the customer actually said and can only have come from remembered/
+  // injected context. Full revert (not selective, unlike GUARD 9/13: with
+  // nothing named at all, no line has a legitimate claim to survive). See
+  // guard19-quantity-only-no-item-named.ts for the full incident writeup —
+  // this is the SAME shape as the 2026-09-08 Zio's P0 (commit b865d3a,
+  // "reset" then "I want four large pizzas"), deliberately re-guarded here
+  // because the CRM build injects prior-order context on purpose, which is
+  // the same lever that incident's unintentional context leak pulled.
+  {
+    const menuItemNames19 = buildMenuItemNames(effectiveMenu);
+    const namedThisTurn19 = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuItemNames19,
+    );
+    const guard19Result = computeGuard19(userMessage, cartSnapshotBeforeTurn, guardCart, namedThisTurn19.size);
+    if (guard19Result.tripped) {
+      console.warn(`[chat-sms] GUARD 19 (quantity-only, zero items named) tripped (conv=${conversation.id}). Message "${userMessage}" named no menu item; reverted cart to pre-turn snapshot (${guardCart.length} lines -> ${guard19Result.revertedCart.length}).`);
+      guardCart.length = 0;
+      guardCart.push(...guard19Result.revertedCart);
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      reply = guardCart.length > 0
+        ? "Sorry, which item did you want more of?"
+        : "Sorry, which item would you like? I don't have a specific one from that yet.";
+    }
+  }
+
+  // ── GUARD 20 (2026-09-08, customer-CRM build, AC6): "the regular" is an
+  // OFFER, never a silent add. Reverts a new cart line for the eligible
+  // regular item unless the bot's own immediately-preceding message actually
+  // offered it AND the customer's message this turn confirms or explicitly
+  // invokes "the regular"/"my usual" themselves. See guard20-regular-offer-
+  // confirmation.ts for the full design (mirrors GUARD 9's "no stale offer"
+  // discipline, scoped to the CRM's own offer instead of an upsell).
+  {
+    const menuItemNames20 = buildMenuItemNames(effectiveMenu);
+    const namedThisTurn20 = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuItemNames20,
+    );
+    const isNamedThisTurn20 = (itemName: string): boolean => {
+      const itemLower = itemName.toLowerCase();
+      if ([...namedThisTurn20].some(n => {
+        const n2 = n.toLowerCase();
+        return n2.includes(itemLower) || itemLower.includes(n2);
+      })) return true;
+      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
+        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
+      }
+      return false;
+    };
+    const guard20Result = computeGuard20(cartSnapshotBeforeTurn, guardCart, regularItem, isNamedThisTurn20);
+    if (guard20Result.tripped) {
+      console.warn(`[chat-sms] GUARD 20 (regular-offer requires confirmation) tripped (conv=${conversation.id}). Message "${userMessage}" did not confirm a just-made offer for "${regularItem?.name}"; reverted: ${guard20Result.reverted.map(r => r.name).join(", ")}`);
+      for (const r of guard20Result.reverted) {
+        const idx = guardCart.indexOf(r);
+        if (idx !== -1) guardCart.splice(idx, 1);
+      }
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
+      reply = regularItem
+        ? `Want your regular, the ${regularItem.name}, or something else today?`
+        : "What would you like to order?";
     }
   }
 
