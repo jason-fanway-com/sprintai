@@ -224,8 +224,14 @@ Source-priority ladder is live: own website → owner-provided PDF/photo → Goo
 listing → aggregator (last resort), with provenance recorded per item (migration
 102: `menus.source_detail`, `menu_items.source`/`source_ref`). Aggregator rung
 measured 0/4 on sites with no usable direct-site menu — Slice returns items with no
-options/sizes, Toast and ChowNow are JS-rendered and return nothing to a static
-scrape.
+options/sizes; Toast and ChowNow were JS-rendered and returned nothing to a static
+scrape until commit 5922868 (2026-09-08), which fixed ChowNow via a Firecrawl
+`waitFor` render delay (verified live: 109 priced items on a real ChowNow site) —
+Toast remains genuinely unfixable via scraping, both a direct fetch and Firecrawl's
+rendered scrape are blocked by Cloudflare/reCAPTCHA (see
+docs/specs/2026-09-05-menu-source-priority.md addendum). Firecrawl free-tier
+credits are low (~32/1000 as of this fix) — top up before relying on this path for
+real onboarding volume.
 
 **v73 (52f4caf, deployed 2026-09-06 03:32 UTC, confirmed via `supabase functions
 list`)** fixed a defect the item-K remeasure2 run surfaced: `MENU_LLM_TIMEOUT_MS=170s`
