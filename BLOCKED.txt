@@ -3896,3 +3896,138 @@ attempt cross-session/cross-tenant leakage with deliberately colliding
 session_id values across two different shop_ids on the web channel, to
 independently verify the tenant-isolation fix actually closes the gap
 described above.
+
+================================================================================
+2026-09-08 ~17:00 UTC (13:00 ET) -- ITEM B (NJB Loukoumades size backfill) +
+ITEM C (NJB manufactured-question fix, 23-of-38 unblock) BUILT AND APPLIED.
+Per PO's full written approval, plan ec35040. Coordinated per standing
+convention: checked git log/status/BLOCKED.txt first -- found the P0 Zio's
+reset/history-leak thread (session b085eaf3) mid-edit on chat-sms/index.ts
+(uncommitted RESET-handler + new Guard 18). Did not touch that file; this
+work never needed to (both fixes below are archetypes.ts + data-only). That
+thread committed and deployed cleanly (b865d3a/e380061) partway through this
+session -- no collision, confirmed via a second git status check.
+================================================================================
+
+--- ITEM C: NJB MANUFACTURED-QUESTION FIX (archetypes.ts) ---
+
+Root cause (already diagnosed by the ec35040 plan, not redone here): the
+slot-resolution ladder recognized a description's "choice of A or B" LIST as
+settling a slot (step 4) but had no equivalent for a description stating one
+FIXED value ("on rye bread", "Beef on pita...", "Wheat toast schmeared...")
+-- no "or" because there's no real choice, but just as authoritative a fact.
+Separately, the Wraps category (10 items) hit a category-level mismatch: a
+wrap IS the bread, there's no separate slot to ask about, same shape as
+burger/temp's existing notChickenVeggieTurkey applies_when guard.
+
+Fix, both in supabase/functions/_shared/archetypes.ts:
+  1. New step 4.5 in the ladder: extractStatedBreadFact() regex-matches a
+     single fixed bread-type phrase (rye/wheat/white/sourdough/multigrain +
+     bread/toast, or bare pita/wrap/roll/bagel) anchored to "on "/"in "/
+     start-of-string, scoped to the `bread` slot only. Deliberately excludes
+     bare "bread" as a standalone alternative so it cannot misfire on NJB's
+     genuine gap ("...on choice of bread." -- Turkey Melt/Tuna Melt --
+     unenumerated, correctly stays needs_question).
+  2. Sandwich archetype's `bread` slot gets `applies_when: item =>
+     !/\bwraps?\b/i.test(item.name)` -- a wrap-named item is now
+     not_applicable regardless of description content (covers Wraps items
+     that don't mention bread at all, which 4.5 can't reach on its own).
+  6 new unit tests added (archetypes.test.ts), same discipline as 5.5b: the
+  real Sloppy Joe/Avocado Crush/Chicken Cutlet shapes (fire), the real
+  Cheesesteak Wrap/Habanero Wrap shapes (wrap guard fires, with and without
+  a "wrap" description mention), and the real Turkey Melt/Tuna Melt shape
+  (must NOT fire -- genuine gap, stays blocked). 2 pre-existing bind-guard
+  tests (Stromboli Rolls/Flatbreads false-positive-bind) used a "Chicken
+  Caesar Wrap" item incidentally, unrelated to their actual assertion (bind
+  guard, not wrap semantics) -- renamed the fixture to "Chicken Caesar Sub"/
+  category "Subs" so the new wrap guard doesn't short-circuit them before
+  they exercise what they're testing. Full suite: 45/45 passing (42 unit +
+  3 live, run against real Vito's/NJB/Zio's data), 0 regressions.
+
+Applied live: scripts/refresh-owner-questions.ts (existing, dry-run-by-
+default) against NJB (b0000000-0000-0000-0000-000000000001) -- dry run
+first (plan: 1 update, 3 delete, matching the audit's item counts exactly),
+then --apply:
+  UPDATE [Hot Sandwiches]/bread: items_affected 11 -> 2 (Turkey Melt/Tuna
+    Melt, the 2 genuine cases, remain blocking)
+  DELETE [Breakfast Sandwiches]/bread (was 2) -- Avocado Crush + Lean Wrap
+  DELETE [Cold Sandwiches]/bread (was 2) -- Sloppy Joe Roast Beef/Turkey
+  DELETE [Wraps]/bread (was 10) -- all 10 Wraps items, via the guard
+Net: 2 (Breakfast) + 2 (Cold) + 10 (Wraps) + 9 (Hot, 11-2) = 23 items
+unblocked at the owner_questions/inference layer -- exact match to the
+dispatch's target.
+egg_style(1)/egg_side(11)/dressing(2) rows: untouched, confirmed still
+present and unchanged (genuine + genuine-by-design, per PO decision, not
+this fix's scope).
+
+GAP, FLAGGED NOT CLOSED: owner_questions is now correct, but menu_items.
+bot_state (what chat-sms's GUARD 15 alternative-suggestion filter and the
+LLM-driven order flow actually read, REGARDLESS of compiled_ordering_
+engine_enabled) is written exclusively by the compile-menu edge function's
+write-back -- confirmed via grep, only compile-menu/index.ts writes bot_
+state/ask_plan/product_key. Live query right now: NJB still 132 orderable /
+38 blocked (unchanged from before this session -- stale). Checked BLOCKED.
+txt history before deciding: compile-menu has, every time it's been run
+against NJB, been run by Jason himself ("the PO's authorized 'ran the
+compile myself' action", ~2026-09-08 entry above) or explicitly signed off
+per-instance ("What I need from you: sign-off on ... compile-menu's real
+write-back against Zio's ONLY" -- ~item-8 entry above) -- never invoked
+unilaterally by an agent against NJB. This dispatch authorized the code fix
++ owner_questions refresh but did not name an NJB recompile the way it
+explicitly named one for Zio's in item A ("After apply: recompile Zio's").
+Did NOT invoke compile-menu against NJB. The 23-item fix is code-complete,
+committed, and correct at the archetype/owner_questions layer, verified via
+the read-only item-9 report script recomputing fresh drafts locally --
+customer-facing bot_state needs one NJB recompile to go live. Flagging for
+explicit sign-off rather than doing it unilaterally, consistent with
+established practice.
+
+--- ITEM B: NJB LOUKOUMADES SIZE BACKFILL ---
+
+Live-counted 18 rows (9 flavors x Small/Large), not the plan's "~20-23"
+estimate -- correcting the estimate against real data, not a discrepancy in
+the fix itself. New script scripts/njb-loukoumades-size-backfill-20260908.ts
+(dry-run by default, same convention as refresh-owner-questions.ts):
+strips the "(Small)"/"(Large)" parenthetical from `name`, rewrites to the
+"<base> - <Size>" dash convention, populates `size_label` -- exactly Vito's
+own shape, so normalize.ts's existing stripSizeSuffix()/productKey folding
+picks these up unchanged on the next compile. Dry run matched expectations
+(18 update, 0 skip); applied. Did NOT touch "Half Dozen Bagels"/"One Dozen
+Bagels" (different category entirely -- Bagels/Bagel With -- never in
+scope here; per PO decision these are quantity, not size, regardless).
+
+VERIFIED two ways: (1) service-role query directly against menu_items,
+menu_id scoped to NJB's real (only) menu -- 18/18 rows renamed, size_label
+populated, no duplicates. (2) Independently via qa_ro (session-pooler
+readonly role, per RUNBOOK.md's "reading the QA data yourself" section) --
+initially alarming: querying qa_ro.menu_items WHERE category='Loukoumades'
+with no menu_id filter returned 36 rows, not 18. Root cause, chased down
+before concluding anything: qa_ro.menu_items (migration 119) is a bare
+`SELECT ... FROM menu_items` with NO shop/menu scoping at all (unlike
+option_groups/option_choices, which call visible_shop_ids() per migration
+117) -- it surfaced BOTH the real NJB's now-fixed 18 rows AND an unrelated
+retired shop's stale 18 pre-fix rows (shop_id 38ae034c-..., slug
+`retired-njb-test-clone`, name "ZZ RETIRED -- do not use", is_test=true --
+the known NJB test clone migration 110 already documents as retired
+2026-09-06). Not my write, not live, not customer-facing -- confirmed via
+qa_ro.shops_all directly. Re-ran qa_ro query scoped to the real menu_id
+(b5d0ba65-...) -- clean 18/18 match. Flagging the qa_ro.menu_items missing-
+scoping gap itself as a minor, pre-existing, non-blocking finding (same
+shape as the option_groups/option_choices gap migrations 116/117 already
+fixed one layer down) -- not fixed here, out of this dispatch's scope.
+
+Same gap as item C: product_key/display_name (compile-menu's write-back
+columns) are unchanged until NJB is recompiled -- not done, same reasoning
+as above.
+
+--- CONSTRAINT CHECKS (per dispatch, after B) ---
+
+Vito's (e0000000-0000-0000-0000-000000000001): compiled_ordering_engine_
+enabled confirmed false (unchanged -- this session made zero writes to
+Vito's anything). Cheese Burger confirmed price_cents=849 ($8.49),
+unchanged. NJB (b0000000-...): compiled_ordering_engine_enabled confirmed
+false (unchanged).
+
+NOT YET DONE: ITEM A (Zio's size-fold) -- separate entry to follow once the
+dry run is built and run, per the dispatch's hard gate ("show me the dry-run
+output before the apply").

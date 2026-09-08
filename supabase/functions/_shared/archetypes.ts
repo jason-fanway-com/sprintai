@@ -18,6 +18,9 @@
 //      (from normalize.ts) fits this slot
 //   4. the item's own "choice of A or B"        -> stated (description) — no question
 //      description-slot fits this slot
+//   4.5. `bread` slot only: description states  -> stated (description) — no question
+//        one FIXED value ("on rye bread") with     see extractStatedBreadFact below
+//        no "or" (no real choice) —
 //   5. default_from_name matches the item name  -> default            — no question,
 //                                                                        recorded as an
 //                                                                        exclusion
@@ -272,8 +275,18 @@ export const ARCHETYPES: Archetype[] = [
         owner_question: "Do customers pick a protein (e.g. beef or chicken) on {category}?", order: 2,
       },
       {
+        // Wrap guard added 2026-09-08 (NJB audit, ac8f69d): a wrap IS the
+        // bread -- there's no separate bread slot to ask about, the same
+        // structural mismatch burger's temp slot already excludes via
+        // notChickenVeggieTurkey. Real NJB data proves the point: all 10
+        // Wraps-category items either say "...in a wrap" (a fixed vessel,
+        // not a choice) or don't mention bread at all, and none has a real
+        // bread option_group. Matches on the item's own NAME (not just
+        // category) so a wrap sold from a non-"Wraps"-named category still
+        // gets excluded.
         slot_key: "bread", kitchen_critical: true, price_critical: false,
         bind_to_list_named: /bread|roll/i,
+        applies_when: item => !/\bwraps?\b/i.test(item.name),
         owner_question: "Do customers pick a bread on {category}?", order: 4,
       },
     ],
@@ -576,6 +589,32 @@ function looksLikeCleanChoiceList(choices: string[]): boolean {
   });
 }
 
+// Single-fixed-value bread fact (added 2026-09-08, NJB 23-of-38-blocked
+// audit): DESCRIPTION_SOURCED_SLOTS above only recognizes a "choice of A or
+// B" LIST as settling a slot. A description stating one fixed bread type
+// ("...on rye bread.", "Beef on pita...", "Wheat toast schmeared...") states
+// the fact just as authoritatively -- there's no "or" because there's no
+// choice -- but the ladder had no equivalent for it, so these items (real
+// NJB data: Avocado Crush, Sloppy Joe x2, Beef/Grilled Chicken Gyro, Big
+// John's, Cheddar Cheeseball Cheesesteak, Cheesesteak, Chicken Cutlet
+// Sandwich, Pizza Bagel, Rachel, Reuben) fell all the way to
+// needs_question with zero real data gap. Scoped to `bread` only, and
+// wired in below as a fallback AFTER the real choice-of-list check --
+// items with a genuine enumerated bread choice (e.g. NJB's "on choice of
+// bagel, bread, or roll") resolve there first and never reach this. Bare
+// "bread" is deliberately NOT one of the alternatives (only a named type +
+// bread/toast, e.g. "rye bread") so this can't misfire on NJB's real
+// GENUINE gap ("...on choice of bread." -- Turkey Melt / Tuna Melt --
+// literally unenumerated, must stay needs_question, not get guessed at).
+const BREAD_FIXED_VALUE_PATTERN =
+  /(?:^|\bon\s+(?:an?\s+)?|\bin\s+(?:an?\s+)?)((?:grilled\s+)?(?:rye|wheat|white|sourdough|multigrain)\s+(?:bread|toast)|pita|wrap|roll|bagel)\b/i;
+
+function extractStatedBreadFact(description: string | null): string | null {
+  if (!description) return null;
+  const m = description.match(BREAD_FIXED_VALUE_PATTERN);
+  return m ? m[1].replace(/\s+/g, " ").trim() : null;
+}
+
 // Step 5.5's gate (see file header): true iff this item has at least one
 // REAL per-item option_group sourced from a platform feed (Slice, or any
 // future adapter) rather than archetype guesswork or a hand-built/owner-
@@ -648,6 +687,13 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
 
   if (DESCRIPTION_SOURCED_SLOTS.has(slot.slot_key) && item.descriptionSlotChoices && looksLikeCleanChoiceList(item.descriptionSlotChoices)) {
     return { ...base, kind: "stated", source: "description", choices: item.descriptionSlotChoices };
+  }
+
+  if (slot.slot_key === "bread") {
+    const fixedBread = extractStatedBreadFact(item.description);
+    if (fixedBread) {
+      return { ...base, kind: "stated", source: "description", choices: [fixedBread] };
+    }
   }
 
   if (slot.default_from_name && slot.default_from_name.test(item.name)) {
