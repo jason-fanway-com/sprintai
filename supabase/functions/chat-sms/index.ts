@@ -45,8 +45,11 @@ import {
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, allSlotsResolved, enforceVerbatimStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
+import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
+import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
+import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -884,6 +887,16 @@ async function executeTool(
   compiledEngineEnabled?: boolean,
   customerMessage?: string,
   shopPhone?: string | null,
+  // D2 fix (2026-09-08 P0, see stated-attribute-carryforward.ts): text used
+  // ONLY by the compiled-engine branch below for slot/modifier matching —
+  // includes the immediately preceding customer turn so an attribute stated
+  // before any items existed ("I want 4 large pizzas") is still visible when
+  // those items get added the next message. Deliberately separate from
+  // `customerMessage`, which the legacy path's reactive modifier matcher
+  // also reads — widening that one would change Vito's legacy-path behavior
+  // too. Falls back to `customerMessage` when not supplied (every call site
+  // except the main tool loop).
+  compiledMatchText?: string,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -919,7 +932,7 @@ async function executeTool(
           menuItem as unknown as CompiledMenuItem,
           menu_item_id,
           quantity as number,
-          customerMessage ?? "",
+          compiledMatchText ?? customerMessage ?? "",
           shopPhone,
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
@@ -1807,6 +1820,12 @@ async function runOrderingLoop(
     { role: "user", content: userMessage },
   ];
 
+  // D2 fix (2026-09-08 P0, see stated-attribute-carryforward.ts) — computed
+  // once per turn, reused for every add_item call this turn (an attribute
+  // stated before any items existed applies to all of them, not just the
+  // first one resolved).
+  const compiledMatchTextForTurn = buildCompiledMatchText(userMessage, history);
+
   let checkoutUrl: string | undefined;
   let finalPhase:  OrderPhase | undefined;
   // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason): categories where a
@@ -2019,6 +2038,7 @@ async function runOrderingLoop(
         compiledEngineEnabled,
         userMessage,
         shopPhone,
+        compiledMatchTextForTurn,
       );
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
       // all. When add_item failed the model narrated it to the customer ("that's
@@ -5945,6 +5965,65 @@ Deno.serve(async (req: Request) => {
       }
       console.warn(`[chat-sms] GUARD 12 (confirmation claims unresolved choice) tripped (conv=${conversation.id}). Flagged: ${flaggedAsks12.map(f => `${f.item.name}:${f.ask}`).join(", ")}`);
       pendingConfirmAsks12_16.push(...flaggedAsks12.map(f => f.ask));
+    }
+  }
+
+  // ── GUARD: stale pending option unaddressed (D3/D5 fix, 2026-09-08 P0,
+  // Zio's live transcript) ──────────────────────────────────────────────────
+  // "Got it!" after a turn that resolved ONE item's Size left TWO other cart
+  // lines (Hawaiian Pizza, Meat Lover's Pizza) with a required option still
+  // pending from an EARLIER turn — the model's own reply never mentioned
+  // them. compiledStepQuestions/enforceVerbatimStepQuestion (ITEM 2, above)
+  // only guarantees a question a call THIS turn left open reaches the
+  // customer verbatim; it has no visibility into a line nobody called
+  // add_item on this turn. findUnaddressedPendingLine closes that gap by
+  // scanning the final post-turn cart directly, and isRepeatedQuestion turns
+  // a genuinely stuck answer (matchChoiceInText correctly declines to guess
+  // "no, I said 4 pizzas" or "oh brother...") into an escalation instead of
+  // the identical question looping forever (same class as the 2026-09-06
+  // caesar-loop fix).
+  {
+    const unaddressed = findUnaddressedPendingLine(guardCart, compiledRenderedGroups);
+    if (unaddressed) {
+      const menuItem = effectiveMenu.find(m => m.id === unaddressed.menuItemId);
+      const step = menuItem?.ask_plan?.steps.find(s => {
+        const groupName = menuItem.option_groups?.find(og => og.id === s.group_id)?.name ?? s.slot_key ?? "option";
+        return groupName === unaddressed.groupName;
+      });
+      if (menuItem?.ask_plan && step) {
+        const question = renderStepQuestion(step, menuItem.ask_plan.display_name);
+        if (!reply.includes(question)) {
+          const repeated = isRepeatedQuestion(question, history);
+          console.warn(`[chat-sms] GUARD: stale pending option unaddressed (conv=${conversation.id}) item=${unaddressed.itemName} group=${unaddressed.groupName} repeated=${repeated}`);
+          reply = repeated && shop.phone_number_e164
+            ? `${reply} ${question} If texting isn't getting this right, call us at ${shop.phone_number_e164} and we'll sort it out.`.trim()
+            : `${reply} ${question}`.trim();
+        }
+      }
+    }
+  }
+
+  // ── GUARD: unresolved named segment (D1 fix, 2026-09-08 P0, Zio's live
+  // transcript) ──────────────────────────────────────────────────────────
+  // "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" — four named items — and
+  // only three landed in the cart, with zero mention of the fourth. A
+  // word-overlap detector was tried and rejected (false-positived on
+  // "plain" — see unresolved-item-segment-guard.ts's header for why); this
+  // checks COUNT instead: a quantity-list message that named more items
+  // than this turn actually added new cart lines for means something was
+  // silently dropped, even without knowing which one. Never guesses a
+  // resolution, never suggests an alternative — just tells the customer
+  // plainly that the count doesn't add up, in their own words, so nothing
+  // is silently lost the way "pepp" was.
+  {
+    const shortfall = countUnresolvedSegments(userMessage, cartSnapshotBeforeTurn, guardCart);
+    if (shortfall > 0) {
+      console.warn(`[chat-sms] GUARD: unresolved named segment (conv=${conversation.id}). Message="${userMessage}" shortfall=${shortfall} before=${cartSnapshotBeforeTurn.length} after=${guardCart.length}`);
+      const clause = shortfall === 1
+        ? "One of those didn't go through"
+        : `${shortfall} of those didn't go through`;
+      const sentence = `${clause} — could you tell me again exactly what you'd like? I don't want to miss anything.`;
+      if (!reply.includes(sentence)) reply = `${reply} ${sentence}`.trim();
     }
   }
 
