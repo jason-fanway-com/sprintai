@@ -6,12 +6,14 @@ import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.t
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 import {
   matchChoiceInText,
+  matchAssertedChoice,
   renderChoiceList,
   renderStepQuestion,
   resolveAskPlan,
   allSlotsResolved,
   enforceVerbatimStepQuestion,
   applyCompiledAddItem,
+  applyCompiledModifyItem,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -459,4 +461,116 @@ Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order
   assertEquals(cart.length, 1);
   assertEquals(cart[0].quantity, 2);
   assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"));
+});
+
+// ── Item 8 fix (2026-09-08 P0, 392894c diagnosis, PO sign-off) ─────────────
+// Root cause: matchChoiceInText only strips plurals, so "pepp" (or any
+// abbreviation) never text-matches "Pepperoni" — full stop, regardless of
+// consumedModifierChoiceIds. Separately, the compiled add_item branch threw
+// away the model's own resolved modifiers/options tool-call input entirely,
+// so even a model that correctly composed "pepp" -> Pepperoni per the system
+// prompt had no path to get that decision into ask_plan_selections. These
+// tests exercise the fix: matchAssertedChoice (constraint 1's validation
+// gate) and its wiring into resolveAskPlan/applyCompiledAddItem/
+// applyCompiledModifyItem (constraint 2).
+
+Deno.test("matchAssertedChoice: exact case-insensitive name match resolves; the abbreviation itself never matches (no fuzzy tolerance)", () => {
+  const choices = [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-mush", display: "Mushroom", price_delta_cents: 250 }];
+  assertEquals(matchAssertedChoice(choices, ["Pepperoni"])?.id, "c-pep");
+  assertEquals(matchAssertedChoice(choices, ["pepperoni"])?.id, "c-pep", "case-insensitive");
+  assertEquals(matchAssertedChoice(choices, ["  Pepperoni  "])?.id, "c-pep", "trims whitespace");
+  assertEquals(matchAssertedChoice(choices, ["pepp"]), null, "an abbreviation is not an exact name — never trusted on its own word");
+});
+
+Deno.test("matchAssertedChoice: a string naming no real choice is never trusted — constraint 1, no unvalidated write-through", () => {
+  const choices = [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }];
+  assertEquals(matchAssertedChoice(choices, ["Anchovies"]), null);
+  assertEquals(matchAssertedChoice(choices, []), null);
+  assertEquals(matchAssertedChoice([], ["Pepperoni"]), null);
+});
+
+Deno.test("resolveAskPlan: 'pepp' never resolves via customerText alone (documents 392894c's root cause — still true after the fix, by design)", () => {
+  const result = resolveAskPlan(TOPPING_ASK_PLAN, "1 pepp, 1 plain", new Set(["grp-size"]), new Map());
+  assertEquals(result.resolved.find(r => r.group_id === "grp-top"), undefined, "text-only 'pepp' must not silently become Pepperoni");
+});
+
+Deno.test("resolveAskPlan: the fix — a model-asserted 'Pepperoni' (validated) resolves the topping even though customerText only says 'pepp'", () => {
+  const result = resolveAskPlan(TOPPING_ASK_PLAN, "1 pepp, 1 plain", new Set(["grp-size"]), new Map(), undefined, ["Pepperoni"]);
+  const top = result.resolved.find(r => r.group_id === "grp-top");
+  assertEquals(top?.choice.id, "c-pep");
+  assertEquals(top?.choice.price_delta_cents, 300);
+});
+
+Deno.test("resolveAskPlan: a model-asserted choice still respects consumedModifierChoiceIds (constraint 1 doesn't bypass D1's per-turn guard)", () => {
+  const consumed = new Set<string>(["c-pep"]);
+  const result = resolveAskPlan(TOPPING_ASK_PLAN, "1 pepp", new Set(["grp-size"]), new Map(), consumed, ["Pepperoni"]);
+  assertEquals(result.resolved.find(r => r.group_id === "grp-top"), undefined, "already consumed this turn — must not be re-granted even via structured assertion");
+});
+
+Deno.test("applyCompiledAddItem: THE FIX — 'pepp'/'plain' repro with model-asserted options per call produces TWO distinct, correctly-composed lines", () => {
+  // Mirrors the live acceptance test's exact wording ("1 pepp, 1 plain, 1
+  // hawaiin, 1 meat lovers") for the two same-base-item segments, and
+  // exercises what the fixed index.ts's add_item branch now does: passes
+  // each call's OWN modelAssertedChoiceTexts (flattened modifiers/options
+  // from that specific tool call), not just the shared turn-wide text.
+  const cart: CompiledCartLine[] = [];
+  // Real production flow: D2's stated-attribute-carryforward prepends the
+  // PRIOR turn ("I want 4 large pizzas") onto compiledMatchText, so "large"
+  // is visible to every add_item call this turn exactly like this fixture.
+  const turnText = "I want 4 large pizzas. 1 pepp, 1 plain, 1 hawaiin, 1 meat lovers";
+  const consumed = new Set<string>();
+  const r1 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, ["Pepperoni"]);
+  const r2 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, []);
+  assertEquals(cart.length, 2, "the pepp/plain segments must land as two real lines, not merge");
+  assert(r1.cartChanged && r2.cartChanged);
+  const withPepperoni = cart.filter(c => c.options?.["Add Toppings"]?.includes("Pepperoni"));
+  const withoutPepperoni = cart.filter(c => !c.options?.["Add Toppings"]);
+  assertEquals(withPepperoni.length, 1, "exactly one line explicitly named Pepperoni");
+  assertEquals(withoutPepperoni.length, 1, "exactly one line stays plain — no phantom topping");
+  assertEquals(withPepperoni[0].price_cents, 1500 + 274 + 300); // base + Large size delta + pepperoni delta
+  assertEquals(withoutPepperoni[0].price_cents, 1500 + 274); // base + Large size delta only
+});
+
+// ── Constraint 2: applyCompiledModifyItem — modify_item must be ask_plan-
+// aware for a compiled item, never a side channel around ask_plan_selections.
+Deno.test("applyCompiledModifyItem: quantity-only change applies directly, does not touch ask_plan_selections", () => {
+  const cart: CompiledCartLine[] = [{ menu_item_id: "cheese-id", name: "Neapolitan Cheese Pizza", quantity: 1, price_cents: 1774, modifiers: [], options: { Size: ["Large 18''"] }, ask_plan_selections: { "grp-size": "c-large" } }];
+  const result = applyCompiledModifyItem(cart, cheesePizzaMenuItem(), "cheese-id", 3, "", []);
+  assertEquals(result.ok, true);
+  assertEquals(cart[0].quantity, 3);
+  assertEquals(cart[0].ask_plan_selections, { "grp-size": "c-large" });
+});
+
+Deno.test("applyCompiledModifyItem: resolving a pending slot via a model-asserted (validated) choice writes into ask_plan_selections and recomputes real price — not a raw field write", () => {
+  const cart: CompiledCartLine[] = [{ menu_item_id: "cheese-id", name: "Neapolitan Cheese Pizza", quantity: 1, price_cents: 1500, modifiers: [], ask_plan_selections: {}, pending_options: ["Size"] }];
+  const result = applyCompiledModifyItem(cart, cheesePizzaMenuItem(), "cheese-id", undefined, "", ["Large 18''"]);
+  assertEquals(result.ok, true);
+  assertEquals(cart[0].ask_plan_selections, { "grp-size": "c-large" });
+  assertEquals(cart[0].price_cents, 1500 + 274, "real compiled delta applied, not left at base price");
+  assertEquals(cart[0].pending_options, undefined, "no more open slots");
+});
+
+Deno.test("applyCompiledModifyItem: an asserted string naming no real choice is silently dropped — never written unvalidated (constraint 1 inside modify_item too)", () => {
+  const cart: CompiledCartLine[] = [{ menu_item_id: "cheese-id", name: "Neapolitan Cheese Pizza", quantity: 1, price_cents: 1500, modifiers: [], ask_plan_selections: {}, pending_options: ["Size"] }];
+  const result = applyCompiledModifyItem(cart, cheesePizzaMenuItem(), "cheese-id", undefined, "", ["Extra Large"]);
+  assertEquals(result.ok, true);
+  assertEquals(cart[0].ask_plan_selections, {}, "an unmatched string must never land in ask_plan_selections");
+  assertEquals(cart[0].pending_options, ["Size"], "the slot is still open — nothing was silently guessed");
+});
+
+Deno.test("applyCompiledModifyItem: modify_item for a compiled line honors consumedModifierChoiceIds — the same choice already granted to another line this turn is not re-applied", () => {
+  const cart: CompiledCartLine[] = [
+    { menu_item_id: "cheese-id", name: "Neapolitan Cheese Pizza", quantity: 1, price_cents: 1500, modifiers: [], ask_plan_selections: { "grp-size": "c-med" } },
+  ];
+  const consumed = new Set<string>(["c-pep"]);
+  const result = applyCompiledModifyItem(cart, cheesePizzaMenuItem(), "cheese-id", undefined, "", ["Pepperoni"], consumed);
+  assertEquals(result.ok, true);
+  assertEquals(cart[0].ask_plan_selections?.["grp-top"], undefined, "already consumed elsewhere this turn — modify_item must not create a second grant");
+});
+
+Deno.test("applyCompiledModifyItem: item not in cart returns ok:false, never mutates", () => {
+  const cart: CompiledCartLine[] = [];
+  const result = applyCompiledModifyItem(cart, cheesePizzaMenuItem(), "cheese-id", 2, "", []);
+  assertEquals(result.ok, false);
+  assertEquals(result.cartChanged, false);
 });

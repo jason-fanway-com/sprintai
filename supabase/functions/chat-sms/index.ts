@@ -45,7 +45,7 @@ import {
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
@@ -934,8 +934,8 @@ async function executeTool(
 
   switch (toolName) {
     case "add_item": {
-      const { menu_item_id, quantity = 1, modifiers = [] } = input as {
-        menu_item_id: string; quantity?: number; modifiers?: string[];
+      const { menu_item_id, quantity = 1, modifiers = [], options: addItemInputOptions } = input as {
+        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>;
       };
       const menuItem = menuMap.get(menu_item_id);
       if (!menuItem) {
@@ -944,14 +944,24 @@ async function executeTool(
 
       // ── Item 8: compiled ordering engine (spec §7/§11 item 8) ──────────
       // Gate: shop flag AND this item has actually been compiled (non-null
-      // ask_plan). Both are false for every item at every shop today (see
-      // BLOCKED.txt PIVOT entry, 2026-09-07) — this branch is provably
-      // unreachable until a shop is explicitly flagged in the DB AND its
-      // menu has been compiled. Vito's is never flagged; nothing below this
-      // block (the entire legacy path) is touched by this change. Logic
-      // lives in ask-plan-engine.ts's applyCompiledAddItem so it is
-      // directly unit-testable rather than requiring a hand-copied mirror.
+      // ask_plan). Logic lives in ask-plan-engine.ts's applyCompiledAddItem
+      // so it is directly unit-testable rather than requiring a hand-copied
+      // mirror.
       if (compiledEngineEnabled && menuItem.ask_plan) {
+        // Item 8 fix (2026-09-08 P0, 392894c diagnosis, constraint 1): the
+        // model's own `modifiers`/`options` tool-call input, flattened to
+        // plain proposed-choice strings. This is only ever a PROPOSAL —
+        // applyCompiledAddItem validates every string against the item's
+        // real ask_plan choices (matchAssertedChoice) before any of it can
+        // reach ask_plan_selections. Previously this input was destructured
+        // and never read at all for a compiled item, which is the root
+        // cause 392894c found: the model could correctly reason "pepp"
+        // means Pepperoni (per the system prompt's compose rule) and pass
+        // it right here, but nothing downstream ever looked.
+        const modelAssertedChoiceTexts = [
+          ...(modifiers as string[]),
+          ...Object.values(addItemInputOptions ?? {}).flat(),
+        ];
         const engineOutcome = applyCompiledAddItem(
           cart as unknown as CompiledCartLine[],
           menuItem as unknown as CompiledMenuItem,
@@ -960,6 +970,7 @@ async function executeTool(
           compiledMatchText ?? customerMessage ?? "",
           shopPhone,
           consumedModifierChoiceIds,
+          modelAssertedChoiceTexts,
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
@@ -1245,8 +1256,36 @@ async function executeTool(
       };
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not in cart." } };
-      if (quantity !== undefined) (cart[idx] as CartItem).quantity = quantity;
       const menuItem = menuMap.get(menu_item_id);
+
+      // Item 8 fix (2026-09-08 P0, 392894c diagnosis, constraint 2): modify_item
+      // was a fully legacy, ask_plan-unaware handler — it wrote directly onto
+      // the cart line's plain fields with zero ask_plan_selections/
+      // consumedModifierChoiceIds awareness, which is exactly how it became
+      // an uncontrolled side channel for a compiled item (see 392894c and
+      // ask-plan-engine.ts's applyCompiledModifyItem doc for the full
+      // explanation). Gated identically to add_item's compiled branch: shop
+      // flag AND this item has actually been compiled. Nothing below this
+      // block (the entire legacy path) is touched for an uncompiled item.
+      if (compiledEngineEnabled && menuItem?.ask_plan) {
+        const modelAssertedChoiceTexts = [
+          ...(modifiers ?? []),
+          ...Object.values(options ?? {}).flat(),
+        ];
+        const modifyOutcome = applyCompiledModifyItem(
+          cart as unknown as CompiledCartLine[],
+          menuItem as unknown as CompiledMenuItem,
+          menu_item_id,
+          quantity,
+          compiledMatchText ?? customerMessage ?? "",
+          modelAssertedChoiceTexts,
+          consumedModifierChoiceIds,
+        );
+        if (modifyOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
+        return { ok: modifyOutcome.ok, result: modifyOutcome.result };
+      }
+
+      if (quantity !== undefined) (cart[idx] as CartItem).quantity = quantity;
       const validMods = menuItem?.modifiers_json?.map(m => m.name) ?? [];
       const modifierNames = new Set(validMods);
       let newModifiers = (modifiers ?? (cart[idx] as CartItem).modifiers ?? []).slice();

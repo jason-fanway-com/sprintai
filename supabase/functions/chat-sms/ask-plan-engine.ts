@@ -101,6 +101,30 @@ export function matchChoiceInText(choices: EngineChoice[], text: string): Engine
   return null;
 }
 
+/**
+ * Item 8 fix (2026-09-08 P0, PO-signed-off "pepp"/dropped-line diagnosis,
+ * 392894c): validates a model-PROPOSED choice against a step's real,
+ * compiled choice list — exact (case-insensitive) name match only, no
+ * fuzzy/stem tolerance. This is the code-side gate constraint 1 of that
+ * fix requires: the model's tool-call `modifiers`/`options` input may
+ * PROPOSE a choice, but it only ever becomes a resolved selection if it
+ * names a REAL choice display verbatim. A string that doesn't match any
+ * real choice here is silently ignored by the caller (falls through to
+ * matchChoiceInText's fuzzy backstop, or stays unresolved) — it is never
+ * written to ask_plan_selections on the strength of the model's word alone.
+ * Same discipline the legacy add_item/modify_item paths already apply via
+ * `group.choices.find(c => c.name.toLowerCase() === sel.toLowerCase())`.
+ */
+export function matchAssertedChoice(choices: EngineChoice[], assertedTexts: string[]): EngineChoice | null {
+  if (assertedTexts.length === 0) return null;
+  const normalizedAsserted = new Set(assertedTexts.map(t => t.trim().toLowerCase()).filter(Boolean));
+  if (normalizedAsserted.size === 0) return null;
+  for (const choice of choices) {
+    if (normalizedAsserted.has(choice.display.trim().toLowerCase())) return choice;
+  }
+  return null;
+}
+
 /** Appendix C: identical wording every run. The LLM never rewrites these. */
 const TEMPLATE_QUESTIONS: Record<string, string> = {
   temp:      "How would you like the {display_name} cooked? {choices}.",
@@ -254,6 +278,20 @@ export function resolveAskPlan(
   // above), which naturally makes the two calls' selections diverge and
   // produces two real, separate cart lines instead of a false merge.
   consumedModifierChoiceIds?: Set<string>,
+  // Item 8 fix (2026-09-08 P0, 392894c diagnosis, PO sign-off): the model's
+  // OWN resolved understanding of this call — e.g. having correctly reasoned
+  // per the system prompt's "COMPOSING A TOPPING-ONLY PIZZA REQUEST" rule
+  // that "pepp" means Pepperoni — passed through as plain proposed-choice
+  // strings (the flattened `modifiers`/`options` values from the tool call
+  // that's resolving THIS step). Tried FIRST via matchAssertedChoice's exact-
+  // name validation (never a raw write-through — see that function's doc);
+  // matchChoiceInText's fuzzy/stem text scan over the whole turn's message
+  // stays as the backstop for whatever the model didn't explicitly pass.
+  // This is what actually closes the gap 392894c found: previously nothing
+  // read the model's own options/modifiers input for a compiled item at all,
+  // so "pepp" (which never stem-matches "Pepperoni") had no way to resolve,
+  // full stop — regardless of how confidently the model itself understood it.
+  modelAssertedChoiceTexts: string[] = [],
 ): EngineResult {
   const resolved: ResolvedSlot[] = [];
   let nextStep: CompiledStep | null = null;
@@ -264,16 +302,16 @@ export function resolveAskPlan(
 
     // Modifiers (bug 4, 2026-09-07: "buffalo chicken pizza with pepperoni"
     // silently dropped the topping and its $3.00 price): apply reactively,
-    // with the real compiled price, when the SAME message names a real
-    // modifier choice — spec Appendix B's worked example ("large pepperoni
-    // pizza": product + size + toppings Pepperoni pre-filled, no question
-    // asked). Never gates `nextStep` — modifiers never block checkout or
-    // get asked proactively here (the full offer_once "ask once" proactive
-    // question is a separate, documented follow-up; this is strictly
-    // narrower: match-if-mentioned-this-turn, same as a slot, minus the
-    // asking).
+    // with the real compiled price, when the model's own tool-call input
+    // (validated) or the SAME message's free text names a real modifier
+    // choice — spec Appendix B's worked example ("large pepperoni pizza":
+    // product + size + toppings Pepperoni pre-filled, no question asked).
+    // Never gates `nextStep` — modifiers never block checkout or get asked
+    // proactively here (the full offer_once "ask once" proactive question is
+    // a separate, documented follow-up; this is strictly narrower:
+    // match-if-mentioned-this-turn, same as a slot, minus the asking).
     if (step.kind === "modifier") {
-      const matched = matchChoiceInText(step.choices, customerText);
+      const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? matchChoiceInText(step.choices, customerText);
       if (matched && !consumedModifierChoiceIds?.has(matched.id)) {
         resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
         totalDeltaCents += matched.price_delta_cents;
@@ -300,7 +338,7 @@ export function resolveAskPlan(
       // matching customer text / asking, same as a plain "ask" step.
     }
 
-    const matched = matchChoiceInText(step.choices, customerText);
+    const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? matchChoiceInText(step.choices, customerText);
     if (matched) {
       resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
       totalDeltaCents += matched.price_delta_cents;
@@ -345,6 +383,82 @@ export interface CompiledAddItemResult {
   cartChanged: boolean;
 }
 
+interface ResolveAndPriceOutcome {
+  newSelections: Record<string, string>;
+  resolvedCount: number;
+  resolvedOptions: Record<string, string[]>;
+  priceCents: number;
+  nextQuestion: string | null;
+  pendingGroupNames: string[] | undefined;
+  nextStep: CompiledStep | null;
+}
+
+/**
+ * Item 8 fix (2026-09-08 P0, 392894c diagnosis): the resolve-then-price core
+ * shared by applyCompiledAddItem (a NEW or continuing cart line) and
+ * applyCompiledModifyItem (an EXISTING line, constraint 2 of the same fix).
+ * Both need the identical validated-resolution + real-price computation
+ * against `priorSelections` — extracting it here means there is exactly one
+ * place that reads ask_plan.steps and writes a priced selection map, so
+ * add_item and modify_item can never again drift into two different pricing
+ * behaviors for the same compiled item.
+ */
+function resolveAndPriceSelections(
+  askPlan: AskPlan,
+  itemGroups: NonNullable<CompiledMenuItem["option_groups"]>,
+  priorSelections: Record<string, string>,
+  customerText: string,
+  defaultChoiceIdByGroup: Map<string, string>,
+  consumedModifierChoiceIds: Set<string> | undefined,
+  modelAssertedChoiceTexts: string[],
+): ResolveAndPriceOutcome {
+  const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
+  const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts);
+
+  const newSelections: Record<string, string> = { ...priorSelections };
+  for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
+
+  // Record every modifier choice this call resolved as consumed for the
+  // rest of this turn (see resolveAskPlan's consumedModifierChoiceIds param
+  // doc) — BEFORE the caller's merge/dedup logic runs, so it applies
+  // regardless of whether this call ends up pushing a new line, filling a
+  // continuation, modifying an existing line, or still finding an identical
+  // existing line for some other legitimate reason.
+  if (consumedModifierChoiceIds) {
+    for (const r of engineResult.resolved) {
+      const step = askPlan.steps.find(s => s.group_id === r.group_id);
+      if (step?.kind === "modifier") consumedModifierChoiceIds.add(r.choice.id);
+    }
+  }
+
+  const resolvedOptions: Record<string, string[]> = {};
+  let priceCents = askPlan.base_price_cents;
+  for (const step of askPlan.steps) {
+    const choiceId = newSelections[step.group_id];
+    if (!choiceId) continue;
+    const choice = step.choices.find(c => c.id === choiceId);
+    if (!choice) continue;
+    priceCents += choice.price_delta_cents;
+    const group = itemGroups.find(g => g.id === step.group_id);
+    if (group) resolvedOptions[group.name] = [choice.display];
+  }
+
+  const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name) : null;
+  const pendingGroupNames = engineResult.nextStep
+    ? [itemGroups.find(g => g.id === engineResult.nextStep!.group_id)?.name ?? engineResult.nextStep.slot_key ?? "option"]
+    : undefined;
+
+  return {
+    newSelections,
+    resolvedCount: engineResult.resolved.length,
+    resolvedOptions,
+    priceCents,
+    nextQuestion,
+    pendingGroupNames,
+    nextStep: engineResult.nextStep,
+  };
+}
+
 /**
  * The full add_item integration for a compiled item (spec §7/§11 item 8).
  * Extracted as a pure function (cart is mutated in place, matching this
@@ -353,8 +467,9 @@ export interface CompiledAddItemResult {
  * it is directly importable and testable, rather than requiring a
  * hand-copied mirror of inline switch-case logic.
  *
- * Scope: SLOT groups only. See this file's header comment for why
- * modifier/offer_once handling is deliberately out of scope here.
+ * Scope: SLOT groups + reactively/explicitly-matched MODIFIER groups. See
+ * this file's header comment and resolveAskPlan's modelAssertedChoiceTexts
+ * doc for the modifier-resolution contract.
  */
 export function applyCompiledAddItem(
   cart: CompiledCartLine[],
@@ -374,6 +489,16 @@ export function applyCompiledAddItem(
   // pending line per invocation, never multiple add_item calls sharing one
   // turn's text, so it isn't exposed to this defect and doesn't need it.
   consumedModifierChoiceIds?: Set<string>,
+  // Item 8 fix (2026-09-08 P0, 392894c diagnosis, constraint 1): the
+  // model's OWN resolved `modifiers`/`options` tool-call input for THIS
+  // add_item call, flattened to plain strings by the caller (index.ts) and
+  // validated here (via resolveAskPlan -> matchAssertedChoice) against the
+  // item's real ask_plan choices before ever being written to
+  // ask_plan_selections. Previously this input was destructured by the
+  // caller and never read at all for a compiled item — see this file's
+  // matchAssertedChoice doc for why an unmatched string is silently
+  // dropped rather than trusted.
+  modelAssertedChoiceTexts: string[] = [],
 ): CompiledAddItemResult {
   const askPlan = menuItem.ask_plan;
   const itemGroups = menuItem.option_groups ?? [];
@@ -404,42 +529,10 @@ export function applyCompiledAddItem(
   });
 
   const priorSelections = continuationIdx >= 0 ? { ...cart[continuationIdx].ask_plan_selections } : {};
-  const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
 
-  const engineResult = resolveAskPlan(askPlan, customerMessage, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds);
-
-  const newSelections: Record<string, string> = { ...priorSelections };
-  for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
-
-  // Record every modifier choice this call resolved as consumed for the
-  // rest of this turn (see param doc above) — BEFORE the merge/dedup logic
-  // below runs, so it applies regardless of whether this call ends up
-  // pushing a new line, filling a continuation, or (now correctly avoided
-  // for the reported defect) still finding an identical existing line for
-  // some other legitimate reason.
-  if (consumedModifierChoiceIds) {
-    for (const r of engineResult.resolved) {
-      const step = askPlan.steps.find(s => s.group_id === r.group_id);
-      if (step?.kind === "modifier") consumedModifierChoiceIds.add(r.choice.id);
-    }
-  }
-
-  const resolvedOptions: Record<string, string[]> = {};
-  let priceCents = askPlan.base_price_cents;
-  for (const step of askPlan.steps) {
-    const choiceId = newSelections[step.group_id];
-    if (!choiceId) continue;
-    const choice = step.choices.find(c => c.id === choiceId);
-    if (!choice) continue;
-    priceCents += choice.price_delta_cents;
-    const group = itemGroups.find(g => g.id === step.group_id);
-    if (group) resolvedOptions[group.name] = [choice.display];
-  }
-
-  const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name) : null;
-  const pendingGroupNames = engineResult.nextStep
-    ? [itemGroups.find(g => g.id === engineResult.nextStep!.group_id)?.name ?? engineResult.nextStep.slot_key ?? "option"]
-    : undefined;
+  const {
+    newSelections, resolvedCount, resolvedOptions, priceCents, nextQuestion, pendingGroupNames, nextStep,
+  } = resolveAndPriceSelections(askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts);
 
   // Bug-3-class guard (2026-09-07 quantity-doubling incident): a redundant
   // add_item call for an item ALREADY fully resolved, carrying text that
@@ -451,7 +544,7 @@ export function applyCompiledAddItem(
   // vulnerability was matching on `options` equality, which a no-new-info
   // call satisfies trivially; here the gate is "did the engine actually
   // learn anything new this turn," which a no-op call never does.
-  const fullyResolvedExistingIdx = continuationIdx < 0 && engineResult.resolved.length === 0
+  const fullyResolvedExistingIdx = continuationIdx < 0 && resolvedCount === 0
     ? cart.findIndex(ci =>
         ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
         allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))))
@@ -513,10 +606,100 @@ export function applyCompiledAddItem(
       // GUARD 8's "Choices for X" clause can tell it already said these
       // choices without re-deriving the engine state. Undefined (not a
       // stale/wrong value) when every slot is resolved.
-      next_question_group: engineResult.nextStep ? pendingGroupNames![0] : undefined,
-      next_question_choices: engineResult.nextStep ? engineResult.nextStep.choices.map(c => c.display) : undefined,
+      next_question_group: nextStep ? pendingGroupNames![0] : undefined,
+      next_question_choices: nextStep ? nextStep.choices.map(c => c.display) : undefined,
       instruction: nextQuestion
         ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${nextQuestion}"`
+        : "All required options are resolved. Do not ask about options for this item again.",
+    },
+  };
+}
+
+export interface CompiledModifyItemResult {
+  ok: boolean;
+  result: unknown;
+  cartChanged: boolean;
+}
+
+/**
+ * Item 8 fix (2026-09-08 P0, constraint 2 of 392894c's PO-signed-off
+ * diagnosis): modify_item was a fully legacy, ask_plan-unaware handler for
+ * a compiled item — it wrote options/price_cents/pending_options straight
+ * onto the cart line's plain fields with zero interaction with
+ * ask_plan_selections or consumedModifierChoiceIds. That is exactly how it
+ * became an uncontrolled side channel: a model that reached for modify_item
+ * instead of add_item on a compiled line silently desynced authoritative
+ * engine state, and the "4 correct lines" runs in 392894c's BLOCKED.txt
+ * entry only happened by accident, via a mechanism the design never
+ * accounted for. Left unfixed next to a corrected add_item, the same
+ * regression returns the moment the model happens to call modify_item.
+ *
+ * This routes a modify_item call for a compiled item through the SAME
+ * resolveAskPlan/matchAssertedChoice validation used by add_item —
+ * `modelAssertedChoiceTexts` may only PROPOSE a choice, resolveAndPriceSelections
+ * still validates it against the item's real ask_plan choices before it is
+ * ever merged into ask_plan_selections — and MERGES into the target line's
+ * existing selections (never replaces them wholesale), so a compiled line's
+ * state can no longer be mutated outside the engine.
+ *
+ * Scope: quantity is applied directly (it is not part of ask_plan_selections
+ * and legacy already applied it the same way). Unmatched option/modifier
+ * keys are silently dropped rather than recorded as `unverified_requests` —
+ * the compiled path has no unverified-request equivalent yet (see this
+ * file's header comment, "documented follow-ups, not silent gaps"); this fix
+ * does not expand that scope.
+ */
+export function applyCompiledModifyItem(
+  cart: CompiledCartLine[],
+  menuItem: CompiledMenuItem,
+  menuItemId: string,
+  quantity: number | undefined,
+  customerMessage: string,
+  modelAssertedChoiceTexts: string[],
+  consumedModifierChoiceIds?: Set<string>,
+): CompiledModifyItemResult {
+  const idx = cart.findIndex(ci => ci.menu_item_id === menuItemId);
+  if (idx < 0) return { ok: false, cartChanged: false, result: { error: "Item not in cart." } };
+
+  const line = cart[idx];
+  const askPlan = menuItem.ask_plan;
+  const itemGroups = menuItem.option_groups ?? [];
+  let cartChanged = false;
+
+  if (quantity !== undefined && quantity !== line.quantity) {
+    line.quantity = quantity;
+    cartChanged = true;
+  }
+
+  const defaultChoiceIdByGroup = new Map<string, string>();
+  for (const g of itemGroups) {
+    if (g.default_choice_id) defaultChoiceIdByGroup.set(g.id, g.default_choice_id);
+  }
+
+  const priorSelections = { ...(line.ask_plan_selections ?? {}) };
+  const outcome = resolveAndPriceSelections(
+    askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup,
+    consumedModifierChoiceIds, modelAssertedChoiceTexts,
+  );
+
+  if (outcome.resolvedCount > 0) {
+    line.ask_plan_selections = outcome.newSelections;
+    line.options = Object.keys(outcome.resolvedOptions).length > 0 ? outcome.resolvedOptions : undefined;
+    line.price_cents = outcome.priceCents;
+    line.pending_options = outcome.pendingGroupNames;
+    cartChanged = true;
+  }
+
+  return {
+    ok: true,
+    cartChanged,
+    result: {
+      modified: askPlan.display_name,
+      quantity: line.quantity,
+      price: line.price_cents,
+      next_question: outcome.nextQuestion,
+      instruction: outcome.nextQuestion
+        ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${outcome.nextQuestion}"`
         : "All required options are resolved. Do not ask about options for this item again.",
     },
   };
