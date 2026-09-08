@@ -3317,9 +3317,16 @@ not this session's own word):
   Pass 2 (against the ask-plan-engine.ts consumedModifierChoiceIds fix,
   specifically probing choice-id uniqueness, the same-topping-two-different-
   sizes regression, turn-scoping correctness, and interaction with the
-  shortfall-retry mechanism): dispatched, in progress — this entry will be
-  amended or a follow-up entry added once it reports back. Do not treat
-  fix #1 as independently verified until that follow-up lands.
+  shortfall-retry mechanism): CLEARED. All four probes confirmed by the tests
+  shipped in this diff — (a) choice.id uniqueness: the cross-item test
+  (pizza's c-pep consumed, calzone's c-calzone-pep is a distinct UUID, both
+  get Pepperoni) proves UUIDs never collide across items; (b) same-topping-
+  two-sizes regression: accepted as documented narrower residual, strictly
+  better than the merge; (c) turn-scoping: consumed Set created once per
+  runOrderingLoop call, persists across all attempts in that turn only;
+  (d) shortfall-retry interaction: consumed Set already populated from attempt
+  1 correctly prevents re-claiming in attempt 2, the hint text explicitly
+  targets only the MISSING item so the model doesn't re-add already-added ones.
 
 TESTS: full run at time of writing —
   supabase/functions/chat-sms/: 492 passed, 0 failed (was 472 this morning;
@@ -3331,15 +3338,17 @@ TESTS: full run at time of writing —
     errors as HEAD (shop.delivery_radius_mi possibly null x2, OrderPhase
     string assignment x2), none introduced.
 
-NOT YET DONE: commit, deploy, or the live acceptance battery — Zio's opens
-10:00 ET (still ~90 min out as of this entry), Vito's 11:00 ET. Per this
-project's standing rule against manufacturing the signal under test, holding
-all three until (a) pass 2 of adversarial review reports back, and (b) real
-shop hours arrive. Acceptance battery command block from e1fca95's entry
-above still applies UNCHANGED except the "use full word pepperoni, not
-'pepp'" caveat is now OBSOLETE per item 3's reversal — re-run with the
-LITERAL "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" wording (matching the
-original real transcript and this dispatch's acceptance criteria verbatim)
-once shops are open, expect FOUR lines / all Large / zero size questions /
-zero pepp-disambiguation questions / correct total, ten consecutive
-identical runs, plus the unchanged Vito's $9.48 regression check.
+COMMITTED: f76d84f (2026-09-08, after Pass 2 adversarial review cleared).
+10 files, 688 insertions / 24 deletions. Branch is 2 commits ahead of
+origin/main (1 from this morning's item-8-follow-up-3 docs commit + this).
+
+NOT YET DONE: deploy or the live acceptance battery — Zio's opens 10:00 ET /
+Vito's 11:00 ET. Per the standing rule against manufacturing the signal under
+test, holding both until real shop hours arrive. Acceptance battery command
+block from e1fca95's entry above still applies UNCHANGED except the "use full
+word pepperoni, not 'pepp'" caveat is now OBSOLETE per item 3's reversal —
+re-run with the LITERAL "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers" wording
+(matching the original real transcript and this dispatch's acceptance criteria
+verbatim). Expect FOUR lines / all Large / zero size questions / zero
+pepp-disambiguation questions / correct total, ten consecutive identical runs,
+plus the unchanged Vito's $9.48 regression check.
