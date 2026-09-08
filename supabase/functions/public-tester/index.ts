@@ -173,11 +173,25 @@ Deno.serve(async (req: Request) => {
   //    so test for that directly instead of for any number at all. Not Just
   //    Bagels (the one real restaurant) still fails twice over: is_test=false
   //    AND a Twilio SID.
+  //
+  //    2026-09-08: Vito's was wired to a real, 10DLC-approved Telnyx number so
+  //    Test Kitchen orders reach chat-sms over SMS for the Erin demo, which
+  //    trips hasCarrierNumber above. is_test alone is NOT enough to drop this
+  //    check — app_config.public_tester_shop_id is an editable row re-checked
+  //    on every request precisely because it can be pointed at the wrong shop,
+  //    and hasCarrierNumber is the independent second signal that catches that
+  //    even if is_test is also (wrongly) true on whatever shop it names. So
+  //    carve out the one shop Jason has explicitly put a live carrier number
+  //    on for testing, by a constant baked into the code — not by re-deriving
+  //    it from the same config value this check exists to protect against.
+  //    Any other shop, test or real, with a carrier number is still refused.
+  const CARRIER_NUMBER_ALLOWED_SHOP_ID = "e0000000-0000-0000-0000-000000000001"; // Vito's Pizza
   const hasCarrierNumber = !!(shop?.twilio_number_sid || shop?.telnyx_number_id);
-  if (!shop || shop.is_test !== true || hasCarrierNumber) {
+  const carrierNumberAllowed = shop?.id === CARRIER_NUMBER_ALLOWED_SHOP_ID;
+  if (!shop || shop.is_test !== true || (hasCarrierNumber && !carrierNumberAllowed)) {
     console.error(
       "[public-tester] REFUSED: target shop failed the test-shop guard",
-      { shopId, found: !!shop, is_test: shop?.is_test, hasCarrierNumber },
+      { shopId, found: !!shop, is_test: shop?.is_test, hasCarrierNumber, carrierNumberAllowed },
     );
     return refuse("misconfigured", 503);
   }
