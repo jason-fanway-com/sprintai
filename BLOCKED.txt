@@ -2716,3 +2716,210 @@ the live DB directly, the flavor backfill's scoping and the recompile's
 invariants, commit completeness, Vito's/NJB untouched) -- the two live-
 hours-gated batteries above are flagged as the one open item, not silently
 treated as done.
+
+================================================================================
+2026-09-08 ~12:00 UTC -- PO course correction on item 3: Type recommendation,
+Gyro/Chicken Gyro fabricated-question fix, archetype-inference guard fix,
+owner_questions audit (Zio's + NJB)
+================================================================================
+
+CONTEXT: PO withdrew the earlier "assign slot_key=type to the 107 Type
+groups" instruction as wrong, and separately flagged that Zio's Gyro and
+Chicken Gyro were blocked behind a manufactured "Do customers pick a bread
+on Baskets & Gyros?" owner_question with no basis in the item's own data --
+a real process failure (Jason was asked a question the menu had already
+answered). Four asks: (1) Type recommendation only, no writes to the 107
+rows; (2) fix Gyro/Chicken Gyro directly; (3) generalize the archetype
+guard so this class of bug can't recur; (4) audit all pending
+owner_questions on both shops for the same defect, report counts+examples.
+
+--- (1) TYPE RECOMMENDATION (investigate only, zero writes to the 107 rows) ---
+
+Verified directly against Zio's DB (not just PO's finding): both Gyro and
+Chicken Gyro's "Type" option_groups have exactly one choice ("Gyros"),
+required=true, is_default=true, price_cents=0, import_key="choose an
+option", source_span="Choose an option -- Required, select only one" (group)
+/ "Gyros $12.95" (choice). Sibling Zio's burgers (Cheese Burger, Mamma Mia
+Burger, BBQ Cheese Burger, Zio's Deluxe Burger) carry the structurally
+identical singleton "Choose an option" pattern.
+
+Also verified: compile-menu.ts's deriveAskMode already computes
+ask_mode='auto_single' for any required group with exactly 1 choice
+("apply its one choice silently -- it's a fact, not a question", spec
+§2.2). This is computed at COMPILE time from live choice count, not stored,
+so these groups are ALREADY silent/inert in every compiled ask_plan today,
+regardless of what happens to the 107 rows. Recommendation (a) "mark
+auto_single explicitly" would therefore change nothing at runtime -- it's
+already true, structurally, for every single-choice group in this schema.
+
+RECOMMENDATION: (b), matching the PO's own instinct. These 107 rows should
+never have been materialized as option_groups at all -- source_span proves
+they're Slice's own per-item "confirm this SKU" UI wrapper (Slice always
+shows a "Choose an option" step even for a single-variant item), and their
+choice name duplicates menu_items.category with zero customer-facing
+differentiation. Beyond being inert noise, they are an active liability:
+the Gyro incident below happened BECAUSE code elsewhere (archetypes.ts's
+stated-provenance gate) reasons over option_groups content/provenance, and
+a group that exists but is tagged wrong (see below) silently defeats that
+reasoning. Fewer rows a downstream system has to interpret correctly beats
+more rows plus a bigger "trust me" surface. Fix belongs in the Slice
+loader/importer: skip creating a group when required=true, exactly 1
+choice, choice name equals (or is contained in) the item's own category,
+and there's no real price delta. Cleanup of the 107 existing rows (groups +
+their choices) is a one-time DELETE, not a backfill -- not executed this
+session, gated on PO/Jason sign-off as instructed.
+
+--- (2) + (3) ROOT CAUSE AND FIX ---
+
+Root cause, confirmed against live data: archetypes.ts's step-5.5 gate
+(hasStatedProvenanceGroup) is supposed to suppress a manufactured question
+whenever the item already has ANY real platform-sourced option_group, even
+one not bound to the slot in question. It keys off group.provenance ===
+'stated'. Gyro/Chicken Gyro's "Type" groups are tagged provenance='inferred'
+at the GROUP level (their CHOICES are correctly 'stated') -- an apparent
+mistagging, since the structurally identical singleton pattern on sibling
+burgers IS tagged 'stated' at the group level and is (correctly) already
+suppressed today. That one wrong tag is 100% of why the sandwich
+archetype's `bread` slot treated Gyro as if it had zero source data and
+manufactured a blocking category-scoped question (2 items affected).
+
+Fix (supabase/functions/_shared/archetypes.ts): added step 5.5b,
+hasOnlySingletonGroups -- true iff the item has at least one real REQUIRED
+(kind='slot') option_group and every required group is a singleton (<=1
+choice), independent of provenance tag. Deliberately excludes modifier
+groups (an optional "Add Extra: Extra Cheese" with 1 choice says nothing
+about the item's real choice surface) and deliberately requires >=1
+required group (an item with ZERO groups, e.g. Zio's Double Burger, still
+falls through to the normal ladder -- that item's temp question is a
+separate, real gap, untouched). This reuses compile-menu.ts's own
+already-established principle (singleton group = fact, not a question) at
+INFERENCE time, not just compile time, instead of inventing a new
+heuristic. 3 new unit tests added (archetypes.test.ts): the real Gyro
+shape (passes via 5.5b), a modifier-only item (5.5b correctly does NOT
+fire, still needs_question), a required MULTI-choice item (5.5b correctly
+does NOT fire). Full suite: archetypes.test.ts 37/37 (+3 new, 40 total)
+and compile-menu.test.ts 49/49, all passing, plus both files' live-data
+tests re-run against Vito's/NJB/Zio's directly -- Zio's Baskets & Gyros no
+longer produces a bread question; Burgers/temp (Double Burger) is
+unaffected; NJB output is unaffected (see audit below for why).
+
+Deployed: `supabase functions deploy compile-menu` (the function that
+regenerates owner_questions on future recompiles). chat-sms does not
+import archetypes.ts directly -- no redeploy needed there for this fix.
+
+Applied live: scripts/refresh-owner-questions.ts (existing, reusable,
+dry-run-by-default, status='pending'-only tool) against Zio's --
+2cba7b51-211c-4437-8910-1af4dcc03498 -- dry run first (confirmed plan: 0
+update, 1 delete, exactly "Baskets & Gyros"/bread, nothing else), then
+--apply. Deleted.
+
+VERIFIED live via a real compile-menu invocation (not just the refresh
+script's own diff): Gyro (f35d4763-3b96-4c11-b2ab-698187c092de) and
+Chicken Gyro (50d3a1f8-09c5-4ba4-8a15-c656e8ad6b8f) both bot_state=
+"orderable", bot_state_reason=null. Invariant 1 ("no item in an active
+category is blocked") violations dropped from 3 (this morning's baseline:
+Double Burger, Gyro, Chicken Gyro) to 1 (Double Burger only -- pre-existing,
+separately diagnosed, untouched, not this session's scope). Invariants
+2-8 all still pass, including invariant 7 (no active choice provenance
+'inferred') -- unaffected, this fix never wrote to option_groups/
+option_choices. Zio's compiled_ordering_engine_enabled reconfirmed true
+(unchanged). Vito's compiled_ordering_engine_enabled reconfirmed false
+(unchanged) -- zero writes to Vito's anything this session.
+
+--- (4) AUDIT: manufactured vs genuine owner_questions, Zio's + NJB ---
+
+9 pending category-scoped owner_questions existed before this session's
+fix (2 Zio's, 7 NJB). Method: for every row, pulled every affected item's
+real description text directly from the DB and checked whether the
+"needs_question" items actually lack the relevant info, or whether (like
+Gyro) their own data already answers it.
+
+ZIO'S (2 rows):
+  - Baskets & Gyros/bread (2 items) -- MANUFACTURED. Fixed this session
+    (above).
+  - Burgers/temp (1 item, Double Burger) -- GENUINE. Double Burger has
+    ZERO option_groups of any kind (not a mistagging case -- there is
+    truly no source data). Separate known gap, not touched.
+
+NJB (7 rows) -- NJB has ZERO option_groups in the entire menu (confirmed:
+groupRows.length=0 for the whole shop), so the Gyro-style "mistagged
+provenance" mechanism cannot apply here; the defect found is DIFFERENT --
+the normalize.ts/archetypes.ts ladder recognizes "choice of X or Y" in a
+description as settling a slot, but has NO equivalent recognition for a
+description stating a SINGLE FIXED value ("on rye bread", "on a roll", "in
+a wrap") as ALSO settling it (with an implicit one-item default, same
+"fact not a question" principle as 5.5b above, just never extended to
+description text). Verified item-by-item against live descriptions:
+
+  - Breakfast Sandwiches/bread (2 affected) -- MANUFACTURED, both. Avocado
+    Crush ("Wheat toast...", fixed, not a choice) and Lean Wrap ("...in a
+    wrap", fixed, not a choice -- also arguably miscategorized, it's a wrap
+    sitting in a sandwich category). Whole row should delete.
+  - Cold Sandwiches/bread (2 affected) -- MANUFACTURED, both. Sloppy Joe -
+    Roast Beef and Sloppy Joe - Turkey both say "...on rye bread" (fixed).
+    Whole row should delete.
+  - Hot Sandwiches/bread (11 of 12 affected, only Grilled Cheese excluded)
+    -- MIXED. 9 MANUFACTURED (fixed, not a choice): Beef Gyro & Grilled
+    Chicken Gyro ("on pita"), Big John's, Cheddar Cheeseball Cheesesteak,
+    Chicken Cutlet Sandwich, Cheesesteak (all "on roll"), Pizza Bagel ("on
+    a bagel"), Reuben & Rachel ("on grilled rye bread"). 2 GENUINE: Turkey
+    Melt and Tuna Melt both literally say "...on choice of bread" --  a
+    real stated choice, just not enumerated (correctly NOT auto-resolved,
+    per the existing looksLikeCleanChoiceList/bare-enumeration guard --
+    this is a real open question, just needs the actual bread options,
+    not a yes/no on whether a choice exists). Row should UPDATE to
+    items_affected=2, not delete.
+  - Wraps/bread (10 of 10 affected, 0 excluded) -- MANUFACTURED, all 10.
+    Every item description either says "...in a wrap" (fixed) or doesn't
+    mention bread at all (implicit -- it's a wrap, that IS the vessel, no
+    separate bread choice exists in this category by construction). This
+    is a category-level mismatch: the sandwich archetype's generic bread
+    slot doesn't apply to wrap-named items at all, structurally, the same
+    way burger's temp slot already has a notChickenVeggieTurkey
+    applies_when guard. Whole row should delete (or the slot should gain
+    an applies_when excluding /wrap/i items entirely, which would be the
+    more durable fix).
+  - Omelette & Egg Platters/egg_style (1 affected) -- GENUINE. "Two Eggs
+    Any Style Platter" is the one item not named "omelet(te)"; "any
+    style" plausibly signals a real customer choice, not a settled fact.
+  - Omelette & Egg Platters/egg_side (11 affected, all) -- GENUINE BY
+    DESIGN, not a bug. archetypes.ts's own comment documents this is
+    deliberate: egg_side never attempts description-sourced binding (even
+    though every item's description literally says "home fries or hash
+    brown") because a prior real bug (double "choice of" clause) proved
+    that binding is unsafe here -- P3 "missing beats wrong" was chosen on
+    purpose. Flagging as a known, intentional tradeoff, not something this
+    audit is recommending a change to.
+  - Salads/dressing (2 affected: Chef's Salad, Garden Salad) -- GENUINE.
+    Greek/Caesar already excluded via default_from_name; Chef's and
+    Garden's descriptions contain no dressing information anywhere.
+
+TOTALS (item-level, the number requested): of the ~28 items driving these
+9 rows, 25 were behind a MANUFACTURED question (2 Zio's, now fixed; 23
+NJB, not yet fixed) and only 6 were GENUINE gaps needing a real owner
+answer (1 Zio's Double Burger + Turkey Melt/Tuna Melt + the 1 non-omelet
+item + Chef's/Garden Salad), plus the 11 egg_side items which are
+genuine-by-design, a separate bucket from either "manufactured" or "needs
+answering right now".
+
+NOT executed this session, by design: no NJB writes. The NJB defect is
+real and well-evidenced (same "fact stated as source, but only as a single
+value instead of an enumerated list, so the ladder didn't recognize it as
+settled" root shape as Gyro, plus a second, category-level "wrap has no
+separate bread slot" shape) but fixing it requires two new, untested code
+paths (single-fixed-value description recognition; a wrap-specific
+applies_when guard) beyond what was authorized for direct action this
+pass. Recommend as explicit follow-up work, scoped and tested the same way
+as 5.5b above, before touching any NJB owner_questions row. ~23 of NJB's
+~38 blocked items are very likely unblockable by that follow-up without
+Jason answering anything.
+
+COMMIT: archetypes.ts + archetypes.test.ts only (this entry included).
+NOT committed (deliberately out of scope, pre-existing uncommitted state
+found at session start, not touched or read for this work): 
+supabase/functions/chat-sms/index.ts and the other untracked chat-sms
+guard/test files already sitting in the tree -- confirmed via `git status`
+before touching anything, consistent with this morning's same discipline.
+
+Handing back to OrderFare/PO for Melvin's independent verification and a
+decision on the NJB follow-up + the Type importer fix.

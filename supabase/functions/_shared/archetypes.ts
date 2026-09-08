@@ -24,6 +24,9 @@
 //   5.5. item already has ANY platform-sourced -> advisory (no question, no
 //        (provenance='stated') option_group,     owner tap) — see
 //        just not one THIS slot bound to         hasStatedProvenanceGroup below
+//   5.5b. item has real group(s), all of them   -> advisory (same as 5.5) —
+//        a required singleton (1 choice) —        see hasOnlySingletonGroups
+//        regardless of provenance tag              below
 //   6. universal_choices exists                 -> proposed  (needs owner tap)
 //   7. kitchen_critical || price_critical        -> needs_question (needs owner tap)
 //   8. none of the above                         -> skip (Appendix A's "no slot, no
@@ -584,6 +587,37 @@ function hasStatedProvenanceGroup(item: InferItemInput): boolean {
   return item.extractedGroups.some(g => g.provenance === "stated");
 }
 
+// Step 5.5b's gate (added 2026-09-08, Zio's Gyro/Chicken Gyro incident):
+// true iff the item has at least one real per-item REQUIRED (kind='slot')
+// option_group AND every required group is a singleton (exactly one
+// choice) — i.e. the item's own required-choice surface, whatever its
+// provenance tag says, offers no real choice anywhere. Deliberately only
+// looks at required groups: an optional modifier group with one choice
+// (e.g. "Add Extra: Extra Cheese") says nothing about whether the item has
+// other real choices, so it must not count here — see the
+// owner_confirmed-modifier test below, which this gate must NOT flip.
+// compile-menu.ts's deriveAskMode already treats a singleton group as
+// `auto_single`, "a fact, not a question" (spec §2.2); this applies that
+// same rule at INFERENCE time too, not just compile time, so a mistagged
+// singleton group can't slip past 5.5 and get read as "no data at all".
+// Concretely: Zio's Gyro/Chicken Gyro each carry one real Slice-sourced
+// required "Type" group (single choice "Gyros", source_span "Gyros
+// $12.95") whose GROUP row was mistagged provenance='inferred' — sibling
+// Zio's burgers have the structurally identical required "Choose an
+// option" singleton pattern correctly tagged 'stated' and are (correctly)
+// never asked about. Without this gate, the sandwich archetype's `bread`
+// slot read the mistagged group as if the item had no data at all and
+// manufactured a blocking "pick a bread" owner_question with zero basis in
+// the item's own description or option_groups (spec §4.3). Requires at
+// least one required group — an item with ZERO groups, or only modifier
+// groups (e.g. Zio's Double Burger, a separate known gap), says nothing
+// and must still fall through to the normal kc/pc ladder rather than being
+// silently excused.
+function hasOnlySingletonGroups(item: InferItemInput): boolean {
+  const requiredGroups = item.extractedGroups.filter(g => g.required);
+  return requiredGroups.length > 0 && requiredGroups.every(g => g.choiceNames.length <= 1);
+}
+
 function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchetype: ArchetypeKey): SlotOutcome {
   const base = { item_id: item.id, slot_key: slot.slot_key };
 
@@ -621,7 +655,7 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
     return { ...base, kind: "default", default_choice: m?.[0] };
   }
 
-  if (hasStatedProvenanceGroup(item)) {
+  if (hasStatedProvenanceGroup(item) || hasOnlySingletonGroups(item)) {
     return {
       ...base, kind: "advisory",
       ...(slot.universal_choices ? { choices: slot.universal_choices } : {}),

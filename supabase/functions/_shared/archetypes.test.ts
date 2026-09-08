@@ -156,6 +156,37 @@ Deno.test("sandwich: a real stated group suppresses the unbound bread question f
   );
 });
 
+Deno.test("sandwich: a required singleton group with provenance='inferred' suppresses the bread question (5.5b) — real Zio's Gyro shape", () => {
+  const gyro = item({
+    name: "Gyro", category: "Baskets & Gyros",
+    description: "Sliced gyro meat with lettuce, tomato, onions & tzatziki sauce, served with fries.",
+    extractedGroups: [{ name: "Type", required: true, choiceNames: ["Gyros"], provenance: "inferred" }],
+  });
+  const result = inferCategory("Baskets & Gyros", [gyro]);
+  assertEquals(result.questions.find(q => q.slot_key === "bread"), undefined);
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "bread")!.kind, "advisory");
+});
+
+Deno.test("sandwich: an item with ONLY a modifier group (no required group) still gets the bread question (5.5b requires a required group)", () => {
+  const noRequiredGroup = item({
+    name: "Ham & Cheese", category: "Cold Sandwiches",
+    extractedGroups: [{ name: "Add Extra", required: false, choiceNames: ["Extra Mayo"], provenance: "owner_confirmed" }],
+  });
+  const result = inferCategory("Cold Sandwiches", [noRequiredGroup]);
+  assertExists(result.questions.find(q => q.slot_key === "bread"));
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "bread")!.kind, "needs_question");
+});
+
+Deno.test("sandwich: a required group with MULTIPLE choices does not trigger 5.5b (real choice present, still needs_question if unbound to bread)", () => {
+  const multiChoiceRequired = item({
+    name: "Club Sandwich", category: "Cold Sandwiches",
+    extractedGroups: [{ name: "Choose an option", required: true, choiceNames: ["Regular", "Large"], provenance: "inferred" }],
+  });
+  const result = inferCategory("Cold Sandwiches", [multiChoiceRequired]);
+  assertExists(result.questions.find(q => q.slot_key === "bread"));
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "bread")!.kind, "needs_question");
+});
+
 Deno.test("steak: 'steak' regex is word-bounded, does not match 'cheesesteak' item names", () => {
   const cheesesteak = item({ name: "Cheesesteak", category: "Hot Sandwiches" });
   // category resolves this to sandwich, not steak, and even a direct
