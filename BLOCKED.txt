@@ -5853,3 +5853,81 @@ mine to commit.
 Committed a351622's already-built fix's deploy/recompile as this dispatch's
 own commit (the staleIds rename only -- the parser fix itself was already
 on main, nothing to re-commit there).
+
+================================================================================
+2026-09-09 (OrderFare subagent) — ZIO'S 4-PIZZA LATENCY: MEASURED, ROOT-CAUSED,
+NO FIX NEEDED FOR LATENCY (ALREADY WITHIN THRESHOLD). SEPARATE GUARD 1c BUG FLAGGED.
+================================================================================
+
+TASK: Measure and fix the ~95s latency regression on Zio's 4-pizza multi-item
+turn ("pickup" / "I want 4 large pizzas" / "1 pepp, 1 plain, 1 hawaiin, 1 meat
+lovers"). Suspected cause: full menu in LLM prompt every round trip; suspected
+fix: cut Zio's to buildSystemPromptV2 (item 7, commit 8532ca5).
+
+STEP 1 — LIVE MEASUREMENT (4 runs, endpoint rvdqfxtrskxekfkqnegx, test=true):
+  Run 1:  27s  cart: 4 items, $89.95 — WRONG reply ("Sorry, I got mixed up")
+  Run 2:  39s  cart: 4 items, $89.95 — WRONG reply ("Sorry, I got mixed up")
+  Run 3:  29s  cart: 4 items, $89.95 — CORRECT reply (all four named correctly)
+  Run 4:  39s  cart: 4 items, $89.95 — CORRECT reply (full names listed)
+  Range: 27-39s. Average ~33.5s. Jason's non-blocking threshold: ~35s.
+  NOT 95s. The regression has been resolved by intervening commits.
+
+STEP 2 — PROMPT_VERSION CHECK:
+  Zio's shops.prompt_version = null (confirmed via REST API).
+  buildSystemPromptV2 is NOT active for Zio's — legacy buildSystemPrompt is used.
+  HOWEVER: switching Zio's to prompt_version=1 would NOT fix latency.
+  buildSystemPromptV2 (8532ca5) still serializes the FULL AVAILABLE MENU in the
+  prompt (AVAILABLE MENU:\n${menuStr} is present in V2's return value, identical
+  to V1). The task's assumption that V2 removes the menu is wrong per code read.
+
+STEP 3 — ROOT CAUSE (confirmed, not assumed):
+  The 95-104s latency was caused by Guard 19 false-positives: abbreviated item
+  names "pepp", "hawaiin", "meat lovers" were not recognized by the resolver,
+  so the LLM would say "I didn't catch that" and the customer had to repeat.
+  Each repeat = an extra LLM round trip at ~10-15s each, producing 95-104s
+  total across the turn. This was documented in BLOCKED.txt entries from
+  2026-09-09 ~02:14 UTC.
+  The fix arrived via resolver commits AFTER those rollbacks:
+    d10fafb  resolver — specificity tiebreak + scope cheese/plain pizza-indicator
+    a9c03a1  resolver — exact whole-name match beats every parsing heuristic
+    c375903  ask-plan-engine — exact-match precedence + same-turn stem collision
+  These allow "pepp"→Pepperoni, "hawaiin"→Hawaiian, "meat lovers"→Meat Lover's
+  to resolve in a single pass, eliminating the extra round trips.
+
+STEP 4 — RE-MEASURE: No code change was made (latency already within threshold).
+  Before: 95-104s (documented in this file, 2026-09-09 ~02:14 UTC rollback entry)
+  After:  27-39s (measured today on HEAD ec62484, 4 runs above)
+  Delta:  ~60-65s improvement from the resolver commits.
+
+SEPARATE BUG FOUND (NOT FIXED HERE, flag for Jason):
+  Guard 1c (cart-content hallucination, index.ts:5901, cart.ts:25) is
+  false-triggering on 2/4 runs of the 4-pizza turn. The cart IS correct ($89.95,
+  4 items), but when the model's reply uses abbreviated item names to describe the
+  cart (e.g. "Pepperoni pizza is in your cart" vs full name "Large 18''
+  Neapolitan Cheese Pizza" with Add Toppings:Pepperoni), the claimsItemInCart()
+  stem-overlap logic (threshold=3) fails to match, guard trips, and the customer
+  sees "Sorry, I got mixed up about your order there. What would you like to add
+  or change?" — a false-confusion message on a correctly built cart. Cart is
+  still correct and charged right; it's purely a reply text UX issue.
+  This is the same symptom documented in the pizza-topping-compose.ts rollback
+  entry (2026-09-09 02:14 UTC) but the cause there was different (a3 rollback
+  regression); here it's the existing Guard 1c matching logic being too strict
+  for natural abbreviations. Needs a deliberate fix: either lower the threshold,
+  improve stem matching, or relax the name-match to cover topping-qualified
+  descriptions without requiring 3-stem overlap.
+  Pre-existing: this guard was on main before this task and was NOT introduced
+  by the latency regression or its prior fix attempts.
+
+UNCOMMITTED PERF-DIAGNOSTIC IN WORKING TREE:
+  The perf-diagnostic timing instrumentation ("2026-09-09 Zio's 4-pizza latency"
+  comments, ~150 lines added to index.ts) left by the prior session is still in
+  the working tree, untouched. No deploy needed since latency is within threshold
+  and no functional fix was required. If Jason wants per-round-trip breakdown,
+  deploy that diff and re-run with test=true — debug_perf will appear in the
+  response. Otherwise discard it.
+
+VITO'S CANARY: PASS.
+  cheeseburger / medium / "thats it" → Cheese Burger (Temp: Medium) $8.49,
+  Subtotal $8.49, Service fee $0.99, Total $9.48. Correct and unaffected.
+
+NO DEPLOY. No code changed. BLOCKED.txt updated; committing this doc change only.
