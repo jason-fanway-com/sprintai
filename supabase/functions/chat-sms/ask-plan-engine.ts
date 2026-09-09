@@ -499,37 +499,18 @@ export function resolveAskPlan(
     // a separate, documented follow-up; this is strictly narrower:
     // match-if-mentioned-this-turn, same as a slot, minus the asking).
     if (step.kind === "modifier") {
-      // P0 fix (2026-09-09, third recurrence): scoped to exactly the ONE
-      // phrase the caller identified for this call — see modifierScopeText's
-      // own doc above. No re-derivation, no search, no guess here.
-      const textForModifier = modifierScopeText ?? customerText;
-      const availableStems = new Set([...significantStems(textForModifier)].filter(s => !consumedStems.has(s)));
-      const textMatch = matchChoiceByStems(step.choices, availableStems);
-      // P0 fix (2026-09-09, fourth recurrence of pepperoni-bleed defect):
-      // matchAssertedChoice trusts the model's explicit modifier claim but
-      // does NOT check whether that claim appears in THIS phrase's text.
-      // When modifierScopeText is defined (even as "") the asserted choice
-      // must have at least one stem in the scoped availableStems — it is
-      // physically impossible for "Pepperoni" to appear in "one hawaai".
-      // When scope is undefined (single-item turn), fall back to unscoped
-      // behavior (same as before) — nothing to isolate.
-      let asserted: EngineChoice | null = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
-      if (asserted !== null && modifierScopeText !== undefined) {
-        const cStems = significantStems(asserted.display);
-        if (![...cStems].some(s => availableStems.has(s))) asserted = null;
-      }
-      const matched = asserted ?? textMatch;
-      // P0 (2026-09-09, live money defect): neither matchAssertedChoice nor
-      // matchChoiceInText is negation-aware — "large plain pizza, no extra
-      // cheese" matched "Extra Cheese" (every one of its stems is present in
-      // the text) and silently charged $4.00 for the exact option the
-      // customer just declined. reactive-modifier-match.ts's legacy path
-      // already guards this with isNegated; the compiled path had no
-      // equivalent. Reused here rather than reimplemented, same rule this
-      // module cites at its own header.
-      if (matched && !consumedModifierChoiceIds?.has(matched.id) && !isNegated(textForModifier, matched.display)) {
-        resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
-        totalDeltaCents += matched.price_delta_cents;
+      // Rank-2 fix (2026-09-09, PO direction — fourth recurrence of the
+      // pepperoni-bleed defect): reactive text scanning REMOVED entirely.
+      // matchChoiceByStems IS the bug — every prior fix constrained it and
+      // failed on the next phrasing. Modifiers now resolve ONLY via
+      // matchAssertedChoice (the model's explicit per-call tool-call input,
+      // or the compose module's toppingChoiceDisplay). A choice with no
+      // explicit assertion is left unresolved — missing beats wrong.
+      const asserted = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+      const negText = modifierScopeText ?? customerText;
+      if (asserted && !consumedModifierChoiceIds?.has(asserted.id) && !isNegated(negText, asserted.display)) {
+        resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: asserted });
+        totalDeltaCents += asserted.price_delta_cents;
       }
       continue;
     }

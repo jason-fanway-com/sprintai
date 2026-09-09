@@ -273,7 +273,7 @@ Deno.test("resolveAskPlan: bug 4 fix — a modifier named in the same message is
         choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }] },
     ],
   };
-  const result = resolveAskPlan(plan, "large with pepperoni", new Set(), new Map());
+  const result = resolveAskPlan(plan, "large with pepperoni", new Set(), new Map(), undefined, ["Pepperoni"]);
   assertEquals(result.resolved.length, 2);
   const bySlotKey = Object.fromEntries(result.resolved.map(r => [r.slot_key, r.choice]));
   assertEquals(bySlotKey["size"].id, "c-large");
@@ -313,7 +313,7 @@ Deno.test("resolveAskPlan: round-3 fix does not over-correct — a later, standa
   // name — "add extra bacon please" contributes real stems the item's own
   // name doesn't contain, so the fix's "said nothing beyond the name" gate
   // never engages and Bacon still resolves and prices normally.
-  const result = resolveAskPlan(plan, "add extra bacon please", new Set(), new Map());
+  const result = resolveAskPlan(plan, "add extra bacon please", new Set(), new Map(), undefined, ["Bacon"]);
   assertEquals(result.resolved.length, 1);
   assertEquals(result.resolved[0].choice.id, "c-bacon");
   assertEquals(result.totalDeltaCents, 300);
@@ -397,7 +397,7 @@ Deno.test("resolveAskPlan: consumedModifierChoiceIds does not affect an UNRELATE
     ],
   };
   const consumed = new Set(["c-pep"]);
-  const result = resolveAskPlan(plan, "with mushroom", new Set(), new Map(), consumed);
+  const result = resolveAskPlan(plan, "with mushroom", new Set(), new Map(), consumed, ["Mushroom"]);
   assertEquals(result.resolved.length, 1);
   assertEquals(result.resolved[0].choice.id, "c-mush");
 });
@@ -514,12 +514,12 @@ Deno.test("applyCompiledAddItem: D1 real repro — without consumedModifierChoic
   assertEquals(cart[0].quantity, 2);
 });
 
-Deno.test("applyCompiledAddItem: D1 fix — WITH consumedModifierChoiceIds, 'pepperoni' then 'plain' produce TWO distinct lines", () => {
+Deno.test("applyCompiledAddItem: rank-2 fix — per-call explicit assertions ('pepperoni' call with assertion, 'plain' call without) produce TWO distinct lines", () => {
   const cart: CompiledCartLine[] = [];
   const turnText = "I want 4 large pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers";
   const consumed = new Set<string>();
-  const r1 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
-  const r2 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
+  const r1 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, ["Pepperoni"]);
+  const r2 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, []);
   assertEquals(cart.length, 2, "each named item must get its own cart line");
   assert(r1.cartChanged && r2.cartChanged);
   const withPepperoni = cart.filter(c => c.options?.["Add Toppings"]?.includes("Pepperoni"));
@@ -534,13 +534,13 @@ Deno.test("applyCompiledAddItem: D1 fix — a genuinely DIFFERENT base item in t
   const cart: CompiledCartLine[] = [];
   const turnText = "1 pepperoni pizza, 1 pepperoni calzone";
   const consumed = new Set<string>();
-  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed);
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, ["Pepperoni"]);
   const calzoneAskPlan: AskPlan = { ...TOPPING_ASK_PLAN, display_name: "Calzone", steps: [
     { group_id: "grp-calzone-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
       choices: [{ id: "c-calzone-pep", display: "Pepperoni", price_delta_cents: 350 }] },
   ] };
   const calzoneMenuItem: CompiledMenuItem = { ask_plan: calzoneAskPlan, bot_state: "orderable", option_groups: [{ id: "grp-calzone-top", name: "Add Toppings" }] };
-  applyCompiledAddItem(cart, calzoneMenuItem, "calzone-id", 1, turnText, null, consumed);
+  applyCompiledAddItem(cart, calzoneMenuItem, "calzone-id", 1, turnText, null, consumed, ["Pepperoni"]);
   assertEquals(cart.length, 2);
   assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"), "the pizza's own Pepperoni choice id is unrelated to the calzone's — must still apply");
   assert(cart[1].options?.["Add Toppings"]?.includes("Pepperoni"), "a different item's own topping choice id is a different choice id — must still apply independently");
@@ -599,7 +599,7 @@ Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order
   // A single add_item call with quantity=2 (the normal QUANTITY PARSING path,
   // e.g. "2 pepperoni pizzas") must still produce ONE line with quantity 2 —
   // this fix must not break ordinary quantity stacking.
-  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 2, "2 pepperoni pizzas", null, consumed);
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 2, "2 pepperoni pizzas", null, consumed, ["Pepperoni"]);
   assertEquals(cart.length, 1);
   assertEquals(cart[0].quantity, 2);
   assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"));
@@ -826,7 +826,7 @@ Deno.test("resolveAskPlan: P0 fix -- 'no extra cheese' never resolves Extra Chee
 });
 
 Deno.test("resolveAskPlan: P0 fix -- an UNNEGATED topping in the same message still resolves and prices correctly (no over-correction)", () => {
-  const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large pizza with pepperoni", new Set(), new Map());
+  const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large pizza with pepperoni", new Set(), new Map(), undefined, ["Pepperoni"]);
   assertEquals(result.resolved.length, 1);
   assertEquals(result.resolved[0].choice.id, "28a7d57a-4dcc-4e66-b303-2917f2f12bd7");
   assertEquals(result.totalDeltaCents, 300);
@@ -840,7 +840,7 @@ Deno.test("resolveAskPlan: P0 fix -- negating one topping does not suppress a di
   const cheeseOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-cheese-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[1]] };
   const pepperoniOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-pepperoni-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[0]] };
   const plan: AskPlan = { ...ZIOS_LARGE_PLAN, steps: [cheeseOnlyStep, pepperoniOnlyStep] };
-  const result = resolveAskPlan(plan, "pepperoni pizza, no extra cheese", new Set(), new Map());
+  const result = resolveAskPlan(plan, "pepperoni pizza, no extra cheese", new Set(), new Map(), undefined, ["Pepperoni"]);
   assertEquals(result.resolved.length, 1, "exactly the unnegated Pepperoni should resolve");
   assertEquals(result.resolved[0].choice.id, "28a7d57a-4dcc-4e66-b303-2917f2f12bd7");
   assertEquals(result.totalDeltaCents, 300);

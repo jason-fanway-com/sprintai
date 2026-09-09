@@ -961,6 +961,7 @@ RULES:
 - REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), call add_item IMMEDIATELY for the item — even if you don't yet know the required option. The system will accept the item and store the missing option as pending. In the SAME reply, casually ask the customer for the missing choice(s) — e.g. "What kind of meat on that gyro — beef or chicken?" The item is already in the cart at its base price; the option surcharge applies once chosen. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
 - OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
 - OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
+- SAME-ITEM DIFFERENT-MODIFIER ORDERING (CRITICAL): When a customer orders multiple of the same base item in ONE message where only SOME have a customer-stated modifier (e.g. "a cheese pizza with extra cheese and a plain cheese pizza"), you MUST make separate add_item calls AND include the modifier in either the modifiers or options parameter of the modified item's call — even if the item has no matching modifier or option group. The system captures it as an unverified note for the shop AND keeps the two cart lines distinct so the system does NOT silently merge them into one quantity-2 line. Do NOT use set_note to differentiate per-item modifiers — set_note applies to the whole order. Example: first call gets modifiers: ["extra cheese"], second gets no modifiers.
 - EXACT-NAME MATCHING: When a customer orders a menu item by its EXACT name (e.g. "Pumpernickel Bagel", "Everything Bagel", "Bagel with Jelly"), acknowledge it and add it immediately. Do NOT ask about cream cheese, butter, or other add-ons that are SEPARATE menu items in the "Bagel With" or "Cream Cheese Spread" categories. A plain bagel is a complete order at its listed price. Only ask about add-ons if the customer explicitly asks for a variation ("with cream cheese") or if the item has modifiers the customer must choose.
 - COMBO ITEMS: Items in the "Bagel With" category (e.g. "Bagel with Plain Cream Cheese", "Bagel with Flavored Cream Cheese", "Bagel with Jelly", "Bagel with Butter") ALREADY INCLUDE the bagel and are COMPLETE standalone items at their listed price. Do NOT add a standalone bagel AND a "Bagel With" item separately. Do NOT ask for a base bagel flavor for "Bagel With" items — just add them directly. When a customer says "cinnamon raisin bagel with cream cheese", add ONE item from "Bagel With" (e.g. "Bagel with Plain Cream Cheese" at $3.50) and note the bagel flavor choice. NEVER double-charge by adding a standalone bagel plus a spread item.
 - BAGEL WITH PRICING: Every "Bagel With" item's listed price is the COMPLETE price for that bagel-and-spread combination, no matter how low the price. "Bagel with Jelly" at $0.75 is a full standalone item — it is NOT an add-on or surcharge. The phrase "(additional charge)" in descriptions is internal menu wording; ignore it for classification. The price column is authoritative: if an item has its own row and price in the menu, it is a complete standalone item. Add it directly — never ask for a base bagel flavor.
@@ -1309,6 +1310,7 @@ RULES:
 - REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), call add_item IMMEDIATELY for the item — even if you don't yet know the required option. The system will accept the item and store the missing option as pending. In the SAME reply, casually ask the customer for the missing choice(s) — e.g. "What kind of meat on that gyro — beef or chicken?" The item is already in the cart at its base price; the option surcharge applies once chosen. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
 - OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
 - OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
+- SAME-ITEM DIFFERENT-MODIFIER ORDERING (CRITICAL): When a customer orders multiple of the same base item in ONE message where only SOME have a customer-stated modifier (e.g. "a cheese pizza with extra cheese and a plain cheese pizza"), you MUST make separate add_item calls AND include the modifier in either the modifiers or options parameter of the modified item's call — even if the item has no matching modifier or option group. The system captures it as an unverified note for the shop AND keeps the two cart lines distinct so the system does NOT silently merge them into one quantity-2 line. Do NOT use set_note to differentiate per-item modifiers — set_note applies to the whole order. Example: first call gets modifiers: ["extra cheese"], second gets no modifiers.
 - ITEM PRICING & COMBO RULE: If a customer's request matches a specific menu item exactly (its own ID/row with its own price in AVAILABLE MENU), that listed price is the COMPLETE price for that item — never an add-on, and it never requires a separate base item alongside it, no matter how low the price. The price column is authoritative regardless of any wording in the item's own description (e.g. ignore parenthetical charge notes). Never double up by adding a standalone item plus a combo item that already includes it.
 ${upsellRestraintRule}
 - MODIFIER GROUNDING (CRITICAL): Only offer a format, bread, or size choice (bagel vs flagel vs wrap; plain/wheat/spinach/tomato-basil; small/large; etc.) for an item when THAT EXACT item's menu entry lists those as selectable options for it. Do NOT assume a sandwich, platter, salad, or any item can be made on a flagel, wrap, or alternate bread — or in another size — unless the menu explicitly lists that choice for that item. Flagels and wraps existing elsewhere on the menu does NOT mean another item can be upgraded to them. When an item has no listed options, add it exactly as named at its listed price and do NOT invent upgrade paths or ask "want it on a flagel or wrap?".
@@ -1571,9 +1573,26 @@ async function executeTool(
         consumedReactiveExtraKeys?.add(`${menu_item_id}::${m.name.toLowerCase()}`);
       }
 
+      let extraCents = 0;
+      const pending: string[] = [];
+      const unverifiedRequests: string[] = [];
+      const defaultedGroups: string[] = [];
+
       const invalidMods  = inputMods.filter(m => !validMods.includes(m));
       if (invalidMods.length > 0) {
-        return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}. Valid options for ${menuItem.name}: ${validMods.join(", ") || "none"}` } };
+        if (validMods.length === 0) {
+          // Item has no modifiers configured — treat customer-stated modifiers as
+          // unverified requests (D1 Vito's fix, 2026-09-09): the model naturally
+          // passes "extra cheese" in `modifiers` for a pizza with no modifier menu;
+          // a hard error causes it to fall back to two identical add_item calls that
+          // merge into one quantity-2 line. Capturing it as an unverified_request
+          // instead keeps the line distinct from a truly plain pizza, which has no
+          // unverified_requests, so the merge check won't conflate them.
+          for (const m of invalidMods) unverifiedRequests.push(m);
+          inputMods = inputMods.filter(m => validMods.includes(m));
+        } else {
+          return { ok: false, result: { error: `Invalid modifiers: ${invalidMods.join(", ")}. Valid options for ${menuItem.name}: ${validMods.join(", ")}` } };
+        }
       }
 
       // Sum modifier price adjustments
@@ -1581,11 +1600,6 @@ async function executeTool(
         const mod = menuItem.modifiers_json?.find(m => m.name === modName);
         return sum + (mod?.price_cents ?? 0);
       }, 0);
-
-      let extraCents = 0;
-      const pending: string[] = [];
-      const unverifiedRequests: string[] = [];
-      const defaultedGroups: string[] = [];
 
       // Reject/redirect option keys that are not a real option group for this
       // item — symmetric with invalidMods above. Without this, a key the
@@ -5884,6 +5898,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         shop.phone_number_e164,
         preConsumedModifierChoiceIds,
         c.toppingChoiceDisplay ? [c.toppingChoiceDisplay] : [],
+        undefined,      // modifierScopeText: text-based modifier matching removed
+        c.phraseIndex,  // sourcePhraseIndex: records which phrase created this line
       );
       if (outcome.ok && outcome.cartChanged) {
         deterministicComposedThisTurn = true;
