@@ -1263,13 +1263,18 @@ async function executeAction(
       await supabase.rpc("owner_update_menu_item", {
         p_item_id: itemId, p_fields: updateFields, p_actor: `owner:${userId}`,
       });
-      logEdit({ table_name: "menu_items", row_id: itemId, before, after: update });
+      // owner_update_menu_item RETURNS void — same silent-no-op exposure as REMOVE_ITEM
+      // (bad id / RLS-blocked cross-shop write). Read back before logging or reporting success.
       const { data: fresh } = await supabase.from("menu_items")
-        .select("name, price_cents, description, category, active, flag_review").eq("id", itemId).single();
-      afterSnapshot = { type: "item_fields", item_id: itemId, after: fresh ?? null };
-      resultMsg = fresh
-        ? `${fresh.name} is now $${(fresh.price_cents / 100).toFixed(2)}${fresh.active ? "" : " (marked unavailable)"}${f.clear_review_flag ? " — confirmed correct" : ""}.`
-        : "Updated.";
+        .select("name, price_cents, description, category, active, flag_review").eq("id", itemId).maybeSingle();
+      if (!fresh) {
+        afterSnapshot = { type: "item_fields", item_id: itemId, after: null, confirmed: false };
+        resultMsg = `Couldn't confirm the update to "${before?.name ?? itemId}" went through — it may not be on this shop's menu.`;
+        break;
+      }
+      logEdit({ table_name: "menu_items", row_id: itemId, before, after: update });
+      afterSnapshot = { type: "item_fields", item_id: itemId, after: fresh };
+      resultMsg = `${fresh.name} is now $${(fresh.price_cents / 100).toFixed(2)}${fresh.active ? "" : " (marked unavailable)"}${f.clear_review_flag ? " — confirmed correct" : ""}.`;
       break;
     }
     case "ADD_ITEM": {
@@ -1309,14 +1314,30 @@ async function executeAction(
       const { data: curItem } = await supabase
         .from("menu_items").select("id, name, price_cents, description, category, active")
         .eq("id", itemId).single();
-      const before = curItem ?? item ?? null;
+      if (!curItem) {
+        beforeSnapshot = { type: "item_remove", item_id: itemId, before: null };
+        afterSnapshot = { type: "item_remove", item_id: itemId, after: null, confirmed: false };
+        resultMsg = `Couldn't remove "${item?.name ?? itemId}" — it wasn't found on this shop's menu.`;
+        break;
+      }
+      const before = curItem;
       beforeSnapshot = { type: "item_remove", item_id: itemId, before };
       await supabase.rpc("owner_update_menu_item", {
         p_item_id: itemId, p_fields: { active: false }, p_actor: `owner:${userId}`,
       });
+      // owner_update_menu_item RETURNS void — a bad id or an RLS-blocked cross-shop
+      // write succeeds with zero rows touched and throws nothing. Read the row back
+      // before claiming success; never report a removal we can't confirm happened.
+      const { data: verifyItem } = await supabase
+        .from("menu_items").select("id, active").eq("id", itemId).maybeSingle();
+      if (!verifyItem || verifyItem.active !== false) {
+        afterSnapshot = { type: "item_remove", item_id: itemId, after: null, confirmed: false, before };
+        resultMsg = `Couldn't confirm "${before.name}" was removed — the change may not have gone through. Nothing was logged as removed.`;
+        break;
+      }
       logEdit({ table_name: "menu_items", row_id: itemId, before, after: { active: false } });
       afterSnapshot = { type: "item_remove", item_id: itemId, after: { active: false } };
-      resultMsg = `Removed "${item?.name ?? curItem?.name ?? "item"}" from the menu.`;
+      resultMsg = `Removed "${before.name}" from the menu.`;
       break;
     }
     case "SET_STORE_HOURS": {
