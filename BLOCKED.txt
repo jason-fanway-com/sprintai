@@ -5567,10 +5567,45 @@ NOT IN SCOPE: `matchOptionRemovalPhrase` (option-removal-20260909.ts) is
 anchored to the start of the customer's message and only matches a specific
 set of removal-verb phrasings -- realistic phrasings outside that set
 (anything not starting with remove/drop/cancel/delete/scratch/get rid of/
-take.../no more/no) fall through to the LLM/tool-loop, which is why this
-exact repro reached GUARD 1f's fallback path rather than the earlier
-deterministic pre-LLM interceptor (~line 5211) that also renders correctly
-today. Both paths now render correctly after this fix; widening the
-anchored matcher itself is a separate, smaller task if the LLM/tool-loop
-path's other guard-chain risk (menu hallucination, phantom adds, etc.) is
-ever judged not worth taking for this class of message.
+take.../no more/no) fall through to the LLM/tool-loop, where GUARD 1f (and
+PROOF-P2, and GUARD 2c's fallback) are the backstops this fix protects.
+Live-verifying below, the literal phrase "remove the extra cheese" actually
+matched the anchored pre-LLM interceptor (~line 5211-5244) and returned
+early -- that path was never at risk (it returns immediately, never reaches
+Phase A) and was already correct before this fix. GUARD 1f/PROOF-P2/GUARD
+2c's fallback only fire on genuinely non-deterministic LLM misbehavior
+(narrating a correction it didn't actually perform, or hallucinating a
+stray dollar figure) that this project's own rules forbid manufacturing
+live ("never manufacture the signal you are testing" -- AGENTS.md) --
+money-footer-double-render-20260909.test.ts is the direct proof at the
+mechanism level (stripLlmMoneyLines demonstrably corrupts itemizer output
+exactly this way; the flag demonstrably prevents it from ever running on
+that output) since forcing the LLM into the narrated-but-unmutated state
+live, on demand, isn't something this codebase does.
+
+LIVE VERIFICATION (chat-sms v321, deployed 2026-09-09 18:30:42 UTC,
+confirmed via `supabase functions list --project-ref rvdqfxtrskxekfkqnegx`):
+
+Zio's (shop_id 2cba7b51-211c-4437-8910-1af4dcc03498), fresh session:
+  1. "large cheese pizza with extra cheese" -> added, $21.99/$0.99/$22.98.
+  2. "pickup"
+  3. "remove the extra cheese" -> reply:
+       "Removed Extra Cheese from the Large 18'' Neapolitan Cheese Pizza.
+
+        Large 18'' Neapolitan Cheese Pizza $17.99
+        Subtotal                        $17.99
+        Service fee                      $0.99
+        Total                           $18.98
+
+        Anything else?"
+     Three separate, correctly labelled lines; cart row confirms
+     price_cents:1799, options cleared. Matches the required repro exactly
+     (Subtotal $17.99 / Service fee $0.99 / Total $18.98).
+
+Vito's canary (shop_id e0000000-0000-0000-0000-000000000001), fresh session:
+  "cheeseburger, medium" -> "Got it - one Cheese Burger, medium, with
+  fries...\n\nSubtotal: $8.49\nService fee: $0.99\nTotal: $9.48" -- exact
+  match to the expected canary numbers, unaffected.
+
+No submit_order called in either session (verification only, no real order
+placed).
