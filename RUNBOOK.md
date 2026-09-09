@@ -1455,3 +1455,58 @@ must keep running the legacy LLM-guessed option path byte-for-byte — per the
 column's own SQL comment, it must never be set `true`. Enabling it for any shop is
 a deliberate, explicit data change made after sign-off, never bundled into a schema
 migration.
+
+## Never deploy `chat-sms` from a dirty/uncommitted working tree without an acceptance battery first — 2026-09-08
+
+Two live incidents same night, both from pushing uncommitted code straight to
+production without running the PO's acceptance battery first:
+
+1. GUARD 19 went live (v295→v296) uncommitted and wiped real Zio's carts to
+   zero items on quantity+topping orders ("1 pepp, 1 plain...") because its
+   item-naming check didn't recognize this shop's compose-rule topping words.
+2. `pizza-topping-compose.ts` + `guard19-fuzzy-item-match.ts` (built by a
+   subagent) went live (v301→v302→v303) with no acceptance battery run at all.
+   The Lead's own live 3-run test against v303 caught a real-money defect (wrong
+   topping added) on run 1, plus a false "I got mixed up about your order"
+   message to two customers who ordered correctly. 0/3 clean.
+
+Both were rolled back same night; `chat-sms` is v306 as of this writing,
+confirmed byte-identical to committed HEAD. The wrong-topping root cause was
+never found — treat it as still latent if topping-compose logic is touched
+again. **Standing rule:** any deploy of `chat-sms` off code that isn't the
+tip of `main` must run the acceptance battery against it live before treating
+it as done, no exceptions for time pressure or agent-authored code.
+
+## Zio's Pizzeria size-fold — applied and live, 2026-09-08
+
+Zio's 220 menu items each carried one required "Size" option group (Vito's
+shape is one row per size instead). `_shared/size-fold.ts` explodes a
+multi-choice size group into one new row per size. Built, applied, broke (51
+newly-blocked items), emergency-rolled-back, then reapplied — current state is
+**live**: 301 active items. The reapply itself had lost each exploded row's
+topping/"make it" option groups (an FK-on-`menu_item_id` gotcha); fixed by
+cloning the source item's option groups onto every new row, with a one-time
+backfill for the 142 rows already written without them. If Zio's toppings look
+wrong on any item created before today, check whether it predates the backfill.
+
+Separately, and NOT part of the fold: Zio's Hot/Cold Subs items block on a
+bread question with no bread option group and no descriptive bread text on the
+item. This is real and unfixed (25 items) but confirmed pre-existing —
+isolation-tested against the pre-fold data, so don't attribute it to the fold
+if it resurfaces.
+
+## Migration 121/122 live-status is unresolved — verify before trusting either the tracker or the build log — 2026-09-08
+
+`supabase migration list` / `db push --dry-run` say migrations 121
+(`customers` table, Customer CRM) and 122 (`sms_opt_outs` unique-constraint
+fix) are local-only, not applied remotely — consistent with this project's
+already-documented tracker drift (see the 2026-09-06 entry above). But the
+same-night build log claims both were applied directly via the Management API
+and independently verified live via `pg_constraint`/`information_schema`
+queries. Neither claim was re-confirmed here: this session only had the
+read-only `qa_ro` credential (`~/.sprintai-readonly-env`), and `qa_ro` exposes
+neither `customers` nor `sms_opt_outs`. Before trusting either the Customer CRM
+feature or the opt-out compliance fix as live, query the primary database
+directly (service-role credential required) — don't stop at `supabase
+migration list`, and don't assume the build log's self-reported verification
+still holds without re-checking.

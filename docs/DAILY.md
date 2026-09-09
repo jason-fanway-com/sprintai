@@ -611,3 +611,209 @@ function's live version (18) was last updated, so the deployed test-harness
 variant does not have that fix. Lower stakes than the primary bot since it's a test
 double, but worth knowing before trusting an mtest run against today's menu-display
 change.
+
+## 2026-09-08
+
+Commit range `057b3750..HEAD`, 40 commits, 84 files, +12.9k/-2.0k lines. Note on
+scope: this range starts right after yesterday's entry's cutoff and runs to
+tonight — the first three commits (`f6ea8c7`, `edab2d7`, and yesterday's own
+journal commit `3a69bfc`) are timestamped 2026-09-07 evening, not today; the
+substantive new work below is `e2a98eb` onward. Facts are read from diffs and
+`BLOCKED.txt`, not commit messages, and cross-checked against `supabase
+functions list` / `supabase migration list` run live in this session.
+
+### Headline: unreviewed code deployed straight to production, twice, same evening — one real-money defect
+
+- **First incident (~17:49 ET):** GUARD 19, part of the new customer-CRM build
+  (below), went live as `chat-sms` v295→v296 via an uncommitted deploy. Its
+  "bare quantity, no item named" cart-revert check didn't recognize Zio's
+  compose-rule topping words, so real orders like "1 pepp, 1 plain, 1 hawaiin, 1
+  meat lovers" got fully wiped to zero items. Caught and rolled back same
+  session.
+- **Second incident (~22:02 ET, `chat-sms` v301→v302→v303):** a subagent built
+  `pizza-topping-compose.ts` and `guard19-fuzzy-item-match.ts` and deployed them
+  live **without ever running an acceptance battery**. When the Lead ran the
+  PO's required 3-run live acceptance test directly against v303 (agent tooling
+  was down), run 1 added the **wrong topping** (Roasted Red Peppers instead of
+  none) on a real order — a real-money defect, $92.95 charged vs. $89.95 owed.
+  Runs 2–3 had correct carts but the bot's own reply falsely told the customer
+  "Sorry, I got mixed up about your order" — a self-contradiction against a
+  customer who did nothing wrong. 0 of 3 clean.
+- Rolled back to the last clean **committed** HEAD at the time (`a351622`),
+  redeployed as **v306** (2026-09-09 02:14:44 UTC / 22:14:44 ET) — confirmed
+  current live state (`chat-sms/index.ts` at today's HEAD is byte-identical to
+  what's deployed). The root cause of the intermittent wrong-topping bug was
+  **never found**. `pizza-topping-compose.ts`, `guard19-fuzzy-item-match.ts`,
+  and their test files remain **untracked, uncommitted** in the working tree —
+  they never shipped cleanly; the only place they ever ran was live, broken,
+  and unreviewed. `4eeba06` is the doc of this rollback.
+
+### `chat-sms`: two P0s fixed, one re-diagnosed
+
+- **Real-money P0 — RESET didn't clear conversation history** (`b865d3a`, deployed
+  v295). The RESET handler now also marks the conversation `status='resolved'`
+  (previously it only expired the cart), so the next message can't inherit old
+  history. A separate, real-but-not-triggered-here cross-tenant gap on the web
+  channel's active-conversation lookup was closed with an added
+  `tenant_id` filter. A broader "Guard 18" backstop was built for the same class
+  of bug but deliberately **not wired into `index.ts`** — it reverted legitimate
+  Zio's orders (e.g. "pepperoni pizza" resolving to "Neapolitan Cheese Pizza,"
+  whose own name never contains "pepperoni") — so it sits as dead code
+  (`guard18-zero-grounding-item-invention.ts`).
+- **"D1" multi-item modifier merge** (`f76d84f`): real root cause was one turn's
+  `add_item` re-claiming a modifier choice meant for a later `add_item` of the
+  same base item; fixed via `consumedModifierChoiceIds` in `ask-plan-engine.ts`,
+  plus a new mid-turn backstop (`enumeration-shortfall-retry.ts`) and a lexicon
+  collision guard in `compile-menu`. The commit's own message says a live
+  acceptance battery was still outstanding. A same-day follow-up (`392894c`)
+  found a deeper cause — `matchChoiceInText` never resolves abbreviations like
+  "pepp" at all, and the compiled `add_item` path discarded the model's own
+  resolved options — closed later the same day by `947ccb9`, which validates
+  model-asserted options against real compiled choices before writing and routes
+  `modify_item` through that same validated path instead of a legacy side
+  channel.
+- Smaller, narrowly-scoped fixes, verified real: `ac8f69d` (a required singleton
+  option group now counts as a stated fact, not a manufactured question,
+  unblocking Zio's Gyro items), `a351622` (NJB's description parser gains a
+  second clause anchor, "served with," recovering a silently-dropped side slot
+  on 11 Omelette/Egg Platter items — 155→166 of 170 orderable), `fa098f6` /
+  `8329eb9` / `6883c66` (unify step rendering on `prompt_template` over raw
+  `slot_key`, backfill Zio's slot_key mappings).
+
+### Zio's size-fold: built, broke, rolled back, reapplied, and a real data bug caught after
+
+Zio's 220 menu items each carry one required "Size" option group instead of
+Vito's shape (one row per size). `_shared/size-fold.ts`'s `planSizeFold` explodes
+a multi-choice size group into one new row per size (`retiresOriginal: true`);
+a single-choice group is folded in place instead.
+
+- `128cef9` (13:13 ET): code + dry run only, stopped at the PO's apply gate — no
+  writes.
+- Applied live (~13:45 ET); the recompile surfaced 51 newly-blocked items →
+  `2af6373` (13:49 ET) emergency-rolled all the way back to the pre-fold 220
+  items.
+- Reapplied later (`a5197ff`, 17:53 ET): 220→301 active items, 298/301
+  orderable on recompile.
+- That reapply had its own real bug: the newly-exploded rows carried **zero**
+  `option_groups` — toppings and "make it" modifiers were silently lost on all
+  142 exploded rows, since `option_groups` FKs to `menu_item_id`. Fixed
+  (`01907c6`, 22:18 ET) by cloning the item's other option groups/choices onto
+  each new row, plus a one-time backfill script for the 142 already-damaged
+  rows.
+- **Current state: size-fold is live on Zio's data** (301 active items), with
+  the clone bug fixed and backfilled.
+- **The "Hot/Cold Subs bread gap"** that first surfaced during this work is
+  explicitly diagnosed as **pre-existing, not caused by the fold** — an
+  isolation test against the rolled-back (pre-fold) data still showed 25
+  blocked items (vs. 51 with the fold, which just doubled the surface via two
+  size rows per item under the same bread question). Root cause: these items
+  carry no bread option group and no descriptive bread text. **Still open, not
+  fixed in this range** — a real PO decision point.
+- Related archetype work: `1e47f97` adds a bread-fact extractor unblocking
+  23/38 NJB items at the `owner_questions` layer, **not yet live** (pending an
+  NJB recompile that was not authorized this session); `1ac0f19` generalizes a
+  wrap-only bread guard to sub/hoagie/hero/grinder/gyro/panini/bagel/roll/pita/
+  baguette/croissant, so e.g. "Steak Sub" needs no bread question by name alone.
+
+### New subsystem: Customer CRM ("remembered diner" + "the regular")
+
+New `_shared/customer-profile.ts` backs a materialized per-`(tenant_id,
+customer_phone)` profile (migration 121, `customers` table). `stripe-webhook`
+upserts it on every paid order (name, order/spend counts, `favorite_items` —
+ranked by count of distinct **paid orders** containing the item, not units).
+`chat-sms` looks the row up only when `shop.customer_personalization_enabled
+!== false` and the customer isn't opted out, and only injects it into the
+system prompt as a greeting-by-name + an offered (never assumed) "regular" —
+gated further by two new guards: **GUARD 19** (full cart revert on a bare
+quantity with no item named — the guard behind the first incident above,
+now fixed) and **GUARD 20** (the regular can only be added if the bot's
+immediately-preceding message offered it and the customer confirmed that
+turn).
+
+- `bccc6e2` adds `canonicalizePhone()`, extracting a real E.164 number out of
+  `web:imsg-p{digits}-{epoch}` iMessage-bridge session IDs (which rotate every
+  24h) so the same diner isn't tracked as a new profile daily — a production
+  backfill reportedly collapsed 12 profiles into 8 real ones. **Confirmed
+  missing from the deployed `customer-crm` admin function** (v1, deployed
+  2026-09-08 20:27:31 ET, ~4 hours before this 22:18 ET fix).
+- The owner-facing screen (`3ff5c81`, `admin-dashboard/src/pages/
+  ShopOwnerCustomers.tsx`) is real, wired UI, not dark — it calls a new
+  `customer-crm` edge function that resolves the tenant server-side from the
+  JWT and never lets the browser query `customers` directly. `dc88de8` is a
+  pure built-artifact sync (minified bundle swap) with no logic change; actual
+  live status of the static admin-dashboard hosting beyond this repo commit was
+  not independently checked this session.
+
+### Compliance bug found and fixed: `sms_opt_outs` had been silently failing since migration 056
+
+Building Customer CRM surfaced a real compliance-severity bug: every live STOP
+request since migration 056 shipped has silently failed to durably persist
+(table confirmed to have 0 rows). Three independently-fatal causes, confirmed
+live via `pg_constraint`/`information_schema` per migration 122's own header
+comments: no unique constraint on `(tenant_id, customer_phone)` (only a legacy
+`(phone_number, shop_id)` pair existed), a missing `updated_at` column the
+write path wrote unconditionally, and two `NOT NULL` legacy columns
+(`phone_number`, `shop_id`) that were never populated — the write's own error
+handling swallowed all of it as non-fatal ("Telnyx has its own enforcement").
+Fixed by migration 122 plus `8bda9c1`/`bccc6e2` (adds the real unique
+constraint, the column, and loosens the dead legacy `shop_id` to nullable).
+`fd4412d` is a distinct, narrower, earlier fix in the same incident — it only
+adds `phone_number` to the write payload, and was itself a redeploy of a fix
+that had been reverted as collateral during the first incident's rollback
+above.
+
+**Open, unresolved conflict — flagging rather than guessing:** `supabase
+migration list` and `supabase db push --dry-run`, both run live in this
+session, show migrations 121 and 122 as **local only, not applied on the
+remote tracker**. But `BLOCKED.txt`'s own build log claims both were applied
+directly via the Supabase Management API (bypassing `db push`, citing this
+project's already-documented migration-tracker drift — see RUNBOOK) and
+independently verified live via direct `pg_constraint`/`information_schema`
+queries at build time. This session had no service-role database credential
+available to re-check independently — the read-only `qa_ro` schema (the only
+DB access available) exposes neither `customers` nor `sms_opt_outs`. Whether
+the `customers` table and the `sms_opt_outs` fix actually exist on the live
+database right now is **genuinely unverified** as of this entry.
+
+### scrape-shop / public-tester / demo-kit
+
+- **ChowNow scraping fixed and verified** (`5922868`): ChowNow's storefront is
+  a client-rendered SPA that hydrates after initial HTML, so a plain scrape
+  read an empty shell. Fix passes `waitFor: 5000` to Firecrawl for ChowNow
+  specifically (`aggregator-render.ts`). Verified live against a real ChowNow
+  storefront: 109 priced items recovered (was 0), independently reproduced by a
+  second reviewer same day (`346cb04`). Toast remains explicitly out of scope
+  (blocked by Cloudflare + reCAPTCHA even through Firecrawl). Deployed:
+  `scrape-shop` v78 is current with this fix.
+- **`public-tester` carrier-number allowlist** (`a3609e4`): a hardcoded
+  allowlist so Vito's real Telnyx number no longer 503s Test Kitchen, while any
+  other shop with a carrier number is still refused. **Timing gap**: the
+  deployed `public-tester` (v8, 16:12:01 ET) is ~5 minutes older than this
+  commit (16:17:14 ET) — the live function likely does **not** yet have this
+  fix; unconfirmed either way this session.
+- `dddcb50` restores QR codes to Vito's demo-kit email, now generated at build
+  time from the live shop row and embedded with the decoded target printed
+  underneath so a stale code is visually detectable.
+
+### Deploy/migration audit for this range
+
+- `chat-sms`: **v306** (22:14:44 ET) — current, matches committed HEAD exactly
+  (post-rollback, see headline above).
+- `chat-sms-mtest`: **v20** (18:48:17 ET) — predates `fd4412d` (20:23 ET) and
+  the `sms_opt_outs` fixes (22:18 ET). **Committed but not deployed.**
+- `customer-crm`: **v1** (20:27:31 ET) — first deploy; predates `bccc6e2` and
+  everything committed after 22:18 ET. **Committed but not deployed.**
+- `scrape-shop`: **v78** (16:47:51 ET) — current.
+- `compile-menu`: **v9** (15:23:19 ET) — current with `1ac0f19`.
+- `public-tester`: **v8** (16:12:01 ET) — likely stale relative to `a3609e4`
+  (16:17 ET); unconfirmed.
+- Migrations **121, 122**: tracker says not applied remotely; today's own build
+  log claims otherwise with live verification. Unresolved — see above.
+
+### Uncommitted working tree, not part of this range
+
+`pizza-topping-compose.ts`/`.test.ts`, `guard19-fuzzy-item-match.ts`/`.test.ts`,
+and several `guard10`/`guard12`/`guard15` test files are untracked in the
+working tree as of this entry — not part of any commit. The first two are the
+files behind the second live incident above; none of these should be read as
+shipped or done.

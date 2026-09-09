@@ -495,6 +495,36 @@ today's 60-second autonomous QA loop is still running the old, more restrictive 
   item detection is shop-agnostic — the same guard works for bagel shop #1
   and pizza shop #10,000.
 
+### Added 2026-09-08 — a retention feature shipped, and a real compliance gap closed
+
+**Customer CRM**: the bot now recognizes a returning diner by phone number,
+greets them by name, and can offer "the regular" (only when one item has been
+in 3+ of their past paid orders — never guessed off a single order). An
+owner-facing screen lets the restaurant see its own customer list. This is the
+first piece of built-in retention tooling — previously the product only
+tracked whether an order succeeded, not whether a customer came back. Commercially
+relevant limits: the backing database migrations and the admin screen's edge
+function are **committed but not confirmed live** as of this writing (see
+`docs/DAILY.md`'s `## 2026-09-08` entry) — don't represent this feature as
+live to a restaurant owner without checking current deploy status first.
+
+**A real compliance gap, closed**: every SMS opt-out (STOP reply) since an
+earlier migration shipped had been silently failing to durably record, for an
+unknown period, on every shop — the write path errored out and swallowed it as
+non-fatal. Telnyx enforces STOP independently at the carrier level, so no
+customer was actually re-texted, but SprintAI itself had no durable audit
+record of any opt-out for the one channel (web/Test Kitchen) that never
+touches Telnyx. Fixed this session; live-database confirmation is the same
+open item noted above.
+
+**A near-miss worth knowing about**: unreviewed code reached production twice
+in one evening this build, and the second time produced a real order with the
+wrong topping charged to a real card — caught by a human running the required
+acceptance test, not by automation. No customer-facing incident occurred
+beyond that one order (corrected), but it is a concrete instance of the
+exact risk this project's whole Proof/quality-monitoring investment exists to
+catch, and this time it slipped past process, not past the tooling.
+
 ---
 
 ## What's next (near-term roadmap)

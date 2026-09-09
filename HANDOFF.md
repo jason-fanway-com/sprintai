@@ -257,6 +257,82 @@ query, not inferred). Same class of bug as the self-contradiction fix just shipp
 but in the notes field, with real kitchen-facing impact. Not fixed; needs a
 priority call, not silent absorption into the backlog.
 
+## State as of 2026-09-08 22:20
+
+Supersedes the 2026-09-07 22:30 snapshot above for anything it contradicts. Full
+detail in `docs/DAILY.md`'s `## 2026-09-08` entry; this section is the
+live-vs-committed summary only.
+
+### Standing operational risk, escalated: unreviewed code went to production twice tonight
+
+Not a new class of bug — the same guard-chain fragility flagged 2026-09-06 and
+2026-09-07 — but tonight it happened via **direct, unreviewed deploys**, not a
+merged-and-tested regression: `chat-sms` was pushed live twice off uncommitted
+code (v295→v296, then v301→v302→v303) without an acceptance battery run first.
+The second time produced a real-money defect (wrong topping added, customer
+undercharged $3) and the bot falsely told two customers who did nothing wrong
+that it "got mixed up." Both were caught and rolled back same night; `chat-sms`
+is now **v306**, confirmed byte-identical to committed HEAD (`a351622`'s
+version of `index.ts`). The root cause of the wrong-topping bug was never
+found. **Do not deploy `chat-sms` from a dirty working tree without first
+running the PO's live acceptance battery** — this is the second time in one
+night that skipping it reached a real customer.
+
+### What is LIVE right now (new since 22:30 on 2026-09-07)
+
+- `chat-sms` (v306) — RESET now clears conversation history in addition to the
+  cart (real-money P0, `b865d3a`); the D1 multi-item modifier-merge fix
+  (`f76d84f` + `947ccb9`, validates model-asserted options against real
+  compiled choices before writing); NJB's "served with" clause parser recovery
+  (`a351622`); Zio's required-singleton-group fix (`ac8f69d`). Does **not**
+  include `pizza-topping-compose.ts` or `guard19-fuzzy-item-match.ts` — see
+  risk note above, both are uncommitted and were reverted out.
+- `scrape-shop` (v78) — ChowNow's client-rendered menu now scrapes correctly
+  (`waitFor: 5000` for that aggregator only); live-verified at 109 recovered
+  items, independently reproduced by a second reviewer.
+- `compile-menu` (v9) — current with today's archetype/bread-guard fixes.
+- Zio's Pizzeria's menu data — the size-fold is **applied and live** (220→301
+  active items), including a same-day fix for a bug in that same reapply
+  (exploded size rows had lost their topping/modifier option groups; cloned
+  back + backfilled).
+- `customer-crm` (v1) — first deploy of the new owner-facing Customer CRM
+  screen's backing function.
+
+### What is committed but NOT deployed
+
+- `customer-crm`'s phone-canonicalization fix (`bccc6e2`) — the live v1 deploy
+  predates it by ~4 hours; profiles keyed off a rotating iMessage-bridge session
+  ID may still fragment into duplicates until redeployed.
+- `chat-sms-mtest` (v20) — predates both `fd4412d` (opt-out phone_number fix)
+  and the `sms_opt_outs` schema fixes; the test double is behind the primary
+  bot on this compliance fix.
+- `public-tester` (v8) — likely predates `a3609e4` (Vito's carrier-number
+  allowlist) by ~5 minutes; unconfirmed either way, redeploy to be safe before
+  relying on Test Kitchen against Vito's live number.
+- The Hot/Cold Subs bread gap on Zio's Pizzeria (25 items blocked) — diagnosed
+  as pre-existing and unrelated to the size-fold, but no fix shipped this
+  range. Needs a PO decision.
+- NJB's bread-fact extractor (`1e47f97`, unblocks 23/38 items) — built and
+  verified but the recompile that would apply it to NJB's real data was not
+  authorized this session.
+
+### Open and unresolved: migration 121/122 live-status conflict
+
+`supabase migration list` says migrations 121 (`customers` table) and 122
+(`sms_opt_outs` fix) are not applied on the remote tracker. Tonight's own build
+log claims both were applied out-of-band via the Management API and verified
+live via direct `pg_constraint` queries — a precedent this project has used
+before (see RUNBOOK's migration-tracker-drift entry). This session had no
+service-role DB credential to check directly (only read-only `qa_ro`, which
+doesn't expose either table). **Whether the compliance fix and the CRM table
+are actually live cannot be confirmed from this session** — verify directly
+against the primary database before relying on either.
+
+### Open decision needed from Jason (carried over, unchanged)
+
+`order_carts.notes` sometimes isn't actually written even when the bot claims a
+kitchen note was recorded (2026-09-07 finding). Still not fixed.
+
 ## What SprintAI is
 
 SprintAI replaces restaurant phone ordering with AI. A customer texts a
