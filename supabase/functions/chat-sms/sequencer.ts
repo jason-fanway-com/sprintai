@@ -72,15 +72,43 @@ export function renderMissingOptionsPrompt(items: Array<{ name: string; missingG
  * literal string "Choices for option: ..." to a customer), which is a
  * different concern (avoiding a raw import-artifact label) from this one
  * (avoiding a duplicate).
+ *
+ * D2 fix (2026-09-09, Vito's "House" salad — real leaked-clause repro): the
+ * textual check used to run against a copy of `text` with every raw
+ * occurrence of the item's own name string-replaced away — meant to stop
+ * "Chicken Caesar added!" from counting as the reply having stated the
+ * "Caesar" dressing choice just because the item's own name contains that
+ * word. That blind substring strip is too blunt: Vito's "House" item has a
+ * REAL dressing choice, "House Balsamic", and the reply genuinely listed it
+ * by name ("Options: ... House Balsamic") — but stripping every "house"
+ * from the text first erased that legitimate mention too, so the check
+ * reported "not said" and the redundant "Choices for Dressing: ..." clause
+ * leaked right after the reply had just named all thirteen choices itself.
+ * Fixed at the primitive: `itemName`'s own stems no longer touch `text` at
+ * all. Instead, a choice is exempted from "prove it in the text" ONLY when
+ * its ENTIRE stem set is already contained in the item's own name (e.g.
+ * bare "Caesar" for "Chicken Caesar") — that choice can never be reliably
+ * confirmed by text-presence alone, since any mention of the item's own
+ * name would trivially satisfy it, so it's treated as unsaid and the real
+ * clause still gets appended for it. A choice with ANY stem beyond the
+ * item's own name ("House Balsamic" against item "House") is not exempted
+ * and is checked against the real, unmodified reply text — where it can
+ * actually be found. General rule, not a name-based special case: applies
+ * identically regardless of whether the group or item name is generic or
+ * specific, and to any call site (see index.ts's GUARD 7c/GUARD 8 callers).
  */
 export function groupChoicesAlreadySaid(
   menuItemId: string, groupName: string, choiceNames: string[], text: string,
   compiledRenderedGroups: Map<string, Set<string>>,
+  itemName: string,
 ): boolean {
   if (compiledRenderedGroups.get(menuItemId)?.has(groupName)) return true;
   const textStems = significantStems(text);
+  const itemNameStems = significantStems(itemName);
   return choiceNames.every(name => {
     const nameStems = significantStems(name);
-    return nameStems.size === 0 || [...nameStems].every(s => textStems.has(s));
+    if (nameStems.size === 0) return true;
+    if ([...nameStems].every(s => itemNameStems.has(s))) return false;
+    return [...nameStems].every(s => textStems.has(s));
   });
 }

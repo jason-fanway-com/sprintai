@@ -81,6 +81,28 @@ const REMOVAL_VERBS = [
   "scratch", "cancel", "delete", "no more",
 ];
 
+// D1 fix (2026-09-09, live money, both directions — BLOCKED.txt Vito's/
+// Zio's "extra cheese on one of two pizzas" repro): a quantity-N cart line
+// is N IDENTICAL units sharing one price_cents/options pair — there is no
+// way to represent "one of these two has extra cheese" on a single line.
+// applyCompiledModifyItem used to mutate that shared pair directly, so a
+// change meant for one unit ("a large cheese pizza with extra cheese and a
+// plain large cheese pizza", added as one qty-2 line then differentiated
+// via modify_item) silently applied to EVERY unit in the line — Zio's
+// verified repro: $4.00 Extra Cheese requested once, charged twice
+// ($43.98 instead of $39.98+$4.00=$43.98... i.e. priced as if both pizzas
+// got it). The fix below splits one unit off into its own quantity-1 line
+// carrying the change, leaving the rest of the original line's units and
+// their price untouched — UNLESS the customer's own words say the change
+// is for every unit (ALL_UNITS_RE), in which case the whole line is
+// updated as before. Same "missing beats wrong" convention as
+// isRemovalRequested above: an undetected "both" still ends up money-safe
+// (the customer can just ask again for the second unit), whereas an
+// undetected "one" silently overcharging/mischarging every time is the
+// worse failure this fix exists to close.
+const ALL_UNITS_RE =
+  /\b(?:both|all(?:\s+of\s+(?:them|these|those))?|every(?:\s*one)?|each(?:\s+one)?|the\s+whole\s+order)\b/i;
+
 /**
  * True iff `text` contains a clause that both (a) uses a removal verb and
  * (b) names every significant stem of `choiceDisplay` — e.g. "remove the
@@ -483,7 +505,20 @@ export function resolveAskPlan(
       const textForModifier = modifierScopeText ?? customerText;
       const availableStems = new Set([...significantStems(textForModifier)].filter(s => !consumedStems.has(s)));
       const textMatch = matchChoiceByStems(step.choices, availableStems);
-      const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? textMatch;
+      // P0 fix (2026-09-09, fourth recurrence of pepperoni-bleed defect):
+      // matchAssertedChoice trusts the model's explicit modifier claim but
+      // does NOT check whether that claim appears in THIS phrase's text.
+      // When modifierScopeText is defined (even as "") the asserted choice
+      // must have at least one stem in the scoped availableStems — it is
+      // physically impossible for "Pepperoni" to appear in "one hawaai".
+      // When scope is undefined (single-item turn), fall back to unscoped
+      // behavior (same as before) — nothing to isolate.
+      let asserted: EngineChoice | null = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+      if (asserted !== null && modifierScopeText !== undefined) {
+        const cStems = significantStems(asserted.display);
+        if (![...cStems].some(s => availableStems.has(s))) asserted = null;
+      }
+      const matched = asserted ?? textMatch;
       // P0 (2026-09-09, live money defect): neither matchAssertedChoice nor
       // matchChoiceInText is negation-aware — "large plain pizza, no extra
       // cheese" matched "Extra Cheese" (every one of its stems is present in
@@ -951,28 +986,50 @@ export function applyCompiledModifyItem(
     }
   }
 
+  let splitOffLine: CompiledCartLine | null = null;
   if (outcome.resolvedCount > 0 || removed) {
     const { resolvedOptions, priceCents } = removed
       ? priceSelections(askPlan, itemGroups, selections)
       : { resolvedOptions: outcome.resolvedOptions, priceCents: outcome.priceCents };
-    line.ask_plan_selections = selections;
-    line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
-    line.price_cents = priceCents;
-    line.pending_options = outcome.pendingGroupNames;
+    if (line.quantity > 1 && !ALL_UNITS_RE.test(customerMessage)) {
+      // See ALL_UNITS_RE's doc above: split one unit off rather than
+      // silently re-pricing every unit sharing this line.
+      line.quantity -= 1;
+      splitOffLine = {
+        menu_item_id: line.menu_item_id,
+        name: line.name,
+        quantity: 1,
+        price_cents: priceCents,
+        modifiers: line.modifiers,
+        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+        pending_options: outcome.pendingGroupNames,
+        ask_plan_selections: selections,
+        sourcePhraseIndex: line.sourcePhraseIndex,
+      };
+      cart.splice(idx + 1, 0, splitOffLine);
+    } else {
+      line.ask_plan_selections = selections;
+      line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+      line.price_cents = priceCents;
+      line.pending_options = outcome.pendingGroupNames;
+    }
     cartChanged = true;
   }
 
+  const reportLine = splitOffLine ?? line;
   return {
     ok: true,
     cartChanged,
     result: {
       modified: askPlan.display_name,
-      quantity: line.quantity,
-      price: line.price_cents,
+      quantity: reportLine.quantity,
+      price: reportLine.price_cents,
       next_question: outcome.nextQuestion,
-      instruction: outcome.nextQuestion
-        ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${outcome.nextQuestion}"`
-        : "All required options are resolved. Do not ask about options for this item again.",
+      instruction: splitOffLine
+        ? `Only ONE ${askPlan.display_name} was changed, not the whole quantity — the cart now has ${line.quantity} unchanged plus 1 with this update, as two separate lines. Say so plainly; do not imply all ${line.quantity + 1} were changed.`
+        : (outcome.nextQuestion
+            ? `A required option is still open. Ask the customer EXACTLY this, verbatim — do not invent your own wording or option names: "${outcome.nextQuestion}"`
+            : "All required options are resolved. Do not ask about options for this item again."),
     },
   };
 }

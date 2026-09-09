@@ -953,3 +953,72 @@ Deno.test("applyCompiledModifyItem: no removal language present — an already-s
   assertEquals(cart[0].price_cents, 2199, "an unrelated message must never silently strip an existing selection");
   assertEquals(cart[0].options, { "Add Toppings": ["Extra Cheese"] });
 });
+
+// D1 fix (2026-09-09, live money, both directions — real Zio's repro: "a
+// large cheese pizza with extra cheese and a plain large cheese pizza"
+// added as one qty-2 line, then differentiated via modify_item, priced
+// Extra Cheese onto BOTH pizzas — $43.98 instead of the correct $39.98).
+function twoPlainCheesePizzas(): CompiledCartLine[] {
+  return [{
+    menu_item_id: "zios-large-cheese",
+    name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 2,
+    price_cents: 1799,
+    modifiers: [],
+    ask_plan_selections: {},
+  }];
+}
+
+Deno.test("applyCompiledModifyItem: D1 fix — adding a modifier to a qty-2 line with no 'both/all' language SPLITS one unit off, does not re-price the whole line", () => {
+  const cart = twoPlainCheesePizzas();
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "one with extra cheese", ["Extra Cheese"]);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 2, "must become two distinct lines, not one qty-2 line");
+  assertEquals(cart[0].quantity, 1);
+  assertEquals(cart[0].price_cents, 1799, "the untouched pizza keeps the plain price");
+  assertEquals(cart[0].options, undefined);
+  assertEquals(cart[1].quantity, 1);
+  assertEquals(cart[1].price_cents, 2199, "only the split-off pizza gets Extra Cheese's $4.00");
+  assertEquals(cart[1].options, { "Add Toppings": ["Extra Cheese"] });
+  const total = cart.reduce((s, l) => s + l.price_cents * l.quantity, 0);
+  assertEquals(total, 3998, "$39.98 total — Extra Cheese charged exactly once, not twice");
+});
+
+Deno.test("applyCompiledModifyItem: D1 fix — 'both'/'all' language applies the change to the WHOLE line, no split", () => {
+  const cart = twoPlainCheesePizzas();
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "extra cheese on both please", ["Extra Cheese"]);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 1, "explicit 'both' must not split the line");
+  assertEquals(cart[0].quantity, 2);
+  assertEquals(cart[0].price_cents, 2199);
+  const total = cart.reduce((s, l) => s + l.price_cents * l.quantity, 0);
+  assertEquals(total, 4398, "$43.98 — both pizzas genuinely got Extra Cheese this time");
+});
+
+Deno.test("applyCompiledModifyItem: D1 fix — a qty-1 line is never split (nothing to split off)", () => {
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "zios-large-cheese", name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 1, price_cents: 1799, modifiers: [], ask_plan_selections: {},
+  }];
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "with extra cheese", ["Extra Cheese"]);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].quantity, 1);
+  assertEquals(cart[0].price_cents, 2199);
+});
+
+Deno.test("applyCompiledModifyItem: D1 fix — removal on a qty-2 line also splits (one loses the topping, one keeps it)", () => {
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "zios-large-cheese", name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 2, price_cents: 2199, modifiers: [],
+    options: { "Add Toppings": ["Extra Cheese"] },
+    ask_plan_selections: { [ZIOS_LARGE_TOPPINGS_STEP.group_id]: "a7b5c218-0006-4d8d-b14b-4609a2f4f2d3" },
+  }];
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "remove the extra cheese from one of them", []);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 2);
+  assertEquals(cart[0].quantity, 1);
+  assertEquals(cart[0].price_cents, 2199, "the untouched unit keeps Extra Cheese");
+  assertEquals(cart[1].quantity, 1);
+  assertEquals(cart[1].price_cents, 1799, "the split-off unit lost Extra Cheese");
+});

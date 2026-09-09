@@ -7,9 +7,11 @@ Deno.test("computeCartSubtotalCents: sums plain line items by quantity", () => {
   assertEquals(computeCartSubtotalCents(cart), 2500);
 });
 
-Deno.test("computeCartSubtotalCents: an incomplete bundle contributes $0", () => {
+Deno.test("computeCartSubtotalCents: an incomplete bundle contributes its committed price (P0 fix 2026-09-09)", () => {
+  // Bundle price is fixed at start_bundle time — `complete` gates flavor
+  // selection, not the dollar amount. An incomplete bundle is real money.
   const cart: PricedCartLine[] = [{ type: "bundle", price_cents: 1999, complete: false }];
-  assertEquals(computeCartSubtotalCents(cart), 0);
+  assertEquals(computeCartSubtotalCents(cart), 1999);
 });
 
 Deno.test("computeCartSubtotalCents: a complete bundle contributes its flat price", () => {

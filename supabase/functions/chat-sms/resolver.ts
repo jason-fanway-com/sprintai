@@ -312,55 +312,23 @@ function findPizzaContextResolution(
 
 // ── PHRASE SPLITTER ────────────────────────────────────────────────────────
 
-// Split a single comma-free segment on "and [article/quantity] [item]" when
-// what follows "and" matches a lexicon item. Purely item-level splitting —
-// "and mushrooms" never splits when mushrooms is not a standalone item.
-function splitOnAndItem(segment: string, lexicon: MenuLexicon): string[] {
-  // Match "and" followed by an optional article or leading numeral
-  const andRe = /\band\s+(?:(?:\d+|a|an|the)\s+)?/gi;
-  let m: RegExpExecArray | null;
-  const boundaries: number[] = [];
+// Matches phrase-split.ts's splitCustomerPhrases exactly: comma, '&', and
+// "and" when immediately followed by a quantity word or article (keeping
+// dish names like "Mac and Cheese" intact; "and one hawaiian" / "and a plain"
+// are boundaries). Also splits on implicit digit-repeat ("1 cheese 1 pepp").
+// The lexicon parameter is retained for backward compatibility but unused.
+const _RESOLVER_SEP_RE = new RegExp(
+  `,|&|\\band\\s+(?=(?:\\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|the)\\b)`,
+  "i",
+);
+const _RESOLVER_DIGIT_RE = /\s+(?=\d+\s)/;
 
-  while ((m = andRe.exec(segment)) !== null) {
-    const afterAnd = segment.slice(m.index + m[0].length);
-    // Take the first several words after "and" and check for an item match.
-    const probe = afterAnd.split(/\s+/).slice(0, 6).join(" ");
-    if (findItemInText(probe, lexicon)) {
-      boundaries.push(m.index);
-    }
-  }
-
-  if (boundaries.length === 0) return [segment];
-
-  // Split at the first item-boundary found; recursively handle the tail.
-  const splitAt = boundaries[0];
-  const andMatchHere = /\band\s+(?:(?:\d+|a|an|the)\s+)?/i.exec(segment.slice(splitAt));
-  if (!andMatchHere) return [segment];
-  const afterBoundary = splitAt + andMatchHere[0].length;
-  const part1 = segment.slice(0, splitAt).trim();
-  const part2 = segment.slice(afterBoundary).trim();
-  return [part1, ...splitOnAndItem(part2, lexicon)].filter(Boolean);
-}
-
-// Main phrase splitter. Guarantees that each returned string is an
-// independent phrase: resolving one will NEVER affect any other.
-//
-// Pass 1: split on commas (always definitive phrase boundaries).
-// Pass 2: within each comma segment, split further on "and [item]" when
-//         what follows "and" unambiguously names a menu item.
-//
-// The lexicon is read-only here; it is never mutated by this function.
-export function splitPhrases(utterance: string, lexicon: MenuLexicon): string[] {
-  const commaSplit = utterance
-    .split(/,/)
+export function splitPhrases(utterance: string, _lexicon?: MenuLexicon): string[] {
+  return utterance
+    .split(_RESOLVER_SEP_RE)
+    .flatMap(seg => seg.split(_RESOLVER_DIGIT_RE))
     .map(s => s.trim())
     .filter(Boolean);
-
-  const result: string[] = [];
-  for (const seg of commaSplit) {
-    result.push(...splitOnAndItem(seg, lexicon));
-  }
-  return result;
 }
 
 // ── RESOLVER ──────────────────────────────────────────────────────────────

@@ -29,12 +29,15 @@ Deno.test("renderItemizedRecap: lists each line, subtotal, service fee, and tota
   assertStringIncludes(recap, "Total");
 });
 
-Deno.test("renderItemizedRecap: an incomplete bundle is skipped entirely", () => {
+Deno.test("renderItemizedRecap: an incomplete bundle renders with '(selecting flavors)' flag (P0 fix 2026-09-09)", () => {
+  // Prior behavior: skip entirely. New: show price + in-progress label so
+  // the customer sees committed money before flavor choices are complete.
   const cart: ItemizedCartLine[] = [
     { type: "bundle", name: "Wing Bundle", price_cents: 1999, complete: false, selections: [] },
   ];
   const recap = renderItemizedRecap(cart);
-  assertEquals(recap.includes("Wing Bundle"), false);
+  assertEquals(recap.includes("Wing Bundle (selecting flavors)"), true);
+  assertEquals(recap.includes("$19.99"), true);
 });
 
 Deno.test("renderItemizedRecap: a complete bundle renders its flat price and selections", () => {

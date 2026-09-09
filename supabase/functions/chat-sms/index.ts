@@ -688,6 +688,7 @@ export function buildSystemPrompt(
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
   customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean } | null,
+  conversationJustExpired = false,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = dayWindows(shop.open_hours?.[today]);
@@ -719,7 +720,11 @@ export function buildSystemPrompt(
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
-      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+      // P0 (2026-09-09, NJB live defect): bundle price is fixed at
+      // start_bundle time, independent of flavor-selection completeness —
+      // gating on `complete` here undercounted the subtotal by the whole
+      // bundle price while flavors were still being collected.
+      return s + (i as BundleItem).price_cents;
     }
     const r = i as CartItem;
     return s + (r.price_cents * (r.quantity || 1));
@@ -790,6 +795,15 @@ export function buildSystemPrompt(
   // reply the customer's own message triggered.
   const expiredNote = priorLinkExpired
     ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
+    : "";
+
+  // Conversation-timeout note (2026-09-09 spec): no silent resurrection — a
+  // customer coming back after the conversation expired (inactivity or shop
+  // close) gets a brief, explicit heads-up that this is a fresh order, not a
+  // template line, so it lands naturally alongside whatever else the model
+  // is already saying this turn.
+  const justExpiredNote = conversationJustExpired
+    ? "\n\nFRESH CONVERSATION CONTEXT: The customer's previous conversation timed out (inactivity or the shop closed since they last messaged), so this is a brand new order with an empty cart — nothing carried over. Briefly let them know you're starting fresh before helping with their new order."
     : "";
 
   // A shop that cannot take a delivery order must never be asked to choose one.
@@ -961,7 +975,7 @@ PHASE BEHAVIOR:
 - greeting/building: Help build the order, answer menu questions
 - checkout: Payment link was sent. Remind them to check their text or email for the payment link.
 - confirmed: Order is confirmed and paid. Thank them and give pickup info.
-- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${complianceNote}`;
+- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${justExpiredNote}${complianceNote}`;
 }
 
 // ─── System prompt builder V2 (instruction-layer renderer, stream C2) ────────
@@ -1017,6 +1031,7 @@ export function buildSystemPromptV2(
   shopSettings?:  ShopSettingsRow | null,
   shopVoice?:     ShopVoiceRow | null,
   shopNotes:      ShopNoteRow[] = [],
+  conversationJustExpired = false,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
   const hours = dayWindows(shop.open_hours?.[today]);
@@ -1053,7 +1068,11 @@ export function buildSystemPromptV2(
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
-      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+      // P0 (2026-09-09, NJB live defect): bundle price is fixed at
+      // start_bundle time, independent of flavor-selection completeness —
+      // gating on `complete` here undercounted the subtotal by the whole
+      // bundle price while flavors were still being collected.
+      return s + (i as BundleItem).price_cents;
     }
     const r = i as CartItem;
     return s + (r.price_cents * (r.quantity || 1));
@@ -1108,6 +1127,10 @@ export function buildSystemPromptV2(
 
   const expiredNote = priorLinkExpired
     ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
+    : "";
+
+  const justExpiredNote = conversationJustExpired
+    ? "\n\nFRESH CONVERSATION CONTEXT: The customer's previous conversation timed out (inactivity or the shop closed since they last messaged), so this is a brand new order with an empty cart — nothing carried over. Briefly let them know you're starting fresh before helping with their new order."
     : "";
 
   // Delivery availability: shop_settings.fulfilment_modes is the structured,
@@ -1296,7 +1319,7 @@ PHASE BEHAVIOR:
 - greeting/building: Help build the order, answer menu questions
 - checkout: Payment link was sent. Remind them to check their text or email for the payment link.
 - confirmed: Order is confirmed and paid. Thank them and give pickup info.
-- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${complianceNote}`;
+- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${justExpiredNote}${complianceNote}`;
 }
 
 // ─── Haversine distance in miles ────────────────────────────────────────────
@@ -1657,11 +1680,31 @@ async function executeTool(
         });
       }
 
-      // Match on menu_item_id + options; merge pending_options when stacking quantity
-      const existing = resolvingPendingIdx >= 0 ? -1 : cart.findIndex(i =>
-        (i as CartItem).menu_item_id === menu_item_id &&
-        JSON.stringify((i as CartItem).options ?? undefined) === JSON.stringify(normalizedOptions)
-      );
+      // Match on FULL line identity — menu_item_id + options + modifiers +
+      // unverified_requests — not menu_item_id + options alone; merge
+      // pending_options when stacking quantity.
+      // D1 fix (2026-09-09, live money, Vito's repro): two pizzas differing
+      // ONLY by a topping this item has no option group for ("extra cheese"
+      // on an item with zero recorded option groups) both resolve to
+      // normalizedOptions === undefined — the topping survives only as an
+      // unverified_requests entry (see the `unverifiedRequests.push` above).
+      // Matching on options alone made them look identical and merged them
+      // into one quantity-2 line, silently dropping the distinction (and the
+      // charge) between "plain" and "with extra cheese." Two lines whose
+      // modifiers or unverified_requests differ must never merge, regardless
+      // of matching menu_item_id + options.
+      const normalizedUnverified = unverifiedRequests.length > 0 ? [...unverifiedRequests].sort() : undefined;
+      const normalizedMods = inputMods.length > 0 ? [...inputMods].sort() : undefined;
+      const existing = resolvingPendingIdx >= 0 ? -1 : cart.findIndex(i => {
+        const ci = i as CartItem;
+        if (ci.menu_item_id !== menu_item_id) return false;
+        if (JSON.stringify(ci.options ?? undefined) !== JSON.stringify(normalizedOptions)) return false;
+        const ciUnverified = (ci.unverified_requests?.length ?? 0) > 0 ? [...ci.unverified_requests!].sort() : undefined;
+        if (JSON.stringify(ciUnverified) !== JSON.stringify(normalizedUnverified)) return false;
+        const ciMods = (ci.modifiers?.length ?? 0) > 0 ? [...ci.modifiers!].sort() : undefined;
+        if (JSON.stringify(ciMods) !== JSON.stringify(normalizedMods)) return false;
+        return true;
+      });
       if (resolvingPendingIdx >= 0) {
         const target = cart[resolvingPendingIdx] as CartItem;
         const mergedOptions = { ...(target.options ?? {}), ...inputOptions };
@@ -3265,6 +3308,83 @@ function getBusinessDateAt(when: Date, timezone: string): string {
   }
 }
 
+// Default conversation timeout, in hours, when app_config has no row (or an
+// unusable one) for 'conversation_timeout_hours'. Overridable per deploy
+// without a code change — see migration 128.
+const DEFAULT_CONVERSATION_TIMEOUT_HOURS = 2;
+
+type ActiveConversationRow = { id: string; last_message_at?: string };
+
+// The single place that reads "the active conversation for this (shop,
+// channel, session/phone)" — expiry is a property of THIS lookup, not a
+// separate check callers must remember to run. Two independent boundaries
+// end a conversation, either fires first:
+//   1. INACTIVITY -- no message for the configured timeout (app_config
+//      'conversation_timeout_hours', default 2h). Long enough that a
+//      customer stepping away mid-order comes back to a live cart; short
+//      enough a session never survives a full daypart shift.
+//   2. SHOP CLOSE -- the shop's local calendar day (shop.timezone) has
+//      rolled over since the conversation's last message. Independent of
+//      elapsed time: 11:50pm -> 12:10am is only 20 minutes but still ends
+//      the conversation, because a session must never carry one day's
+//      hours/prices/context into the next.
+// On either boundary the OLD conversation is marked `resolved` (same
+// mechanism the RESET keyword uses) and this function returns null for it --
+// so every caller, present and future, gets a fresh conversation on the next
+// message without having to know expiry exists. Nothing is deleted; the old
+// row stays as audit trail. Returns `justExpired: true` only when an
+// existing conversation was ended here (never on a true first-ever contact),
+// so callers can surface a brief "starting fresh" note instead of silently
+// resuming.
+async function findActiveConversation(
+  supabase: SupabaseClient,
+  shop: Shop,
+  channel: "web" | "sms",
+  sessionId: string | undefined,
+  customerPhone: string | null,
+): Promise<{ conversation: ActiveConversationRow | null; justExpired: boolean }> {
+  let conversation: ActiveConversationRow | null;
+  if (channel === "web") {
+    const { data } = await supabase
+      .from("conversations").select("id, last_message_at")
+      .eq("tenant_id", shop.tenant_id)
+      .eq("session_id", sessionId).eq("channel", "web")
+      .eq("status", "active")
+      .order("started_at", { ascending: false }).limit(1).maybeSingle();
+    conversation = data;
+  } else {
+    const { data } = await supabase
+      .from("conversations").select("id, last_message_at")
+      .eq("tenant_id", shop.tenant_id).eq("customer_phone", customerPhone)
+      .eq("channel", "sms").eq("status", "active")
+      .order("started_at", { ascending: false }).limit(1).single();
+    conversation = data;
+  }
+
+  if (!conversation) return { conversation: null, justExpired: false };
+
+  const { data: cfgRow } = await supabase
+    .from("app_config").select("value").eq("key", "conversation_timeout_hours").maybeSingle();
+  const timeoutHours = typeof cfgRow?.value === "number" && cfgRow.value > 0
+    ? cfgRow.value
+    : DEFAULT_CONVERSATION_TIMEOUT_HOURS;
+  const timeoutMs = timeoutHours * 60 * 60 * 1000;
+
+  const lastMsgAt = conversation.last_message_at;
+  const lastMsgDate = lastMsgAt ? new Date(lastMsgAt) : null;
+  const now = new Date();
+  const inactiveTooLong = !lastMsgDate || (now.getTime() - lastMsgDate.getTime()) > timeoutMs;
+  const crossedShopDay = lastMsgDate
+    ? getBusinessDateAt(lastMsgDate, shop.timezone) !== getBusinessDateAt(now, shop.timezone)
+    : false;
+
+  if (!inactiveTooLong && !crossedShopDay) return { conversation, justExpired: false };
+
+  console.log(`[chat-sms] conversation timeout: resolving ${conversation.id} (inactive=${inactiveTooLong}, crossedShopDay=${crossedShopDay}, timeoutHours=${timeoutHours}, lastMsgAt=${lastMsgAt ?? "null"})`);
+  await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
+  return { conversation: null, justExpired: true };
+}
+
 function getCurrentTime(timezone: string): string {
   try {
     return new Intl.DateTimeFormat("en-US", {
@@ -4376,86 +4496,39 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   }
 
   // ── Find or create conversation ───────────────────────────────────────────
-  // D1 fix (2026-09-09): a conversation used to be reused for up to 24h from
-  // its CREATION (`started_at >= windowStart`), which bounds age, not
-  // inactivity. Confirmed live (conversation c5a038f6): a session begun
-  // 10:11pm, resumed 7:12am and again 5:48pm -- 19.6h span, three sittings,
-  // all still "within 24h of started_at" -- welded this evening's message
-  // onto this morning's cart/context. Same root-cause class as the
-  // 2026-09-08 P0 phantom-cart incident (stale state carried forward across
-  // sittings). Two independent boundaries now end a conversation, either one
-  // fires first:
-  //   1. INACTIVITY -- no message for CONVERSATION_TIMEOUT_MS (3h). Long
-  //      enough that a customer pulled away mid-order (interrupted at work,
-  //      stepping away to check with someone) comes back to a live cart;
-  //      short enough that a session never survives a full daypart shift.
-  //      No stronger existing TTL convention found elsewhere in this repo to
-  //      prefer instead (merchant-auth's 12h token TTL is an auth session,
-  //      not an order conversation; eval-sweep's 10min IDLE_MINUTES is a
-  //      judge-visibility window, not a customer-facing timeout) -- using
-  //      the PM-specified 3h.
-  //   2. SHOP CLOSE -- the shop's local calendar day (shop.timezone) has
-  //      rolled over since the conversation's last message. Independent of
-  //      elapsed time: 11:50pm -> 12:10am is only 20 minutes (inside the 3h
-  //      window) but still ends the conversation, because every shop closes
-  //      at some point each day and a session must never carry one day's
-  //      hours/prices/context into the next.
-  // On either boundary: mark the OLD conversation `resolved` -- the same
-  // mechanism the RESET keyword already uses (see below) -- so this lookup
-  // (status='active') misses it next time and falls through to "create new
-  // conversation": zero messages, zero cart, no resurrected context. Nothing
-  // is deleted; the old row stays as audit trail.
-  const CONVERSATION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
-  let conversation: { id: string; last_message_at?: string } | null = null;
-
-  if (channel === "web") {
-    // CRITICAL FIX (2026-09-08, P0 Zio's investigation): this lookup was
-    // scoped ONLY by session_id + channel + status -- NOT by tenant_id.
-    // `shop_id` and `session_id` are independent, client-supplied values in
-    // the request body with no server-side binding between them (see
-    // shop_id/sessionId destructure above). Any client that ever sent the
-    // same session_id against a different shop_id (a shared widget, a buggy
-    // integration, a test harness reusing a fixed session_id, the
-    // web:imsg-* bridge) would have this query hand back a DIFFERENT
-    // TENANT'S conversation row -- and, transitively via conversation_id,
-    // that tenant's full message history and cart. This function runs on
-    // SUPABASE_SERVICE_ROLE_KEY, so Postgres RLS provides no protection.
-    // Confirmed NOT the cause of the 2026-09-08 Zio's incident (that
-    // customer's leaked pizza types came from this same conversation_id, same
-    // tenant, same session -- see the RESET fix above) -- but a real,
-    // independently reachable tenant-isolation gap regardless. Scoping by
-    // tenant_id, exactly like the SMS branch below and the lifetime-first-
-    // contact check further down already do, closes it.
-    const { data } = await supabase
-      .from("conversations").select("id, last_message_at")
-      .eq("tenant_id", shop.tenant_id)
-      .eq("session_id", sessionId).eq("channel", "web")
-      .eq("status", "active")
-      .order("started_at", { ascending: false }).limit(1).maybeSingle();
-    conversation = data;
-  } else {
-    const { data } = await supabase
-      .from("conversations").select("id, last_message_at")
-      .eq("tenant_id", shop.tenant_id).eq("customer_phone", customerPhone)
-      .eq("channel", "sms").eq("status", "active")
-      .order("started_at", { ascending: false }).limit(1).single();
-    conversation = data;
-  }
-
-  if (conversation) {
-    const lastMsgAt = conversation.last_message_at;
-    const lastMsgDate = lastMsgAt ? new Date(lastMsgAt) : null;
-    const now = new Date();
-    const inactiveTooLong = !lastMsgDate || (now.getTime() - lastMsgDate.getTime()) > CONVERSATION_TIMEOUT_MS;
-    const crossedShopDay = lastMsgDate
-      ? getBusinessDateAt(lastMsgDate, shop.timezone) !== getBusinessDateAt(now, shop.timezone)
-      : false;
-    if (inactiveTooLong || crossedShopDay) {
-      console.log(`[chat-sms] D1 conversation timeout: resolving ${conversation.id} (inactive=${inactiveTooLong}, crossedShopDay=${crossedShopDay}, lastMsgAt=${lastMsgAt ?? "null"})`);
-      await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
-      conversation = null;
-    }
-  }
+  // Conversation-timeout fix (2026-09-09, revised to final spec same day):
+  // a conversation used to be reused for up to 24h from its CREATION
+  // (`started_at >= windowStart`), which bounds age, not inactivity.
+  // Confirmed live (conversation c5a038f6): a session begun 10:11pm, resumed
+  // 7:12am and again 5:48pm -- 19.6h span, three sittings, all still "within
+  // 24h of started_at" -- welded each later message onto an earlier sitting's
+  // cart/context. Same root-cause class as the 2026-09-08 P0 phantom-cart
+  // incident (stale state carried forward across sittings).
+  //
+  // findActiveConversation() (above) now OWNS expiry: it is the only place
+  // that reads "the active conversation for this (shop, channel,
+  // session/phone)", and it silently resolves a stale one and returns null
+  // before ever handing a conversation back — so nothing downstream (this
+  // handler, any future caller) can accidentally operate on stale state by
+  // forgetting to check. The window itself is configurable via app_config
+  // ('conversation_timeout_hours', default 2h) rather than hardcoded, and a
+  // shop-close boundary ends a conversation independent of elapsed time,
+  // exactly per the finalized spec.
+  //
+  // CRITICAL FIX (2026-09-08, P0 Zio's investigation), preserved here: the
+  // web-channel lookup is scoped by tenant_id, not just session_id + channel
+  // + status. `shop_id` and `session_id` are independent, client-supplied
+  // values in the request body with no server-side binding between them (see
+  // shop_id/sessionId destructure above). Any client that ever sent the same
+  // session_id against a different shop_id (a shared widget, a buggy
+  // integration, a test harness reusing a fixed session_id, the
+  // web:imsg-* bridge) would otherwise hand back a DIFFERENT TENANT'S
+  // conversation row -- and, transitively via conversation_id, that tenant's
+  // full message history and cart. This function runs on
+  // SUPABASE_SERVICE_ROLE_KEY, so Postgres RLS provides no protection.
+  const { conversation: lookedUpConversation, justExpired: conversationJustExpired } =
+    await findActiveConversation(supabase, shop, channel, sessionId, customerPhone);
+  let conversation: ActiveConversationRow | null = lookedUpConversation;
 
   const isFirstMessage = !conversation;
 
@@ -5202,7 +5275,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           .map(groupName => {
             const group = resolved7c.option_groups?.find(g => g.name === groupName);
             if (!group || group.choices.length === 0) return "";
-            if (groupChoicesAlreadySaid(resolved7c.id, groupName, group.choices.map(c => c.name), askText7c, compiledRenderedGroups)) return "";
+            if (groupChoicesAlreadySaid(resolved7c.id, groupName, group.choices.map(c => c.name), askText7c, compiledRenderedGroups, resolved7c.name)) return "";
             const label7c = displayGroupName(group.name);
             if (label7c.toLowerCase() === "option") return "";
             return `Choices for ${label7c}: ${group.choices.map(c => c.name).join(", ")}.`;
@@ -5848,9 +5921,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       supabase.from("shop_voice").select("greeting, sign_off, persona").eq("shop_id", shop.id).maybeSingle(),
       supabase.from("shop_notes").select("text").eq("shop_id", shop.id).order("created_at", { ascending: true }),
     ]);
-    basePrompt = buildSystemPromptV2(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, shopSettingsRow as ShopSettingsRow | null, shopVoiceRow as ShopVoiceRow | null, (shopNotesRows ?? []) as ShopNoteRow[]);
+    basePrompt = buildSystemPromptV2(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, shopSettingsRow as ShopSettingsRow | null, shopVoiceRow as ShopVoiceRow | null, (shopNotesRows ?? []) as ShopNoteRow[], conversationJustExpired);
   } else {
-    basePrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext);
+    basePrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, conversationJustExpired);
   }
   const systemPrompt = basePrompt + (zeroOptionHint ?? "") + composedLinesNote;
 
@@ -5941,7 +6014,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // Deterministic cart total (used by hallucinated-total guard)
   const guardCartSubtotal = guardCart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
-      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+      // P0 (2026-09-09, NJB live defect): bundle price is fixed at
+      // start_bundle time, independent of flavor-selection completeness —
+      // gating on `complete` here undercounted the subtotal by the whole
+      // bundle price while flavors were still being collected.
+      return s + (i as BundleItem).price_cents;
     }
     const r = i as CartItem;
     return s + (r.price_cents * (r.quantity || 1));
@@ -7023,10 +7100,6 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     for (const added of addedThisTurn8) {
       const menuItem = effectiveMenu.find(mi => mi.id === added.menu_item_id);
       if (!menuItem) continue;
-      // Strip the item's own name before matching — "Chicken Caesar added!"
-      // must not count as enumerating a "Caesar" dressing choice just
-      // because the word appears in the item name.
-      const replyLower = reply.toLowerCase().split(menuItem.name.toLowerCase()).join(" ");
       for (const groupName of added.pending_options ?? []) {
         const group = menuItem.option_groups?.find(g => g.name === groupName);
         if (!group || group.choices.length === 0) continue;
@@ -7050,7 +7123,16 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // it always was: a guard against ever emitting the literal leaked
         // string "Choices for option: ..." — a different concern (avoiding a
         // raw import-artifact label) from avoiding a duplicate.
-        if (groupChoicesAlreadySaid(added.menu_item_id, groupName, group.choices.map(c => c.name), replyLower, compiledRenderedGroups)) continue;
+        //
+        // D2 fix (2026-09-09, Vito's "House" salad repro): this used to strip
+        // every raw occurrence of the item's own name out of `reply` before
+        // the stem check, to stop "Chicken Caesar added!" from counting as
+        // stating the "Caesar" dressing choice. That blind strip also erased
+        // "House Balsamic" (a real choice the reply DID list) whenever the
+        // item itself was named "House" — see groupChoicesAlreadySaid's own
+        // doc for the fix, now applied at the primitive via `menuItem.name`
+        // instead of pre-mangling the text here.
+        if (groupChoicesAlreadySaid(added.menu_item_id, groupName, group.choices.map(c => c.name), reply, compiledRenderedGroups, menuItem.name)) continue;
         const label8 = displayGroupName(group.name);
         if (label8.toLowerCase() === "option") continue;
         missingClauses.push(`Choices for ${label8}: ${group.choices.map(c => c.name).join(", ")}.`);

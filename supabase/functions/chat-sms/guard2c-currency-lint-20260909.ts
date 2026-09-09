@@ -61,7 +61,10 @@ export function buildGroundedMoneyCents(
   let subtotal = 0;
   for (const i of cart) {
     if (i.type === "bundle") {
-      if (!i.complete) continue;
+      // P0 (2026-09-09, NJB live defect): bundle price is fixed regardless
+      // of flavor-selection completeness — excluding it here would flag the
+      // model's own correct quote of an incomplete bundle's price as a
+      // "stray" hallucinated figure.
       set.add(i.price_cents);
       subtotal += i.price_cents;
       continue;

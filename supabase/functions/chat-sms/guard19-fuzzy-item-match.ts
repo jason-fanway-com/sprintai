@@ -106,9 +106,15 @@ export function levenshteinDistance(a: string, b: string): number {
  * prefix of the longer ("pepp"/"pepperoni", "lover"/"lovers"), or — only when
  * BOTH words are 5+ chars — a small edit distance apart scaled by length
  * (distance<=1 for 5-7 chars covers single-letter typos like "hawaiin"/
- * "hawaiian"; distance<=2 for 8+ chars). Below 5 chars, edit distance is too
- * easy to false-positive on unrelated words ("four"/"flour") — short words
- * only match via exact or prefix above.
+ * "hawaiian"; distance<=2 for 8+ chars; distance<=3 when both words are long,
+ * covering deeper typos like "hawaai"/"hawaiian"). Below 5 chars, edit distance
+ * is too easy to false-positive on unrelated words ("four"/"flour") — short
+ * words only match via exact or prefix above.
+ *
+ * The extended distance (3 edits for shorter>=6 + longer>=8) accepts a known
+ * tradeoff: "peppers"/"pepperoni" also has edit distance 3 and will match.
+ * In practice this only affects item RESOLUTION (findItemInText), not
+ * topping/modifier matching, which uses a separate stem-based path.
  */
 export function fuzzyWordMatch(a: string, b: string): boolean {
   if (a === b) return true;
@@ -119,8 +125,12 @@ export function fuzzyWordMatch(a: string, b: string): boolean {
   // 4-char word ("four") is one edit away from too many unrelated words
   // ("flour") to be safe here; short words only match via exact/prefix above.
   if (shorter.length < 5) return false;
+  // Base threshold: 2 edits for 8+ char targets, 1 edit for 5-7 char.
+  // Extended by 1 when both words are long (shorter>=6, longer>=8) — handles
+  // deeper customer typos like "hawaai"/"hawaiian" (dist=3).
   const maxDist = longer.length >= 8 ? 2 : 1;
-  return levenshteinDistance(a, b) <= maxDist;
+  const allowedDist = (shorter.length >= 6 && maxDist === 2) ? maxDist + 1 : maxDist;
+  return levenshteinDistance(a, b) <= allowedDist;
 }
 
 /**

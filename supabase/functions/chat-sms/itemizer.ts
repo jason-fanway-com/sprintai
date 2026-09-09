@@ -81,10 +81,15 @@ export function renderItemizedRecap(
   let subtotal = 0;
   for (const i of cart) {
     if (i.type === "bundle") {
-      if (!i.complete) continue; // an incomplete bundle has no settled price yet
+      // P0 (2026-09-09, NJB live defect): a bundle's price is fixed at
+      // start_bundle time and doesn't depend on `complete` (flavor
+      // selection) — skipping the line while incomplete quoted a $0.99
+      // total for a cart holding a committed $15 bundle. Count and show it
+      // from the moment it's added; flag it as still-in-progress instead.
       subtotal += i.price_cents;
       const detail = (i.selections ?? []).map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-      lines.push(padReceiptLine(`${i.name}${detail ? ` (${detail})` : ""}`, `$${(i.price_cents / 100).toFixed(2)}`));
+      const label = i.complete ? i.name : `${i.name} (selecting flavors)`;
+      lines.push(padReceiptLine(`${label}${detail ? ` (${detail})` : ""}`, `$${(i.price_cents / 100).toFixed(2)}`));
       continue;
     }
     const lineTotal = i.price_cents * (i.quantity || 1);

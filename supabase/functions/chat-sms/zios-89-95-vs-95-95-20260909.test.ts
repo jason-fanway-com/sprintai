@@ -146,3 +146,21 @@ Deno.test("NO FALSE POSITIVE: the widened read-only shortcut still ignores real 
   assertEquals(CART_SUMMARY_RE.test("add a large pepperoni"), false);
   assertEquals(CART_SUMMARY_RE.test("what wing flavors do you have"), false);
 });
+
+// ── Defect 2 matrix (2026-09-09): CART_SUMMARY_RE must match all of these ──
+// Live transcript showed "show me the line items in the order" returned
+// "Sorry, I got mixed up" twice — the regex missed the phrasing. Fixed in
+// cart-summary-intent-20260909.ts (commit d533cbb). This matrix verifies all
+// equivalent phrasings are covered and prevents silent regression.
+Deno.test("CART_SUMMARY_RE matrix — all line-items/order-summary phrasings match", () => {
+  const mustMatch = [
+    "show me the line items",
+    "show me the line items in the order",
+    "what's in my order",
+    "show me my order",
+    "what do I have so far",
+  ];
+  for (const phrase of mustMatch) {
+    assert(CART_SUMMARY_RE.test(phrase), `CART_SUMMARY_RE missed: "${phrase}"`);
+  }
+});

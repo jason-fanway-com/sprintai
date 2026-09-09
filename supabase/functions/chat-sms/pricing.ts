@@ -18,11 +18,19 @@ export interface PricedCartLine {
   complete?: boolean; // bundle lines only
 }
 
-/** Sum of all cart line totals — an incomplete bundle contributes $0. */
+// P0 (2026-09-09, NJB live defect): a bundle's price_cents is FIXED at
+// start_bundle time (e.g. a dozen bagels is $15.00 regardless of which
+// flavors get picked) — `complete` only gates whether the flavor/composition
+// choices are settled, not what the bundle costs. Gating the subtotal
+// contribution on `complete` made an incomplete bundle invisible to the
+// customer's quoted total (cart held a committed $15 bundle, footer said
+// $0.99) — a real-money giveaway. Bundle lines now count from the moment
+// they're added; `complete` still legitimately gates submit_order elsewhere.
+/** Sum of all cart line totals — a bundle's fixed price counts even before flavors are chosen. */
 export function computeCartSubtotalCents(cart: PricedCartLine[]): number {
   return cart.reduce((s, i) => {
     if (i.type === "bundle") {
-      return s + (i.complete ? i.price_cents : 0);
+      return s + i.price_cents;
     }
     return s + (i.price_cents * (i.quantity || 1));
   }, 0);

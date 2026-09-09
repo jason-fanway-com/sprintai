@@ -26,9 +26,14 @@ export function renderMoneyFooterLines(
 ): string {
   if (cart.length === 0) return "";
 
+  // P0 (2026-09-09, NJB live defect): bundle price is fixed at start_bundle
+  // time and doesn't depend on `complete` (flavor selection) — gating the
+  // subtotal on completeness quoted $0.99 total for a cart holding a
+  // committed $15 bundle. Count the bundle's fixed price from the moment
+  // it's in the cart.
   const subtotal = cart.reduce((s, i) => {
     if (i.type === "bundle") {
-      return s + (i.complete ? i.price_cents : 0);
+      return s + i.price_cents;
     }
     return s + (i.price_cents * (i.quantity || 1));
   }, 0);

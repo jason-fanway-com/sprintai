@@ -25,13 +25,13 @@ Deno.test("renderMissingOptionsPrompt: multiple items joined with ', and'", () =
 
 Deno.test("groupChoicesAlreadySaid: structural match via compiledRenderedGroups", () => {
   const rendered = new Map([["item-1", new Set(["Size"])]]);
-  assertEquals(groupChoicesAlreadySaid("item-1", "Size", ["Medium", "Large"], "", rendered), true);
+  assertEquals(groupChoicesAlreadySaid("item-1", "Size", ["Medium", "Large"], "", rendered, "Turkey Sub"), true);
 });
 
 Deno.test("groupChoicesAlreadySaid: textual match, straight vs curly quote does not break the stem match", () => {
   const rendered = new Map<string, Set<string>>();
   assertEquals(
-    groupChoicesAlreadySaid("item-1", "Size", ["12''"], "What size — medium 12\" or large 16\"?", rendered),
+    groupChoicesAlreadySaid("item-1", "Size", ["12''"], "What size — medium 12\" or large 16\"?", rendered, "Turkey Sub"),
     true,
   );
 });
@@ -39,7 +39,27 @@ Deno.test("groupChoicesAlreadySaid: textual match, straight vs curly quote does 
 Deno.test("groupChoicesAlreadySaid: choice names absent from the text are not already said", () => {
   const rendered = new Map<string, Set<string>>();
   assertEquals(
-    groupChoicesAlreadySaid("item-1", "Flavor", ["Buffalo", "BBQ"], "What size would you like?", rendered),
+    groupChoicesAlreadySaid("item-1", "Flavor", ["Buffalo", "BBQ"], "What size would you like?", rendered, "Wings"),
+    false,
+  );
+});
+
+// D2 fix (2026-09-09, Vito's "House" salad repro — see sequencer.ts's own
+// doc on groupChoicesAlreadySaid for the full incident).
+Deno.test("groupChoicesAlreadySaid: D2 fix — a real choice that happens to start with the item's own name is still recognized when genuinely stated", () => {
+  const rendered = new Map<string, Set<string>>();
+  const reply = "House added. What dressing would you like? Options: French, Bleu Cheese, House Balsamic.";
+  assertEquals(
+    groupChoicesAlreadySaid("vito-house", "Dressing", ["French", "Bleu Cheese", "House Balsamic"], reply, rendered, "House"),
+    true,
+  );
+});
+
+Deno.test("groupChoicesAlreadySaid: D2 fix — a choice wholly contained in the item's own name is never trusted from text-presence alone", () => {
+  const rendered = new Map<string, Set<string>>();
+  const reply = "Chicken Caesar added! What dressing would you like?";
+  assertEquals(
+    groupChoicesAlreadySaid("vito-caesar", "Dressing", ["Caesar"], reply, rendered, "Chicken Caesar"),
     false,
   );
 });
