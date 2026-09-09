@@ -45,6 +45,8 @@ import {
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import { computeGuard19 } from "./guard19-quantity-only-no-item-named.ts";
+import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
+import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
 import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
@@ -83,7 +85,12 @@ const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messa
 const NAME_ASK = "What's your name for the order?";
 
 // ─── Provider resolution ─────────────────────────────────────────────────────
-function resolveSmsProvider(): "telnyx" | "twilio" {
+function resolveSmsProvider(shop?: { sms_provider?: string | null } | null): "telnyx" | "twilio" {
+  // Per-shop wins. A shop's number is provisioned on exactly ONE provider, so a
+  // deployment-wide switch would send from a number the other carrier doesn't own.
+  // shops.sms_provider is NOT NULL DEFAULT 'twilio', so this is set for every shop.
+  const perShop = (shop?.sms_provider ?? "").trim().toLowerCase();
+  if (perShop === "telnyx" || perShop === "twilio") return perShop;
   const telnyxKey = Deno.env.get("TELNYX_API_KEY") ?? "";
   return telnyxKey.length > 0 ? "telnyx" : "twilio";
 }
@@ -197,6 +204,7 @@ interface Shop {
   wing_mix_extra:          boolean | null;
   tenant_id:               string;
   phone_number_e164:       string | null;
+  sms_provider:            string | null;
   reply_from_e164:         string | null;
   open_hours:              Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
   timezone:                string;
@@ -858,7 +866,7 @@ RULES:
 - When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If they say "7 sesame and 7 plain" and a dozen bundle is active, that is 14 bagels which completes the dozen. Just add them.
 - While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
 - OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
-- COMPOSING A TOPPING-ONLY PIZZA REQUEST (CRITICAL): some shops have no standalone menu item for a topping named alone (e.g. no "Pepperoni Pizza" item at all — pepperoni only exists as a topping choice on the base cheese pizza). When the customer is clearly ordering pizzas (they said "pizza"/"pizzas" earlier in this conversation, or this item is one of several pizzas named together in the same list) and names a bare topping with no matching standalone item, compose it as ONE add_item call: the shop's base/cheese pizza item PLUS that topping selected in its topping option group. Do NOT guess a different item just because its name happens to contain the topping word — a Calzone or Stromboli or any other product with "Pepperoni" in ITS OWN name is a completely different product, not a plain pepperoni pizza, and must never be substituted for one. Do NOT drop the topping and silently add only the base pizza. Always state the full composition in your reply so the customer knows what they're getting — e.g. "Large Cheese Pizza with Pepperoni added", never just "Cheese Pizza added" when a topping was requested. "Plain" or "cheese" alone (no topping named) composes to the base cheese pizza with no toppings added. If there is no established pizza context at all (nothing about pizza said anywhere in this conversation, the item stands alone), ask instead of guessing which product the customer means.
+- TOPPING-ONLY PIZZA REQUESTS (e.g. "pepp" when there's no standalone "Pepperoni Pizza" item, only a topping choice on the base cheese pizza): this is now resolved deterministically by code BEFORE you see this message, whenever it can be — see "SYSTEM-COMPOSED THIS TURN" above if that happened. You only need this for the rare case code did NOT resolve (an item with no compiled option data, or genuine ambiguity — e.g. two equally-plausible base pizza styles, or no size established): compose it yourself as ONE add_item call, the base/cheese pizza item PLUS the topping in its topping option group — never a different real product that merely contains the topping word in its own name (a Calzone/Stromboli is not a pizza). State the full composition in your reply. If there's no pizza context at all, ask instead of guessing.
 - WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask - never guess, never imply a list exists, and never offer to go find out. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "I don't have the dressing list for that one - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
 - NEVER CLAIM AN ACTION YOU DO NOT TAKE (CRITICAL): you can do exactly two things - read the menu above and call the tools listed below. You cannot check with the kitchen, ask the owner, ask anyone, look anything up, call, walk back, confirm with staff, or go find out and come back. Never say or imply that you will. Banned in every wording: "let me check", "I'll check with the kitchen", "let me ask", "I'll find out", "let me confirm", "let me look that up", "one moment", "give me a sec", "I'll get back to you", "hold on while I". When you do not know something, say you do not know it and ask the customer in the same breath, then keep the order moving. Good: "I don't have the flavor list for these - what flavor would you like?" Never: "Let me check with the kitchen on which ones we have." Inventing an action is the same lie as inventing an option, and worse, because it is a lie about yourself. The one thing you may promise is what the tools actually do: adding an item, saving a note, sending the payment link.
 - NEVER NARRATE A TECHNICAL FAILURE TO THE CUSTOMER: if a tool call comes back with an error, that is between you and the system. A customer ordering dinner has no use for "that's giving me a system hiccup", "there's a glitch on my end", "an error came back", or "the system won't let me". Say the plain human version instead - "I can't add the large cheese right now" - and immediately offer the closest real thing on the menu. Never invent a technical excuse for something you simply could not find.
@@ -1920,6 +1928,14 @@ async function runOrderingLoop(
   // Item 8 (spec §7/§11 item 8) — see executeTool's matching params.
   compiledEngineEnabled?: boolean,
   shopPhone?: string | null,
+  // Deterministic pizza-topping compose (pizza-topping-compose.ts) may have
+  // already resolved one or more modifier choices on a base pizza item
+  // BEFORE this loop ever runs (index.ts, right before systemPrompt is
+  // built). Seeding those here means a redundant model add_item call for
+  // the SAME base item this turn can't reactively re-claim the same
+  // topping — same protection consumedModifierChoiceIdsForTurn already
+  // gives every add_item call made from inside this loop.
+  preConsumedModifierChoiceIds?: Set<string>,
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
@@ -1937,7 +1953,7 @@ async function runOrderingLoop(
   // add_item call this turn (across every attempt below) — prevents a
   // reactively-matched modifier (e.g. a topping) from being granted to more
   // than one NEW cart line for the same base item in a single turn.
-  const consumedModifierChoiceIdsForTurn = new Set<string>();
+  const consumedModifierChoiceIdsForTurn = new Set<string>(preConsumedModifierChoiceIds ?? []);
 
   const messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [
     ...history,
@@ -2941,18 +2957,67 @@ function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | nul
     // item literally called "3 items" is in the cart, so a TRUE statement was
     // flagged as a hallucination and the whole reply was thrown away. Verify a
     // count as a count: right number, no hallucination.
-    const countClaim = claimed.match(/\b(\d+)\s+items?\b/i);
+    // EXTENDED (2026-09-08): also handle "N pizzas", "N large pizzas",
+    // "all 4 pizzas" etc. — the model's natural summary after a deterministic
+    // compose adds 2 pizzas and the model adds 2 more, it says "all 4 large
+    // pizzas in your cart" which is truthful but "pizzas" isn't "items".
+    const FOOD_TYPE_PAT = "(?:items?|pizzas?|pies?|sandwiches?|burgers?|subs?|salads?|wings?|orders?|wraps?)";
+    const SIZE_PAT      = "(?:(?:large|medium|small|regular|personal|family)\\s+)?";
+    const countClaim = claimed.match(
+      new RegExp(`\\b(\\d+)\\s+${SIZE_PAT}${FOOD_TYPE_PAT}\\b`, "i"),
+    );
     if (countClaim) {
       if (Number(countClaim[1]) === guardCart.length) continue; // truthful
       return claimed;                                           // wrong count
     }
-    const cartNames = guardCart.map(i =>
-      (i as BundleItem).type === "bundle" ? (i as BundleItem).name : (i as CartItem).name
+    // Word-number count claim: "all four large pizzas", "four pizzas", etc.
+    // — digit check above only catches numerals; word numbers are a separate
+    // pattern that the model also produces naturally.
+    const WORD_NUM: Record<string, number> = {
+      one:1, two:2, three:3, four:4, five:5,
+      six:6, seven:7, eight:8, nine:9, ten:10,
+    };
+    const wordCountClaim = claimed.match(
+      new RegExp(`\\b(${Object.keys(WORD_NUM).join("|")})\\s+${SIZE_PAT}${FOOD_TYPE_PAT}\\b`, "i"),
     );
-    const found = cartNames.some(n =>
-      n.toLowerCase().includes(claimed.toLowerCase()) ||
-      claimed.toLowerCase().includes(n.toLowerCase())
-    );
+    if (wordCountClaim) {
+      const claimedCount = WORD_NUM[wordCountClaim[1].toLowerCase()];
+      if (claimedCount === guardCart.length) continue; // truthful
+      return claimed;                                  // wrong count
+    }
+    // Live-confirmed regression (2026-09-08, pizza-topping-compose.ts): a
+    // composed line's own `name` field never carries its topping (e.g.
+    // "Large 18'' Neapolitan Cheese Pizza" with options {"Add
+    // Toppings":["Pepperoni"]}) — same shape as every other compiled/legacy
+    // item with options. A perfectly honest reply describing the FULL
+    // composition ("Neapolitan Cheese Pizza with Pepperoni is in your
+    // cart") was flagged as a hallucination because "with Pepperoni" isn't
+    // a substring of the bare name. Match against each line's real
+    // options/modifiers too, not just its bare name, so a truthful
+    // topping-qualified claim is recognized instead of false-tripping this
+    // guard onto "Sorry, I got mixed up" over a cart that was actually
+    // correct.
+    const cartNames = guardCart.flatMap(i => {
+      if ((i as BundleItem).type === "bundle") return [(i as BundleItem).name];
+      const item = i as CartItem;
+      const extras = [...(item.modifiers ?? []), ...Object.values(item.options ?? {}).flat()];
+      return extras.length > 0 ? [item.name, `${item.name} ${extras.join(" ")}`] : [item.name];
+    });
+    const found = cartNames.some(n => {
+      if (n.toLowerCase().includes(claimed.toLowerCase())) return true;
+      if (claimed.toLowerCase().includes(n.toLowerCase())) return true;
+      // Stem-overlap fallback: model may describe a composed item without a
+      // size qualifier (e.g. "Large Neapolitan Cheese Pizza" omitting "18''")
+      // — neither substring direction matches, but 3+ significant stems in
+      // common is a strong signal the model is describing this cart item.
+      // Threshold 3 is intentionally conservative so a 2-word slip like
+      // "Pepperoni Calzone" can't accidentally clear a real hallucination.
+      const nStems = significantStems(n);
+      const cStems = significantStems(claimed);
+      let overlap = 0;
+      for (const s of nStems) if (cStems.has(s)) overlap++;
+      return overlap >= 3;
+    });
     if (!found) return claimed;
   }
 
@@ -4004,7 +4069,7 @@ export async function handleSystemEvent(
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
-      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(), shop.phone_number_e164, conversation.customer_phone, message);
+      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(shop), shop.phone_number_e164, conversation.customer_phone, message);
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
     // iMessage bridge: extract real phone from "web:imsg-{identifier}-{sessionid}"
@@ -5354,7 +5419,7 @@ Deno.serve(async (req: Request) => {
   // on the name turn. The system prompt's PICKUP NAME RULE is unreliable.
   let nameSubmitCheckoutUrl: string | undefined;
   {
-    const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
+    const shopGeo = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
       ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
       : null;
     if (cartItems.length > 0 && !(cart as any).pickup_name) {
@@ -5387,7 +5452,7 @@ Deno.serve(async (req: Request) => {
             const { data: reloaded } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
             if (reloaded) {
               cart.cart_json = (reloaded.cart_json as AnyCartItem[]);
-              cart.phase = (reloaded.phase as string) || "checkout";
+              cart.phase = (reloaded.phase as OrderPhase) || "checkout";
               (cart as any).pickup_name = trimmed;
             }
           } else {
@@ -5479,6 +5544,81 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── DETERMINISTIC PIZZA-TOPPING COMPOSE (2026-09-08 P0, PO root-cause
+  // direction — see pizza-topping-compose.ts header) ──────────────────────
+  // Runs BEFORE the system prompt is built and BEFORE the LLM ever sees this
+  // turn: for a bare topping/plain word with no standalone menu item (e.g.
+  // "pepp" on a menu with no "Pepperoni Pizza" item, only a base cheese
+  // pizza with a Pepperoni topping choice), code — not the model — resolves
+  // the correct base item + choice and applies it via the same
+  // applyCompiledAddItem the model's own add_item calls use. This replaces
+  // reliance on the system prompt's old "COMPOSING A TOPPING-ONLY PIZZA
+  // REQUEST" paragraph for this exact case (that paragraph is now a short
+  // pointer — see buildSystemPrompt — since the model no longer has to find
+  // or guess the base item's ID itself).
+  const preConsumedModifierChoiceIds = new Set<string>();
+  let deterministicComposedThisTurn = false;
+  let composedLinesNote = "";
+  if (compiledOrderingEngineEnabled) {
+    const carryforwardText = buildCompiledMatchText(userMessage, history);
+    const composed = composeDeterministicPizzaLines(
+      userMessage,
+      carryforwardText,
+      effectiveMenu as unknown as ComposeMenuItem[],
+      cartItems as unknown as { menu_item_id: string }[],
+    );
+    // Bare "plain"/"cheese" composes with an EMPTY selection map — to
+    // applyCompiledAddItem, resolvedCount===0 on a call for an item that
+    // ALREADY has another (e.g. Pepperoni) line in the cart looks
+    // indistinguishable from a redundant no-op repeat of THAT line (its
+    // bug-3-class guard, ask-plan-engine.ts), because a modifier-only
+    // ask_plan (no slot steps) is vacuously "fully resolved" for every
+    // selection map. Applying every zero-selection compose BEFORE any
+    // topping compose for the same base item means the empty line is
+    // created first, while the cart still has no sibling to be confused
+    // with — confirmed live (2026-09-08 P0 verification run): "plain"
+    // silently vanished when applied after "pepp" on the very first test.
+    const orderedComposed = [...composed].sort((a, b) =>
+      (a.toppingChoiceDisplay ? 1 : 0) - (b.toppingChoiceDisplay ? 1 : 0));
+    const appliedComposed: typeof composed = [];
+    for (const c of orderedComposed) {
+      const baseMenuItem = effectiveMenu.find(m => m.id === c.baseMenuItemId);
+      if (!baseMenuItem?.ask_plan) continue;
+      // Pass "" as customerMessage so matchChoiceInText cannot see the rest
+      // of the turn's text (e.g. "pepp" elsewhere in "1 pepp, 1 plain, ...")
+      // and accidentally resolve a topping for a "plain" line. Only
+      // modelAssertedChoiceTexts (the exact topping display name from
+      // composeDeterministicPizzaLines) drives the choice selection here.
+      const outcome = applyCompiledAddItem(
+        cartItems as unknown as CompiledCartLine[],
+        baseMenuItem as unknown as CompiledMenuItem,
+        c.baseMenuItemId,
+        c.quantity,
+        "",
+        shop.phone_number_e164,
+        preConsumedModifierChoiceIds,
+        c.toppingChoiceDisplay ? [c.toppingChoiceDisplay] : [],
+      );
+      if (outcome.ok && outcome.cartChanged) {
+        deterministicComposedThisTurn = true;
+        appliedComposed.push(c);
+        // Consume the applied topping choice ID so the model's own loop
+        // can't re-apply the same topping to a different pizza line.
+        if (c.toppingChoiceId) preConsumedModifierChoiceIds.add(c.toppingChoiceId);
+        console.log(`[chat-sms] Deterministic pizza-topping compose (conv=${conversation.id}): "${c.token}" -> ${c.baseDisplayName}${c.toppingChoiceDisplay ? ` + ${c.toppingChoiceDisplay}` : ""}.`);
+      } else {
+        console.warn(`[chat-sms] Deterministic pizza-topping compose DID NOT APPLY (conv=${conversation.id}): "${c.token}" -> ${c.baseDisplayName}${c.toppingChoiceDisplay ? ` + ${c.toppingChoiceDisplay}` : ""}. ok=${outcome.ok} cartChanged=${outcome.cartChanged}. Leaving this token to the normal model-driven path instead of claiming a compose that didn't actually land.`);
+      }
+    }
+    if (deterministicComposedThisTurn) {
+      await saveCart(supabase, cart.id, cartItems, "building");
+      cart.cart_json = cartItems;
+      // Only the lines that ACTUALLY landed in the cart go in the note —
+      // never claim a compose to the model that silently no-op'd.
+      composedLinesNote = buildComposedLinesNote(appliedComposed);
+    }
+  }
+
   // ── Run ordering loop ─────────────────────────────────────────────────────
   // Rebuild system prompt with potentially corrected cart
   //
@@ -5492,9 +5632,9 @@ Deno.serve(async (req: Request) => {
     cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
     effectiveMenu,
   );
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext) + (zeroOptionHint ?? "");
+  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext) + (zeroOptionHint ?? "") + composedLinesNote;
 
-  const shopGeo = shop.latitude != null && shop.longitude != null && shop.delivery_radius_mi > 0
+  const shopGeo = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
     : null;
 
@@ -5507,7 +5647,7 @@ Deno.serve(async (req: Request) => {
   } else {
     const loopResult = await runOrderingLoop(
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
-      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null,
+      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null, preConsumedModifierChoiceIds,
     );
     reply = loopResult.reply;
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
@@ -5544,7 +5684,7 @@ Deno.serve(async (req: Request) => {
   if (freshCart) {
     cart.cart_json = (freshCart.cart_json as AnyCartItem[]);
     cart.order_type = (freshCart.order_type as string) || null;
-    cart.phase = (freshCart.phase as string) || "greeting";
+    cart.phase = (freshCart.phase as OrderPhase) || "greeting";
   }
 
   // ── POST-TURN DETERMINISTIC GUARDS ────────────────────────────────────────
@@ -6959,7 +7099,22 @@ Deno.serve(async (req: Request) => {
       [{ role: "user", content: userMessage }],
       menuItemNames19,
     );
-    const guard19Result = computeGuard19(userMessage, cartSnapshotBeforeTurn, guardCart, namedThisTurn19.size);
+    // 2026-09-08 LIVE INCIDENT FIX, superseded same day by the deterministic
+    // compose path above: namedThisTurn19.size alone only counts exact
+    // menu-item-name matches, which is exactly zero for a real order like "1 pepp,
+    // 1 plain, 1 hawaiin, 1 meat lovers" (a composed topping, a typo, and a dropped
+    // apostrophe/pluralization). The topping-compose case is now resolved
+    // deterministically ABOVE this turn (deterministicComposedThisTurn) — a
+    // successful code-side compose is a strictly more reliable "the customer
+    // named something real" signal than fuzzy-matching topping vocabulary
+    // against the customer's text ever was, so it short-circuits this check.
+    // hasGuard19NamedSignal (guard19-fuzzy-item-match.ts) remains as the
+    // fallback for genuine standalone-item typos ("hawaiin" -> "Hawaiian")
+    // — its own vocab is narrowed to item names only now that the topping/
+    // modifier vocabulary it used to also scan is covered by the
+    // deterministic path instead (see that file's header for the narrowing).
+    const hasNamedSignal19 = deterministicComposedThisTurn || hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurn19.size);
+    const guard19Result = computeGuard19(userMessage, cartSnapshotBeforeTurn, guardCart, hasNamedSignal19 ? 1 : 0);
     if (guard19Result.tripped) {
       console.warn(`[chat-sms] GUARD 19 (quantity-only, zero items named) tripped (conv=${conversation.id}). Message "${userMessage}" named no menu item; reverted cart to pre-turn snapshot (${guardCart.length} lines -> ${guard19Result.revertedCart.length}).`);
       guardCart.length = 0;
