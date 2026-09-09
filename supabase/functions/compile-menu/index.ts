@@ -579,11 +579,11 @@ Deno.serve(async (req: Request) => {
 
   // Deactivate derived rows that are no longer in the desired set (stale
   // after a base pizza was removed/renamed, or toppings list changed).
-  const staleIds = existingDerived
+  const staleDerivedIds = existingDerived
     .filter(r => !desiredEntityKeys.has(r.import_key))
     .map(r => r.id);
-  for (let i = 0; i < staleIds.length; i += IN_BATCH_SIZE) {
-    await supabase.from("menu_items").update({ active: false }).in("id", staleIds.slice(i, i + IN_BATCH_SIZE));
+  for (let i = 0; i < staleDerivedIds.length; i += IN_BATCH_SIZE) {
+    await supabase.from("menu_items").update({ active: false }).in("id", staleDerivedIds.slice(i, i + IN_BATCH_SIZE));
   }
 
   // Upsert derived rows' lexicon terms alongside the regular lexicon write-back.

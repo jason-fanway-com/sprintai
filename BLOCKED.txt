@@ -5698,3 +5698,158 @@ No edge-function deploy for either task -- Task A was a direct DB data fix,
 Task B was a local script change. Both read against live data via the
 service-role key; no other tables written except the single menu_items.active
 flip in Task A.
+
+================================================================================
+2026-09-09 20:20 UTC (16:20 ET) -- NJB TWO-CLAUSE PARSER FIX MADE LIVE
+(compile-menu deploy was stale) + FIXED AN UNRELATED PRE-EXISTING BOOT_ERROR
+IT SURFACED + ROOT-CAUSED (not fixed) the ticket-text gap the 20:11 UTC entry
+above found. Real numbers: NJB 155/170 -> 166/170 orderable.
+================================================================================
+
+CONTEXT: dispatched to find and fix NJB's "served with A or B and choice of
+C or D" two-clause description parser gap (11 of NJB's then-15 blocked items,
+all Omelette & Egg Platters). Shared worktree -- confirmed via `git log
+--oneline -10` + `git status` before starting: clean except unrelated
+supabase/.temp/* and pre-existing untracked tmp-*.ts scripts, nothing of
+mine to step on.
+
+FOUND THE FIX ALREADY BUILT AND COMMITTED: commit a351622 ("fix(njb):
+two-choice-clause description parser (side+bread) + universal egg-style
+archetype", 2026-09-08 22:13:57 -0400) already ships this exact fix,
+verified an ancestor of HEAD (`git merge-base --is-ancestor a351622 HEAD`).
+Its own BLOCKED.txt entry (22:19 UTC, ~4680 lines up) documents the
+mechanism in full (extractDescriptionClauses anchors on "served with" in
+addition to "choice of"; new pickSideDescriptionSlot; egg_style resolves via
+a new universalSuppliesWithoutQuestion flag instead of asking) and says the
+live DB was NOT yet updated because compile-menu wasn't safe to redeploy
+that night (a live P0 was in flight). Nothing left to build -- the actual
+remaining work was entirely deploy + recompile + verify, which is what
+follows.
+
+STARTING STATE, live-queried directly against menu_items (not assumed):
+NJB 155/170 orderable, 15 blocked -- 11 Omelette & Egg Platter items (the
+egg_side/egg_style gap) + Turkey Melt/Tuna Melt (bread) + Chef's/Garden
+Salad (dressing), matching a351622's own documented starting state exactly.
+
+DEPLOY GATE CHECK (RUNBOOK.md's own documented rule: compile-menu's deployed
+version can lag main): `supabase functions list` showed compile-menu last
+deployed 2026-09-08 19:23:19 UTC -- BEFORE a351622 (02:13:57 UTC the next
+calendar day) and before commit 24d7275 (D1 derived pizza rows, 2026-09-09
+13:26:30 -0400) which also touches compile-menu.ts/index.ts. Confirmed stale,
+redeploy required before any real NJB recompile would reflect the fix.
+
+DEPLOYED compile-menu -- BOOT_ERROR, a live regression I introduced by
+deploying HEAD as-is (the bug was already sitting in committed code on
+main, not something I wrote): `deno check` immediately after the failed
+curl showed `TS2451: Cannot redeclare block-scoped variable 'staleIds'`,
+two `const staleIds` in the same function scope
+(supabase/functions/compile-menu/index.ts:582 and :651) -- 24d7275 (D1
+derived rows, merged 13:26:30 -0400 today) added the first one, colliding
+with a pre-existing lexicon-cleanup block of the same name. This had never
+been caught because compile-menu had not been redeployed since before
+24d7275 landed -- my redeploy was the first one to actually ship it, and it
+took the shared function down (BOOT_ERROR on every shop, every invocation)
+for the few minutes between my two deploys. No evidence anything else
+invoked compile-menu in that window (it's a manually-triggered admin
+function, not part of the live customer order path) -- flagging for full
+transparency regardless, per this file's own standing rule of logging every
+consequential action.
+
+FIX: renamed the derived-rows one to `staleDerivedIds` (supabase/functions/
+compile-menu/index.ts, one-line diff, no behavior change -- same filter,
+same batched update). `deno check` clean on compile-menu/index.ts +
+compile-menu.ts + normalize.ts + archetypes.ts. Full relevant suite:
+compile-menu.test.ts + normalize.test.ts + archetypes.test.ts +
+menu-readiness.test.ts = 148 passed, 0 failed, 0 unexpected. Redeployed --
+`supabase functions list` confirms compile-menu v13, ACTIVE, 2026-09-09
+20:12:38 UTC. POST /functions/v1/compile-menu {shop_id: NJB} now returns
+HTTP 200, ok:true (was HTTP 503 BOOT_ERROR before the fix).
+
+NJB RECOMPILED (POST /functions/v1/compile-menu, live invoke, real write).
+REAL POST-RECOMPILE NUMBER, live-queried directly against menu_items
+(bot_state counts), not the edge function's own response, not assumed:
+**166/170 orderable, 4 blocked** -- Turkey Melt, Tuna Melt (Hot Sandwiches,
+"choice of bread" with zero enumerated alternative), Chef's Salad, Garden
+Salad (Salads, "choice of dressing" with zero enumerated alternative). All
+11 Omelette & Egg Platter items (Two Eggs Any Style, Bacon/Sausage/Ham/Pork
+Roll, Cheese, Veggie, Western, Spinach & Feta, Penny's Spicy, Meat Lovers',
+Lox & Onions, Lean, Build Your Own) are orderable. Drop of exactly 11 blocked
+items, matching the task's expected number exactly. The 4 remaining are
+genuine questions (no enumerated alternative exists anywhere in NJB's real
+menu text for bread or dressing on these 4 items) -- correctly still
+blocked, not touched, per a351622's own prior audit.
+
+CONFIRMING "BOTH STATED CHOICES RESOLVE CORRECTLY" -- live ask_plan for
+Two Eggs Any Style Platter (dd9f6035-1962-4ac8-aef5-d7d937aea57e) now has
+two independent slot steps: {Home Fries, Hash Brown} and {Bagel, Toast},
+each its own group_id, priced correctly (both $0 delta, correct for this
+item). Internally correct and distinct -- this is genuinely fixed.
+
+NEW FINDING (root-causing, not fixing, the entry immediately above this
+one at 20:11 UTC): that entry found the item5 readiness gate's §8.3 walk
+fails "ticket text missing selection display_name" on exactly these 12
+items and called it "a real product bug ... worth a follow-up item once
+triaged." Triaged it. ROOT CAUSE, confirmed by direct test against the real
+production modules (ask-plan-engine.ts + itemizer.ts, the actual live
+ask_plan JSON, NOT the readiness script's own reconstruction): NJB has ZERO
+option_groups rows anywhere in its live menu (confirmed pre-existing fact,
+this file's own history). ask-plan-engine.ts's priceSelections/
+resolveAndPriceSelections builds the customer-facing `options` map by
+looking up each ask_plan step's group_id against the item's REAL
+`option_groups` DB rows (`itemGroups.find(g => g.id === step.group_id)`) --
+for NJB this lookup ALWAYS fails (empty array), so `line.options` stays
+undefined and NO slot selection (side, bread, meat -- not just "Home
+Fries") ever reaches the receipt/ticket via renderItemizedRecap. Proved
+this directly: built the real cart line via applyCompiledAddItem against
+Two Eggs Any Style Platter's actual live ask_plan with option_groups:[]
+(its real value), answered both slots, rendered via renderItemizedRecap --
+receipt shows price and item name only, zero mention of Home Fries or
+Toast, even though ask_plan_selections internally records both correctly.
+(The readiness script's own walk output undercounts this -- it fabricates
+its own synthetic derived-groups with every one hardcoded name:"Choice",
+so its version of the bug is a same-key overwrite that loses only 1 of 2
+selections; real production has no such fallback objects at all and loses
+ALL of them.)
+
+SCOPE, checked live: NOT limited to the 12 items already flagged. 47 of
+NJB's 166 currently-orderable items have at least one ask_plan slot step
+whose group_id starts with "derived:" (i.e., sourced from description
+parsing with no backing option_groups row) -- e.g. Turkey Club, Chicken
+Salad Sandwich, Salami & Cheese Sandwich (bread choice) -- and ZERO
+orderable NJB items have a real (non-"derived:") group slot step. This is
+pre-existing across NJB's whole menu, not introduced by tonight's parser
+fix or by this dispatch -- the parser fix only added 11 more items into an
+already-broken pool.
+
+NOT AN ACTIVE LIVE INCIDENT: confirmed `shops.compiled_ordering_engine_enabled
+= false` for NJB. Real NJB customers today are served by the legacy/LLM
+ordering path, not this compiled ask-plan-engine code -- so no live
+customer has received a receipt or kitchen ticket silently missing their
+side/bread/meat choice because of this. It IS a hard go-live blocker: the
+moment anyone flips that flag for NJB, every slot-based item's ticket goes
+out incomplete, which for a restaurant means the kitchen literally doesn't
+know what to make.
+
+NOT FIXED HERE -- out of scope for "extend the two-clause parser," touches
+shared ask-plan-engine.ts (used by all 3 shops), and the real fix needs a
+design decision this task didn't ask for: description-sourced slots need a
+real per-slot label (e.g. "Side", "Bread") propagated from normalize.ts/
+archetypes.ts through to the ask_plan step, instead of the current generic
+slot_key:"choice" for every one -- and priceSelections/
+resolveAndPriceSelections need to key resolvedOptions off something that
+survives when no real option_groups row exists, not solely off an
+option_groups lookup. Flagging for an explicit PO call on the labeling
+scheme before anyone touches ask-plan-engine.ts, same reasoning a351622
+gave for not silently generalizing egg_style's fix to burger/steak temp.
+
+DID NOT TOUCH: chat-sms/index.ts has an unrelated, in-progress, uncommitted
+diff sitting in this shared worktree right now (perf-diagnostic timing
+instrumentation, "2026-09-09 Zio's 4-pizza latency" per its own comments) --
+confirmed via `git status` it was NOT there when I started and is still
+there now, left completely alone, not staged, not committed. Only
+supabase/functions/compile-menu/index.ts (my one-line staleIds rename) is
+mine to commit.
+
+Committed a351622's already-built fix's deploy/recompile as this dispatch's
+own commit (the staleIds rename only -- the parser fix itself was already
+on main, nothing to re-commit there).
