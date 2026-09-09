@@ -146,6 +146,21 @@ function findItemInText(text: string, lexicon: MenuLexicon): LexiconItem | null 
   if (bestItems.length === 0) return null;
   if (bestItems.length === 1) return bestItems[0];
 
+  // Tiebreak by specificity: prefer the item with the most significant
+  // words (the longest/most-specific matching name). A customer saying
+  // "Nacho Cheese Fries" fully satisfies both that item and the shorter
+  // superset-of-words "Cheese Fries" (2/2 words), but "Nacho Cheese Fries"
+  // (3/3 words) accounts for the whole phrase and is the one actually named
+  // — it must win, not tie-break arbitrarily toward the shorter name.
+  const maxSignificantWords = Math.max(
+    ...bestItems.map(i => significantItemWords(i.displayName).length),
+  );
+  const mostSpecific = bestItems.filter(
+    i => significantItemWords(i.displayName).length === maxSignificantWords,
+  );
+  if (mostSpecific.length === 1) return mostSpecific[0];
+  bestItems = mostSpecific;
+
   // Tiebreak by size word: prefer the item whose raw name contains the
   // size word present in the customer's phrase.
   const sizeTag = (norm.match(/\b(small|medium|large|family|personal|jumbo)\b/) ?? [])[1];
@@ -391,14 +406,23 @@ export function resolvePhrase(rawText: string, lexicon: MenuLexicon): ResolvedOp
   //      Calzone) but the phrase also contains "pizza" — the customer said
   //      "pepperoni pizza", which names a composition, not a calzone. The
   //      pizza-context path wins when this override applies.
-  const hasPizzaIndicator =
-    /\bpizza\b|\bpie\b/i.test(fullNorm) ||
+  //
+  // The bare "plain"/"cheese" pattern (no explicit "pizza"/"pie" word) is
+  // only a pizza indicator for case 1, where nothing else on the menu
+  // explains the phrase. It must NOT drive case 2: overriding an item that
+  // was already matched requires checking that item's own category, not a
+  // bare regex over the raw phrase — otherwise a real non-pizza item whose
+  // name happens to start with "cheese " ("Cheese Fries", "cheese steak")
+  // gets misrouted into pizza disambiguation.
+  const explicitPizzaWord = /\bpizza\b|\bpie\b/i.test(fullNorm);
+  const bareCheeseOrPlain =
     /^(?:plain|cheese)$/i.test(normalizeText(baseText).trim()) ||
     /^(?:plain|cheese)\s+\w/i.test(normalizeText(baseText).trim());
+  const hasPizzaIndicator = explicitPizzaWord || bareCheeseOrPlain;
 
   const nonPizzaOverride =
     foundItem !== null &&
-    hasPizzaIndicator &&
+    explicitPizzaWord &&
     foundItem.category.toLowerCase() !== "pizza";
 
   if (!foundItem || nonPizzaOverride) {
