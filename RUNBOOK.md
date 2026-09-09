@@ -1550,11 +1550,31 @@ UUIDs) are left alone rather than guessed at. A one-time backfill against
 production collapsed 12 fragmented profiles into 8 real ones, no
 cross-tenant or name-based merges.
 
-**Live status: unresolved as of this writing.** See the migration 121/122
-entry immediately below — do not represent Customer CRM as live to a
-restaurant owner without checking the primary database directly first.
+**Live status: RESOLVED live 2026-09-09.** See the migration 121/122 entry
+immediately below.
 
-## Migration 121/122 live-status is unresolved — verify before trusting either the tracker or the build log — 2026-09-08
+## Migration 121/122 — RESOLVED live, verified directly against the primary DB — 2026-09-09
+
+The 2026-09-08 entry below flagged this as unresolved (tracker said
+local-only, build log self-reported "applied," neither independently
+re-confirmed in that session). Re-verified 2026-09-09 via the Supabase
+Management API `database/query` endpoint (`SUPABASE_ACCESS_TOKEN`, not
+`qa_ro` — `qa_ro` still cannot see either table):
+- `customers` (migration 121): table exists, `select count(*)` returns 8 rows
+  live — matches the documented backfill (12 fragmented profiles collapsed
+  into 8 real ones).
+- `sms_opt_outs` (migration 122): `pg_constraint` on the live table shows both
+  `uq_sms_opt_outs_tenant_phone UNIQUE (tenant_id, customer_phone)` and
+  `sms_opt_outs_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+  ON DELETE CASCADE` — exactly what 122's writeup claims, confirmed
+  independently rather than taken on the build log's word.
+`supabase migration list` still cannot be trusted as the check (CLI failed
+SASL auth against the pooler in this session, separately from the tracker
+drift already documented) — the Management API query is the reliable path
+when the CLI is unavailable. Customer CRM and the opt-out compliance fix are
+both safe to represent as live.
+
+### 2026-09-08 entry (superseded, kept for context)
 
 `supabase migration list` / `db push --dry-run` say migrations 121
 (`customers` table, Customer CRM) and 122 (`sms_opt_outs` unique-constraint
