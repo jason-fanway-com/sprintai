@@ -253,7 +253,7 @@ function isSizeGroup(g) {
 // in this script.
 async function foldSizeGroupIfPresent(menuItemId, groupRows, apply) {
   const sizeGroupIdx = groupRows.findIndex(isSizeGroup);
-  if (sizeGroupIdx === -1) return { remainingGroups: groupRows, sizeFoldPlan: null };
+  if (sizeGroupIdx === -1) return { remainingGroups: groupRows, sizeFoldPlan: null, targetItemIds: [menuItemId] };
   const sizeGroup = groupRows[sizeGroupIdx];
   const remainingGroups = groupRows.filter((_, i) => i !== sizeGroupIdx);
 
@@ -261,32 +261,46 @@ async function foldSizeGroupIfPresent(menuItemId, groupRows, apply) {
     `menu_items?id=eq.${menuItemId}&select=id,menu_id,name,category,description,price_cents`);
   if (!item) {
     console.error(`    FAILED size-fold: menu_item ${menuItemId} not found`);
-    return { remainingGroups, sizeFoldPlan: null };
+    return { remainingGroups, sizeFoldPlan: null, targetItemIds: [menuItemId] };
   }
 
   const sourceItem = { id: item.id, name: item.name, category: item.category, description: item.description, price_cents: item.price_cents };
   const sourceChoices = sizeGroup.choices.map(c => ({ id: null, name: c.name, display_name: c.name, price_cents: c.price_cents }));
   const plan = planSizeFold(sourceItem, sourceChoices);
 
-  if (!apply) return { remainingGroups, sizeFoldPlan: plan };
+  if (!apply) return { remainingGroups, sizeFoldPlan: plan, targetItemIds: [menuItemId] };
 
+  // F1 fix (2026-09-08 P0 follow-up): `remainingGroups` (Toppings, "Make
+  // it", etc) used to always get written against the ORIGINAL menuItemId
+  // below in main() -- fine for the singleton_update case (same row, kept
+  // active), but wrong for the explode case, where that original row gets
+  // retired (active=false) and every live customer-facing row is one of
+  // the brand-new `inserted` ones, which start with zero option_groups of
+  // their own (option_groups is FK'd to menu_item_id). Confirmed live: this
+  // exact gap broke "compose a bare topping onto the base pizza" for all
+  // 142 rows the one-time backfill script exploded (see
+  // scripts/repair-fold-missing-option-groups-20260908.ts). Returning every
+  // NEW row's id here so the caller writes remainingGroups onto each one
+  // instead of the now-inactive original.
+  let targetItemIds = [menuItemId];
   if (plan.retiresOriginal) {
     const insertRows = plan.actions
       .filter(a => a.kind === 'explode_insert')
       .map(a => ({ menu_id: item.menu_id, name: a.name, category: a.category, description: a.description, price_cents: a.price_cents, size_label: a.size_label, active: true, source: 'manual' }));
     const inserted = await supabase('POST', 'menu_items', insertRows, 'return=representation');
-    if (!inserted || inserted.length !== insertRows.length) { console.error(`    FAILED size-fold insert for "${item.name}"`); return { remainingGroups, sizeFoldPlan: plan }; }
+    if (!inserted || inserted.length !== insertRows.length) { console.error(`    FAILED size-fold insert for "${item.name}"`); return { remainingGroups, sizeFoldPlan: plan, targetItemIds }; }
     // return=representation so a successful-but-empty-body ambiguity (PATCH's
     // default Prefer is return=minimal, a 204 with no body) can't be
     // misread as the same `null` the helper returns on a real HTTP error.
     const retired = await supabase('PATCH', `menu_items?id=eq.${item.id}`, { active: false }, 'return=representation');
     if (!retired || retired.length !== 1) console.error(`    FAILED to retire original "${item.name}" after size-fold`);
+    targetItemIds = inserted.map(r => r.id);
   } else if (plan.actions[0]?.kind === 'singleton_update') {
     const updated = await supabase('PATCH', `menu_items?id=eq.${item.id}`, { size_label: plan.actions[0].size_label }, 'return=representation');
     if (!updated || updated.length !== 1) console.error(`    FAILED singleton size_label update for "${item.name}"`);
   }
 
-  return { remainingGroups, sizeFoldPlan: plan };
+  return { remainingGroups, sizeFoldPlan: plan, targetItemIds };
 }
 
 async function writeItem(menuItemId, groupRows) {
@@ -349,7 +363,7 @@ async function main() {
       continue;
     }
     let groupRows = buildGroupRows(match, result.groups);
-    const { remainingGroups, sizeFoldPlan } = await foldSizeGroupIfPresent(menuItemId, groupRows, APPLY);
+    const { remainingGroups, sizeFoldPlan, targetItemIds } = await foldSizeGroupIfPresent(menuItemId, groupRows, APPLY);
     if (sizeFoldPlan) {
       itemsSizeFolded++;
       const desc = sizeFoldPlan.retiresOriginal
@@ -365,12 +379,19 @@ async function main() {
     totalGroups += groupRows.length;
     totalChoices += nChoices;
     console.log(`${groupRows.length} group(s), ${nChoices} choice(s)`);
-    extractLog.push({ menuItemId, match, groups: groupRows });
+    extractLog.push({ menuItemId, match, groups: groupRows, targetItemIds });
 
+    // Write the same remaining groups (Toppings/"Make it"/etc, identical
+    // across every size of the same base item) onto EACH target row --
+    // targetItemIds is the exploded rows' new ids when a size-fold just
+    // happened (see foldSizeGroupIfPresent), or just [menuItemId] unchanged
+    // otherwise.
     if (APPLY && groupRows.length) {
-      const written = await writeItem(menuItemId, groupRows);
-      if (written !== groupRows.length) {
-        console.error(`    partial write: ${written}/${groupRows.length} groups`);
+      for (const targetId of targetItemIds) {
+        const written = await writeItem(targetId, groupRows);
+        if (written !== groupRows.length) {
+          console.error(`    partial write on ${targetId}: ${written}/${groupRows.length} groups`);
+        }
       }
     }
     await sleep(jitter(2000, 2000)); // human page-load pace, jittered 2-4s

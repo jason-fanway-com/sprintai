@@ -102,6 +102,53 @@ for (const c of choiceRows ?? []) {
   choicesByGroup.set(c.option_group_id, list);
 }
 
+// F1 fix (2026-09-08 P0 follow-up): option_groups is FK'd to menu_item_id,
+// so an explode_insert's brand-new row starts with ZERO option_groups --
+// planSizeFold only ever decided what to do with the SIZE group, it never
+// carried the item's OTHER groups (Toppings, "Make it", "Add Extra",
+// dressing substitutions, etc) forward. Confirmed live: every one of the
+// first 142 rows this script ever exploded ended up with no Toppings group
+// at all, breaking "compose a bare topping onto the base pizza" (no group
+// left to select the topping from) -- see
+// scripts/repair-fold-missing-option-groups-20260908.ts for the one-time
+// backfill of that damage. This fetch + the clone loop below (APPLY only)
+// is the fix so this can't happen again on a future run of this script.
+const { data: otherGroupsRaw, error: otherGroupsErr } = await supabase
+  .from("option_groups")
+  .select("id,menu_item_id,name,kind,required,min_select,max_select,provenance,source_span,import_key,display_order")
+  .in("menu_item_id", (sizeGroups ?? []).map(g => g.menu_item_id))
+  .not("id", "in", `(${groupIds.length ? groupIds.join(",") : "00000000-0000-0000-0000-000000000000"})`) as { data: OptionGroupRow[] | null; error: unknown };
+if (otherGroupsErr) { console.error(otherGroupsErr); Deno.exit(1); }
+const otherGroupsByItem = new Map<string, OptionGroupRow[]>();
+for (const g of otherGroupsRaw ?? []) {
+  const list = otherGroupsByItem.get(g.menu_item_id) ?? [];
+  list.push(g);
+  otherGroupsByItem.set(g.menu_item_id, list);
+}
+const otherGroupIds = (otherGroupsRaw ?? []).map(g => g.id);
+const otherChoicesByGroup = new Map<string, OptionChoiceRow[]>();
+for (let i = 0; i < otherGroupIds.length; i += 200) {
+  const batch = otherGroupIds.slice(i, i + 200);
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("option_choices")
+      .select("id,option_group_id,name,display_name,price_cents,is_default,provenance,source_span,import_key,display_order")
+      .in("option_group_id", batch)
+      .range(from, from + pageSize - 1) as { data: OptionChoiceRow[] | null; error: unknown };
+    if (error) { console.error(error); Deno.exit(1); }
+    for (const c of data ?? []) {
+      const list = otherChoicesByGroup.get(c.option_group_id) ?? [];
+      list.push(c);
+      otherChoicesByGroup.set(c.option_group_id, list);
+    }
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+}
+console.log(`other (non-Size) option_groups on items being exploded: ${otherGroupsRaw?.length ?? 0}, choices: ${[...otherChoicesByGroup.values()].reduce((s, l) => s + l.length, 0)}`);
+
 console.log(`shop_id=${ZIOS_SHOP_ID} menu_id=${menuId} mode=${APPLY ? "APPLY" : "dry-run"}`);
 console.log(`active menu_items: ${activeItems?.length}`);
 console.log(`required Size-named option_groups: ${sizeGroups?.length}`);
@@ -158,6 +205,7 @@ if (!APPLY) {
 
 // ---- APPLY ----
 let insertedTotal = 0, retiredTotal = 0, singletonUpdatedTotal = 0, failures = 0;
+let clonedGroupsTotal = 0, clonedChoicesTotal = 0;
 
 for (const { plan } of explodePlans) {
   const insertRows = plan.actions
@@ -166,9 +214,44 @@ for (const { plan } of explodePlans) {
       menu_id: menuId, name: a.name, category: a.category, description: a.description,
       price_cents: a.price_cents, size_label: a.size_label, active: true, source: "manual",
     }));
+  // Postgres preserves input row order for a single multi-row INSERT ...
+  // RETURNING, so `inserted[i]` corresponds to `insertRows[i]` / `plan.actions[i]`.
   const { data: inserted, error: insErr } = await supabase.from("menu_items").insert(insertRows).select("id");
   if (insErr) { console.error(`  FAILED insert for "${plan.item_name}":`, insErr); failures++; continue; }
   insertedTotal += inserted?.length ?? 0;
+
+  // Clone the item's OTHER (non-Size) option_groups + choices onto each new
+  // size row -- see the "F1 fix" comment above where these are fetched.
+  // Without this, a folded item starts with none of its topping/modifier
+  // groups (option_groups is FK'd to menu_item_id, a new row has no rows
+  // pointing at it yet).
+  const groupsToClone = otherGroupsByItem.get(plan.item_id) ?? [];
+  if (groupsToClone.length > 0 && inserted) {
+    for (const row of inserted) {
+      for (const g of groupsToClone) {
+        const { data: newGroup, error: cloneGroupErr } = await supabase
+          .from("option_groups")
+          .insert({
+            menu_item_id: row.id, name: g.name, kind: g.kind, required: g.required,
+            min_select: g.min_select, max_select: g.max_select, provenance: g.provenance,
+            source_span: g.source_span, import_key: g.import_key, display_order: g.display_order,
+          })
+          .select("id").single();
+        if (cloneGroupErr || !newGroup) { console.error(`  FAILED to clone group "${g.name}" onto new row for "${plan.item_name}":`, cloneGroupErr); failures++; continue; }
+        clonedGroupsTotal++;
+        const choices = otherChoicesByGroup.get(g.id) ?? [];
+        if (choices.length === 0) continue;
+        const choiceRowsToInsert = choices.map(c => ({
+          option_group_id: newGroup.id, name: c.name, display_name: c.display_name, price_cents: c.price_cents,
+          is_default: c.is_default, provenance: c.provenance, source_span: c.source_span,
+          import_key: c.import_key, display_order: c.display_order,
+        }));
+        const { data: newChoices, error: cloneChoicesErr } = await supabase.from("option_choices").insert(choiceRowsToInsert).select("id");
+        if (cloneChoicesErr) { console.error(`  FAILED to clone choices for group "${g.name}" onto new row for "${plan.item_name}":`, cloneChoicesErr); failures++; continue; }
+        clonedChoicesTotal += newChoices?.length ?? 0;
+      }
+    }
+  }
 
   const { error: retireErr } = await supabase.from("menu_items").update({ active: false }).eq("id", plan.item_id);
   if (retireErr) { console.error(`  FAILED retire for "${plan.item_name}":`, retireErr); failures++; continue; }
@@ -199,5 +282,5 @@ if (delChoicesErr) { console.error("FAILED to delete option_choices:", delChoice
 const { error: delGroupsErr } = await supabase.from("option_groups").delete().in("id", groupIds);
 if (delGroupsErr) { console.error("FAILED to delete option_groups:", delGroupsErr); failures++; }
 
-console.log(`\nApplied: ${insertedTotal} inserted, ${retiredTotal} retired, ${singletonUpdatedTotal} singleton size_label updates, ${groupIds.length} Size groups deleted, ${failures} failures.`);
+console.log(`\nApplied: ${insertedTotal} inserted, ${retiredTotal} retired, ${singletonUpdatedTotal} singleton size_label updates, ${clonedGroupsTotal} other option_groups cloned onto new rows, ${clonedChoicesTotal} option_choices cloned, ${groupIds.length} Size groups deleted, ${failures} failures.`);
 console.log("DONE. product_key/display_name/bot_state/ask_plan/lexicon are unchanged -- run a compile-menu recompile against Zio's next.");
