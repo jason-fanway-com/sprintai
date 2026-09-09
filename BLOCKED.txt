@@ -6379,3 +6379,102 @@ Committed as d9b8251. Scratch verification scripts (scripts/tmp-d2-live-
 verify-20260909.ts, tmp-d3-live-verify-20260909.ts, tmp-d3-live-verify2-
 20260909.ts, tmp-post-d1d2d3-zios-sanity-20260909.ts) left uncommitted —
 throwaway, not product code.
+
+2026-09-09 ~22:30 UTC — D1 RE-DIAGNOSED AND FIXED (PO re-diagnosis, session
+agent:main:po:claude): the earlier "D1 not a bug" conclusion (8d5006b) was
+wrong. Root cause confirmed against the DB (conversation c5a038f6): a single
+conversation spanned 19.6h across three sittings (10:11pm Sep 8, 7:12am Sep
+9, 5:48pm Sep 9). Both individual "closed" replies were correct for when they
+were sent -- the bug is this evening's message landed in a 19h-old
+conversation still carrying this morning's context, because the reuse window
+(supabase/functions/chat-sms/index.ts, "Find or create conversation") bounded
+CREATION age (`started_at >= now-24h`), not inactivity. Same root-cause class
+as the 2026-09-08 P0 phantom-cart incident (stale state carried forward
+across sittings) -- that incident was patched only for the explicit RESET
+keyword; this closes the general case.
+
+FIX (chat-sms/index.ts, ~L4371-4448): two independent boundaries now end a
+conversation, either fires first:
+  1. INACTIVITY -- no message for CONVERSATION_TIMEOUT_MS = 3h. No stronger
+     existing TTL convention found elsewhere in this repo to prefer instead
+     (checked: merchant-auth's 12h token TTL is an auth session, not an
+     order conversation; eval-sweep's 10min IDLE_MINUTES is a
+     judge-visibility window, not a customer-facing timeout) -- used the
+     PM-specified 3h as-is.
+  2. SHOP CLOSE -- the shop's local calendar date (shop.timezone, via a new
+     getBusinessDateAt(when, tz) helper factored out of the existing
+     getBusinessDate) at the conversation's last_message_at differs from
+     today's. Independent of elapsed time -- an 11:50pm -> 12:10am gap is
+     only 20 minutes but still ends the conversation.
+On either boundary the OLD conversation is marked `status: resolved` (same
+mechanism the RESET keyword already uses) so the next lookup (filtered to
+status='active') misses it and falls through to "create new conversation" --
+zero messages, zero cart welded over. Nothing deleted; old rows stay as audit
+trail. Also removed a stray `[DIAG-D1]` console.log left over from the
+original (wrong) investigation.
+
+SWEEP for other unbounded-lifetime state (task item 4): order_carts,
+pending_disambiguation, and ask_plan_selections (inside cart_json) have NO
+independent TTL of their own -- but ALL order_carts queries in chat-sms
+(confirmed via grep, every one of ~35 call sites) are scoped by `conversation_id`,
+and the cart lookup at "Find or create order cart" only ever looks up a cart
+for the CURRENT conversation.id. Since the conversation fix above bounds
+conversation.id churn, cart/pending_disambiguation/ask_plan_selections are
+bounded transitively -- a timed-out conversation gets a brand-new cart with
+zero pending state, no separate fix needed. Public-tester (web /try) sessions
+go through the same "Find or create conversation" code path (channel==="web"
+branch), so they're covered by the identical fix, not a separate mechanism.
+
+VERIFY (task item 5, hours-check timezone) -- CONFIRMED CORRECT, no fix
+needed, per the PM's ask to verify rather than assume: getBusinessDate,
+getCurrentTime, getBusinessDayKey, and getLocalMinutes (chat-sms/index.ts
+~L3247-3304) all compute via Intl.DateTimeFormat with `timeZone: shop.timezone`
+-- never server/UTC wall-clock time or bare `Date.getDay()`/`getHours()`.
+The business-hours check at ~L4720 (`cart.phase === "greeting"`) consumes
+these shop-local values throughout. The PM's original assertion that this was
+broken was incorrect; the prior session's "not a bug" conclusion on the hours
+logic itself stands.
+
+TEST: `deno test --allow-env --allow-net --allow-read supabase/functions/chat-sms/`
+-- 691 passed, 0 failed (all pre-existing tests still green; no test
+previously covered the reuse-window logic itself).
+
+LIVE VERIFY (real, not synthetic -- against deployed chat-sms v333, project
+rvdqfxtrskxekfkqnegx): scripts/tmp-d1-timeout-live-verify-20260909.ts against
+Vito's Pizza (shop e0000000-0000-0000-0000-000000000001, test mode). Turn 1
+built a real $13.94 cart (one small Margherita). Backdated that
+conversation's last_message_at 4h via REST PATCH (simulating real elapsed
+time without waiting). Turn 2 (same session_id): got a fresh greeting/menu
+link, NOT a reference to the Margherita order. DB confirmed: new
+conversation id created, OLD conversation flipped to status=resolved, new
+conversation's cart is `[]`. PASS on all three checks.
+
+Shop-close boundary sub-case (independent of the 3h window) verified
+DETERMINISTICALLY, not via a live HTTP call at real midnight (today's actual
+wall-clock time when this ran was ~18:26 EDT, so no request made in the last
+3h could naturally straddle a calendar-day boundary to test this live): ran
+the exact deployed getBusinessDateAt logic against lastMsg=2026-09-08 23:58
+EDT, now=2026-09-09 00:10 EDT (12 min apart, well inside the 3h window) --
+crossedShopDay correctly evaluated true. A true end-to-end live HTTP
+confirmation of this specific sub-case would need to run within ~3h of a
+real local midnight; not done this session. Flagging as a known verification
+gap, not a suspected defect -- the code path is identical to the inactivity
+path that WAS live-verified, differing only in which boolean trips.
+
+DEPLOYED: `supabase functions deploy chat-sms` -- confirmed live via
+`supabase functions list`: chat-sms v333, ACTIVE, updated 2026-09-09 22:25:02
+UTC.
+
+OUT OF SCOPE, LEFT UNTOUCHED: supabase/functions/admin-chat/index.ts has
+unrelated uncommitted changes already sitting in this worktree before this
+task started (owner_update_menu_item/REMOVE_ITEM read-back-before-claiming-
+success fix) -- not part of D1/D2/D3, no spec or Melvin check attached to it
+in this session, left exactly as found. Not committed, not deployed.
+
+Scratch verification script (scripts/tmp-d1-timeout-live-verify-20260909.ts)
+left uncommitted, same convention as every other tmp-*.ts in this repo --
+throwaway, not product code. D1 committed as chat-sms/index.ts changes only
+(the D3 unprompted-name-capture diff already sitting in this file, sitting
+uncommitted before this task started and separately confirmed "stands as
+previously corrected," is committed together with it since it's the same
+file and was already approved product code, not experimental).

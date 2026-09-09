@@ -3244,16 +3244,24 @@ function jsonError(message: string, status = 400): Response {
 }
 
 function getBusinessDate(timezone: string): string {
+  return getBusinessDateAt(new Date(), timezone);
+}
+
+// Same as getBusinessDate but for an arbitrary instant, not just "now" --
+// used by the D1 conversation-timeout shop-close-boundary check to compare
+// the shop's local calendar date of a conversation's last message against
+// today's.
+function getBusinessDateAt(when: Date, timezone: string): string {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
-    }).formatToParts(new Date());
+    }).formatToParts(when);
     const y = parts.find(p => p.type === "year")?.value  ?? "";
     const m = parts.find(p => p.type === "month")?.value ?? "";
     const d = parts.find(p => p.type === "day")?.value   ?? "";
     return `${y}-${m}-${d}`;
   } catch {
-    return new Date().toISOString().split("T")[0];
+    return when.toISOString().split("T")[0];
   }
 }
 
@@ -4368,23 +4376,46 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   }
 
   // ── Find or create conversation ───────────────────────────────────────────
-  const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  let conversation: { id: string } | null = null;
+  // D1 fix (2026-09-09): a conversation used to be reused for up to 24h from
+  // its CREATION (`started_at >= windowStart`), which bounds age, not
+  // inactivity. Confirmed live (conversation c5a038f6): a session begun
+  // 10:11pm, resumed 7:12am and again 5:48pm -- 19.6h span, three sittings,
+  // all still "within 24h of started_at" -- welded this evening's message
+  // onto this morning's cart/context. Same root-cause class as the
+  // 2026-09-08 P0 phantom-cart incident (stale state carried forward across
+  // sittings). Two independent boundaries now end a conversation, either one
+  // fires first:
+  //   1. INACTIVITY -- no message for CONVERSATION_TIMEOUT_MS (3h). Long
+  //      enough that a customer pulled away mid-order (interrupted at work,
+  //      stepping away to check with someone) comes back to a live cart;
+  //      short enough that a session never survives a full daypart shift.
+  //      No stronger existing TTL convention found elsewhere in this repo to
+  //      prefer instead (merchant-auth's 12h token TTL is an auth session,
+  //      not an order conversation; eval-sweep's 10min IDLE_MINUTES is a
+  //      judge-visibility window, not a customer-facing timeout) -- using
+  //      the PM-specified 3h.
+  //   2. SHOP CLOSE -- the shop's local calendar day (shop.timezone) has
+  //      rolled over since the conversation's last message. Independent of
+  //      elapsed time: 11:50pm -> 12:10am is only 20 minutes (inside the 3h
+  //      window) but still ends the conversation, because every shop closes
+  //      at some point each day and a session must never carry one day's
+  //      hours/prices/context into the next.
+  // On either boundary: mark the OLD conversation `resolved` -- the same
+  // mechanism the RESET keyword already uses (see below) -- so this lookup
+  // (status='active') misses it next time and falls through to "create new
+  // conversation": zero messages, zero cart, no resurrected context. Nothing
+  // is deleted; the old row stays as audit trail.
+  const CONVERSATION_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+  let conversation: { id: string; last_message_at?: string } | null = null;
 
   if (channel === "web") {
-    // Mirror the SMS freshness window: only reuse a web conversation that is
-    // still active AND was started within the last 24h. A stale prior-day
-    // session no longer welds onto a new one -- it times out and we start a
-    // fresh conversation. Within-window same-session reuse is unchanged
-    // (started_at >= windowStart for any conversation begun today).
-    //
     // CRITICAL FIX (2026-09-08, P0 Zio's investigation): this lookup was
-    // scoped ONLY by session_id + channel + status + window -- NOT by
-    // tenant_id. `shop_id` and `session_id` are independent, client-supplied
-    // values in the request body with no server-side binding between them
-    // (see shop_id/sessionId destructure above). Any client that ever sent
-    // the same session_id against a different shop_id (a shared widget, a
-    // buggy integration, a test harness reusing a fixed session_id, the
+    // scoped ONLY by session_id + channel + status -- NOT by tenant_id.
+    // `shop_id` and `session_id` are independent, client-supplied values in
+    // the request body with no server-side binding between them (see
+    // shop_id/sessionId destructure above). Any client that ever sent the
+    // same session_id against a different shop_id (a shared widget, a buggy
+    // integration, a test harness reusing a fixed session_id, the
     // web:imsg-* bridge) would have this query hand back a DIFFERENT
     // TENANT'S conversation row -- and, transitively via conversation_id,
     // that tenant's full message history and cart. This function runs on
@@ -4396,21 +4427,34 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // tenant_id, exactly like the SMS branch below and the lifetime-first-
     // contact check further down already do, closes it.
     const { data } = await supabase
-      .from("conversations").select("id")
+      .from("conversations").select("id, last_message_at")
       .eq("tenant_id", shop.tenant_id)
       .eq("session_id", sessionId).eq("channel", "web")
       .eq("status", "active")
-      .gte("started_at", windowStart)
       .order("started_at", { ascending: false }).limit(1).maybeSingle();
     conversation = data;
   } else {
     const { data } = await supabase
-      .from("conversations").select("id")
+      .from("conversations").select("id, last_message_at")
       .eq("tenant_id", shop.tenant_id).eq("customer_phone", customerPhone)
       .eq("channel", "sms").eq("status", "active")
-      .gte("started_at", windowStart)
       .order("started_at", { ascending: false }).limit(1).single();
     conversation = data;
+  }
+
+  if (conversation) {
+    const lastMsgAt = conversation.last_message_at;
+    const lastMsgDate = lastMsgAt ? new Date(lastMsgAt) : null;
+    const now = new Date();
+    const inactiveTooLong = !lastMsgDate || (now.getTime() - lastMsgDate.getTime()) > CONVERSATION_TIMEOUT_MS;
+    const crossedShopDay = lastMsgDate
+      ? getBusinessDateAt(lastMsgDate, shop.timezone) !== getBusinessDateAt(now, shop.timezone)
+      : false;
+    if (inactiveTooLong || crossedShopDay) {
+      console.log(`[chat-sms] D1 conversation timeout: resolving ${conversation.id} (inactive=${inactiveTooLong}, crossedShopDay=${crossedShopDay}, lastMsgAt=${lastMsgAt ?? "null"})`);
+      await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
+      conversation = null;
+    }
   }
 
   const isFirstMessage = !conversation;
@@ -5559,7 +5603,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       const looksLikeName = /^[A-Z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;
       const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
       const askedForName = typeof lastAssistant?.content === "string" && isAskingForPickupName(lastAssistant.content);
-      if (looksLikeName && askedForName) {
+      // D3 fix (2026-09-09): a customer can volunteer their pickup name a turn
+      // before the bot asks for it (confirmed live — "I wrote Jason before it
+      // asked for name" — an early answer, not a message-ordering race). The
+      // old askedForName-only gate ignored that unambiguous answer and asked
+      // again. Recognize it as unprompted ONLY when nothing else could
+      // plausibly be the answer instead: order_type is already decided (else
+      // a bare word could be answering "pickup or delivery?"), no cart line
+      // still has a pending required option (else it could be answering
+      // "what size?"/"how would you like that cooked?"), and it isn't a
+      // stock yes/no/filler word. looksLikeName itself is untouched.
+      const anyPendingOptions = cartItems.some(i => ((i as CartItem).pending_options?.length ?? 0) > 0);
+      const isFillerWord = impliesOrderConfirmation(trimmed) || /^(?:no|nope|nah|none|nothing|maybe|idk|hi|hello|hey)$/i.test(trimmed);
+      const unpromptedName = !askedForName && !!cart.order_type && !anyPendingOptions && !isFillerWord;
+      if (looksLikeName && (askedForName || unpromptedName)) {
         const orderType = cart.order_type;
         const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
         // C2 deadlock breaker (2026-09-01): For delivery-enabled shops, the customer
@@ -5575,7 +5632,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           cart.order_type = "pickup";
         }
         if (!hasIncompleteBundle) {
-          console.log(`[chat-sms] C2 pre-LLM name→submit shortcut firing (conv=${conversation.id}, name="${trimmed}", cart=${cart.id})`);
+          console.log(`[chat-sms] C2 pre-LLM name→submit shortcut firing (conv=${conversation.id}, name="${trimmed}", cart=${cart.id}, unprompted=${!askedForName})`);
           const submitInput: Record<string, unknown> = { pickup_name: trimmed };
           const submitResult = await executeTool("submit_order", submitInput, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
           if (submitResult.ok && submitResult.checkoutUrl) {
