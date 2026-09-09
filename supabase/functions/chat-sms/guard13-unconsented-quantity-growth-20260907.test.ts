@@ -21,6 +21,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import { computeGuard13, type Guard13CartLine } from "./guard13-unconsented-quantity-growth.ts";
 
 const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+// Item 2 (2026-09-09): extractCustomerReferencedItems moved to cart.ts.
+const CART_SOURCE = Deno.readTextFileSync(new URL("./cart.ts", import.meta.url));
 
 // A trivial "was this item named in the message" predicate for tests —
 // GUARD 13 takes this as an external parameter (mirroring GUARD 9's shape),
@@ -262,9 +264,10 @@ Deno.test("GUARD 13 family: sanity check — the mirror DOES detect a real, deli
   assertEquals(isNamed("Buffalo Chicken Pizza"), true);
 });
 
-Deno.test("GUARD 13 family: buildMenuItemNames/extractCustomerReferencedItems mirrors match index.ts's current source (drift guard)", () => {
+Deno.test("GUARD 13 family: buildMenuItemNames/extractCustomerReferencedItems mirrors match current source (drift guard)", () => {
   assert(INDEX_SOURCE.includes("function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {"), "buildMenuItemNames signature moved or changed — update the mirror above");
-  assert(INDEX_SOURCE.includes("function extractCustomerReferencedItems("), "extractCustomerReferencedItems signature moved or changed — update the mirror above");
+  // extractCustomerReferencedItems was extracted to cart.ts (Item 2, 2026-09-09)
+  assert(CART_SOURCE.includes("function extractCustomerReferencedItems("), "extractCustomerReferencedItems signature moved or changed — update the mirror above");
   assert(INDEX_SOURCE.includes('const GENERIC_LAST_WORDS = new Set(['), "GENERIC_LAST_WORDS moved or changed — update the mirror above");
   assert(INDEX_SOURCE.includes('"double", "triple"'), "GENERIC_LAST_WORDS contents changed — update GENERIC_LAST_WORDS_MIRROR above");
 });

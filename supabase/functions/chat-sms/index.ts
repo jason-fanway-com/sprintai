@@ -49,6 +49,7 @@ import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
+import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
@@ -59,6 +60,23 @@ import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
 import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
 import { decideShortfallRetry } from "./enumeration-shortfall-retry.ts";
+import {
+  claimsItemInCart,
+  extractCustomerReferencedItems,
+  filterNegatedItems,
+  findMissingCartItems,
+  isClosingReply,
+  replyAcknowledgesCart,
+} from "./cart.ts";
+import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
+import { padReceiptLine, renderItemizedRecap, renderLedgerFooter } from "./itemizer.ts";
+import { groupChoicesAlreadySaid, renderMissingOptionsPrompt } from "./sequencer.ts";
+import {
+  detectBareTipReply,
+  isAdditiveClearCartMessage,
+  isExplicitCartRestart,
+  parseBareTipDollars,
+} from "./intent-router.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1886,13 +1904,7 @@ async function saveCart(
     }
   }
 
-  const subtotal = cart.reduce((s, i) => {
-    if ((i as BundleItem).type === "bundle") {
-      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
-    }
-    const r = i as CartItem;
-    return s + (r.price_cents * (r.quantity || 1));
-  }, 0);
+  const subtotal = computeCartSubtotalCents(cart);
   const { error } = await supabase.from("order_carts")
     .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal })
     .eq("id", cartId);
@@ -1994,11 +2006,7 @@ async function runOrderingLoop(
   // correction (set qty→1 or removed last item), skip the LLM and return
   // a confirmation with the actual cart state.
   if (correctionApplied) {
-    const subtotal = cart.reduce((s, i) => {
-      if ((i as BundleItem).type === "bundle") return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
-      const r = i as CartItem;
-      return s + (r.price_cents * (r.quantity || 1));
-    }, 0);
+    const subtotal = computeCartSubtotalCents(cart);
     const cartTotal = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (cart.reduce((s, i) => { const r = (i as any); return s + (r.driver_tip_cents ?? 0); }, 0));
     // We need to read driver_tip from the DB row — use the cart's tip from the caller
     // For now: compute total from cart items + fee + delivery. Tip will be added when loaded.
@@ -2021,20 +2029,9 @@ async function runOrderingLoop(
   // driver tip and the user replied with a bare tip amount, this is a tip-only
   // turn. Capture the prior assistant's last message to check.
   let tipSuppressAddItem = false;
-  {
-    const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
-    const offeredTip = lastAssistant && typeof lastAssistant.content === "string"
-      && /\b(?:tip|driver tip)\b/i.test(lastAssistant.content)
-      && /\$(?:1|2|3|5)\b/i.test(lastAssistant.content);
-    const userMsg = userMessage.trim();
-    const isBareTip = offeredTip && (
-      /^\$?\s*(1|2|3|5)\s*$/.test(userMsg) ||
-      /^(no tip|no thanks|skip|none|pass|no)\s*$/i.test(userMsg)
-    );
-    if (isBareTip) {
-      tipSuppressAddItem = true;
-      console.log(`[chat-sms] GUARD: bare-tip reply detected, suppressing add_item this turn (conv msg="${userMsg}")`);
-    }
+  if (detectBareTipReply(history, userMessage)) {
+    tipSuppressAddItem = true;
+    console.log(`[chat-sms] GUARD: bare-tip reply detected, suppressing add_item this turn (conv msg="${userMessage.trim()}")`);
   }
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -2042,9 +2039,7 @@ async function runOrderingLoop(
     // When the user responds to a tip offer, call set_driver_tip directly
     // and return. No LLM inference needed — and no risk of add_item hallucination.
     if (tipSuppressAddItem && attempt === 0) {
-      const userMsg = userMessage.trim();
-      const tipMatch = userMsg.match(/\$?\s*([0-9]+)/);
-      const tipArg = tipMatch ? parseInt(tipMatch[1], 10) : 0;
+      const tipArg = parseBareTipDollars(userMessage);
       if (tipArg > 0) {
         const tipResult = await executeTool(
           "set_driver_tip", { tip_cents: tipArg * 100 }, cart, menu, cartId, supabase, shopName, testMode,
@@ -2155,10 +2150,8 @@ async function runOrderingLoop(
       // — the anchored ^…$ pattern missed these. The broader check uses a
       // second non-anchored regex so "actually" + "cancel my order" passes.
       if (toolBlock.name === "clear_cart" && cart.length > 0) {
-        const e1msg = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        const isExplicitRestart = /^(start over|restart|cancel (?:everything|all|the order|it all|my order)|new order|clear (?:the cart|it all|everything)|reset|wipe (?:the cart|it|everything))[!.]?$/i.test(e1msg)
-          || /\b(?:cancel\s+(?:my\s+)?order|cancel\s+(?:everything|all|it\s+all)|forget\s+(?:it|the whole|everything)|start\s+over|wipe\s+(?:the\s+)?(?:cart|it|everything|all))\b/i.test(e1msg);
-        const isAdditive = /\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(e1msg);
+        const isExplicitRestart = isExplicitCartRestart(userMessage);
+        const isAdditive = isAdditiveClearCartMessage(userMessage);
         if (isAdditive && !isExplicitRestart) {
           console.warn(`[chat-sms] E1 GUARD: suppressed clear_cart — additive user intent (cartId=${cartId}, cart has ${cart.length} items). Message: ${JSON.stringify(userMessage).slice(0, 120)}`);
           toolResults.push({
@@ -2366,89 +2359,10 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false, hasH
 
 // ─── Phase A: Deterministic Ledger-status rendering ─────────────────────────
 
-/**
- * Render the authoritative money/status footer from Ledger truth.
- * The LLM owns the conversational framing; the Ledger owns the numbers.
- * This is appended to every non-checkout reply that has cart items.
- *
- * STEP 2 FIX (2026-09-09, P0): this used to fold the fee into a single
- * "N items — $X.XX total" line on every turn after the first, with the
- * subtotal/fee breakdown shown only once (`showFeeBreakdown`, gated on
- * `order_carts.fee_disclosed_at`) to cut repeat noise. That fold is defect
- * class (c) from the Zio's incident write-up: a customer who only ever sees
- * a bare total on turns 2+ has no independent number to check it against.
- * Every turn with cart items now renders the same three labelled lines --
- * Subtotal, Service fee (+ Delivery/Tip when present), Total -- code-owned,
- * never folded. `showFeeBreakdown` is kept as a parameter for call-site
- * stability but no longer suppresses anything; `fee_disclosed_at` still
- * gets written by callers, it just no longer gates what's shown.
- */
-function renderLedgerFooter(
-  cart: AnyCartItem[],
-  phase: string,
-  deliveryFeeCents?: number,
-  driverTipCents?: number,
-  showFeeBreakdown = true,
-): string {
-  void showFeeBreakdown;
-  return renderMoneyFooterLines(cart, SERVICE_FEE_CENTS, deliveryFeeCents, driverTipCents);
-}
-
-/**
- * Deterministic itemized recap — lists each cart line with its chosen
- * options/modifiers, not just the total renderLedgerFooter already shows.
- * Reuses the same "group: choice" formatting submit_order's own Stripe line
- * items use (see the lineItems.map description logic in executeTool) so the
- * two never drift apart.
- */
-/**
- * Right-pads `label`, right-aligns `amount`, to a fixed total width — a
- * plain-text receipt column, no box-drawing characters (reads correctly in
- * an SMS). Falls back to a single space when the label alone already fills
- * the width, so a long item name never throws on a negative repeat count.
- */
-function padReceiptLine(label: string, amount: string, width = 38): string {
-  const gap = Math.max(1, width - label.length - amount.length);
-  return `${label}${" ".repeat(gap)}${amount}`;
-}
-
-/**
- * Deterministic itemized recap — a full plain-text receipt (line items with
- * their own price, chosen options, subtotal, service fee, and total), not
- * just a count and a total. This is the structural defense against the
- * double-charge class (2026-09-06, Jason: "Luca only caught a $37 error
- * because he happened to read a number") — the model never states these
- * figures itself.
- */
-function renderItemizedRecap(cart: AnyCartItem[], deliveryFeeCents?: number, driverTipCents?: number): string {
-  const lines: string[] = [];
-  let subtotal = 0;
-  for (const i of cart) {
-    if ((i as BundleItem).type === "bundle") {
-      const b = i as BundleItem;
-      if (!b.complete) continue; // an incomplete bundle has no settled price yet
-      subtotal += b.price_cents;
-      const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-      lines.push(padReceiptLine(`${b.name}${detail ? ` (${detail})` : ""}`, `$${(b.price_cents / 100).toFixed(2)}`));
-      continue;
-    }
-    const r = i as CartItem;
-    const lineTotal = r.price_cents * (r.quantity || 1);
-    subtotal += lineTotal;
-    const qtyPrefix = (r.quantity || 1) > 1 ? `${r.quantity}x ` : "";
-    const detail = r.modifiers?.length > 0
-      ? r.modifiers.join(", ")
-      : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ") : "");
-    lines.push(padReceiptLine(`${qtyPrefix}${r.name}${detail ? ` (${detail})` : ""}`, `$${(lineTotal / 100).toFixed(2)}`));
-  }
-  const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);
-  lines.push(padReceiptLine("Subtotal", `$${(subtotal / 100).toFixed(2)}`));
-  lines.push(padReceiptLine("Service fee", `$${(SERVICE_FEE_CENTS / 100).toFixed(2)}`));
-  if (deliveryFeeCents) lines.push(padReceiptLine("Delivery fee", `$${(deliveryFeeCents / 100).toFixed(2)}`));
-  if (driverTipCents) lines.push(padReceiptLine("Driver tip", `$${(driverTipCents / 100).toFixed(2)}`));
-  lines.push(padReceiptLine("Total", `$${(totalCents / 100).toFixed(2)}`));
-  return lines.join("\n");
-}
+// renderLedgerFooter, padReceiptLine, renderItemizedRecap now live in
+// itemizer.ts (imported above) — same reason GUARD 9/13 were extracted (see
+// their headers): a test exercises the exact renderer this file calls, not a
+// hand-copied mirror, and it's importable without booting Deno.serve.
 
 /**
  * FIX (2026-09-06, Jason): the system prompt already tells the model never
@@ -2488,81 +2402,9 @@ function isAskingForPickupName(text: string): boolean {
     && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
 }
 
-/**
- * FIX (2026-09-06, Jason — internal-name leak, the 4th place a raw name
- * reached a customer today, this one written AFTER the earlier sweep): a
- * customer was told "Almost - I still need to know: Chicken Caesar
- * (Dressing). What'll it be?" — an item name with an option-group name
- * bolted on in parentheses is not how a person talks; a person asks "what
- * dressing do you want on the Caesar salad?"
- *
- * This is the ONE place any customer-facing text asks about missing
- * required options, on ANY item — GUARD 2's pending-options branch and D1's
- * pending-options failure branch both call this instead of interpolating
- * `${item.name} (${groups.join(", ")})` themselves. A new call site cannot
- * reintroduce this leak by accident because there is no raw interpolation
- * left to copy.
- */
-function renderMissingOptionsPrompt(items: Array<{ name: string; missingGroups: string[] }>): string {
-  const clauses = items.map(item => {
-    // BUG 2 fix (2026-09-07): missingGroups holds the RAW group name as
-    // stored in pending_options (must stay raw there — it's matched by
-    // exact string elsewhere) but a Slice import artifact like "Choose an
-    // option" must never be read aloud to the customer. Sanitize only here,
-    // at render time.
-    const displayGroups = item.missingGroups.map(displayGroupName);
-    const groups = displayGroups.length > 1
-      ? `${displayGroups.slice(0, -1).join(", ")} and ${displayGroups[displayGroups.length - 1]}`
-      : displayGroups[0];
-    return `what ${groups.toLowerCase()} you'd like on the ${item.name}`;
-  });
-  const joined = clauses.length > 1
-    ? `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`
-    : clauses[0];
-  return `I still need to know ${joined}. What'll it be?`;
-}
-
-/**
- * ITEM 1 (2026-09-08, PO live verification — "Turkey Sub added! What size -
- * medium 12" or large 16" (+$8)? ... Choices for Size: Medium 12'', Large
- * 16''"): the real question is never "is this group's display name a
- * generic Slice import artifact" — it's "did the customer already hear
- * these choices this turn." The old check (displayGroupName(...) ===
- * "option") happened to mask the duplicate for generic-named groups
- * ("Choose an option") but did nothing for a real-named group like "Size" —
- * which is exactly what fired in the PO's repro, and always would have,
- * generic-label check or not.
- *
- * "Already said" has two sources of truth, checked in order:
- *   1. Structural (compiled path): `compiledRenderedGroups` records exactly
- *      which group's canonical question enforceVerbatimStepQuestion just
- *      placed in `reply` this turn — unambiguous, no text-matching needed.
- *   2. Textual (legacy path / anything else): every choice's real name is
- *      already present in the given text. Stem-based (reusing
- *      `significantStems`, the same primitive `matchChoiceInText` in
- *      ask-plan-engine.ts uses) rather than a raw substring/quote match —
- *      the ORIGINAL bug here was "12"" (model's straight quote) failing to
- *      substring-match "12''" (stored two-apostrophe choice name);
- *      stemming strips punctuation on both sides so that mismatch can't
- *      recur.
- *
- * The generic-label check is NOT folded into this function — it still runs
- * as its own, separate anti-leak fallback at each call site (never show the
- * literal string "Choices for option: ..." to a customer), which is a
- * different concern (avoiding a raw import-artifact label) from this one
- * (avoiding a duplicate).
- */
-function groupChoicesAlreadySaid(
-  menuItemId: string, groupName: string, choiceNames: string[], text: string,
-  compiledRenderedGroups: Map<string, Set<string>>,
-): boolean {
-  if (compiledRenderedGroups.get(menuItemId)?.has(groupName)) return true;
-  const textStems = significantStems(text);
-  return choiceNames.every(name => {
-    const nameStems = significantStems(name);
-    return nameStems.size === 0 || [...nameStems].every(s => textStems.has(s));
-  });
-}
+// renderMissingOptionsPrompt and groupChoicesAlreadySaid now live in
+// sequencer.ts (imported above) — same importable-without-Deno.serve reason
+// as the itemizer/pricing extractions above.
 
 /**
  * Deterministic menu-request detector. Matches an explicit ask for "the
@@ -2601,19 +2443,7 @@ function impliesMenuRequest(text: string): boolean {
  * with the deterministic Ledger footer. The LLM keeps A1 conversational
  * framing; this removes any numbers it leaked.
  */
-/**
- * BUG-2 FIX (2026-09-04): render the " — $X.XX total" fragment ONLY when the
- * total is real. Previously guards interpolated the total unconditionally and a
- * later stripLlmMoneyLines() pass removed the dollar amount, leaving a dangling
- * dash and a stray period: "1x French Fries — . What else can I add".
- * Missing / non-finite / <= 0 totals now yield an empty fragment, so the
- * sentence reads "Your cart: 1x French Fries. What else can I add?".
- */
-function cartTotalFragment(totalCents: number | null | undefined): string {
-  if (totalCents === null || totalCents === undefined) return "";
-  if (!Number.isFinite(totalCents) || totalCents <= 0) return "";
-  return ` — $${(totalCents / 100).toFixed(2)} total`;
-}
+// cartTotalFragment now lives in pricing.ts (imported above).
 
 /**
  * BUG-2 FIX (2026-09-04): after money-stripping, remove punctuation fragments
@@ -2903,338 +2733,32 @@ function offersUngroundedUpgrade(
   return { tripped: false };
 }
 
-// Guard 2b helper: detects LLM claims about items being in the cart that don't
-// match the authoritative cart state. Returns the claimed item name, or null.
-function claimsItemInCart(reply: string, guardCart: AnyCartItem[]): string | null {
-  if (!reply) return null;
-
-  // If cart is empty, ANY assertion of cart contents is a hallucination.
-  if (guardCart.length === 0) {
-    if (/\b(?:in\s+(?:your|the)\s+cart|already\s+(?:have|in|added)|you\s+(?:have|got).*(?:in\s+(?:your|the)\s+cart))\b/i.test(reply)) {
-      return "(empty cart)";
-    }
-    return null;
-  }
-
-  // Cart has items — extract what the LLM claims is in the cart and verify.
-  //
-  // CHANGE 3 (2026-09-05, Jason): every pattern now REQUIRES the literal phrase
-  // "in your/the cart". Pattern 2 used to make that suffix optional against a
-  // lazy capture, so plain English tripped it: "I can add it if you have a
-  // preference" matched "you have a pr" and was reported as a claim that an item
-  // called "pr" was in the cart. On 2026-09-05 that discarded the model's honest
-  // answer to "you're not really checking with the kitchen, you're a bot" and
-  // shipped a cart recital instead — the customer's direct question went
-  // unanswered. Pattern 3's bare "already" alternative had the same shape.
-  // A cart-content claim says "in your cart". Nothing else is one.
-  const patterns = [
-    /(?:one\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)(?:\s+is\s+)?(?:already\s+)?in\s+(?:your|the)\s+cart/i,
-    /you\s+(?:already\s+)?have\s+(?:a\s+|an\s+|the\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+in\s+(?:your|the)\s+cart/i,
-    /i['"]?(?:ve|\s+have)\s+(?:already\s+)?(?:got\s+)?(?:a\s+)?(["']?[A-Za-z][\w\s&'-]{1,40}?)\s+(?:already\s+)?in\s+(?:your|the)\s+cart/i,
-  ];
-
-  for (const re of patterns) {
-    const m = reply.match(re);
-    if (!m) continue;
-    const claimed = m[1].replace(/["']/g, '').trim();
-    // A one- or two-letter fragment is never a menu item name; it is the regex
-    // catching a preposition. Require enough characters to be a real claim.
-    if (claimed.length < 4) continue;
-    // CHANGE 2 (2026-09-04, Jason): an item COUNT is not an item NAME. These
-    // patterns capture "You've got 3 items in your cart" as a claim that an
-    // item literally called "3 items" is in the cart, so a TRUE statement was
-    // flagged as a hallucination and the whole reply was thrown away. Verify a
-    // count as a count: right number, no hallucination.
-    // EXTENDED (2026-09-08): also handle "N pizzas", "N large pizzas",
-    // "all 4 pizzas" etc. — the model's natural summary after a deterministic
-    // compose adds 2 pizzas and the model adds 2 more, it says "all 4 large
-    // pizzas in your cart" which is truthful but "pizzas" isn't "items".
-    const FOOD_TYPE_PAT = "(?:items?|pizzas?|pies?|sandwiches?|burgers?|subs?|salads?|wings?|orders?|wraps?)";
-    const SIZE_PAT      = "(?:(?:large|medium|small|regular|personal|family)\\s+)?";
-    const countClaim = claimed.match(
-      new RegExp(`\\b(\\d+)\\s+${SIZE_PAT}${FOOD_TYPE_PAT}\\b`, "i"),
-    );
-    if (countClaim) {
-      if (Number(countClaim[1]) === guardCart.length) continue; // truthful
-      return claimed;                                           // wrong count
-    }
-    // Word-number count claim: "all four large pizzas", "four pizzas", etc.
-    // — digit check above only catches numerals; word numbers are a separate
-    // pattern that the model also produces naturally.
-    const WORD_NUM: Record<string, number> = {
-      one:1, two:2, three:3, four:4, five:5,
-      six:6, seven:7, eight:8, nine:9, ten:10,
-    };
-    const wordCountClaim = claimed.match(
-      new RegExp(`\\b(${Object.keys(WORD_NUM).join("|")})\\s+${SIZE_PAT}${FOOD_TYPE_PAT}\\b`, "i"),
-    );
-    if (wordCountClaim) {
-      const claimedCount = WORD_NUM[wordCountClaim[1].toLowerCase()];
-      if (claimedCount === guardCart.length) continue; // truthful
-      return claimed;                                  // wrong count
-    }
-    // Live-confirmed regression (2026-09-08, pizza-topping-compose.ts): a
-    // composed line's own `name` field never carries its topping (e.g.
-    // "Large 18'' Neapolitan Cheese Pizza" with options {"Add
-    // Toppings":["Pepperoni"]}) — same shape as every other compiled/legacy
-    // item with options. A perfectly honest reply describing the FULL
-    // composition ("Neapolitan Cheese Pizza with Pepperoni is in your
-    // cart") was flagged as a hallucination because "with Pepperoni" isn't
-    // a substring of the bare name. Match against each line's real
-    // options/modifiers too, not just its bare name, so a truthful
-    // topping-qualified claim is recognized instead of false-tripping this
-    // guard onto "Sorry, I got mixed up" over a cart that was actually
-    // correct.
-    const cartNames = guardCart.flatMap(i => {
-      if ((i as BundleItem).type === "bundle") return [(i as BundleItem).name];
-      const item = i as CartItem;
-      const extras = [...(item.modifiers ?? []), ...Object.values(item.options ?? {}).flat()];
-      return extras.length > 0 ? [item.name, `${item.name} ${extras.join(" ")}`] : [item.name];
-    });
-    const found = cartNames.some(n => {
-      if (n.toLowerCase().includes(claimed.toLowerCase())) return true;
-      if (claimed.toLowerCase().includes(n.toLowerCase())) return true;
-      // Stem-overlap fallback: model may describe a composed item without a
-      // size qualifier (e.g. "Large Neapolitan Cheese Pizza" omitting "18''")
-      // — neither substring direction matches, but 3+ significant stems in
-      // common is a strong signal the model is describing this cart item.
-      // Threshold 3 is intentionally conservative so a 2-word slip like
-      // "Pepperoni Calzone" can't accidentally clear a real hallucination.
-      const nStems = significantStems(n);
-      const cStems = significantStems(claimed);
-      let overlap = 0;
-      for (const s of nStems) if (cStems.has(s)) overlap++;
-      return overlap >= 3;
-    });
-    if (!found) return claimed;
-  }
-
-  return null;
-}
+// claimsItemInCart now lives in cart.ts (imported above).
 
 // Guard 1d helper `claimsAddedWithoutMutation` lives in ./phantom-add-guard.ts
 // (pure + unit-tested; see guard-phantom-add.test.ts). Imported at top of file.
 
-// Guard 1 helper: detects dollar amounts quoted when the cart is empty.
-// Only fires when cart is empty; a non-empty cart quoting its total is fine.
-function claimsTotal(text: string): boolean {
-  if (!text) return false;
-  const norm = text.toLowerCase().replace(/\s+/g, ' ').trim();
-  return (
-    /\$\d+\.?\d*\s*(?:total|plus|each|comes to|would be|will be|is|cost|for that|covers)/i.test(norm) ||
-    /(?:total|subtotal|comes to|that'?s|that is|cost|price)\s*(?:\$|of\s*\$)\s*\d+/i.test(norm) ||
-    /(?:comes to|totals?|brings? your|your total|order total|that'?ll be|that will be)\s*\$?\s*\d+/i.test(norm)
-  );
-}
-
-// Helper: extract dollar amounts from text (returns array of cents)
-function extractDollarCents(text: string): number[] {
-  const matches = text.matchAll(/\$(\d+(?:\.\d{2})?)/g);
-  const cents: number[] = [];
-  for (const m of matches) {
-    cents.push(Math.round(parseFloat(m[1]) * 100));
-  }
-  return cents;
-}
+// claimsTotal and extractDollarCents now live in pricing.ts (imported above).
 
 
-// Helper: detects "fixed it", "removed that", "that's one now", etc.
-// when the model narrates a correction but no cart mutation occurred.
-/**
- * CHANGE 2 (2026-09-04, Jason): does the model's reply already acknowledge the
- * cart state?
- *
- * Guard 1f used to REPLACE the model's reply with a flat recital
- * ("Your cart: 1x Cheese - Large (16"), 1x French Fries. What else can I add?")
- * whenever it suspected a narrated correction that never mutated the cart. In a
- * six-turn test it discarded two perfectly coherent replies, because its
- * predicate matches a plain cart listing ("1x ...") next to the word "want".
- *
- * The recital is now a FALLBACK, not a blanket replacement: it is used only when
- * the model produced nothing usable, or wrote something that shows no awareness
- * of what is in the cart. A reply that names an item in the cart, or refers to
- * the cart/order at all, is coherent — send the model's words.
- */
-function replyAcknowledgesCart(reply: string, cart: AnyCartItem[]): boolean {
-  const text = (reply ?? "").trim();
-  if (text.length === 0) return false;
+// replyAcknowledgesCart now lives in cart.ts (imported above).
 
-  // Generic cart/order awareness.
-  if (/\b(?:cart|order|added|got it|that'?s|so far|total)\b/i.test(text)) return true;
-
-  // Or it names something actually in the cart. Match on the item's most
-  // distinctive word so "Cheese - Large (16\")" is recognised in "large cheese".
-  const norm = text.toLowerCase();
-  for (const item of cart) {
-    const name = ((item as CartItem).name ?? (item as BundleItem).name ?? "").toLowerCase();
-    if (!name) continue;
-    if (norm.includes(name)) return true;
-    const words = name.split(/[^a-z0-9]+/).filter(w => w.length > 3);
-    if (words.some(w => norm.includes(w))) return true;
-  }
-  return false;
-}
-
-function claimsCorrectedWithoutMutation(reply: string, cartBefore: AnyCartItem[], cartAfter: AnyCartItem[]): boolean {
-  if (!reply) return false;
-  // If the cart actually changed, the correction was real
-  if (JSON.stringify(cartBefore) !== JSON.stringify(cartAfter)) return false;
-  const norm = reply.toLowerCase();
-  return (
-    /\b(?:fixed|corrected|updated|changed|adjusted|removed|took\s+(?:that|it)\s+off|took\s+(?:that|it)\s+out)\b/i.test(norm) ||
-    /\b(?:just\s+one|only\s+one|1x|one\s+(?:left|now|total)|that'?s\s+one)\b/i.test(norm) &&
-    /\b(?:want|wanted|said|asked|meant|need|needed)\b/i.test(norm)
-  );
-}
+// claimsCorrectedWithoutMutation's replacement (P0, 2026-09-09 live money
+// defect) now lives in guard1f-correction-claim-20260909.ts as evaluateGuard1f
+// (imported above). A live false-correction-claim incident ("Removed the
+// extra cheese..." / "Done - removed the extra cheese..." on a byte-identical
+// cart) showed the old single-predicate version was silenced by
+// replyAcknowledgesCart whenever the reply named a real cart item by word --
+// which an explicit, believable false claim always does. See that module's
+// header for the explicit/ambiguous split this replaced it with.
 
 // Guard 2 / Guard 9 helper `impliesOrderConfirmation` now lives in
 // guard9-unconsented-affirmation.ts (imported above) — kept with GUARD 9's
 // pure decision logic since that guard's internal bare-affirmation gate must
 // use the exact same function, not a reimplementation.
 
-// ─── Guard 4 helpers: Under-populated cart backstop ─────────────────────────
-
-/**
- * Detect when the LLM's reply is "closing" — summarizing the order, quoting
- * a total, asking to confirm, or heading to checkout. These are the moments
- * where a missing item in the cart is most dangerous.
- */
-function isClosingReply(reply: string): boolean {
-  if (!reply) return false;
-  const norm = reply.toLowerCase();
-  // Check 1: Total-line patterns — dollar amount adjacent to total/summary language.
-  const hasTotal = (
-    /\$\d+[.,]\d{2}/.test(norm) &&
-    /\b(?:total|comes to|that['\u2019]s|that is|that['\u2019]ll be|order (?:total|summary)|your (?:total|order)|subtotal|plus.*fee|all together|grand total)\b/i.test(norm)
-  );
-  // Check 2: Checkout/confirmation language — the LLM is asking to close.
-  const hasCheckoutSignal = (
-    /\b(?:confirm\??|ready to check out|ready to check|ready to pay|check(?:-| )?out|place your order|all set|good to go|proceed(?: to (?:pay|checkout|order))?|all good\??|look good\??|looks good\??|that look good|that sound good|how['\u2019]s that look|how['\u2019]s that sound|i['\u2019]ll send|sending your|payment link|your order is|let me know if|just confirm|just let me know)\b/i.test(norm)
-  );
-  // Check 3: Closing item-count summary (with cart/summary context).
-  const hasCountSummary = (
-    /\b\d+\s+items?\b/i.test(norm) &&
-    /\b(?:in (?:your|the) (?:cart|order)|so far|total(?:ing)?|that['\u2019]s \d+ items?|i['\u2019]ve got|you['\u2019]ve got|you have|your (?:cart|order)|we have)\b/i.test(norm)
-  );
-  return hasTotal || hasCheckoutSignal || hasCountSummary;
-}
-
-/**
- * Walk conversation history and return the set of menu-item display names the
- * customer has referenced. Uses the same canonical-key matching as
- * buildMenuItemNames. Scans the CURRENT user message + all prior user messages
- * that contain ordering conjunctions ("and", "also", etc.) — pure questions
- * ("Do you have coffee?") are excluded from prior-turn scanning to avoid
- * false positives on items the customer merely asked about.
- *
- * The current message is always scanned regardless of form.
- */
-function extractCustomerReferencedItems(
-  history: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }>,
-  menuNames: Map<string, string>,
-): Set<string> {
-  const referenced = new Set<string>();
-  const userMessages = history
-    .filter(h => h.role === "user" && typeof h.content === "string")
-    .map(h => (h.content as string).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim());
-
-  for (let i = 0; i < userMessages.length; i++) {
-    const msg = userMessages[i];
-    const isCurrent = i === userMessages.length - 1;
-    // For prior messages, only scan ones that look like orders (contain
-    // conjunctions/connectors), not pure questions.
-    if (!isCurrent && !/\b(?:and|also|plus|with|then|as well|too)\b/i.test(msg)) continue;
-
-    for (const [key, displayName] of menuNames) {
-      // Skip ID-based keys (UUIDs / short hashes) — not natural language.
-      if (/^[a-f0-9-]{8,}$/.test(key)) continue;
-      if (msg.includes(key)) {
-        referenced.add(displayName);
-      }
-    }
-  }
-  return referenced;
-}
-
-/**
- * Return menu-item display names that the customer referenced but are absent
- * from the cart. Match is bidirectional substring ("Shrimp Scampi" ref matches
- * cart item "Shrimp Scampi", and vice versa).
- */
-function findMissingCartItems(
-  referencedItems: Set<string>,
-  cart: AnyCartItem[],
-): string[] {
-  // A referenced name is satisfied by ANYTHING already on the cart that
-  // means it, not just a cart LINE whose own name matches. Before this fix,
-  // ordering "large cheese pizza ... add pepperoni and mushrooms" put
-  // pepperoni into the cart as an OPTION CHOICE
-  // (options: {"Toppings": ["Pepperoni (Whole pizza)"]}) on the cheese pizza
-  // line — never as a line item literally named "Pepperoni". Guard 4 read
-  // that as still missing and offered to add pepperoni immediately after
-  // adding it (2026-09-06, Jason's Test Kitchen transcript). Modifiers,
-  // selected option choices, AND unverified_requests (a customer ask the shop
-  // hasn't confirmed a real choice for) all count as "this is on the ticket".
-  const cartLower = new Set<string>();
-  for (const i of cart) {
-    if ((i as BundleItem).type === "bundle") { cartLower.add((i as BundleItem).name.toLowerCase()); continue; }
-    const ci = i as CartItem;
-    cartLower.add(ci.name.toLowerCase());
-    for (const m of ci.modifiers ?? []) cartLower.add(m.toLowerCase());
-    for (const selections of Object.values(ci.options ?? {})) {
-      for (const sel of selections) cartLower.add(sel.toLowerCase());
-    }
-    for (const u of ci.unverified_requests ?? []) cartLower.add(u.toLowerCase());
-  }
-
-  const missing: string[] = [];
-  for (const displayName of referencedItems) {
-    const itemLower = displayName.toLowerCase();
-    const inCart = [...cartLower].some(cn =>
-      cn.includes(itemLower) || itemLower.includes(cn)
-    );
-    if (!inCart) {
-      missing.push(displayName);
-    }
-  }
-  return missing;
-}
-
-/**
- * Remove items from the referenced set that appear inside a negated phrase
- * in the current customer message. Safety net — the narrowing-order guard
- * already suppresses prior-history scanning on "just"/"only", but this
- * catches the remaining case where a customer says e.g.
- * "actually, no pepperoni pizza — just the cheese" in the CURRENT message.
- *
- * Prefer under-asking to nagging: when in doubt about a negation, suppress.
- */
-function filterNegatedItems(
-  referencedItems: Set<string>,
-  currentMessage: string,
-): Set<string> {
-  if (!currentMessage) return referencedItems;
-  const msg = currentMessage.toLowerCase();
-  const result = new Set<string>();
-  for (const displayName of referencedItems) {
-    const itemLower = displayName.toLowerCase();
-    const escaped = itemLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Patterns: "no <item>", "not <item>", "remove <item>", "skip <item>",
-    // "drop <item>", "scratch <item>", "don't want/need/get <item>",
-    // "cancel <item>", "i don't want <item>".
-    const negRegex = new RegExp(
-      `\\b(?:no|not|remove|skip|drop|scratch|removing|skipping|dropping|cancel(?:ling)?|i\\s+don['\\u2019]t\\s+(?:want|need|get))\\s+(?:the\\s+)?(?:any\\s+)?${escaped}\\b|` +
-      `\\bdon['\\u2019]t\\s+(?:want|need|get)\\s+(?:the\\s+)?(?:any\\s+)?${escaped}\\b`,
-      'i'
-    );
-    if (!negRegex.test(msg)) {
-      result.add(displayName);
-    } else {
-      console.log(`[chat-sms] GUARD 4 v2 negation-filter: suppressed "${displayName}" (appears in negated context)`);
-    }
-  }
-  return result;
-}
+// isClosingReply, extractCustomerReferencedItems, findMissingCartItems, and
+// filterNegatedItems (GUARD 4 helpers) now live in cart.ts (imported above).
 
 function twimlResponse(message: string): Response {
   const safe = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -4140,7 +3664,11 @@ async function activateTestMode(
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
+// Item 2 (2026-09-09, module extraction): named + exported so index.ts is
+// importable for tests without booting a listener — Deno.serve only runs
+// when this file is the entry point (`import.meta.main`), not when a test
+// file imports it to reach the pure modules above.
+export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -5861,11 +5389,11 @@ Deno.serve(async (req: Request) => {
   // ── Guard 1f: narrated correction without cart mutation ────────────────
   // If the model says "fixed it, 1x" / "removed that" / "updated to just one"
   // but the cart didn't change, replace the reply with the real cart state.
-  // CHANGE 2 (2026-09-04): fire ONLY when the model gave us nothing coherent to
-  // send. When it wrote a reply that acknowledges the cart, that reply ships.
-  if (!portionCheck.tripped && claimsCorrectedWithoutMutation(reply, cartItems, guardCart)
-      && !replyAcknowledgesCart(reply, guardCart)) {
-    console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+  // Decision core (explicit vs. ambiguous split, and why) lives in
+  // guard1f-correction-claim-20260909.ts.
+  const guard1f = evaluateGuard1f(reply, cartItems, guardCart);
+  if (!portionCheck.tripped && guard1f.tripped) {
+    console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation, ${guard1f.reason}) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     if (guardCart.length === 0) {
       reply = "Your cart is empty. What would you like to order?";
     } else {
@@ -7609,4 +7137,8 @@ Deno.serve(async (req: Request) => {
     // returns TwiML and is untouched.
     model:        CHAT_MODEL,
   });
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handleChatSmsRequest);
+}
