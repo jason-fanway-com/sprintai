@@ -29,6 +29,38 @@ export interface CustomerRow {
 const MAX_FAVORITE_ITEMS = 5;
 
 /**
+ * Canonicalize whatever raw string is currently used as `customer_phone` to
+ * an E.164 phone (+1XXXXXXXXXX) when one can be confidently recovered, or
+ * `null` when it can't (caller falls back to the raw value unchanged —
+ * canonicalization must never invent an identity, only recover one that's
+ * already embedded).
+ *
+ * Handles:
+ *   - Already E.164 (`+16102565023`) → unchanged.
+ *   - `web:imsg-p{digits}-{unix-timestamp}` — the iMessage-bridge's web
+ *     session id, which embeds the real phone right after the `p` (confirmed
+ *     against live rows, e.g. `web:imsg-p16102565023-1781561505`; the same
+ *     `p(\d+)-` extraction already used at chat-sms/index.ts's outbound-
+ *     delivery branch, reused here for identity instead of routing).
+ *   - Anything else (bare `web:<uuid>` sessions, `web:imsg-{email-local}-*`
+ *     email-derived ids, malformed digit runs) → null. These carry no
+ *     recoverable phone; merging them would be a guess, not a canonicalization.
+ */
+export function canonicalizePhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  if (/^\+[1-9]\d{9,14}$/.test(raw)) return raw;
+
+  const bridgeMatch = raw.match(/^web:imsg-p(\d+)-\d+$/);
+  if (bridgeMatch) {
+    const digits = bridgeMatch[1];
+    if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+    if (digits.length === 10) return `+1${digits}`;
+  }
+
+  return null;
+}
+
+/**
  * Merge one paid order's distinct item names into the existing favorite-item
  * ranking. `orderItemNames` is deduped by the caller's caller conceptually,
  * but deduped again here defensively — two of the same item in one order is
@@ -105,11 +137,12 @@ export async function lookupCustomerContext(
   customerPhone: string,
 ): Promise<CustomerRow | null> {
   if (!tenantId || !customerPhone) return null;
+  const key = canonicalizePhone(customerPhone) ?? customerPhone;
   const { data, error } = await supabase
     .from("customers")
     .select("tenant_id, customer_phone, name, order_count, total_spent_cents, favorite_items, last_order_id, last_order_at")
     .eq("tenant_id", tenantId)
-    .eq("customer_phone", customerPhone)
+    .eq("customer_phone", key)
     .maybeSingle();
   if (error) {
     console.error(`[customer-profile] lookupCustomerContext error for ${customerPhone}:`, error.message);
@@ -148,15 +181,16 @@ export async function upsertCustomerProfile(
   if (!order.tenantId || !order.customerPhone) {
     return { ok: false, error: "missing tenantId/customerPhone" };
   }
+  const customerPhone = canonicalizePhone(order.customerPhone) ?? order.customerPhone;
 
   const { data: existing, error: fetchErr } = await supabase
     .from("customers")
     .select("name, order_count, total_spent_cents, favorite_items")
     .eq("tenant_id", order.tenantId)
-    .eq("customer_phone", order.customerPhone)
+    .eq("customer_phone", customerPhone)
     .maybeSingle();
   if (fetchErr) {
-    console.error(`[customer-profile] upsertCustomerProfile fetch error for ${order.customerPhone}:`, fetchErr.message);
+    console.error(`[customer-profile] upsertCustomerProfile fetch error for ${customerPhone}:`, fetchErr.message);
     return { ok: false, error: fetchErr.message };
   }
 
@@ -168,7 +202,7 @@ export async function upsertCustomerProfile(
     .from("customers")
     .upsert({
       tenant_id:         order.tenantId,
-      customer_phone:    order.customerPhone,
+      customer_phone:    customerPhone,
       name,
       last_seen_at:      order.orderAt,
       order_count:       (existing?.order_count ?? 0) + 1,

@@ -3,7 +3,34 @@ import {
   computeFavoriteItemsUpdate,
   resolveCustomerName,
   regularEligibility,
+  canonicalizePhone,
 } from "./customer-profile.ts";
+
+Deno.test("canonicalizePhone: already-E.164 passes through unchanged", () => {
+  assertEquals(canonicalizePhone("+16102565023"), "+16102565023");
+});
+
+Deno.test("canonicalizePhone: iMessage-bridge web session id recovers the embedded phone", () => {
+  assertEquals(canonicalizePhone("web:imsg-p16102565023-1781561505"), "+16102565023");
+  assertEquals(canonicalizePhone("web:imsg-p16107374183-1781635233"), "+16107374183");
+});
+
+Deno.test("canonicalizePhone: 10-digit embedded number gets +1 prepended", () => {
+  assertEquals(canonicalizePhone("web:imsg-p6102565023-1781561505"), "+16102565023");
+});
+
+Deno.test("canonicalizePhone: email-derived bridge id is left unrecoverable", () => {
+  assertEquals(canonicalizePhone("web:imsg-jasonfanwaycom-1783778364"), null);
+});
+
+Deno.test("canonicalizePhone: plain anonymous web session id is left unrecoverable", () => {
+  assertEquals(canonicalizePhone("web:19bfed35-d8f0-47d7-9059-f81afcd16f83"), null);
+});
+
+Deno.test("canonicalizePhone: null/empty input returns null", () => {
+  assertEquals(canonicalizePhone(null), null);
+  assertEquals(canonicalizePhone(""), null);
+});
 
 Deno.test("computeFavoriteItemsUpdate: first order seeds the list at count 1", () => {
   const result = computeFavoriteItemsUpdate([], ["Large Cheese Pizza", "Garlic Knots"]);
