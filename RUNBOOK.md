@@ -1465,6 +1465,37 @@ touching `supabase/functions/compile-menu/` or `supabase/functions/_shared/
 compile-menu.ts`/`normalize.ts`/`archetypes.ts` — if the commit is newer, redeploy
 first.
 
+## `menu-readiness` gate (item 5, §8/§11 item 5) — read-only, not wired to any go-live switch
+
+`supabase/functions/_shared/menu-readiness.ts` is the readiness gate: §8.1 item
+state and §8.2's 8 invariants were already built by item 4 (`compile-menu.ts`'s
+`compileItem`/`compileMenu`/`computeMenuInvariants`) — this module adds only
+§8.3, the generated menu walk, which for every `orderable` item drives the real
+`resolver.ts` (add-by-name) + `ask-plan-engine.ts`'s `applyCompiledAddItem` (item
+8's real sequencer/cart code, gated live behind
+`shops.compiled_ordering_engine_enabled` — see below, but usable directly
+in-process here with no I/O and no flag) + `pricing.ts` + `itemizer.ts`, no LLM.
+`scripts/item5-menu-readiness-live-report.ts` runs the whole gate read-only
+against a shop's real menu (same DB-read pattern as
+`d1-derived-rows-live-report.ts`) — it does not call the `compile-menu` edge
+function and writes nothing.
+
+Real run 2026-09-09: Zio's 301/301 orderable but invariants #3/#4 fail (two
+`"Double Burger"` rows share a display_name and neither resolves a unique
+lexicon term) and the walk passes 163/301 (54%); Vito's 219/221 orderable,
+8/8 invariants pass, walk passes 106/219 (48%). The walk's dominant failure
+mode on both shops is `resolveUtterance` failing to resolve an item by its
+own exact display_name — two known resolver.ts (item 3) causes, not gate
+bugs: (a) `scoreItemMatch` scores a candidate's OWN word-coverage of the
+phrase, so a short item whose words are a strict subset of a longer item's
+name (e.g. "Cheese Fries" vs. "Nacho Cheese Fries") ties or beats the exact
+match and resolves to neither; (b) the pizza-context fallback's regex
+`/^(?:plain|cheese)\s+\w/i` fires on any phrase starting with "cheese X", not
+just pizza items, mis-routing e.g. "Cheese Fries" into a pizza-size
+disambiguation question. resolver.ts is not wired into the live conversation
+path (item 3's own note), so neither is a live-money bug — they're real gaps
+for whenever it is wired in.
+
 ## `shops.compiled_ordering_engine_enabled` (migration 118) — do not flip on for Vito's
 
 Gates the new deterministic ask_plan sequencer/resolver (`ask-plan-engine.ts`) in

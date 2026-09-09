@@ -13,7 +13,9 @@ import {
   categoryLexiconTerms,
   compileItem,
   compileMenu,
+  computeMenuInvariants,
   planOwnerQuestionsRefresh,
+  type AskPlan,
   type CompileGroup,
   type CompileItem,
   type CompiledItem,
@@ -402,12 +404,118 @@ Deno.test("overrides: field '*' on a group removes it from the item", () => {
 });
 
 // ---- Menu-level invariants (§8.2) ----------------------------------------------
+//
+// Item 5 (§11 item 5, the readiness gate): the two prior tests here (inv 3,
+// inv 8) plus inv 4's pass case (see "compileMenu end-to-end" above) and
+// inv 7's fail case were the only invariants with dedicated pass/fail
+// coverage. The block below fills in explicit pass AND fail cases for every
+// one of the 8. Invariants 2, 4, and 5 only ever fire on an item whose
+// bot_state is `orderable` — but computeBotState's own checks (tested above)
+// mean compileItem can never actually PRODUCE a nonconforming orderable
+// item through the normal path. To test those three as the defense-in-depth
+// checks they are (§8.2's own wording: the check is unconditional on the
+// data, not on trusting bot_state), we call computeMenuInvariants directly
+// against a hand-built CompiledItem map that force-marks bad data
+// `orderable` — the same technique the existing invariant-7 test already
+// uses in miniature (a hand-built inferred choice on an item whose real
+// bot_state would be `blocked`).
+
+function fakeAskPlan(displayName: string, basePriceCents = 1000): AskPlan {
+  return { compiled_at: "t", compiler_version: 1, display_name: displayName, base_price_cents: basePriceCents, steps: [], recap_template: "", ticket_template: "" };
+}
+
+function forceOrderable(it: CompileItem, lexiconTerms: CompiledItem["lexicon_terms"] = []): CompiledItem {
+  return { item_id: it.id, bot_state: "orderable", bot_state_reason: null, ask_plan: fakeAskPlan(it.display_name ?? it.name, it.price_cents ?? 1000), lexicon_terms: lexiconTerms };
+}
+
+Deno.test("invariant 1: a blocked item in an active category fails; passes when none are blocked", () => {
+  const blockedItem = item({ display_name: null }); // missing display_name -> blocked
+  const orderableItem = item({ display_name: "Cheese Pizza" });
+  const failing = compileMenu([blockedItem, orderableItem], [], "t", false);
+  assertEquals(failing.invariants.find(i => i.invariant === 1)!.pass, false);
+
+  const passing = compileMenu([orderableItem], [], "t", false);
+  assertEquals(passing.invariants.find(i => i.invariant === 1)!.pass, true);
+});
+
+Deno.test("invariant 2 (defense in depth): an item force-marked orderable with price_cents=0 fails; a real orderable item passes", () => {
+  const badItem = item({ price_cents: 0 }); // real bot_state would be display_only ("source lacks a price")
+  const compiledMap = new Map<string, CompiledItem>([[badItem.id, forceOrderable(badItem)]]);
+  const failing = computeMenuInvariants([badItem], compiledMap, false);
+  assertEquals(failing.find(i => i.invariant === 2)!.pass, false);
+
+  const goodItem = item();
+  const passing = compileMenu([goodItem], [], "t", false);
+  assertEquals(passing.invariants.find(i => i.invariant === 2)!.pass, true);
+});
+
+Deno.test("invariant 3 pass: two orderable items with distinct display_names", () => {
+  const items = [item({ display_name: "Cheese Pizza" }), item({ display_name: "Pepperoni Pizza" })];
+  const { invariants } = compileMenu(items, [], "t", false);
+  assertEquals(invariants.find(i => i.invariant === 3)!.pass, true);
+});
 
 Deno.test("invariant 3: two orderable items sharing a display_name fails", () => {
   const items = [item({ display_name: "Cheese Pizza" }), item({ display_name: "Cheese Pizza" })];
   const { invariants } = compileMenu(items, [], "t", false);
   const inv3 = invariants.find(i => i.invariant === 3)!;
   assertEquals(inv3.pass, false);
+});
+
+Deno.test("invariant 4 (defense in depth): two orderable items whose only lexicon term collides (non-unique) fails", () => {
+  const itemA = item({ display_name: "Pizza A" });
+  const itemB = item({ display_name: "Pizza B" });
+  const collidingTerm = (targetId: string) => [{ term: "pizza", target_type: "item" as const, target_id: targetId, provenance: "stated" as const }];
+  const compiledMap = new Map<string, CompiledItem>([
+    [itemA.id, forceOrderable(itemA, collidingTerm(itemA.id))],
+    [itemB.id, forceOrderable(itemB, collidingTerm(itemB.id))],
+  ]);
+  const invariants = computeMenuInvariants([itemA, itemB], compiledMap, false);
+  assertEquals(invariants.find(i => i.invariant === 4)!.pass, false);
+});
+// invariant 4's pass case is covered above by "compileMenu end-to-end: the
+// Zio's/Shrimp Parmigiana/Eggplant Parmigiana collisions resolve and both
+// items keep a unique term".
+
+Deno.test("invariant 5 (defense in depth): an orderable item's slot group with zero active choices fails; a well-formed group passes", () => {
+  const badGroup = group({ kind: "slot", choices: [] });
+  const badItem = item({ groups: [badGroup] });
+  const compiledMap = new Map<string, CompiledItem>([[badItem.id, forceOrderable(badItem)]]);
+  const failing = computeMenuInvariants([badItem], compiledMap, false);
+  assertEquals(failing.find(i => i.invariant === 5)!.pass, false);
+
+  const goodItem = item({ groups: [group({ kind: "slot", choices: [choice()] })] });
+  const passing = compileMenu([goodItem], [], "t", false);
+  assertEquals(passing.invariants.find(i => i.invariant === 5)!.pass, true);
+});
+
+Deno.test("invariant 6: default_choice_id pointing at a nonexistent choice fails; a real reference passes", () => {
+  const badGroup = group({ default_choice_id: "does-not-exist", choices: [choice()] });
+  const badItem = item({ groups: [badGroup] });
+  const failing = compileMenu([badItem], [], "t", false);
+  assertEquals(failing.invariants.find(i => i.invariant === 6)!.pass, false);
+
+  const realChoice = choice();
+  const goodGroup = group({ default_choice_id: realChoice.id, choices: [realChoice, choice()] });
+  const goodItem = item({ groups: [goodGroup] });
+  const passing = compileMenu([goodItem], [], "t", false);
+  assertEquals(passing.invariants.find(i => i.invariant === 6)!.pass, true);
+});
+
+Deno.test("invariant 7 pass: no active choice has inferred provenance", () => {
+  const it = item({ groups: [group({ slot_key: "temp", choices: [choice(), choice()] })] });
+  const { invariants } = compileMenu([it], [], "t", false);
+  assertEquals(invariants.find(i => i.invariant === 7)!.pass, true);
+});
+
+Deno.test("invariant 7: an active inferred choice on an orderable item's group fails", () => {
+  const it = item({ groups: [group({ slot_key: "temp", choices: [choice({ provenance: "inferred" }), choice()] })] });
+  // Note: this item would itself be `blocked` (unconfirmed choice), so it
+  // won't be `orderable` — invariant 7 still flags the raw inferred choice
+  // regardless of the item's own state, since "no active inferred choice
+  // anywhere" is unconditional per §8.2.
+  const { invariants } = compileMenu([it], [], "t", false);
+  assertEquals(invariants.find(i => i.invariant === 7)!.pass, false);
 });
 
 Deno.test("invariant 8: ratio below 90% fails without acknowledgement, passes with it", () => {
@@ -420,16 +528,6 @@ Deno.test("invariant 8: ratio below 90% fails without acknowledgement, passes wi
   assertEquals(withoutAck.invariants.find(i => i.invariant === 8)!.pass, false);
   const withAck = compileMenu(items, [], "t", true);
   assertEquals(withAck.invariants.find(i => i.invariant === 8)!.pass, true);
-});
-
-Deno.test("invariant 7: an active inferred choice on an orderable item's group fails", () => {
-  const it = item({ groups: [group({ slot_key: "temp", choices: [choice({ provenance: "inferred" }), choice()] })] });
-  // Note: this item would itself be `blocked` (unconfirmed choice), so it
-  // won't be `orderable` — invariant 7 still flags the raw inferred choice
-  // regardless of the item's own state, since "no active inferred choice
-  // anywhere" is unconditional per §8.2.
-  const { invariants } = compileMenu([it], [], "t", false);
-  assertEquals(invariants.find(i => i.invariant === 7)!.pass, false);
 });
 
 // ---- Infer wiring (§3 stage 5, §11 item 3's own note: "item 4's compiler
