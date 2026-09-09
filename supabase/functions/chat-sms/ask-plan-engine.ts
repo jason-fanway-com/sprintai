@@ -45,7 +45,77 @@
 
 import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
+import { splitCustomerPhrases } from "./phrase-split.ts";
+import { GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
+
+// P0 fix (2026-09-09, live money — Zio's "one plain, one pepperoni, one
+// meat lover and one hawaai" regression): resolveAndPriceSelections' MODIFIER
+// branch below reactively matches against `customerText`, which is the
+// WHOLE turn's text (D1/D2 fixes above are why — a size or topping stated
+// once must reach every add_item call this turn). That is correct for the
+// common one-item-per-turn case, but for a multi-item message it means a
+// topping named in ONE phrase ("one pepperoni") reactively attaches itself
+// to every OTHER item resolved from a DIFFERENT phrase in the SAME message
+// the instant the customer spells the topping out in full — an abbreviation
+// like "pepp" never stem-matches "Pepperoni" and so never triggered this
+// (confirmed live: the exact same order phrased with "pepp" didn't bleed;
+// phrased with "pepperoni" it bled onto every other pizza).
+//
+// Generic size/format/course words ("pizza", "large", "plain", ...) are
+// stripped before every overlap check below — every phrase in a same-
+// category order shares them, so leaving them in would make every phrase
+// look like a match for every item.
+//
+// Two paths, in order:
+//   A. This item's OWN distinctive words name exactly one phrase (Meat
+//      Lover's Pizza -> "one meat lover", Hawaiian Pizza -> "a hawaiian").
+//      Confident — isolate to just that phrase.
+//   B. The item's own name doesn't confidently name a phrase — most often
+//      because it's a generic base item the customer names only by a bare
+//      topping/plain word (pizza-topping-compose.ts's own case, or a shop
+//      where that module doesn't apply and the model resolves it the same
+//      way — see ask-plan-engine.test.ts's "genuinely DIFFERENT base item"
+//      and negation-fix coverage, both of which name the base pizza only by
+//      a topping word and must still reactively match against the WHOLE
+//      text). Drop only the phrases KNOWN to belong to a genuinely
+//      different item this same turn (`otherItemPhraseHints` — pre-loop
+//      deterministic compose tokens today; see index.ts's call site) —
+//      never guess beyond that. No hints at all (every caller/test that
+//      predates this fix) leaves every phrase in place — byte-for-byte the
+//      old whole-text behavior.
+// "cheese" isn't in GUARD19_GENERIC_WORDS (it legitimately distinguishes a
+// "Cheese Steak" from a "Chicken Steak" elsewhere), but for THIS overlap
+// check it's exactly as generic as "plain" — both just mean "no toppings"
+// on a base pizza (pizza-topping-compose.ts's own BASE_PIZZA_NAME_RE treats
+// them identically) — and it collided with a real Zio's item whose own
+// display_name is "...Cheese Pizza...": "no extra cheese" false-matched as
+// THIS item's own phrase over the real "pepperoni pizza" phrase, because
+// "cheese" from the item's name and "cheese" from "Extra Cheese" are the
+// same stem. Excluded here only, not from GUARD19_GENERIC_WORDS itself.
+const ISOLATION_GENERIC_WORDS = new Set([...GUARD19_GENERIC_WORDS, "cheese"]);
+
+function isolatePhraseForItem(customerText: string, itemDisplayName: string, otherItemPhraseHints: string[] = []): string {
+  const phrases = splitCustomerPhrases(customerText);
+  if (phrases.length <= 1) return customerText;
+
+  const distinctiveStems = (s: string) =>
+    new Set([...significantStems(s)].filter(w => !ISOLATION_GENERIC_WORDS.has(w)));
+
+  const itemStems = distinctiveStems(itemDisplayName);
+  if (itemStems.size > 0) {
+    const ownMatches = phrases.filter(p => {
+      const phraseStems = distinctiveStems(p);
+      return [...itemStems].some(s => phraseStems.has(s));
+    });
+    if (ownMatches.length === 1) return ownMatches[0];
+  }
+
+  const excludeStems = new Set(otherItemPhraseHints.flatMap(n => [...distinctiveStems(n)]));
+  if (excludeStems.size === 0) return customerText;
+  const kept = phrases.filter(p => ![...distinctiveStems(p)].some(s => excludeStems.has(s)));
+  return kept.join(" ");
+}
 
 // P0 fix (2026-09-09, live money — cart-mutation gap): a customer removing a
 // priced modifier/topping already resolved on a compiled cart line ("remove
@@ -386,6 +456,11 @@ export function resolveAskPlan(
   // so "pepp" (which never stem-matches "Pepperoni") had no way to resolve,
   // full stop — regardless of how confidently the model itself understood it.
   modelAssertedChoiceTexts: string[] = [],
+  // P0 fix (2026-09-09, see isolatePhraseForItem above): other real items
+  // this SAME turn's message resolved to (pre-loop deterministic compose
+  // tokens today) — path B's ONLY source of "this phrase belongs to
+  // something else," never a guess beyond what the caller actually knows.
+  otherItemPhraseHints: string[] = [],
 ): EngineResult {
   const resolved: ResolvedSlot[] = [];
   let nextStep: CompiledStep | null = null;
@@ -432,7 +507,6 @@ export function resolveAskPlan(
   // that is a different, higher-trust channel this text-only heuristic has
   // no business gating.
   const consumedStems = new Set(significantStems(askPlan.display_name));
-  const customerTextStems = significantStems(customerText);
 
   for (const step of askPlan.steps) {
     if (alreadyResolvedGroupIds.has(step.group_id)) continue;
@@ -448,7 +522,11 @@ export function resolveAskPlan(
     // a separate, documented follow-up; this is strictly narrower:
     // match-if-mentioned-this-turn, same as a slot, minus the asking).
     if (step.kind === "modifier") {
-      const availableStems = new Set([...customerTextStems].filter(s => !consumedStems.has(s)));
+      // P0 fix (2026-09-09, see isolatePhraseForItem above): scoped to the
+      // ONE phrase naming this item in a multi-item message, not the whole
+      // turn — the fix for the pepperoni-bleeds-onto-every-pizza defect.
+      const isolatedModifierText = isolatePhraseForItem(customerText, askPlan.display_name, otherItemPhraseHints);
+      const availableStems = new Set([...significantStems(isolatedModifierText)].filter(s => !consumedStems.has(s)));
       const textMatch = matchChoiceByStems(step.choices, availableStems);
       const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? textMatch;
       // P0 (2026-09-09, live money defect): neither matchAssertedChoice nor
@@ -589,9 +667,10 @@ function resolveAndPriceSelections(
   defaultChoiceIdByGroup: Map<string, string>,
   consumedModifierChoiceIds: Set<string> | undefined,
   modelAssertedChoiceTexts: string[],
+  otherItemPhraseHints: string[] = [],
 ): ResolveAndPriceOutcome {
   const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
-  const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts);
+  const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, otherItemPhraseHints);
 
   const newSelections: Record<string, string> = { ...priorSelections };
   for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
@@ -667,6 +746,13 @@ export function applyCompiledAddItem(
   // matchAssertedChoice doc for why an unmatched string is silently
   // dropped rather than trusted.
   modelAssertedChoiceTexts: string[] = [],
+  // P0 fix (2026-09-09, see isolatePhraseForItem's header above): other
+  // real items this SAME turn's message also resolves to — index.ts's main
+  // tool loop passes the turn's deterministic-compose tokens here so a
+  // topping named for ONE of them can't reactively bleed onto THIS item's
+  // reactive modifier match. Empty at every call site that predates this
+  // fix, which is exactly why none of them change behavior.
+  otherItemPhraseHints: string[] = [],
 ): CompiledAddItemResult {
   const askPlan = menuItem.ask_plan;
   const itemGroups = menuItem.option_groups ?? [];
@@ -700,7 +786,7 @@ export function applyCompiledAddItem(
 
   const {
     newSelections, resolvedCount, resolvedOptions, priceCents, nextQuestion, pendingGroupNames, nextStep,
-  } = resolveAndPriceSelections(askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts);
+  } = resolveAndPriceSelections(askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, otherItemPhraseHints);
 
   // Bug-3-class guard (2026-09-07 quantity-doubling incident): a redundant
   // add_item call for an item ALREADY fully resolved, carrying text that

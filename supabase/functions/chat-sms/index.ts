@@ -1349,6 +1349,17 @@ async function executeTool(
   // any legacy-path shop (e.g. Vito's) ordering 2+ of the same base item in
   // one message where only one segment names a modifier.
   consumedReactiveExtraKeys?: Set<string>,
+  // P0 fix (2026-09-09, live money — Zio's "one plain, one pepperoni, one
+  // meat lover and one hawaai" regression, see ask-plan-engine.ts's
+  // isolatePhraseForItem): other real items this SAME turn's message also
+  // resolved to — today, just the pre-loop deterministic pizza-topping-
+  // compose.ts tokens (composedPhraseTexts, computed once per turn by the
+  // caller). Lets the compiled engine's reactive modifier match tell "one
+  // pepperoni" (claimed by the compose step already) apart from "one meat
+  // lover"/"one hawaiian" (this add_item call's own phrase) instead of
+  // scanning the whole turn's text and reactively re-claiming the topping
+  // for every OTHER item in the same message.
+  otherItemPhraseHints?: string[],
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1398,6 +1409,7 @@ async function executeTool(
           shopPhone,
           consumedModifierChoiceIds,
           modelAssertedChoiceTexts,
+          otherItemPhraseHints ?? [],
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
@@ -2317,9 +2329,22 @@ async function runOrderingLoop(
   // topping — same protection consumedModifierChoiceIdsForTurn already
   // gives every add_item call made from inside this loop.
   preConsumedModifierChoiceIds?: Set<string>,
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }> }> {
+  // P0 fix (2026-09-09, live money — see executeTool's matching param): the
+  // exact phrase tokens (e.g. "pepperoni", "plain") the pre-loop
+  // deterministic compose step already claimed this turn, threaded into
+  // every add_item call this loop makes so the compiled engine's reactive
+  // modifier match can tell a DIFFERENT item's own phrase apart from one
+  // already spoken for.
+  composedPhraseTexts?: string[],
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
+  // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency): per-round-trip
+  // timing to the chat model, surfaced on the response only in test_mode.
+  // See BLOCKED.txt for why this exists.
+  const debugAttemptMs: number[] = [];
+  let toolCallCountForDebug = 0;
+  const debugToolMs: Array<{ name: string; ms: number }> = [];
 
   // D1 fix (2026-09-08 P0, PO re-diagnosis, see enumeration-shortfall-retry.ts):
   // snapshot the cart BEFORE this turn touches it so a mid-turn count check
@@ -2420,6 +2445,7 @@ async function runOrderingLoop(
       // Fall through to normal LLM path if tip tool fails
     }
 
+    const debugT0 = performance.now();
     const res = await fetch(CHAT_API, {
       method:  "POST",
       headers: {
@@ -2437,14 +2463,17 @@ async function runOrderingLoop(
         tools:      ORDERING_TOOLS,
       }),
     });
+    const debugFetchMs = Math.round(performance.now() - debugT0);
 
     if (!res.ok) {
       const errText = await res.text();
       console.error("[chat-sms] Chat API error:", res.status, errText);
+      debugAttemptMs.push(debugFetchMs);
       break;
     }
 
     const data: { stop_reason: string; content: ContentBlock[] } = await res.json();
+    debugAttemptMs.push(Math.round(performance.now() - debugT0));
     const content    = data.content ?? [];
     const toolBlocks = content.filter(b => b.type === "tool_use");
     const textBlocks = content.filter(b => b.type === "text");
@@ -2475,7 +2504,7 @@ async function runOrderingLoop(
         continue;
       }
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
-      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions };
+      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
       const soft = cart.length > 0
         ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
@@ -2484,6 +2513,7 @@ async function runOrderingLoop(
     }
 
     messages.push({ role: "assistant", content });
+    toolCallCountForDebug += toolBlocks.length;
 
     const toolResults: ContentBlock[] = [];
     for (const toolBlock of toolBlocks) {
@@ -2541,6 +2571,7 @@ async function runOrderingLoop(
         continue;
       }
 
+      const debugToolT0 = performance.now();
       const result = await executeTool(
         toolBlock.name!,
         toolBlock.input! as Record<string, unknown>,
@@ -2557,7 +2588,10 @@ async function runOrderingLoop(
         shopPhone,
         compiledMatchTextForTurn,
         consumedModifierChoiceIdsForTurn,
+        undefined, // consumedReactiveExtraKeys — legacy path only, not exercised here
+        composedPhraseTexts,
       );
+      debugToolMs.push({ name: toolBlock.name!, ms: Math.round(performance.now() - debugToolT0) });
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
       // all. When add_item failed the model narrated it to the customer ("that's
       // giving me a system hiccup") and the only record was the customer's
@@ -2612,7 +2646,7 @@ async function runOrderingLoop(
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase };
+  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs };
 }
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
@@ -4032,6 +4066,8 @@ async function activateTestMode(
 // when this file is the entry point (`import.meta.main`), not when a test
 // file imports it to reach the pure modules above.
 export async function handleChatSmsRequest(req: Request): Promise<Response> {
+  // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency) — see BLOCKED.txt.
+  const debugReqT0 = performance.now();
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -5566,6 +5602,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   const preConsumedModifierChoiceIds = new Set<string>();
   let deterministicComposedThisTurn = false;
   let composedLinesNote = "";
+  // P0 fix (2026-09-09, live money — see ask-plan-engine.ts's
+  // isolatePhraseForItem): the raw phrase token each compose line actually
+  // claimed ("pepperoni", "plain") — threaded into the model's own add_item
+  // calls below (runOrderingLoop) so a topping already claimed here can't
+  // reactively bleed onto a DIFFERENT item the model resolves from a
+  // different phrase in this same message.
+  const composedPhraseTexts: string[] = [];
   if (compiledOrderingEngineEnabled) {
     const carryforwardText = buildCompiledMatchText(userMessage, history);
     const composed = composeDeterministicPizzaLines(
@@ -5612,6 +5655,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // Consume the applied topping choice ID so the model's own loop
         // can't re-apply the same topping to a different pizza line.
         if (c.toppingChoiceId) preConsumedModifierChoiceIds.add(c.toppingChoiceId);
+        composedPhraseTexts.push(c.token);
         console.log(`[chat-sms] Deterministic pizza-topping compose (conv=${conversation.id}): "${c.token}" -> ${c.baseDisplayName}${c.toppingChoiceDisplay ? ` + ${c.toppingChoiceDisplay}` : ""}.`);
       } else {
         console.warn(`[chat-sms] Deterministic pizza-topping compose DID NOT APPLY (conv=${conversation.id}): "${c.token}" -> ${c.baseDisplayName}${c.toppingChoiceDisplay ? ` + ${c.toppingChoiceDisplay}` : ""}. ok=${outcome.ok} cartChanged=${outcome.cartChanged}. Leaving this token to the normal model-driven path instead of claiming a compose that didn't actually land.`);
@@ -5676,16 +5720,25 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // label). Any code path that finalizes `reply` with the itemizer's own
   // output must set this so Phase A leaves it byte-for-byte alone.
   let moneyFooterAlreadyRendered = false;
+  // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency) — see runOrderingLoop.
+  let debugPerf: { attemptMs: number[]; toolCallCount: number } | undefined;
+  const debugBeforeLoopMs = Math.round(performance.now() - debugReqT0);
   if (nameSubmitCheckoutUrl) {
     reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
     checkoutUrl = nameSubmitCheckoutUrl;
   } else {
     const loopResult = await runOrderingLoop(
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
-      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null, preConsumedModifierChoiceIds,
+      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null, preConsumedModifierChoiceIds, composedPhraseTexts,
     );
     reply = loopResult.reply;
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
+    if (cart.test_mode && loopResult.debugAttemptMs) {
+      debugPerf = { attemptMs: loopResult.debugAttemptMs, toolCallCount: loopResult.debugToolCallCount ?? 0 };
+      (debugPerf as Record<string, unknown>).beforeLoopMs = debugBeforeLoopMs;
+      (debugPerf as Record<string, unknown>).afterLoopMs  = Math.round(performance.now() - debugReqT0);
+      (debugPerf as Record<string, unknown>).toolMs       = loopResult.debugToolMs ?? [];
+    }
     // ITEM 2 (2026-09-08, PO live verification): force every compiled slot
     // question opened this turn to reach the customer byte-for-byte. Must run
     // BEFORE stripInventedActions below — that scrub only touches invented
@@ -6560,10 +6613,32 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // concatenated phrase never matched. The "I've flagged it for the shop"
   // clause is gated on saveCart's own success (honestFlaggedClause) instead
   // of being asserted unconditionally.
-  if (pendingConfirmAsks12_16.length > 0) {
+  // P0 fix (2026-09-09, live money — false-claim-INVERSE, same Zio's
+  // transcript as GUARD 1f/12/16 above): GUARD 12/16 each flag "the
+  // customer named X but THIS one touched line doesn't have it selected,"
+  // then this render asserts one blanket claim for the whole cart — "X
+  // isn't priced or on the order yet." That claim is true only if X really
+  // is absent EVERYWHERE. A real transcript had Pepperoni already selected
+  // and priced on three OTHER pizza lines this turn didn't touch; GUARD 16
+  // correctly saw it unselected on the fourth (untouched-this-turn) line and
+  // flagged it, and this render then told the customer Pepperoni "isn't
+  // priced or on the order yet" while it plainly was, on three lines, right
+  // then. Cross-check every flagged term against the cart's OWN actual
+  // state (guardCart's `options`, which is DERIVED straight from
+  // ask_plan_selections for a compiled line — see CartItem's own doc
+  // comment — so this is real cart state, not a re-guess) before it's
+  // allowed into the disclaimer — same "render from real state, don't let
+  // an assertion drift from it" discipline as GUARD 1f.
+  const cartWidePricedNames1216 = new Set<string>();
+  for (const raw of guardCart) {
+    const ci = raw as CartItem;
+    for (const v of Object.values(ci.options ?? {}).flat()) cartWidePricedNames1216.add(v.toLowerCase());
+  }
+  const trueAsks1216 = pendingConfirmAsks12_16.filter(ask => !cartWidePricedNames1216.has(ask.toLowerCase()));
+  if (trueAsks1216.length > 0) {
     const seenLower1216 = new Set<string>();
     const dedupedAsks1216: string[] = [];
-    for (const ask of pendingConfirmAsks12_16) {
+    for (const ask of trueAsks1216) {
       const key = ask.toLowerCase();
       if (seenLower1216.has(key)) continue;
       seenLower1216.add(key);
@@ -7659,6 +7734,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // a value the client guessed. Web/JSON path only — the SMS branch above
     // returns TwiML and is untouched.
     model:        CHAT_MODEL,
+    // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency) — per-round-trip
+    // LLM call timing, test_mode only. Remove once the regression is closed.
+    ...(debugPerf ? { debug_perf: { ...debugPerf, endMs: Math.round(performance.now() - debugReqT0) } } : {}),
   });
 }
 

@@ -44,6 +44,7 @@
 
 import { significantStems } from "./pending-disambiguation.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
+import { splitCustomerPhrases } from "./phrase-split.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
 
 export interface ComposeMenuItem {
@@ -190,10 +191,31 @@ const NUMBER_WORDS: Record<string, number> = {
 };
 
 function splitIntoSegments(message: string): Segment[] {
-  const parts = message.split(/,|\band\b/i).map(p => p.trim()).filter(Boolean);
+  // P0 fix (2026-09-09): was comma-only (plus a bare "and", unconditionally
+  // recursed via splitOnAndItem-like matching elsewhere) — see phrase-
+  // split.ts's header for the live regression this widened separator set
+  // (',' | 'and' | '&', plus the implicit repeated-digit-quantity boundary)
+  // fixes: "and" was one of the recognized boundaries already inside this
+  // very split, but a message with NO comma/and at all ("1 cheese 1
+  // pepperoni 1 meat lover 1 hawaiian") had no recognized boundary whatsoever
+  // and collapsed to one giant segment.
+  const parts = splitCustomerPhrases(message);
   const segments: Segment[] = [];
+  // P0 fix (2026-09-09, matrix case 6: "gimme a plain and a pepperoni and a
+  // meat lovers and a hawaiian"): the quantity token used to have to be the
+  // very FIRST word of the segment, so the leading filler verb in the
+  // opening phrase of a list ("gimme a plain") left the quantity anchor
+  // unrecognized and the whole "gimme a plain" fell through untouched — the
+  // plain cheese pizza silently never got composed at all. Only the FIRST
+  // phrase of a list can carry this kind of preamble (every later phrase
+  // starts right at its own boundary from splitCustomerPhrases), so this
+  // searches for the quantity/article word boundary anywhere in the
+  // segment, not just position 0, and discards anything before it — a bare
+  // dish name with no quantity word at all (e.g. "plain pizza") still falls
+  // through unchanged to the segments.push below.
+  const QTY_TOKEN_RE = /\b(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(.+)$/i;
   for (const part of parts) {
-    const m = part.match(/^(\d+|[a-z]+)\s+(.*)$/i);
+    const m = part.match(QTY_TOKEN_RE);
     if (m) {
       const qtyToken = m[1].toLowerCase();
       const qty = /^\d+$/.test(qtyToken) ? parseInt(qtyToken, 10) : NUMBER_WORDS[qtyToken];
@@ -238,20 +260,33 @@ export function composeDeterministicPizzaLines(
 
   const results: ComposedPizzaToken[] = [];
   for (const seg of splitIntoSegments(customerMessage)) {
+    // Bare "plain"/"cheese" (with only size/format/course words alongside,
+    // e.g. "1 cheese pizza") names the base pizza itself, not a topping —
+    // checked FIRST and unconditionally, before any topping match is even
+    // attempted. This must not depend on GUARD19_GENERIC_WORDS filtering
+    // "cheese" away: it deliberately does NOT (see that set's own file —
+    // "cheese" legitimately distinguishes real items like "Cheese Steak"
+    // elsewhere), which used to mean a bare "1 cheese" segment fell through
+    // to the topping-match branch below and matched an unrelated "Extra
+    // Cheese" choice purely because both contain the word "cheese" — live
+    // regression, 2026-09-09 matrix case 5 ("1 cheese 1 pepperoni 1 meat
+    // lover 1 hawaiian"): the plain cheese pizza silently never got added.
+    // "cheese" and "plain" are equally valid bare-pizza-indicator words here
+    // (BASE_PIZZA_NAME_RE already treats them identically for defining the
+    // family) — this check restores that equivalence for segment
+    // classification too.
+    const bare = seg.text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").trim().split(/\s+/).filter(Boolean);
+    const isBarePlain = bare.every(w => w === "plain" || w === "cheese" || w === "pizza" || w === "pizzas") &&
+      bare.some(w => w === "plain" || w === "cheese");
+    if (isBarePlain) {
+      results.push({ token: seg.text, quantity: seg.quantity, baseMenuItemId: baseItem.id, baseDisplayName: baseItem.ask_plan?.display_name ?? baseItem.name });
+      continue;
+    }
+
     const tokenWords = significantStems(seg.text).size > 0
       ? seg.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(w => w.length >= 3 && !GUARD19_GENERIC_WORDS.has(w))
       : [];
-    if (tokenWords.length === 0) {
-      // Bare "plain"/"cheese" (both are GENERIC words, filtered above) —
-      // check for that exact case explicitly.
-      const bare = seg.text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").trim().split(/\s+/).filter(Boolean);
-      const isBarePlain = bare.every(w => w === "plain" || w === "cheese" || w === "pizza" || w === "pizzas") &&
-        bare.some(w => w === "plain" || w === "cheese");
-      if (isBarePlain) {
-        results.push({ token: seg.text, quantity: seg.quantity, baseMenuItemId: baseItem.id, baseDisplayName: baseItem.ask_plan?.display_name ?? baseItem.name });
-      }
-      continue;
-    }
+    if (tokenWords.length === 0) continue;
     // (a) Skip if this segment already names a real standalone item —
     // that's the model's existing (working) typo-correction path, not this
     // module's job.

@@ -558,6 +558,74 @@ Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order
   assert(cart[0].options?.["Add Toppings"]?.includes("Pepperoni"));
 });
 
+// ── P0 LIVE MONEY REGRESSION (2026-09-09, PO idx444, the actual reported
+// shape): "one plain, one pepperoni, one meat lover and one hawaai" bled the
+// Pepperoni topping onto the Meat Lover's AND Hawaiian lines too — $6.00 of
+// toppings nobody ordered. The D1 consumedModifierChoiceIds mechanism above
+// does NOT catch this: Meat Lover's Pizza and Hawaiian Pizza each have their
+// OWN, separately-ID'd "Pepperoni" topping choice on their own "Add Extra
+// Toppings" modifier group (a real menu shape — a specialty pizza can still
+// take extra toppings) — a DIFFERENT DB id than the cheese pizza's own
+// Pepperoni choice, so ID-based consumption tracking never sees them as the
+// same thing. The bleed happens because Meat Lover's/Hawaiian's own reactive
+// modifier match scans the WHOLE turn's text, finds the word "pepperoni"
+// (already spoken for by a completely different phrase/line), and matches
+// it against their OWN Pepperoni choice. otherItemPhraseHints (the
+// deterministic compose step's own claimed tokens, e.g. "one pepperoni")
+// must exclude that phrase from Meat Lover's/Hawaiian's own reactive text so
+// neither can ever reactively claim it.
+const MEAT_LOVERS_ASK_PLAN: AskPlan = {
+  compiled_at: "2026-09-09T00:00:00Z",
+  compiler_version: 1,
+  display_name: "Meat Lover's Pizza",
+  base_price_cents: 2499,
+  steps: [
+    { group_id: "grp-ml-size", slot_key: "size", kind: "slot", ask_mode: "ask", prompt_template: "size.ask",
+      choices: [{ id: "c-ml-large", display: "Large 18''", price_delta_cents: 0 }] },
+    { group_id: "grp-ml-extra", slot_key: "extra_toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "extra.on_request",
+      choices: [{ id: "c-ml-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-ml-mush", display: "Mushroom", price_delta_cents: 250 }] },
+  ],
+  recap_template: "",
+  ticket_template: "",
+};
+function meatLoversMenuItem(): CompiledMenuItem {
+  return { ask_plan: MEAT_LOVERS_ASK_PLAN, bot_state: "orderable", option_groups: [{ id: "grp-ml-size", name: "Size" }, { id: "grp-ml-extra", name: "Add Extra Toppings" }] };
+}
+const HAWAIIAN_ASK_PLAN: AskPlan = {
+  compiled_at: "2026-09-09T00:00:00Z",
+  compiler_version: 1,
+  display_name: "Hawaiian Pizza",
+  base_price_cents: 2499,
+  steps: [
+    { group_id: "grp-haw-size", slot_key: "size", kind: "slot", ask_mode: "ask", prompt_template: "size.ask",
+      choices: [{ id: "c-haw-large", display: "Large 18''", price_delta_cents: 0 }] },
+    { group_id: "grp-haw-extra", slot_key: "extra_toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "extra.on_request",
+      choices: [{ id: "c-haw-pep", display: "Pepperoni", price_delta_cents: 300 }] },
+  ],
+  recap_template: "",
+  ticket_template: "",
+};
+function hawaiianMenuItem(): CompiledMenuItem {
+  return { ask_plan: HAWAIIAN_ASK_PLAN, bot_state: "orderable", option_groups: [{ id: "grp-haw-size", name: "Size" }, { id: "grp-haw-extra", name: "Add Extra Toppings" }] };
+}
+
+Deno.test("applyCompiledAddItem: P0 regression — otherItemPhraseHints stops Pepperoni (claimed by a DIFFERENT item's own compose) from bleeding onto Meat Lover's/Hawaiian's OWN separate Pepperoni choice", () => {
+  const cart: CompiledCartLine[] = [];
+  const turnText = "one plain, one pepperoni, one meat lover and one hawaai";
+  const consumed = new Set<string>();
+  // The deterministic compose step (pizza-topping-compose.ts) already
+  // claimed "one pepperoni" for the cheese pizza line before either of these
+  // two calls runs — exactly what index.ts's composedPhraseTexts carries.
+  const otherItemPhraseHints = ["one pepperoni"];
+  applyCompiledAddItem(cart, meatLoversMenuItem(), "ml-id", 1, turnText, null, consumed, [], otherItemPhraseHints);
+  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, turnText, null, consumed, [], otherItemPhraseHints);
+  assertEquals(cart.length, 2);
+  assertEquals(cart[0].options?.["Add Extra Toppings"], undefined, "Meat Lover's must NOT reactively claim Pepperoni from a different phrase");
+  assertEquals(cart[1].options?.["Add Extra Toppings"], undefined, "Hawaiian must NOT reactively claim Pepperoni from a different phrase");
+  assertEquals(cart[0].price_cents, 2499);
+  assertEquals(cart[1].price_cents, 2499);
+});
+
 // ── Item 8 fix (2026-09-08 P0, 392894c diagnosis, PO sign-off) ─────────────
 // Root cause: matchChoiceInText only strips plurals, so "pepp" (or any
 // abbreviation) never text-matches "Pepperoni" — full stop, regardless of

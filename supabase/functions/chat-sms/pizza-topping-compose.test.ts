@@ -87,6 +87,48 @@ Deno.test("composeDeterministicPizzaLines: the full acceptance shape — 'pepp' 
   assertEquals(plain?.toppingChoiceDisplay, undefined);
 });
 
+// P0 regression (2026-09-09, matrix case 5): bare "cheese" (no "plain") used
+// to fall through to the topping-match branch and match "Extra Cheese"
+// purely on the shared word "cheese" — the plain cheese pizza the customer
+// asked for silently never got added at all. "cheese" and "plain" must be
+// equally valid bare-pizza-indicators here, matching BASE_PIZZA_NAME_RE's
+// own equivalence between them.
+Deno.test("composeDeterministicPizzaLines: bare 'cheese' (no 'plain') composes the base pizza itself, not the 'Extra Cheese' topping", () => {
+  const menu = buildMenu();
+  const cart: { menu_item_id: string }[] = [];
+  const composed = composeDeterministicPizzaLines(
+    "1 cheese 1 pepperoni 1 meat lover 1 hawaiian",
+    "I want 4 large pizzas 1 cheese 1 pepperoni 1 meat lover 1 hawaiian",
+    menu,
+    cart,
+  );
+  assertEquals(composed.length, 2);
+  const cheese = composed.find(c => c.token === "cheese");
+  assertEquals(cheese?.baseMenuItemId, "neap-large");
+  assertEquals(cheese?.toppingChoiceDisplay, undefined, "bare 'cheese' must be the plain base pizza, not the Extra Cheese topping");
+  const pepp = composed.find(c => c.token === "pepperoni");
+  assertEquals(pepp?.toppingChoiceDisplay, "Pepperoni");
+});
+
+// P0 regression (2026-09-09, matrix case 6): a leading filler verb on the
+// FIRST phrase of a list ("gimme a plain") used to hide the quantity anchor
+// entirely, so "plain" silently never composed at all — 3 lines instead of 4.
+Deno.test("composeDeterministicPizzaLines: a leading filler verb on the first phrase ('gimme a plain') does not block the bare-plain compose", () => {
+  const menu = buildMenu();
+  const cart: { menu_item_id: string }[] = [];
+  const composed = composeDeterministicPizzaLines(
+    "gimme a plain and a pepperoni and a meat lovers and a hawaiian",
+    "I want 4 large pizzas gimme a plain and a pepperoni and a meat lovers and a hawaiian",
+    menu,
+    cart,
+  );
+  assertEquals(composed.length, 2);
+  const plain = composed.find(c => c.baseMenuItemId === "neap-large" && c.toppingChoiceDisplay === undefined);
+  assertEquals(plain?.quantity, 1);
+  const pepp = composed.find(c => c.toppingChoiceDisplay === "Pepperoni");
+  assertEquals(pepp?.quantity, 1);
+});
+
 Deno.test("composeDeterministicPizzaLines: never composes without established pizza context", () => {
   const menu = buildMenu();
   const composed = composeDeterministicPizzaLines("1 pepp please", "1 pepp please", menu, []);
