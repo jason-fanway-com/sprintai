@@ -6085,3 +6085,86 @@ COMMITTED: supabase/functions/_shared/menu-readiness.ts (§8.4 addition),
 supabase/functions/_shared/menu-readiness.test.ts (8 new tests),
 scripts/item5-menu-readiness-live-report.ts (two-number report). No edge
 function deploy — this is gate/script code only, not chat-sms itself.
+
+================================================================================
+2026-09-09 (OrderFare subagent) — ZIO'S "PENDING QUESTION LOST" DEFECT: NOT
+REPRODUCIBLE ON CURRENT LIVE SYSTEM. NO CODE CHANGE MADE, NO DEPLOY.
+================================================================================
+
+TASK: Investigate and fix a reported defect at Zio's (shop_id 2cba7b51-211c-
+4437-8910-1af4dcc03498): customer says "I need to order four large pizzas",
+bot asks "Which four are you thinking? pickup or delivery?", customer
+answers "all plain", bot replies "Nothing's in your order yet. What can I
+get started for you?" — the pending clarifying question and the "four"
+quantity are both lost. Reported as found in the same test batch that
+surfaced today's Vito's quantity regression, but flagged by the requester
+as a SEPARATE defect, not to be folded into that fix.
+
+INVESTIGATION: Read pending-disambiguation.ts, pending-question-
+followthrough.ts, sequencer.ts, and the conversation_state read/write path
+in index.ts to understand how a pending question is persisted and re-read
+across turns, before touching anything. Per the task's own constraint (a
+second session, 091702b1, was actively editing resolver.ts/ask-plan-
+engine.ts in this same shared worktree for the unrelated Vito's fix), did
+NOT edit resolver.ts or ask-plan-engine.ts blind — confirmed via `git
+status` before starting that both were already mid-edit and uncommitted,
+left untouched throughout.
+
+LIVE REPRODUCTION ATTEMPT (endpoint rvdqfxtrskxekfkqnegx, chat-sms v324,
+deployed 2026-09-09 20:22:48 UTC — current HEAD at investigation start was
+01f833b): ran the EXACT reported 3-turn sequence against the real shop, 5
+independent sessions:
+  Turn 1: "I need to order four large pizzas"
+  Turn 2: "all plain"
+  Result, all 5 runs: bot asked which pizzas + pickup/delivery on turn 1
+  (wording varied slightly, LLM-generated), then on turn 2 correctly added
+  4x Large 18'' Neapolitan Cheese Pizza, cart lines: 1, qty=4, and asked
+  pickup/delivery again (NOT lost — carried forward correctly). Zero
+  reproductions of "Nothing's in your order yet" across 5/5 runs.
+
+VARIANT (per task's ask, to rule out a fix narrowly matching this exact
+wording — different clarifying question, different short answer, 3 separate
+sessions): "I'd like two subs" -> bot asks which subs + pickup/delivery ->
+"italian" / "both italian" (x2). All 3 runs correctly carried "two Italian
+subs" forward into the NEXT clarifying question (size), still remembering
+pickup/delivery was unanswered. Ran one to completion: "I'd like two subs"
+-> "both italian" -> "medium, pickup" -> bot added 2x Medium 12'' Italian
+Sub, cart lines: 1, correct subtotal. Zero context loss across 4 runs total
+(1 to full completion + 3 to the second clarifying turn).
+
+CONCLUSION: could not reproduce the reported defect on the currently
+deployed chat-sms (v324) after 8 live runs across two independent
+clarifying-question flows. Did not identify a live root cause because there
+was no live failure to root-cause. Most likely explanation, not confirmed:
+the same resolver/ask-plan-engine precedence commits that fixed today's
+Vito's quantity regression (a9c03a1 "resolver — exact whole-name match
+beats every parsing heuristic", d10fafb "resolver — specificity tiebreak",
+c375903 "ask-plan-engine — exact-match precedence + same-turn stem
+collision") also fixed this — both defects were found in the same test
+batch, both involve a short low-signal customer reply ("all plain",
+abbreviated topping words) following a pending question, and a resolver
+that fails to match such a reply plausibly falls through to whatever guard
+path produces a state-reset reply. This is a plausible shared cause, not a
+confirmed one — I never observed the failure directly, so I cannot point to
+the specific line that used to cause it.
+
+NO CODE CHANGE MADE. NO DEPLOY. Nothing to commit in chat-sms or its
+dependents. Committing this BLOCKED.txt entry plus my own throwaway repro
+scripts (scripts/tmp-pending-q-repro-20260909.ts, scripts/tmp-pending-q-
+variant-20260909.ts, scripts/tmp-vitos-canary-20260909.ts) only. Did NOT
+touch, stage, or commit the other session's in-progress uncommitted diff
+(ask-plan-engine.ts, index.ts, cart-summary-intent-20260909.ts,
+pizza-topping-compose.ts) — confirmed via `git status` those are unrelated
+to anything I changed, exactly as they were found.
+
+VITO'S CANARY: PASS. cheeseburger / medium / "thats it" -> Cheese Burger
+(Temp: Medium) $8.49, Subtotal $8.49, Service fee $0.99, Total $9.48.
+Correct and unaffected.
+
+IF THIS DEFECT RECURS: the report that triggered this investigation is
+real (Jason/QA saw it happen), even though it didn't reproduce here. Worth
+asking whoever ran the original test batch for the exact session_id/
+timestamp so the actual conversation_state row (if still in the DB) or
+function logs from that request can be pulled directly, rather than relying
+on a fresh session missing whatever transient condition triggered it the
+first time.
