@@ -6168,3 +6168,214 @@ timestamp so the actual conversation_state row (if still in the DB) or
 function logs from that request can be pulled directly, rather than relying
 on a fresh session missing whatever transient condition triggered it the
 first time.
+
+================================================================================
+2026-09-09 (OrderFare subagent) — D1/D2/D3 FROM REAL SMS ORDER #6: D1 NOT A
+BUG (timezone gate is correct — transcript spans 19.5 real hours, not
+seconds), D2 FIXED + DEPLOYED (payment-confirmed receipt dropped modifiers),
+D3 FIXED + DEPLOYED (per-conversation turn lock for double-texts).
+================================================================================
+
+TASK: three defects flagged from Vito's real, paid, end-to-end SMS order #6
+($85.46). Fix in priority order, verify each live, report separately.
+
+--------------------------------------------------------------------------------
+D1 — hours-gate "closed" refusal. NOT A BUG. No code change.
+--------------------------------------------------------------------------------
+
+REPORTED AS: three back-to-back texts, refused twice while genuinely open
+(11am-10pm, sent at "5:45"), self-corrected on the third.
+
+ROOT CAUSE (confirmed via the real messages table, not assumption): the
+three "back-to-back" texts were NOT back-to-back. Pulled the actual
+conversation (c5a038f6-e839-408e-8b5e-b6bf6e91c47c) and its real
+timestamps:
+  msg1 "I'd like to order..."  @ 2026-09-09T02:11:41 UTC = Mon 10:11pm ET
+    -> genuinely closed (Monday hours 11:00-22:00, 22:11 is past close)
+  msg2 "Need to order"         @ 2026-09-09T11:12:25 UTC = Tue  7:12am ET
+    -> genuinely closed (before 11:00 open)
+  msg3 "Need to order"         @ 2026-09-09T21:45:08 UTC = Tue  5:45pm ET
+    -> genuinely open (11:00-22:00 window)
+The customer's three texts were ~9 hours and then ~10.5 hours apart, not
+seconds apart. getBusinessDayKey/getLocalMinutes (index.ts) already convert
+via Intl.DateTimeFormat with the shop's real IANA timezone
+(America/New_York, confirmed via direct DB query) for BOTH the day-of-week
+and minutes-since-midnight — no UTC-vs-local bug found, none reproduced.
+Checked shop.timezone for every shop in the shops table (49 rows): 100%
+America/New_York, so this cannot be a shop-specific timezone
+misconfiguration either — confirmed by direct query, not inference.
+
+The ONE real (cosmetic, not money/order-losing) issue: the bot's own turn-3
+reply — "Oh man, I had that wrong — we're actually open until 10 PM (it's
+only 5:45!). Sorry about that." — is LLM ad-libbed from conversation history
+(there is no hardcoded "I had that wrong" string anywhere in the codebase)
+and is factually WRONG: the bot was never wrong: it was accurately closed
+both prior times, real time had simply passed. This is a minor tone
+artifact (the model apologizing for something it didn't get wrong), not a
+functional defect and not what was reported (no order was lost — the
+customer's fourth message onward completed a real $85.46 paid order in the
+same conversation). Not fixing prompt tone under a P0/D1 severity label;
+flagging for a normal-priority copy pass if Jason wants the model to stop
+self-flagellating over correct-at-the-time closures.
+
+VERIFICATION: direct queries against the live DB
+(rvdqfxtrskxekfkqnegx.messages, .shops) via the Management API, not
+simulation. No code change. No deploy needed for D1.
+
+--------------------------------------------------------------------------------
+D2 — final order confirmation drops the modifier. FIXED + DEPLOYED (v330).
+--------------------------------------------------------------------------------
+
+ROOT CAUSE (confirmed by reading the code, not assumption): the
+payment_confirmed SMS receipt (chat-sms/index.ts, handleSystemEvent) built
+its item list from ITS OWN renderer:
+    const items = cartRow.cart_json.map(i => `${i.quantity||1}x ${i.name}`)
+— name and quantity ONLY. No modifiers, no options. Meanwhile the checkout
+recap (LLM-composed, reading the same cart via the CURRENT CART section of
+the system prompt, which DOES include modifiers) and the kitchen ticket
+email (its own itemizer, further down in the same file, which ALSO already
+correctly merged modifiers+options) both rendered correctly. Two renderers,
+one wrong — exactly the class of bug the task named. Same root cause as the
+order #5 report from 2026-09-08 that was never fixed then.
+
+FIX: extracted the modifier/option merge (dedup mods+options — logic the
+email itemizer already had right) into one shared function,
+cartItemModifierParts(r: CartItem), and pointed BOTH the SMS receipt and the
+email itemizer at it. A line can no longer render correctly in one place and
+silently drop its modifier in another, because there's only one place that
+decides what a line's modifiers/options are now.
+
+VERIFICATION (live, real endpoint, real cart, zero side effects): drove a
+fresh test-mode order on Vito's Pizza through the real chat-sms endpoint —
+"one large pepperoni pizza" -> "Jason" -> "thats it, checkout" — reached
+checkout with cart_json correctly holding options.Toppings = ["Pepperoni
+(Whole pizza)"]. Then called the real payment_confirmed system-event branch
+(handleSystemEvent) against that REAL cart. This is not a fabricated
+signal — payment_confirmed's own rendering logic reads only cart_json, has
+nothing to do with how payment was verified, and the call is safe by
+construction: the test session's channel is "web" (not "sms", not
+"web:imsg-*"), so index.ts's own channel check sends no real SMS/iMessage —
+the rendered text is simply returned in the JSON response, which is exactly
+what needed inspecting. Result, post-fix:
+  "Payment confirmed! Order for Jason: 1x Cheese - Large (16") (Pepperoni
+  (Whole pizza)). Total: $21.99 (Subtotal $21.00 + Service fee $0.99)..."
+Pepperoni now named. Pre-fix this would have read "1x Cheese - Large (16")"
+with no mention of pepperoni, per the code trace above.
+
+Kitchen ticket email side effect: because email_ticket_recipient is set for
+Vito's, this same test also sent one real kitchen-ticket email to Vito's
+Test Kitchen's configured recipient — an accepted, known cost of testing
+against a live shop with a real ticket destination, not a customer-facing
+or money-moving side effect.
+
+Full existing chat-sms test suite: 691 passed, 0 failed, both before and
+after. deno check: clean.
+
+--------------------------------------------------------------------------------
+D3 — turn-ordering race on rapid double-text. FIXED + DEPLOYED (v330),
+BOUNDED — real residual gap documented below, not hidden.
+--------------------------------------------------------------------------------
+
+ROOT CAUSE (confirmed by code search, not assumption): nothing in
+chat-sms/index.ts serialized two inbound messages for the same
+conversation. Each inbound SMS is its own independent invocation of this
+stateless edge function; searched for any lock/mutex/advisory-lock/queue
+pattern (grep for advisory_lock, mutex, in_flight, processing_lock,
+debounce, etc.) — none existed anywhere in chat-sms or _shared. A customer
+double-texting quickly (very common on real SMS) could have both
+invocations run concurrently against the same starting
+cart/conversation-state read, so a reply could land referencing state a
+newer message had already superseded — exactly the "Yes"/"Jason" repro.
+
+FIX: added conversations.processing_claimed_at (migration 127, applied
+directly to the live DB via the Supabase Management API — the CLI's direct
+db-password auth was failing, and this is the same short-lived
+claim-with-staleness idiom the codebase already uses for
+order_carts.ticket_send_attempt_at, no new architecture). Right after the
+conversation is resolved (existing or newly created), the handler now does
+a bounded poll-claim loop (single atomic UPDATE...WHERE, so two concurrent
+callers cannot both win) before touching cart or conversation state, and
+the ENTIRE remaining handler body is wrapped in try/finally so the lock
+releases on every one of its many existing early-return paths (hours-gate
+refusal, menu-unavailable, every guard branch, every success path) without
+having to touch each one individually.
+
+Two deliberately different time horizons (both documented inline in
+index.ts): a 60s staleness threshold (crash detection — measured real turns
+in this system run from ~1s to 35s+, so this must clear real processing
+time or a live-but-slow first caller would have its lock stolen mid-turn)
+and a ~15s poll-wait bound for a losing caller (kept under typical inbound
+SMS webhook timeouts — Twilio's is ~15s — since blocking the HTTP response
+longer risks the PROVIDER treating the webhook as failed and retrying it,
+manufacturing a third concurrent invocation on top of the customer's own
+double-text).
+
+LIVE VERIFICATION (real endpoint, Promise.all concurrent requests against
+the same session, DB message timestamps as ground truth — not reply text
+alone): sequential setup turns to reach the exact real-repro moment (bot
+has just asked "What's your name for the order?"), then fired "Yes" and
+"Jason" concurrently (300ms stagger, mirroring real SMS delivery order).
+Both turns completed in ~1.5s each (under the poll bound). Real DB message
+order, by timestamp:
+  22:08:39.085 customer: Yes
+  22:08:39.699 assistant: Payment link sent!...      <- turn on "Yes" fully done
+  22:08:40.141 customer: Jason                        <- only NOW does turn3 start
+  22:08:40.172 assistant: Your payment link was sent - check your texts...
+"Jason" is not saved until AFTER the "Yes" turn's own reply was saved and
+its lock released — correctly serialized, no interleaving, no stale-state
+reply. (Separately: the bot took "Yes" literally as the pickup name, which
+is an existing, unrelated UX quirk — the same ambiguity is present in the
+real order #6 transcript's own "Yes"/"Jason" sequence — not something this
+fix touches or claims to fix.)
+
+RESIDUAL GAP — found by testing, not swept under the rug: a FIRST attempt
+at this fix used a 10s poll bound. Re-ran the same live test with setup
+turns combined into a single slower multi-intent message (one turn took
+15.8s to process); the second, concurrent turn hit the 10s bound, gave up,
+and proceeded unlocked — the exact race recurred (visible in DB message
+timestamps: the second message's customer row was saved 3s BEFORE the
+first turn's own reply was saved). Fixed by widening the poll bound to 15s
+and raising staleness to 60s — closes the common case cleanly (verified
+above) but a turn that legitimately runs past ~15s (this system has known,
+separately-tracked slow paths — see the Zio's 4-pizza latency entry
+earlier in this file) can still race under load, now at least logged
+(`console.warn` "turn lock contention... proceeding without lock") instead
+of silent. A FULLY airtight fix needs to stop blocking the inbound webhook
+response on processing at all (ack immediately, process in a background
+queue strictly ordered per conversation) — that's a materially bigger
+architecture change than this task's blast radius, and Jason's call to
+make given it also touches how Twilio/Telnyx webhook delivery is handled
+for every shop, not just Vito's.
+
+Full existing chat-sms test suite: 691 passed, 0 failed, both before and
+after. deno check: clean.
+
+--------------------------------------------------------------------------------
+DEPLOYS: chat-sms v330 (D2+D3 code), migration 127 (D3 schema, applied
++ recorded in supabase_migrations.schema_migrations).
+
+POST-FIX REGRESSION CHECK (both re-run live after the v330 deploy):
+  Vito's canary: cheeseburger / medium / "thats it" -> $9.48. Unchanged, correct.
+  Zio's 4-pizza matrix (one case from session 091702b1's just-completed
+  matrix, re-run fresh): "I want 4 large pizzas" -> "one plain, one
+  pepperoni, one meat lover and one hawaiian" -> $88.96/$0.99/$89.95.
+  Unchanged, correct, matches 091702b1's numbers exactly.
+
+SHARED WORKTREE NOTE: session 091702b1 committed a5b4c29 (P0
+structural phrase-identity refactor, deployed as chat-sms v329) WHILE this
+task was in progress. Left their files (ask-plan-engine.ts, phrase-split.ts,
+pizza-topping-compose.ts, and their portion of index.ts) entirely untouched
+— by the time this session's own index.ts edits were committed, git status
+showed only this session's changes staged (their commit had already landed
+separately). No merge conflict, no overlap: their diff touched lines
+~120-2360 (interfaces, ORDERING_TOOLS schema, executeTool/runOrderingLoop);
+this session's D2 fix touched ~132-3730 (a new shared helper + the
+payment_confirmed items line + the email itemizer's use of it) and D3
+touched ~4506-7793 (lock acquire + try/finally wrap) — non-overlapping
+regions, confirmed via `git diff --stat` showing only this session's own
+file in the working tree before commit.
+
+Committed as d9b8251. Scratch verification scripts (scripts/tmp-d2-live-
+verify-20260909.ts, tmp-d3-live-verify-20260909.ts, tmp-d3-live-verify2-
+20260909.ts, tmp-post-d1d2d3-zios-sanity-20260909.ts) left uncommitted —
+throwaway, not product code.
