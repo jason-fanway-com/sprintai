@@ -2639,6 +2639,7 @@ async function upsertOptOut(
         .upsert({
           tenant_id:        tenantId,
           customer_phone:   phone,
+          phone_number:     phone, // legacy column, still NOT NULL — see migration 122
           opted_out_at:     new Date().toISOString(),
           opted_out_reason: reason,
           opted_back_at:    null,
