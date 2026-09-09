@@ -947,11 +947,20 @@ async function executeAction(
         source: "admin-chat",
         notes: `86'd via admin chat: "${rawMessage}"`,
       }));
-      await supabase.from("availability_overrides").insert(inserts);
+      const { error: insertErr } = await supabase.from("availability_overrides").insert(inserts);
 
       const names = allIds.map(id => menuMap.get(id)?.name ?? id).join(", ");
-      resultMsg = `Done — ${names} marked sold out until close.`;
+      // Insert errors (RLS, FK) usually throw, but read back anyway so a partial/no-op
+      // insert can't be reported as a clean success.
       const fresh86 = await get86List(supabase, shopId, businessDate);
+      const fresh86Ids = new Set(fresh86.map(e => e.item.id));
+      const notConfirmed86 = allIds.filter(id => !fresh86Ids.has(id));
+      if (insertErr || notConfirmed86.length > 0) {
+        afterSnapshot = { type: "eightysix", eighty_six_after: fresh86.map(e => e.item.id), confirmed: false };
+        resultMsg = `Couldn't confirm ${names} ${allIds.length > 1 ? "were" : "was"} marked sold out — the change may not have gone through.`;
+        break;
+      }
+      resultMsg = `Done — ${names} marked sold out until close.`;
       afterSnapshot = { type: "eightysix", eighty_six_after: fresh86.map(e => e.item.id) };
       break;
     }
@@ -959,18 +968,33 @@ async function executeAction(
       const ids = proposal.item_ids ?? [];
       beforeSnapshot = { type: "restore", eighty_six_before: eightySixList.map(e => e.item.id) };
 
+      // Confirm each id is actually 86'd on THIS shop before attempting the delete — a
+      // bad/cross-tenant item_id resolves to no override_id at all, so a bare read-back
+      // afterward can't distinguish "restored" from "was never 86'd here to begin with".
+      const unresolvedIds = ids.filter(id => !eightySixMap.has(id));
       const overrideIds = ids.map(id => eightySixMap.get(id)?.override_id).filter(Boolean) as string[];
-      await supabase.from("availability_overrides").delete().in("id", overrideIds);
+      const { error: deleteErr } = overrideIds.length > 0
+        ? await supabase.from("availability_overrides").delete().in("id", overrideIds)
+        : { error: null };
 
       const names = ids.map(id => menuMap.get(id)?.name ?? id).join(", ");
-      resultMsg = `Done — ${names} is back on the menu.`;
+      // Delete-by-filter is RLS-scoped — a cross-tenant override_id matches zero rows
+      // and returns no error, so confirm via read-back before reporting success.
       const fresh86 = await get86List(supabase, shopId, businessDate);
+      const fresh86Ids = new Set(fresh86.map(e => e.item.id));
+      const stillEightySixed = ids.filter(id => fresh86Ids.has(id));
+      if (deleteErr || unresolvedIds.length > 0 || stillEightySixed.length > 0) {
+        afterSnapshot = { type: "restore", eighty_six_after: fresh86.map(e => e.item.id), confirmed: false };
+        resultMsg = `Couldn't confirm ${names} ${ids.length > 1 ? "were" : "was"} restored — the change may not have gone through.`;
+        break;
+      }
+      resultMsg = `Done — ${names} is back on the menu.`;
       afterSnapshot = { type: "restore", eighty_six_after: fresh86.map(e => e.item.id) };
       break;
     }
     case "ADD_SPECIAL": {
       beforeSnapshot = { type: "special_add", specials_before: specials.map(s => s.id) };
-      const { data: created } = await supabase
+      const { data: created, error: insertErr } = await supabase
         .from("specials")
         .insert({
           shop_id: shopId,
@@ -982,6 +1006,11 @@ async function executeAction(
           created_by: userId,
         })
         .select("id").single();
+      if (insertErr || !created) {
+        afterSnapshot = { type: "special_add", specials_after: specials.map(s => s.id), confirmed: false };
+        resultMsg = `Couldn't confirm "${proposal.special_name}" was added — the change may not have gone through.`;
+        break;
+      }
       resultMsg = `Done — "${proposal.special_name}" at $${((proposal.special_price_cents ?? 0) / 100).toFixed(2)} is live for today.`;
       const freshSpecials = await getActiveSpecials(supabase, shopId, businessDate);
       afterSnapshot = { type: "special_add", specials_after: freshSpecials.map(s => s.id) };
@@ -990,9 +1019,21 @@ async function executeAction(
     case "END_SPECIAL": {
       const sid = proposal.special_id!;
       beforeSnapshot = { type: "special_end", specials_before: specials.map(s => s.id), ending_special_id: sid };
-      await supabase.from("specials").delete().eq("id", sid);
-      resultMsg = `Done — "${proposal.special_name ?? sid}" has been ended.`;
+      // A bad/cross-tenant special_id was never in this shop's active list to begin
+      // with, so a read-back showing it "gone" afterward can't be trusted on its own.
+      const wasActiveForShop = specials.some(s => s.id === sid);
+      const { error: deleteErr } = await supabase.from("specials").delete().eq("id", sid);
+
+      // Delete-by-filter is RLS-scoped — a cross-tenant special_id matches zero rows
+      // and returns no error, so confirm via read-back before reporting success.
       const freshSpecials = await getActiveSpecials(supabase, shopId, businessDate);
+      const stillActive = freshSpecials.some(s => s.id === sid);
+      if (deleteErr || !wasActiveForShop || stillActive) {
+        afterSnapshot = { type: "special_end", specials_after: freshSpecials.map(s => s.id), confirmed: false };
+        resultMsg = `Couldn't confirm "${proposal.special_name ?? sid}" was ended — the change may not have gone through.`;
+        break;
+      }
+      resultMsg = `Done — "${proposal.special_name ?? sid}" has been ended.`;
       afterSnapshot = { type: "special_end", specials_after: freshSpecials.map(s => s.id) };
       break;
     }
