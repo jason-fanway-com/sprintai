@@ -248,6 +248,31 @@ interface Shop {
   // Customer CRM (docs/specs/2026-09-03-customer-crm.md) — owner-level kill
   // switch for personalization. Default true (migration 121).
   customer_personalization_enabled?: boolean;
+  // Instruction-layer renderer (docs/specs/2026-09-09-prompt-line-
+  // classification.md, migration 124). NULL = legacy buildSystemPrompt,
+  // unchanged. Non-null = buildSystemPromptV2, sourced from shop_settings/
+  // shop_voice/shop_notes instead of the shared hardcoded template. See the
+  // gate at the buildSystemPrompt(...) call site.
+  prompt_version?: number | null;
+}
+
+// Instruction-layer rows (migration 124) — read-only inputs to
+// buildSystemPromptV2. Kept minimal/local to this file rather than a shared
+// type module: only the renderer touches these fields today.
+interface ShopSettingsRow {
+  hours_line:            string | null;
+  fulfilment_modes:      string[];
+  delivery_radius_miles: number | null;
+  quantity_words:        Record<string, number>;
+  upsell_enabled:        boolean;
+}
+interface ShopVoiceRow {
+  greeting: string | null;
+  sign_off: string | null;
+  persona:  string | null;
+}
+interface ShopNoteRow {
+  text: string;
 }
 
 interface OrderCart {
@@ -622,7 +647,11 @@ function optionCardinality(g: { required: boolean; min_select: number; max_selec
   return capped ? `optional, pick up to ${g.max_select}` : "optional, pick any number";
 }
 
-function buildSystemPrompt(
+// Exported (2026-09-09, stream C2) so test scripts can render a prompt
+// directly, offline, without deploying or flipping any shop's prompt_version
+// — see docs/specs/2026-09-09-prompt-line-classification.md. This is an
+// `export` keyword ONLY; the function body below is untouched.
+export function buildSystemPrompt(
   shop:           Shop,
   phase:          OrderPhase,
   menu:           EffectiveMenuItem[],
@@ -908,6 +937,341 @@ RULES:
 - CONTEXT MEMORY: Pay close attention to what the customer said in previous messages. If they already told you what type/flavor they want, do NOT ask again. If they said "jalapeno cheddar" two messages ago, you KNOW the flavor. Do not lose track.
 - TOASTED PROMPT: After adding a "Bagel With" item (cream cheese bagel) or a breakfast sandwich, if the customer has NOT already mentioned toasting preference, ask: "Want that toasted?" Keep it casual and brief, just like a real bagel shop counter. If they already said "toasted" or "not toasted" in their message, do NOT ask -- just note it. Only ask ONCE per order, not for every item. Do NOT ask about toasting for bundle orders (dozen, half dozen, baker's dozen) or standalone plain bagels -- those are take-home items.
 - PREP INSTRUCTIONS: When a customer says "toasted", "scooped", "extra toasted", "lightly toasted", "cut in half", "extra cream cheese", "light butter", or any other preparation preference, call set_note to save it. These instructions go directly to the kitchen. NEVER tell the customer to "let the shop know" -- YOU are the shop. Capture it and confirm: "Got it, noted toasted." If they mention prep preferences along with items, add the items AND set the note in the same turn.
+
+PHASE BEHAVIOR:
+- greeting/building: Help build the order, answer menu questions
+- checkout: Payment link was sent. Remind them to check their text or email for the payment link.
+- confirmed: Order is confirmed and paid. Thank them and give pickup info.
+- expired: Their payment link expired. Ask if they want to restart.${expiredNote}${complianceNote}`;
+}
+
+// ─── System prompt builder V2 (instruction-layer renderer, stream C2) ────────
+//
+// docs/specs/2026-09-09-prompt-line-classification.md classified today's
+// buildSystemPrompt line by line. Bug: 7 rules specific to Not Just Bagels'
+// menu (sandwich-name aliases, bundle vocabulary + prices, "Bagel With"
+// combo/pricing rules, cream cheese disambiguation, toasted prompt) were
+// hardcoded into the SHARED template and sent to every shop, including
+// Zio's and Vito's pizzerias, on every message.
+//
+// This renderer composes the prompt from: (a) the same universal rules as
+// buildSystemPrompt, minus the 7 NJB-only ones; (b) the compiled menu,
+// unchanged; (c) shop_settings for hours/fulfilment/bundle vocabulary;
+// (d) shop_voice for identity/persona; (e) shop_notes for the per-shop facts
+// that used to live in the hardcoded rules. Intentionally duplicates
+// buildSystemPrompt's runtime computations (menu/cart rendering, delivery
+// info, wing policy, etc.) rather than refactoring it to share code — the
+// hard gate requires buildSystemPrompt to stay byte-for-byte unchanged for
+// prompt_version:null shops, so it is not touched here at all.
+//
+// GATE: only called when shop.prompt_version is non-null. See the call site
+// near the end of handleChatSmsRequest.
+
+// "dozen" -> "One Dozen"; "half dozen" -> "Half Dozen". Used to find the
+// matching real menu item (e.g. "One Dozen Bagels") so the bundle's name and
+// price come from the compiled menu, never a hardcoded number.
+function quantityWordToItemPhrase(word: string): string {
+  const lower = word.trim().toLowerCase();
+  const titled = lower.replace(/\b\w/g, c => c.toUpperCase());
+  const startsWithQuantifier = /^(half|quarter|one|two|three|four|five|six|seven|eight|nine|ten)\b/.test(lower);
+  return startsWithQuantifier ? titled : `One ${titled}`;
+}
+
+export function buildSystemPromptV2(
+  shop:           Shop,
+  phase:          OrderPhase,
+  menu:           EffectiveMenuItem[],
+  cart:           AnyCartItem[],
+  currentTime:    string,
+  isFirstMessage: boolean,
+  notes?:         string | null,
+  priorLinkExpired = false,
+  soldOutNames:   string[] = [],
+  orderTypeStr?:  string | null,
+  deliveryAddress?: Record<string, unknown> | null,
+  driverTipCents?: number | null,
+  deliveryFeeCents?: number | null,
+  deliveryEnabled?: boolean,
+  testMode?: boolean,
+  deliveryGeoAvailable?: boolean,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean } | null,
+  shopSettings?:  ShopSettingsRow | null,
+  shopVoice?:     ShopVoiceRow | null,
+  shopNotes:      ShopNoteRow[] = [],
+): string {
+  const today = getBusinessDayKey(shop.timezone);
+  const hours = dayWindows(shop.open_hours?.[today]);
+  const computedHoursStr = hours.length > 0
+    ? hours.map((h: { open: string; close: string }) => `${h.open}-${h.close}`).join(", ")
+    : "Hours not specified";
+  // shop_settings.hours_line is a full-week summary (e.g. "Mon-Fri 7 AM-3
+  // PM, Sat ..."), not a single day's window, so it gets its own generic
+  // "HOURS" label rather than reusing legacy's "TODAY'S HOURS" framing.
+  // Falls back to the same per-day computation as legacy when unset.
+  const hoursLabel = shopSettings?.hours_line ? "HOURS" : "TODAY'S HOURS";
+  const hoursStr = shopSettings?.hours_line ?? computedHoursStr;
+
+  const cartStr = cart.length === 0
+    ? "Empty"
+    : cart.map(i => {
+        if ((i as BundleItem).type === "bundle") {
+          const b = i as BundleItem;
+          const filled = b.selections.reduce((s, sel) => s + sel.quantity, 0);
+          if (b.complete) {
+            const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
+            return `${b.name} [${detail}] - $${(b.price_cents / 100).toFixed(2)}`;
+          }
+          return `[ACTIVE BUNDLE] ${b.name}: ${filled} of ${b.target} selected. Selections so far: ${b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ") || "none"}`;
+        }
+        const r = i as CartItem;
+        const mods = r.modifiers?.length > 0 ? ` [${r.modifiers.join(", ")}]` : "";
+        const opts = r.options ? ` [${Object.entries(r.options).map(([_k, v]) => v.join(', ')).join(', ')}]` : "";
+        const qty = r.quantity || 1;
+        const unverified = r.unverified_requests?.length
+          ? ` [customer asked for: ${r.unverified_requests.join(", ")} (not a menu option — unconfirmed, pass to shop)]`
+          : "";
+        return `${qty}x ${r.name}${mods}${opts}${unverified} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
+      }).join("\n");
+  const subtotal = cart.reduce((s, i) => {
+    if ((i as BundleItem).type === "bundle") {
+      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
+    }
+    const r = i as CartItem;
+    return s + (r.price_cents * (r.quantity || 1));
+  }, 0);
+
+  const menuByCategory: Record<string, EffectiveMenuItem[]> = {};
+  for (const item of menu) {
+    const cat = item.category ?? "Other";
+    if (!menuByCategory[cat]) menuByCategory[cat] = [];
+    menuByCategory[cat].push(item);
+  }
+  const nameAppearances = new Map<string, number>();
+  for (const [, items] of Object.entries(menuByCategory)) {
+    for (const item of items) {
+      const norm = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      nameAppearances.set(norm, (nameAppearances.get(norm) || 0) + 1);
+    }
+  }
+  const duplicatedNames = new Set([...nameAppearances.entries()].filter(([,c]) => c > 1).map(([n]) => n));
+
+  const menuStr = Object.entries(menuByCategory)
+    .map(([cat, items]) => {
+      const rows = items.map(item => {
+        const norm = item.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+        const label = duplicatedNames.has(norm)
+          ? `${item.name} (${cat})`
+          : item.name;
+        const price = `$${(item.price_cents / 100).toFixed(2)}`;
+        const desc  = item.description ? ` - ${item.description}` : "";
+        const groups = item.option_groups || [];
+        if (groups.length > 0) {
+          const groupLines = groups.map(g => {
+            const reqLabel = optionCardinality(g);
+            return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.is_default ? ' [default]' : '') + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
+          }).join('\n');
+          return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
+        } else {
+          const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
+          const ask = (!mods && item.prompt_for)
+            ? ` | REQUIRES A CHOICE: ${item.prompt_for} - the available choices are NOT recorded. ASK the customer; never state or guess a list.`
+            : "";
+          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${ask}`;
+        }
+      }).join("\n");
+      return `${cat}:\n${rows}`;
+    })
+    .join("\n\n");
+
+  const complianceNote = isFirstMessage
+    ? "\n\nCOMPLIANCE NOTE: Do NOT write any 'Msg & data rates' or 'Reply HELP/STOP' text yourself. The system appends the required disclosure automatically."
+    : "";
+
+  const expiredNote = priorLinkExpired
+    ? "\n\nEXPIRED LINK CONTEXT: The customer's previous payment link expired. Since they just messaged again, gently let them know that link expired and ask if they want to reorder, then help them start fresh."
+    : "";
+
+  // Delivery availability: shop_settings.fulfilment_modes is the structured,
+  // per-shop authoritative source once present; falls back to shop.
+  // delivery_enabled (legacy source) when shop_settings has no row yet.
+  const fulfilmentDeliveryConfigured = shopSettings
+    ? shopSettings.fulfilment_modes.includes("delivery")
+    : deliveryEnabled === true;
+  const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false;
+  const orderTypeInfo = orderTypeStr === "delivery"
+    ? `\nORDER TYPE: Delivery`
+    : orderTypeStr === "pickup"
+      ? `\nORDER TYPE: Pickup`
+      : canActuallyDeliver
+        ? `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`
+        : `\nORDER TYPE: Pickup — this shop cannot take delivery orders right now, so there is nothing to choose. Do NOT ask \"pickup or delivery?\". Mention pickup once, in passing, and keep the order moving.`;
+
+  const deliveryInfo = deliveryAddress
+    ? `\nDELIVERY ADDRESS: ${(deliveryAddress as Record<string,unknown>).formatted || JSON.stringify(deliveryAddress)}`
+    : "";
+
+  const tipInfo = driverTipCents && driverTipCents > 0
+    ? `\nDRIVER TIP: $${(driverTipCents / 100).toFixed(2)}`
+    : "";
+
+  const deliveryFeeInfo = deliveryFeeCents && deliveryFeeCents > 0
+    ? `\nDELIVERY FEE: $${(deliveryFeeCents / 100).toFixed(2)} (added at checkout)`
+    : "";
+
+  const deliveryAvail = (() => {
+    if (!fulfilmentDeliveryConfigured) {
+      return `\nDELIVERY AVAILABLE: No — this shop is pickup only. Never offer delivery.`;
+    }
+    if (deliveryGeoAvailable === false) {
+      return `\nDELIVERY AVAILABLE: No — delivery is temporarily unavailable while we finalize our delivery zone. Please order for pickup only. Never offer delivery.`;
+    }
+    return `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`;
+  })();
+
+  const wingIncluded = shop.wing_flavors_included;
+  const wingMixExtra = shop.wing_mix_extra;
+  const wingPolicy = (() => {
+    const lines: string[] = [];
+    if (typeof wingIncluded === "number" && wingIncluded > 0) {
+      lines.push(wingIncluded === 1
+        ? `one flavor is included per order of wings`
+        : `up to ${wingIncluded} flavors are included per order of wings`);
+    }
+    if (wingMixExtra === true) lines.push(`splitting an order across flavors costs extra`);
+    else if (wingMixExtra === false && typeof wingIncluded === "number") {
+      lines.push(`splitting an order across flavors costs nothing extra`);
+    }
+    if (lines.length === 0) {
+      return `\nWING POLICY: NOT CONFIGURED for this shop. You do NOT know how many flavors are included, or whether an order can be split across flavors. Do NOT tell the customer they can mix and match, and do NOT tell them they cannot. Ask the customer what they want, add it, and move on. Do NOT say you will check with the kitchen - you cannot check with anyone.`;
+    }
+    return `\nWING POLICY (authoritative, from this shop's settings): ${lines.join("; ")}. Do not state any wing policy beyond this.`;
+  })();
+
+  const testModeDirective = testMode
+    ? `\nTEST MODE: Ignore all business-hours restrictions — allow ordering at any time. Do NOT refuse orders based on the current time or TODAY'S HOURS.`
+    : "";
+
+  const customerContextBlock = (() => {
+    if (!customerContext) return "";
+    const nameClause = customerContext.name && customerContext.isFirstMessage
+      ? `This is a RETURNING customer named ${customerContext.name}. Greet them by name once, warmly and briefly (e.g. "Hey ${customerContext.name}, welcome back!") as part of your first reply this conversation. Do NOT repeat their name in every later message this conversation.`
+      : customerContext.name
+        ? `This is a RETURNING customer named ${customerContext.name}. You already greeted them by name earlier this conversation — do not repeat the greeting.`
+        : "";
+    const regularClause = customerContext.regularItem
+      ? ` Their usual order is "${customerContext.regularItem.name}". You MAY offer it (e.g. "want your regular, the ${customerContext.regularItem.name}, or something else today?") — this is an OFFER, not an instruction to add it. NEVER call add_item for this item unless the customer explicitly confirms your offer in their own next message (e.g. "yes", "sounds good", "the usual please") or names the item themselves. If they haven't confirmed yet, just ask — do not add it preemptively.`
+      : "";
+    if (!nameClause && !regularClause) return "";
+    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}`;
+  })();
+
+  // (d) shop_voice: identity + tone. Falls back to the old boilerplate role
+  // sentence when a shop has no voice row yet.
+  const identityLine = `You are the ordering assistant for ${shop.name}. ${shopVoice?.persona ?? "Help customers order for pickup or delivery via text."}`;
+  const voiceExtras = [
+    shopVoice?.greeting ? `Opening greeting style: ${shopVoice.greeting}` : "",
+    shopVoice?.sign_off ? `Sign-off style: ${shopVoice.sign_off}` : "",
+  ].filter(Boolean).join(" ");
+
+  // (c) shop_settings.quantity_words -> the CRITICAL BUNDLE RULE's trigger
+  // vocabulary, sized and priced from the COMPILED MENU (never a hardcoded
+  // number) — e.g. NJB's "dozen" resolves to the real "One Dozen Bagels"
+  // menu row ($15.00), matching quantityWordToItemPhrase. A shop with no
+  // quantity_words (Zio's, Vito's) gets NO bundle section at all — this is
+  // the fix for "a dozen wings" triggering start_bundle on a pizza shop.
+  const quantityWords = shopSettings?.quantity_words ?? {};
+  const bundleTriggers = Object.entries(quantityWords)
+    .map(([word, count]) => {
+      const phrase = quantityWordToItemPhrase(word);
+      const match = menu.find(m => m.name.toLowerCase().startsWith(phrase.toLowerCase()));
+      return match ? { word, count, name: match.name, priceCents: match.price_cents } : null;
+    })
+    .filter((t): t is { word: string; count: number; name: string; priceCents: number } => t !== null);
+
+  const bundleSection = bundleTriggers.length === 0 ? "" : `
+- CRITICAL BUNDLE RULE: When a customer's words match one of this shop's bundle triggers below, you MUST call start_bundle IMMEDIATELY in that same turn. Do NOT just acknowledge it in text — use the tool. Bundle triggers for this shop: ${bundleTriggers.map(t => `"${t.word}" → start_bundle(bundle_item_name="${t.name}", bundle_size=${t.count}, bundle_price_cents=${t.priceCents})`).join("; ")}.
+- If the customer also provides flavors in the same message, call start_bundle THEN add_to_bundle for each flavor — all in one turn. If they just name the trigger without flavors, call start_bundle and then ask for flavors.
+- When a bundle is active and the customer provides flavors, call add_to_bundle for EACH flavor immediately. Do NOT ask for clarification. If the flavors given complete the bundle's target count, just add them.
+- While a bundle is active, you may ONLY use add_to_bundle, cancel_bundle, or clear_cart. Do not call add_item or submit_order until the bundle is complete or cancelled.
+- NEVER suggest switching from a larger bundle to a smaller one. If the count does not match, tell the customer how many slots remain.
+- NEVER ask "are you ordering individual items or a bundle?" If the customer already used a bundle trigger word or you started a bundle, they are ordering a bundle. Period.`;
+
+  // (e) shop_notes: replaces the NJB-only rules (sandwich aliases, cream
+  // cheese disambiguation, toasted prompt, etc.) that used to be hardcoded
+  // into every shop's prompt. Empty for shops with no notes (Zio's, Vito's).
+  const shopNotesBlock = shopNotes.length === 0 ? "" : `
+SHOP NOTES (kitchen facts and constraints specific to this shop — authoritative, follow exactly):
+${shopNotes.map(n => `- ${n.text}`).join("\n")}
+`;
+
+  // shop_settings.upsell_enabled -> restrained, shop-configurable upsell
+  // permission, replacing NJB's hardcoded "don't ask about cream cheese for
+  // an exact-name order" rule with a general one every shop can opt into or
+  // out of.
+  const upsellEnabled = shopSettings?.upsell_enabled ?? true;
+  const upsellRestraintRule = upsellEnabled
+    ? `- UPSELL RESTRAINT: When a customer names a menu item exactly as it appears on the menu, add it as-is without asking about optional extras. You may make AT MOST one soft upsell offer at a natural moment (e.g. right after adding a base item) — never repeat it, and only for items that exist in the AVAILABLE MENU.`
+    : `- UPSELL RESTRAINT: This shop has upsells turned off. Add exactly what the customer asks for and do not offer additional items unless the customer asks first.`;
+
+  return `${identityLine}${voiceExtras ? ` ${voiceExtras}` : ""}
+
+You are replying by SMS text message. Plain text only. Never use markdown, tables, headings, or bullet points of any kind - no hyphens, asterisks, or numbers starting a line, and never put each item on its own line. Write lists inline in a sentence, the way a person texts: "Large cheese pizza, french fries, and bone-in wings (hot)". Keep replies under about 300 characters. Write the way a person texts.
+
+CURRENT PHASE: ${phase}
+CURRENT TIME: ${currentTime}
+${hoursLabel}: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}${customerContextBlock}
+
+AVAILABLE MENU:
+${menuStr}
+${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a customer asks, tell them we're temporarily out): ${soldOutNames.join(", ")}\n` : ""}${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these exactly):\n${shop.ai_instructions}\n` : ""}${testModeDirective}
+PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, ${hoursLabel}, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly, use the menu's real item name and unit instead. The menu is the single source of truth for what items exist and what they cost.
+${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}${shopNotesBlock}
+CURRENT CART:
+${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)} (for your reference only — do NOT quote in your reply)` : ""}
+${notes ? `\nORDER NOTES: ${notes}` : ""}
+
+RULES:
+- Keep ALL responses under 300 characters for SMS
+- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
+- Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
+- Never add items not in the available menu
+- REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
+- SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
+- Never use em dashes in responses
+- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"
+- When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
+- Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
+- Be friendly but concise — every character over 160 costs a segment
+- SERVICE FEE: A $0.99 service fee is added to every order. The system automatically displays it with the total and checkout link — you do NOT need to state or calculate it. Never quote any dollar amount in your reply.
+- OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
+- CLEAR_CART RESTRICTION (CRITICAL): NEVER call clear_cart unless the customer explicitly asks to cancel, restart, or start a new order. Words like "also", "add another", "and a", "can I also get", "let me also", "I also want" are ADDITIVE — they mean ADD to the existing cart, not replace it. Calling clear_cart when the customer asks to add more items will DESTROY their existing order. Only call clear_cart for explicit cancel/restart messages.
+- SAFE WORDS: At every decision point where a customer might want to abandon or change something, offer CHANGE to modify or RESTART to begin again. NEVER use the word "cancel" in a prompt or instruction — if a customer cancels, offer CHANGE or RESTART as the alternative.
+- CUSTOMER QUESTIONS (CRITICAL): ALWAYS answer a direct question from the customer explicitly before or alongside advancing the order. If they ask whether you carry an item or category (e.g. "do you have coffee?", "any hot drinks?", "got lattes?"), answer plainly — "We don't carry coffee, sorry" — no matter how many times they've already asked. A question is NEVER an order-completion signal. If the customer asks a question and also says they're done, declines something, or lists more items, answer the question FIRST, then handle the rest. NEVER reply with "what else can I add?" or ask for the pickup name while an unanswered question is on the table. If the customer asks about an entire category you don't carry (coffee, hot drinks, desserts), decline the category clearly (e.g. "We don't carry any coffee or hot drinks — just bagels and sandwiches") — don't fixate on one item.
+- ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
+- QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 slices of pizza", "3 orders of fries"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
+- QUANTITY REDUCTION (CRITICAL): When a customer wants to reduce the quantity of an item already in the cart (e.g. "actually just one", "make it 1", "only one please", "change it to 1", "reduce to 1", "I only want one"), you MUST call modify_item with the new quantity — NOT add_item. add_item ADDS to the existing quantity; it will make the cart LARGER, not smaller. modify_item SETS the quantity. For complete removal (customer says "remove it", "take it off", "cancel the X"), use remove_item instead. NEVER call add_item when the intent is to decrease or remove.
+- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "cheese pizza, an order of fries, and a soda"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
+- PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
+- EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your first response MUST ask whether the customer wants pickup or delivery. CRITICAL EXCEPTION: if the customer's FIRST message already names recognizable menu item(s), you MUST call add_item for those items AND ask pickup/delivery IN THE SAME RESPONSE. Both things — item in cart + delivery question — must happen in one turn. Example: "Got it — one Special Stromboli added. Are you ordering pickup or delivery today?" Do NOT silently default to pickup when items were named; the customer must be asked. Only if the customer explicitly says "pickup" (or ignores the delivery question twice while continuing to order) may you default to pickup and proceed. If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything else. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead (the item stays in the cart — do NOT remove it). This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question.
+- DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way, answer with a clear YES and offer to take their address. Once they confirm delivery, call set_order_type("delivery"), then collect the address. Once the address is set and accepted, offer an optional driver tip. Do NOT ask for delivery address for pickup orders.
+- ADDRESS COLLECTION: Ask for the delivery address naturally like a real shop — don't present a form. Example: "Where should we bring it?" Get street, city, state, and zip. Apt/unit is optional. Once you have all required fields, call set_delivery_address. Validate that the zip looks like a 5-digit US zip before calling.
+- DRIVER TIP: After the address is set, ask once: "Would you like to add a tip for your driver?" Offer simple options: $1, $2, $3, or $5. If they pick one, call set_driver_tip. If they say no or skip, move on. Do NOT badger them.
+- MULTI-ITEM FOCUS: When a customer asks for multiple items in sequence, process EACH one fully before moving on. If you said you're adding something, USE THE TOOL to actually add it. Never claim you added something without calling add_item. If add_item fails, tell the customer the specific error.${bundleSection}
+- OPTION GROUNDING (CRITICAL - covers flavors, sauces, dressings, toppings, cheeses, breads, sizes, formats, and every other choice): You may ONLY name a specific option if that exact option appears in THIS item's own menu entry above - in its "Options:" list, its option groups, or spelled out in its own description. If the item's entry does not enumerate the choices, you DO NOT know them. Do not assemble a list from other items, other categories, sauces used elsewhere on the menu, or general knowledge of what restaurants usually offer. Naming an option the shop did not list is inventing a product: the kitchen cannot make it, and the customer was promised it in the shop's name.
+- TOPPING-ONLY PIZZA REQUESTS (e.g. "pepp" when there's no standalone "Pepperoni Pizza" item, only a topping choice on the base cheese pizza): this is now resolved deterministically by code BEFORE you see this message, whenever it can be — see "SYSTEM-COMPOSED THIS TURN" above if that happened. You only need this for the rare case code did NOT resolve (an item with no compiled option data, or genuine ambiguity — e.g. two equally-plausible base pizza styles, or no size established): compose it yourself as ONE add_item call, the base/cheese pizza item PLUS the topping in its topping option group — never a different real product that merely contains the topping word in its own name (a Calzone/Stromboli is not a pizza). State the full composition in your reply. If there's no pizza context at all, ask instead of guessing.
+- WHEN YOU DO NOT KNOW THE CHOICES: say so plainly and ask - never guess, never imply a list exists, and never offer to go find out. Do NOT offer "examples" of what the options might be either ("like buffalo, BBQ, something else?"); to a customer an example reads as availability, and it is the same invented promise in softer words. Ask an open question instead. Good: "What flavor would you like on those?" or "I don't have the dressing list for that one - what were you thinking?" Never: "We've got Hot, Mild, BBQ, and Sweet & Spicy", and never "like buffalo or BBQ", when the menu entry does not list them.
+- NEVER CLAIM AN ACTION YOU DO NOT TAKE (CRITICAL): you can do exactly two things - read the menu above and call the tools listed below. You cannot check with the kitchen, ask the owner, ask anyone, look anything up, call, walk back, confirm with staff, or go find out and come back. Never say or imply that you will. Banned in every wording: "let me check", "I'll check with the kitchen", "let me ask", "I'll find out", "let me confirm", "let me look that up", "one moment", "give me a sec", "I'll get back to you", "hold on while I". When you do not know something, say you do not know it and ask the customer in the same breath, then keep the order moving. Good: "I don't have the flavor list for these - what flavor would you like?" Never: "Let me check with the kitchen on which ones we have." Inventing an action is the same lie as inventing an option, and worse, because it is a lie about yourself. The one thing you may promise is what the tools actually do: adding an item, saving a note, sending the payment link.
+- NEVER NARRATE A TECHNICAL FAILURE TO THE CUSTOMER: if a tool call comes back with an error, that is between you and the system. A customer ordering dinner has no use for "that's giving me a system hiccup", "there's a glitch on my end", "an error came back", or "the system won't let me". Say the plain human version instead - "I can't add the large cheese right now" - and immediately offer the closest real thing on the menu. Never invent a technical excuse for something you simply could not find.
+- NEVER STATE SHOP POLICY YOU WERE NOT TOLD: whether flavors can be mixed or split across an order, whether substitutions are allowed, whether extras cost more, minimums, or timing. If a policy is not given to you above, do not assert it in either direction. Say plainly that you do not have it and ask the customer what they want. "You can mix and match!" is a promise the kitchen may not be able to keep.
+- Never state the NUMBER of available flavors or menu items ("we have 12 flavors"). If the item's entry does list its options, you may name them, without counting.
+- REQUIRED OPTIONS: When adding an item that has REQUIRED option groups (marked "required" in the menu above), call add_item IMMEDIATELY for the item — even if you don't yet know the required option. The system will accept the item and store the missing option as pending. In the SAME reply, casually ask the customer for the missing choice(s) — e.g. "What kind of meat on that gyro — beef or chicken?" The item is already in the cart at its base price; the option surcharge applies once chosen. If the customer already specified their choice in the same message (e.g. "bacon egg and cheese on a roll"), include it in the add_item call without asking.
+- OPTIONAL OPTIONS: For optional groups (like condiments), ask AFTER the required choices are settled. Keep it brief: "Salt, pepper, or ketchup?" If the customer says "nothing" or moves on, skip it.
+- OPTIONS IN add_item: When calling add_item for an item with option groups, pass the selections in the "options" parameter as an object like {"Bread Type": ["Roll"], "Condiments": ["Salt", "Pepper"]}. Keys must match the option group names exactly as shown in the menu.
+- ITEM PRICING & COMBO RULE: If a customer's request matches a specific menu item exactly (its own ID/row with its own price in AVAILABLE MENU), that listed price is the COMPLETE price for that item — never an add-on, and it never requires a separate base item alongside it, no matter how low the price. The price column is authoritative regardless of any wording in the item's own description (e.g. ignore parenthetical charge notes). Never double up by adding a standalone item plus a combo item that already includes it.
+${upsellRestraintRule}
+- MODIFIER GROUNDING (CRITICAL): Only offer a format, bread, or size choice (bagel vs flagel vs wrap; plain/wheat/spinach/tomato-basil; small/large; etc.) for an item when THAT EXACT item's menu entry lists those as selectable options for it. Do NOT assume a sandwich, platter, salad, or any item can be made on a flagel, wrap, or alternate bread — or in another size — unless the menu explicitly lists that choice for that item. Flagels and wraps existing elsewhere on the menu does NOT mean another item can be upgraded to them. When an item has no listed options, add it exactly as named at its listed price and do NOT invent upgrade paths or ask "want it on a flagel or wrap?".
+- CONTEXT MEMORY: Pay close attention to what the customer said in previous messages. If they already told you what type/flavor they want, do NOT ask again. If they said "jalapeno cheddar" two messages ago, you KNOW the flavor. Do not lose track.
+- PREP INSTRUCTIONS: When a customer says "toasted", "extra sauce", "lightly toasted", "cut in half", "no onions", "light butter", or any other preparation preference, call set_note to save it. These instructions go directly to the kitchen. NEVER tell the customer to "let the shop know" -- YOU are the shop. Capture it and confirm: "Got it, noted toasted." If they mention prep preferences along with items, add the items AND set the note in the same turn.
 
 PHASE BEHAVIOR:
 - greeting/building: Help build the order, answer menu questions
@@ -5275,7 +5639,24 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     cartItems.filter((i): i is CartItem => Boolean((i as CartItem).menu_item_id)),
     effectiveMenu,
   );
-  const systemPrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext) + (zeroOptionHint ?? "") + composedLinesNote;
+  // GATE (stream C2, docs/specs/2026-09-09-prompt-line-classification.md):
+  // null = legacy buildSystemPrompt, byte-for-byte unchanged, zero risk.
+  // Non-null = buildSystemPromptV2, sourced from shop_settings/shop_voice/
+  // shop_notes. No shop has prompt_version set today (migration 124), so
+  // this branch is currently a permanent no-op in production — see the
+  // handleChatSmsRequest RUNBOOK entry before ever setting it on a live shop.
+  let basePrompt: string;
+  if (shop.prompt_version != null) {
+    const [{ data: shopSettingsRow }, { data: shopVoiceRow }, { data: shopNotesRows }] = await Promise.all([
+      supabase.from("shop_settings").select("hours_line, fulfilment_modes, delivery_radius_miles, quantity_words, upsell_enabled").eq("shop_id", shop.id).maybeSingle(),
+      supabase.from("shop_voice").select("greeting, sign_off, persona").eq("shop_id", shop.id).maybeSingle(),
+      supabase.from("shop_notes").select("text").eq("shop_id", shop.id).order("created_at", { ascending: true }),
+    ]);
+    basePrompt = buildSystemPromptV2(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, shopSettingsRow as ShopSettingsRow | null, shopVoiceRow as ShopVoiceRow | null, (shopNotesRows ?? []) as ShopNoteRow[]);
+  } else {
+    basePrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext);
+  }
+  const systemPrompt = basePrompt + (zeroOptionHint ?? "") + composedLinesNote;
 
   const shopGeo = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
     ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }

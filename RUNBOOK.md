@@ -1620,3 +1620,51 @@ feature or the opt-out compliance fix as live, query the primary database
 directly (service-role credential required) — don't stop at `supabase
 migration list`, and don't assume the build log's self-reported verification
 still holds without re-checking.
+
+## Instruction-layer renderer (stream C2) — built, NOT deployed, NOT live — 2026-09-09
+
+`buildSystemPromptV2` (`supabase/functions/chat-sms/index.ts`, next to the
+untouched legacy `buildSystemPrompt`) renders a shop's system prompt from
+`shop_settings`/`shop_voice`/`shop_notes` (migration 124) instead of the
+hardcoded shared template. Fixes the bug docs/specs/2026-09-09-prompt-line-
+classification.md found: 7 Not Just Bagels–only rules (sandwich-name aliases,
+bundle vocabulary/prices, "Bagel With" combo/pricing, cream cheese
+disambiguation, toasted prompt) were baked into every shop's prompt,
+including Zio's and Vito's pizzerias — e.g. a Zio's customer saying "a dozen
+wings" could trigger `start_bundle` with NJB's bagel pricing.
+
+**Gate**: `handleChatSmsRequest` branches on `shops.prompt_version` — `null`
+calls `buildSystemPrompt` with the exact original argument list (verified via
+`git diff`: the only change to that function is an `export` keyword and a
+comment; the call site's else-branch arguments are byte-identical to the
+pre-change line). Non-null fetches `shop_settings`/`shop_voice`/`shop_notes`
+and calls `buildSystemPromptV2`. **No shop has `prompt_version` set** — the
+gate is a permanent no-op in production until a shop is explicitly flipped.
+
+**Bundle rule is now dynamic, not hardcoded**: `shop_settings.quantity_words`
+(e.g. NJB's `{"dozen": 14, "half dozen": 6}`) is matched against the compiled
+menu (e.g. "One Dozen Bagels" $15.00) to build the `start_bundle` trigger at
+render time — size and price come from the real menu row, never a literal
+number in code. A shop with empty `quantity_words` (Zio's, Vito's) gets no
+bundle section at all.
+
+**Verified 2026-09-09** (scratch, read-only against real Zio's/NJB data for
+prompt-content checks; new throwaway shop rows — never the real shops table —
+for the live conversational check; all scratch rows deleted after):
+- Zio's rendered via V2: zero occurrences of BOBO/SOBO/HOBO/PROBO/TBOBO,
+  "half dozen", "Bagel With", "cream cheese".
+- NJB rendered via V2: sandwich aliases + dozen=14/half-dozen=6 present,
+  sourced from `shop_notes`/`shop_settings`, bundle prices ($15.00/$7.50)
+  pulled live from the compiled menu.
+- Vito's (`prompt_version` still null): full order conversation via the
+  locally-edited `handleChatSmsRequest` (not deployed) behaves identically to
+  before — pickup → add item → guarded name-ask → confirm.
+- Scratch bagel shop (quantity_words set): "I'll take a dozen" → real
+  `start_bundle` call, target=14, price_cents=1500.
+- Scratch pizza shop (quantity_words empty): "I'll take a dozen wings" →
+  no bundle triggered at all — the bug, reproduced fixed.
+
+**Not done**: `chat-sms` was NOT deployed (code is committed, not live) and no
+shop's `prompt_version` was set. Both are separate go/no-go decisions for
+Jason — see the go-live checklist this entry's commit references before
+flipping either.
