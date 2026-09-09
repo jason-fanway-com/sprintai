@@ -48,6 +48,9 @@ import { computeGuard19 } from "./guard19-quantity-only-no-item-named.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
+import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
+import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
@@ -2368,11 +2371,17 @@ function honestFallbackReply(cart: AnyCartItem[], incompleteBundle = false, hasH
  * The LLM owns the conversational framing; the Ledger owns the numbers.
  * This is appended to every non-checkout reply that has cart items.
  *
- * Line 1 (item count + total) appears every turn. Line 2 (the fee breakdown)
- * is noise on repeat — Jason's product call was to state it once, the first
- * turn the fee applies, and again at checkout (the checkout path is separate,
- * see the checkoutUrl branch below). Callers pass `showFeeBreakdown = false`
- * once `order_carts.fee_disclosed_at` is already set for this cart.
+ * STEP 2 FIX (2026-09-09, P0): this used to fold the fee into a single
+ * "N items — $X.XX total" line on every turn after the first, with the
+ * subtotal/fee breakdown shown only once (`showFeeBreakdown`, gated on
+ * `order_carts.fee_disclosed_at`) to cut repeat noise. That fold is defect
+ * class (c) from the Zio's incident write-up: a customer who only ever sees
+ * a bare total on turns 2+ has no independent number to check it against.
+ * Every turn with cart items now renders the same three labelled lines --
+ * Subtotal, Service fee (+ Delivery/Tip when present), Total -- code-owned,
+ * never folded. `showFeeBreakdown` is kept as a parameter for call-site
+ * stability but no longer suppresses anything; `fee_disclosed_at` still
+ * gets written by callers, it just no longer gates what's shown.
  */
 function renderLedgerFooter(
   cart: AnyCartItem[],
@@ -2381,29 +2390,8 @@ function renderLedgerFooter(
   driverTipCents?: number,
   showFeeBreakdown = true,
 ): string {
-  if (cart.length === 0) return "";
-
-  const subtotal = cart.reduce((s, i) => {
-    if ((i as BundleItem).type === "bundle") {
-      return s + ((i as BundleItem).complete ? (i as BundleItem).price_cents : 0);
-    }
-    const r = i as CartItem;
-    return s + (r.price_cents * (r.quantity || 1));
-  }, 0);
-
-  const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);
-  const itemCount = cart.reduce((s, i) => {
-    if ((i as BundleItem).type === "bundle") return s + ((i as BundleItem).complete ? 1 : 0);
-    return s + ((i as CartItem).quantity || 1);
-  }, 0);
-
-  const lines: string[] = [];
-  lines.push(`${itemCount} item${itemCount === 1 ? "" : "s"} — $${(totalCents / 100).toFixed(2)} total`);
-  if (showFeeBreakdown) {
-    lines.push(`(subtotal $${(subtotal / 100).toFixed(2)} + $${(SERVICE_FEE_CENTS / 100).toFixed(2)} service fee${deliveryFeeCents ? ` + $${(deliveryFeeCents / 100).toFixed(2)} delivery` : ""}${driverTipCents ? ` + $${(driverTipCents / 100).toFixed(2)} tip` : ""})`);
-  }
-
-  return lines.join("\n");
+  void showFeeBreakdown;
+  return renderMoneyFooterLines(cart, SERVICE_FEE_CENTS, deliveryFeeCents, driverTipCents);
 }
 
 /**
@@ -3048,6 +3036,7 @@ function extractDollarCents(text: string): number[] {
   }
   return cents;
 }
+
 
 // Helper: detects "fixed it", "removed that", "that's one now", etc.
 // when the model narrates a correction but no cart mutation occurred.
@@ -5468,7 +5457,13 @@ Deno.serve(async (req: Request) => {
   // renderItemizedRecap directly, no LLM. Same renderer the checkout summary
   // uses, so the numbers can never drift apart. Guard: only fires when the
   // cart has items and the phase is building (not greeting, not checkout).
-  const CART_SUMMARY_RE = /^(?:show(?:\s+me)?(?:\s+my)?(?:\s+(?:full\s+)?order|\s+cart|\s+order)?|what(?:'?s|\s+is)(?:\s+in)?(?:\s+my)?(?:\s+cart|\s+order)|(?:my\s+)?(?:order|cart)(?:\s+so\s+far)?|(?:see|view|check|read)\s+(?:my\s+)?(?:order|cart)|what(?:\s+did|\s+have)\s+i(?:\s+(?:get|order|got|added))?)[\s?]*$/i;
+  //
+  // STEP 1 FIX (2026-09-09, P0 -- Zio's incident, see cart-summary-intent-
+  // 20260909.ts header): a real customer asked "show me the cart with
+  // prices" and this shape did not match ("the" and "with prices" weren't
+  // covered), so the read fell through to the LLM, which then had to state
+  // real money itself -- exactly the read-only path that must never touch
+  // the LLM or a mutation guard.
   if (!correctionApplied && !nameSubmitCheckoutUrl && cartItems.length > 0 && cart.phase === "building" && CART_SUMMARY_RE.test(userMessage.trim())) {
     const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
     const summaryReply = `Here's your order so far:\n\n${recap}`;
@@ -7223,11 +7218,38 @@ Deno.serve(async (req: Request) => {
     // hallucinated a total and had its entire message discarded. Quoting a
     // price is not quoting a total.
     const claimsATotal = /\b(?:total|subtotal|comes to|that['\u2019]ll be|that will be|you owe|grand total|order total|due|to pay|adds up to|comes out to|altogether|all together)\b/i.test(reply);
+    let guard2cTripped = false;
+    let guard2cReason = "";
     if (quotedCents.length > 0 && claimsATotal) {
       const lastQuoted = quotedCents[quotedCents.length - 1];
       // Allow ±$0.01 rounding difference
       if (Math.abs(lastQuoted - guardRealTotalCents) > 1) {
-        console.warn(`[chat-sms] GUARD 2c (hallucinated-total) tripped (conv=${conversation.id}). Quoted ${lastQuoted}¢ vs real ${guardRealTotalCents}¢. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+        guard2cTripped = true;
+        guard2cReason = `hallucinated-total: quoted ${lastQuoted}c vs real ${guardRealTotalCents}c`;
+      }
+    }
+
+    // STEP 3 (2026-09-09, P0 -- Zio's $89.95-vs-$95.95 incident): a model
+    // that quotes a wrong dollar figure WITHOUT total-claiming language (e.g.
+    // "So that's four pizzas for $89.95, sound good?") previously sailed
+    // through this guard untouched, because claimsATotal never matched "for
+    // $X" phrasing. Widen the backstop beyond total-claiming wording: ANY
+    // dollar figure in the reply that matches neither a real cart/menu price
+    // nor the real total trips the same replace path. This is what would
+    // have caught the live incident even though the model never said "total".
+    if (!guard2cTripped) {
+      const groundedMoneyCents = buildGroundedMoneyCents(
+        guardCart, effectiveMenu, SERVICE_FEE_CENTS, guardDeliveryFee, guardDriverTip, guardRealTotalCents,
+      );
+      const strayCents = findStrayDollarCents(quotedCents, groundedMoneyCents);
+      if (strayCents !== null) {
+        guard2cTripped = true;
+        guard2cReason = `stray-dollar-figure: quoted ${strayCents}c matches no real cart/menu/total number`;
+      }
+    }
+
+    if (guard2cTripped) {
+        console.warn(`[chat-sms] GUARD 2c (${guard2cReason}) tripped (conv=${conversation.id}). Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
 
         // CHANGE 2 (2026-09-04, Jason): do NOT replace a coherent reply with a
         // flat cart recital. This guard was the one overwriting the model mid
@@ -7251,7 +7273,6 @@ Deno.serve(async (req: Request) => {
           }).join(", ");
           reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
         }
-      }
     }
   }
 
