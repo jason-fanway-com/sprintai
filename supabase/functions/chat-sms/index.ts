@@ -4511,13 +4511,30 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // name-ask reply landing AFTER the customer's next message had already
   // answered it. Same short-lived claim-with-staleness idiom as
   // order_carts.ticket_send_attempt_at below: a single atomic UPDATE...WHERE
-  // guards the claim, so two concurrent callers cannot both win. A caller
-  // that loses the race polls (bounded — favors availability over a stuck
-  // customer text if the first caller crashed mid-turn) rather than
-  // proceeding on a stale read.
+  // guards the claim, so two concurrent callers cannot both win.
+  //
+  // Two DIFFERENT time horizons, deliberately not the same number:
+  //   - STALE_MS (60s) is crash detection — how long a claim can sit before
+  //     a NEW caller is allowed to steal it outright. Measured turns in this
+  //     system run anywhere from ~1s to 35s+ (compiled multi-item orders are
+  //     the slow end — see BLOCKED.txt's Zio's 4-pizza latency entry), so
+  //     this must comfortably exceed real processing time or a live-but-slow
+  //     first caller would have its lock stolen mid-turn — two callers
+  //     "holding" it at once, defeating the whole point.
+  //   - the poll loop below (~15s) is how long a LOSING caller waits before
+  //     giving up and proceeding unlocked. Deliberately shorter than
+  //     STALE_MS and kept under typical inbound-SMS-webhook timeouts (~15s
+  //     for Twilio) — blocking the HTTP response past that risks the
+  //     provider treating the webhook itself as failed and retrying it,
+  //     which would manufacture a THIRD concurrent invocation on top of the
+  //     customer's own double-text. A turn that legitimately runs past this
+  //     window still proceeds (favors availability over a stuck customer
+  //     text) but is no longer guaranteed serialized — logged so real
+  //     contention past the bound is visible rather than silently accepted.
+  const STALE_MS = 60_000;
   let turnLockAcquired = false;
-  for (let lockAttempt = 0; lockAttempt < 25; lockAttempt++) {
-    const staleBefore = new Date(Date.now() - 30_000).toISOString();
+  for (let lockAttempt = 0; lockAttempt < 30; lockAttempt++) {
+    const staleBefore = new Date(Date.now() - STALE_MS).toISOString();
     const { data: claimedTurn } = await supabase
       .from("conversations")
       .update({ processing_claimed_at: new Date().toISOString() })
@@ -4525,12 +4542,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       .or(`processing_claimed_at.is.null,processing_claimed_at.lte.${staleBefore}`)
       .select("id");
     if (claimedTurn && claimedTurn.length > 0) { turnLockAcquired = true; break; }
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
   if (!turnLockAcquired) {
-    // Genuinely still locked after ~10s (not just a crashed claim past the
-    // 30s staleness threshold) — proceed unlocked rather than leave the
-    // customer's message unanswered. Logged so real contention is visible.
+    // Still locked after ~15s of polling and the claim isn't stale yet (the
+    // first caller is genuinely still working, not crashed) — proceed
+    // unlocked rather than leave the customer's message unanswered or risk
+    // a provider webhook retry. Logged so real contention is visible.
     console.warn(`[chat-sms] turn lock contention for conversation ${conversation.id} — proceeding without lock`);
   }
 
