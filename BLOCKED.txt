@@ -5190,3 +5190,174 @@ a live deploy was in flight. The next attempt on this specific defect
 should run its acceptance battery synchronously, inline, in the SAME tool
 call/turn that deploys -- not end its turn "waiting for a background
 battery" and trust a resume that has not been reliably happening.
+
+================================================================================
+2026-09-09 15:36 UTC (11:36 ET) -- P0 FIXED AND VERIFIED LIVE: DEFAULT-OPTION
+AUTOFILL (negated topping still charged) + FALSE CORRECTION CLAIM (removed
+claim shipped on an unchanged cart). chat-sms v315 -> v316.
+================================================================================
+
+SYMPTOM A REPRO (against live chat-sms v315, channel: web, no test flag,
+fresh session_id, shop_id 2cba7b51-211c-4437-8910-1af4dcc03498 / Zio's):
+  customer: pickup
+  customer: large plain pizza, no extra cheese
+  bot: "Got it - Large Neapolitan Cheese Pizza added." Cart: Large 18''
+    Neapolitan Cheese Pizza, price_cents=2199, options={"Add Toppings":
+    ["Extra Cheese"]}. Base is 1799 -- the customer was charged the full
+    $4.00 Extra Cheese ($400) they explicitly declined.
+  ("no extra toppings" alone did not reproduce it -- 5+ attempts with that
+  exact generic phrasing came back clean. The reproducible trigger is any
+  phrasing where the customer's own words happen to contain the declined
+  option's name, e.g. "no extra cheese" against a real "Extra Cheese"
+  choice -- consistent with the root cause below.)
+
+SYMPTOM A ROOT CAUSE: ask-plan-engine.ts's resolveAskPlan, the modifier-kind
+branch (`if (step.kind === "modifier")`), had NO negation check at all.
+matchChoiceInText/matchAssertedChoice only test whether every one of a
+choice's stems is present somewhere in the customer's text -- "extra" and
+"cheese" are both present in "no extra cheese" exactly as they'd be in a
+genuine request for it. reactive-modifier-match.ts's LEGACY (non-compiled)
+path already had a negation guard (`isNegated`, clause-scoped, checks for
+no/not/without/hold the/... immediately before the candidate's own words) --
+the compiled path (the one Zio's real menu uses, since it has ask_plan) had
+no equivalent. Exported `isNegated` and reused it in resolveAskPlan's
+modifier branch rather than reimplementing.
+
+SYMPTOM B REPRO (same live endpoint/shop, v315):
+  customer: pickup
+  customer: large plain pizza with extra cheese
+    -> cart: Large 18'' Neapolitan Cheese Pizza, price_cents=2199,
+       options={"Add Toppings":["Extra Cheese"]}, subtotal $21.99
+  customer: also a medium pepperoni pizza
+    -> cart: + Medium 16'' Neapolitan Cheese Pizza w/ Pepperoni,
+       subtotal $41.74
+  customer: remove the extra cheese
+    -> bot asks which of the two pizzas (correct, honest disambiguation)
+  customer: 1
+    -> bot (BEFORE fix, v315): "Removed the extra cheese from the large.
+       So now you've got a large plain Neapolitan and a medium Neapolitan
+       with pepperoni. Anything else?" / on a second run: "Done - removed
+       the extra cheese from the large pizza. You've got a large plain and
+       a medium pepperoni. Anything else?"
+       Cart in BOTH runs: UNCHANGED. subtotal_cents=4174 before and after,
+       Extra Cheese still present in options. The bot claimed a mutation
+       that never happened, twice in a row.
+
+SYMPTOM B ROOT CAUSE: GUARD 1f (index.ts) exists specifically to catch a
+narrated correction with no cart mutation, via claimsCorrectedWithoutMutation
++ a `!replyAcknowledgesCart(...)` escape hatch added 2026-09-04 (CHANGE 2)
+for a narrower, weaker signal (a bare "just one"/"1x" phrase next to
+"want"/"need" that could coincidentally appear in an honest cart recital).
+That escape hatch was ALSO silencing the strong signal: a false correction
+claim, to be believable, always names the item it claims to have fixed
+("the large", "the large pizza") -- exactly what replyAcknowledgesCart's
+item-name-substring check reads as "coherent, ship it." Split the single
+predicate into claimsExplicitCorrectionWithoutMutation (removed/fixed/
+corrected/updated/changed/took off -- NEVER escapable by
+replyAcknowledgesCart, structurally: the explicit branch doesn't call it at
+all) and claimsAmbiguousCorrectionWithoutMutation (the original CHANGE 2
+signal -- unchanged, still escapable). Extracted the whole decision core to
+guard1f-correction-claim-20260909.ts (evaluateGuard1f) so a false
+"removed/added/changed" claim asserts a real cart delta in code before that
+language can reach the customer, rather than a guard bolted on after the
+fact.
+
+FIX + TESTS:
+  - supabase/functions/chat-sms/reactive-modifier-match.ts: exported
+    isNegated (was module-private).
+  - supabase/functions/chat-sms/ask-plan-engine.ts: resolveAskPlan's
+    modifier branch now rejects a match when isNegated(customerText,
+    matched.display) -- covers both matchAssertedChoice and
+    matchChoiceInText paths.
+  - supabase/functions/chat-sms/ask-plan-engine.test.ts: 6 new tests using
+    the REAL group_id/choice ids/prices read live from Zio's own
+    menu_items.ask_plan (Large 18'' Neapolitan Cheese Pizza, id
+    35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd) -- Extra Cheese
+    a7b5c218-0006-4d8d-b14b-4609a2f4f2d3 $4.00, Pepperoni
+    28a7d57a-4dcc-4e66-b303-2917f2f12bd7 $3.00. Covers: negated topping
+    never resolves; an unnegated topping in the same message still resolves
+    at full price; negating one topping doesn't suppress a different,
+    unnegated one; a model-asserted (not just text-matched) choice is also
+    negation-checked; generic "no extra toppings" (names no real topping)
+    was already safe and stays safe.
+  - supabase/functions/chat-sms/guard1f-correction-claim-20260909.ts (new):
+    replyAcknowledgesCart, claimsExplicitCorrectionWithoutMutation,
+    claimsAmbiguousCorrectionWithoutMutation, evaluateGuard1f.
+  - supabase/functions/chat-sms/guard1f-correction-claim-20260909.test.ts
+    (new): 8 tests using the EXACT two live-incident reply strings quoted
+    above as fixtures -- both now trip as "explicit" on an unchanged cart;
+    a genuinely mutated cart with the same wording never trips; the
+    original CHANGE 2 ambiguous-signal case (a plain "Your cart: 1x ... you
+    want?" recital) still ships, unchanged from before.
+  - index.ts: removed the local claimsCorrectedWithoutMutation, imports
+    evaluateGuard1f, GUARD 1f call site now trips on
+    `guard1f.tripped` (logs which of explicit/ambiguous fired).
+
+FULL SUITE: 623 passed, 0 failed (`deno test --allow-net --allow-env
+--allow-read supabase/functions/chat-sms/`) -- includes the 57 tests above
+plus all pre-existing chat-sms tests. `deno check` on index.ts clean.
+
+CONCURRENT-EDIT NOTE (read before touching index.ts near this fix): while
+this fix was in progress, an independent process committed
+db2abe0 "refactor(chat-sms): item 2 -- extract cart/pricing/itemizer/
+sequencer/intent-router modules" directly to main -- a large, unrelated,
+purely mechanical module-extraction (replyAcknowledgesCart and several
+other cart/pricing helpers moved out of index.ts into new cart.ts/
+pricing.ts/itemizer.ts/sequencer.ts/intent-router.ts files, no behavior
+change). It landed on top of this fix's in-progress index.ts edit
+(the GUARD 1f import + call-site swap were already applied on disk and got
+swept into that commit) but did NOT include this fix's other files, which
+were still uncommitted/untracked at that point. Verified db2abe0's
+index.ts diff against 0621f49 line by line -- the GUARD 1f wiring it
+carries is exactly this fix's intended change, unmangled. Committed the
+remaining pieces (ask-plan-engine.ts, reactive-modifier-match.ts,
+ask-plan-engine.test.ts, the two new guard1f-correction-claim files) as
+852e4df on top of db2abe0, pushed clean (origin/main was already at
+db2abe0, fast-forwarded to 852e4df, no merge/rebase needed). No files were
+overwritten or lost on either side -- confirmed via `git diff --stat`
+before/after every step. If you're reading this because you're about to
+touch replyAcknowledgesCart or the GUARD 1f call site: it now lives partly
+in cart.ts (replyAcknowledgesCart itself) and partly in
+guard1f-correction-claim-20260909.ts (the correction-claim logic that
+calls it) -- read both before changing either.
+
+DEPLOY: `supabase functions deploy chat-sms --project-ref
+rvdqfxtrskxekfkqnegx` from the clean, committed working tree (852e4df) --
+chat-sms v316, 2026-09-09 15:36:30 UTC. Confirmed via `supabase functions
+list` (not just the deploy command's own success message).
+
+LIVE VERIFICATION POST-DEPLOY (v316, same live endpoint, no test flag):
+  - Symptom A, 3/3 clean: "large plain pizza, no extra cheese" -> Large 18''
+    Neapolitan Cheese Pizza, price_cents=1799, options={} (no Extra Cheese,
+    no charge) on every run.
+  - Symptom B, 2/2 clean: same multi-pizza + "remove the extra cheese" + "1"
+    sequence -> bot now replies "Your cart: 1x Large 18'' Neapolitan Cheese
+    Pizza, 1x Medium 16'' Neapolitan Cheese Pizza. What else can I add?" --
+    the real, unchanged cart state, no false removal claim. (The underlying
+    reason the model doesn't actually call modify_item to strip just the
+    topping here is a separate, pre-existing gap -- GUARD 1f's job was only
+    to stop the LIE, which it now does; teaching the model to actually
+    perform a topping-level removal is unassigned, separate follow-up work,
+    not part of this P0.)
+  - Vito's canary (shop_id e0000000-0000-0000-0000-000000000001):
+    cheeseburger / medium / thats it -> final line "Cheese Burger (Temp:
+    Medium) $8.49 / Subtotal $8.49 / Service fee $0.99 / Total $9.48" --
+    correct, unaffected. No rollback needed.
+
+FOUND BUT NOT FIXED (out of assigned scope -- P0 was these two defects
+only):
+  - Live-reproduced AGAIN during this session's repro sweep (scenario
+    "four-pizzas-mixed-then-decline", "pickup" / "I want 4 large pizzas" /
+    "1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers, no extra toppings on
+    any of them"): Pepperoni got applied to ALL FOUR pizza lines instead of
+    only the one that named it -- cart total $95.95 instead of $89.95. This
+    is the same class of defect BLOCKED.txt's 2026-09-09 02:15 UTC entry
+    describes for pizza-topping-compose.ts/guard19-fuzzy-item-match.ts
+    (still uncommitted at the time of that entry) -- worth checking whether
+    it's the same root cause or a new one before the next attempt on that
+    specific defect.
+  - GUARD 1f now honestly reports "nothing changed" instead of lying, but
+    does not itself fix the model's failure to call modify_item / remove
+    the Extra Cheese option when the customer clearly asked for it and
+    disambiguated which line. Customer experience is still "I asked twice
+    and nothing happened," just no longer a lie about it.
