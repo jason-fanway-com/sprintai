@@ -56,6 +56,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import {
   compileMenu,
+  buildDerivedRows,
   applyOverrides,
   buildOwnerQuestionSummaries,
   type CompileItem,
@@ -65,6 +66,7 @@ import {
   type OverrideEntityType,
   type LexiconTerm,
   type InferSourceItem,
+  type DerivedMenuRow,
 } from "../_shared/compile-menu.ts";
 import type { ExtractedGroup, OwnerQuestionDraft } from "../_shared/archetypes.ts";
 import { itemEntityKey, groupEntityKey, choiceEntityKey } from "../_shared/menu-entity-key.ts";
@@ -147,6 +149,7 @@ interface MenuItemRow {
   price_provenance: string;
   product_key: string | null;
   import_key: string | null;
+  is_derived: boolean;
 }
 interface OptionGroupRow {
   id: string;
@@ -173,6 +176,7 @@ interface OptionChoiceRow {
   is_default: boolean;
   provenance: string;
   import_key: string | null;
+  not_composable: boolean;
 }
 interface OwnerQuestionRow {
   id: string;
@@ -243,9 +247,10 @@ Deno.serve(async (req: Request) => {
   const itemRows = await fetchAllRows<MenuItemRow>(() =>
     supabase
       .from("menu_items")
-      .select("id, menu_id, name, description, display_name, category, price_cents, size_label, active, price_provenance, product_key, import_key")
+      .select("id, menu_id, name, description, display_name, category, price_cents, size_label, active, price_provenance, product_key, import_key, is_derived")
       .eq("menu_id", menuId)
       .eq("active", true)
+      .eq("is_derived", false)
       .order("display_order", { ascending: true })
       .order("id", { ascending: true }),
   );
@@ -272,7 +277,7 @@ Deno.serve(async (req: Request) => {
     ? await fetchAllRowsBatchedIn<OptionChoiceRow, string>(groupIds, batch =>
         supabase
           .from("option_choices")
-          .select("id, option_group_id, name, display_name, price_cents, is_default, provenance, import_key")
+          .select("id, option_group_id, name, display_name, price_cents, is_default, provenance, import_key, not_composable")
           .in("option_group_id", batch)
           .order("display_order", { ascending: true })
           .order("id", { ascending: true }),
@@ -408,6 +413,7 @@ Deno.serve(async (req: Request) => {
           price_cents: c.price_cents,
           is_default: c.is_default,
           provenance: c.provenance as CompileChoice["provenance"],
+          not_composable: c.not_composable,
         };
       });
       return {
@@ -468,6 +474,8 @@ Deno.serve(async (req: Request) => {
       // until that column ships; every other state is unaffected.
       missing_from_source_since: null,
       groups: [...groups, ...derivedGroups],
+      import_key: row.import_key,
+      size_label: row.size_label,
     };
 
     const overrides = (overrideRows ?? []) as MenuOverrideRow[];
@@ -505,6 +513,82 @@ Deno.serve(async (req: Request) => {
   const compiledAt = new Date().toISOString();
   const result = compileMenu(compileItems, allQuestions, compiledAt, acknowledgedDisplayOnly);
 
+  // ---- D1: Compute derived rows (compile-time base × topping, pizza only) ----
+  // Pre-compute a last-write-wins override map for derived entity keys so
+  // buildDerivedRows can apply owner overrides without touching the DB itself.
+  const derivedOverrides = new Map<string, Record<string, unknown>>();
+  for (const o of ((overrideRows ?? []) as MenuOverrideRow[]).sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    if (o.entity_type === "item" && typeof o.entity_key === "string" && o.entity_key.startsWith("derived:")) {
+      const fields = derivedOverrides.get(o.entity_key) ?? {};
+      if (o.field && o.value !== undefined) fields[o.field] = o.value;
+      derivedOverrides.set(o.entity_key, fields);
+    }
+  }
+
+  const compiledMap = new Map(result.items.map(c => [c.item_id, c]));
+  const derivedRows = buildDerivedRows(compileItems, compiledMap, derivedOverrides, compiledAt);
+
+  // Fetch existing derived rows for this menu (for upsert / stale-deactivate).
+  interface DerivedItemRow { id: string; import_key: string; active: boolean }
+  const existingDerived = await fetchAllRows<DerivedItemRow>(() =>
+    supabase
+      .from("menu_items")
+      .select("id, import_key, active")
+      .eq("menu_id", menuId)
+      .eq("is_derived", true),
+  );
+  const existingDerivedById = new Map(existingDerived.map(r => [r.import_key, r]));
+  const desiredEntityKeys = new Set(derivedRows.map(r => r.entity_key));
+
+  // Upsert derived rows (insert new, update changed fields of existing).
+  const CONCURRENCY_DERIVED = 10;
+  for (let i = 0; i < derivedRows.length; i += CONCURRENCY_DERIVED) {
+    const batch = derivedRows.slice(i, i + CONCURRENCY_DERIVED);
+    await Promise.all(batch.map(async dr => {
+      const existing = existingDerivedById.get(dr.entity_key);
+      const payload = {
+        name: dr.name,
+        display_name: dr.display_name,
+        price_cents: dr.price_cents,
+        active: dr.active,
+        price_provenance: dr.provenance,
+        product_key: dr.product_key,
+        bot_state: dr.bot_state,
+        bot_state_reason: dr.bot_state_reason,
+        ask_plan: dr.ask_plan,
+        is_derived: true,
+        derived_from: dr.derived_from,
+      };
+      if (existing) {
+        await supabase.from("menu_items").update(payload).eq("id", existing.id);
+      } else {
+        const { error } = await supabase.from("menu_items").insert({
+          ...payload,
+          menu_id: menuId,
+          category: dr.category,
+          size_label: null,
+          display_order: 99000 + i,
+          import_key: dr.entity_key,
+          description: null,
+          name_provenance: dr.provenance,
+        });
+        if (error) console.error(`[compile-menu] derived insert error (${dr.entity_key}):`, error.message);
+      }
+    }));
+  }
+
+  // Deactivate derived rows that are no longer in the desired set (stale
+  // after a base pizza was removed/renamed, or toppings list changed).
+  const staleIds = existingDerived
+    .filter(r => !desiredEntityKeys.has(r.import_key))
+    .map(r => r.id);
+  for (let i = 0; i < staleIds.length; i += IN_BATCH_SIZE) {
+    await supabase.from("menu_items").update({ active: false }).in("id", staleIds.slice(i, i + IN_BATCH_SIZE));
+  }
+
+  // Upsert derived rows' lexicon terms alongside the regular lexicon write-back.
+  const derivedLexiconTerms: LexiconTerm[] = derivedRows.flatMap(r => r.lexicon_terms);
+
   // ---- Write back: menu_items.display_name / product_key / bot_state /
   // bot_state_reason / ask_plan. display_name/product_key come from
   // compileItems (post-override — same value ask_plan.display_name already
@@ -532,10 +616,14 @@ Deno.serve(async (req: Request) => {
 
   // ---- Write back: lexicon — upsert desired rows, deactivate stale
   // 'stated' rows no longer produced by this compile (idempotent re-compile
-  // after e.g. a display_name override changes what rules 1/2/3/6 emit). ----
+  // after e.g. a display_name override changes what rules 1/2/3/6 emit).
+  // Derived lexicon terms are included in the upsert but skipped from the
+  // 'stated'-provenance stale scan (they have provenance 'derived' or
+  // 'owner_confirmed', not 'stated'). ----
   const desiredTerms: LexiconTerm[] = [
     ...result.items.flatMap(c => c.lexicon_terms),
     ...result.categoryLexicon,
+    ...derivedLexiconTerms,
   ];
   const desiredKeys = new Set(desiredTerms.map(t => `${t.term} ${t.target_type} ${t.target_id}`));
 
@@ -580,6 +668,15 @@ Deno.serve(async (req: Request) => {
       invariants: result.invariants,
       owner_questions: allOwnerQuestionRows,
       category_archetypes: categoryQuestionSummaries.map(s => ({ category: s.category, archetype: s.archetype, item_count: s.itemCount })),
+      derived_rows: {
+        total: derivedRows.length,
+        by_size: Object.fromEntries(
+          [...new Map(derivedRows.map(r => [r.entity_key.split("#").pop() ?? "", 0])).keys()].map(sizeKey => [
+            sizeKey,
+            derivedRows.filter(r => r.entity_key.endsWith(`#${sizeKey}`)).length,
+          ]),
+        ),
+      },
     }),
     { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
   );

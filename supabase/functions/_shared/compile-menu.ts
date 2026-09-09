@@ -27,7 +27,7 @@
 
 import { inferCategory, buildCategoryCandidateGroups, type InferItemInput, type ExtractedGroup, type OwnerQuestionDraft, type ArchetypeKey, type CategoryPriceItem } from "./archetypes.ts";
 
-export type Provenance = "stated" | "inferred" | "owner_confirmed" | "learned" | "defaulted";
+export type Provenance = "stated" | "inferred" | "owner_confirmed" | "learned" | "defaulted" | "derived";
 export type GroupKind = "slot" | "modifier";
 export type AskMode = "ask" | "apply_default" | "auto_single" | "offer_once" | "on_request";
 export type BotState = "orderable" | "blocked" | "display_only" | "stale";
@@ -43,6 +43,9 @@ export interface CompileChoice {
   price_cents: number;
   is_default: boolean;
   provenance: Provenance;
+  // When true, this choice is excluded from compile-time derived row generation
+  // (e.g. "Extra Cheese", "Half and Half"). Defaults to false when absent.
+  not_composable?: boolean;
 }
 
 export interface CompileGroup {
@@ -101,6 +104,10 @@ export interface CompileItem {
   product_key: string | null;
   missing_from_source_since: string | null; // ISO timestamp or null
   groups: CompileGroup[];
+  // Optional — present when the compiler reads them from the DB row. Used by
+  // buildDerivedRows to construct stable entity keys that survive re-imports.
+  import_key?: string | null;
+  size_label?: string | null;
 }
 
 export interface CompiledStep {
@@ -944,6 +951,246 @@ export function planOwnerQuestionsRefresh(
   }
 
   return { toUpdate, toDelete };
+}
+
+// ============================================================
+// D1 — Compile-time derived rows (§11 item 4, stream D1).
+//
+// Emits one DerivedMenuRow per (base pizza × composable topping choice),
+// for each distinct size variant. Pure, deterministic — same contract as
+// compileItem/compileMenu above: no I/O, no randomness, identical input
+// produces identical output.
+//
+// Base-pizza selection: picks the dominant "family" (name-prefix group with
+// the most size variants). Ties return an empty list — missing beats wrong.
+// Within the chosen family, each distinct size_label maps to the lowest-
+// priced item (in case two items share a size label, which is rare).
+//
+// Owner overrides: a derivedOverrides Map<entityKey, Record<field,value>>
+// is pre-computed by the caller (index.ts) from menu_overrides rows whose
+// entity_key starts with "derived:". When an override exists for a row's
+// entity_key, provenance is flipped to "owner_confirmed" and derived_from
+// is preserved unchanged (the override changes what the kitchen sees, not
+// how the ticket resolves to base + topping).
+// ============================================================
+
+export interface DerivedFrom {
+  base_item_id: string;
+  choice_ids: string[]; // Phase 0: single-element (one topping)
+}
+
+export interface DerivedMenuRow {
+  entity_key: string;     // "derived:<base_import_key>#<choice_key>#<size_key>"
+  name: string;           // "{Choice} Pizza - {size_label}"
+  display_name: string;   // "{size_word} {choice} pizza"
+  category: string | null;
+  price_cents: number;    // base + delta
+  product_key: string;    // "pizza:{choice_key}"
+  is_derived: true;
+  derived_from: DerivedFrom;
+  provenance: "derived" | "owner_confirmed";
+  active: boolean;
+  bot_state: BotState;
+  bot_state_reason: string | null;
+  ask_plan: AskPlan;
+  lexicon_terms: LexiconTerm[];
+}
+
+// Same base-pizza regexp as pizza-topping-compose.ts's BASE_PIZZA_NAME_RE,
+// extended to also match "neapolitan", "regular", and "traditional" —
+// handles shops that name their plain pizza by style rather than the word
+// "cheese". Word-boundary (\b) so "cheeseburger" or "extra cheese" don't
+// match on a substring.
+const DERIVED_BASE_PIZZA_RE = /\b(cheese|plain|neapolitan|regular|traditional)\b/i;
+const DERIVED_PIZZA_CATEGORY_RE = /^pizza/i;
+const DERIVED_DEFAULT_CAP = 40;
+
+// Size-word regexp used to extract the leading size from a size_label like
+// "Small 14''" → "Small". Falls back to the full label when no known word
+// leads it.
+const DERIVED_SIZE_WORD_RE =
+  /^(Small|Medium|Large|Family|Personal|Jumbo|Mini|XL|X-Large|Regular)\b/i;
+
+function derivedSizeWord(sizeLabel: string): string {
+  const m = sizeLabel.match(DERIVED_SIZE_WORD_RE);
+  return m ? m[1] : sizeLabel;
+}
+
+// Strip the trailing " - {anything}" size suffix from a name to get the
+// family key: "Neapolitan Cheese Pizza - Large 18''" → "neapolitan cheese pizza".
+function derivedFamilyKey(name: string): string {
+  return name.replace(/\s*-\s*[^-]*$/, "").trim().toLowerCase();
+}
+
+export function buildDerivedRows(
+  items: CompileItem[],
+  compiled: Map<string, CompiledItem>,
+  derivedOverrides: Map<string, Record<string, unknown>>,
+  compiledAt: string,
+  opts?: { basePattern?: RegExp; capPerSize?: number },
+): DerivedMenuRow[] {
+  const baseRe = opts?.basePattern ?? DERIVED_BASE_PIZZA_RE;
+  const cap = opts?.capPerSize ?? DERIVED_DEFAULT_CAP;
+
+  // Step 1: Find pizza base candidates — active, pizza category, name matches
+  // base regex, has at least one toppings modifier group with choices.
+  const candidates = items.filter(item => {
+    if (!item.active) return false;
+    if (!item.category || !DERIVED_PIZZA_CATEGORY_RE.test(item.category)) return false;
+    if (!baseRe.test(item.name)) return false;
+    if (!item.groups.some(g => g.kind === "modifier" && g.slot_key === "toppings" && g.choices.length > 0)) return false;
+    // Orderable check — derived rows inherit the base item's state
+    if (compiled.get(item.id)?.bot_state !== "orderable") return false;
+    return true;
+  });
+
+  if (candidates.length === 0) return [];
+
+  // Step 2: Group candidates by family key (name stripped of size suffix).
+  const families = new Map<string, CompileItem[]>();
+  for (const c of candidates) {
+    const key = derivedFamilyKey(c.name);
+    const list = families.get(key) ?? [];
+    list.push(c);
+    families.set(key, list);
+  }
+
+  // Step 3: Pick the family with the most size variants. Genuine tie → skip
+  // (missing beats wrong — a wrong base is worse than no derived rows).
+  let bestFamily: CompileItem[] | null = null;
+  let bestCount = -1;
+  let tied = false;
+  for (const members of families.values()) {
+    if (members.length > bestCount) {
+      bestFamily = members;
+      bestCount = members.length;
+      tied = false;
+    } else if (members.length === bestCount) {
+      tied = true;
+    }
+  }
+  if (tied || !bestFamily) return [];
+
+  // Step 4: Group family members by their size_label (null → '__no_size__').
+  // Lowest-priced item wins when multiple items share the same size label.
+  const bySize = new Map<string, CompileItem>();
+  for (const member of bestFamily) {
+    const sizeKey = member.size_label ? normaliseTerm(member.size_label) : "__no_size__";
+    const existing = bySize.get(sizeKey);
+    if (!existing || (member.price_cents ?? Infinity) < (existing.price_cents ?? Infinity)) {
+      bySize.set(sizeKey, member);
+    }
+  }
+
+  // Step 5: For each (base item, composable choice), emit a DerivedMenuRow.
+  const rows: DerivedMenuRow[] = [];
+
+  for (const [sizeKey, baseItem] of bySize) {
+    const toppingsGroup = baseItem.groups.find(
+      g => g.kind === "modifier" && g.slot_key === "toppings",
+    );
+    if (!toppingsGroup) continue;
+
+    // Filter composable choices, then apply cap.
+    const composableChoices = toppingsGroup.choices
+      .filter(c => !c.not_composable)
+      .slice(0, cap);
+
+    for (const choice of composableChoices) {
+      const choiceDisplay = (choice.display_name?.trim() || choice.name).trim();
+      const choiceKey = normaliseTerm(choiceDisplay);
+      const baseKey = baseItem.import_key ?? `id:${baseItem.id}`;
+      const entityKey = `derived:${baseKey}#${choiceKey}#${sizeKey}`;
+
+      // Name / display_name
+      const sizeLabel = sizeKey === "__no_size__" ? null : baseItem.size_label;
+      const name = sizeLabel
+        ? `${choiceDisplay} Pizza - ${sizeLabel}`
+        : `${choiceDisplay} Pizza`;
+      const sizeWord = sizeLabel ? derivedSizeWord(sizeLabel) : null;
+      const displayName = sizeWord
+        ? `${sizeWord} ${choiceDisplay} Pizza`
+        : `${choiceDisplay} Pizza`;
+
+      // Price: base + topping delta
+      const priceCents = (baseItem.price_cents ?? 0) + choice.price_cents;
+
+      // Override lookup (last-write-wins already applied by the caller)
+      const overrideFields = derivedOverrides.get(entityKey);
+      const provenance: "derived" | "owner_confirmed" = overrideFields
+        ? "owner_confirmed"
+        : "derived";
+      const finalDisplayName =
+        (overrideFields?.display_name as string | undefined) ?? displayName;
+      const finalPriceCents =
+        (overrideFields?.price_cents as number | undefined) ?? priceCents;
+
+      // Bot state: never orderable if the topping choice itself is inferred —
+      // the kitchen can't reliably price a topping we invented.
+      const isInferred = choice.provenance === "inferred";
+      const botState: BotState = isInferred ? "display_only" : "orderable";
+      const botStateReason = isInferred
+        ? "composing topping choice has inferred provenance"
+        : null;
+
+      // Ask plan: no interactive steps — base + topping are both pre-baked.
+      // ticket_template renders the BASE item's name + topping so the kitchen
+      // ticket reads the canonical item name, not the derived label.
+      const baseName = baseItem.name; // raw source name (kitchen-facing)
+      const askPlan: AskPlan = {
+        compiled_at: compiledAt,
+        compiler_version: COMPILER_VERSION,
+        display_name: finalDisplayName,
+        base_price_cents: finalPriceCents,
+        steps: [],
+        recap_template: "{qty} {display_name}",
+        ticket_template: `${baseName}\n  + ${choiceDisplay} x{qty}`,
+      };
+
+      // Lexicon: three entries per derived row, all in ITEM position.
+      // "{choice} pizza", "{choice} pie", and the bare choice term.
+      const choiceLower = choiceDisplay.toLowerCase();
+      const lexiconTerms = dedupeLexicon([
+        {
+          term: normaliseTerm(`${choiceLower} pizza`),
+          target_type: "item" as LexiconTargetType,
+          target_id: entityKey,
+          provenance,
+        },
+        {
+          term: normaliseTerm(`${choiceLower} pie`),
+          target_type: "item" as LexiconTargetType,
+          target_id: entityKey,
+          provenance,
+        },
+        {
+          term: normaliseTerm(choiceLower),
+          target_type: "item" as LexiconTargetType,
+          target_id: entityKey,
+          provenance,
+        },
+      ]);
+
+      rows.push({
+        entity_key: entityKey,
+        name,
+        display_name: finalDisplayName,
+        category: baseItem.category,
+        price_cents: finalPriceCents,
+        product_key: `pizza:${choiceKey}`,
+        is_derived: true,
+        derived_from: { base_item_id: baseItem.id, choice_ids: [choice.id] },
+        provenance,
+        active: !isInferred,
+        bot_state: botState,
+        bot_state_reason: botStateReason,
+        ask_plan: askPlan,
+        lexicon_terms: lexiconTerms,
+      });
+    }
+  }
+
+  return rows;
 }
 
 export function compileMenu(

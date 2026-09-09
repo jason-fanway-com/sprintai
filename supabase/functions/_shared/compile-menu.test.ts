@@ -8,6 +8,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import {
   applyOverrides,
   buildAskPlan,
+  buildDerivedRows,
   buildOwnerQuestionSummaries,
   categoryLexiconTerms,
   compileItem,
@@ -15,6 +16,7 @@ import {
   planOwnerQuestionsRefresh,
   type CompileGroup,
   type CompileItem,
+  type CompiledItem,
   type ExistingOwnerQuestionRow,
   type InferSourceItem,
   type OverrideRow,
@@ -655,4 +657,252 @@ Deno.test("refresh: mixed batch — one update, one delete, one untouched non-pe
   assertEquals(plan.toUpdate.map(u => u.id), [breadStale.id]);
   assertEquals(plan.toUpdate[0].items_affected, 2);
   assertEquals(plan.toDelete, [{ id: toastStale.id }]);
+});
+
+// ============================================================
+// buildDerivedRows — D1 compile-time derived rows (§11 item 4 stream D1)
+//
+// Mirrors real Zio's Pizzeria shape:
+//   - Neapolitan Cheese Pizza in 3 sizes (the dominant family)
+//   - Sicilian Cheese Pizza single-size (inferior family by variant count)
+//   - Toppings: 9 composable + 1 not_composable (Extra Cheese)
+//   - Price: base $15.25 (small), $16.75 (med), $17.99 (large) + $3.00 delta/topping
+// ============================================================
+
+const T_COMPILED_AT = "2026-09-09T00:00:00.000Z";
+
+const TOPPING_CHOICE_NAMES = [
+  "Pepperoni", "Sausage", "Mushrooms", "Onions", "Bacon",
+  "Peppers", "Hot Peppers", "Roasted Red Peppers", "Fresh Garlic",
+];
+const NOT_COMPOSABLE_NAME = "Extra Cheese";
+
+function toppingChoice(name: string, idx: number): CompileGroup["choices"][0] {
+  return {
+    id: `topping-choice-${idx}`,
+    name,
+    display_name: name,
+    price_cents: 300,
+    is_default: false,
+    provenance: "stated",
+    not_composable: name === NOT_COMPOSABLE_NAME,
+  };
+}
+
+function toppingsGroup(choices: string[]): CompileGroup {
+  return {
+    id: "toppings-group-id",
+    name: "Add Toppings",
+    kind: "modifier",
+    slot_key: "toppings",
+    min_select: 0,
+    max_select: 10,
+    kitchen_critical: false,
+    price_critical: false,
+    default_choice_id: null,
+    ask_mode: "offer_once",
+    provenance: "stated",
+    display_order: 10,
+    choices: choices.map((n, i) => toppingChoice(n, i)),
+  };
+}
+
+function pizzaItem(
+  overrides: Partial<CompileItem> & { name: string; price_cents: number; size_label: string | null },
+): CompileItem {
+  return {
+    id: `item-${overrides.name.replace(/\W+/g, "-").toLowerCase()}`,
+    display_name: overrides.name, // simplified for tests
+    category: "Pizza",
+    active: true,
+    price_provenance: "stated",
+    product_key: null,
+    missing_from_source_since: null,
+    import_key: `import-${overrides.name.replace(/\W+/g, "-").toLowerCase()}`,
+    groups: [toppingsGroup([...TOPPING_CHOICE_NAMES, NOT_COMPOSABLE_NAME])],
+    ...overrides,
+  };
+}
+
+function orderable(itemId: string): [string, CompiledItem] {
+  return [itemId, {
+    item_id: itemId,
+    bot_state: "orderable",
+    bot_state_reason: null,
+    ask_plan: { compiled_at: T_COMPILED_AT, compiler_version: 1, display_name: "", base_price_cents: 0, steps: [], recap_template: "", ticket_template: "" },
+    lexicon_terms: [],
+  }];
+}
+
+function buildTestMenu() {
+  const small  = pizzaItem({ name: "Neapolitan Cheese Pizza - Small 14''",  price_cents: 1525, size_label: "Small 14''" });
+  const medium = pizzaItem({ name: "Neapolitan Cheese Pizza - Medium 16''", price_cents: 1675, size_label: "Medium 16''" });
+  const large  = pizzaItem({ name: "Neapolitan Cheese Pizza - Large 18''",  price_cents: 1799, size_label: "Large 18''" });
+  const sicilian = pizzaItem({ name: "Sicilian Cheese Pizza", price_cents: 1999, size_label: null,
+    id: "item-sicilian", import_key: "import-sicilian" });
+
+  const compiled = new Map([
+    orderable(small.id),
+    orderable(medium.id),
+    orderable(large.id),
+    orderable(sicilian.id),
+  ]);
+
+  return { small, medium, large, sicilian, compiled };
+}
+
+Deno.test("buildDerivedRows: row count — 9 composable toppings × 3 Neapolitan sizes = 27 rows (Sicilian single-size family is inferior)", () => {
+  const { small, medium, large, sicilian, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large, sicilian], compiled, new Map(), T_COMPILED_AT);
+  assertEquals(rows.length, 27);
+});
+
+Deno.test("buildDerivedRows: not_composable choice (Extra Cheese) is excluded from all derived rows", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const hasExtraCheese = rows.some(r => r.name.toLowerCase().includes("extra cheese"));
+  assertEquals(hasExtraCheese, false);
+});
+
+Deno.test("buildDerivedRows: row shape — name, display_name, product_key, is_derived, derived_from", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"));
+  assert(pepp !== undefined, "should have a large pepperoni derived row");
+  assertEquals(pepp!.name, "Pepperoni Pizza - Large 18''");
+  assertEquals(pepp!.display_name, "Large Pepperoni Pizza");
+  assertEquals(pepp!.product_key, "pizza:pepperoni");
+  assertEquals(pepp!.is_derived, true);
+  assertEquals(pepp!.derived_from.base_item_id, large.id);
+  assertEquals(pepp!.derived_from.choice_ids.length, 1);
+  assertEquals(pepp!.provenance, "derived");
+});
+
+Deno.test("buildDerivedRows: price arithmetic — base + topping delta (exact)", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  // Small base = 1525, topping delta = 300 → 1825
+  const smallPepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("small"));
+  assertEquals(smallPepp?.price_cents, 1525 + 300);
+  // Large base = 1799, topping delta = 300 → 2099
+  const largePepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"));
+  assertEquals(largePepp?.price_cents, 1799 + 300);
+});
+
+Deno.test("buildDerivedRows: cap — 40 choices max per size (all 9 composable fit well under cap)", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  // Build an item with 50 toppings — only 40 should appear
+  const manyToppings = Array.from({ length: 50 }, (_, i) => `Topping${i}`);
+  const bigItem = pizzaItem({
+    name: "Neapolitan Cheese Pizza - Large 18''",
+    price_cents: 1799,
+    size_label: "Large 18''",
+    groups: [toppingsGroup(manyToppings)],
+  });
+  const compiledBig = new Map([orderable(bigItem.id)]);
+  const rows = buildDerivedRows([bigItem], compiledBig, new Map(), T_COMPILED_AT);
+  assertEquals(rows.length, 40);
+});
+
+Deno.test("buildDerivedRows: regeneration is idempotent — identical inputs produce byte-identical output except compiled_at", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const r1 = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const r2 = buildDerivedRows([small, medium, large], compiled, new Map(), "2026-09-10T00:00:00.000Z");
+  assertEquals(r1.length, r2.length);
+  for (let i = 0; i < r1.length; i++) {
+    const a = { ...r1[i], ask_plan: { ...r1[i].ask_plan, compiled_at: "x" } };
+    const b = { ...r2[i], ask_plan: { ...r2[i].ask_plan, compiled_at: "x" } };
+    assertEquals(a, b, `row ${i} (${r1[i].entity_key}) should be identical across recompile`);
+  }
+});
+
+Deno.test("buildDerivedRows: owner override survives recompile — provenance flips to owner_confirmed, derived_from preserved", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const largePepp = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT)
+    .find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+
+  // Simulate an owner override for display_name on the large pepperoni row
+  const overrides = new Map([[largePepp.entity_key, { display_name: "Large Pepperoni Pie" }]]);
+  const withOverride = buildDerivedRows([small, medium, large], compiled, overrides, T_COMPILED_AT);
+  const overridden = withOverride.find(r => r.entity_key === largePepp.entity_key)!;
+
+  assertEquals(overridden.provenance, "owner_confirmed");
+  assertEquals(overridden.display_name, "Large Pepperoni Pie");
+  // derived_from is intact — the ticket still resolves to base + topping
+  assertEquals(overridden.derived_from.base_item_id, large.id);
+  assertEquals(overridden.derived_from.choice_ids.length, 1);
+
+  // Other rows (non-overridden) stay "derived"
+  const smallPepp = withOverride.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("small"))!;
+  assertEquals(smallPepp.provenance, "derived");
+});
+
+Deno.test("buildDerivedRows: ticket_template renders base item name + topping, not the derived label", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  // ticket_template must reference the base item's own name (kitchen-facing)
+  assert(pepp.ask_plan.ticket_template.includes(large.name), "ticket_template must embed base item name");
+  assert(pepp.ask_plan.ticket_template.includes("Pepperoni"), "ticket_template must embed topping name");
+  // Must NOT just be the derived display_name alone
+  assert(!pepp.ask_plan.ticket_template.startsWith("Large Pepperoni Pizza"), "ticket_template must not be the derived label");
+});
+
+Deno.test("buildDerivedRows: lexicon — three entries per row ('{choice} pizza', '{choice} pie', bare choice)", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  const terms = pepp.lexicon_terms.map(t => t.term);
+  assert(terms.includes("pepperoni pizza"), "should have '{choice} pizza' term");
+  assert(terms.includes("pepperoni pie"), "should have '{choice} pie' term");
+  assert(terms.includes("pepperoni"), "should have bare choice term");
+});
+
+Deno.test("buildDerivedRows: never active if topping choice has inferred provenance", () => {
+  const { large } = buildTestMenu();
+  const inferredItem = pizzaItem({
+    name: "Neapolitan Cheese Pizza - Large 18''",
+    price_cents: 1799,
+    size_label: "Large 18''",
+    id: large.id,
+    import_key: large.import_key,
+    groups: [{
+      ...toppingsGroup(["Pepperoni"]),
+      choices: [{
+        id: "inferred-choice-id",
+        name: "Pepperoni",
+        display_name: "Pepperoni",
+        price_cents: 300,
+        is_default: false,
+        provenance: "inferred",
+      }],
+    }],
+  });
+  const compiled = new Map([orderable(large.id)]);
+  const rows = buildDerivedRows([inferredItem], compiled, new Map(), T_COMPILED_AT);
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0].active, false);
+  assertEquals(rows[0].bot_state, "display_only");
+});
+
+Deno.test("buildDerivedRows: family tie (two single-size families) returns empty — missing beats wrong", () => {
+  const sicilian = pizzaItem({ name: "Sicilian Cheese Pizza", price_cents: 1999, size_label: null,
+    id: "item-sicilian", import_key: "import-sicilian" });
+  const grandma = pizzaItem({ name: "Grandma Cheese Pizza", price_cents: 1899, size_label: null,
+    id: "item-grandma", import_key: "import-grandma" });
+  const compiled = new Map([orderable(sicilian.id), orderable(grandma.id)]);
+  const rows = buildDerivedRows([sicilian, grandma], compiled, new Map(), T_COMPILED_AT);
+  assertEquals(rows.length, 0, "tied families must produce no derived rows");
+});
+
+Deno.test("buildDerivedRows: base item not orderable → skipped (no derived rows for that size)", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  // Mark large as blocked
+  const compiledWithBlock = new Map([...compiled]);
+  compiledWithBlock.set(large.id, { ...compiled.get(large.id)!, bot_state: "blocked" });
+  const rows = buildDerivedRows([small, medium, large], compiledWithBlock, new Map(), T_COMPILED_AT);
+  // Only small and medium should produce rows (9 × 2 = 18)
+  assertEquals(rows.length, 18);
+  const hasLarge = rows.some(r => r.entity_key.includes("large"));
+  assertEquals(hasLarge, false);
 });

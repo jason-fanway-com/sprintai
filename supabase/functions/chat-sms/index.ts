@@ -69,7 +69,8 @@ import {
   replyAcknowledgesCart,
 } from "./cart.ts";
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
-import { padReceiptLine, renderItemizedRecap, renderLedgerFooter } from "./itemizer.ts";
+import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, buildMenuPriceIndex } from "./itemizer.ts";
+import { matchOptionRemovalPhrase, findCartLinesWithOption, type OptionRemovalCartLine } from "./option-removal-20260909.ts";
 import { groupChoicesAlreadySaid, renderMissingOptionsPrompt } from "./sequencer.ts";
 import {
   detectBareTipReply,
@@ -1342,6 +1343,7 @@ async function executeTool(
           compiledMatchText ?? customerMessage ?? "",
           modelAssertedChoiceTexts,
           consumedModifierChoiceIds,
+          options,
         );
         if (modifyOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         return { ok: modifyOutcome.ok, result: modifyOutcome.result };
@@ -2006,21 +2008,18 @@ async function runOrderingLoop(
   // correction (set qty→1 or removed last item), skip the LLM and return
   // a confirmation with the actual cart state.
   if (correctionApplied) {
-    const subtotal = computeCartSubtotalCents(cart);
-    const cartTotal = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (cart.reduce((s, i) => { const r = (i as any); return s + (r.driver_tip_cents ?? 0); }, 0));
-    // We need to read driver_tip from the DB row — use the cart's tip from the caller
-    // For now: compute total from cart items + fee + delivery. Tip will be added when loaded.
-    const totalWithoutTip = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0);
     if (cart.length === 0) {
       return { reply: "Your cart is empty. What would you like to order?", finalPhase: "building" };
     }
-    const itemList = cart.map(i => {
-      const r = i as CartItem;
-      return `${(r.quantity || 1)}x ${r.name}`;
-    }).join(", ");
+    // P0 fix (2026-09-09, item 2 — itemized recap): this used to render a
+    // bare "1x Name, 1x Name — $X.XX total" line with no options/modifiers
+    // shown and the service fee folded silently into one number — exactly
+    // the shape that let a $4 topping upcharge go unmentioned. Every price
+    // string in a cart-facing reply must come from itemizer.ts, which lists
+    // each line's active options and keeps Subtotal/Service fee/Total as
+    // separate labelled lines, never folded.
     return {
-      // BUG-2 FIX: guard the dash+total fragment (see cartTotalFragment).
-      reply: `Updated! Your cart: ${itemList}${cartTotalFragment(totalWithoutTip)}. Add anything else?`,
+      reply: `Updated!\n\n${renderItemizedRecap(cart, deliveryFeeCents ?? undefined, undefined, buildMenuPriceIndex(menu))}\n\nAdd anything else?`,
       finalPhase: "building",
     };
   }
@@ -4455,10 +4454,61 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // add nothing, never hand this turn to the LLM at all.
       console.log(`[chat-sms] Pending disambiguation declined (conv=${conversation.id}): "${pending.query_name}" abandoned by customer ("${userMessage}"). Clearing state, adding nothing.`);
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
-      const reply = "No problem — I won't add that. Anything else?";
+      const reply = pending.action === "remove_option" ? "No problem — I won't remove that. Anything else?" : "No problem — I won't add that. Anything else?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    } else if (resolved && pending.action === "remove_option") {
+      // P0 (2026-09-09, live money defect): the customer named an option to
+      // remove ("remove the extra cheese") while it was applied on 2+ cart
+      // lines; GUARD 7's disambiguation persistence is reused here (same
+      // {query_name, candidates} shape) rather than inventing a parallel
+      // mechanism, but resolution must strip the option from the resolved
+      // line, never add_item — that's the whole point of `action`. Re-run
+      // findCartLinesWithOption against the CURRENT cart (not the possibly-
+      // stale candidate snapshot from when the question was asked) so the
+      // exact stored value/group to remove is always fresh.
+      const localCartItems = [...cart.cart_json];
+      const freshMatches = findCartLinesWithOption(pending.option_phrase ?? "", localCartItems as unknown as OptionRemovalCartLine[]);
+      const target = freshMatches.find(m => m.menu_item_id === resolved.menu_item_id);
+      await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
+      if (!target) {
+        // The option is no longer on that line (cart changed since the
+        // question was asked) — say so plainly rather than guessing.
+        const reply = "That option isn't on that item anymore — anything else?";
+        console.log(`[chat-sms] Pending option-removal disambiguation: "${pending.option_phrase}" no longer found on resolved line ${resolved.menu_item_id} (conv=${conversation.id}).`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      }
+      const removeArgs: { menu_item_id: string; options?: Record<string, string[]>; modifiers?: string[] } = target.group_name
+        ? { menu_item_id: target.menu_item_id, options: { [target.group_name]: ((localCartItems.find(ci => (ci as CartItem).menu_item_id === target.menu_item_id) as CartItem)?.options?.[target.group_name] ?? []).filter(v => v.toLowerCase() !== target.matched_value.toLowerCase()) } }
+        : { menu_item_id: target.menu_item_id, modifiers: ((localCartItems.find(ci => (ci as CartItem).menu_item_id === target.menu_item_id) as CartItem)?.modifiers ?? []).filter(v => v.toLowerCase() !== target.matched_value.toLowerCase()) };
+      // Compiled-engine-aware, same as every OTHER modify_item call site that
+      // can reach a compiled item (see executeTool's compiledEngineEnabled
+      // param doc) — passing `options: { group: [] }` here doubles as the
+      // explicit-clear signal applyCompiledModifyItem's removal path checks
+      // (option-removal-20260909.ts's header), so this works correctly
+      // whether the target line is compiled or legacy.
+      const removeResult = await executeTool(
+        "modify_item", removeArgs, localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+        undefined, undefined,
+        shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null, userMessage, undefined,
+      );
+      const feeAlreadyDisclosedOptRemove = !!cart.fee_disclosed_at;
+      const footerOptRemove = removeResult.ok
+        ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosedOptRemove)
+        : "";
+      const reply = removeResult.ok
+        ? `Removed ${target.matched_value} from the ${target.name}.${footerOptRemove ? `\n\n${footerOptRemove}` : ""} Anything else?`
+        : "Sorry, I had trouble removing that — mind trying again?";
+      if (removeResult.ok && !feeAlreadyDisclosedOptRemove) {
+        await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+      }
+      console.log(`[chat-sms] Pending option-removal disambiguation resolved (conv=${conversation.id}): "${pending.option_phrase}" -> removed "${target.matched_value}" from "${target.name}" (${target.menu_item_id}).`);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
     } else if (resolved) {
       const localCartItems = [...cart.cart_json];
       const addResult = await executeTool(
@@ -4779,6 +4829,76 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   let correctionApplied = false;
   {
     const norm = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // ── Option-level removal (P0 fix, 2026-09-09, live money — see
+    // option-removal-20260909.ts's header for the full incident) ──────────
+    // "remove the extra cheese" / "take the extra cheese off" / "no more
+    // pepperoni" must strip that SPECIFIC option from whichever cart line has
+    // it, deterministically, before the LLM/tool loop ever runs — GUARD 1f
+    // (deployed v316) only stopped the model from LYING about having done
+    // this; the cart itself never actually changed. Checked BEFORE
+    // namedRemoveMatch below: "extra cheese" stem-overlaps "cheese" against a
+    // cart line literally named "... Neapolitan Cheese Pizza" (the menu's own
+    // SKU name), so routing this phrase through the whole-item resolver risks
+    // targeting the ENTIRE pizza instead of the $4 topping. Only intercepts
+    // when a REAL applied option matches something in the cart; zero matches
+    // falls through to the existing whole-item logic completely unchanged
+    // (so "remove the pizza" / "drop my garlic knots" etc. are unaffected).
+    const optionRemovalPhrase = cartItems.length > 0 ? matchOptionRemovalPhrase(norm) : null;
+    if (optionRemovalPhrase) {
+      const optionMatches = findCartLinesWithOption(optionRemovalPhrase, cartItems as unknown as OptionRemovalCartLine[]);
+      if (optionMatches.length === 1) {
+        const target = optionMatches[0];
+        const targetLine = cartItems.find(ci => (ci as CartItem).menu_item_id === target.menu_item_id) as CartItem | undefined;
+        const removeArgs: { menu_item_id: string; options?: Record<string, string[]>; modifiers?: string[] } = target.group_name
+          ? { menu_item_id: target.menu_item_id, options: { [target.group_name]: (targetLine?.options?.[target.group_name] ?? []).filter(v => v.toLowerCase() !== target.matched_value.toLowerCase()) } }
+          : { menu_item_id: target.menu_item_id, modifiers: (targetLine?.modifiers ?? []).filter(v => v.toLowerCase() !== target.matched_value.toLowerCase()) };
+        const removeResult = await executeTool(
+          "modify_item", removeArgs, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+          undefined, undefined,
+          shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null, userMessage, undefined,
+        );
+        // P0 item 2 (2026-09-09): every price string shown to the customer
+        // after an option removal must come from renderItemizedRecap — not a
+        // bare ledger footer that would hide the per-item option upcharges.
+        // Using renderItemizedRecap here means: the updated item price
+        // (without the removed topping) is visible on its own line, and the
+        // three separate labelled lines (Subtotal / Service fee / Total) are
+        // always shown, never folded.
+        const receiptOptRemove = removeResult.ok
+          ? renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, buildMenuPriceIndex(effectiveMenu))
+          : "";
+        const reply = removeResult.ok
+          ? `Removed ${target.matched_value} from the ${target.name}.\n\n${receiptOptRemove}\n\nAnything else?`
+          : "Sorry, I had trouble removing that — mind trying again?";
+        if (removeResult.ok && !cart.fee_disclosed_at) {
+          await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+        }
+        console.log(`[chat-sms] Option removal (conv=${conversation.id}): "${optionRemovalPhrase}" -> removed "${target.matched_value}" from "${target.name}" (${target.menu_item_id}).`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: cartItems, phase: "building", session_id: sessionId });
+      } else if (optionMatches.length > 1) {
+        const pendingPayload: PendingDisambiguation = {
+          query_name: optionRemovalPhrase,
+          candidates: optionMatches.map(m => ({ menu_item_id: m.menu_item_id, name: m.name, category: m.category, price_cents: m.price_cents })),
+          action: "remove_option",
+          option_phrase: optionRemovalPhrase,
+        };
+        await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
+        const listStr = optionMatches.map((m, i) => `${i + 1}) the ${m.name} — $${(m.price_cents / 100).toFixed(2)}`).join("  ");
+        const reply = `Which one did you want to remove ${optionRemovalPhrase} from? ${listStr}. Reply with the number.`;
+        console.log(`[chat-sms] Option removal ambiguous (conv=${conversation.id}): "${optionRemovalPhrase}" matched ${optionMatches.length} cart lines, asking.`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      }
+      // Zero matches — this option is not currently in the cart. Fall
+      // through unchanged: could be a genuine whole-item removal
+      // (namedRemoveMatch below) or an unrelated message this loosely-
+      // anchored phrase (esp. bare "no X") happened to also match
+      // syntactically; never intercepted here either way.
+    }
 
     // Bucket 3 (ambiguous, 2026-09-06 — "no thanks" deleted the only line;
     // "forget it" added 2026-09-07 — same idiom family as "forget that",
@@ -5287,8 +5407,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       console.warn(`[chat-sms] PROOF-P2 tripped (conv=${conversation.id}): cart wiped from ${cartItems.length} items to 0 without cancel signal. Restoring.`);
       cart.cart_json = [...cartItems];
       await supabase.from("order_carts").update({ cart_json: JSON.stringify(cartItems) }).eq("id", cart.id);
-      const itemList = cartItems.map(i => `${((i as CartItem).quantity || 1)}x ${(i as CartItem).name}`).join(", ");
-      reply = `Your cart: ${itemList}. Anything else or ready to checkout?`;
+      // P0 fix (2026-09-09, item 2 — itemized recap): route through
+      // itemizer.ts instead of a bare name list, same reasoning as the
+      // correctionApplied short-circuit above.
+      reply = `Your cart:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}\n\nAnything else or ready to checkout?`;
     }
   }
 
@@ -5397,14 +5519,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (guardCart.length === 0) {
       reply = "Your cart is empty. What would you like to order?";
     } else {
-      const itemList = guardCart.map(i => {
-        const r = i as CartItem;
-        return `${(r.quantity || 1)}x ${r.name}`;
-      }).join(", ");
-      // BUG-2 FIX: omit the dash+total fragment entirely when the total is
-      // not a real positive amount. The deterministic Ledger footer below owns
-      // the numbers, so a missing fragment loses nothing.
-      reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
+      // P0 fix (2026-09-09, item 2 — itemized recap): this is exactly the
+      // reply the live incident showed the customer (BLOCKED.txt 2026-09-09,
+      // guard1f-correction-claim-20260909.test.ts) — a bare name list with no
+      // options/upcharges shown, so the $4 Extra Cheese GUARD 1f just proved
+      // was NEVER removed was also never visible in the "corrected" recap
+      // either. Route through itemizer.ts like every other cart-facing reply.
+      reply = `Your cart:\n\n${renderItemizedRecap(guardCart)}\n\nWhat else can I add?`;
     }
   }
 
@@ -6795,11 +6916,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (replyAcknowledgesCart(stripped, guardCart)) {
           reply = stripped;
         } else {
-          const itemList = guardCart.map(i => {
-            const r = i as CartItem;
-            return `${(r.quantity || 1)}x ${r.name}`;
-          }).join(", ");
-          reply = `Your cart: ${itemList}${cartTotalFragment(guardRealTotalCents)}. What else can I add?`;
+          // P0 fix (2026-09-09, item 2 — itemized recap): route through
+          // itemizer.ts instead of a bare name list, same reasoning as
+          // GUARD 1f's fallback above.
+          reply = `Your cart:\n\n${renderItemizedRecap(guardCart)}\n\nWhat else can I add?`;
         }
     }
   }

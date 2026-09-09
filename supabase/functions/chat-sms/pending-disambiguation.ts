@@ -23,6 +23,14 @@ export interface PendingCandidate {
 export interface PendingDisambiguation {
   query_name: string;
   candidates: PendingCandidate[];
+  // P0 (2026-09-09, option-level removal): when set, resolving this
+  // disambiguation must NOT add_item (the default, implicit behavior for
+  // every pre-existing row/caller) — it must strip `option_phrase` from the
+  // resolved candidate's cart line instead. Optional and additive so every
+  // existing persisted row (and every other caller of this type, which never
+  // sets it) keeps its current add_item resolution unchanged.
+  action?: "remove_option";
+  option_phrase?: string;
 }
 
 // Crude but sufficient stemmer: strips a trailing plural so "salad"/"salads"

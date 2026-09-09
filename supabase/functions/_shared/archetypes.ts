@@ -94,6 +94,10 @@ export interface ModifierRule {
   bind_to_list_named?: RegExp;
   ask_mode: "offer_once" | "on_request";
   applies_when?: (item: InferItemInput) => boolean;
+  // When true, the compile-time D1 pass generates one derived menu_items row
+  // per (base pizza × non-not_composable choice) for this modifier group.
+  // Phase 0: pizza toppings only.
+  composable?: boolean;
 }
 
 export interface Archetype {
@@ -273,7 +277,7 @@ export const ARCHETYPES: Archetype[] = [
       { slot_key: "size", kitchen_critical: false, price_critical: true, owner_question: "", order: 1 },
     ],
     modifiers: [
-      { slot_key: "toppings", bind_to_list_named: /topping/i, ask_mode: "offer_once", applies_when: item => !/specialty/i.test(item.name) },
+      { slot_key: "toppings", bind_to_list_named: /topping/i, ask_mode: "offer_once", applies_when: item => !/specialty/i.test(item.name), composable: true },
       { slot_key: "toppings", bind_to_list_named: /topping/i, ask_mode: "on_request", applies_when: item => /specialty/i.test(item.name) },
     ],
   },

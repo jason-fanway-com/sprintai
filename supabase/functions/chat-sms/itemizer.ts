@@ -7,6 +7,7 @@ import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 
 export interface ItemizedCartLine {
   type?: "bundle";
+  menu_item_id?: string;
   name: string;
   price_cents: number;
   complete?: boolean; // bundle lines only
@@ -14,6 +15,36 @@ export interface ItemizedCartLine {
   quantity?: number;
   modifiers?: string[];
   options?: Record<string, string[]>;
+}
+
+// P0 (2026-09-09, item 2 — itemized recap): a cart line's `options`/
+// `modifiers` are stored as bare display strings (e.g. "Extra Cheese") with
+// no price attached — correct for every existing guard/matcher that does
+// stem/substring comparison against them (embedding a price into the stored
+// value would break all of that), but it means the recap could show an
+// option's NAME without ever showing what it COST, which is exactly the
+// "$4 upcharge silently omitted" defect class. This builds a lookup (menu
+// item id -> lowercased display value -> its own price) from menu data the
+// caller already has in scope, entirely separate from what's stored on the
+// cart line, so renderItemizedRecap can annotate an option's real per-unit
+// price without any cart-line schema change or write-path touch.
+export interface MenuItemForPricing {
+  id: string;
+  option_groups?: Array<{ name: string; choices: Array<{ name: string; price_cents: number }> }> | null;
+  modifiers_json?: Array<{ name: string; price_cents: number }> | null;
+  ask_plan?: { steps: Array<{ choices: Array<{ display: string; price_delta_cents: number }> }> } | null;
+}
+
+export function buildMenuPriceIndex(menu: MenuItemForPricing[]): Map<string, Map<string, number>> {
+  const byMenuItemId = new Map<string, Map<string, number>>();
+  for (const item of menu) {
+    const idx = new Map<string, number>();
+    for (const g of item.option_groups ?? []) for (const c of g.choices ?? []) idx.set(c.name.toLowerCase(), c.price_cents);
+    for (const m of item.modifiers_json ?? []) idx.set(m.name.toLowerCase(), m.price_cents);
+    for (const step of item.ask_plan?.steps ?? []) for (const c of step.choices ?? []) idx.set(c.display.toLowerCase(), c.price_delta_cents);
+    byMenuItemId.set(item.id, idx);
+  }
+  return byMenuItemId;
 }
 
 /**
@@ -35,7 +66,17 @@ export function padReceiptLine(label: string, amount: string, width = 38): strin
  * because he happened to read a number") — the model never states these
  * figures itself.
  */
-export function renderItemizedRecap(cart: ItemizedCartLine[], deliveryFeeCents?: number, driverTipCents?: number): string {
+export function renderItemizedRecap(
+  cart: ItemizedCartLine[],
+  deliveryFeeCents?: number,
+  driverTipCents?: number,
+  // P0 (2026-09-09, item 2): menu_item_id -> lowercased option/modifier
+  // display value -> its own price, from buildMenuPriceIndex. Optional and
+  // additive — every existing caller that doesn't have menu data handy keeps
+  // rendering exactly as before (option/modifier names shown, no per-option
+  // price annotation), it just doesn't get this extra detail.
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>,
+): string {
   const lines: string[] = [];
   let subtotal = 0;
   for (const i of cart) {
@@ -49,9 +90,14 @@ export function renderItemizedRecap(cart: ItemizedCartLine[], deliveryFeeCents?:
     const lineTotal = i.price_cents * (i.quantity || 1);
     subtotal += lineTotal;
     const qtyPrefix = (i.quantity || 1) > 1 ? `${i.quantity}x ` : "";
+    const optionPrices = i.menu_item_id ? priceIndexByMenuItemId?.get(i.menu_item_id) : undefined;
+    const annotate = (value: string): string => {
+      const p = optionPrices?.get(value.toLowerCase());
+      return p && p > 0 ? `${value} (+$${(p / 100).toFixed(2)})` : value;
+    };
     const detail = (i.modifiers?.length ?? 0) > 0
-      ? i.modifiers!.join(", ")
-      : (i.options ? Object.entries(i.options).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ") : "");
+      ? i.modifiers!.map(annotate).join(", ")
+      : (i.options ? Object.entries(i.options).map(([k, v]) => `${k}: ${v.map(annotate).join(", ")}`).join("; ") : "");
     lines.push(padReceiptLine(`${qtyPrefix}${i.name}${detail ? ` (${detail})` : ""}`, `$${(lineTotal / 100).toFixed(2)}`));
   }
   const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);

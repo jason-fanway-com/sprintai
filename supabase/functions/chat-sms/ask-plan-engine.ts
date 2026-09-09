@@ -47,6 +47,56 @@ import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 
+// P0 fix (2026-09-09, live money — cart-mutation gap): a customer removing a
+// priced modifier/topping already resolved on a compiled cart line ("remove
+// the extra cheese") got a reply that CLAIMED the removal happened while the
+// cart itself never changed — nothing in resolveAskPlan/
+// resolveAndPriceSelections below could ever strip an already-resolved
+// modifier-kind selection, only add one. GUARD 1f (index.ts,
+// guard1f-correction-claim-20260909.ts, shipped as chat-sms v316) stopped the
+// bot from lying about it but explicitly left the actual mutation as
+// unassigned follow-up work (BLOCKED.txt, 2026-09-09 15:36 UTC entry). This
+// is that follow-up: a deterministic, clause-scoped detector (same technique
+// as isNegated above, reused rather than reimplemented) that reads the
+// customer's own words and tells applyCompiledModifyItem which already-
+// selected modifier choice they're asking to take off — independent of
+// whatever `options`/`modifiers` shape the model's own tool-call happens to
+// pass, so a bare `modify_item(menu_item_id)` call with no other args is
+// enough for the removal to actually take effect. Kept local to this module
+// (not a separate file) — it is only ever consumed by
+// applyCompiledModifyItem below.
+const REMOVAL_VERBS = [
+  "remove", "take off", "take away", "get rid of", "drop", "lose",
+  "scratch", "cancel", "delete", "no more",
+];
+
+/**
+ * True iff `text` contains a clause that both (a) uses a removal verb and
+ * (b) names every significant stem of `choiceDisplay` — e.g. "remove the
+ * extra cheese" against "Extra Cheese". Clause-scoped (split on
+ * but/and/also/plus/punctuation) so "remove the pepperoni but keep the extra
+ * cheese" doesn't also flag Extra Cheese, same discipline as isNegated's own
+ * clause splitting. Falls back to isNegated (a bare "no extra cheese" spoken
+ * about an item already in the cart reads as a removal request too).
+ */
+export function isRemovalRequested(text: string, choiceDisplay: string): boolean {
+  if (!text) return false;
+  const nameStems = significantStems(choiceDisplay);
+  if (nameStems.size === 0) return false;
+
+  const clauses = text.toLowerCase().split(/\b(?:but|and|also|plus)\b|[,.;]/);
+  for (const clause of clauses) {
+    const hasRemovalVerb = REMOVAL_VERBS.some(verb =>
+      new RegExp(`\\b${verb.replace(/ /g, "\\s+")}\\b`, "i").test(clause),
+    );
+    if (!hasRemovalVerb) continue;
+    const clauseStems = significantStems(clause);
+    if ([...nameStems].every(s => clauseStems.has(s))) return true;
+  }
+
+  return isNegated(text, choiceDisplay);
+}
+
 export interface EngineChoice {
   id: string;
   display: string;
@@ -403,6 +453,34 @@ interface ResolveAndPriceOutcome {
 }
 
 /**
+ * P0 fix (2026-09-09, cart-mutation gap — see isRemovalRequested above): the
+ * resolved-selections -> {options, price} projection, factored out so
+ * applyCompiledModifyItem's removal path (which produces a selections map
+ * resolveAndPriceSelections never sees, since removal deletes a key rather
+ * than resolving one) can recompute the same real price/options from the
+ * compiled ask_plan instead of hand-rolling a second copy of this loop that
+ * could drift from the add path's.
+ */
+function priceSelections(
+  askPlan: AskPlan,
+  itemGroups: NonNullable<CompiledMenuItem["option_groups"]>,
+  selections: Record<string, string>,
+): { resolvedOptions: Record<string, string[]>; priceCents: number } {
+  const resolvedOptions: Record<string, string[]> = {};
+  let priceCents = askPlan.base_price_cents;
+  for (const step of askPlan.steps) {
+    const choiceId = selections[step.group_id];
+    if (!choiceId) continue;
+    const choice = step.choices.find(c => c.id === choiceId);
+    if (!choice) continue;
+    priceCents += choice.price_delta_cents;
+    const group = itemGroups.find(g => g.id === step.group_id);
+    if (group) resolvedOptions[group.name] = [choice.display];
+  }
+  return { resolvedOptions, priceCents };
+}
+
+/**
  * Item 8 fix (2026-09-08 P0, 392894c diagnosis): the resolve-then-price core
  * shared by applyCompiledAddItem (a NEW or continuing cart line) and
  * applyCompiledModifyItem (an EXISTING line, constraint 2 of the same fix).
@@ -440,17 +518,7 @@ function resolveAndPriceSelections(
     }
   }
 
-  const resolvedOptions: Record<string, string[]> = {};
-  let priceCents = askPlan.base_price_cents;
-  for (const step of askPlan.steps) {
-    const choiceId = newSelections[step.group_id];
-    if (!choiceId) continue;
-    const choice = step.choices.find(c => c.id === choiceId);
-    if (!choice) continue;
-    priceCents += choice.price_delta_cents;
-    const group = itemGroups.find(g => g.id === step.group_id);
-    if (group) resolvedOptions[group.name] = [choice.display];
-  }
+  const { resolvedOptions, priceCents } = priceSelections(askPlan, itemGroups, newSelections);
 
   const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name) : null;
   const pendingGroupNames = engineResult.nextStep
@@ -657,6 +725,25 @@ export interface CompiledModifyItemResult {
  * the compiled path has no unverified-request equivalent yet (see this
  * file's header comment, "documented follow-ups, not silent gaps"); this fix
  * does not expand that scope.
+ *
+ * REMOVAL (P0 fix, 2026-09-09, live money — see isRemovalRequested's header
+ * above for the full incident): resolveAndPriceSelections above only ever
+ * ADDS a resolution — nothing in the compiled engine could previously strip
+ * an already-selected modifier-kind choice (e.g. "remove the extra cheese"
+ * on a pizza that already has Extra Cheese selected), so a modify_item call
+ * for that intent was a structural no-op regardless of what the model's tool
+ * args contained. Two independent removal signals are checked against every
+ * currently-resolved MODIFIER-kind step (never a required SLOT — size/temp/
+ * bread etc. have no "remove" state, only a different choice): (1) the raw
+ * `explicitOptions` the model's own tool call passed, when it names a real
+ * group with an empty array (the same "pass an empty list to clear" contract
+ * the legacy non-compiled modify_item path already honors); (2)
+ * isRemovalRequested against `customerMessage` — the actual words the
+ * customer used this turn (plus one turn of carryforward, via the caller's
+ * compiledMatchText), independent of whatever the model's tool-call args
+ * happen to contain. Either signal is sufficient, so a bare
+ * `modify_item(menu_item_id)` call with no other args still removes the
+ * option the customer asked to drop.
  */
 export function applyCompiledModifyItem(
   cart: CompiledCartLine[],
@@ -666,6 +753,11 @@ export function applyCompiledModifyItem(
   customerMessage: string,
   modelAssertedChoiceTexts: string[],
   consumedModifierChoiceIds?: Set<string>,
+  // The model's raw (unflattened) `options` tool-call input, keyed by group
+  // name — read ONLY for the explicit-clear signal above (an empty array for
+  // a real group name). Optional/undefined at any call site that doesn't
+  // have it handy; removal still works via `customerMessage` alone.
+  explicitOptions?: Record<string, string[]>,
 ): CompiledModifyItemResult {
   const idx = cart.findIndex(ci => ci.menu_item_id === menuItemId);
   if (idx < 0) return { ok: false, cartChanged: false, result: { error: "Item not in cart." } };
@@ -691,10 +783,34 @@ export function applyCompiledModifyItem(
     consumedModifierChoiceIds, modelAssertedChoiceTexts,
   );
 
-  if (outcome.resolvedCount > 0) {
-    line.ask_plan_selections = outcome.newSelections;
-    line.options = Object.keys(outcome.resolvedOptions).length > 0 ? outcome.resolvedOptions : undefined;
-    line.price_cents = outcome.priceCents;
+  const explicitlyClearedGroupIds = new Set(
+    Object.entries(explicitOptions ?? {})
+      .filter(([, vals]) => Array.isArray(vals) && vals.length === 0)
+      .map(([name]) => itemGroups.find(g => g.name === name)?.id)
+      .filter((id): id is string => !!id),
+  );
+
+  const selections = { ...outcome.newSelections };
+  let removed = false;
+  for (const step of askPlan.steps) {
+    if (step.kind !== "modifier") continue;
+    const choiceId = selections[step.group_id];
+    if (!choiceId) continue;
+    const choice = step.choices.find(c => c.id === choiceId);
+    if (!choice) continue;
+    if (explicitlyClearedGroupIds.has(step.group_id) || isRemovalRequested(customerMessage, choice.display)) {
+      delete selections[step.group_id];
+      removed = true;
+    }
+  }
+
+  if (outcome.resolvedCount > 0 || removed) {
+    const { resolvedOptions, priceCents } = removed
+      ? priceSelections(askPlan, itemGroups, selections)
+      : { resolvedOptions: outcome.resolvedOptions, priceCents: outcome.priceCents };
+    line.ask_plan_selections = selections;
+    line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+    line.price_cents = priceCents;
     line.pending_options = outcome.pendingGroupNames;
     cartChanged = true;
   }

@@ -14,6 +14,7 @@ import {
   enforceVerbatimStepQuestion,
   applyCompiledAddItem,
   applyCompiledModifyItem,
+  isRemovalRequested,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -652,4 +653,141 @@ Deno.test("resolveAskPlan: 'no extra toppings' (generic, no specific topping nam
   const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large plain pizza, no extra toppings", new Set(), new Map());
   assertEquals(result.resolved.length, 0);
   assertEquals(result.totalDeltaCents, 0);
+});
+
+// ── P0 (2026-09-09, live money — cart-mutation gap): "remove the extra
+// cheese" against a cart line that already HAS Extra Cheese selected must
+// actually strip it from the cart, not just produce a reply that claims it
+// did. Live incident: Zio's Pizzeria (shop_id
+// 2cba7b51-211c-4437-8910-1af4dcc03498) — "large cheese pizza with extra
+// cheese" -> cart Large 18'' Neapolitan Cheese Pizza, options {"Add
+// Toppings": ["Extra Cheese"]}, price_cents 2199; "remove the extra cheese"
+// / "actually remove the extra cheese" -> cart UNCHANGED, still 2199,
+// reproduced deterministically pre-fix. Every test below asserts BOTH the
+// tool result AND the real cart-line state (options/ask_plan_selections/
+// price_cents) after the call — a passing reply with an unchanged cart is
+// exactly how the mutation gap shipped as "fixed" the first time (v316
+// tested reply text only).
+function ziosLargeCheeseMenuItem(): CompiledMenuItem {
+  return {
+    ask_plan: ZIOS_LARGE_PLAN,
+    bot_state: "orderable",
+    option_groups: [{ id: ZIOS_LARGE_TOPPINGS_STEP.group_id, name: "Add Toppings" }],
+  };
+}
+
+function cartLineWithExtraCheese(): CompiledCartLine {
+  return {
+    menu_item_id: "zios-large-cheese",
+    name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 1,
+    price_cents: 2199,
+    modifiers: [],
+    options: { "Add Toppings": ["Extra Cheese"] },
+    ask_plan_selections: { [ZIOS_LARGE_TOPPINGS_STEP.group_id]: "a7b5c218-0006-4d8d-b14b-4609a2f4f2d3" },
+  };
+}
+
+Deno.test("isRemovalRequested: 'remove the extra cheese' matches 'Extra Cheese'", () => {
+  assertEquals(isRemovalRequested("remove the extra cheese", "Extra Cheese"), true);
+});
+
+Deno.test("isRemovalRequested: 'actually remove the extra cheese' matches (filler word before the verb)", () => {
+  assertEquals(isRemovalRequested("actually remove the extra cheese", "Extra Cheese"), true);
+});
+
+Deno.test("isRemovalRequested: unrelated text (no verb, no name) does not match", () => {
+  assertEquals(isRemovalRequested("large pepperoni pizza please", "Extra Cheese"), false);
+});
+
+Deno.test("isRemovalRequested: removal verb present but naming a DIFFERENT option does not match", () => {
+  assertEquals(isRemovalRequested("remove the pepperoni", "Extra Cheese"), false);
+});
+
+Deno.test("applyCompiledModifyItem: THE FIX — 'remove the extra cheese' actually mutates the cart line (options, ask_plan_selections, and price all update), not just the reply", () => {
+  const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
+  const result = applyCompiledModifyItem(
+    cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined,
+    "remove the extra cheese", [],
+  );
+  assertEquals(result.ok, true);
+  assertEquals(result.cartChanged, true, "the whole point of the fix — this must no longer be a silent no-op");
+  // Reply-facing value:
+  assertEquals((result.result as { price: number }).price, 1799, "reply-facing price must reflect the real post-removal total");
+  // Real cart state — the actual bug: a reply can lie, the cart_json cannot.
+  assertEquals(cart[0].price_cents, 1799, "base price only, Extra Cheese's $4.00 must be gone");
+  assertEquals(cart[0].options, undefined, "no options left once the only selected topping is removed");
+  assertEquals(cart[0].ask_plan_selections?.[ZIOS_LARGE_TOPPINGS_STEP.group_id], undefined, "engine-authoritative state must also be cleared, not just the display fields");
+});
+
+Deno.test("applyCompiledModifyItem: 'actually remove the extra cheese' (the exact second live repro phrasing) also mutates the cart", () => {
+  const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
+  const result = applyCompiledModifyItem(
+    cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined,
+    "actually remove the extra cheese", [],
+  );
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart[0].price_cents, 1799);
+  assertEquals(cart[0].options, undefined);
+});
+
+Deno.test("applyCompiledModifyItem: a bare modify_item(menu_item_id) call with NO options/modifiers args still removes the option — the model doesn't need to know the right arg shape, the customer's own words drive it", () => {
+  const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
+  // Empty modelAssertedChoiceTexts, no explicitOptions — only customerMessage
+  // carries the removal intent, exactly like a minimal/uninformed tool call.
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "remove the extra cheese", []);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart[0].price_cents, 1799);
+});
+
+Deno.test("applyCompiledModifyItem: explicit empty-array options signal (\"Add Toppings\": []) also clears the selection — parity with the legacy non-compiled path's contract", () => {
+  const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
+  const result = applyCompiledModifyItem(
+    cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined,
+    "", [], undefined, { "Add Toppings": [] },
+  );
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart[0].price_cents, 1799);
+  assertEquals(cart[0].ask_plan_selections?.[ZIOS_LARGE_TOPPINGS_STEP.group_id], undefined);
+});
+
+Deno.test("applyCompiledModifyItem: removal is scoped to the NAMED option only — a second selected topping on the same line survives", () => {
+  // Mirrors the real production shape (same as the "negating one topping
+  // does not suppress a different, unnegated topping" test above): each
+  // topping is its own single-choice step/group, not two choices sharing one
+  // group — Zio's real compiled menu gives every on-request modifier its own
+  // group_id.
+  const cheeseOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-cheese-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[1]] };
+  const pepperoniOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-pepperoni-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[0]] };
+  const plan: AskPlan = { ...ZIOS_LARGE_PLAN, steps: [cheeseOnlyStep, pepperoniOnlyStep] };
+  const menuItem: CompiledMenuItem = {
+    ask_plan: plan,
+    bot_state: "orderable",
+    option_groups: [{ id: cheeseOnlyStep.group_id, name: "Extra Cheese" }, { id: pepperoniOnlyStep.group_id, name: "Pepperoni" }],
+  };
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "zios-large-both",
+    name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 1,
+    price_cents: 1799 + 400 + 300,
+    modifiers: [],
+    options: { "Extra Cheese": ["Extra Cheese"], "Pepperoni": ["Pepperoni"] },
+    ask_plan_selections: {
+      [cheeseOnlyStep.group_id]: "a7b5c218-0006-4d8d-b14b-4609a2f4f2d3",
+      [pepperoniOnlyStep.group_id]: "28a7d57a-4dcc-4e66-b303-2917f2f12bd7",
+    },
+  }];
+  const result = applyCompiledModifyItem(cart, menuItem, "zios-large-both", undefined, "remove the extra cheese", []);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart[0].price_cents, 1799 + 300, "Extra Cheese's $4.00 removed, Pepperoni's $3.00 stays");
+  assertEquals(cart[0].ask_plan_selections?.[cheeseOnlyStep.group_id], undefined);
+  assertEquals(cart[0].ask_plan_selections?.[pepperoniOnlyStep.group_id], "28a7d57a-4dcc-4e66-b303-2917f2f12bd7", "the unrelated, unnamed topping must survive");
+  assertEquals(cart[0].options, { Pepperoni: ["Pepperoni"] }, "Extra Cheese's group must be gone from the displayed options entirely");
+});
+
+Deno.test("applyCompiledModifyItem: no removal language present — an already-selected option is left completely alone (regression guard)", () => {
+  const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
+  const result = applyCompiledModifyItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", undefined, "can I also get a large pepperoni pizza", []);
+  assertEquals(cart[0].price_cents, 2199, "an unrelated message must never silently strip an existing selection");
+  assertEquals(cart[0].options, { "Add Toppings": ["Extra Cheese"] });
 });
