@@ -2848,7 +2848,7 @@ function repairOrphanedPunctuation(text: string): string {
     .trim();
 }
 
-function stripLlmMoneyLines(text: string): string {
+export function stripLlmMoneyLines(text: string): string {
   let out = text;
 
   // Dollar amounts in prose: "$X.XX total", "$X.XX (includes...)", "comes to $X.XX", etc.
@@ -5665,6 +5665,17 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   let reply: string;
   let checkoutUrl: string | undefined;
   let declinedBlockedItems: Array<{ category: string; name: string }> = [];
+  // P0 fix (2026-09-09, money-footer double-render — Zio's live incident):
+  // when a deterministic guard below (PROOF-P2, GUARD 1f, GUARD 2c) already
+  // sets `reply` to a full renderItemizedRecap() receipt, Phase A's
+  // stripLlmMoneyLines() must NEVER run on it again — that function is built
+  // to scrub LLM-composed prose, and its regexes match across the newlines
+  // in the itemizer's own padded receipt lines, deleting the Subtotal line
+  // outright and merging the Service fee line with the Total line's dollar
+  // figure ("Service fee $18.98" — the Total's own value under the wrong
+  // label). Any code path that finalizes `reply` with the itemizer's own
+  // output must set this so Phase A leaves it byte-for-byte alone.
+  let moneyFooterAlreadyRendered = false;
   if (nameSubmitCheckoutUrl) {
     reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
     checkoutUrl = nameSubmitCheckoutUrl;
@@ -5792,6 +5803,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // itemizer.ts instead of a bare name list, same reasoning as the
       // correctionApplied short-circuit above.
       reply = `Your cart:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}\n\nAnything else or ready to checkout?`;
+      moneyFooterAlreadyRendered = true;
     }
   }
 
@@ -5907,6 +5919,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // was NEVER removed was also never visible in the "corrected" recap
       // either. Route through itemizer.ts like every other cart-facing reply.
       reply = `Your cart:\n\n${renderItemizedRecap(guardCart)}\n\nWhat else can I add?`;
+      moneyFooterAlreadyRendered = true;
     }
   }
 
@@ -7301,6 +7314,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           // itemizer.ts instead of a bare name list, same reasoning as
           // GUARD 1f's fallback above.
           reply = `Your cart:\n\n${renderItemizedRecap(guardCart)}\n\nWhat else can I add?`;
+          moneyFooterAlreadyRendered = true;
         }
     }
   }
@@ -7487,47 +7501,55 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // Strip LLM-emitted totals/fees/status lines, then append the Ledger footer.
   // Cart has items, not in checkout phase → deterministic footer owns the numbers.
   if (!checkoutUrl && guardCart.length > 0) {
-    reply = stripLlmMoneyLines(reply);
-    const driverTip = (guardCartRow as any)?.driver_tip_cents ?? undefined;
     // Fee breakdown noise fix (Jason, 2026-09-05): line 1 (item count + total)
     // every turn; line 2 (subtotal + fee breakdown) only the first turn the
     // fee applies, persisted so it never repeats after that — and again at
     // checkout (separate code path below, unconditional on this flag).
     const feeAlreadyDisclosed = !!(guardCartRow as any)?.fee_disclosed_at;
-    // HARD GATE (2026-09-06, Jason — "the required-options gate is
-    // intermittent... put the check where the cart is finalized, not on the
-    // route the customer happened to take"): GUARD 2's re-ask only fires
-    // when impliesOrderConfirmation() matches the customer's exact wording
-    // (itself just fixed for "thats it" — see guard9-unconsented-affirmation.ts)
-    // — any FUTURE phrasing gap, or the model independently deciding to ask
-    // for the name on its own (the common path per the recap fix above),
-    // has the same reachability problem the recap had. This is the
-    // unconditional backstop: whatever produced this reply, if ANY cart
-    // line still has an unresolved required option, the reply can never be
-    // a name-ask — checkout cannot proceed while the recap it's about to
-    // show has a hole in it. Checked first, ahead of the recap logic below.
-    const anyPendingOptions = guardCart.some(i => ((i as CartItem).pending_options?.length ?? 0) > 0);
-    if (anyPendingOptions && isAskingForPickupName(reply)) {
-      const pendingForPrompt = guardCart
-        .filter(i => ((i as CartItem).pending_options?.length ?? 0) > 0)
-        .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! }));
-      console.warn(`[chat-sms] HARD GATE (name-ask with unresolved required options) tripped (conv=${conversation.id}). Overriding reply that asked for the name while options were still pending.`);
-      reply = renderMissingOptionsPrompt(pendingForPrompt);
-    } else if (!hasPickupName && isAskingForPickupName(reply)) {
-      // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
-      // that matters — the customer is being asked for their pickup name,
-      // which is the last step before checkout, regardless of whether GUARD 2
-      // forced that ask or the model asked on its own initiative (the common
-      // case; GUARD 2 is only a backstop). A count-and-total footer here is
-      // exactly the gap Luca's $37 double-charge exposed: he only caught it
-      // because he happened to read a number, not because the bot itemized
-      // anything. This replaces the plain footer with the full receipt only
-      // at this one moment; every other turn keeps the short footer as before.
-      reply = `${reply}\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}`;
-    } else {
-      const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
-      if (footer) {
-        reply = `${reply}\n\n${footer}`;
+    // P0 fix (2026-09-09): moneyFooterAlreadyRendered means a deterministic
+    // guard above (PROOF-P2, GUARD 1f, GUARD 2c) already finalized `reply`
+    // with renderItemizedRecap()'s own code-rendered receipt. stripLlmMoneyLines()
+    // must never run on that text — see its declaration for why — and there
+    // is no LLM prose left to strip or footer left to add; the receipt IS
+    // the footer, already three labelled lines, already correct.
+    if (!moneyFooterAlreadyRendered) {
+      reply = stripLlmMoneyLines(reply);
+      const driverTip = (guardCartRow as any)?.driver_tip_cents ?? undefined;
+      // HARD GATE (2026-09-06, Jason — "the required-options gate is
+      // intermittent... put the check where the cart is finalized, not on the
+      // route the customer happened to take"): GUARD 2's re-ask only fires
+      // when impliesOrderConfirmation() matches the customer's exact wording
+      // (itself just fixed for "thats it" — see guard9-unconsented-affirmation.ts)
+      // — any FUTURE phrasing gap, or the model independently deciding to ask
+      // for the name on its own (the common path per the recap fix above),
+      // has the same reachability problem the recap had. This is the
+      // unconditional backstop: whatever produced this reply, if ANY cart
+      // line still has an unresolved required option, the reply can never be
+      // a name-ask — checkout cannot proceed while the recap it's about to
+      // show has a hole in it. Checked first, ahead of the recap logic below.
+      const anyPendingOptions = guardCart.some(i => ((i as CartItem).pending_options?.length ?? 0) > 0);
+      if (anyPendingOptions && isAskingForPickupName(reply)) {
+        const pendingForPrompt = guardCart
+          .filter(i => ((i as CartItem).pending_options?.length ?? 0) > 0)
+          .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! }));
+        console.warn(`[chat-sms] HARD GATE (name-ask with unresolved required options) tripped (conv=${conversation.id}). Overriding reply that asked for the name while options were still pending.`);
+        reply = renderMissingOptionsPrompt(pendingForPrompt);
+      } else if (!hasPickupName && isAskingForPickupName(reply)) {
+        // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
+        // that matters — the customer is being asked for their pickup name,
+        // which is the last step before checkout, regardless of whether GUARD 2
+        // forced that ask or the model asked on its own initiative (the common
+        // case; GUARD 2 is only a backstop). A count-and-total footer here is
+        // exactly the gap Luca's $37 double-charge exposed: he only caught it
+        // because he happened to read a number, not because the bot itemized
+        // anything. This replaces the plain footer with the full receipt only
+        // at this one moment; every other turn keeps the short footer as before.
+        reply = `${reply}\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}`;
+      } else {
+        const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
+        if (footer) {
+          reply = `${reply}\n\n${footer}`;
+        }
       }
     }
     if (!feeAlreadyDisclosed) {

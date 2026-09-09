@@ -5472,3 +5472,105 @@ functions list --project-ref rvdqfxtrskxekfkqnegx` (not just the deploy
 command's own success message). Code is committed as 7bd3ed9 on main
 (already landed by the other session before I could commit my own half --
 diffed byte-identical, nothing of mine needed a separate commit).
+
+================================================================================
+2026-09-09 18:29 UTC (14:29 ET) -- STEP 2 FIXED: POST-MUTATION MONEY FOOTER
+WAS SHREDDED BY A SECOND STRIP-AND-RE-RENDER PASS (Zio's). chat-sms v320 ->
+this fix.
+================================================================================
+
+DISPATCH: follow-up to the v320 entry above, which fixed the real cart
+mutation (the money is correct in the database and in the read-only
+cart-summary reply) but left one display-only defect: the POST-MUTATION
+confirmation reply, same turn, same cart, showed the wrong text.
+
+REPRO (live, Zio's, shop_id 2cba7b51-211c-4437-8910-1af4dcc03498): large
+cheese pizza with extra cheese -> "remove the extra cheese". Post-mutation
+reply read:
+  "Your cart: Large 18'' Neapolitan Cheese Pizza $17.99
+   Service fee $18.98   What else can I add?"
+No Subtotal line at all, and $18.98 -- the real TOTAL -- printed under the
+"Service fee" label. The read-only cart-summary path, same cart/moment,
+rendered correctly via itemizer.ts (Subtotal $17.99 / Service fee $0.99 /
+Total $18.98).
+
+ROOT CAUSE (traced the actual call path, not assumed): index.ts has THREE
+deterministic guards that already do the right thing -- PROOF-P2 (~line
+5794), GUARD 1f (~line 5909, this exact repro's path: a narrated-correction-
+without-mutation catch that replaces `reply` with a fresh
+`renderItemizedRecap(guardCart)` once the real mutation lands), and GUARD 2c's
+fallback (~line 7303) -- all three set `reply` to the itemizer's own
+code-rendered receipt and then fall through, with NO early return, into
+"Phase A: Deterministic money/status rendering" (~line 7489 pre-fix), which
+unconditionally ran `reply = stripLlmMoneyLines(reply)` and then appended a
+SECOND Ledger footer.
+
+stripLlmMoneyLines() exists to scrub money the LLM said in its own prose
+(banned by the system prompt's MONEY/SCOPE RULE but not 100% reliably
+obeyed) before the code-owned footer gets appended. Its regexes use `\s*` /
+`\s{2,}`, which match across newlines -- fine against a single line of LLM
+prose, catastrophic against the itemizer's own multi-line padded receipt:
+  - `\b[Ss]ubtotal[\s:]*\$\d+[.,]\d{2}` matches "Subtotal<padding>$17.99"
+    and deletes it whole, including its own line. The blank line it leaves
+    behind is two consecutive newlines, which the trailing
+    `.replace(/\s{2,}/g, " ")` collapse then merges into a SINGLE SPACE,
+    splicing the item line directly onto the Service fee line.
+  - `\$\d+[.,]\d{2}\s*(?:total|grand total)...` is meant to catch LLM prose
+    like "$0.99 total" but `\s*` also spans the newline between the itemizer's
+    OWN adjacent "Service fee    $0.99" and "Total    $18.98" lines --
+    matching "$0.99\nTotal" and deleting it, but the regex's own match ends
+    at the word "total", so the trailing "$18.98" (the real Total's value)
+    survives as an orphan, landing immediately after "Service fee".
+Both effects together reproduce the exact live text byte-for-byte: no
+Subtotal line, "$18.98" stranded right after "Service fee". This was never
+the LLM composing prose (hypothesis ruled out) and never a second, different
+renderer (money-footer-20260909.ts's renderMoneyFooterLines is correct in
+isolation, per its own tests) -- it was the itemizer's own correct output
+getting fed back through a function built for a different job.
+
+FIX (index.ts): added `let moneyFooterAlreadyRendered = false;` alongside
+`reply`'s own declaration. Each of the three guards (PROOF-P2, GUARD 1f,
+GUARD 2c fallback) sets it to `true` in the same statement where it assigns
+`reply = renderItemizedRecap(...)`. Phase A now checks the flag: when set,
+it skips `stripLlmMoneyLines()` and the footer-append entirely (the receipt
+IS the footer already) but still runs its unrelated `fee_disclosed_at`
+bookkeeping unconditionally, since a full receipt was in fact just shown.
+This is the "one renderer, one source of truth" fix specified for this
+task: the post-mutation confirmation was already calling the same
+itemizer.ts function the read-only path uses (GUARD 1f already did this,
+per its own 2026-09-09 header comment) -- the gap was that a LATER,
+unrelated pass in the same request was allowed to mangle that already-
+correct output. Also exported `stripLlmMoneyLines` (was module-private) so
+its behavior against itemizer output is directly unit-testable.
+
+TEST (money-footer-double-render-20260909.test.ts, new file): asserts
+against the itemizer's REAL return value, not reply-text pattern-matching --
+`renderItemizedRecap`/`renderLedgerFooter` for the exact Zio's repro cart
+(Large pizza $17.99) produce exactly one Subtotal, one Service fee, and one
+Total line, each with the correct value ($17.99 / $0.99 / $18.98), and the
+same for Vito's canary cart ($8.49 / $0.99 / $9.48). A regression-
+characterization test proves `stripLlmMoneyLines` corrupts the itemizer's
+own receipt this exact way (Subtotal line vanishes, output != input) --
+documenting exactly why it must never run on itemizer output, i.e. why the
+flag exists. A final test builds the actual post-mutation reply shape
+(item-action text + itemizer receipt, byte-for-byte, never re-stripped) and
+asserts the three lines are intact and the specific defect pattern
+(`/Service fee\s*\$18\.98/`) is absent.
+
+RESULTS: `deno check` on index.ts clean. Full chat-sms suite: `deno test
+--allow-net --allow-env --allow-read supabase/functions/chat-sms/` -> 669
+passed, 0 failed (includes this fix's 5 new tests). No pre-existing test
+needed changes; the three guard call sites' own behavior (what they set
+`reply` to) is unchanged, only what happens to it AFTER is different.
+
+NOT IN SCOPE: `matchOptionRemovalPhrase` (option-removal-20260909.ts) is
+anchored to the start of the customer's message and only matches a specific
+set of removal-verb phrasings -- realistic phrasings outside that set
+(anything not starting with remove/drop/cancel/delete/scratch/get rid of/
+take.../no more/no) fall through to the LLM/tool-loop, which is why this
+exact repro reached GUARD 1f's fallback path rather than the earlier
+deterministic pre-LLM interceptor (~line 5211) that also renders correctly
+today. Both paths now render correctly after this fix; widening the
+anchored matcher itself is a separate, smaller task if the LLM/tool-loop
+path's other guard-chain risk (menu hallucination, phantom adds, etc.) is
+ever judged not worth taking for this class of message.
