@@ -6649,3 +6649,89 @@ commit is real and the live code is already correct in the meantime.
 Committed: [index.ts refactor + migration 128 + conversation-timeout test],
 staged separately from the concurrent ask-plan-engine.ts changes in this
 worktree (left untouched, not part of this task).
+
+[DEFECT 1 + DEFECT 2 — Same-item merge bug + Choices-for debug leak, 2026-09-09]
+Found by: 20-case varied multi-item test run (10 per shop). 17 clean, 2 real defects,
+both on Vito's (shop_id e0000000-0000-0000-0000-000000000001).
+
+DEFECT 1 — Same-item variant merge (money in both directions)
+Root cause (TWO separate mechanisms, one per code path):
+
+  Zio's (compiled/ask-plan path, applyCompiledAddItem in ask-plan-engine.ts):
+    The Bug-3 no-op guard matched ANY fully-resolved existing line for the same
+    menu_item_id — regardless of whether that line's ask_plan_selections matched
+    the current call's newSelections. Real sequence: call 1 ("extra cheese")
+    creates a toppinged line; call 2 ("plain pizza", resolvedCount=0) matched
+    the already-toppinged line as "no new info" and was silently dropped as a
+    no-op. Model then forced modify_item(quantity:2) → doubled the toppinged
+    line's price ($43.98 instead of $39.98). Fix (commit 6c52cf2, v337+): no-op
+    guard now also verifies candidate line's selections equal this call's
+    newSelections; a differently-configured second order for the same base item
+    falls through to the genuine-new-add path.
+
+  Vito's (legacy add_item path in index.ts):
+    Two separate sub-bugs, one prompting the other:
+    (a) Invalid-modifier hard error: the model naturally passes unrecognized
+    customer modifiers (e.g. "extra cheese") in the `modifiers` field. For items
+    with zero configured modifiers (validMods.length === 0), any modifier is
+    "invalid" and triggered a hard error returned in ~2ms. The model saw this
+    failure and fell back to making two IDENTICAL add_item calls (no modifier),
+    which then merged to qty 2 — the extra cheese disappeared entirely.
+    (b) Merge key missing unverified_requests: if the modifier HAD survived to
+    be captured as an unverified_request (e.g., via the options path), the old
+    merge key (menu_item_id + options) would have still merged lines with
+    different unverified_requests. That key was already extended to include
+    unverified_requests + modifiers in commit 1baa81d, but the hard error at (a)
+    prevented it from ever being exercised.
+
+  Fix (this session, committed as one change, v340):
+    Code: when validMods.length === 0, unrecognized modifiers are treated as
+    unverified_requests instead of a hard error — the modifier is captured for
+    the kitchen and the line is distinct from a plain item. Items WITH configured
+    modifiers still reject unknown names as before.
+    Prompt: added SAME-ITEM DIFFERENT-MODIFIER ORDERING instruction in both
+    prompt blocks (legacy + compiled), telling the model to use `modifiers` to
+    differentiate same-base-item calls.
+
+Live verification (v340):
+  - "a large cheese pizza with extra cheese and a plain large cheese pizza" on
+    Vito's → 2 lines: [{qty:1, unverified:["extra cheese"]}, {qty:1, no modifier}]
+    bot: "one large cheese pizza with extra cheese (I'll pass that along to the shop
+    to confirm) and one plain large cheese pizza" ✓
+  - "two large cheese pizzas, one with extra cheese" → 2 lines ✓
+  - "a plain large cheese pizza and another plain large cheese pizza" → 1 line
+    qty:2 (legitimate merge, no regression) ✓
+  - "a large cheese pizza with extra cheese and a plain large cheese pizza" on
+    Zio's → 2 lines, $39.98 ✓ (was $43.98 before v337 fix)
+  Vito's canary (cheeseburger/medium/"thats it"): $8.49 + $0.99 = $9.48 ✓
+
+DEFECT 2 — "Choices for Dressing:" debug string leaking into customer reply
+Root cause: GUARD 8's duplicate-suppression check (groupChoicesAlreadySaid) ran
+against a copy of the reply with all occurrences of the item's own name stripped
+first. "House" salad's item name is "House"; choice "House Balsamic" contains
+"house"; the strip erased "house" from both the reply text AND from the choice
+name match targets — so even when the reply had already listed "House Balsamic",
+the stemmed check reported it as "not said" and appended "Choices for Dressing:
+French, Bleu Cheese, ..." as a visible customer-facing debug clause.
+The name-based suppression (displayGroupName === "option") from the 2026-09-07
+fix was ALWAYS the wrong check; it happened to mask the leak for generic-named
+groups ("Choose an option") but never addressed named groups. This fix correct
+the fundamental: item name stems no longer strip the reply text at all. Instead,
+a choice is skipped from "prove it in text" ONLY when its entire stem set is
+contained in the item's own name (bare "Caesar" against "Chicken Caesar") since
+those choices can't be text-confirmed anyway. All other choices are tested against
+the real, unmodified reply. (sequencer.ts, groupChoicesAlreadySaid — commit
+1baa81d.)
+
+Live verification (v338+, both tests clean):
+  - Vito's house salad + dressing: "What dressing would you like? We've got Ranch,
+    Bleu Cheese, Caesar, Italian, French, Thousand Island, Honey Mustard,
+    Oil-Vinegar, Balsamic, Raspberry Vinaigrette, Creamy Italian, Jalapeno Ranch,
+    or Cilantro Lime" — NO "Choices for Dressing:" prefix ✓
+  - Zio's generic-named group (regression): "Chicken Fingers & Fries added!" —
+    NO "Choices for option:" leak ✓
+
+Commits: 1baa81d (D1 Vito's legacy merge key + D2 groupChoicesAlreadySaid fix),
+6c52cf2 (D1 Zio's compiled no-op guard fix), this session (D1 invalid-modifier
+code fix + prompt differentiation instruction).
+Deployed: chat-sms v340 (2026-09-09 23:02 UTC).
