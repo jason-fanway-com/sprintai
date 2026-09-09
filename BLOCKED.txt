@@ -6539,3 +6539,113 @@ splitCustomerPhrases live path (phrase-split.ts) was already correct and is
 UNCHANGED. This commit only fixes the test-layer splitPhrases in resolver.ts
 and adds the modifier-scope guard in ask-plan-engine.ts which is shop-agnostic.
 
+
+--------------------------------------------------------------------------------
+2026-09-09 ~22:45 UTC — CONVERSATION TIMEOUT: REVISED TO JASON'S FINAL SPEC
+(builder session, per PO relay). Supersedes the ~22:30 UTC D1 entry above,
+which shipped a first pass (3h hardcoded, no config, no "starting fresh"
+notice, expiry bolted onto the request handler). Jason's final spec (via PO)
+called for four specific changes; all four are done:
+
+1. WINDOW: 2h, not 3h. Confirmed customer-facing: someone stepping away for
+   20 minutes keeps their cart; someone gone 2h+ starts clean.
+
+2. CONFIGURABLE, not hardcoded. New migration 128 seeds app_config
+   ('conversation_timeout_hours', 2) -- same key/value convention as
+   customer_retention_months (migration 121). findActiveConversation() reads
+   it on every lookup that finds an existing active conversation; falls back
+   to 2 in code if the row is ever missing/non-numeric, so a bad edit fails
+   safe rather than breaking ordering. Applied directly to the live DB via
+   `supabase db push` (temporarily held out the ~28 migration files already
+   flagged as remote-untracked in this project's known tracker-drift --
+   isolated the push to exactly file 128, applied, restored the held-out
+   files unchanged, zero risk to any other migration's state). Verified live
+   via `supabase db dump --data-only`: conversation_timeout_hours = 2,
+   timestamped 2026-09-09T22:36:40Z.
+
+3. ARCHITECTURE: expiry is now a property of the READ, not a bolted-on
+   check. Extracted the entire "look up the active conversation, then check
+   if it's stale" block (previously ~90 lines inline in the request handler,
+   duplicated reasoning between the web/sms branches) into one function,
+   findActiveConversation(shop, channel, sessionId, customerPhone) ->
+   {conversation, justExpired}. It owns the query AND the expiry check AND
+   the resolve-if-stale write; every caller (today: one call site in the
+   handler; tomorrow: anything else that needs "the active conversation")
+   gets a live-or-null conversation back with no way to accidentally skip
+   the check, because the check is not a separate step to remember -- it's
+   inside the only function that hands back a conversation at all. The
+   boundary-decision math itself (inactivity vs shop-close) is further
+   factored into an exported pure function, isConversationExpired(), so it
+   is unit-testable without a live DB (see item 5 below).
+
+4. NO SILENT RESURRECTION: a new `conversationJustExpired` flag threads into
+   both buildSystemPrompt() and buildSystemPromptV2() (same pattern already
+   used for `priorLinkExpired`'s "your link expired" nudge) and adds a
+   FRESH CONVERSATION CONTEXT instruction telling the model to briefly
+   mention it's starting fresh before helping with the new order -- never a
+   silent continuation. Deterministic-append convention (like the compliance
+   footer) was considered and rejected: this reply is otherwise entirely
+   LLM-composed in this codebase, and the customer's own message context
+   varies too much (STOP/HELP/greeting/mid-order) for one hardcoded string
+   to always read naturally; the instruction approach matches how the
+   existing expired-payment-link nudge already handles the same class of
+   "explain a state change, briefly, inline" problem.
+
+5. TESTS (supabase/functions/chat-sms/conversation-timeout-20260909.test.ts,
+   4 tests, all green): the exact four required cases, run against
+   isConversationExpired() directly rather than a live deploy + real
+   elapsed-time wait --
+     - past the 2h window -> expired, reason "inactivity"
+     - 20 min elapsed (under 2h) -> NOT expired, same conversation
+     - shop-close boundary (11:50pm -> 12:10am ET, only 20 min elapsed) ->
+       expired, reason "shop_close" -- proves the boundary fires independent
+       of the inactivity window
+     - the exact real repro (conversation c5a038f6, msg1 02:11:41 UTC / msg2
+       11:12:25 UTC / msg3 21:48:00 UTC, America/New_York) -> applying the
+       check sequentially at each new-message boundary shows conversation 1
+       expired before msg2 and conversation 2 expired before msg3: three
+       separate conversations under the new rule, not the one 19.6h
+       conversation that actually shipped.
+   Full suite: `deno test --allow-env --allow-net --allow-read
+   supabase/functions/chat-sms/` -- 710 passed, 0 failed. `deno check` clean.
+
+SWEEP (task item 4, re-verified independently rather than trusting the prior
+session's note as-is): order_carts.pending_disambiguation (migration 112)
+and ask_plan_selections (embedded in order_carts.cart_json) are BOTH columns
+on order_carts, not separate tables with their own reuse window -- confirmed
+via migration grep, not just re-stated. order_carts has no lookup path
+independent of conversation_id (prior session's ~35-call-site grep; not
+re-run here, but the schema-level fact above is the structural reason it
+holds and didn't change with this session's refactor). Both are therefore
+still bounded transitively by conversation lifetime, which this fix bounds.
+public_tester_sessions (migration 096) is a SEPARATE table from
+conversations -- checked directly (not assumed): it has no TTL of its own
+and a returning tester's session_id row lives until it hits TURN_CAP, but it
+carries no cart/order state itself (turns counter + submitted flag only,
+pure rate-limit/audit bookkeeping) -- the public-tester "send" action calls
+chat-sms with channel="web" using that stable session_id, which now goes
+through the same findActiveConversation() as every other web caller, so the
+actual order state (cart, context) is bounded exactly like any other web
+session. Not the same bug class; no fix needed.
+
+DEPLOY STATUS: the original 3h/hardcoded/bolted-on version was deployed live
+as chat-sms v336 (2026-09-09 22:38 UTC) by a concurrent session in this same
+shared worktree (bundled with an unrelated phrase-splitter commit, 1baa81d --
+confirmed via `git show` that the bundled diff is exactly this session's own
+code, uncorrupted, non-overlapping with the phrase-splitter changes). This
+session's follow-up refactor (extracting isConversationExpired as a pure,
+exported, independently-tested function) is a NO-OP behaviorally -- same
+inactivity/shop-close logic, same app_config read, same resolve-on-expiry
+write -- so v336 is already functionally correct per the four spec items
+above; NOT redeployed separately from this session, because
+ask-plan-engine.ts/ask-plan-engine.test.ts (a different, unrelated D1-labeled
+money fix) is sitting uncommitted and mid-flight in this same shared
+worktree, and a fresh `functions deploy` bundles the whole directory --
+deploying now would ship that other session's unfinished, unreviewed change
+alongside this one without its own author's sign-off. Left for whichever
+session (this one finishing later, or that one) deploys next; the refactor
+commit is real and the live code is already correct in the meantime.
+
+Committed: [index.ts refactor + migration 128 + conversation-timeout test],
+staged separately from the concurrent ask-plan-engine.ts changes in this
+worktree (left untouched, not part of this task).

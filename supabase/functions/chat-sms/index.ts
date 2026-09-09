@@ -3315,20 +3315,39 @@ const DEFAULT_CONVERSATION_TIMEOUT_HOURS = 2;
 
 type ActiveConversationRow = { id: string; last_message_at?: string };
 
-// The single place that reads "the active conversation for this (shop,
-// channel, session/phone)" — expiry is a property of THIS lookup, not a
-// separate check callers must remember to run. Two independent boundaries
-// end a conversation, either fires first:
-//   1. INACTIVITY -- no message for the configured timeout (app_config
+// Pure decision function, exported so the required test cases (2h vs 20min
+// vs shop-close-boundary vs the exact c5a038f6 real repro) can assert against
+// it directly instead of needing a live DB and real elapsed time. Two
+// independent boundaries end a conversation, either fires first:
+//   1. INACTIVITY -- no message for `timeoutHours` (app_config
 //      'conversation_timeout_hours', default 2h). Long enough that a
 //      customer stepping away mid-order comes back to a live cart; short
 //      enough a session never survives a full daypart shift.
-//   2. SHOP CLOSE -- the shop's local calendar day (shop.timezone) has
-//      rolled over since the conversation's last message. Independent of
-//      elapsed time: 11:50pm -> 12:10am is only 20 minutes but still ends
-//      the conversation, because a session must never carry one day's
+//   2. SHOP CLOSE -- the shop's local calendar day (shopTimezone) has rolled
+//      over since the conversation's last message. Independent of elapsed
+//      time: 11:50pm -> 12:10am is only 20 minutes but still ends the
+//      conversation, because a session must never carry one day's
 //      hours/prices/context into the next.
-// On either boundary the OLD conversation is marked `resolved` (same
+export function isConversationExpired(
+  lastMessageAt: string | null | undefined,
+  now: Date,
+  shopTimezone: string,
+  timeoutHours: number,
+): { expired: boolean; reason: "inactivity" | "shop_close" | null } {
+  const lastMsgDate = lastMessageAt ? new Date(lastMessageAt) : null;
+  const timeoutMs = timeoutHours * 60 * 60 * 1000;
+  const inactiveTooLong = !lastMsgDate || (now.getTime() - lastMsgDate.getTime()) > timeoutMs;
+  const crossedShopDay = lastMsgDate
+    ? getBusinessDateAt(lastMsgDate, shopTimezone) !== getBusinessDateAt(now, shopTimezone)
+    : false;
+  if (!inactiveTooLong && !crossedShopDay) return { expired: false, reason: null };
+  return { expired: true, reason: inactiveTooLong ? "inactivity" : "shop_close" };
+}
+
+// The single place that reads "the active conversation for this (shop,
+// channel, session/phone)" — expiry is a property of THIS lookup (via
+// isConversationExpired above), not a separate check callers must remember
+// to run. On expiry the OLD conversation is marked `resolved` (same
 // mechanism the RESET keyword uses) and this function returns null for it --
 // so every caller, present and future, gets a fresh conversation on the next
 // message without having to know expiry exists. Nothing is deleted; the old
@@ -3368,19 +3387,11 @@ async function findActiveConversation(
   const timeoutHours = typeof cfgRow?.value === "number" && cfgRow.value > 0
     ? cfgRow.value
     : DEFAULT_CONVERSATION_TIMEOUT_HOURS;
-  const timeoutMs = timeoutHours * 60 * 60 * 1000;
 
-  const lastMsgAt = conversation.last_message_at;
-  const lastMsgDate = lastMsgAt ? new Date(lastMsgAt) : null;
-  const now = new Date();
-  const inactiveTooLong = !lastMsgDate || (now.getTime() - lastMsgDate.getTime()) > timeoutMs;
-  const crossedShopDay = lastMsgDate
-    ? getBusinessDateAt(lastMsgDate, shop.timezone) !== getBusinessDateAt(now, shop.timezone)
-    : false;
+  const { expired, reason } = isConversationExpired(conversation.last_message_at, new Date(), shop.timezone, timeoutHours);
+  if (!expired) return { conversation, justExpired: false };
 
-  if (!inactiveTooLong && !crossedShopDay) return { conversation, justExpired: false };
-
-  console.log(`[chat-sms] conversation timeout: resolving ${conversation.id} (inactive=${inactiveTooLong}, crossedShopDay=${crossedShopDay}, timeoutHours=${timeoutHours}, lastMsgAt=${lastMsgAt ?? "null"})`);
+  console.log(`[chat-sms] conversation timeout: resolving ${conversation.id} (reason=${reason}, timeoutHours=${timeoutHours}, lastMsgAt=${conversation.last_message_at ?? "null"})`);
   await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
   return { conversation: null, justExpired: true };
 }
