@@ -240,12 +240,13 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
   console.log(`  failed: ${walk.failed}`);
   const walkFailureSamples: ShopSummary["walk_failure_samples"] = [];
   const failedResults = walk.results.filter(r => !r.pass);
-  for (const r of failedResults.slice(0, 10)) {
+  const dumpLimit = Deno.env.get("FULL_DUMP") ? failedResults.length : 10;
+  for (const r of failedResults.slice(0, dumpLimit)) {
     console.log(`  FAIL: ${r.display_name} (${r.item_id})`);
     for (const f of r.failures) console.log(`      [${f.step}] ${f.detail}`);
     walkFailureSamples.push({ item_id: r.item_id, display_name: r.display_name, failures: r.failures });
   }
-  if (failedResults.length > 10) console.log(`  ... and ${failedResults.length - 10} more failing walk cases`);
+  if (failedResults.length > dumpLimit) console.log(`  ... and ${failedResults.length - dumpLimit} more failing walk cases`);
 
   summaries.push({
     shop: shopName,

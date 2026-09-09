@@ -123,11 +123,36 @@ function scoreItemMatch(phraseNorm: string, item: LexiconItem): number {
   return matched / iWords.length;
 }
 
+// An exact, whole-string match against an item's own display name beats any
+// word-coverage heuristic: it can never misattribute (it requires full
+// string equality against a real catalog name) and it sidesteps every
+// downstream heuristic — "with"/"no"/quantity parsing, generic-word
+// filtering, pizza-context fallback — that exists only to interpret PARTIAL
+// phrases. Many real dish names are themselves built from words that
+// resolver.ts's own significance filter treats as noise ("Regular Slice",
+// "Side Salad" — both words generic), contain "with" as part of the name
+// rather than a topping clause ("Chicken Fingers (5) With French Fries"),
+// lead with a numeral that parseQuantity would otherwise strip as an order
+// quantity ("10 Pieces Wings (Bone-In)"), or share a flavor word with an
+// unrelated item in a different format ("Turkey Wrap" vs "Turkey Sub",
+// "Garden Salad" vs "Garden Pizza") — none of which should ever block an
+// exact echo of the item's own name from resolving to that exact item.
+// Returns null (not a guess) when zero or more than one item shares that
+// exact name — e.g. a genuine duplicate display_name across two items.
+function findExactItemMatch(text: string, lexicon: MenuLexicon): LexiconItem | null {
+  const norm = normalizeText(text);
+  const matches = lexicon.items.filter(i => !i.blocked && normalizeText(i.displayName) === norm);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // Find the best-matching menu item for the given text. Requires ≥ 50% of
 // the item's significant words to match. Among tied-score candidates, breaks
 // ties by size-word presence (e.g. "large" in phrase -> prefer items whose
 // name contains "large"). Returns null on genuine ambiguity or no match.
 function findItemInText(text: string, lexicon: MenuLexicon): LexiconItem | null {
+  const exactMatch = findExactItemMatch(text, lexicon);
+  if (exactMatch) return exactMatch;
+
   const norm = normalizeText(text);
   let bestScore = 0.5; // minimum threshold — below this is noise
   let bestItems: LexiconItem[] = [];
@@ -547,6 +572,29 @@ export function buildLexicon(menu: ComposeMenuItem[]): MenuLexicon {
 // splitPhrases() runs first, resolvePhrase() sees exactly one phrase string.
 export function resolveUtterance(utterance: string, menu: ComposeMenuItem[]): ResolvedOp[] {
   const lexicon = buildLexicon(menu);
+
+  // Whole-utterance exact match, BEFORE splitPhrases. Some real dish names
+  // contain a comma ("Chicken, Ranch & Bacon Pan Pizza") or the word "with"
+  // ("Sauteed Pierogies With Onions (5)") as part of the name itself, not as
+  // a customer-intended phrase separator or topping clause. splitPhrases and
+  // resolvePhrase's "with X" parsing would otherwise carve a name like that
+  // into the wrong pieces before item matching ever runs. An exact match of
+  // the ENTIRE utterance against a real item's own display name is
+  // authoritative — it is what the customer said, verbatim — so it takes
+  // priority over every phrase-splitting and clause-parsing heuristic below.
+  const wholeUtteranceMatch = findExactItemMatch(utterance, lexicon);
+  if (wholeUtteranceMatch) {
+    return [{
+      kind: "add_item",
+      phrase: utterance.trim(),
+      itemId: wholeUtteranceMatch.id,
+      itemName: wholeUtteranceMatch.displayName,
+      quantity: 1,
+      addToppings: [],
+      removeToppingNames: [],
+    }];
+  }
+
   return splitPhrases(utterance, lexicon).map(p => resolvePhrase(p, lexicon));
 }
 

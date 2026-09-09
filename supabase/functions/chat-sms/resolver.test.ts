@@ -450,3 +450,76 @@ Deno.test("HONEST MISS — item not on menu: nothing added, available items list
   const cart = applyOps(ops, []);
   assertEquals(cart.length, 0);
 });
+
+// ── ROUND 2 (2026-09-09): exact whole-name match fixes ─────────────────────
+// The live menu-readiness walk found real dish names the round-1 resolver
+// could never resolve to themselves: names built entirely from words the
+// resolver treats as generic noise ("Side Salad"), names sharing a flavor
+// word with an unrelated item in a different format ("Turkey Wrap" vs
+// "Turkey Sub"), names containing "with" or a comma as part of the name
+// itself rather than a topping clause or phrase separator, and names
+// leading with a numeral that parseQuantity would otherwise strip as an
+// order quantity. Each fixture below is isolated (not the shared pizza
+// buildMenu()) to keep these cases from interacting with the pizza-specific
+// ambiguity/tiebreak tests above.
+
+function nonPizzaMenu(): ComposeMenuItem[] {
+  return [
+    { id: "side-salad", name: "Side Salad", category: "Salads", ask_plan: null },
+    { id: "turkey-wrap", name: "Turkey Wrap", category: "Wraps", ask_plan: null },
+    { id: "turkey-sub", name: "Turkey Sub", category: "Subs", ask_plan: null },
+    { id: "wings-bonein", name: "10 Pieces Wings (Bone-In)", category: "Wings", ask_plan: null },
+    { id: "wings-boneless", name: "10 Pieces Wings (Boneless)", category: "Wings", ask_plan: null },
+    { id: "pierogies-onions", name: "Sauteed Pierogies With Onions (5)", category: "Sides", ask_plan: null },
+    { id: "cbr-pizza", name: "Chicken, Bacon & Ranch Pizza", category: "Pizza", ask_plan: null },
+    { id: "double-burger-1", name: "Double Burger", category: "Burgers", ask_plan: null },
+    { id: "double-burger-2", name: "Double Burger", category: "Burgers", ask_plan: null },
+  ] as unknown as ComposeMenuItem[];
+}
+
+Deno.test("EXACT NAME MATCH — name built entirely from generic words ('Side Salad') still resolves", () => {
+  const ops = resolveUtterance("Side Salad", nonPizzaMenu());
+  assertEquals(ops.length, 1);
+  assertEquals(asAdd(ops[0]).itemId, "side-salad");
+});
+
+Deno.test("EXACT NAME MATCH — shared flavor word across formats resolves to the format actually named ('Turkey Wrap' vs 'Turkey Sub')", () => {
+  const wrapOps = resolveUtterance("Turkey Wrap", nonPizzaMenu());
+  assertEquals(wrapOps.length, 1);
+  assertEquals(asAdd(wrapOps[0]).itemId, "turkey-wrap");
+
+  const subOps = resolveUtterance("Turkey Sub", nonPizzaMenu());
+  assertEquals(subOps.length, 1);
+  assertEquals(asAdd(subOps[0]).itemId, "turkey-sub");
+});
+
+Deno.test("EXACT NAME MATCH — leading numeral that is part of the dish's own name is not stripped as a quantity ('10 Pieces Wings (Bone-In)' vs '(Boneless)')", () => {
+  const boneInOps = resolveUtterance("10 Pieces Wings (Bone-In)", nonPizzaMenu());
+  assertEquals(boneInOps.length, 1);
+  assertEquals(asAdd(boneInOps[0]).itemId, "wings-bonein");
+
+  const bonelessOps = resolveUtterance("10 Pieces Wings (Boneless)", nonPizzaMenu());
+  assertEquals(bonelessOps.length, 1);
+  assertEquals(asAdd(bonelessOps[0]).itemId, "wings-boneless");
+});
+
+Deno.test("EXACT NAME MATCH — 'with' inside the dish's own name is not parsed as a topping clause", () => {
+  const ops = resolveUtterance("Sauteed Pierogies With Onions (5)", nonPizzaMenu());
+  assertEquals(ops.length, 1);
+  const op = asAdd(ops[0]);
+  assertEquals(op.itemId, "pierogies-onions");
+  assertEquals(op.addToppings, []); // "Onions" must not be split off as a topping request
+});
+
+Deno.test("EXACT NAME MATCH — comma inside the dish's own name is not parsed as a phrase separator", () => {
+  const ops = resolveUtterance("Chicken, Bacon & Ranch Pizza", nonPizzaMenu());
+  assertEquals(ops.length, 1);
+  assertEquals(asAdd(ops[0]).itemId, "cbr-pizza");
+});
+
+Deno.test("GENUINE DUPLICATE NAME — two distinct items sharing one display_name still ask/miss, never guess", () => {
+  const ops = resolveUtterance("Double Burger", nonPizzaMenu());
+  assertEquals(ops.length, 1);
+  const op = asMiss(ops[0]);
+  assertEquals(op.reason, "item_not_found"); // ambiguous between the two ids — missing beats wrong
+});
