@@ -132,6 +132,19 @@ function hs(s: string): string {
   return s.replace(/[\r\n]/g, " ");
 }
 
+// Single source of truth for "what modifiers/options does this cart line
+// carry" — deduped list of raw strings, unescaped. Every place that renders
+// a cart item to a human (kitchen ticket email, payment-confirmed SMS
+// receipt, etc.) must read the modifiers/options off a line through THIS
+// function rather than re-deriving its own subset, so a line can never show
+// correctly in one render and drop its modifier in another (the order #5/#6
+// "two identical cheese pizzas, pepperoni named on neither" defect).
+function cartItemModifierParts(r: CartItem): string[] {
+  const mods = r.modifiers?.length ? r.modifiers : [];
+  const opts = r.options ? Object.values(r.options).flat() : [];
+  return [...new Set([...mods, ...opts])];
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface OptionChoice {
@@ -3705,7 +3718,8 @@ export async function handleSystemEvent(
     const items = (cartRow.cart_json as AnyCartItem[]).map((i: AnyCartItem) => {
       if ((i as BundleItem).type === "bundle") return (i as BundleItem).name;
       const r = i as CartItem;
-      return `${(r.quantity || 1)}x ${r.name}`;
+      const detail = cartItemModifierParts(r).join(", ");
+      return `${(r.quantity || 1)}x ${r.name}${detail ? ` (${detail})` : ""}`;
     }).join(", ");
     const subtotal   = ((cartRow.subtotal_cents ?? 0) / 100).toFixed(2);
     const serviceFee  = ((cartRow.service_fee_cents ?? 0) / 100).toFixed(2);
@@ -3835,9 +3849,7 @@ export async function handleSystemEvent(
           }
           const r = i as CartItem;
           const linePrice = r.price_cents != null ? `$${((r.price_cents * (r.quantity || 1)) / 100).toFixed(2)}` : "";
-          const mods = r.modifiers?.length ? r.modifiers.map(m => h(m)) : [];
-          const opts = r.options ? Object.values(r.options).flat().map(o => h(o)) : [];
-          const detail = [...new Set([...mods, ...opts])].join(", ");
+          const detail = cartItemModifierParts(r).map(d => h(d)).join(", ");
           const detailSub = detail ? `<br><span style="font-size:11px;color:#888;">${detail}</span>` : "";
           // Not a validated menu selection — kept visually distinct so the kitchen
           // never confuses it for a real option (the Boosenberry-wings defect).
@@ -4490,6 +4502,39 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
     conversation = newConv;
   }
+
+  // ── D3 fix (2026-09-09, real SMS double-text race — order #6): nothing
+  // previously serialized two inbound messages for the SAME conversation.
+  // Each inbound SMS is its own independent invocation of this function, so
+  // a customer double-texting quickly can have both invocations run
+  // concurrently against the same starting cart/conversation state — e.g. a
+  // name-ask reply landing AFTER the customer's next message had already
+  // answered it. Same short-lived claim-with-staleness idiom as
+  // order_carts.ticket_send_attempt_at below: a single atomic UPDATE...WHERE
+  // guards the claim, so two concurrent callers cannot both win. A caller
+  // that loses the race polls (bounded — favors availability over a stuck
+  // customer text if the first caller crashed mid-turn) rather than
+  // proceeding on a stale read.
+  let turnLockAcquired = false;
+  for (let lockAttempt = 0; lockAttempt < 25; lockAttempt++) {
+    const staleBefore = new Date(Date.now() - 30_000).toISOString();
+    const { data: claimedTurn } = await supabase
+      .from("conversations")
+      .update({ processing_claimed_at: new Date().toISOString() })
+      .eq("id", conversation.id)
+      .or(`processing_claimed_at.is.null,processing_claimed_at.lte.${staleBefore}`)
+      .select("id");
+    if (claimedTurn && claimedTurn.length > 0) { turnLockAcquired = true; break; }
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  if (!turnLockAcquired) {
+    // Genuinely still locked after ~10s (not just a crashed claim past the
+    // 30s staleness threshold) — proceed unlocked rather than leave the
+    // customer's message unanswered. Logged so real contention is visible.
+    console.warn(`[chat-sms] turn lock contention for conversation ${conversation.id} — proceeding without lock`);
+  }
+
+  try {
 
   // ── Find or create order cart ─────────────────────────────────────────────
   const { data: existingCart } = await supabase
@@ -7770,6 +7815,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // LLM call timing, test_mode only. Remove once the regression is closed.
     ...(debugPerf ? { debug_perf: { ...debugPerf, endMs: Math.round(performance.now() - debugReqT0) } } : {}),
   });
+  } finally {
+    // Release the D3 turn lock (see acquire above) on every exit path —
+    // every early return in the block above is inside this try, so this
+    // always runs before the next inbound message for this conversation
+    // can acquire it.
+    if (turnLockAcquired) {
+      await supabase.from("conversations").update({ processing_claimed_at: null }).eq("id", conversation.id);
+    }
+  }
 }
 
 if (import.meta.main) {
