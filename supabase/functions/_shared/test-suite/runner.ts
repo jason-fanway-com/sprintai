@@ -402,6 +402,7 @@ async function runConversationalCase(
   const sessionId = `test-suite-${crypto.randomUUID()}`;
   const transcript: TurnResult[] = [];
   const history: string[] = [];
+  const expectCartShrink = testCase.expectCartShrink === true;
   let goalReached = false;
   let lastPhase: string | undefined;
 
@@ -466,6 +467,7 @@ async function runConversationalCase(
         shopId,
         transcript,
         sessionId,
+        expectCartShrink,
         error: (e as Error).message,
       };
     }
@@ -486,6 +488,7 @@ async function runConversationalCase(
     shopId,
     transcript,
     sessionId,
+    expectCartShrink,
   };
 }
 

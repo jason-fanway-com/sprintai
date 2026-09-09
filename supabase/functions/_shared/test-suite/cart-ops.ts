@@ -128,6 +128,17 @@ function isQuestion(msg: string): boolean {
   if (/\b(?:also|add(?: another| a| an)?|and a|and another|and some|and the|can i also|let me also|let me get|i also|ill also|ill have|i'll also|i'll have|i want|gimme|give me|actually |oh and|plus)\b/i.test(t)) {
     return false;
   }
+  // Removal/cancellation intent is NOT a question either: "can you remove the
+  // pizza?", "please cancel the wings", "take off the fries" are explicit
+  // order-removal commands that legitimately mutate the cart. Classifying
+  // them as questions would trip the no_mutation_on_non_order invariant and
+  // false-fail valid removal turns (2026-09-09: "No toppings, just cheese.
+  // Now can you remove the pizza? I only want the garlic knots." was flagged
+  // as an unexpected mutation because "can you" tripped the question regex
+  // below before the explicit "remove the pizza" command was ever considered).
+  if (/\b(?:remove|cancel|delete|take (?:off|out)|get rid of|scratch|nix|don'?t want)\b/i.test(t)) {
+    return false;
+  }
   return t.endsWith("?") || /\b(what|when|how|where|why|who|do you|are you|can you|is there|does|could you|would you)\b/i.test(t);
 }
 
