@@ -797,10 +797,29 @@ export function applyCompiledAddItem(
   // vulnerability was matching on `options` equality, which a no-new-info
   // call satisfies trivially; here the gate is "did the engine actually
   // learn anything new this turn," which a no-op call never does.
+  //
+  // D1 fix (2026-09-09, live money — Zio's "a large cheese pizza with extra
+  // cheese and a plain large cheese pizza" repro): this used to match on
+  // menu_item_id alone — ANY fully-resolved existing line for this item was
+  // enough to call the new call a no-op, even when that line's OWN
+  // selections don't match what THIS call would produce. Real sequence
+  // observed live: call 1 resolves "with extra cheese" onto a new line;
+  // call 2 (the plain pizza, resolvedCount=0 since it names nothing new)
+  // matched call 1's ALREADY-toppinged line here and was silently dropped
+  // as a no-op — the second, plain pizza never became its own line at all.
+  // The model then resorted to modify_item(quantity:2) to force the count
+  // up, which multiplied the toppinged line's price by 2 ($43.98 instead of
+  // $39.98). Requiring the candidate line's selections to equal THIS call's
+  // newSelections (same sorted-entries comparison the identicalExisting
+  // merge below already uses) keeps the guard's real target — a truly
+  // redundant re-call for the SAME configuration — while a differently
+  // configured second order for the same base item now correctly falls
+  // through to the genuine-new-add path below instead of vanishing.
   const fullyResolvedExistingIdx = continuationIdx < 0 && resolvedCount === 0
     ? cart.findIndex(ci =>
         ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
-        allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))))
+        allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))) &&
+        JSON.stringify(Object.entries(ci.ask_plan_selections).sort()) === JSON.stringify(Object.entries(newSelections).sort()))
     : -1;
   if (fullyResolvedExistingIdx >= 0) {
     const existingLine = cart[fullyResolvedExistingIdx];

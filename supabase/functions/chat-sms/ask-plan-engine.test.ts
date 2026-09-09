@@ -546,6 +546,53 @@ Deno.test("applyCompiledAddItem: D1 fix — a genuinely DIFFERENT base item in t
   assert(cart[1].options?.["Add Toppings"]?.includes("Pepperoni"), "a different item's own topping choice id is a different choice id — must still apply independently");
 });
 
+// D1 fix (2026-09-09, live money — real Zio's repro, the actual mechanism):
+// "a large cheese pizza with extra cheese and a plain large cheese pizza"
+// as two add_item calls — call 1 resolves Extra Cheese onto a new line
+// (resolvedCount=1); call 2 (the plain pizza) names nothing new
+// (resolvedCount=0). The Bug-3 no-op guard above used to match ANY
+// fully-resolved existing line for this menu_item_id, regardless of
+// whether ITS selections matched what this zero-new-info call would
+// produce — so call 2 was silently swallowed as "already in cart, nothing
+// added," and the plain pizza never became its own line. The model then
+// resorted to modify_item(quantity:2) to force the count up, doubling the
+// Extra-Cheese line's price ($43.98 instead of $39.98). Fixed by requiring
+// the candidate line's selections to match this call's (both empty here) —
+// see ask-plan-engine.ts's own doc on this guard for the fix.
+Deno.test("applyCompiledAddItem: D1 fix — real live sequence: 'with extra cheese' FIRST (new line), then a resolvedCount=0 'plain' call must NOT be swallowed as a no-op against the toppinged line", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  const turnText = "a large cheese pizza with extra cheese and a plain large cheese pizza";
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, ["Pepperoni"]);
+  const r2 = applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, turnText, null, consumed, []);
+  assertEquals(cart.length, 2, "the plain pizza must become its own line, not a silent no-op against the toppinged one");
+  assertEquals(r2.cartChanged, true);
+  const withTopping = cart.filter(c => c.options?.["Add Toppings"]?.includes("Pepperoni"));
+  const withoutTopping = cart.filter(c => !c.options?.["Add Toppings"]);
+  assertEquals(withTopping.length, 1);
+  assertEquals(withoutTopping.length, 1);
+  assertEquals(withoutTopping[0].quantity, 1);
+  assertEquals(withoutTopping[0].price_cents, 1500 + 274, "the plain line must be base+size only, never inheriting the topping's price");
+});
+
+Deno.test("applyCompiledAddItem: D1 fix — the Bug-3 no-op guard still fires for a GENUINELY redundant re-call (same item, same empty selections)", () => {
+  // Zio's real cheese pizza fixture (ziosLargeCheeseMenuItem, defined
+  // further below) has zero required SLOT steps — every step is an
+  // optional on-request modifier — matching the real menu shape this guard
+  // exists for, unlike cheesePizzaMenuItem's required Size slot above.
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "zios-large-cheese", name: "Neapolitan Cheese Pizza - Large 18''",
+    quantity: 1, price_cents: 1799, modifiers: [], ask_plan_selections: {},
+  }];
+  // A second, unrelated call for the SAME item resolving nothing new (e.g.
+  // the model re-confirming after an unrelated question) must still be a
+  // true no-op — not a new line, not a quantity bump.
+  const r2 = applyCompiledAddItem(cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", 1, "sounds good", null);
+  assertEquals(cart.length, 1, "must not spawn a phantom duplicate line");
+  assertEquals(cart[0].quantity, 1, "must not silently bump quantity either");
+  assertEquals(r2.cartChanged, false);
+});
+
 Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order (no list, same item twice with the same topping) still stacks quantity when there's no consumed-set collision risk (single call, quantity=2)", () => {
   const cart: CompiledCartLine[] = [];
   const consumed = new Set<string>();
