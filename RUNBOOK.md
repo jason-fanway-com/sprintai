@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-09-04
+Last updated: 2026-09-09
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -72,6 +72,23 @@ served the conversation.
 
 Owner-facing page at `/demo-kit`, rendered from the shop record — QR codes, the order
 message, the phone number. All derived, nothing stored.
+
+### Demo kit EMAIL — build-time QR generation (`dddcb50`, 2026-09-08)
+
+Separate from the `/demo-kit` page above: the Erin/Vito's demo kit email
+(`docs/demo/erin-vitos-demo-email.html`) is built by
+`scripts/build-demo-kit-email.py <slug>`, which draws all three QR codes
+**at build time from the shop's live DB row** and embeds them as `cid:`
+images (Gmail strips `data:` URIs), printing each code's decoded target
+underneath it so a stale code is visible to a human reviewer before it's
+sent. Shop-agnostic — takes a slug — and mirrors the payload builders in
+`admin-dashboard/src/lib/demoKit.ts` so the page and the email can't drift.
+This replaced an earlier state where the kit shipped with no QR codes at
+all and pointed the recipient at the login-gated `/demo-kit` page instead
+(a2d7631) — that traded a wrong-code failure for a no-demo-without-login
+failure. The email also prints the shop's ordering number directly as a
+tap-to-text link, so the core demo still doesn't require a Sprint login
+even if a QR fails to scan.
 
 ### Expo Screen (c361d71, b2661fd)
 
@@ -319,7 +336,7 @@ Shop owner → admin dashboard → admin-chat / admin-api edge functions
 |-----|-------|
 | Project ID | `sprintai-chat` |
 | Functions | `supabase/functions/` (Deno) |
-| Migrations | `supabase/migrations/` (001–081) |
+| Migrations | `supabase/migrations/` (001–122; see "Migration 121/122 live-status" below — local tracker vs. remote can drift) |
 
 ---
 
@@ -762,6 +779,7 @@ notified without a corresponding issue.
 | `merchant-auth` | Server-side PIN auth for sold-out manager | No |
 | `set-app-metadata` | Set user roles in app_metadata (service-key only) | No |
 | `shop-financials` | Shop financial reporting (KPIs, ledger, payouts, CSV export) | Yes |
+| `customer-crm` | Read-only owner-facing customer list (name, phone, order count/spend, opt-out status) — tenant derived server-side from JWT, `customers` table stays service-role-only | Yes |
 
 #### Go-live gates (13 — all must pass)
 
@@ -1494,6 +1512,47 @@ bread question with no bread option group and no descriptive bread text on the
 item. This is real and unfixed (25 items) but confirmed pre-existing —
 isolation-tested against the pre-fold data, so don't attribute it to the fold
 if it resurfaces.
+
+## Customer CRM — returning-diner recognition, first retention feature — 2026-09-08
+
+New `customers` table (migration 121), upserted from `stripe-webhook` on every
+paid order (`tenant_id`, `customer_phone`, name, order count, spend, last
+order). `chat-sms` does one indexed lookup per turn, scoped strictly to
+`(tenant_id, customer_phone)` (AC2/AC7 — never cross-tenant, never a table
+scan), and can greet a returning diner by name and offer "the regular" — but
+only when a single item has appeared in 3+ of that phone's past *paid* orders
+(AC6, never guessed off one order), suppressed on SMS opt-out or an owner
+toggle, and never dumping raw order history back to the customer (AC5).
+
+Two new deterministic guards close the same real-money risk shape as the
+day's `b865d3a` RESET incident, since injecting prior-order context into a
+turn is the same lever that bug's context leak pulled:
+- **GUARD 19** reverts any cart growth on a quantity-only message that names
+  zero items (e.g. bare "2" with nothing else).
+- **GUARD 20** requires the regular item be both freshly offered by the bot
+  *and* explicitly confirmed by the customer before it can be added — the
+  bot self-inserting "the regular" with no prior offer in the turn is not
+  sufficient.
+
+`customer-crm` (new edge function, see edge function index) backs a
+read-only owner-facing screen (`ShopOwnerCustomers.tsx`) — name, phone
+(formatted; "No phone on file" for unresolvable identities), order count,
+total spent, last order date, top items, opted-out status; sortable and
+searchable. Deliberately no messaging, no export, no editing. The `customers`
+table itself stays service-role-only; the browser never queries it directly.
+
+`canonicalizePhone` (`_shared/customer-profile.ts`) extracts a real E.164
+number from known identity shapes (`web:imsg-p<phone>-<epoch>`, raw
+`+1...`) before every write/lookup, because the iMessage bridge mints a new
+session id every 24h and one real diner was fragmenting into a new
+`customers` row daily; unrecoverable identities (email-derived, anonymous
+UUIDs) are left alone rather than guessed at. A one-time backfill against
+production collapsed 12 fragmented profiles into 8 real ones, no
+cross-tenant or name-based merges.
+
+**Live status: unresolved as of this writing.** See the migration 121/122
+entry immediately below — do not represent Customer CRM as live to a
+restaurant owner without checking the primary database directly first.
 
 ## Migration 121/122 live-status is unresolved — verify before trusting either the tracker or the build log — 2026-09-08
 
