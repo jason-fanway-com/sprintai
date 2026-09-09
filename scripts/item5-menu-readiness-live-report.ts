@@ -5,8 +5,17 @@
  * Bagels and runs the
  * full readiness gate against it: §8.1 item state (compile-menu.ts's
  * bot_state, item 4), §8.2 the 8 menu-level invariants (compile-menu.ts's
- * computeMenuInvariants, item 4), and §8.3 the generated menu walk
- * (menu-readiness.ts's runMenuWalk, item 5 — new).
+ * computeMenuInvariants, item 4), §8.3 the generated SINGLE-item menu walk
+ * (menu-readiness.ts's runMenuWalk, item 5), and §8.4 the generated
+ * MULTI-item, multi-phrasing menu walk (menu-readiness.ts's
+ * runMultiItemMenuWalk, item 5 follow-up — 2026-09-09: §8.3 alone was
+ * reported as "passes" while only ever proving single-item orderability,
+ * one item per cart, never a multi-item order — exactly the shape of the
+ * live P0 defect (a topping bleeding from one pizza onto another in a
+ * 4-item order) this gate should have caught from day one. The top-line
+ * report below now prints TWO separate numbers — "items individually
+ * orderable" and "real multi-item orders correct" — and never folds them
+ * into one).
  *
  * READ-ONLY. No writes to any table — this is a reporting/testing gate
  * only. Does not call the compile-menu edge function (which writes
@@ -29,7 +38,7 @@ import {
 } from "../supabase/functions/_shared/compile-menu.ts";
 import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 import { itemEntityKey, groupEntityKey, choiceEntityKey } from "../supabase/functions/_shared/menu-entity-key.ts";
-import { summarizeItemStates, runMenuWalk } from "../supabase/functions/_shared/menu-readiness.ts";
+import { summarizeItemStates, runMenuWalk, runMultiItemMenuWalk } from "../supabase/functions/_shared/menu-readiness.ts";
 
 const SUPABASE_URL = Deno.env.get("SPRINTAI_CHAT_SUPABASE_URL") ?? "";
 const SUPABASE_KEY = Deno.env.get("SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -108,6 +117,11 @@ interface ShopSummary {
   walk_passed: number;
   walk_failed: number;
   walk_failure_samples: { item_id: string; display_name: string; failures: { step: string; detail: string }[] }[];
+  multi_walk_total: number;
+  multi_walk_passed: number;
+  multi_walk_failed: number;
+  multi_walk_skipped_case_types: string[];
+  multi_walk_failure_samples: { case_id: string; utterance: string; failures: { step: string; detail: string }[] }[];
 }
 
 const summaries: ShopSummary[] = [];
@@ -250,6 +264,24 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
   }
   if (failedResults.length > dumpLimit) console.log(`  ... and ${failedResults.length - dumpLimit} more failing walk cases`);
 
+  console.log(`\n§8.4 generated MULTI-item, multi-phrasing menu walk (multi-item cases derived from this shop's own menu, real resolver + ask-plan-engine + pricing + itemizer code):`);
+  const multiWalk = runMultiItemMenuWalk(compileItems, compiledMap);
+  console.log(`  total multi-item cases: ${multiWalk.total_cases}`);
+  console.log(`  passed: ${multiWalk.passed}`);
+  console.log(`  failed: ${multiWalk.failed}`);
+  if (multiWalk.skipped_case_types.length > 0) {
+    console.log(`  SKIPPED case types (menu has no items shaped to support them): ${multiWalk.skipped_case_types.join(", ")}`);
+  }
+  const multiWalkFailureSamples: ShopSummary["multi_walk_failure_samples"] = [];
+  const failedMultiResults = multiWalk.results.filter(r => !r.pass);
+  const multiDumpLimit = Deno.env.get("FULL_DUMP") ? failedMultiResults.length : 10;
+  for (const r of failedMultiResults.slice(0, multiDumpLimit)) {
+    console.log(`  FAIL: [${r.case_type} / ${r.phrasing}] "${r.utterance}"`);
+    for (const f of r.failures) console.log(`      [${f.step}] ${f.detail}`);
+    multiWalkFailureSamples.push({ case_id: r.case_id, utterance: r.utterance, failures: r.failures });
+  }
+  if (failedMultiResults.length > multiDumpLimit) console.log(`  ... and ${failedMultiResults.length - multiDumpLimit} more failing multi-item cases`);
+
   summaries.push({
     shop: shopName,
     orderable: states.orderable,
@@ -263,6 +295,11 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
     walk_passed: walk.passed,
     walk_failed: walk.failed,
     walk_failure_samples: walkFailureSamples,
+    multi_walk_total: multiWalk.total_cases,
+    multi_walk_passed: multiWalk.passed,
+    multi_walk_failed: multiWalk.failed,
+    multi_walk_skipped_case_types: multiWalk.skipped_case_types,
+    multi_walk_failure_samples: multiWalkFailureSamples,
   });
 }
 
@@ -273,6 +310,9 @@ for (const s of summaries) {
   console.log(`\n${s.shop}:`);
   console.log(`  ${s.orderable}/${s.total_active} orderable (${s.orderable_pct})  [blocked=${s.blocked} display_only=${s.display_only} stale=${s.stale}]`);
   console.log(`  invariants: ${8 - s.invariant_failures.length}/8 passing${s.invariant_failures.length > 0 ? ` — FAILING: ${s.invariant_failures.map(f => `#${f.invariant}`).join(", ")}` : ""}`);
-  console.log(`  walk: ${s.walk_passed}/${s.walk_total} passed${s.walk_failed > 0 ? ` (${s.walk_failed} FAILED)` : ""}`);
+  // Two separate numbers, never folded together — see this file's header
+  // comment and BLOCKED.txt (2026-09-09) for why that distinction matters.
+  console.log(`  items individually orderable: ${s.walk_passed}/${s.walk_total}${s.walk_failed > 0 ? ` (${s.walk_failed} FAILED)` : ""}`);
+  console.log(`  real multi-item orders correct: ${s.multi_walk_passed}/${s.multi_walk_total}${s.multi_walk_failed > 0 ? ` (${s.multi_walk_failed} FAILED)` : ""}${s.multi_walk_skipped_case_types.length > 0 ? ` [skipped: ${s.multi_walk_skipped_case_types.join(", ")}]` : ""}`);
 }
 console.log("\nDone. Read-only run — no rows were written.");

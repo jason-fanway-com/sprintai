@@ -5931,3 +5931,157 @@ VITO'S CANARY: PASS.
   Subtotal $8.49, Service fee $0.99, Total $9.48. Correct and unaffected.
 
 NO DEPLOY. No code changed. BLOCKED.txt updated; committing this doc change only.
+
+================================================================================
+2026-09-09 (OrderFare subagent) — ITEM 5 GATE FIX: MENU-READINESS WALK ONLY
+TESTED ONE ITEM AT A TIME. EXTENDED TO REAL MULTI-ITEM ORDERS. HONEST BASELINE
+IS BAD (0/20, 0/20, 4/5) — REAL RESOLVER BUGS FOUND, NOT FIXED HERE.
+================================================================================
+
+WHAT THE GATE WAS ACTUALLY TESTING BEFORE:
+  supabase/functions/_shared/menu-readiness.ts's runMenuWalk/runItemWalk
+  (§8.3) built exactly one cart line per call: `orderable.map(i =>
+  runItemWalk(i, ...))`. It resolved each item's OWN display_name through the
+  resolver, added it to an empty cart, answered any open slots, and checked
+  price/ticket for THAT SINGLE LINE. It never once built a cart with more
+  than one line, and never once fed the resolver a sentence naming more than
+  one item. "Zio's 299/301, Vito's 219/219" (reported as "Phase 0 passes")
+  was real and correct AS FAR AS IT WENT, but it went nowhere near multi-item
+  orders — the exact shape of the pepperoni-bleeds-across-pizzas P0 that's
+  been "fixed" three times this week and still fails live. Jason caught this
+  directly; the gate was manufacturing false confidence by construction, not
+  by a coding mistake in the walk itself.
+
+WHAT IT TESTS NOW (§8.4, runMultiItemMenuWalk, same file):
+  For each shop's own compiled menu, generates real multi-item cases —
+  derived from the menu's actual orderable items, never hardcoded:
+    - two items from different categories
+    - four items, at least one composed from base item + a modifier
+      ("X with Y") — the exact shape of the live P0
+    - two of the same item with two different modifiers
+    - an item plus a drink/non-composed item
+  Each case is rendered in all 5 required phrasings (comma+digit qty,
+  comma+word qty, "and"-separated, bare list, conversational "gimme a X and
+  a Y") and run through the SAME in-process deterministic pipeline the
+  single-item walk already used: resolver.ts's resolveUtterance (splits the
+  utterance into phrase-isolated ops), ask-plan-engine.ts's
+  applyCompiledAddItem (turns each op into a real, priced cart line, running
+  the same ask-loop the single-item walk uses for any still-open required
+  slot), pricing.ts's computeCartSubtotalCents, itemizer.ts's
+  renderItemizedRecap. No LLM, no live HTTP call to chat-sms — same
+  reasoning as the single-item walk's own header comment.
+  Each case asserts: correct line count; each line's MODIFIER selections are
+  EXACTLY what its own phrase named (nothing missing, nothing leaked in from
+  another line or from the item's own name colliding with a modifier
+  choice); no modifier choice id ever resolves onto more than one line;
+  subtotal equals the sum of the individual lines, and each line's own price
+  equals its own base + resolved deltas. A case type that the shop's menu
+  can't support (e.g. no item with >=2 modifier choices) is reported in
+  `skipped_case_types`, never silently counted as a pass.
+  scripts/item5-menu-readiness-live-report.ts now prints two separate
+  numbers per shop, never folded together:
+    "items individually orderable: N/M"   (§8.3, unchanged)
+    "real multi-item orders correct: N/M" (§8.4, new)
+  8 unit tests added in menu-readiness.test.ts, including a fixture-menu
+  test that documents one further real, narrow gap this same work
+  surfaced: resolver.ts's splitOnAndItem() probes 6 words past each "and"
+  to decide an item boundary; with 3+ items chained by "and" with no commas
+  the probe after the first "and" runs far enough to also contain the NEXT
+  item's name, so both candidates tie and the split fails, collapsing
+  everything before the last item into one unresolved phrase.
+
+HONESTY NOTE on what a "pass" here does and doesn't prove (also written
+into menu-readiness.ts's own header comment for §8.4): resolver.ts is NOT
+wired into supabase/functions/chat-sms/index.ts today — confirmed by grep,
+zero call sites for resolveUtterance/resolvePhrase outside menu-readiness.ts
+and resolver's own test. The live chat-sms function still relies on the
+LLM's own tool-calling loop to decide how many times to call add_item and
+what customerMessage text to pass each call (ask-plan-engine.ts's own D1 fix
+comment documents that the live caller reuses the WHOLE turn's raw text for
+every add_item call this turn, not a phrase-isolated slice). This gate
+proves the DETERMINISTIC pipeline (resolver.ts's phrase isolation +
+ask-plan-engine.ts's compiled apply path) can build a correct multi-item
+cart when each add_item call is fed its own isolated phrase — a real,
+load-bearing property, and the exact shape resolver.ts was built for (see
+resolver.ts's own header: "why the original pepperoni-on-two-pizzas defect
+cannot recur in this path"). It does NOT, by itself, prove today's live
+LLM-tool-calling path is bug-free, because that path never calls
+resolver.ts. Whoever eventually wires resolver.ts into the live add_item
+loop (or replaces the LLM's own multi-item parsing with it) gets this gate
+as the correctness proof for free; until then, treat this as validating
+the module that SHOULD parse multi-item orders, not the one that currently
+does.
+
+REAL NUMBERS, run against live Supabase data today (deno run
+scripts/item5-menu-readiness-live-report.ts), Zio's/Vito's/Not Just Bagels:
+
+  Zio's Pizzeria:
+    items individually orderable:   300/300
+    real multi-item orders correct: 0/20   (ALL 20 FAILED)
+
+  Vito's Pizza:
+    items individually orderable:   219/219
+    real multi-item orders correct: 0/20   (ALL 20 FAILED)
+
+  Not Just Bagels:
+    items individually orderable:   158/170  (12 FAILED — pre-existing §8.3
+                                     ticket-text gap, "Home Fries"/"Bacon"
+                                     selection missing from itemizer output;
+                                     not multi-item, not investigated here)
+    real multi-item orders correct: 4/5    (1 FAILED — the documented
+                                     3+-item and-chain gap above; NJB's menu
+                                     has no item with >=2 modifier choices
+                                     and no plain/drink item, so 3 of the 4
+                                     multi-item case types were SKIPPED, not
+                                     passed — see skipped_case_types in the
+                                     script output)
+
+ROOT CAUSE of the 0/20 results (both real, live, currently-existing bugs
+inside resolver.ts's findToppingInText — the SAME function, two distinct
+failure modes, neither touched by this task):
+
+  1. Vito's (e.g. "Small Cheese Pizza with Steak (Half pizza)"): the
+     modifier group has BOTH "Steak (Half pizza)" and "Steak (Whole pizza)"
+     as separate choices (real half/half topping composition data). "half"
+     and "whole" are both in GUARD19_GENERIC_WORDS (guard19-fuzzy-item-
+     match.ts), so significantItemWords/findToppingInText's own significant-
+     word filter reduces BOTH choices to the single word "steak" and they
+     tie on coverage. The tie-break requires the winning word to be
+     STRICTLY longer than the runner-up's; "steak" vs "steak" is equal, so
+     the genuinely-named, single correct choice returns null ("missing beats
+     wrong") even though the customer said its exact, full display text
+     verbatim.
+
+  2. Zio's (e.g. "Jalapeno Poppers with Blue Cheese Dipping Sauce"): the
+     modifier group has 5 dipping-sauce choices sharing the generic-ish tail
+     words "dipping"/"sauce". findToppingInText's coverage formula is
+     `1 / tWords.length` — it only checks whether AT LEAST ONE significant
+     word matched, then scores INVERSELY by the candidate's OWN total word
+     count, never by how many of the customer's words actually matched. The
+     exact, fully-named "Blue Cheese Dipping Sauce" (4 significant words)
+     scores 0.25; three UNRELATED siblings ("Ranch"/"Cocktail"/"Marinara
+     Dipping Sauce", each 3 words) score 0.333 apiece purely for having
+     fewer words, and all three tie for the max — so the correct topping is
+     never even in the running, and the ambiguous trio returns null.
+  Both are pre-existing defects in the committed resolver.ts (git status
+  confirms resolver.ts has zero local modifications in this worktree — the
+  bugs are on main, not introduced by concurrent WIP). Not fixed here per
+  this task's explicit instruction not to wait for or duplicate the
+  resolver fix another session is already doing; flagging both mechanisms
+  precisely so that session (or whoever reviews it) can verify their fix
+  actually covers BOTH failure modes, not just the one they started from.
+
+DID NOT TOUCH: this is a shared worktree with a concurrent session's
+uncommitted, in-progress resolver-adjacent work already present when this
+task started — modified supabase/functions/chat-sms/{ask-plan-engine.ts,
+index.ts,pizza-topping-compose.ts,cart-summary-intent-20260909.ts} and a new
+untracked supabase/functions/chat-sms/phrase-split.ts. All left exactly as
+found, not staged, not committed. This task's multi-item walk ran against
+whatever was on disk (including that WIP) except resolver.ts itself, which
+is unmodified from main — so the two root causes above are attributable to
+committed code, not to the concurrent session's in-flight changes.
+
+COMMITTED: supabase/functions/_shared/menu-readiness.ts (§8.4 addition),
+supabase/functions/_shared/menu-readiness.test.ts (8 new tests),
+scripts/item5-menu-readiness-live-report.ts (two-number report). No edge
+function deploy — this is gate/script code only, not chat-sms itself.

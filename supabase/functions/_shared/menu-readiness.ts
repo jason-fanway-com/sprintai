@@ -285,12 +285,484 @@ export function runMenuWalk(items: CompileItem[], compiled: Map<string, Compiled
   };
 }
 
-// ── Top-line readiness report combining §8.1 states + §8.2 invariants + §8.3 walk ──
+// ── §8.4 the generated MULTI-ITEM menu walk ─────────────────────────────────
+//
+// runItemWalk/runMenuWalk above prove every orderable item is individually
+// orderable — one item, one cart line. They have never once built a cart
+// with more than one line, which is exactly the shape of the real P0 defect
+// (a topping named for one pizza bleeding onto another pizza in the same
+// multi-item order) that kept recurring while this gate reported "passes."
+// This section closes that gap: for each shop's own compiled menu, it
+// generates real multi-item, multi-phrasing utterances and runs them through
+// the SAME in-process deterministic pipeline as the single-item walk —
+// resolver.ts's phrase splitter/resolver (item 3) turns one utterance into
+// one ResolvedOp per phrase, ask-plan-engine.ts's applyCompiledAddItem (item
+// 8) turns each op into a real, priced cart line, pricing.ts cross-checks
+// the subtotal, itemizer.ts renders the real ticket text. No LLM, no live
+// HTTP call to chat-sms — same reasoning as runItemWalk's own header comment.
+//
+// HONESTY NOTE (read before trusting a "pass" here as proof the live bot is
+// fixed): resolver.ts is NOT wired into supabase/functions/chat-sms/index.ts
+// today — grep confirms zero call sites for resolveUtterance/resolvePhrase
+// outside this file and its own test. The live chat-sms function still
+// relies on the LLM's own tool-calling loop to decide how many times to call
+// add_item and what customerMessage text to pass each call (ask-plan-
+// engine.ts's own D1 fix comment documents that the live caller reuses the
+// WHOLE turn's raw text for every add_item call this turn, not a phrase-
+// isolated slice). This walk proves the DETERMINISTIC pipeline
+// (resolver.ts's phrase isolation + ask-plan-engine.ts's compiled apply
+// path) can build a correct multi-item cart when each add_item call is fed
+// its own isolated phrase — a real, load-bearing correctness property, and
+// the shape resolver.ts was explicitly built for (see resolver.ts's own
+// header, "why the original pepperoni-on-two-pizzas defect cannot recur in
+// this path"). It does NOT, by itself, prove today's live LLM-tool-calling
+// path is bug-free, because that path does not call resolver.ts at all.
+
+export interface MultiItemCaseResult {
+  case_id: string;
+  case_type: string;
+  phrasing: string;
+  utterance: string;
+  pass: boolean;
+  failures: WalkFailure[];
+  expected_line_count: number;
+  actual_line_count: number;
+  subtotal_cents: number | null;
+  ticket_text: string | null;
+}
+
+export interface MultiItemWalkReport {
+  total_cases: number;
+  passed: number;
+  failed: number;
+  skipped_case_types: string[];
+  results: MultiItemCaseResult[];
+}
+
+interface ComposedPick {
+  item: CompileItem;
+  askPlan: AskPlan;
+  modStep: AskPlan["steps"][number];
+}
+
+interface PlannedItem {
+  item: CompileItem;
+  askPlan: AskPlan;
+  phraseText: string;
+  intendedModifierChoiceIds: Set<string>;
+}
+
+// Items whose own display name contains "with" are excluded from case
+// generation entirely: resolvePhrase's "with X" clause-splitting has a known,
+// separate, pre-existing limitation on names like that (only the
+// whole-UTTERANCE exact-match short-circuit in resolveUtterance protects
+// against it, and that short-circuit only ever fires for a single-item
+// utterance — see resolver.ts's own header comment). Picking such a name here
+// would contaminate a multi-item/modifier-isolation test with an unrelated,
+// already-documented gap.
+function hasWithInName(displayName: string): boolean {
+  return /\bwith\b/i.test(displayName);
+}
+
+function findComposedItems(orderable: CompileItem[], compiled: Map<string, CompiledItem>): ComposedPick[] {
+  const out: ComposedPick[] = [];
+  for (const it of orderable) {
+    const c = compiled.get(it.id);
+    if (!c) continue;
+    if (hasWithInName(c.ask_plan.display_name)) continue;
+    const modStep = c.ask_plan.steps.find(s => s.kind === "modifier" && s.choices.length > 0);
+    if (modStep) out.push({ item: it, askPlan: c.ask_plan, modStep });
+  }
+  return out;
+}
+
+function findPlainItems(orderable: CompileItem[], compiled: Map<string, CompiledItem>): CompileItem[] {
+  return orderable.filter(it => {
+    const c = compiled.get(it.id);
+    if (!c) return false;
+    if (hasWithInName(c.ask_plan.display_name)) return false;
+    return !c.ask_plan.steps.some(s => s.kind === "modifier");
+  });
+}
+
+function toPlanned(
+  it: CompileItem,
+  compiled: Map<string, CompiledItem>,
+  modifier?: { choice: { id: string; display: string } },
+): PlannedItem | null {
+  const c = compiled.get(it.id);
+  if (!c) return null;
+  const askPlan = c.ask_plan;
+  const phraseText = modifier ? `${askPlan.display_name} with ${modifier.choice.display}` : askPlan.display_name;
+  const intendedModifierChoiceIds = new Set<string>(modifier ? [modifier.choice.id] : []);
+  return { item: it, askPlan, phraseText, intendedModifierChoiceIds };
+}
+
+function buildTwoDifferentCategories(
+  orderable: CompileItem[],
+  compiled: Map<string, CompiledItem>,
+  composed: ComposedPick[],
+): PlannedItem[] | null {
+  const a = composed[0];
+  if (!a) {
+    for (const x of orderable) {
+      const y = orderable.find(cand => cand.id !== x.id && (cand.category ?? "") !== (x.category ?? "") && !hasWithInName(compiled.get(cand.id)?.ask_plan.display_name ?? ""));
+      if (y) {
+        const p1 = toPlanned(x, compiled);
+        const p2 = toPlanned(y, compiled);
+        if (p1 && p2) return [p1, p2];
+      }
+    }
+    return null;
+  }
+  const b = orderable.find(cand =>
+    cand.id !== a.item.id &&
+    (cand.category ?? "") !== (a.item.category ?? "") &&
+    !hasWithInName(compiled.get(cand.id)?.ask_plan.display_name ?? ""),
+  );
+  if (!b) return null;
+  const p1 = toPlanned(a.item, compiled, { choice: a.modStep.choices[0] });
+  const p2 = toPlanned(b, compiled);
+  if (!p1 || !p2) return null;
+  return [p1, p2];
+}
+
+function buildFourItemsWithModifier(
+  orderable: CompileItem[],
+  compiled: Map<string, CompiledItem>,
+  composed: ComposedPick[],
+): PlannedItem[] | null {
+  const a = composed[0];
+  if (!a) return null;
+  const others = orderable.filter(it => it.id !== a.item.id && !hasWithInName(compiled.get(it.id)?.ask_plan.display_name ?? "")).slice(0, 3);
+  if (others.length < 3) return null;
+  const planned: (PlannedItem | null)[] = [toPlanned(a.item, compiled, { choice: a.modStep.choices[0] })];
+  for (const o of others) planned.push(toPlanned(o, compiled));
+  if (planned.some(p => p === null)) return null;
+  return planned as PlannedItem[];
+}
+
+function buildTwoSameItemDifferentModifiers(
+  compiled: Map<string, CompiledItem>,
+  composed: ComposedPick[],
+): PlannedItem[] | null {
+  const candidate = composed.find(c => c.modStep.choices.length >= 2);
+  if (!candidate) return null;
+  const p1 = toPlanned(candidate.item, compiled, { choice: candidate.modStep.choices[0] });
+  const p2 = toPlanned(candidate.item, compiled, { choice: candidate.modStep.choices[1] });
+  if (!p1 || !p2) return null;
+  return [p1, p2];
+}
+
+function buildItemPlusPlain(
+  compiled: Map<string, CompiledItem>,
+  composed: ComposedPick[],
+  plain: CompileItem[],
+): PlannedItem[] | null {
+  const a = composed[0];
+  if (!a) return null;
+  const b = plain.find(it => it.id !== a.item.id);
+  if (!b) return null;
+  const p1 = toPlanned(a.item, compiled, { choice: a.modStep.choices[0] });
+  const p2 = toPlanned(b, compiled);
+  if (!p1 || !p2) return null;
+  return [p1, p2];
+}
+
+interface PhrasingStyle {
+  key: string;
+  build: (parts: string[]) => string;
+}
+
+// The 5 required phrasing forms (item 5 follow-up spec). Each takes the raw
+// per-item phrase text (e.g. "Cheese Pizza with Pepperoni") and wraps it in
+// a distinct quantity/connector style — resolver.ts's splitPhrases/
+// parseQuantity must isolate each item correctly under every one of these.
+const PHRASING_STYLES: PhrasingStyle[] = [
+  { key: "comma-digit-qty", build: parts => parts.map(p => `1 ${p}`).join(", ") },
+  { key: "comma-word-qty", build: parts => parts.map(p => `one ${p}`).join(", ") },
+  { key: "and-separated", build: parts => parts.map(p => `one ${p}`).join(" and ") },
+  { key: "bare-list", build: parts => parts.join(", ") },
+  {
+    key: "conversational",
+    build: parts => {
+      if (parts.length === 1) return `gimme a ${parts[0]}`;
+      const lead = parts.slice(0, -1).map(p => `a ${p}`).join(", ");
+      return `gimme ${lead}, and a ${parts[parts.length - 1]}`;
+    },
+  },
+];
+
+/**
+ * Execute one multi-item, one-phrasing case: resolve the utterance via
+ * resolver.ts, build each resulting add_item op into a real cart line via
+ * ask-plan-engine.ts (running the same ask-loop runItemWalk uses to resolve
+ * any remaining required slots), then assert:
+ *   - correct line count (no silent merge, no dropped phrase)
+ *   - each line's MODIFIER selections are exactly the ones its own phrase
+ *     named — nothing missing, nothing leaked in from another phrase or from
+ *     the item's own name colliding with a modifier choice
+ *   - no single modifier choice id ever resolves onto more than one cart line
+ *   - subtotal (pricing.ts's computeCartSubtotalCents) equals the sum of the
+ *     individual lines, and each line's own price equals its own base +
+ *     resolved deltas (same discipline as runItemWalk's pricing check)
+ */
+function runMultiItemCase(
+  caseType: string,
+  phrasingKey: string,
+  utterance: string,
+  planned: PlannedItem[],
+  allItems: CompileItem[],
+  allCompiled: Map<string, CompiledItem>,
+): MultiItemCaseResult {
+  const failures: WalkFailure[] = [];
+  const caseId = `${caseType}:${phrasingKey}`;
+  const menuForResolver = toComposeMenu(allItems, allCompiled);
+
+  let ops: ResolvedOp[];
+  try {
+    ops = resolveUtterance(utterance, menuForResolver);
+  } catch (e) {
+    failures.push({ step: "multi-resolve", detail: `resolveUtterance threw on "${utterance}": ${String(e)}` });
+    return { case_id: caseId, case_type: caseType, phrasing: phrasingKey, utterance, pass: false, failures, expected_line_count: planned.length, actual_line_count: 0, subtotal_cents: null, ticket_text: null };
+  }
+
+  const addOps = ops.filter((o): o is Extract<ResolvedOp, { kind: "add_item" }> => o.kind === "add_item");
+  if (ops.length !== planned.length || addOps.length !== planned.length) {
+    failures.push({
+      step: "multi-resolve",
+      detail: `expected ${planned.length} add_item ops for "${utterance}", got ${ops.length} op(s) (${addOps.length} add_item): ${JSON.stringify(ops.map(o => ({ kind: o.kind, phrase: o.phrase })))}`,
+    });
+  }
+  for (let idx = 0; idx < Math.min(addOps.length, planned.length); idx++) {
+    if (addOps[idx].itemId !== planned[idx].item.id) {
+      failures.push({
+        step: "multi-resolve-order",
+        detail: `phrase ${idx} ("${addOps[idx].phrase}") resolved to item ${addOps[idx].itemId}, expected ${planned[idx].item.id} (${planned[idx].askPlan.display_name})`,
+      });
+    }
+  }
+
+  const cart: CompiledCartLine[] = [];
+  const opToLineIndex: (number | null)[] = [];
+
+  for (let idx = 0; idx < addOps.length; idx++) {
+    const op = addOps[idx];
+    const opItem = allItems.find(i => i.id === op.itemId);
+    const compiledOpItem = opItem ? allCompiled.get(opItem.id) : undefined;
+    if (!opItem || !compiledOpItem) {
+      failures.push({ step: `multi-add:${idx}`, detail: `op ${idx} referenced unknown item id ${op.itemId}` });
+      opToLineIndex.push(null);
+      continue;
+    }
+    const askPlan = compiledOpItem.ask_plan;
+    const engineMenuItem: CompiledMenuItem = {
+      ask_plan: askPlan,
+      bot_state: compiledOpItem.bot_state,
+      option_groups: opItem.groups.map(g => ({ id: g.id, name: g.name, default_choice_id: g.default_choice_id })),
+    };
+
+    const sizeBefore = cart.length;
+    const addResult = applyCompiledAddItem(cart, engineMenuItem, opItem.id, op.quantity, op.phrase, null);
+    if (!addResult.ok) {
+      failures.push({ step: `multi-add:${idx}`, detail: `applyCompiledAddItem failed for phrase "${op.phrase}": ${JSON.stringify(addResult.result)}` });
+      opToLineIndex.push(null);
+      continue;
+    }
+    if (cart.length !== sizeBefore + 1) {
+      failures.push({ step: `multi-add:${idx}`, detail: `expected a new cart line for phrase "${op.phrase}" (item ${opItem.id}); cart length went ${sizeBefore} -> ${cart.length} (likely merged into an existing line)` });
+      opToLineIndex.push(cart.length > 0 ? cart.length - 1 : null);
+      continue;
+    }
+    const lineIndex = cart.length - 1;
+    opToLineIndex.push(lineIndex);
+
+    // Ask-loop: resolve any still-open required slots with choices[0].display,
+    // exactly like runItemWalk's single-item walk.
+    const slotSteps = askPlan.steps.filter(s => s.kind === "slot");
+    let guard = 0;
+    for (;;) {
+      const line = cart[lineIndex];
+      const resolvedIds = new Set(Object.keys(line.ask_plan_selections ?? {}));
+      if (allSlotsResolved(askPlan, resolvedIds)) break;
+      guard++;
+      if (guard > slotSteps.length + 2) {
+        failures.push({ step: `multi-ask-loop:${idx}`, detail: `slot resolution for ${opItem.id} (phrase "${op.phrase}") did not converge after ${guard} turns` });
+        break;
+      }
+      const nextStep = slotSteps.find(s => !resolvedIds.has(s.group_id));
+      if (!nextStep || nextStep.choices.length === 0) {
+        failures.push({ step: `multi-ask-loop:${idx}`, detail: `no answerable next step for ${opItem.id}` });
+        break;
+      }
+      const answerText = nextStep.choices[0].display;
+      const beforeSize = resolvedIds.size;
+      const stepResult = applyCompiledAddItem(cart, engineMenuItem, opItem.id, 1, answerText, null);
+      const afterIds = new Set(Object.keys(cart[lineIndex].ask_plan_selections ?? {}));
+      if (!stepResult.ok || !afterIds.has(nextStep.group_id) || afterIds.size <= beforeSize) {
+        failures.push({ step: `multi-ask:${idx}:${nextStep.slot_key ?? nextStep.group_id}`, detail: `answering "${answerText}" for ${opItem.id} did not record a selection` });
+        break;
+      }
+    }
+  }
+
+  // ── Assertion: correct line count ──────────────────────────────────────
+  if (cart.length !== planned.length) {
+    failures.push({ step: "line-count", detail: `expected ${planned.length} cart lines for "${utterance}", got ${cart.length}` });
+  }
+
+  // ── Assertion: modifier isolation — each line carries EXACTLY the
+  // modifier(s) its own phrase named, nothing missing, nothing leaked ─────
+  for (let idx = 0; idx < planned.length; idx++) {
+    const lineIndex = opToLineIndex[idx];
+    if (lineIndex === null || !cart[lineIndex]) continue; // already reported above
+    const line = cart[lineIndex];
+    const askPlan = planned[idx].askPlan;
+    const modifierChoiceIds = new Set<string>();
+    for (const step of askPlan.steps) {
+      if (step.kind !== "modifier") continue;
+      const choiceId = line.ask_plan_selections?.[step.group_id];
+      if (choiceId) modifierChoiceIds.add(choiceId);
+    }
+    const intended = planned[idx].intendedModifierChoiceIds;
+    const missing = [...intended].filter(id => !modifierChoiceIds.has(id));
+    const extra = [...modifierChoiceIds].filter(id => !intended.has(id));
+    if (missing.length > 0) {
+      failures.push({ step: `modifier-missing:${idx}`, detail: `phrase "${planned[idx].phraseText}" (item ${planned[idx].item.id}) is missing intended modifier choice id(s): ${missing.join(", ")}` });
+    }
+    if (extra.length > 0) {
+      failures.push({ step: `modifier-leakage:${idx}`, detail: `phrase "${planned[idx].phraseText}" (item ${planned[idx].item.id}) picked up unintended modifier choice id(s): ${extra.join(", ")} — cross-line/self-name leakage` });
+    }
+  }
+
+  // ── Assertion: no MODIFIER choice id resolves on more than one line ──────
+  // (SLOT choices legitimately repeat across lines — two independent pizzas
+  // can both be "Large" — so only modifier-kind selections are checked here;
+  // the missing/extra check above already covers per-line correctness.)
+  const modifierChoiceIdToLines = new Map<string, number[]>();
+  for (let idx = 0; idx < planned.length; idx++) {
+    const lineIndex = opToLineIndex[idx];
+    if (lineIndex === null || !cart[lineIndex]) continue;
+    const line = cart[lineIndex];
+    const askPlan = planned[idx].askPlan;
+    for (const step of askPlan.steps) {
+      if (step.kind !== "modifier") continue;
+      const choiceId = line.ask_plan_selections?.[step.group_id];
+      if (!choiceId) continue;
+      const arr = modifierChoiceIdToLines.get(choiceId) ?? [];
+      arr.push(lineIndex);
+      modifierChoiceIdToLines.set(choiceId, arr);
+    }
+  }
+  for (const [choiceId, lines] of modifierChoiceIdToLines) {
+    if (lines.length > 1) {
+      failures.push({ step: "cross-line-duplicate-selection", detail: `modifier choice id ${choiceId} was resolved on ${lines.length} different cart lines (indices ${lines.join(",")}) for "${utterance}"` });
+    }
+  }
+
+  // ── Assertion: subtotal == sum of the lines; each line's own price ==
+  // its own base + resolved deltas ─────────────────────────────────────────
+  let subtotalCents: number | null = null;
+  try {
+    subtotalCents = computeCartSubtotalCents(cart as unknown as PricedCartLine[]);
+    const sumOfLines = cart.reduce((s, l) => s + l.price_cents * l.quantity, 0);
+    if (subtotalCents !== sumOfLines) {
+      failures.push({ step: "subtotal", detail: `computeCartSubtotalCents ${subtotalCents} !== sum of line totals ${sumOfLines} for "${utterance}"` });
+    }
+    for (let idx = 0; idx < planned.length; idx++) {
+      const lineIndex = opToLineIndex[idx];
+      if (lineIndex === null || !cart[lineIndex]) continue;
+      const line = cart[lineIndex];
+      const askPlan = planned[idx].askPlan;
+      let expectedDelta = 0;
+      for (const step of askPlan.steps) {
+        const choiceId = line.ask_plan_selections?.[step.group_id];
+        if (!choiceId) continue;
+        const choice = step.choices.find(c => c.id === choiceId);
+        if (choice) expectedDelta += choice.price_delta_cents;
+      }
+      const expectedLineTotal = askPlan.base_price_cents + expectedDelta;
+      if (line.price_cents !== expectedLineTotal) {
+        failures.push({ step: `pricing:${idx}`, detail: `line ${idx} (${askPlan.display_name}) price_cents ${line.price_cents} !== base ${askPlan.base_price_cents} + deltas ${expectedDelta}` });
+      }
+    }
+  } catch (e) {
+    failures.push({ step: "subtotal", detail: `computeCartSubtotalCents threw: ${String(e)}` });
+  }
+
+  let ticketText: string | null = null;
+  try {
+    ticketText = renderItemizedRecap(cart as unknown as ItemizedCartLine[]);
+  } catch (e) {
+    failures.push({ step: "ticket-text", detail: `renderItemizedRecap threw: ${String(e)}` });
+  }
+
+  return {
+    case_id: caseId,
+    case_type: caseType,
+    phrasing: phrasingKey,
+    utterance,
+    pass: failures.length === 0,
+    failures,
+    expected_line_count: planned.length,
+    actual_line_count: cart.length,
+    subtotal_cents: subtotalCents,
+    ticket_text: ticketText,
+  };
+}
+
+/**
+ * §8.4: run the extended multi-item, multi-phrasing walk for a compiled
+ * menu. Cases are DERIVED from the shop's own orderable items (never
+ * hardcoded item names) — see the 4 buildXxx() functions above. A case type
+ * is skipped (not silently counted as a pass) when the shop's menu has no
+ * items shaped to support it (e.g. no item with >=2 modifier choices for the
+ * "two of the same item, different modifiers" case) — `skipped_case_types`
+ * reports exactly which, so a 0-case shop never reads as a clean pass.
+ */
+export function runMultiItemMenuWalk(items: CompileItem[], compiled: Map<string, CompiledItem>): MultiItemWalkReport {
+  const orderable = items.filter(i => compiled.get(i.id)?.bot_state === "orderable");
+  const composed = findComposedItems(orderable, compiled);
+  const plain = findPlainItems(orderable, compiled);
+
+  const caseBuilders: Array<{ type: string; build: () => PlannedItem[] | null }> = [
+    { type: "two-different-categories", build: () => buildTwoDifferentCategories(orderable, compiled, composed) },
+    { type: "four-items-with-modifier", build: () => buildFourItemsWithModifier(orderable, compiled, composed) },
+    { type: "two-same-item-different-modifiers", build: () => buildTwoSameItemDifferentModifiers(compiled, composed) },
+    { type: "item-plus-non-composed", build: () => buildItemPlusPlain(compiled, composed, plain) },
+  ];
+
+  const results: MultiItemCaseResult[] = [];
+  const skippedCaseTypes: string[] = [];
+
+  for (const { type, build } of caseBuilders) {
+    const planned = build();
+    if (!planned) {
+      skippedCaseTypes.push(type);
+      continue;
+    }
+    for (const style of PHRASING_STYLES) {
+      const utterance = style.build(planned.map(p => p.phraseText));
+      results.push(runMultiItemCase(type, style.key, utterance, planned, items, compiled));
+    }
+  }
+
+  return {
+    total_cases: results.length,
+    passed: results.filter(r => r.pass).length,
+    failed: results.filter(r => !r.pass).length,
+    skipped_case_types: skippedCaseTypes,
+    results,
+  };
+}
+
+// ── Top-line readiness report combining §8.1 states + §8.2 invariants + §8.3 walk + §8.4 multi-item walk ──
 
 export interface MenuReadinessReport {
   states: ItemStateCounts;
   invariants: MenuInvariantResult[];
   walk: MenuWalkReport;
+  multi_item_walk: MultiItemWalkReport;
   orderable_ratio: number;
 }
 
@@ -301,10 +773,12 @@ export function computeReadinessReport(
 ): MenuReadinessReport {
   const states = summarizeItemStates(items, compiled);
   const walk = runMenuWalk(items, compiled);
+  const multiItemWalk = runMultiItemMenuWalk(items, compiled);
   return {
     states,
     invariants,
     walk,
+    multi_item_walk: multiItemWalk,
     orderable_ratio: states.total_active === 0 ? 1 : states.orderable / states.total_active,
   };
 }
