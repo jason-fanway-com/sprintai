@@ -755,6 +755,9 @@ export interface InferSourceItem {
   extractedGroups: ExtractedGroup[];
   nameSlotChoices: string[] | null;
   descriptionSlotChoices: string[] | null;
+  // 2026-09-08, real NJB two-choice-clause fix — see InferItemInput's own
+  // field of the same name in archetypes.ts for the full rationale.
+  sideSlotChoices: string[] | null;
   priceCents: number;
 }
 
@@ -810,6 +813,7 @@ export function buildOwnerQuestionSummaries(items: InferSourceItem[]): CategoryQ
       siblingCount: item.productKey ? productKeyCounts.get(item.productKey) ?? 1 : 1,
       nameSlotChoices: item.nameSlotChoices,
       descriptionSlotChoices: item.descriptionSlotChoices,
+      sideSlotChoices: item.sideSlotChoices,
       extractedGroups: item.extractedGroups,
       categoryCandidateGroups: otherCategoryCandidates,
     }));

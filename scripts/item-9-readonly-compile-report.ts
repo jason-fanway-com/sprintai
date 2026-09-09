@@ -31,7 +31,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 import {
   inferCategory,
   buildCategoryCandidateGroups,
@@ -216,6 +216,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
     const normalized = normalizedById.get(r.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
     const descSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
+    const sideSlot = normalized ? pickSideDescriptionSlot(normalized) : undefined;
     const extractedGroups: ExtractedGroup[] = (groupsByItem.get(r.id) ?? []).map(g => ({
       name: g.name,
       required: g.required,
@@ -231,6 +232,7 @@ async function compileShop(shopName: string, shopId: string): Promise<ShopReport
       siblingCount: siblingCounts.get(normalized?.product_key ?? `unfolded:${r.id}`) ?? 1,
       nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
       descriptionSlotChoices: descSlot ? descSlot.choices.map(c => c.display_name) : null,
+      sideSlotChoices: sideSlot ? sideSlot.choices.map(c => c.display_name) : null,
       extractedGroups,
     };
   });

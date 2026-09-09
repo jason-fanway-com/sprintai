@@ -28,7 +28,7 @@ import {
   type InferItemInput,
   type CategoryPriceItem,
 } from "./archetypes.ts";
-import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
 
 function item(overrides: Partial<InferItemInput>): InferItemInput {
   return {
@@ -40,6 +40,7 @@ function item(overrides: Partial<InferItemInput>): InferItemInput {
     siblingCount: 1,
     nameSlotChoices: null,
     descriptionSlotChoices: null,
+    sideSlotChoices: null,
     extractedGroups: [],
     ...overrides,
   };
@@ -370,13 +371,49 @@ Deno.test("bagel: spread applies only when name/description names cream cheese/b
   assertEquals(spreadResult.slotOutcomes.find(o => o.slot_key === "spread")!.kind, "needs_question");
 });
 
-Deno.test("eggs: egg_style universal choices apply, but not to omelet-named items (auto_single)", () => {
+Deno.test("eggs: egg_style universal choices supply WITHOUT an owner question (2026-09-08, PO directive superseding the prior 'proposed' behavior) — real NJB 'Two Eggs Any Style Platter'", () => {
   const anyStyle = item({ name: "Two Eggs Any Style Platter", category: "Omelette & Egg Platters" });
   const omelet = item({ name: "Cheese Omelette Platter", category: "Omelette & Egg Platters" });
   const result = inferCategory("Omelette & Egg Platters", [anyStyle, omelet]);
   const outcomes = result.slotOutcomes.filter(o => o.slot_key === "egg_style");
-  assertEquals(outcomes.find(o => o.item_id === anyStyle.id)!.kind, "proposed");
+  const anyStyleOutcome = outcomes.find(o => o.item_id === anyStyle.id)!;
+  assertEquals(anyStyleOutcome.kind, "advisory");
+  assertEquals(anyStyleOutcome.choices, ["Scrambled", "Over easy", "Over medium", "Over hard", "Sunny side up", "Poached"]);
   assertEquals(outcomes.find(o => o.item_id === omelet.id)!.kind, "not_applicable");
+  // advisory never contributes to needsQuestion — no owner_question at all.
+  assertEquals(result.questions.find(q => q.slot_key === "egg_style"), undefined);
+});
+
+Deno.test("eggs: burger/steak temp is UNAFFECTED by egg_style's universalSuppliesWithoutQuestion opt-in — still asks when unbound (deliberately not mirrored onto every universal_choices slot)", () => {
+  const burger = item({ name: "Cheeseburger", category: "Burgers" });
+  const result = inferCategory("Burgers", [burger]);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "temp")!;
+  assertEquals(outcome.kind, "proposed");
+  assertExists(result.questions.find(q => q.slot_key === "temp"));
+});
+
+Deno.test("eggs: egg_side binds to the description's SIDE clause (sideSlotChoices), not the bread/toast one — closes the 'genuine by design' standing question, real NJB 10-platter shape", () => {
+  const platter = item({
+    name: "Western Omelette Platter", category: "Omelette & Egg Platters",
+    description: "Western omelette with ham, peppers & onions. Served with home fries or hash brown and choice of bagel or toast.",
+    descriptionSlotChoices: ["Bagel", "Toast"],
+    sideSlotChoices: ["Home Fries", "Hash Brown"],
+  });
+  const result = inferCategory("Omelette & Egg Platters", [platter]);
+  const side = result.slotOutcomes.find(o => o.slot_key === "egg_side")!;
+  assertEquals(side.kind, "stated");
+  assertEquals(side.source, "description");
+  assertEquals(side.choices, ["Home Fries", "Hash Brown"]);
+  const toast = result.slotOutcomes.find(o => o.slot_key === "toast")!;
+  assertEquals(toast.kind, "stated");
+  assertEquals(toast.choices, ["Bagel", "Toast"]);
+  assertEquals(result.questions.find(q => q.slot_key === "egg_side"), undefined);
+});
+
+Deno.test("eggs: egg_side still asks when a description states no side clause at all (no silent stated-with-wrong-data, no regression for items with genuinely no side data)", () => {
+  const noSide = item({ name: "Cheese Omelette Platter", category: "Omelette & Egg Platters", sideSlotChoices: null });
+  const result = inferCategory("Omelette & Egg Platters", [noSide]);
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "egg_side")!.kind, "needs_question");
 });
 
 Deno.test("platter: side binds from the normalizer's description slot when present, else asks", () => {
@@ -691,6 +728,7 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
     const normalized = normalizedById.get(it.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
     const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
+    const sideSlot = normalized ? pickSideDescriptionSlot(normalized) : undefined;
     return {
       id: it.id,
       name: it.name,
@@ -700,6 +738,7 @@ async function loadShopItems(supabase: any, shopId: string): Promise<InferItemIn
       siblingCount: siblingCounts.get(`${it.category ?? ""}::${baseNameOf(it.name, it.size_label).toLowerCase()}`) ?? 1,
       nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
       descriptionSlotChoices: descriptionSlot ? descriptionSlot.choices.map(c => c.display_name) : null,
+      sideSlotChoices: sideSlot ? sideSlot.choices.map(c => c.display_name) : null,
       extractedGroups: groupsByItem.get(it.id) ?? [],
       categoryCandidateGroups: [...categoryCandidates.values()].filter(g => g.name !== it.category),
     };

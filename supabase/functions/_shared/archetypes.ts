@@ -30,6 +30,11 @@
 //   5.5b. item has real group(s), all of them   -> advisory (same as 5.5) —
 //        a required singleton (1 choice) —        see hasOnlySingletonGroups
 //        regardless of provenance tag              below
+//   5.7. slot opted into                        -> advisory (no question, no
+//        universalSuppliesWithoutQuestion —        owner tap) — see that
+//        universal_choices IS the answer,           flag's own comment on
+//        no restaurant-specific data needed —       SlotRule (egg_style is
+//        (added 2026-09-08, egg_style)               the only slot so far)
 //   6. universal_choices exists                 -> proposed  (needs owner tap)
 //   7. kitchen_critical || price_critical        -> needs_question (needs owner tap)
 //   8. none of the above                         -> skip (Appendix A's "no slot, no
@@ -44,7 +49,8 @@
 // restaurant-sourced data. That's guessing over a real answer, not caution (P3 "missing
 // beats wrong" is about gaps in the data, not about second-guessing data that exists).
 // Items with NO stated-provenance groups at all (no platform source, e.g. Not Just
-// Bagels) are completely unaffected — steps 6/7 still apply to them exactly as before.
+// Bagels) are completely unaffected — steps 6/7 still apply to them exactly as before,
+// EXCEPT for a slot that opts into step 5.7 (egg_style only, so far).
 //
 // `size` and `count` are special-cased outside this ladder entirely (Appendix B: "size
 // stated by rows; toppings quoted" — no question ever). They're resolved from sibling
@@ -67,6 +73,20 @@ export interface SlotRule {
   default_from_name?: RegExp;
   owner_question: string;
   order: number;
+  // 2026-09-08, PO-directed egg_style fix. Most universal_choices slots
+  // (burger/steak `temp`) still fall to `proposed` (step 6, an owner tap)
+  // when unbound -- a real restaurant can genuinely offer only some temps,
+  // or none at all, so the list needs the owner's confirmation before it's
+  // trustworthy. `egg_style` is different in kind, not degree: "how do you
+  // want your eggs" with these six answers is a customer-facing universal
+  // any establishment that serves eggs "any style" already implies, not a
+  // restaurant-specific menu fact — there is no real-world answer set this
+  // could be wrong about the way a bread or dressing question could. Set
+  // true ONLY where that's true; leaves burger/steak temp's existing
+  // ask-when-unbound behavior (and its known 3 pre-existing blocked Vito's
+  // burgers) untouched, since changing that is a separate, unreviewed call
+  // this task never asked for.
+  universalSuppliesWithoutQuestion?: boolean;
 }
 
 export interface ModifierRule {
@@ -122,6 +142,17 @@ export interface InferItemInput {
   siblingCount: number;
   nameSlotChoices: string[] | null;
   descriptionSlotChoices: string[] | null;
+  // 2026-09-08, real NJB two-choice-clause fix. normalize.ts's
+  // pickDescriptionSlot picks the BREAD/named-sub-attribute clause into
+  // descriptionSlotChoices above; this is the separate "served with A or B"
+  // SIDE clause a description can state alongside it (normalize.ts's own
+  // pickSideDescriptionSlot) — e.g. NJB's "... served with home fries or
+  // hash brown and choice of bagel or toast." states a side AND a bread
+  // choice in one sentence, and the two must never collapse into a single
+  // field the way they used to (see egg_side's own comment below). Null
+  // when the description states no such clause (every non-NJB-egg-platter
+  // item today).
+  sideSlotChoices: string[] | null;
   extractedGroups: ExtractedGroup[];
   // §5's "shared list" concept, recognized post-hoc: other categories in the
   // SAME menu, each turned into a candidate ExtractedGroup (category name as
@@ -191,6 +222,15 @@ const NAME_SOURCED_SLOTS = new Set(["protein"]);
 // where "choice of bagel, bread, or roll" was stated in the source text but
 // never reached this slot because bread wasn't in this set at all.
 const DESCRIPTION_SOURCED_SLOTS = new Set(["side", "toast", "bread"]);
+// `egg_side` is deliberately NOT in the set above: it reads its own
+// `sideSlotChoices` field (see InferItemInput and the egg_side SlotRule's
+// own comment), not the shared `descriptionSlotChoices` field this set's
+// slots all read — the two clauses a description like NJB's "... served
+// with home fries or hash brown and choice of bagel or toast." states are
+// never the same list, so they can't share one field the way `side` and
+// `toast` currently do (harmless today only because no live item uses both
+// `side` and `toast`/`bread` at once — egg_side's own history is exactly
+// what happens when two real, DIFFERENT clauses collapse onto one field).
 
 // Slots resolved from sibling product rows, never from a question (see file
 // header). Universal across every archetype that declares one.
@@ -376,8 +416,18 @@ export const ARCHETYPES: Archetype[] = [
     match: [/\begg\b/i, /eggs/i, /omelet/i, /omelette/i, /scramble/i, /benedict/i],
     slots: [
       {
+        // universalSuppliesWithoutQuestion added 2026-09-08 (PO directive,
+        // superseding this slot's own prior behavior): egg_style used to
+        // fall to `proposed` like any other universal_choices slot when
+        // unbound, which meant NJB's "Two Eggs Any Style Platter" -- the one
+        // item this slot genuinely applies to -- sat blocked on an owner tap
+        // for a fact that isn't restaurant-specific (see the flag's own
+        // comment on SlotRule for why egg_style differs from burger/steak
+        // temp here). Resolves as `advisory` now: the six choices are
+        // supplied, no owner_question is created, no tap spent.
         slot_key: "egg_style", kitchen_critical: true, price_critical: false,
         universal_choices: EGG_STYLE_CHOICES,
+        universalSuppliesWithoutQuestion: true,
         applies_when: item => !/omelet|omelette/i.test(item.name),
         owner_question: "How would customers like their eggs cooked on {category}?", order: 3,
       },
@@ -386,14 +436,19 @@ export const ARCHETYPES: Archetype[] = [
         bind_to_list_named: /toast|bread/i,
         owner_question: "Do customers pick a toast/bread on {category}?", order: 4,
       },
-      // Named distinctly from platter's `side` below: NJB's real descriptions
-      // ("...home fries or hash brown and choice of bagel or toast.") carry
-      // TWO implicit choices but normalize.ts's regex only ever captures the
-      // first "choice of ... or ..." match (here, the toast clause). Sharing
-      // `side` with platter would let this slot wrongly claim "stated" with
-      // the toast slot's choices mislabeled as the side dish (P3: missing
-      // beats wrong) -- so `egg_side` deliberately never attempts
-      // description-sourced binding and always asks when kc and unbound.
+      // SUPERSEDES the prior standing note here (2026-09-08, PO directive):
+      // this slot used to say it "deliberately never attempts description-
+      // sourced binding and always asks when kc and unbound" — reasonable
+      // as a stopgap when normalize.ts could only ever surface ONE
+      // "choice of ..." clause per description (so `side` and `toast` would
+      // have collided on the same mislabeled data, P3 "missing beats
+      // wrong"), but that stopgap is not the answer. normalize.ts now
+      // extracts the "served with A or B" side clause as its own,
+      // independently-anchored slot (InferItemInput.sideSlotChoices, fed by
+      // pickSideDescriptionSlot) distinct from the "choice of C or D" bread
+      // clause `toast` reads above — there's no more collision to guard
+      // against, so `egg_side` binds to its own real, stated data below
+      // exactly like every other description-sourced slot in this file.
       {
         slot_key: "egg_side", kitchen_critical: true, price_critical: false,
         owner_question: "Do customers pick a side on {category}?", order: 6,
@@ -707,6 +762,14 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
     }
   }
 
+  // egg_side reads its OWN field rather than DESCRIPTION_SOURCED_SLOTS'
+  // shared descriptionSlotChoices — see sideSlotChoices' comment on
+  // InferItemInput and egg_side's own SlotRule comment for why the two
+  // clauses can't share one field.
+  if (slot.slot_key === "egg_side" && item.sideSlotChoices && looksLikeCleanChoiceList(item.sideSlotChoices)) {
+    return { ...base, kind: "stated", source: "description", choices: item.sideSlotChoices };
+  }
+
   if (slot.default_from_name && slot.default_from_name.test(item.name)) {
     const m = item.name.match(slot.default_from_name);
     return { ...base, kind: "default", default_choice: m?.[0] };
@@ -717,6 +780,16 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
       ...base, kind: "advisory",
       ...(slot.universal_choices ? { choices: slot.universal_choices } : {}),
     };
+  }
+
+  // See SlotRule.universalSuppliesWithoutQuestion's own comment: a narrow,
+  // explicitly-opted-in escape from step 6 below for slots whose universal
+  // list is a customer-facing fact, not a restaurant-specific one — checked
+  // AFTER the bind/name/description/default attempts above (a real stated
+  // answer always wins over the universal fallback) and before step 6 so it
+  // never reaches `proposed`.
+  if (slot.universalSuppliesWithoutQuestion && slot.universal_choices) {
+    return { ...base, kind: "advisory", choices: slot.universal_choices };
   }
 
   if (slot.universal_choices) {

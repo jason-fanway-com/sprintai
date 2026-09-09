@@ -68,7 +68,7 @@ import {
 } from "../_shared/compile-menu.ts";
 import type { ExtractedGroup, OwnerQuestionDraft } from "../_shared/archetypes.ts";
 import { itemEntityKey, groupEntityKey, choiceEntityKey } from "../_shared/menu-entity-key.ts";
-import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "../_shared/normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "../_shared/normalize.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -325,6 +325,7 @@ Deno.serve(async (req: Request) => {
     const normalized = normalizedById.get(row.id);
     const nameSlot = normalized?.slots.find(s => s.source === "name");
     const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
+    const sideSlot = normalized ? pickSideDescriptionSlot(normalized) : undefined;
     const extractedGroups: ExtractedGroup[] = (groupsByItem.get(row.id) ?? []).map(g => ({
       name: g.name,
       required: g.kind === "slot",
@@ -340,6 +341,7 @@ Deno.serve(async (req: Request) => {
       extractedGroups,
       nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
       descriptionSlotChoices: descriptionSlot ? descriptionSlot.choices.map(c => c.display_name) : null,
+      sideSlotChoices: sideSlot ? sideSlot.choices.map(c => c.display_name) : null,
       priceCents: row.price_cents,
     };
   });

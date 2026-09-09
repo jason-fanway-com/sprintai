@@ -51,6 +51,21 @@ export interface NormalizedSlot {
   // sub-clause when more than one description-sourced slot exists on an
   // item (see pickDescriptionSlot below).
   label?: string;
+  // Which cue introduced this clause (2026-09-08, real NJB two-choice-clause
+  // fix). "choice_of" for every clause anchored on the literal words "choice
+  // of" (the vast majority). "served_with" is narrower: real NJB platter
+  // text states a SECOND, earlier alternative with no "choice of" at all --
+  // "Two eggs any style served with home fries or hash brown and choice of
+  // bagel or toast." -- where "served with ... or ..." is its own stated
+  // side-dish choice, textually before the "choice of bagel or toast" bread
+  // choice. Previously this whole "served with" clause fell in the gap
+  // between the (nonexistent, for a single-anchor description) or the
+  // just-consumed prior anchor's sentence boundary and the next "choice of"
+  // anchor's start, and was silently discarded -- see
+  // extractDescriptionClauses. Distinguishing the two anchors is what lets a
+  // caller (pickDescriptionSlot / pickSideDescriptionSlot below) bind each
+  // clause to the RIGHT archetype slot instead of picking one arbitrarily.
+  anchor?: "choice_of" | "served_with";
 }
 
 // A "choice of N <thing>" clause ("choice of three veggies", "choice of 1
@@ -87,7 +102,24 @@ export interface NormalizedMenuItem {
 // to name-sourced choices from name-slotted items — unaffected either way.
 export function pickDescriptionSlot(item: NormalizedMenuItem): NormalizedSlot | undefined {
   const descriptionSlots = item.slots.filter(s => s.source === "description");
-  return descriptionSlots.find(s => !s.label) ?? descriptionSlots[0];
+  // A "served_with"-anchored clause (see NormalizedSlot.anchor) is the SIDE
+  // choice, never the bread/toast/named-sub-attribute one this function
+  // exists to pick -- exclude it here so a 3-clause description (meat +
+  // side + bread, real NJB "Bacon, Sausage, Ham or Pork Roll Omelette
+  // Platter" text) doesn't hand the textually-earlier side clause to a
+  // caller expecting bread. pickSideDescriptionSlot below is the side
+  // clause's own accessor.
+  const choiceOfSlots = descriptionSlots.filter(s => s.anchor !== "served_with");
+  return choiceOfSlots.find(s => !s.label) ?? choiceOfSlots[0] ?? descriptionSlots[0];
+}
+
+// The side-dish counterpart to pickDescriptionSlot above (2026-09-08, real
+// NJB two-choice-clause fix) -- returns the "served with A or B" clause a
+// description states ALONGSIDE (never instead of) its own "choice of ..."
+// bread/toast clause. Undefined when the description has no such clause
+// (every shop/item that isn't one of NJB's egg platters).
+export function pickSideDescriptionSlot(item: NormalizedMenuItem): NormalizedSlot | undefined {
+  return item.slots.find(s => s.source === "description" && s.anchor === "served_with");
 }
 
 function titleCaseWord(word: string): string {
@@ -200,6 +232,22 @@ function extractOrClauseFromName(name: string): { strippedName: string; choices:
 // menu follows this shape; Vito's and Zio's have zero such items (checked
 // against live data), so this only ever activates on NJB text today.
 //
+// 2026-09-08 fix (PO-diagnosed extraction bug, 11 NJB Omelette & Egg
+// Platters items): a "choice of" anchor is not the ONLY way a description
+// states an alternative. Real NJB text states a SECOND choice with no
+// "choice of" at all — "Two eggs any style served with home fries or hash
+// brown and choice of bagel or toast." — where "served with A or B" is its
+// own genuine side-dish choice, stated plainly, just not through the
+// "choice of" phrasing. The old single-anchor-type version of this function
+// only ever looked at text AFTER a "choice of" match, so "home fries or
+// hash brown" — sitting either before the only anchor (single-sentence
+// items) or in the truncated-at-sentence-boundary gap between two anchors
+// (two-sentence items) — was silently discarded on every one of these 11
+// items: never a slot, never a modifier, just gone. "served with" is now a
+// second anchor phrase, tracked as `anchor` on the resulting slot (see
+// NormalizedSlot) so a caller can tell a stated SIDE clause from a stated
+// BREAD/TOAST clause instead of guessing from array position.
+//
 // Within one clause, two independent shapes both produce a slot:
 //  1. A parenthetical list right after an optional named label ("meat (A,
 //     B, or C)", or no label at all — "(A, B, ..., Z)"). This is checked
@@ -215,20 +263,22 @@ function extractOrClauseFromName(name: string): { strippedName: string; choices:
 // "choice of N <thing>" quantity has no list to become a slot from, but is
 // real structured data (see NormalizedModifier), not a discard.
 function extractDescriptionClauses(description: string | null): {
-  slots: { choices: string[]; label?: string }[];
+  slots: { choices: string[]; label?: string; anchor: "choice_of" | "served_with" }[];
   modifiers: NormalizedModifier[];
 } {
-  const slots: { choices: string[]; label?: string }[] = [];
+  const slots: { choices: string[]; label?: string; anchor: "choice_of" | "served_with" }[] = [];
   const modifiers: NormalizedModifier[] = [];
   if (!description) return { slots, modifiers };
 
-  const anchorRe = /choice of\s+/gi;
+  const anchorRe = /\b(choice of|served with)\s+/gi;
   const anchorStarts: number[] = [];
   const contentStarts: number[] = [];
+  const anchorKinds: ("choice_of" | "served_with")[] = [];
   let anchorMatch: RegExpExecArray | null;
   while ((anchorMatch = anchorRe.exec(description))) {
     anchorStarts.push(anchorMatch.index);
     contentStarts.push(anchorMatch.index + anchorMatch[0].length);
+    anchorKinds.push(anchorMatch[1].toLowerCase() === "served with" ? "served_with" : "choice_of");
   }
 
   if (anchorStarts.length === 0) {
@@ -238,7 +288,7 @@ function extractDescriptionClauses(description: string | null): {
     const parenMatch = description.match(/\(([^()]+)\)/);
     if (parenMatch) {
       const choices = splitOrList(parenMatch[1]).map(titleCase);
-      if (choices.length >= 2) slots.push({ choices });
+      if (choices.length >= 2) slots.push({ choices, anchor: "choice_of" });
     }
     return { slots, modifiers };
   }
@@ -250,13 +300,14 @@ function extractDescriptionClauses(description: string | null): {
     if (sentenceEnd !== -1) clause = clause.slice(0, sentenceEnd);
     clause = clause.replace(/\s+(on|and)\s*$/i, "").trim();
     if (!clause) continue;
+    const anchor = anchorKinds[i];
 
     const parenMatch = clause.match(/^([^()]*?)\(([^()]+)\)\s*$/);
     if (parenMatch) {
       const label = parenMatch[1].trim().toLowerCase();
       const choices = splitOrList(parenMatch[2]).map(titleCase);
       if (choices.length >= 2) {
-        slots.push({ choices, ...(label ? { label } : {}) });
+        slots.push({ choices, ...(label ? { label } : {}), anchor });
         continue;
       }
     }
@@ -264,7 +315,7 @@ function extractDescriptionClauses(description: string | null): {
     if (/\bor\b/i.test(clause)) {
       const choices = splitOrList(clause).map(titleCase);
       if (choices.length >= 2) {
-        slots.push({ choices });
+        slots.push({ choices, anchor });
         continue;
       }
     }
@@ -347,6 +398,7 @@ export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[]
         source: "description",
         choices: clause.choices.map(display_name => ({ display_name })),
         ...(clause.label ? { label: clause.label } : {}),
+        anchor: clause.anchor,
       });
     }
 

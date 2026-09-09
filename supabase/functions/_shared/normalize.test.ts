@@ -17,7 +17,7 @@
  */
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { normalizeMenuItems, pickDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
+import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "./normalize.ts";
 
 function row(overrides: Partial<RawMenuItemRow>): RawMenuItemRow {
   return {
@@ -180,13 +180,24 @@ Deno.test("'choice of A, B, or C' (Oxford comma, standalone) becomes a 3-way unl
   assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
 });
 
-Deno.test("'choice of A or B' (no comma) becomes a 2-way unlabeled slot (real NJB Omelette Platter text)", () => {
+Deno.test("'choice of A or B' (no comma) becomes a 2-way unlabeled slot, AND the earlier 'served with A or B' side clause in the same sentence extracts too (real NJB Two Eggs Any Style Platter text, 2026-09-08 PO-diagnosed drop fixed)", () => {
+  // Before this fix, "home fries or hash brown" fell in the unscanned gap
+  // before the description's only "choice of" anchor and was silently
+  // discarded — never a slot, never a modifier, on all 11 real NJB items
+  // shaped like this. pickDescriptionSlot resolves the BREAD clause
+  // (bagel/toast) same as before; pickSideDescriptionSlot is the new
+  // accessor for the side clause.
   const out = normalizeMenuItems([
     row({ name: "Two Eggs Any Style Platter", description: "Two eggs any style served with home fries or hash brown and choice of bagel or toast.", category: "Omelette & Egg Platters" }),
   ]);
-  assertEquals(out[0].slots.length, 1);
-  assertEquals(out[0].slots[0].label, undefined);
-  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  assertEquals(out[0].slots.length, 2);
+  const bread = pickDescriptionSlot(out[0]);
+  assert(bread, "expected a bread/toast description slot");
+  assertEquals(bread!.label, undefined);
+  assertEquals(bread!.choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  const side = pickSideDescriptionSlot(out[0]);
+  assert(side, "expected a side description slot");
+  assertEquals(side!.choices.map(c => c.display_name), ["Home Fries", "Hash Brown"]);
 });
 
 Deno.test("'choice of X (A, B, C, or D)' becomes a slot LABELED with X (real NJB 'Meat Side' text)", () => {
@@ -205,10 +216,13 @@ Deno.test("'choice of N <thing>' becomes a MODIFIER (max_select N), not a slot (
   assertEquals(out[0].modifiers.length, 1);
   assertEquals(out[0].modifiers[0].max_select, 3);
   assertEquals(out[0].modifiers[0].source_span, "choice of three veggies");
-  // the OTHER "choice of" clause in the same description (bagel or toast)
-  // must still land as its own slot — the modifier and the slot coexist.
-  assertEquals(out[0].slots.length, 1);
-  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  // The OTHER two clauses in the same description — the "choice of bagel or
+  // toast" bread clause AND (2026-09-08 fix) the earlier "served with home
+  // fries or hash brown" side clause — must still land as their own slots.
+  // Modifier + both slots all coexist.
+  assertEquals(out[0].slots.length, 2);
+  assertEquals(pickDescriptionSlot(out[0])!.choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  assertEquals(pickSideDescriptionSlot(out[0])!.choices.map(c => c.display_name), ["Home Fries", "Hash Brown"]);
 });
 
 Deno.test("a compound 'choice of 1 A, 1 B & 2 C' decomposes into 3 modifiers when every segment parses cleanly (real NJB 'Build Your Own Omelette Platter' text)", () => {
@@ -218,8 +232,11 @@ Deno.test("a compound 'choice of 1 A, 1 B & 2 C' decomposes into 3 modifiers whe
   assertEquals(out[0].modifiers.map(m => [m.slot_key, m.max_select]), [
     ["meat", 1], ["cheese", 1], ["vegetable", 2],
   ]);
-  assertEquals(out[0].slots.length, 1);
-  assertEquals(out[0].slots[0].choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  // Same 2026-09-08 fix as the Veggie Omelette Platter test above: the side
+  // clause now extracts alongside the bread clause instead of being dropped.
+  assertEquals(out[0].slots.length, 2);
+  assertEquals(pickDescriptionSlot(out[0])!.choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  assertEquals(pickSideDescriptionSlot(out[0])!.choices.map(c => c.display_name), ["Home Fries", "Hash Brown"]);
 });
 
 Deno.test("a comma list with no leading quantity and no trailing 'or' produces neither a slot nor a modifier (real NJB 'Chicken Cutlet Sandwich' text)", () => {
@@ -253,7 +270,7 @@ Deno.test("two-clause description picks the item's own label-then-bind: pickDesc
   assertEquals(picked!.choices.map(c => c.display_name), ["Bagel", "Bread", "Roll"]);
 });
 
-Deno.test("two-clause description (meat + toast) picks toast, not meat — real NJB 'Bacon, Sausage, Ham or Pork Roll Omelette Platter' text (this exact real item motivated archetypes.test.ts's 'Melvin finding, Bug 2')", () => {
+Deno.test("three-clause description (meat + side + toast) picks toast, not meat, and exposes side separately — real NJB 'Bacon, Sausage, Ham or Pork Roll Omelette Platter' text (this exact real item motivated archetypes.test.ts's 'Melvin finding, Bug 2'; the side clause fix is 2026-09-08)", () => {
   const out = normalizeMenuItems([
     row({
       name: "Bacon, Sausage, Ham or Pork Roll Omelette Platter",
@@ -261,10 +278,14 @@ Deno.test("two-clause description (meat + toast) picks toast, not meat — real 
       category: "Omelette & Egg Platters",
     }),
   ]);
+  assertEquals(out[0].slots.length, 3);
   const picked = pickDescriptionSlot(out[0]);
   assert(picked, "expected a description slot to be picked");
   assertEquals(picked!.label, undefined);
   assertEquals(picked!.choices.map(c => c.display_name), ["Bagel", "Toast"]);
+  const side = pickSideDescriptionSlot(out[0]);
+  assert(side, "expected a side description slot");
+  assertEquals(side!.choices.map(c => c.display_name), ["Home Fries", "Hash Brown"]);
 });
 
 // ---- display_name rules -----------------------------------------------------
