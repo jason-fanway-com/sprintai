@@ -574,3 +574,82 @@ Deno.test("applyCompiledModifyItem: item not in cart returns ok:false, never mut
   assertEquals(result.ok, false);
   assertEquals(result.cartChanged, false);
 });
+
+// ── P0 (2026-09-09, live money defect): negated modifiers must never charge ──
+// Live incident: Zio's Pizzeria (shop_id 2cba7b51-211c-4437-8910-1af4dcc03498),
+// "large plain pizza, no extra cheese" -> Extra Cheese ($4.00) was silently
+// added to the cart line anyway. Live-verified 2026-09-09 against the real
+// endpoint (channel: web, no test flag) before this fix: cart came back with
+// options: {"Add Toppings": ["Extra Cheese"]}, price_cents 2199 (base 1799 +
+// 400). Root cause: resolveAskPlan's modifier branch had no negation check at
+// all -- matchChoiceInText only requires every one of a choice's stems to
+// appear in the text, and "extra"/"cheese" are both present in "no extra
+// cheese" the same as they'd be present in a genuine request for it.
+//
+// Fixture below uses the REAL group_id and choice ids/prices read live from
+// Zio's Large 18" Neapolitan Cheese Pizza's own ask_plan (menu_items.id
+// 35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd), not invented values, so a schema/id
+// drift in the real menu would show up here.
+const ZIOS_LARGE_TOPPINGS_STEP: CompiledStep = {
+  group_id: "c61917b8-f553-4a7b-b138-8bf640069d72",
+  slot_key: null,
+  kind: "modifier",
+  ask_mode: "on_request",
+  prompt_template: "make_it.on_request",
+  choices: [
+    { id: "28a7d57a-4dcc-4e66-b303-2917f2f12bd7", display: "Pepperoni", price_delta_cents: 300 },
+    { id: "a7b5c218-0006-4d8d-b14b-4609a2f4f2d3", display: "Extra Cheese", price_delta_cents: 400 },
+  ],
+};
+
+const ZIOS_LARGE_PLAN: AskPlan = {
+  ...SIZE_ASK_PLAN,
+  display_name: "Neapolitan Cheese Pizza - Large 18''",
+  base_price_cents: 1799,
+  steps: [ZIOS_LARGE_TOPPINGS_STEP],
+};
+
+Deno.test("resolveAskPlan: P0 fix -- 'no extra cheese' never resolves Extra Cheese, real Zio's ids/prices", () => {
+  const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large plain pizza, no extra cheese", new Set(), new Map());
+  assertEquals(result.resolved.length, 0, "Extra Cheese must not be resolved when the customer explicitly declined it");
+  assertEquals(result.totalDeltaCents, 0);
+});
+
+Deno.test("resolveAskPlan: P0 fix -- an UNNEGATED topping in the same message still resolves and prices correctly (no over-correction)", () => {
+  const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large pizza with pepperoni", new Set(), new Map());
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].choice.id, "28a7d57a-4dcc-4e66-b303-2917f2f12bd7");
+  assertEquals(result.totalDeltaCents, 300);
+});
+
+Deno.test("resolveAskPlan: P0 fix -- negating one topping does not suppress a different, unnegated topping in a separate step (same message)", () => {
+  // Two separate steps (mirrors Zio's real ask_plan shape: multiple modifier
+  // steps coexist, e.g. "Make it"/"Add Toppings") so each choice list is
+  // textually unambiguous on its own -- matchChoiceInText's single-match
+  // ambiguity rule (unrelated to this fix) is not what's under test here.
+  const cheeseOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-cheese-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[1]] };
+  const pepperoniOnlyStep: CompiledStep = { ...ZIOS_LARGE_TOPPINGS_STEP, group_id: "grp-pepperoni-only", choices: [ZIOS_LARGE_TOPPINGS_STEP.choices[0]] };
+  const plan: AskPlan = { ...ZIOS_LARGE_PLAN, steps: [cheeseOnlyStep, pepperoniOnlyStep] };
+  const result = resolveAskPlan(plan, "pepperoni pizza, no extra cheese", new Set(), new Map());
+  assertEquals(result.resolved.length, 1, "exactly the unnegated Pepperoni should resolve");
+  assertEquals(result.resolved[0].choice.id, "28a7d57a-4dcc-4e66-b303-2917f2f12bd7");
+  assertEquals(result.totalDeltaCents, 300);
+});
+
+Deno.test("resolveAskPlan: P0 fix -- a model-asserted choice is also negation-checked, not just the text-matched fallback", () => {
+  const result = resolveAskPlan(
+    ZIOS_LARGE_PLAN,
+    "large plain pizza, no extra cheese please",
+    new Set(),
+    new Map(),
+    undefined,
+    ["Extra Cheese"], // model incorrectly proposed it despite the decline
+  );
+  assertEquals(result.resolved.length, 0, "a model-asserted choice must still be rejected when the customer's own text negates it");
+});
+
+Deno.test("resolveAskPlan: 'no extra toppings' (generic, no specific topping named) never matches any real choice — sanity check for the broader phrasing", () => {
+  const result = resolveAskPlan(ZIOS_LARGE_PLAN, "large plain pizza, no extra toppings", new Set(), new Map());
+  assertEquals(result.resolved.length, 0);
+  assertEquals(result.totalDeltaCents, 0);
+});

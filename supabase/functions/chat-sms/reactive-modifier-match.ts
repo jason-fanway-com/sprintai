@@ -48,7 +48,7 @@ const NEGATORS = ["no", "not", "without", "hold the", "hold on the", "minus", "s
 // reliably, since "no <2 words> mushroom" fits the same window as "no
 // <2 words> pepperoni" once "but add" sits in between. Splitting on
 // conjunctions/punctuation first keeps each negator scoped to its own clause.
-function isNegated(text: string, candidateName: string): boolean {
+export function isNegated(text: string, candidateName: string): boolean {
   const nameStems = [...significantStems(candidateName)];
   if (nameStems.length === 0) return false;
   const clauses = text.toLowerCase().split(/\b(?:but|and|also|plus)\b|[,.;]/);

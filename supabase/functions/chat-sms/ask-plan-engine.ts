@@ -44,6 +44,7 @@
 // primitives, don't hand-roll a new ad hoc regex matcher").
 
 import { significantStems } from "./pending-disambiguation.ts";
+import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 
 export interface EngineChoice {
@@ -312,7 +313,15 @@ export function resolveAskPlan(
     // match-if-mentioned-this-turn, same as a slot, minus the asking).
     if (step.kind === "modifier") {
       const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? matchChoiceInText(step.choices, customerText);
-      if (matched && !consumedModifierChoiceIds?.has(matched.id)) {
+      // P0 (2026-09-09, live money defect): neither matchAssertedChoice nor
+      // matchChoiceInText is negation-aware — "large plain pizza, no extra
+      // cheese" matched "Extra Cheese" (every one of its stems is present in
+      // the text) and silently charged $4.00 for the exact option the
+      // customer just declined. reactive-modifier-match.ts's legacy path
+      // already guards this with isNegated; the compiled path had no
+      // equivalent. Reused here rather than reimplemented, same rule this
+      // module cites at its own header.
+      if (matched && !consumedModifierChoiceIds?.has(matched.id) && !isNegated(customerText, matched.display)) {
         resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
         totalDeltaCents += matched.price_delta_cents;
       }
