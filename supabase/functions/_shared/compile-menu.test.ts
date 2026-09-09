@@ -885,10 +885,12 @@ Deno.test("buildDerivedRows: never active if topping choice has inferred provena
   assertEquals(rows[0].bot_state, "display_only");
 });
 
-Deno.test("buildDerivedRows: family tie (two single-size families) returns empty — missing beats wrong", () => {
+Deno.test("buildDerivedRows: family tie (two single-size families, same priority and price) returns empty — missing beats wrong", () => {
+  // Both families match /cheese/ (same priority) and have the same price — a
+  // genuine toss-up that the compiler cannot resolve; must emit zero rows.
   const sicilian = pizzaItem({ name: "Sicilian Cheese Pizza", price_cents: 1999, size_label: null,
     id: "item-sicilian", import_key: "import-sicilian" });
-  const grandma = pizzaItem({ name: "Grandma Cheese Pizza", price_cents: 1899, size_label: null,
+  const grandma = pizzaItem({ name: "Grandma Cheese Pizza", price_cents: 1999, size_label: null,
     id: "item-grandma", import_key: "import-grandma" });
   const compiled = new Map([orderable(sicilian.id), orderable(grandma.id)]);
   const rows = buildDerivedRows([sicilian, grandma], compiled, new Map(), T_COMPILED_AT);

@@ -1055,21 +1055,38 @@ export function buildDerivedRows(
     families.set(key, list);
   }
 
-  // Step 3: Pick the family with the most size variants. Genuine tie → skip
-  // (missing beats wrong — a wrong base is worse than no derived rows).
-  let bestFamily: CompileItem[] | null = null;
-  let bestCount = -1;
-  let tied = false;
+  // Step 3: Pick the family with the most size variants. When multiple families
+  // tie on count, break ties by name priority (plain > cheese > neapolitan >
+  // regular > traditional), then by cheapest item. Genuine tie after all
+  // tiebreakers → skip (missing beats wrong — wrong base is worse than no rows).
+  let maxCount = 0;
   for (const members of families.values()) {
-    if (members.length > bestCount) {
-      bestFamily = members;
-      bestCount = members.length;
-      tied = false;
-    } else if (members.length === bestCount) {
-      tied = true;
-    }
+    if (members.length > maxCount) maxCount = members.length;
   }
-  if (tied || !bestFamily) return [];
+  let tiedFamilies = [...families.values()].filter(m => m.length === maxCount);
+
+  if (tiedFamilies.length > 1) {
+    const PRIORITY = [/\bplain\b/i, /\bcheese\b/i, /\bneapolitan\b/i, /\bregular\b/i, /\btraditional\b/i];
+    const familyPriority = (members: CompileItem[]) => {
+      const key = derivedFamilyKey(members[0].name);
+      for (let i = 0; i < PRIORITY.length; i++) {
+        if (PRIORITY[i].test(key)) return i;
+      }
+      return PRIORITY.length;
+    };
+    const minPri = Math.min(...tiedFamilies.map(familyPriority));
+    tiedFamilies = tiedFamilies.filter(m => familyPriority(m) === minPri);
+  }
+
+  if (tiedFamilies.length > 1) {
+    const minPrice = (members: CompileItem[]) =>
+      Math.min(...members.map(m => m.price_cents ?? Infinity));
+    const lowestPrice = Math.min(...tiedFamilies.map(minPrice));
+    tiedFamilies = tiedFamilies.filter(m => minPrice(m) === lowestPrice);
+  }
+
+  if (tiedFamilies.length !== 1) return [];
+  const bestFamily = tiedFamilies[0];
 
   // Step 4: Group family members by their size_label (null → '__no_size__').
   // Lowest-priced item wins when multiple items share the same size label.
