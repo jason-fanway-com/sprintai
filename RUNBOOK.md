@@ -416,13 +416,14 @@ Settled. Do not re-derive this from old notes, old QA shops, or old specs.
 | Shop | id | Number | Carrier / path | Status |
 |---|---|---|---|---|
 | **Not Just Bagels** | `b0000000-…0001` | `+16103792553` | Twilio | REAL restaurant. 10DLC **approved**. Both demo *and* a sellable property — Erin has spoken to them and they are willing. **Never touch this number.** |
-| **Vito's Pizza** | `e0000000-…0001` | `+14842018054` | **iMessage bridge** | The real pizza demo account. |
-| _(parked)_ | — | `+16107358315` | Telnyx | **NOT 10DLC approved** — pending with Chris. Assigned to **no shop**. Cannot carry commercial SMS until approval lands. |
+| **Vito's Pizza** | `e0000000-…0001` | `+16107358315` | **Telnyx** | The pizza demo. 10DLC **approved 2026-09-08** — brand `BJ8MUGY`, campaign `C8RNN6Y`; T-Mobile / AT&T / non-T-Mobile mapping all `ADDED`. Verified live: real inbound SMS reaches `chat-sms` and gets a stored reply. This is the number in Erin's demo kit. |
+| _(retired)_ | — | `+14842018054` | iMessage bridge | Superseded 2026-09-08 by the Telnyx line above. The launchd bridge (`com.sprintai.imsg-bridge`, still hardwired to Vito's `SHOP_ID`) is a **second front door onto the same shop** — decide whether to retire it rather than leaving both live. |
 
 - `+14842018054` is a **physical iPhone Jason pays for**, plugged into power at
-  his house, always on. It runs through the iMessage bridge, **not a carrier**.
-  It will never appear in Telnyx or Twilio inventory — its absence there is
-  expected, not a bug.
+  his house, always on. It runs through the iMessage bridge, **not a carrier**,
+  so it will never appear in Telnyx or Twilio inventory. As of 2026-09-08 it is
+  no longer the demo line — but the bridge is still loaded and still points at
+  Vito's, so texts to it still reach the shop.
   - Bridge: `scripts/imsg-bridge.sh`, launchd job `com.sprintai.imsg-bridge`
     (`KeepAlive`, `ORDERING_NUMBER=+14842018054`), hardwired to
     `SHOP_ID=e0000000-…0001`. It POSTs `{shop_id, message, session_id}` straight
@@ -430,8 +431,8 @@ Settled. Do not re-derive this from old notes, old QA shops, or old specs.
     resolve the shop by `phone_number_e164`.
 - The **Twilio sole-proprietor listing can only ever hold one number.** That is
   the entire reason Telnyx exists alongside it.
-- **Once Telnyx 10DLC clears:** `+16107358315` becomes the pizza demo, replacing
-  the iPhone. Then provision a **second** Telnyx number for NJB.
+- **Telnyx 10DLC cleared 2026-09-08** and `+16107358315` is now the pizza demo,
+  as planned. Still open: provision a **second** Telnyx number for NJB.
 
 **Deleted 2026-09-05 as fabricated / QA artifacts** — do not recreate:
 `Mario's Pizza` (`d0000000-…0001`, invented during testing) and six
