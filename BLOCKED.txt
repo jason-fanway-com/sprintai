@@ -5609,3 +5609,92 @@ Vito's canary (shop_id e0000000-0000-0000-0000-000000000001), fresh session:
 
 No submit_order called in either session (verification only, no real order
 placed).
+
+================================================================================
+2026-09-09 20:11 UTC (16:11 ET) -- ITEM 5 GATE: ZIO'S DOUBLE BURGER DUPE
+DEACTIVATED (301/301 -> 300/300, invariants 8/8) + GATE SCRIPT EXTENDED TO
+NOT JUST BAGELS (real numbers below, NOT fixed -- 12 walk failures found).
+================================================================================
+
+TASK A -- REPRO (live, `scripts/item5-menu-readiness-live-report.ts`,
+pre-fix): Zio's Pizzeria (shop_id 2cba7b51-211c-4437-8910-1af4dcc03498)
+reported 301/301 orderable but invariants only 6/8 -- #3 ("no two orderable
+items share the same display_name") and #4 failing, plus 2/301 walk
+failures, all four traced to two active menu_items rows both showing
+display_name "Double Burger":
+  - be5b49d5-2062-4119-a264-4f5f89b6ddf3 -- name "Double Burger",
+    product_key "burgers:double-burger", size_label NULL, display_order
+    153, created 2026-08-23. ZERO option_groups (no modifiers at all).
+  - 148fe62e-b6c9-455e-b57e-c0e474cb0dae -- name "Burger - Double",
+    product_key "burgers:burger", size_label "Double", display_order NULL,
+    created 2026-09-08. Has an "Add Extra" option_group with 16 choices
+    (cheeses, bacon, veggies, sauces).
+
+CAUSE (queried menu_items + option_groups directly, not guessed): both rows
+share price_cents 1399, category "Burgers", and display_name "Double
+Burger" -- a genuine duplicate, not two distinct items that happen to
+share a name. Pulled every "Burgers"-category item on this menu to
+confirm: the original "Burger" row (465c3391, $9.99, created 2026-08-23)
+was already deactivated (active=false) as of the same 2026-09-08 restructure
+that created "Burger - Regular" (2ebb2240, $9.99, size_label "Regular") and
+"Burger - Double" (148fe62e, $13.99, size_label "Double") -- i.e. someone
+split the old single "Burger" item into sized Regular/Double variants and
+correctly retired the old unsized "Burger" row, but never retired the old
+unsized "Double Burger" row (be5b49d5), which is the exact same real-world
+item under the old naming scheme. Every other burger on the menu (BBQ
+Cheese Burger, Cheese Burger, Mamma Mia Burger, Zio's Deluxe Burger, the
+old deactivated "Burger") has an "Add Extra" option_group -- be5b49d5 was
+the only burger item on the whole menu with zero option_groups, confirming
+it's the stale/incomplete record, not 148fe62e.
+
+FIX: `UPDATE menu_items SET active = false WHERE id =
+'be5b49d5-2062-4119-a264-4f5f89b6ddf3'` (direct DB write via service role,
+read-modify path -- confirmed via `.select()` on the same call that the row
+now has active=false). Kept 148fe62e ("Burger - Double") active -- it's the
+complete, current record consistent with the rest of the Burgers category's
+modifier structure and the already-completed Regular/Double split.
+
+VERIFICATION (re-ran `scripts/item5-menu-readiness-live-report.ts`,
+env: `set -a; source ~/.openclaw/.secrets; set +a`):
+  Zio's Pizzeria: 300/300 orderable (100.0%) [blocked=0 display_only=0
+    stale=0]; invariants: 8/8 passing; walk: 300/300 passed.
+Orderable count dropped from 301 to 300 as expected -- one duplicate row
+removed from the active set, not a new failure.
+
+TASK B -- EXTENDED `scripts/item5-menu-readiness-live-report.ts`'s
+hardcoded SHOPS map to add Not Just Bagels. Looked up the real shop_id from
+the `shops` table (name ILIKE '%bagel%' returned exactly one live match;
+excluded "ZZ RETIRED -- do not use (was Not Just Bagels TEST CLONE)"):
+  "Not Just Bagels": "b0000000-0000-0000-0000-000000000001"
+Also corrected the file's header comment (previously said "Zio's Pizzeria
+and Vito's Pizza" only).
+
+NJB HAD NOT BEEN THROUGH THIS GATE BEFORE. Real numbers, run live, not
+assumed:
+  Not Just Bagels: 170/170 orderable (100.0%) [blocked=0 display_only=0
+    stale=0]; invariants: 8/8 PASSING; walk: 158/170 passed, 12 FAILED.
+  All 12 walk failures are the same [ticket-text] failure mode: "ticket
+  text missing selection display_name" for a default option on a platter/
+  sandwich item -- 11 of 12 say `"Home Fries"` (every Omelette Platter plus
+  "Two Eggs Any Style Platter"), 1 of 12 says `"Bacon"` ("Meat Only
+  Breakfast Sandwich"). Full item id list: f2268e5e-a829-4b20-8963-
+  02f49b1ce773, dd9f6035-1962-4ac8-aef5-d7d937aea57e, 9e612996-1820-4584-
+  bf46-d30e28fbba6e, 25e39740-5b24-45b7-af37-6f017c8fa373, 017bff65-eb66-
+  4352-8cb4-f7b4a2d117b5, 9f2a29eb-bdf7-47be-884a-50e2a853432f, 15a7a682-
+  f4cb-4037-8c6c-a7f687356411, 8dab4bd1-a586-4631-a61f-95d6867da68f,
+  590905a1-ee44-4281-b432-6137065fdb7c, 8e3e57c5-f190-47b3-adcc-
+  888f8e995831, 0e9a8ec9-e481-4d19-ae7b-eb001e350ffc, c605051e-a162-4062-
+  a8d3-f6a24de2734c.
+
+NOT FIXED -- out of scope for this task (asked only to extend the script
+and report what it says, not to make NJB pass). The invariants gate (§8.2,
+all 8) is clean; the failure is isolated to §8.3's generated walk, in the
+ticket-text rendering step, and looks like a real product bug (default
+option's display_name not being carried into ticket text) rather than a
+data problem like Task A's -- worth a follow-up item once triaged, not
+guessed at here.
+
+No edge-function deploy for either task -- Task A was a direct DB data fix,
+Task B was a local script change. Both read against live data via the
+service-role key; no other tables written except the single menu_items.active
+flip in Task A.

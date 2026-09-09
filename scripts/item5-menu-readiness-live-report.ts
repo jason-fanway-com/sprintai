@@ -1,7 +1,8 @@
 /**
  * Item 5 — menu-readiness gate: live acceptance report
  * =====================================================
- * Reads real menu data from Zio's Pizzeria and Vito's Pizza and runs the
+ * Reads real menu data from Zio's Pizzeria, Vito's Pizza, and Not Just
+ * Bagels and runs the
  * full readiness gate against it: §8.1 item state (compile-menu.ts's
  * bot_state, item 4), §8.2 the 8 menu-level invariants (compile-menu.ts's
  * computeMenuInvariants, item 4), and §8.3 the generated menu walk
@@ -41,6 +42,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const SHOPS: Record<string, string> = {
   "Zio's Pizzeria": "2cba7b51-211c-4437-8910-1af4dcc03498",
   "Vito's Pizza": "e0000000-0000-0000-0000-000000000001",
+  "Not Just Bagels": "b0000000-0000-0000-0000-000000000001",
 };
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
