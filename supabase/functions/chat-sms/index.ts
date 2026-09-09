@@ -404,11 +404,11 @@ const ORDERING_TOOLS = [
   },
   {
     name: "set_note",
-    description: "Set or update the order notes for prep instructions like toasted, scooped, extra cream cheese, cut in half, lightly toasted, etc. Call this whenever the customer mentions a preparation preference. Replaces any previous notes.",
+    description: "Set or update the order notes for kitchen-facing prep instructions. Call this whenever the customer mentions a preparation preference for their order. Replaces any previous notes.",
     input_schema: {
       type: "object",
       properties: {
-        note: { type: "string", description: "The preparation instructions, e.g. 'Everything bagels toasted, plain bagels not toasted' or 'All bagels scooped'" },
+        note: { type: "string", description: "The preparation instructions in the customer's own words, e.g. 'Extra cheese, light sauce' or 'No onions on the burger'" },
       },
       required: ["note"],
     },
