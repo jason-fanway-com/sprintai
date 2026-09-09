@@ -120,31 +120,40 @@ Deno.test("walk: happy path — ask + auto_single + apply_default resolve, offer
   assert(result.ticket_text!.includes("Cheese Pizza"));
 });
 
-Deno.test("walk: resolver-add failure surfaces when resolveUtterance can't find the item by its own display_name", () => {
-  // A display_name made entirely of sub-3-character words has zero
-  // "significant" words by the resolver's own definition (resolver.ts's
-  // significantItemWords filters length < 3) — findItemInText can never
-  // score it above zero, so even resolving the item by its OWN exact name
-  // fails. This is a genuine conversation-readiness gap the gate must catch,
-  // not a harness bug.
+// Both of these fixtures used to document genuine matching gaps ("Ay Ox" /
+// "Ex" vs "Oh" — displays made entirely of sub-3-character words, which
+// resolver.ts's and ask-plan-engine.ts's word-significance filters both
+// used to treat as zero significant stems). Two rounds of exact-whole-
+// string-match fixes closed both gaps: resolver.ts's findExactItemMatch
+// (round 2, commit a9c03a1) resolves an item to itself off a full-string
+// echo regardless of word length, and ask-plan-engine.ts's matchChoiceInText
+// (round 3, this fix) does the same for a slot's own choices[0].display.
+// The one GENUINE gap that survives an exact-string-match tier by design
+// (missing beats wrong) is two entities sharing the identical display text
+// — real, live examples of exactly this already exist (Zio's two distinct
+// "Double Burger" items, flagged by invariants #3/#4) — so both tests below
+// now exercise that instead.
+
+Deno.test("walk: resolver-add failure surfaces when two items share the exact same display_name (genuine duplicate-name gap, real Double Burger shape)", () => {
   const soloChoice = choice({ name: "Only", display_name: "Only", price_cents: 0 });
   const soloGroup = group({ name: "Size", slot_key: "size", kind: "slot", choices: [soloChoice] });
-  const badItem = item({ name: "XY", display_name: "Ay Ox", price_cents: 500, groups: [soloGroup] });
-  const { compiled, compiledMap } = compileOne(badItem);
+  const itemA = item({ name: "TWIN-A", display_name: "Twin Special", price_cents: 500, groups: [soloGroup] });
+  const itemB = item({ name: "TWIN-B", display_name: "Twin Special", price_cents: 600, groups: [soloGroup] });
 
-  const result = runItemWalk(badItem, compiled, [badItem], compiledMap);
+  const compiledResult = compileMenu([itemA, itemB], [], "2026-09-09T00:00:00.000Z", true);
+  for (const c of compiledResult.items) {
+    assertEquals(c.bot_state, "orderable", `fixture must compile orderable, got: ${c.bot_state_reason}`);
+  }
+  const compiledMap = new Map(compiledResult.items.map(c => [c.item_id, c]));
+
+  const result = runItemWalk(itemA, compiledMap.get(itemA.id)!, [itemA, itemB], compiledMap);
   assert(!result.pass);
   assert(result.failures.some(f => f.step === "resolver-add"), `expected a resolver-add failure, got: ${JSON.stringify(result.failures)}`);
 });
 
-Deno.test("walk: ask-loop failure surfaces when choices[0].display can't be resolved back by the engine's own matcher", () => {
-  // Both choices are 2-character displays — ask-plan-engine.ts's
-  // matchChoiceInText (via significantStems, length >= 3) can never match
-  // either one against itself, so answering "choices[0].display" verbatim
-  // never resolves the slot. A real, unaskable slot — exactly the class of
-  // bug the walk exists to catch.
-  const optA = choice({ name: "Ex", display_name: "Ex", price_cents: 0 });
-  const optB = choice({ name: "Oh", display_name: "Oh", price_cents: 0 });
+Deno.test("walk: ask-loop failure surfaces when two choices in the same group share the exact same display (genuine duplicate-choice gap)", () => {
+  const optA = choice({ name: "Sauce A", display_name: "Extra Sauce", price_cents: 0 });
+  const optB = choice({ name: "Sauce B", display_name: "Extra Sauce", price_cents: 0 });
   const unaskableGroup = group({ name: "Style", slot_key: "flavor", kind: "slot", choices: [optA, optB] });
   const badItem = item({ name: "Sandwich", display_name: "Turkey Sandwich", price_cents: 800, groups: [unaskableGroup] });
   const { compiled, compiledMap } = compileOne(badItem);
@@ -159,9 +168,10 @@ Deno.test("walk: ask-loop failure surfaces when choices[0].display can't be reso
 
 Deno.test("walk: runMenuWalk aggregates pass/fail counts across multiple items", () => {
   const good = buildPizzaFixture();
-  const soloChoice = choice({ name: "Only", display_name: "Only", price_cents: 0 });
-  const soloGroup = group({ name: "Size", slot_key: "size", kind: "slot", choices: [soloChoice] });
-  const badItem = item({ name: "XY", display_name: "Ay Ox", price_cents: 500, groups: [soloGroup] });
+  const optA = choice({ name: "Sauce A", display_name: "Extra Sauce", price_cents: 0 });
+  const optB = choice({ name: "Sauce B", display_name: "Extra Sauce", price_cents: 0 });
+  const unaskableGroup = group({ name: "Style", slot_key: "flavor", kind: "slot", choices: [optA, optB] });
+  const badItem = item({ name: "Sandwich", display_name: "Turkey Sandwich", price_cents: 800, groups: [unaskableGroup] });
   const badCompiled = compileOne(badItem);
 
   const allItems = [good.item, badItem];

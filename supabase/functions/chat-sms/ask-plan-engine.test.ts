@@ -74,14 +74,49 @@ Deno.test("matchChoiceInText: exact single-stem choice display matches cleanly (
 
 Deno.test("matchChoiceInText: ambiguous text matching multiple choices returns null, never guesses", () => {
   const choices = [
-    { id: "c-1", display: "Large", price_delta_cents: 500 },
-    { id: "c-2", display: "Large Pizza", price_delta_cents: 500 },
+    { id: "c-1", display: "Buffalo Ranch", price_delta_cents: 500 },
+    { id: "c-2", display: "Ranch Dressing", price_delta_cents: 500 },
   ];
-  // "large pizza" satisfies BOTH choices' full stem sets (Large needs only
-  // "large"; Large Pizza needs "large"+"pizza", both present) — a real
-  // overlapping-choice-name case, not a contrived one.
-  const match = matchChoiceInText(choices, "large pizza");
+  // "buffalo ranch dressing" satisfies BOTH choices' full stem sets, and
+  // (unlike the exact-match cases below) is the verbatim full name of
+  // NEITHER — a real overlapping-choice-name case where the customer's text
+  // genuinely doesn't tell us which one they mean.
+  const match = matchChoiceInText(choices, "buffalo ranch dressing");
   assertEquals(match, null);
+});
+
+Deno.test("matchChoiceInText: exact match wins over a shorter sibling choice whose stems are a subset (round-3 fix, real Vito's dressing shape)", () => {
+  const choices = [
+    { id: "c-italian", display: "Italian", price_delta_cents: 0 },
+    { id: "c-creamy", display: "Creamy Italian", price_delta_cents: 0 },
+  ];
+  // Before the fix: "Italian"'s stems ({"italian"}) are a subset of
+  // "Creamy Italian"'s full stem set too, so BOTH counted as hits and the
+  // customer's own verbatim, unambiguous answer resolved to null forever
+  // (§8.3 live report, Vito's Tuna Salad). The exact full-string match must
+  // win outright before the fuzzy subset check ever runs.
+  assertEquals(matchChoiceInText(choices, "Creamy Italian")?.id, "c-creamy");
+  assertEquals(matchChoiceInText(choices, "Italian")?.id, "c-italian");
+});
+
+Deno.test("matchChoiceInText: exact match wins even when a numeric suffix is the only distinguishing stem (real Zio's wings shape)", () => {
+  const choices = [
+    { id: "c-8", display: "8 Pieces", price_delta_cents: 0 },
+    { id: "c-14", display: "14 Pieces", price_delta_cents: 700 },
+  ];
+  // Both displays reduce to the identical stem {"piece"} once the sub-3-char
+  // numeric tokens are dropped by significantStems, so the fuzzy path alone
+  // can never tell them apart (§8.3 live report, Zio's Bone In Wings).
+  assertEquals(matchChoiceInText(choices, "14 Pieces")?.id, "c-14");
+  assertEquals(matchChoiceInText(choices, "8 Pieces")?.id, "c-8");
+});
+
+Deno.test("matchChoiceInText: two choices sharing the exact same display name stay ambiguous, never guesses", () => {
+  const choices = [
+    { id: "c-1", display: "Large", price_delta_cents: 500 },
+    { id: "c-2", display: "Large", price_delta_cents: 700 },
+  ];
+  assertEquals(matchChoiceInText(choices, "Large"), null);
 });
 
 Deno.test("matchChoiceInText: empty text or empty choice list never matches", () => {
@@ -244,6 +279,65 @@ Deno.test("resolveAskPlan: bug 4 fix — a modifier named in the same message is
   assertEquals(bySlotKey["size"].id, "c-large");
   assertEquals(bySlotKey["toppings"].id, "c-pep");
   assertEquals(result.totalDeltaCents, 800); // $5.00 size delta + $3.00 pepperoni
+});
+
+Deno.test("resolveAskPlan: round-3 fix — naming a specialty item whose OWN display_name contains an ingredient word does not reactively charge that ingredient as a modifier (real Zio's 'Mike's Hot Honey Pepperoni Sicilian' shape)", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    display_name: "Mike's Hot Honey Pepperoni Sicilian",
+    steps: [
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
+        choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-bacon", display: "Bacon", price_delta_cents: 300 }] },
+    ],
+  };
+  // §8.3's walk (and a real customer just naming the item) passes the
+  // item's own display_name as customerText — before the fix this silently
+  // matched "Pepperoni" via matchChoiceInText, since the word appears
+  // verbatim in the item's own name, charging an extra the customer never
+  // asked for.
+  const named = resolveAskPlan(plan, "Mike's Hot Honey Pepperoni Sicilian", new Set(), new Map());
+  assertEquals(named.resolved.length, 0);
+  assertEquals(named.totalDeltaCents, 0);
+});
+
+Deno.test("resolveAskPlan: round-3 fix does not over-correct — a later, standalone request for a DIFFERENT topping still resolves and prices normally", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    display_name: "Mike's Hot Honey Pepperoni Sicilian",
+    steps: [
+      { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
+        choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-bacon", display: "Bacon", price_delta_cents: 300 }] },
+    ],
+  };
+  // A later turn's text is its own message, not a repeat of the item's
+  // name — "add extra bacon please" contributes real stems the item's own
+  // name doesn't contain, so the fix's "said nothing beyond the name" gate
+  // never engages and Bacon still resolves and prices normally.
+  const result = resolveAskPlan(plan, "add extra bacon please", new Set(), new Map());
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].choice.id, "c-bacon");
+  assertEquals(result.totalDeltaCents, 300);
+});
+
+Deno.test("resolveAskPlan: round-3 fix — answering a required SLOT question does not also reactively charge an unrelated MODIFIER choice sharing the same display (real Zio's 'Choose Cheese' / 'Add Extra' sub shape)", () => {
+  const plan: AskPlan = {
+    ...SIZE_ASK_PLAN,
+    display_name: "Ham & Cheese Sub",
+    steps: [
+      { group_id: "grp-cheese", slot_key: "choice", kind: "slot", ask_mode: "ask", prompt_template: "choice.ask",
+        choices: [{ id: "c-american", display: "American Cheese", price_delta_cents: 0 }, { id: "c-swiss", display: "Swiss Cheese", price_delta_cents: 0 }] },
+      { group_id: "grp-extra", slot_key: null, kind: "modifier", ask_mode: "on_request", prompt_template: "extra.on_request",
+        choices: [{ id: "c-extra-american", display: "American Cheese", price_delta_cents: 75 }, { id: "c-bacon", display: "Bacon", price_delta_cents: 200 }] },
+    ],
+  };
+  // Answering the required "which cheese" slot with the choice's own exact
+  // display ("American Cheese") must resolve ONLY the slot — the identical
+  // text also fully satisfying an unrelated "Add Extra" modifier choice in a
+  // DIFFERENT group is not a request for the $0.75 upcharge.
+  const result = resolveAskPlan(plan, "American Cheese", new Set(), new Map());
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].choice.id, "c-american");
+  assertEquals(result.totalDeltaCents, 0);
 });
 
 Deno.test("resolveAskPlan: a modifier NOT mentioned this turn is simply not applied (never a question, never a guess)", () => {

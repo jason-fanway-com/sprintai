@@ -123,6 +123,11 @@ export interface EngineResult {
   totalDeltaCents: number;
 }
 
+/** Case/whitespace-fold for exact-string comparison — not a stem, no plural handling. */
+function normalizeForExactMatch(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /**
  * Match free customer text against a step's real, compiled choice list.
  * Deterministic: normalizes both sides to significant stems (reusing the
@@ -130,20 +135,58 @@ export interface EngineResult {
  * codebase) and requires the match to be unambiguous. Never guesses between
  * two plausible choices — returns null rather than pick one, matching the
  * "missing beats wrong" principle (spec P3).
+ *
+ * Fix (2026-09-09, ask-plan-engine modifier/choice matching gaps, round 3):
+ * an exact (case/whitespace-normalized) full-string match against one
+ * choice's own display wins outright, before the fuzzy stem-subset check
+ * below ever runs. Spec §8.3's walk() answers every `ask` step with
+ * literally `choices[0].display` and asserts the selection is recorded —
+ * that is the customer stating the single, unabbreviated, canonical name of
+ * exactly one real choice, not a guess between comparably plausible ones.
+ * Without this, real sibling-choice pairs where one display is a strict
+ * textual subset of another's — "Italian" / "Creamy Italian" on a dressing
+ * group, "8 Pieces" / "14 Pieces" on a wings size group (the trailing
+ * number is dropped as a sub-3-char stem, so both reduce to the identical
+ * stem {"piece"}), "Medium Rare" sharing "rare" with a plain "Rare" choice —
+ * answering with the full, exact name of the one truly-intended choice still
+ * matched >1 choice's stem set and fell back to "ambiguous," permanently
+ * stuck. Scoped narrowly to full-string equality only — it does not touch
+ * the fuzzy subset logic for genuinely partial/ambiguous text (e.g. "large
+ * pizza" against sibling choices "Large" and "Large Pizza" with neither
+ * being the verbatim whole answer relative to the OTHER's presence — still
+ * resolved by the unchanged logic below, still returns null when it should).
  */
 export function matchChoiceInText(choices: EngineChoice[], text: string): EngineChoice | null {
   if (!text || choices.length === 0) return null;
+
+  const normalizedText = normalizeForExactMatch(text);
+  const exactHits = choices.filter(c => normalizeForExactMatch(c.display) === normalizedText);
+  if (exactHits.length === 1) return exactHits[0];
+  if (exactHits.length > 1) return null; // two choices sharing a display name — genuinely ambiguous, never guess
+
   const textStems = significantStems(text);
-  if (textStems.size === 0) return null;
+  return matchChoiceByStems(choices, textStems);
+}
+
+/**
+ * Fuzzy stem-subset match against a pre-computed set of available stems,
+ * rather than raw text — the primitive matchChoiceInText's fuzzy tier is
+ * built on, and reused directly by resolveAskPlan's modifier matching
+ * (round-3 fix above) to match against a RESIDUAL stem set — customerText's
+ * stems minus whatever this same call already resolved via the item's own
+ * name or an unrelated slot — without re-deriving a synthetic text string.
+ */
+function matchChoiceByStems(choices: EngineChoice[], availableStems: Set<string>): EngineChoice | null {
+  if (availableStems.size === 0) return null;
 
   const hits: EngineChoice[] = [];
   for (const choice of choices) {
     const choiceStems = significantStems(choice.display);
     if (choiceStems.size === 0) continue;
-    // Every stem the choice display contributes must appear in the
-    // customer's text (so "large" matches a choice displayed "Large" or
+    // Every stem the choice display contributes must appear among the
+    // available stems (so "large" matches a choice displayed "Large" or
     // "Large 18 inch", but "large" alone never matches "Extra Large").
-    const allPresent = [...choiceStems].every(s => textStems.has(s));
+    const allPresent = [...choiceStems].every(s => availableStems.has(s));
     if (allPresent) hits.push(choice);
   }
 
@@ -348,6 +391,49 @@ export function resolveAskPlan(
   let nextStep: CompiledStep | null = null;
   let totalDeltaCents = 0;
 
+  // Fix (2026-09-09, ask-plan-engine modifier matching gap, round 3): the
+  // SAME customerText is reused for every not-yet-resolved step this call
+  // (by design — see the D1 fix doc above, an attribute stated once should
+  // apply to every item it's stated for), but a modifier step reactively
+  // matching that whole text has no way to tell "the customer asked for
+  // this" apart from "this word is already spoken for by something else
+  // this call resolved." Two real shapes of that, both found via the §8.3
+  // live report (56 walk failures across both shops before this fix):
+  //  (a) the add-item call for a brand new line is very often passed
+  //      customerText that IS the item's own display_name and nothing else
+  //      — spec §8.3's walk literally does this
+  //      (`applyCompiledAddItem(cart, ..., askPlan.display_name, ...)`),
+  //      and a real customer naming a specialty item behaves the same way
+  //      ("I'll get the Mike's Hot Honey Pepperoni Sicilian"). When the
+  //      item's OWN name already contains an ingredient word that also
+  //      happens to be a real "Add Toppings"/"Add Extra" MODIFIER choice on
+  //      that same item ("...Pepperoni Sicilian" vs. a topping choice
+  //      "Pepperoni"), naming the item alone silently added a chargeable
+  //      extra nobody asked for (47 of the 56 failures).
+  //  (b) a REQUIRED SLOT answer can itself collide with an unrelated
+  //      MODIFIER choice's display in a different group on the same item —
+  //      real Zio's subs shape: a "Choose Cheese" slot (which cheese comes
+  //      ON the sub, required) and an "Add Extra" modifier (an upcharge for
+  //      MORE of that cheese) both offer "American Cheese" as a choice
+  //      display. Answering the required slot question with "American
+  //      Cheese" also reactively matched the unrelated modifier and silently
+  //      added a $0.75 upcharge nobody asked for (4 of the 56 failures).
+  // Fix: track every stem this call has already "spent" — starting with the
+  // item's own display_name, growing by each slot choice's display the
+  // moment THIS call resolves it (auto_single, apply_default, or a text
+  // match; slot steps are always ordered before modifier steps by the
+  // compiler's canonical ask order, so every slot this call can resolve is
+  // already accounted for by the time the loop reaches a modifier step) —
+  // and only match a modifier against whatever stems remain. A message that
+  // says MORE than what's already spoken for (e.g. "...Sicilian with extra
+  // bacon", or a slot answer plus a genuinely separate topping request)
+  // keeps the extra stem and still matches normally. matchAssertedChoice
+  // (the model's own separately-validated tool-call input) is untouched —
+  // that is a different, higher-trust channel this text-only heuristic has
+  // no business gating.
+  const consumedStems = new Set(significantStems(askPlan.display_name));
+  const customerTextStems = significantStems(customerText);
+
   for (const step of askPlan.steps) {
     if (alreadyResolvedGroupIds.has(step.group_id)) continue;
 
@@ -362,7 +448,9 @@ export function resolveAskPlan(
     // a separate, documented follow-up; this is strictly narrower:
     // match-if-mentioned-this-turn, same as a slot, minus the asking).
     if (step.kind === "modifier") {
-      const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? matchChoiceInText(step.choices, customerText);
+      const availableStems = new Set([...customerTextStems].filter(s => !consumedStems.has(s)));
+      const textMatch = matchChoiceByStems(step.choices, availableStems);
+      const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? textMatch;
       // P0 (2026-09-09, live money defect): neither matchAssertedChoice nor
       // matchChoiceInText is negation-aware — "large plain pizza, no extra
       // cheese" matched "Extra Cheese" (every one of its stems is present in
@@ -382,6 +470,7 @@ export function resolveAskPlan(
       const choice = step.choices[0];
       resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice });
       totalDeltaCents += choice.price_delta_cents;
+      for (const s of significantStems(choice.display)) consumedStems.add(s);
       continue;
     }
 
@@ -391,6 +480,7 @@ export function resolveAskPlan(
       if (defaultChoice) {
         resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: defaultChoice });
         totalDeltaCents += defaultChoice.price_delta_cents;
+        for (const s of significantStems(defaultChoice.display)) consumedStems.add(s);
         continue;
       }
       // No default resolvable from the data we have — fall through to
@@ -401,6 +491,7 @@ export function resolveAskPlan(
     if (matched) {
       resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
       totalDeltaCents += matched.price_delta_cents;
+      for (const s of significantStems(matched.display)) consumedStems.add(s);
       continue;
     }
 
