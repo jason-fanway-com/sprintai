@@ -62,6 +62,15 @@ export interface ComposeCartLineLike {
 
 export interface ComposedPizzaToken {
   token:               string; // the customer's own bare word, e.g. "pepp"
+  // The 0-based index of this token's own segment within
+  // splitIntoSegments(customerMessage) — i.e. splitCustomerPhrases's ordering
+  // over the raw utterance. Identity, not a guess: it is the same segment
+  // loop index this function already iterates in, threaded straight onto the
+  // resulting cart line (index.ts) so downstream modifier resolution can
+  // scope itself to exactly this phrase instead of re-deriving "which phrase
+  // was this" via text search (see ask-plan-engine.ts's former
+  // isolatePhraseForItem, removed 2026-09-09 P0 in favor of this field).
+  phraseIndex:         number;
   quantity:            number;
   baseMenuItemId:       string;
   baseDisplayName:      string;
@@ -259,7 +268,9 @@ export function composeDeterministicPizzaLines(
     .flatMap(s => s.choices);
 
   const results: ComposedPizzaToken[] = [];
-  for (const seg of splitIntoSegments(customerMessage)) {
+  const segments = splitIntoSegments(customerMessage);
+  for (let phraseIndex = 0; phraseIndex < segments.length; phraseIndex++) {
+    const seg = segments[phraseIndex];
     // Bare "plain"/"cheese" (with only size/format/course words alongside,
     // e.g. "1 cheese pizza") names the base pizza itself, not a topping —
     // checked FIRST and unconditionally, before any topping match is even
@@ -279,7 +290,7 @@ export function composeDeterministicPizzaLines(
     const isBarePlain = bare.every(w => w === "plain" || w === "cheese" || w === "pizza" || w === "pizzas") &&
       bare.some(w => w === "plain" || w === "cheese");
     if (isBarePlain) {
-      results.push({ token: seg.text, quantity: seg.quantity, baseMenuItemId: baseItem.id, baseDisplayName: baseItem.ask_plan?.display_name ?? baseItem.name });
+      results.push({ token: seg.text, phraseIndex, quantity: seg.quantity, baseMenuItemId: baseItem.id, baseDisplayName: baseItem.ask_plan?.display_name ?? baseItem.name });
       continue;
     }
 
@@ -338,6 +349,7 @@ export function composeDeterministicPizzaLines(
 
     results.push({
       token: seg.text,
+      phraseIndex,
       quantity: seg.quantity,
       baseMenuItemId: baseItem.id,
       baseDisplayName: baseItem.ask_plan?.display_name ?? baseItem.name,

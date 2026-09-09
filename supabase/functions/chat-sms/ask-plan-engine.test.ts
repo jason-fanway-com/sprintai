@@ -609,16 +609,16 @@ function hawaiianMenuItem(): CompiledMenuItem {
   return { ask_plan: HAWAIIAN_ASK_PLAN, bot_state: "orderable", option_groups: [{ id: "grp-haw-size", name: "Size" }, { id: "grp-haw-extra", name: "Add Extra Toppings" }] };
 }
 
-Deno.test("applyCompiledAddItem: P0 regression — otherItemPhraseHints stops Pepperoni (claimed by a DIFFERENT item's own compose) from bleeding onto Meat Lover's/Hawaiian's OWN separate Pepperoni choice", () => {
+Deno.test("applyCompiledAddItem: modifierScopeText stops Pepperoni (claimed by a DIFFERENT item's own compose) from bleeding onto Meat Lover's/Hawaiian's OWN separate Pepperoni choice", () => {
   const cart: CompiledCartLine[] = [];
   const turnText = "one plain, one pepperoni, one meat lover and one hawaai";
   const consumed = new Set<string>();
-  // The deterministic compose step (pizza-topping-compose.ts) already
-  // claimed "one pepperoni" for the cheese pizza line before either of these
-  // two calls runs — exactly what index.ts's composedPhraseTexts carries.
-  const otherItemPhraseHints = ["one pepperoni"];
-  applyCompiledAddItem(cart, meatLoversMenuItem(), "ml-id", 1, turnText, null, consumed, [], otherItemPhraseHints);
-  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, turnText, null, consumed, [], otherItemPhraseHints);
+  // Each call is scoped to exactly its OWN real phrase (as index.ts's
+  // source_phrase + resolveClaimedPhraseIndex would establish) — "one
+  // pepperoni" never appears in either scope, so neither call can reactively
+  // claim it.
+  applyCompiledAddItem(cart, meatLoversMenuItem(), "ml-id", 1, turnText, null, consumed, [], "one meat lover");
+  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, turnText, null, consumed, [], "one hawaai");
   assertEquals(cart.length, 2);
   assertEquals(cart[0].options?.["Add Extra Toppings"], undefined, "Meat Lover's must NOT reactively claim Pepperoni from a different phrase");
   assertEquals(cart[1].options?.["Add Extra Toppings"], undefined, "Hawaiian must NOT reactively claim Pepperoni from a different phrase");

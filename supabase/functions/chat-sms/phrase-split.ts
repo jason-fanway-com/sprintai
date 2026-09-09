@@ -37,3 +37,28 @@ export function splitCustomerPhrases(text: string): string[] {
     .map(s => s.trim())
     .filter(Boolean);
 }
+
+// P0 fix (2026-09-09, third recurrence of the pepperoni-bleed defect): the
+// prior three fixes all tried to RE-DERIVE, after the fact, which phrase an
+// already-resolved item/choice came from (context, position, word-stem
+// overlap) — fragile by construction, since every derivation is a guess that
+// works on the phrasing it was tested against and fails on the next one. The
+// real fix moves identity to the front: the model's own add_item/modify_item
+// tool call now states which words of its OWN message it's resolving
+// (`source_phrase`), and this function VALIDATES that claim against the
+// turn's real, structurally-split phrase boundaries — it is never trusted
+// blindly, and it is never used to search for a plausible attachment; it
+// either maps to exactly one real phrase or it doesn't (missing beats
+// wrong, this codebase's standing principle — see ask-plan-engine.ts).
+export function resolveClaimedPhraseIndex(phrases: string[], claimedPhrase: string): number | null {
+  if (phrases.length <= 1) return phrases.length === 1 ? 0 : null;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const claim = norm(claimedPhrase);
+  if (!claim) return null;
+  const matches: number[] = [];
+  phrases.forEach((p, i) => {
+    const pn = norm(p);
+    if (pn && (pn.includes(claim) || claim.includes(pn))) matches.push(i);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}

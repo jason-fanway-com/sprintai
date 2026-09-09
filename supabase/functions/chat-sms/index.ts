@@ -56,6 +56,7 @@ import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex } from "./phrase-split.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
 import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
@@ -200,6 +201,9 @@ interface CartItem {
   // lines (i.e. every line at every shop until a menu is compiled AND the
   // shop flag is set — see ask-plan-engine.ts).
   ask_plan_selections?: Record<string, string>;
+  // See ask-plan-engine.ts's CompiledCartLine.sourcePhraseIndex doc — same
+  // field, mirrored here since index.ts's real cart uses this interface.
+  sourcePhraseIndex?: number;
 }
 
 interface BundleItem {
@@ -322,8 +326,9 @@ const ORDERING_TOOLS = [
         quantity:     { type: "integer", minimum: 1, description: "How many to add" },
         modifiers:    { type: "array", items: { type: "string" }, description: "Modifier names from the item's options" },
         options:      { type: "object", description: "Selected options from option groups. Keys are group names (e.g. 'Bread Type'), values are arrays of chosen names (e.g. ['Roll']). Required for items with required option groups.", additionalProperties: { type: "array", items: { type: "string" } } },
+        source_phrase: { type: "string", description: "Copy, verbatim, the exact words from the customer's OWN message that name THIS one item — nothing about any other item in the same message. E.g. for \"one plain, one pepperoni, one meat lover and one hawaiian\", the meat lover's call gets 'one meat lover', not the whole sentence. This is required for every call — even a single-item message just gets the whole thing." },
       },
-      required: ["menu_item_id", "quantity"],
+      required: ["menu_item_id", "quantity", "source_phrase"],
     },
   },
   {
@@ -347,6 +352,7 @@ const ORDERING_TOOLS = [
         quantity:     { type: "integer", minimum: 1 },
         modifiers:    { type: "array", items: { type: "string" }, description: "Full list of modifiers to set (replaces existing)" },
         options:      { type: "object", description: "Option group selections, e.g. {\"Bread Type\": [\"Everything Bagel\"]}. Keys are group names, values are arrays of chosen names.", additionalProperties: { type: "array", items: { type: "string" } } },
+        source_phrase: { type: "string", description: "Copy, verbatim, the exact words from the customer's OWN message that are about THIS item — nothing about any other item in the same message, when the message names more than one." },
       },
       required: ["menu_item_id"],
     },
@@ -1349,17 +1355,15 @@ async function executeTool(
   // any legacy-path shop (e.g. Vito's) ordering 2+ of the same base item in
   // one message where only one segment names a modifier.
   consumedReactiveExtraKeys?: Set<string>,
-  // P0 fix (2026-09-09, live money — Zio's "one plain, one pepperoni, one
-  // meat lover and one hawaai" regression, see ask-plan-engine.ts's
-  // isolatePhraseForItem): other real items this SAME turn's message also
-  // resolved to — today, just the pre-loop deterministic pizza-topping-
-  // compose.ts tokens (composedPhraseTexts, computed once per turn by the
-  // caller). Lets the compiled engine's reactive modifier match tell "one
-  // pepperoni" (claimed by the compose step already) apart from "one meat
-  // lover"/"one hawaiian" (this add_item call's own phrase) instead of
-  // scanning the whole turn's text and reactively re-claiming the topping
-  // for every OTHER item in the same message.
-  otherItemPhraseHints?: string[],
+  // The raw phrase tokens ("pepperoni", "plain") the deterministic compose
+  // step (pizza-topping-compose.ts, index.ts) already claimed for OTHER
+  // cart lines this turn on a COMPILED item. Only relevant to the LEGACY
+  // reactive-extras match below: a compiled-enabled shop can still have an
+  // individual item with no ask_plan (not yet compiled), which falls
+  // through to this same legacy branch — without this, a topping already
+  // spent on a compiled sibling line could bleed onto that uncompiled
+  // item's own reactive match too.
+  composedPhraseTexts?: string[],
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1372,8 +1376,8 @@ async function executeTool(
 
   switch (toolName) {
     case "add_item": {
-      const { menu_item_id, quantity = 1, modifiers = [], options: addItemInputOptions } = input as {
-        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>;
+      const { menu_item_id, quantity = 1, modifiers = [], options: addItemInputOptions, source_phrase } = input as {
+        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>; source_phrase?: string;
       };
       const menuItem = menuMap.get(menu_item_id);
       if (!menuItem) {
@@ -1400,6 +1404,27 @@ async function executeTool(
           ...(modifiers as string[]),
           ...Object.values(addItemInputOptions ?? {}).flat(),
         ];
+        // P0 fix (2026-09-09, third recurrence of the pepperoni-bleed
+        // defect): the model's own tool call now states which words of its
+        // OWN message this specific add_item call is resolving
+        // (`source_phrase`, required in the schema above). That claim is
+        // validated — never trusted blindly — against this turn's real,
+        // structurally-split phrase boundaries. A single-phrase turn is
+        // trivially phrase 0 for every call; in a multi-phrase turn an
+        // unvalidated or ambiguous claim leaves phraseIndex null, and
+        // modifierScopeText becomes "" (no reactive-modifier text at all
+        // for this call) rather than falling back to the whole turn's
+        // text — an unidentified phrase must never risk a cross-item guess.
+        // This REPLACES isolatePhraseForItem/otherItemPhraseHints entirely:
+        // there is no more searching the turn's text for "which phrase
+        // probably belongs to this item" — the model states it, code checks
+        // it against real boundaries, and an unconfirmed claim resolves to
+        // nothing rather than something merely plausible.
+        const turnPhrases = splitCustomerPhrases(customerMessage ?? "");
+        const phraseIndex = resolveClaimedPhraseIndex(turnPhrases, source_phrase ?? "");
+        const modifierScopeText = turnPhrases.length <= 1
+          ? undefined
+          : (phraseIndex !== null ? turnPhrases[phraseIndex] : "");
         const engineOutcome = applyCompiledAddItem(
           cart as unknown as CompiledCartLine[],
           menuItem as unknown as CompiledMenuItem,
@@ -1409,7 +1434,8 @@ async function executeTool(
           shopPhone,
           consumedModifierChoiceIds,
           modelAssertedChoiceTexts,
-          otherItemPhraseHints ?? [],
+          modifierScopeText,
+          phraseIndex ?? undefined,
         );
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
@@ -1492,6 +1518,7 @@ async function executeTool(
         ...inputMods.map(m => m.toLowerCase()),
         ...Object.values(inputOptions).flat().map(v => v.toLowerCase()),
         ...(turnConsumedForThisItem ?? []),
+        ...(composedPhraseTexts ?? []).map(t => t.toLowerCase()),
       ]);
       const reactiveCandidates: ReactiveCandidate[] = [
         ...(menuItem.modifiers_json ?? []).map(m => ({ groupName: null, name: m.name, price_cents: m.price_cents })),
@@ -1690,8 +1717,8 @@ async function executeTool(
     }
 
     case "modify_item": {
-      const { menu_item_id, quantity, modifiers, options } = input as {
-        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>;
+      const { menu_item_id, quantity, modifiers, options, source_phrase } = input as {
+        menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>; source_phrase?: string;
       };
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not in cart." } };
@@ -1711,6 +1738,14 @@ async function executeTool(
           ...(modifiers ?? []),
           ...Object.values(options ?? {}).flat(),
         ];
+        // See the identical block in the add_item case above for the full
+        // explanation — same phrase-identity validation, applied
+        // symmetrically so modify_item isn't left as a known bleed vector.
+        const turnPhrasesModify = splitCustomerPhrases(customerMessage ?? "");
+        const phraseIndexModify = resolveClaimedPhraseIndex(turnPhrasesModify, source_phrase ?? "");
+        const modifierScopeTextModify = turnPhrasesModify.length <= 1
+          ? undefined
+          : (phraseIndexModify !== null ? turnPhrasesModify[phraseIndexModify] : "");
         const modifyOutcome = applyCompiledModifyItem(
           cart as unknown as CompiledCartLine[],
           menuItem as unknown as CompiledMenuItem,
@@ -1720,6 +1755,7 @@ async function executeTool(
           modelAssertedChoiceTexts,
           consumedModifierChoiceIds,
           options,
+          modifierScopeTextModify,
         );
         if (modifyOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         return { ok: modifyOutcome.ok, result: modifyOutcome.result };
@@ -2329,12 +2365,8 @@ async function runOrderingLoop(
   // topping — same protection consumedModifierChoiceIdsForTurn already
   // gives every add_item call made from inside this loop.
   preConsumedModifierChoiceIds?: Set<string>,
-  // P0 fix (2026-09-09, live money — see executeTool's matching param): the
-  // exact phrase tokens (e.g. "pepperoni", "plain") the pre-loop
-  // deterministic compose step already claimed this turn, threaded into
-  // every add_item call this loop makes so the compiled engine's reactive
-  // modifier match can tell a DIFFERENT item's own phrase apart from one
-  // already spoken for.
+  // See executeTool's matching param doc — threaded straight through to
+  // every add_item tool call this loop dispatches.
   composedPhraseTexts?: string[],
 ): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
