@@ -5361,3 +5361,114 @@ only):
     the Extra Cheese option when the customer clearly asked for it and
     disambiguated which line. Customer experience is still "I asked twice
     and nothing happened," just no longer a lie about it.
+
+================================================================================
+2026-09-09 17:19 UTC (13:19 ET) -- P0 FOLLOW-UP FIXED AND VERIFIED LIVE:
+REAL CART-MUTATION FOR PRICED-MODIFIER REMOVAL (Zio's). chat-sms v316 -> v320.
+Concurrent-session collision + a second, more severe, PREVIOUSLY-UNKNOWN
+whole-cart-wipe defect found and fixed along the way.
+================================================================================
+
+DISPATCH: separate follow-up to the 2026-09-09 15:36 UTC entry above (v316),
+which explicitly left "teaching the model to actually perform a topping-level
+removal" as unassigned work. Repro handed off: Zio's, "large cheese pizza
+with extra cheese" -> cart $21.99 with Add Toppings: Extra Cheese -> "remove
+the extra cheese" -> cart claimed unchanged at $21.99.
+
+SHARED-WORKTREE COLLISION (read before touching option-removal-20260909.ts /
+pending-disambiguation.ts / the option-removal block in index.ts): while this
+fix was in progress, ANOTHER concurrent session was independently building
+the exact same defect's fix in the same shared worktree, live, in real time
+-- confirmed via repeated git status/mtime checks showing option-removal-
+20260909.ts and index.ts changing on disk within the same minute as my own
+edits, with zero coordination. Root-caused the cart-mutation gap the same
+way independently: ask-plan-engine.ts's resolveAskPlan/resolveAndPriceSelections
+can only ADD a compiled-engine selection, never remove one. Rather than fight
+over the same files, moved my own detection logic (isRemovalRequested) OUT of
+the contested shared filename and inline into ask-plan-engine.ts itself (the
+one file I could safely own), verified it independently in an isolated `git
+worktree` (matching this file's own established rollback/isolation pattern),
+and let the other session keep building its half undisturbed. The two halves
+turned out to be genuinely complementary, not duplicate effort -- see below.
+
+WHY BOTH HALVES ARE REQUIRED (this is the important part for whoever reads
+this next): ask-plan-engine.ts's applyCompiledModifyItem now supports real
+removal (isRemovalRequested reactive detection off customerMessage, PLUS an
+explicit-clear signal when a modify_item call passes `options: {group: []}`)
+-- but that function is only ever reached if something calls modify_item
+with the RIGHT menu_item_id. index.ts already has a MUCH OLDER, unrelated
+deterministic pre-LLM whole-item-removal path (namedRemoveMatch / bucket 2,
+2026-09-06/07) that matches "remove the <name>" against cart line NAME/
+CATEGORY via stem overlap. "extra cheese" stem-overlaps "cheese" against
+"...Neapolitan CHEESE Pizza" -- the pizza's own SKU name -- so without a
+correctly-ordered interception in front of it, "remove the extra cheese"
+matches the WHOLE PIZZA, not the topping.
+
+LIVE-VERIFIED, ISOLATED (before any combining): deployed chat-sms v317 from
+a clean `git worktree` containing ONLY my ask-plan-engine.ts fix (no routing
+change). Result: "remove the extra cheese" against a SINGLE-PIZZA cart wiped
+the entire cart line (cart lines: 0), not "unchanged" -- namedRemoveMatch
+resolved exactly one cart-line match (the only line, whose name contains
+"cheese") and executed a full remove_item. This is WORSE than the documented
+v316 symptom (overcharge-but-honest -> silent-whole-order-deletion).
+Immediately rolled back to a clean checkout of the pre-existing committed
+code (deployed as v318) to stop the regression -- and discovered, live, 2/2
+reproducible runs, that THIS EXACT SAME whole-cart-wipe ALREADY EXISTED IN
+v316 for a single-item cart. The original v316 verification (both here and
+in the PO's own dispatch of this follow-up) only ever tested a TWO-pizza
+cart, where namedRemoveMatch's category/name stem overlap matches BOTH
+pizzas (both contain "cheese" in their SKU names) and asks a disambiguating
+question rather than silently deleting -- masking the single-item case
+entirely. This is a previously undocumented, more severe P0 that predates
+today: the customer's whole order silently vanishing on ordinary phrasing
+("remove the extra cheese" against a one-item cart), not just an overcharge.
+Filing this explicitly so nobody assumes v316 was ever a safe rollback
+target for this exact phrasing -- it was not.
+
+COMBINED FIX, VERIFIED, DEPLOYED: assembled my ask-plan-engine.ts removal
+primitive together with the other session's option-removal-20260909.ts
+(matchOptionRemovalPhrase / findCartLinesWithOption, checked BEFORE
+namedRemoveMatch specifically to avoid the SKU-name stem collision) and its
+index.ts/pending-disambiguation.ts wiring, in the same isolated worktree.
+`deno check` clean, 651 tests passed (0 failed) including both sessions' new
+suites. Deployed as chat-sms v319, live-verified 2/2 clean on "remove the
+extra cheese" ($21.99 -> $17.99, options={}) plus 1/1 clean on "actually
+remove the extra cheese" (the exact second phrasing from this task's repro,
+routed through the LLM/tool-loop fallback rather than the anchored regex --
+proving both layers pull their own weight) and Vito's canary unaffected
+(cheeseburger/medium/thats it -> $8.49/$0.99/$9.48, exact match).
+
+While live-verifying v319, the other session committed the same combined
+work (plus an unrelated, bundled "item 2" itemized-receipt improvement to
+the option-removal reply and an unrelated "item 3" resolver feature) as
+7bd3ed9 "fix(chat-sms): P0 live money -- real option removal + itemized
+receipt (items 1+2)". Diffed 7bd3ed9's ask-plan-engine.ts against my deployed
+v319 copy -- byte-identical. Checked out 7bd3ed9 clean, `deno check` clean,
+909 tests passed / 0 failed / 7 ignored (full suite, both _shared and
+chat-sms), deployed as chat-sms v320, re-verified live 2/2 clean on the exact
+repro (now showing the improved itemized receipt: "Large 18'' Neapolitan
+Cheese Pizza $17.99 / Subtotal $17.99 / Service fee $0.99 / Total $18.98")
+and Vito's canary unchanged. v320 is the final, git-history-attributed
+deploy -- confirmed via `supabase functions list`, not just the deploy
+command's own success message (which misleadingly printed "No change found"
+on this particular redeploy; the version number incremented 319 -> 320
+regardless, confirmed the real bundle changed).
+
+FOUND BUT NOT IN SCOPE OF EITHER HALF (flagging, not fixing): the
+same-display-name group collision in ask-plan-engine.ts's priceSelections --
+when a compiled item has multiple internal option_groups sharing one
+customer-facing name (e.g. every individual topping modeled as its own
+group_id but all named "Add Toppings" for display), `resolvedOptions[group
+.name] = [choice.display]` overwrites per name, so a cart line's displayed
+`options` object can only ever show the LAST-iterated selection under a
+shared group name even when ask_plan_selections correctly holds several.
+Not exercised by this task's exact repro (single topping) and not touched by
+either fix -- worth a dedicated look if a future defect report involves a
+cart line with 2+ simultaneously-selected toppings under the same display
+group name.
+
+DEPLOY: chat-sms v320, 2026-09-09 17:19:40 UTC, confirmed via `supabase
+functions list --project-ref rvdqfxtrskxekfkqnegx` (not just the deploy
+command's own success message). Code is committed as 7bd3ed9 on main
+(already landed by the other session before I could commit my own half --
+diffed byte-identical, nothing of mine needed a separate commit).
