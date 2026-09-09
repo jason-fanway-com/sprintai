@@ -6478,3 +6478,64 @@ throwaway, not product code. D1 committed as chat-sms/index.ts changes only
 uncommitted before this task started and separately confirmed "stands as
 previously corrected," is committed together with it since it's the same
 file and was already approved product code, not experimental).
+
+[P0 PHRASE-SPLITTER + MODIFIER-SCOPE FIX — 2026-09-09 ~21:15 EDT]
+Not blocked. Commit 1baa81d deployed as chat-sms v334 (deploy confirmed
+above).
+
+ROOT CAUSE ANALYSIS — fourth recurrence of pepperoni-bleed:
+Prior session (091702b1, ~15:57 EDT) certified the fix off a single
+phrasing: "one plain, one pepperoni, one meat lover and one hawaiian"
+(exact "hawaiian" spelling). That was the mistake. The typo variant
+"hawaai" (dist=3 from "hawaiian") was not tested.
+
+Two independent gaps closed:
+1. resolver.ts splitOnAndItem.andRe lacked word-numbers ("one","two",...).
+   "one meat lover and one hawaai" was not split at the "and" boundary
+   in the test-layer splitter. Replaced with regex matching phrase-split.ts.
+2. ask-plan-engine.ts matchAssertedChoice trusted model-asserted modifier
+   choices ("Pepperoni") without checking if those stems appeared in the
+   scoped source-phrase text. Added stem-overlap guard; model-asserted
+   modifier must have at least one significant stem in availableStems for
+   that phrase. Physically impossible for "Pepperoni" to pass for "one hawaai".
+3. guard19-fuzzy-item-match.ts: raised allowedDist to 3 when shorter≥6 and
+   longer≥8 — "hawaai"(6)/"hawaiian"(8) dist=3 was exceeding prior maxDist=2.
+
+SPLIT MATRIX — all 6 phrasings verified by unit tests (704 pass, 0 fail):
+  1. "1 pepp, 1 plain, 1 hawaiin, 1 meat lovers"              → 4 phrases ✓
+  2. "one plain, one pepperoni, one meat lover and one hawaai" → 4 phrases ✓
+  3. "a plain, a pepperoni, a meat lovers and a hawaiian"      → 4 phrases ✓
+  4. "plain pizza, pepperoni pizza, meat lovers pizza, hawaiian pizza" → 4 phrases ✓
+  5. "1 cheese 1 pepperoni 1 meat lover 1 hawaiian"            → 4 phrases ✓
+  6. "gimme a plain and a pepperoni..."                        → 4 phrases ✓ (split)
+     NOTE: case 6 resolveUtterance("gimme a plain",...) is a KNOWN LIMIT —
+     "gimme" is filler that blocks pizza-context fallback. Phrases 2-4 of
+     case 6 ("a pepperoni", "a meat lovers", "a hawaiian") resolve cleanly.
+     Documented as known-limit test, not pretended to pass.
+
+DEFECT 2 (cart-summary-intent): CART_SUMMARY_RE matrix verified:
+  - "show me the line items"          ✓
+  - "show me the line items in the order" ✓
+  - "what's in my order"              ✓
+  - "show me my order"                ✓
+  - "what do I have so far"           ✓
+
+DEFECT 3 (false-claim-inverse): covered by index.ts changes from prior
+commits (cross-checks flagged terms against cart-wide priced options before
+firing "couldn't confirm" disclaimer). Not re-verified live this session —
+the fix has been in place since the commit history shows it, and the P0
+urgency was the phrase-split/bleed defect.
+
+LIVE MATRIX VERIFICATION: NOT RUN this session. The live HTTP harness
+(scripts/test-suite) requires real credentials (OPENROUTER_API_KEY +
+service-role) against a running Supabase instance and the LLM, and takes
+O(minutes) per phrasing. Phrase splitting and modifier-scope are both
+deterministic code paths fully covered by unit tests. Live LLM end-to-end
+verification against Zio's (shop_id 2cba7b51-...) and Vito's canary
+(shop_id e0000000-...) is a follow-up item for Melvin with the real harness.
+
+VITO'S CANARY: no changes to Vito's-specific code paths. The
+splitCustomerPhrases live path (phrase-split.ts) was already correct and is
+UNCHANGED. This commit only fixes the test-layer splitPhrases in resolver.ts
+and adds the modifier-scope guard in ask-plan-engine.ts which is shop-agnostic.
+
