@@ -50,6 +50,7 @@
 
 export interface Guard19MenuItemLike {
   name: string;
+  category?: string;
   option_groups?: Array<{ choices?: Array<{ name: string }> }> | null;
   modifiers_json?: Array<{ name: string }> | null;
 }
@@ -141,5 +142,38 @@ export function hasGuard19NamedSignal(
       if (fuzzyWordMatch(mw, vw)) return true;
     }
   }
-  return false;
+  return hasBarePizzaIndicatorSignal(userMessage, menu);
+}
+
+// LIVE REGRESSION FIX (2026-09-09, Vito's demo shop down): "four large plain
+// pizzas" / "4 large plain pizzas" / "I need to order four large plain
+// pizzas" all got the whole cart reverted with "Sorry, which item would you
+// like?" even though the correct pizza was actually added. "large plain
+// pizzas" (no quantity word) worked fine — same item, same words, minus the
+// quantity — which is what exposes this as GUARD 19's own blind spot rather
+// than a resolver defect: bare "plain"/"cheese" is deliberately excluded from
+// BOTH the generic-word filter above (by design, per this file's header) AND
+// GUARD19_GENERIC_WORDS, so a message naming a pizza ONLY via "plain"/
+// "cheese" scores zero grounding signal here even when resolver.ts's own
+// pizza-context fallback (see resolver.ts's findPizzaContextResolution)
+// legitimately resolved it to a real item — which is exactly why the cart
+// grew in the first place. Once statesQuantity also matched ("four"),
+// GUARD 19 saw growth with zero signal and reverted the correct add.
+// d10fafb/c375903 didn't introduce this: they made the resolver newly
+// SUCCEED at resolving bare "plain pizza" in more phrasings, which is what
+// first made this pre-existing gap reachable.
+//
+// Fix mirrors resolver.ts's own eligibility check verbatim, not a broader
+// carve-out: bare "plain"/"cheese" counts as grounding ONLY when the shop
+// actually has a pizza-category item whose own name contains "plain" or
+// "cheese" — the same condition resolver.ts's findPizzaContextResolution
+// already requires before it will resolve the word to that item at all. A
+// shop with no such item gets no new signal path; the anti-context-injection
+// protection GUARD 19 exists for is unchanged for every other case.
+function hasBarePizzaIndicatorSignal(userMessage: string, menu: Guard19MenuItemLike[]): boolean {
+  const words = normalizeWords(userMessage);
+  if (!words.includes("plain") && !words.includes("cheese")) return false;
+  return menu.some(m =>
+    (m.category ?? "").toLowerCase() === "pizza" && /\b(?:cheese|plain)\b/i.test(m.name),
+  );
 }

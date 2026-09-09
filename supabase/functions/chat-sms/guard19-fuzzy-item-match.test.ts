@@ -65,6 +65,34 @@ Deno.test("hasGuard19NamedSignal: exact-match count short-circuits to true regar
   assertEquals(hasGuard19NamedSignal("anything at all", [], 3), true);
 });
 
+// LIVE REGRESSION (2026-09-09, Vito's demo shop down): "four large plain
+// pizzas" reverted the whole cart even though the correct pizza was added —
+// see guard19-fuzzy-item-match.ts's hasBarePizzaIndicatorSignal header for
+// the full mechanism. "plain"/"cheese" are deliberately generic everywhere
+// else in this file; they only count as grounding when the shop actually
+// has a pizza-category item resolver.ts's own bare-plain/cheese fallback
+// would resolve them to.
+const VITOS_LIKE_MENU = [
+  { name: "Neapolitan Cheese Pizza", category: "Pizza" },
+  { name: "Hawaiian Pizza", category: "Pizza" },
+  { name: "Cheese Fries", category: "Sides" },
+  { name: "Cheese Steak", category: "Sandwiches" },
+];
+
+Deno.test("hasGuard19NamedSignal: bare 'plain'/'cheese' pizza reference IS real signal when the shop has a pizza-category cheese/plain item", () => {
+  assertEquals(hasGuard19NamedSignal("four large plain pizzas", VITOS_LIKE_MENU, 0), true);
+  assertEquals(hasGuard19NamedSignal("4 large plain pizzas", VITOS_LIKE_MENU, 0), true);
+  assertEquals(hasGuard19NamedSignal("I need to order four large plain pizzas", VITOS_LIKE_MENU, 0), true);
+  assertEquals(hasGuard19NamedSignal("four large cheese pizzas", VITOS_LIKE_MENU, 0), true);
+});
+
+Deno.test("hasGuard19NamedSignal: 'plain' does NOT become a false signal when the shop has no pizza-category plain/cheese item", () => {
+  // Neither item's own name contains "plain"/"cheese" and neither is
+  // category "Pizza" with such wording — bare "plain" must stay ungrounded.
+  const noCheesePizzaMenu = [{ name: "Hawaiian Pizza", category: "Pizza" }, { name: "Turkey Club", category: "Sandwiches" }];
+  assertEquals(hasGuard19NamedSignal("four large plain pizzas", noCheesePizzaMenu, 0), false);
+});
+
 Deno.test("fuzzyWordMatch: prefix match requires shorter word >=4 chars", () => {
   assertEquals(fuzzyWordMatch("pepp", "pepperoni"), true);
   assertEquals(fuzzyWordMatch("lover", "lovers"), true);
