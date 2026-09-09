@@ -28,6 +28,7 @@ import ShopFinancialsPage from './pages/shop-financials/ShopFinancialsPage'
 import ShopOwnerDashboard from './pages/ShopOwnerDashboard'
 import ShopOwnerDemoKit from './pages/ShopOwnerDemoKit'
 import ShopOwnerMenuSettings from './pages/ShopOwnerMenuSettings'
+import ShopOwnerCustomers from './pages/ShopOwnerCustomers'
 import TestSuite from './pages/TestSuite'
 import FinancialReporting from './pages/FinancialReporting'
 import ExpoScreen from './pages/ExpoScreen'
@@ -157,6 +158,14 @@ export default function App() {
             element={
               <ShopOwnerRoute role={roleInfo}>
                 <ShopOwnerMenuSettings />
+              </ShopOwnerRoute>
+            }
+          />
+          <Route
+            path="customers"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <ShopOwnerCustomers />
               </ShopOwnerRoute>
             }
           />

@@ -39,6 +39,7 @@ const superAdminBottomNav = [
 const shopOwnerNav = [
   { to: '/shop-owner', label: 'At a Glance', icon: LayoutDashboard },
   { to: '/menu-settings', label: 'Menu & Settings', icon: UtensilsCrossed },
+  { to: '/customers', label: 'Customers', icon: Users },
   { to: '/expo', label: 'Expo Screen', icon: Monitor },
   { to: '/conversations', label: 'Conversation', icon: MessageSquare },
   { to: '/conversation-quality', label: 'Quality', icon: ShieldCheck },
