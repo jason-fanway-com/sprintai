@@ -209,12 +209,15 @@ export default function ShopDetail() {
   const editMenuItem = useMutation({
     mutationFn: async ({ itemId, form }: { itemId: string; form: typeof editItemForm }) => {
       const priceCents = Math.round(parseFloat(form.price_cents_str) * 100)
-      const { error } = await supabase.from('menu_items').update({
-        name: form.name,
-        price_cents: isNaN(priceCents) ? 0 : priceCents,
-        description: form.description || null,
-        category: form.category,
-      }).eq('id', itemId)
+      const { error } = await supabase.rpc('owner_update_menu_item', {
+        p_item_id: itemId,
+        p_fields: {
+          name: form.name,
+          price_cents: isNaN(priceCents) ? 0 : priceCents,
+          description: form.description || null,
+          category: form.category,
+        },
+      })
       if (error) throw error
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['menu-items', id] }); setEditingItemId(null) },
@@ -223,7 +226,7 @@ export default function ShopDetail() {
 
   const deleteMenuItem = useMutation({
     mutationFn: async (itemId: string) => {
-      const { error } = await supabase.from('menu_items').delete().eq('id', itemId)
+      const { error } = await supabase.rpc('owner_delete_menu_item', { p_item_id: itemId })
       if (error) throw error
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['menu-items', id] }),

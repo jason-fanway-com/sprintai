@@ -1130,10 +1130,14 @@ async function executeAction(
       } else if (snapType === "item_fields") {
         const before = snap.before as Record<string, unknown> | null;
         if (before) {
-          await supabase.from("menu_items").update({
-            name: before.name, price_cents: before.price_cents, description: before.description,
-            category: before.category, active: before.active,
-          }).eq("id", snap.item_id as string);
+          await supabase.rpc("owner_update_menu_item", {
+            p_item_id: snap.item_id as string,
+            p_fields: {
+              name: before.name, price_cents: before.price_cents, description: before.description,
+              category: before.category, active: before.active,
+            },
+            p_actor: `owner:${userId}`,
+          });
         }
       } else if (snapType === "store_hours") {
         await supabase.from("shops").update({ open_hours: snap.open_hours_before ?? {} }).eq("id", shopId);
@@ -1153,10 +1157,14 @@ async function executeAction(
         resultMsg = "Option group changes can't be auto-undone yet — edit the item directly to revert.";
         break;
       } else if (snapType === "item_add") {
-        await supabase.from("menu_items").delete().eq("id", snap.item_id as string);
+        await supabase.rpc("owner_delete_menu_item", { p_item_id: snap.item_id as string, p_actor: `owner:${userId}` });
       } else if (snapType === "item_remove") {
         const before = snap.before as Record<string, unknown> | null;
-        await supabase.from("menu_items").update({ active: (before?.active as boolean | undefined) ?? true }).eq("id", snap.item_id as string);
+        await supabase.rpc("owner_update_menu_item", {
+          p_item_id: snap.item_id as string,
+          p_fields: { active: (before?.active as boolean | undefined) ?? true },
+          p_actor: `owner:${userId}`,
+        });
       }
 
       // Mark the undone action
@@ -1220,7 +1228,9 @@ async function executeAction(
       // Never invent an answer: prompt_for clears ONLY when this submission actually supplied
       // a choice, never as a side effect of an empty or clarification-only turn.
       if (anyChoiceWritten && item?.prompt_for) {
-        await supabase.from("menu_items").update({ prompt_for: null, owner_edited: true }).eq("id", itemId);
+        await supabase.rpc("owner_update_menu_item", {
+          p_item_id: itemId, p_fields: { prompt_for: null }, p_actor: `owner:${userId}`,
+        });
         logEdit({ table_name: "menu_items", row_id: itemId, before: { prompt_for: item.prompt_for }, after: { prompt_for: null } });
       }
 
@@ -1248,7 +1258,11 @@ async function executeAction(
       if (f.category !== undefined) update.category = f.category;
       if (f.active !== undefined) update.active = f.active;
       if (f.clear_review_flag) { update.flag_review = false; update.flag_reason = null; }
-      await supabase.from("menu_items").update(update).eq("id", itemId);
+      const updateFields = { ...update };
+      delete updateFields.owner_edited; // owner_update_menu_item always sets this itself
+      await supabase.rpc("owner_update_menu_item", {
+        p_item_id: itemId, p_fields: updateFields, p_actor: `owner:${userId}`,
+      });
       logEdit({ table_name: "menu_items", row_id: itemId, before, after: update });
       const { data: fresh } = await supabase.from("menu_items")
         .select("name, price_cents, description, category, active, flag_review").eq("id", itemId).single();
@@ -1297,7 +1311,9 @@ async function executeAction(
         .eq("id", itemId).single();
       const before = curItem ?? item ?? null;
       beforeSnapshot = { type: "item_remove", item_id: itemId, before };
-      await supabase.from("menu_items").update({ active: false, owner_edited: true }).eq("id", itemId);
+      await supabase.rpc("owner_update_menu_item", {
+        p_item_id: itemId, p_fields: { active: false }, p_actor: `owner:${userId}`,
+      });
       logEdit({ table_name: "menu_items", row_id: itemId, before, after: { active: false } });
       afterSnapshot = { type: "item_remove", item_id: itemId, after: { active: false } };
       resultMsg = `Removed "${item?.name ?? curItem?.name ?? "item"}" from the menu.`;
