@@ -252,6 +252,27 @@ export function matchAssertedChoice(choices: EngineChoice[], assertedTexts: stri
   return null;
 }
 
+/**
+ * P0 fix (2026-09-10, live money — Zio's "large cheese pizza with pepperoni
+ * and mushrooms" undercharge): matchAssertedChoice returns only the FIRST
+ * choice whose display is in the asserted-text set, by design (its own
+ * contract is "validate one proposed choice"). A modifier step whose option
+ * group allows more than one selection (min/max on the group, e.g. "Add
+ * Toppings" min 0 max 25) can legitimately have SEVERAL of its real choices
+ * asserted in one call — Pepperoni AND Mushrooms are both valid, separately
+ * priced siblings in the same step. Returns EVERY choice whose display is in
+ * assertedTexts, in the step's own choice order, so resolveAskPlan's
+ * modifier branch can resolve all of them instead of just the first. Same
+ * validation discipline as matchAssertedChoice: exact (case/whitespace-
+ * normalized) name match only, never a fuzzy/stem guess.
+ */
+export function matchAllAssertedChoices(choices: EngineChoice[], assertedTexts: string[]): EngineChoice[] {
+  if (assertedTexts.length === 0) return [];
+  const normalizedAsserted = new Set(assertedTexts.map(t => t.trim().toLowerCase()).filter(Boolean));
+  if (normalizedAsserted.size === 0) return [];
+  return choices.filter(c => normalizedAsserted.has(c.display.trim().toLowerCase()));
+}
+
 /** Appendix C: identical wording every run. The LLM never rewrites these. */
 const TEMPLATE_QUESTIONS: Record<string, string> = {
   temp:      "How would you like the {display_name} cooked? {choices}.",
@@ -506,9 +527,20 @@ export function resolveAskPlan(
       // matchAssertedChoice (the model's explicit per-call tool-call input,
       // or the compose module's toppingChoiceDisplay). A choice with no
       // explicit assertion is left unresolved — missing beats wrong.
-      const asserted = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+      //
+      // P0 fix (2026-09-10, live money — Zio's undercharge, see
+      // matchAllAssertedChoices's doc above): a modifier group legitimately
+      // allows more than one selection (option group min/max, e.g. "Add
+      // Toppings" min 0 max 25) — resolve EVERY asserted choice this step's
+      // real choices contain, not just the first. A choice text that
+      // matches NOTHING in step.choices still falls through unresolved
+      // (matchAllAssertedChoices only ever returns real, validated choices)
+      // — that "genuinely unverifiable" case is unchanged by this fix.
+      const assertedChoices = matchAllAssertedChoices(step.choices, modelAssertedChoiceTexts);
       const negText = modifierScopeText ?? customerText;
-      if (asserted && !consumedModifierChoiceIds?.has(asserted.id) && !isNegated(negText, asserted.display)) {
+      for (const asserted of assertedChoices) {
+        if (consumedModifierChoiceIds?.has(asserted.id)) continue;
+        if (isNegated(negText, asserted.display)) continue;
         resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: asserted });
         totalDeltaCents += asserted.price_delta_cents;
       }
@@ -567,7 +599,16 @@ export interface CompiledCartLine {
   modifiers: string[];
   options?: Record<string, string[]>;
   pending_options?: string[];
-  ask_plan_selections?: Record<string, string>;
+  // Group id -> resolved choice id(s). A single string for every slot group
+  // (always exactly one choice) and for a modifier group with exactly one
+  // resolved choice; an array of ids ONLY when a modifier group's option
+  // group allows more than one selection and more than one was resolved
+  // (P0 fix 2026-09-10, see matchAllAssertedChoices's doc in this file) —
+  // kept as a bare string in the common single-choice case rather than
+  // always an array, so every pre-existing exact-string comparison
+  // elsewhere (index.ts GUARD 16, this file's identical-line dedup) keeps
+  // working unchanged for the overwhelmingly common case.
+  ask_plan_selections?: Record<string, string | string[]>;
   // The 0-based index (within this turn's own splitCustomerPhrases ordering)
   // of the customer phrase that created this line — set once, at creation,
   // never re-derived. See pizza-topping-compose.ts's ComposedPizzaToken and
@@ -590,7 +631,7 @@ export interface CompiledAddItemResult {
 }
 
 interface ResolveAndPriceOutcome {
-  newSelections: Record<string, string>;
+  newSelections: Record<string, string | string[]>;
   resolvedCount: number;
   resolvedOptions: Record<string, string[]>;
   priceCents: number;
@@ -611,18 +652,25 @@ interface ResolveAndPriceOutcome {
 function priceSelections(
   askPlan: AskPlan,
   itemGroups: NonNullable<CompiledMenuItem["option_groups"]>,
-  selections: Record<string, string>,
+  selections: Record<string, string | string[]>,
 ): { resolvedOptions: Record<string, string[]>; priceCents: number } {
   const resolvedOptions: Record<string, string[]> = {};
   let priceCents = askPlan.base_price_cents;
   for (const step of askPlan.steps) {
-    const choiceId = selections[step.group_id];
-    if (!choiceId) continue;
-    const choice = step.choices.find(c => c.id === choiceId);
-    if (!choice) continue;
-    priceCents += choice.price_delta_cents;
+    const sel = selections[step.group_id];
+    if (!sel) continue;
+    // P0 fix (2026-09-10): a modifier group's selection may be more than
+    // one choice id (see CompiledCartLine.ask_plan_selections's doc) — price
+    // and record every one, not just a single value.
+    const choiceIds = Array.isArray(sel) ? sel : [sel];
+    if (choiceIds.length === 0) continue;
     const group = itemGroups.find(g => g.id === step.group_id);
-    if (group) resolvedOptions[group.name] = [choice.display];
+    for (const choiceId of choiceIds) {
+      const choice = step.choices.find(c => c.id === choiceId);
+      if (!choice) continue;
+      priceCents += choice.price_delta_cents;
+      if (group) resolvedOptions[group.name] = [...(resolvedOptions[group.name] ?? []), choice.display];
+    }
   }
   return { resolvedOptions, priceCents };
 }
@@ -640,7 +688,7 @@ function priceSelections(
 function resolveAndPriceSelections(
   askPlan: AskPlan,
   itemGroups: NonNullable<CompiledMenuItem["option_groups"]>,
-  priorSelections: Record<string, string>,
+  priorSelections: Record<string, string | string[]>,
   customerText: string,
   defaultChoiceIdByGroup: Map<string, string>,
   consumedModifierChoiceIds: Set<string> | undefined,
@@ -650,8 +698,27 @@ function resolveAndPriceSelections(
   const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
   const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText);
 
-  const newSelections: Record<string, string> = { ...priorSelections };
-  for (const r of engineResult.resolved) newSelections[r.group_id] = r.choice.id;
+  // P0 fix (2026-09-10): a single step can now push MULTIPLE resolved
+  // entries sharing one group_id (a modifier step resolving more than one
+  // asserted choice — see resolveAskPlan's modifier branch above). Group
+  // them by group_id before writing into newSelections so a second choice
+  // for the same group doesn't clobber the first (the old `newSelections[
+  // r.group_id] = r.choice.id` one-liner this replaces did exactly that).
+  // Collapsed back to a bare string when only one id resolved for a group,
+  // and sorted when more than one, so two calls that assert the same set of
+  // choices in a different order still produce byte-identical selections —
+  // load-bearing for the identical-line merge/no-op-guard comparisons below,
+  // which compare selections via JSON.stringify.
+  const newSelections: Record<string, string | string[]> = { ...priorSelections };
+  const resolvedIdsByGroup = new Map<string, string[]>();
+  for (const r of engineResult.resolved) {
+    const ids = resolvedIdsByGroup.get(r.group_id) ?? [];
+    ids.push(r.choice.id);
+    resolvedIdsByGroup.set(r.group_id, ids);
+  }
+  for (const [groupId, ids] of resolvedIdsByGroup) {
+    newSelections[groupId] = ids.length === 1 ? ids[0] : [...ids].sort();
+  }
 
   // Record every modifier choice this call resolved as consumed for the
   // rest of this turn (see resolveAskPlan's consumedModifierChoiceIds param
@@ -976,14 +1043,28 @@ export function applyCompiledModifyItem(
   let removed = false;
   for (const step of askPlan.steps) {
     if (step.kind !== "modifier") continue;
-    const choiceId = selections[step.group_id];
-    if (!choiceId) continue;
-    const choice = step.choices.find(c => c.id === choiceId);
-    if (!choice) continue;
-    if (explicitlyClearedGroupIds.has(step.group_id) || isRemovalRequested(customerMessage, choice.display)) {
+    const sel = selections[step.group_id];
+    if (!sel) continue;
+    // P0 fix (2026-09-10): a modifier group's selection may now hold more
+    // than one choice id (see CompiledCartLine.ask_plan_selections's doc) —
+    // removal must drop only the SPECIFIC choice(s) the customer named,
+    // leaving any other already-selected choice in the same group intact
+    // (e.g. "remove the pepperoni" on a line that also has mushrooms must
+    // not clear mushrooms too).
+    const choiceIds = Array.isArray(sel) ? sel : [sel];
+    if (explicitlyClearedGroupIds.has(step.group_id)) {
       delete selections[step.group_id];
       removed = true;
+      continue;
     }
+    const remainingIds = choiceIds.filter(choiceId => {
+      const choice = step.choices.find(c => c.id === choiceId);
+      return !choice || !isRemovalRequested(customerMessage, choice.display);
+    });
+    if (remainingIds.length === choiceIds.length) continue;
+    removed = true;
+    if (remainingIds.length === 0) delete selections[step.group_id];
+    else selections[step.group_id] = remainingIds.length === 1 ? remainingIds[0] : remainingIds;
   }
 
   let splitOffLine: CompiledCartLine | null = null;

@@ -7,6 +7,7 @@ import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 import {
   matchChoiceInText,
   matchAssertedChoice,
+  matchAllAssertedChoices,
   renderChoiceList,
   renderStepQuestion,
   resolveAskPlan,
@@ -491,7 +492,14 @@ const TOPPING_ASK_PLAN: AskPlan = {
     { group_id: "grp-size", slot_key: "size", kind: "slot", ask_mode: "ask", prompt_template: "size.ask",
       choices: [{ id: "c-med", display: "Medium", price_delta_cents: 0 }, { id: "c-large", display: "Large 18''", price_delta_cents: 274 }] },
     { group_id: "grp-top", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.on_request",
-      choices: [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }, { id: "c-mush", display: "Mushroom", price_delta_cents: 250 }] },
+      // Third choice ("Sausage") added 2026-09-10 alongside the MULTI-
+      // TOPPING P0 fix so the three-toppings-in-one-call regression test
+      // below isn't limited to only two available choices.
+      choices: [
+        { id: "c-pep", display: "Pepperoni", price_delta_cents: 300 },
+        { id: "c-mush", display: "Mushroom", price_delta_cents: 250 },
+        { id: "c-saus", display: "Sausage", price_delta_cents: 300 },
+      ] },
   ],
   recap_template: "",
   ticket_template: "",
@@ -673,6 +681,109 @@ Deno.test("applyCompiledAddItem: modifierScopeText stops Pepperoni (claimed by a
   assertEquals(cart[1].price_cents, 2499);
 });
 
+// ── Item 3 Phase 1b (2026-09-10): resolver.ts (dead code, never wired into
+// chat-sms/index.ts) vs. the LIVE path — porting resolver.test.ts's four
+// PHRASE ISOLATION/MULTI-TOPPING acceptance cases onto applyCompiledAddItem,
+// called once per phrase exactly as index.ts's add_item branch does (each
+// call gets its OWN modelAssertedChoiceTexts + modifierScopeText for its own
+// phrase — see index.ts lines ~1454-1489).
+
+Deno.test("applyCompiledAddItem: resolver.test.ts case 1 (direction A) — '1 Hawaiian with pepperoni, 1 Meat Lover's': pepperoni lands ONLY on the Hawaiian line", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, "1 Hawaiian with pepperoni", null, consumed, ["Pepperoni"], "1 Hawaiian with pepperoni");
+  applyCompiledAddItem(cart, meatLoversMenuItem(), "ml-id", 1, "1 Meat Lover's", null, consumed, [], "1 Meat Lover's");
+  assertEquals(cart.length, 2);
+  assertEquals(cart[0].options?.["Add Extra Toppings"], ["Pepperoni"], "Hawaiian must carry the pepperoni it was named for");
+  assertEquals(cart[1].options?.["Add Extra Toppings"], undefined, "Meat Lover's must NOT inherit pepperoni from the other phrase");
+});
+
+Deno.test("applyCompiledAddItem: resolver.test.ts case 1 (direction B) — '1 Meat Lover's, 1 Hawaiian with pepperoni' (reversed): same invariant, proves it isn't just 'first phrase wins'", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(cart, meatLoversMenuItem(), "ml-id", 1, "1 Meat Lover's", null, consumed, [], "1 Meat Lover's");
+  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, "1 Hawaiian with pepperoni", null, consumed, ["Pepperoni"], "1 Hawaiian with pepperoni");
+  assertEquals(cart.length, 2);
+  assertEquals(cart[0].options?.["Add Extra Toppings"], undefined, "Meat Lover's (resolved FIRST this time) must still not inherit pepperoni");
+  assertEquals(cart[1].options?.["Add Extra Toppings"], ["Pepperoni"], "Hawaiian (resolved SECOND) must still carry its own pepperoni");
+});
+
+Deno.test("applyCompiledAddItem: resolver.test.ts case 2 — THREE-PIZZA ORDER, distinct toppings per pizza including two identical 'large cheese' base items, no cross-bleed", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, "1 large cheese with pepperoni", null, consumed, ["Pepperoni"], "1 large cheese with pepperoni");
+  applyCompiledAddItem(cart, cheesePizzaMenuItem(), "cheese-id", 1, "1 large cheese with mushrooms", null, consumed, ["Mushroom"], "1 large cheese with mushrooms");
+  applyCompiledAddItem(cart, hawaiianMenuItem(), "haw-id", 1, "1 Hawaiian", null, consumed, [], "1 Hawaiian");
+  assertEquals(cart.length, 3, "three distinct cart lines, even though two share the same base item");
+  assertEquals(cart[0].options?.["Add Toppings"], ["Pepperoni"]);
+  assertEquals(cart[1].options?.["Add Toppings"], ["Mushroom"], "the second identical base item must get its OWN topping, not the first's");
+  assertEquals(cart[2].options?.["Add Extra Toppings"], undefined, "Hawaiian named with no topping must stay untouched by either cheese-pizza phrase");
+});
+
+// resolver.test.ts case 3 (MULTI-TOPPING): 'large cheese pizza with pepperoni
+// and mushrooms' must produce ONE cart line carrying BOTH toppings.
+//
+// LIVE DEFECT FOUND (2026-09-10, this port): it does not. Confirmed against
+// Zio's Pizzeria's real, live-deployed menu (queried directly from
+// menu_items.ask_plan, shop_id 2cba7b51-211c-4437-8910-1af4dcc03498) —
+// "Neapolitan Cheese Pizza - Large 18''" id 35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd
+// compiles ALL ~25 toppings (Pepperoni, Mushrooms, Sausage, ...) as SIBLING
+// choices of ONE "Add Toppings" modifier step/group — exactly the shape
+// TOPPING_ASK_PLAN's grp-top models here. resolveAskPlan's modifier branch
+// (this file, ~line 501-515) calls matchAssertedChoice(step.choices,
+// modelAssertedChoiceTexts) EXACTLY ONCE per step and pushes at most ONE
+// resolved choice, then `continue`s to the next step — there is no loop over
+// remaining matched entries within the same step. So passing
+// modelAssertedChoiceTexts=["Pepperoni","Mushroom"] in ONE add_item call
+// resolves only the FIRST of the two to appear in the step's own choices
+// array (sorted by choice id per compile-menu.ts's buildStep) — the other is
+// silently dropped: no error, no follow-up question, no price for it. This is
+// not a resolver.ts-specific behavior; it is a structural limit of
+// ask-plan-engine.ts's one-choice-per-step resolution, and it means ANY real
+// customer asking for two toppings from the same "Add Toppings" group on one
+// pizza — an extremely common request — currently gets only one of them.
+// Asserting the CORRECT (both-toppings) behavior here, per this task's
+// explicit instruction not to weaken the assertion to make it pass — this
+// test is expected to FAIL until that gap is fixed.
+Deno.test("applyCompiledAddItem: resolver.test.ts case 3 (MULTI-TOPPING) — 'large cheese pizza with pepperoni and mushrooms' must add BOTH toppings to ONE line [LIVE DEFECT — see comment above]", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(
+    cart, cheesePizzaMenuItem(), "cheese-id", 1,
+    "large cheese pizza with pepperoni and mushrooms", null, consumed,
+    ["Pepperoni", "Mushroom"], "large cheese pizza with pepperoni and mushrooms",
+  );
+  assertEquals(cart.length, 1, "one pizza, one line");
+  assertEquals(
+    [...(cart[0].options?.["Add Toppings"] ?? [])].sort(),
+    ["Mushroom", "Pepperoni"],
+    "both toppings named in the SAME phrase must land on the SAME line — the live engine currently resolves only one choice per modifier step, dropping the other",
+  );
+});
+
+// P0 fix verification (2026-09-10): the same defect class fixed for TWO
+// same-step choices must also hold for THREE — "resolve everything asserted
+// for this step," not an off-by-one patch that only covers exactly 2.
+Deno.test("applyCompiledAddItem: THREE same-step toppings in one call ('pepperoni, mushrooms, and sausage') all resolve, price, and land on ONE line — not just the first two", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(
+    cart, cheesePizzaMenuItem(), "cheese-id", 1,
+    "large cheese pizza with pepperoni, mushrooms, and sausage", null, consumed,
+    ["Pepperoni", "Mushroom", "Sausage"], "large cheese pizza with pepperoni, mushrooms, and sausage",
+  );
+  assertEquals(cart.length, 1, "one pizza, one line");
+  assertEquals(
+    [...(cart[0].options?.["Add Toppings"] ?? [])].sort(),
+    ["Mushroom", "Pepperoni", "Sausage"],
+    "all three toppings named in the SAME phrase must land on the SAME line",
+  );
+  // "large" in the phrase also resolves the size slot (base 1500 + Large's
+  // own +274 delta) — assert price via all FOUR real deltas actually being
+  // summed (size + 3 toppings), not just the toppings being present.
+  assertEquals(cart[0].price_cents, 1500 + 274 + 300 + 250 + 300, "size + all three toppings' real prices must be summed, none silently dropped");
+});
+
 // ── Item 8 fix (2026-09-08 P0, 392894c diagnosis, PO sign-off) ─────────────
 // Root cause: matchChoiceInText only strips plurals, so "pepp" (or any
 // abbreviation) never text-matches "Pepperoni" — full stop, regardless of
@@ -697,6 +808,49 @@ Deno.test("matchAssertedChoice: a string naming no real choice is never trusted 
   assertEquals(matchAssertedChoice(choices, ["Anchovies"]), null);
   assertEquals(matchAssertedChoice(choices, []), null);
   assertEquals(matchAssertedChoice([], ["Pepperoni"]), null);
+});
+
+// P0 fix (2026-09-10, MULTI-TOPPING undercharge) — matchAllAssertedChoices is
+// the sibling of matchAssertedChoice that resolveAskPlan's modifier branch
+// now uses so a SECOND (or third) valid, same-step choice is no longer
+// dropped. Same validation discipline: only a real, exact-name choice is
+// ever returned, never a guess.
+Deno.test("matchAllAssertedChoices: returns every real choice named in assertedTexts, in the step's own choice order", () => {
+  const choices = [
+    { id: "c-pep", display: "Pepperoni", price_delta_cents: 300 },
+    { id: "c-mush", display: "Mushroom", price_delta_cents: 250 },
+    { id: "c-saus", display: "Sausage", price_delta_cents: 300 },
+  ];
+  assertEquals(matchAllAssertedChoices(choices, ["Pepperoni", "Mushroom"]).map(c => c.id), ["c-pep", "c-mush"]);
+  assertEquals(matchAllAssertedChoices(choices, ["Mushroom", "Pepperoni"]).map(c => c.id), ["c-pep", "c-mush"], "order follows the step's own choices, not the asserted-text order");
+});
+
+// Requirement 2 (reply self-contradiction) hinges on the engine never
+// resolving a genuinely-unsold item as if it were real — a TRUE partial
+// resolution (one real choice + one the shop doesn't sell) must still
+// resolve and price ONLY the real one, leaving the fake one absent from
+// options/ask_plan_selections entirely (never a guess, never a silent
+// drop that also prices it). This is what lets index.ts's GUARD 16 compose
+// a non-contradictory reply: the cart's own state has exactly the real
+// choice, nothing more, nothing less — same "missing beats wrong"
+// discipline as the single-choice case, now proven for the multi-choice path.
+Deno.test("matchAllAssertedChoices: a mix of one valid and one invalid choice text resolves ONLY the valid one — the invalid one is never guessed at (HONEST MISS equivalent for the multi-choice path)", () => {
+  const choices = [{ id: "c-pep", display: "Pepperoni", price_delta_cents: 300 }];
+  const result = matchAllAssertedChoices(choices, ["Pepperoni", "Anchovies"]);
+  assertEquals(result.map(c => c.id), ["c-pep"], "Anchovies names no real choice on this item — it must not appear, and must not block Pepperoni from resolving");
+});
+
+Deno.test("applyCompiledAddItem: TRUE partial resolution — one real topping + one the shop doesn't sell — prices/records only the real one, cart state has no trace of the fake one", () => {
+  const cart: CompiledCartLine[] = [];
+  const consumed = new Set<string>();
+  applyCompiledAddItem(
+    cart, cheesePizzaMenuItem(), "cheese-id", 1,
+    "large cheese pizza with pepperoni and anchovies", null, consumed,
+    ["Pepperoni", "Anchovies"], "large cheese pizza with pepperoni and anchovies",
+  );
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].options?.["Add Toppings"], ["Pepperoni"], "only the real topping is priced/recorded");
+  assertEquals(cart[0].price_cents, 1500 + 274 + 300, "size (large) + Pepperoni only — Anchovies contributes no price, real or phantom");
 });
 
 Deno.test("resolveAskPlan: 'pepp' never resolves via customerText alone (documents 392894c's root cause — still true after the fix, by design)", () => {

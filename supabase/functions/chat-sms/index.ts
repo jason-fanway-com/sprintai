@@ -212,8 +212,11 @@ interface CartItem {
   // about this path) but are DERIVED from this map on every compiled-path
   // add_item call, never hand-adjusted. Absent entirely for legacy-path
   // lines (i.e. every line at every shop until a menu is compiled AND the
-  // shop flag is set — see ask-plan-engine.ts).
-  ask_plan_selections?: Record<string, string>;
+  // shop flag is set — see ask-plan-engine.ts). Value is an array ONLY when
+  // a modifier group's option group allows more than one selection and more
+  // than one was resolved (P0 fix 2026-09-10, see ask-plan-engine.ts's
+  // CompiledCartLine.ask_plan_selections doc) — a bare string otherwise.
+  ask_plan_selections?: Record<string, string | string[]>;
   // See ask-plan-engine.ts's CompiledCartLine.sourcePhraseIndex doc — same
   // field, mirrored here since index.ts's real cart uses this interface.
   sourcePhraseIndex?: number;
@@ -6926,10 +6929,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
         for (const c of step.choices) allModifierDisplays16.push(c.display);
-        const choiceId = ci.ask_plan_selections![step.group_id];
-        if (!choiceId) continue;
-        const choice = step.choices.find(c => c.id === choiceId);
-        if (choice) confirmedDisplays16.add(choice.display.toLowerCase());
+        // P0 fix (2026-09-10): a modifier group's selection may now be an
+        // array of choice ids (more than one choice resolved from the same
+        // step — see ask-plan-engine.ts's CompiledCartLine.ask_plan_selections
+        // doc). Every resolved id must count as confirmed, not just the
+        // first, or a genuinely-priced second choice (e.g. Mushrooms
+        // alongside Pepperoni) would be falsely flagged as an unconfirmed
+        // claim by this guard.
+        const sel = ci.ask_plan_selections![step.group_id];
+        if (!sel) continue;
+        const choiceIds = Array.isArray(sel) ? sel : [sel];
+        for (const choiceId of choiceIds) {
+          const choice = step.choices.find(c => c.id === choiceId);
+          if (choice) confirmedDisplays16.add(choice.display.toLowerCase());
+        }
       }
       if (allModifierDisplays16.length === 0) continue;
       // Strip the item's display name AS A PHRASE (not word-by-word) so
