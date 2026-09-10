@@ -290,6 +290,72 @@ Not part of any commit, so not reflected above as shipped: `scripts/imsg-bridge.
 this up next should check `git status` before assuming the repo matches this
 document.
 
+## Shipped 2026-09-10: address-entry P0 (`google-places-lookup` mode:"set")
+
+An owner typing their real address on the Settings page could get a *different
+business's* address silently saved instead — reported live on Vito's (the demo
+shop): typed "5620 Cetronia Rd, Allentown PA 18106", got
+"6750 Iroquois Trail #7, Allentown, PA 18104" written to `formatted_address`/
+`latitude`/`longitude`, ~1.4mi off. That miscentered the 5mi delivery radius and
+published a stranger's address on the public menu page (`/m/:slug`).
+
+Root cause, two compounding bugs in `mode:"set"`: (1) the shop's name was
+prepended to the owner-typed address before a Places `searchText` call
+("Vito's Pizza, 5620 cetronia rd..."), which ranks by place relevance and let a
+same-named business outrank the actual address typed; (2) `searchText` is not
+a geocoder — it returns a plausible top result for nearly any query, so the
+existing "no match, don't write" branch could never fire to catch a bad match.
+
+Fix (commit `c27c7c1`): `mode:"set"` now resolves through the **Geocoding
+API** with the raw address only, never mixed with the shop name, and writes
+**only** `formatted_address`/`latitude`/`longitude` — it no longer touches
+`google_place_id`/`google_rating`/`google_review_count`/`business_status`
+(those are the business's Google identity, corrupted as collateral damage by
+the original bug). A resolved address that doesn't closely and precisely
+match what was typed — Google's own `partial_match` flag, the leading house
+number not surviving into the result, or a `location_type` coarser than a
+rooftop/interpolated point (e.g. a bare road centroid) — is returned as a
+candidate with nothing written; the caller must retry with `confirm: true` to
+accept it. This is a code gate (verified live: writes only on confirm),
+not a warning string. `admin-chat`'s `SET_SHOP_ADDRESS` passes `confirm`
+through and the Settings-page Address field (`OwnerSettingsPanel.tsx`, bundle
+`index-Tq-9Qb3e.js`, commit `e000449`) shows a "Did you mean...?" prompt
+requiring an explicit click before anything saves. `mode:"auto"` (onboarding,
+name-based search with no owner-typed address) is untouched — legitimate use
+of Places search.
+
+Vito's data repaired: `formatted_address`/`latitude`/`longitude` restored to
+the real address (re-geocoded live through the fixed function, matched
+against an independent Census geocode); `google_place_id`/`google_rating`/
+`google_review_count`/`business_status` nulled rather than guessed, since no
+record of Vito's true Google identity exists (it's a hand-built demo shop).
+
+Deployed and live-verified against the real functions, not the commit:
+`google-places-lookup` v35, `admin-chat` v42. Four cases run against the
+deployed endpoint: a full correct address (direct write, correct
+lat/lng/formatted_address), a nonexistent address (skip, zero write), a
+road-only address with no house number (`needs_confirmation: true`, zero DB
+mutation, `updated_at` unchanged), and the same address retried with
+`confirm: true` (writes). Vito's canary re-run clean: `cheeseburger` /
+`medium` / `thats it` → $8.49 + $0.99 = $9.48. Public menu page
+(`getsprintai.com/m/vitos-pizza`) confirmed showing the Cetronia Rd address.
+
+**Operational note:** while investigating, found the legacy `service_role`
+JWT (as shown by `supabase projects api-keys`) does **not** match
+`Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")` inside this project's edge
+functions — it works fine for direct PostgREST calls and for
+`verify_jwt=true` functions (chat-sms accepted it for the canary above), but
+fails the manual string-compare `google-places-lookup` uses for its
+service-role/internal-secret check. Worked around it by rotating
+`INTERNAL_FUNCTION_SECRET` to a fresh self-minted value (same pattern as the
+`DAILY_RESET_SECRET` resolution on 2026-09-10 — generated and set as a
+function secret in one shell scope, plaintext never logged or committed) and
+using that as the bearer for live verification. This is worth someone
+running down properly (likely a key-rotation/new-key-format artifact of this
+project), since any other tooling that authenticates to edge functions by
+comparing against the "legacy service_role key" shown in the CLI may have the
+same silent gap.
+
 ## System overview
 
 SprintAI replaces a restaurant's phone ordering: customers text a shop's number,
