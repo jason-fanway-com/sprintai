@@ -817,3 +817,182 @@ and several `guard10`/`guard12`/`guard15` test files are untracked in the
 working tree as of this entry — not part of any commit. The first two are the
 files behind the second live incident above; none of these should be read as
 shipped or done.
+
+## 2026-09-09
+
+Commit range `dc88de8..HEAD`, 37 commits, 76 files, +12.8k/-0.8k lines. The
+single busiest day in this journal's history for `chat-sms`: the same class of
+real-money defect (a customer's stated topping/removal getting applied to the
+wrong pizza, or silently dropped, or double-charged) recurred and was
+re-fixed at least four separate times today, each time by a different session
+working the shared worktree concurrently. Read the actual diffs and queried
+the live DB/edge-function registry directly rather than trusting any single
+session's own "fixed and verified" claim — several of today's own commits
+document a prior same-day fix that turned out to be wrong or incomplete.
+
+### Security/correctness fix in `admin-chat` — COMMITTED, NOT DEPLOYED
+
+Three separate fixes landed on `admin-chat/index.ts` today, all the same root
+cause: `executeAction()` (menu edits proposed and confirmed via the owner
+chat) never checked that a write actually succeeded, or — worse — never
+re-checked that the confirmed payload's item/special ids still belonged to
+the calling shop:
+- `627d8a3` (18:22 ET) — `REMOVE_ITEM`/`SET_ITEM_FIELDS` reported success even
+  when the underlying RPC touched zero rows (bad or cross-tenant id).
+- `952fc67` (18:32 ET) — same phantom-success bug in
+  `EIGHTYSIX_ITEM`/`RESTORE_ITEM`/`ADD_SPECIAL`/`END_SPECIAL`.
+- `3f76dd1` (20:11 ET) — the more serious one: the confirm-time flow re-parses
+  whatever proposal JSON the client echoes back and calls `executeAction()`
+  directly, without re-running `validateProposal()`'s shop-ownership check.
+  Live-verified against production (test fixture shops) that a tampered
+  confirm payload naming another tenant's `menu_item_id` wrote a real
+  cross-tenant `availability_overrides` row before this fix. Migration 129
+  adds a DB-level `BEFORE INSERT/UPDATE` trigger backstop on
+  `availability_overrides`/`specials` so this holds regardless of app code,
+  role, or RLS bypass.
+
+**Verified via `supabase functions list`: `admin-chat` is live at v35, last
+updated 2026-09-09 17:48:05 UTC (13:48 ET) — before all three of today's
+fixes.** The code fixing a real, live-demonstrated cross-tenant write is sitting
+committed on `main`, not deployed. Migration 129's schema-level trigger is a
+separate matter (see migrations section below) but the app-level re-validation
+it depends on to fail *before* touching the DB is not yet live either.
+
+### `chat-sms` — the money-bug day, in the order it happened
+
+- **11:36 ET, v316** — negated-topping autofill (`852e4df`): "no extra
+  cheese" still charged Extra Cheese because the compiled ask-plan resolver
+  had no negation check at all (the legacy path already did). Also fixed a
+  false-correction-claim bug (GUARD 1f) where the bot said "removed the extra
+  cheese" on a cart that hadn't changed, twice, live.
+- **13:19 ET, v320** — real cart-mutation for priced-modifier removal
+  (`7bd3ed9`): teaching the model to actually remove a topping (not just stop
+  lying about it) surfaced a **worse, previously-undocumented** defect along
+  the way — "remove the extra cheese" against a single-item cart matched the
+  cart line by name-stem overlap and deleted the *entire order*, not the
+  topping. Fixed by intercepting option-level removal before the older
+  whole-item removal path ever sees it.
+- **14:29 ET, v321** — post-mutation money footer (`ff3fb8f`): the correct,
+  itemized receipt from the fix above was then run through a second
+  "strip stray LLM dollar amounts" pass whose regexes matched across
+  newlines, deleting the itemizer's own Subtotal line and stranding the Total
+  figure next to "Service fee". Fixed with a `moneyFooterAlreadyRendered` flag
+  so a code-rendered receipt is never re-processed.
+- **16:11–16:21 ET** — Zio's had two active menu rows both display-named
+  "Double Burger" (one a stale pre-restructure duplicate with zero modifiers);
+  deactivated the stale one directly in the DB (`860013d`), a data fix, not a
+  code deploy. Extending the menu-readiness gate (`01f833b`) to Not Just
+  Bagels for the first time found a real, still-open product bug: NJB has
+  **zero `option_groups` rows anywhere in its menu**, so every slot selection
+  (side, bread, meat) an ask-plan resolves is silently dropped from the
+  itemized receipt/kitchen ticket — invisible today only because NJB's
+  `compiled_ordering_engine_enabled` flag is off; a hard go-live blocker for
+  NJB specifically, not fixed.
+- **~20:20 ET** — the NJB two-clause description parser fix (already
+  committed last night as `a351622`) had never actually been redeployed;
+  `ec62484` redeploys `compile-menu` and recompiles NJB (155/170 → 166/170
+  orderable), and in the process finds and fixes an unrelated
+  boot-blocking bug it surfaced: two `const staleIds` declarations in the
+  same function scope, which took `compile-menu` down with a 503 `BOOT_ERROR`
+  for every shop for the few minutes between the (bad) redeploy and the fix.
+- **~21:15 ET, v334** — fourth recurrence of the "pepperoni bleeds onto every
+  pizza" bug (`1baa81d`): the specific trigger this time was a typo
+  ("hawaai" instead of "hawaiian") that a prior session's fix hadn't tested.
+  Same commit also fixes a customer-visible debug-string leak ("Choices for
+  Dressing: ...") caused by an item-name-stripping step that happened to erase
+  the word "house" from both the reply and the choice names it was checking
+  against.
+- **19:04 ET (`49a34d1`)** — rather than patch `matchChoiceByStems` a fourth
+  time, removed it: modifiers now resolve **only** from the model's explicit
+  per-call assertion or the compose module's own topping-choice mapping, never
+  from scanning reply text for stem overlaps. "Missing beats wrong" — an
+  unresolved modifier is left off rather than guessed onto the wrong line.
+- **18:48 ET (`6c52cf2`)** and **~23:02 ET (`d9b8251`… final `v340`/`v341`)**
+  — a same-item-different-modifier merge bug, in two independent code paths:
+  Zio's compiled path silently no-op'd a second, differently-configured order
+  of the same base item (doubling its price instead of adding a second line);
+  Vito's legacy path rejected any modifier on an item with no configured
+  modifier list as a hard error, causing the model to retry without the
+  modifier and merge two orders into one. Both fixed; verified live on both
+  shops.
+- **Conversation lifetime**: first patched as a hardcoded 3h inactivity
+  timeout (`3e9b33b`, deployed v336), then revised same night to the PM's
+  final spec (`68ab695`) — 2 hours, configurable via new `app_config` row
+  (migration 128, confirmed live: `conversation_timeout_hours = 2`), with the
+  expiry check moved into the single function that reads "the active
+  conversation" so a caller can't skip it. Also adds a per-conversation
+  turn-lock (migration 127) against a double-text race — deployed, bounded
+  (60s stale-lock detection, 15s poll wait), with a documented residual: a
+  turn that legitimately runs past ~15s can still race, now at least logged
+  instead of silent.
+- **rank-2 architecture note**: `49a34d1`'s commit message states outright
+  that three prior "fixes" to this same defect only ever constrained the
+  buggy search function without removing it, and each failed on the next
+  phrasing — worth remembering before accepting the next narrow patch to this
+  area as done.
+
+**Verified live**: `chat-sms` is deployed at **v341, 2026-09-09 23:05:09
+UTC** — 23 seconds after `49a34d1` (the last commit that touches the
+`chat-sms` function directory today) landed. Current with `HEAD`.
+
+### Test suite
+
+`4098a8e` fixes a false-positive in the cart-ops invariant checker (a
+correct "remove the pizza, keep the garlic knots" cart mutation was
+misclassified as a no-mutation defect because `isQuestion()` matched "can
+you" before the explicit removal command) and a real gap where
+conversational test cases never propagated `expectCartShrink`, silently
+skipping the `correction_reflected` check for every conversational case. This
+is local test-harness code (`scripts/test-suite/`, mirrored into
+`supabase/functions/_shared/test-suite/`) — the mirrored copy only reaches
+production once `test-runner`/`eval-sweep`/`generate-test-cases` are
+redeployed. `supabase functions list` shows `test-runner` last deployed
+2026-09-09 20:50:53 UTC, before this fix's 19:06 ET commit — **not yet live**
+in the deployed test runner either, though this affects test scoring, not
+customer orders.
+
+### Migrations — verified against the live DB directly, not `supabase migration list`
+
+`supabase migration list`/`db push` both fail against this project with a
+password-auth error (consistent with this project's already-documented
+CLI/tracker drift — see RUNBOOK). Queried the live schema directly via the
+service-role REST key instead:
+- **123** (`sms_provider` column on `shops`), **124** (`shop_settings`/
+  `shop_voice`/`shop_notes` tables), **125** (`menu_items.is_derived`),
+  **127** (`conversations.processing_claimed_at`), **128** (`app_config`
+  row `conversation_timeout_hours = 2`) — all **confirmed live** by direct
+  query.
+- **126** (menu-override actor RPC wrappers) and **129** (availability/
+  specials shop-match triggers) were **not independently re-queried** this
+  session (no safe way to introspect trigger/function definitions over the
+  REST API without a raw-SQL credential) — taking the authoring session's own
+  live-verification claims for 129 at face value, flagged rather than
+  confirmed.
+
+### Deploy status summary (edge functions touched this range)
+
+- `chat-sms`: **v341**, 2026-09-09 23:05:09 UTC — current with `HEAD`.
+- `compile-menu`: **v14**, 2026-09-09 20:13:33 UTC — current with `HEAD`
+  (includes the D1 derived-pizza-rows commit `24d7275` and the `staleIds`
+  rename).
+- `admin-chat`: **v35**, 2026-09-09 17:48:05 UTC — **stale**, predates all
+  three of today's phantom-success/ownership fixes (see above). Committed,
+  not deployed.
+- `_shared` (test-suite mirror only, this range): reaches production only via
+  `test-runner`/`eval-sweep`/`generate-test-cases`; `test-runner` is one
+  deploy behind this range's fix (see Test suite section above).
+
+### Also shipped today, not covered above (lower-stakes / already self-documenting)
+
+`f2d907b`/`8532ca5` (items C1/C2: instruction-layer schema + a
+`buildSystemPromptV2` prompt renderer sourced from `shop_settings`/
+`shop_voice`/`shop_notes` instead of a hardcoded shared template) and
+`e54ecd0` (item 9: wires real UPDATE/DELETE callers to migration 114's
+previously-inert `menu_overrides` actor trigger via new `owner_update_menu_item`/
+`owner_delete_menu_item` RPC wrappers) are both **committed and their
+migrations are live**, but gated off in practice: no shop has
+`shops.prompt_version` set (confirmed live, sampled `null` across shops), so
+`buildSystemPromptV2` is a permanent no-op until a shop is explicitly flipped.
+`5c19835`, `d10fafb`, `a9c03a1`, `c375903`, `db2abe0` are earlier-in-the-day
+resolver/prompt/refactor commits whose effects are already folded into the
+`chat-sms` v341 status above; see each commit's own message for specifics.

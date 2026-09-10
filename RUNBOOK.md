@@ -1668,3 +1668,85 @@ for the live conversational check; all scratch rows deleted after):
 shop's `prompt_version` was set. Both are separate go/no-go decisions for
 Jason — see the go-live checklist this entry's commit references before
 flipping either.
+
+## `admin-chat`'s confirmed_action_id flow must re-validate, never trust the echoed payload — 2026-09-09
+
+`validateProposal()` (item/shop-ownership + business-rule checks) only ever
+ran once, at proposal-creation time. The confirm-time flow re-parses whatever
+proposal JSON the client echoes back on confirmation and called
+`executeAction()` directly — so a tampered or stale confirm payload could
+carry a different tenant's `menu_item_id`/`special_id` straight through to a
+write, live-demonstrated in production against test fixture shops (`3f76dd1`).
+**If you add a new confirmed-action type or a new field to an existing
+proposal, it must be covered by `validateProposal()` AND that function must be
+re-run at confirm time, not just at proposal-creation time** — the confirm
+handler now does this, but the pattern is easy to defeat again by adding a new
+write path that bypasses `executeAction()`'s call to it. Migration 129 is a
+DB-level backstop (`BEFORE INSERT/UPDATE` triggers on `availability_overrides`
+and `specials` checking the item/shop match) that holds even if the app-level
+check is ever skipped, including for `service_role` callers that bypass RLS —
+but it only covers those two tables; a future write path to a different table
+needs its own equivalent trigger, RLS doesn't provide this by default (see
+migration 129's own header comment for which existing RLS policies do vs
+don't already join through to verify tenant ownership).
+
+**As of this writing, `admin-chat` is deployed at v35 (2026-09-09 17:48 UTC),
+which predates this fix and the two related phantom-success fixes
+(`627d8a3`, `952fc67`) — the code is committed on `main`, not live.** Confirm
+via `supabase functions list` before assuming any of the three are protecting
+production.
+
+## Modifier resolution: reactive text-stem scanning was removed, don't re-add it — 2026-09-09
+
+The "pepperoni bleeds onto every pizza in a multi-item order" defect recurred
+four times this week. Every fix before `49a34d1` tried to constrain
+`matchChoiceByStems` (scope it to one phrase, gate it on consumed ids, require
+a stem match on the model's own assertion) and each one failed on the next
+phrasing, because the underlying capability — resolving a modifier by
+scanning the customer's raw text for stem overlap — was still there to
+misfire. `49a34d1` deleted that capability outright: a modifier now resolves
+**only** via `matchAssertedChoice` (the model's explicit per-call tool
+argument) or the pizza-topping-compose module's own `toppingChoiceDisplay`
+mapping. An unresolved modifier is left off the cart line rather than guessed
+— "missing beats wrong." If you're touching `ask-plan-engine.ts`'s modifier
+branch and are tempted to add a text-scanning fallback "just for this one
+phrasing," don't — that's exactly the pattern that caused the last four
+recurrences.
+
+## NJB (Not Just Bagels) has zero `option_groups` rows — a real go-live blocker, not yet fixed — 2026-09-09
+
+Confirmed live: every NJB menu item's ask-plan slot steps that come from
+description parsing (side, bread, meat choices — 47 of NJB's 166 currently
+orderable items) have a `group_id` with no backing `option_groups` row
+(`derived:*` ids). `ask-plan-engine.ts`'s `priceSelections` builds the
+customer-facing `options` map by looking up each step's `group_id` against the
+item's real `option_groups` rows — for NJB this lookup always returns nothing,
+so the itemized receipt and kitchen ticket silently omit every slot selection
+a customer picked (which side, which bread, which meat), even though
+`ask_plan_selections` records them correctly internally. **Not currently a
+live incident** because `shops.compiled_ordering_engine_enabled = false` for
+NJB (confirmed live) — real NJB orders go through the legacy/LLM path, not
+this code. **Do not flip that flag for NJB until this is fixed** — the moment
+it's on, every slot-based item's kitchen ticket goes out with the side/bread
+missing, which for a restaurant means the kitchen doesn't know what to make.
+The real fix needs a product decision (a per-slot label like "Side"/"Bread"
+propagated from `normalize.ts`/`archetypes.ts` through to the ask-plan step,
+plus a `resolvedOptions` keying scheme that doesn't require a real
+`option_groups` row) — flagged for an explicit call before anyone touches
+`ask-plan-engine.ts`'s options-building code to "just fix NJB."
+
+## Direct DB verification when `supabase migration list`/`db push` won't authenticate — 2026-09-09
+
+Both commands failed today with a Postgres SASL/password-auth error against
+this project (`rvdqfxtrskxekfkqnegx`) — consistent with this project's
+already-documented migration-tracker drift (see the 2026-09-06 entry above).
+Fallback used: query the live schema directly over REST with the
+service-role key (`SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY` in
+`~/.openclaw/.secrets`) — e.g. `curl
+"$SPRINTAI_CHAT_SUPABASE_URL/rest/v1/app_config?select=*&key=eq.conversation_timeout_hours"
+-H "apikey: $KEY" -H "Authorization: Bearer $KEY"` to confirm a migration's
+columns/rows actually exist and hold the expected value. This confirms a
+migration's *effects* (a column, a row, a table) but not trigger/function
+bodies, which aren't exposed over PostgREST — there is no read-only way found
+so far to confirm a `CREATE TRIGGER` migration actually applied without a raw
+SQL credential or a live write test against a real trigger condition.

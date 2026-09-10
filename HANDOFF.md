@@ -939,6 +939,37 @@ See `BUILD-NOTES-payment-links-compliance-segments.md` for the full breakdown.
 
 ---
 
+## Live vs committed — 2026-09-09 snapshot
+
+As of the 2026-09-09 journal entry (`docs/DAILY.md`), verified directly
+against `supabase functions list` and the live DB via the service-role REST
+key (not assumed from commit messages):
+
+- **`chat-sms` — v341, current with `HEAD`.** Everything committed today
+  (the money-bug fixes, the turn lock, the conversation timeout, the
+  same-item-merge fix) is live.
+- **`compile-menu` — v14, current with `HEAD`.**
+- **`admin-chat` — v35, STALE.** Three fixes committed today are NOT live:
+  two phantom-success fixes (`627d8a3`, `952fc67`) and a real,
+  live-demonstrated cross-tenant write vulnerability in the confirm-time
+  proposal flow (`3f76dd1`, see RUNBOOK). Redeploy before relying on any of
+  the three.
+- **`test-runner`** has not been redeployed since a `_shared/test-suite` fix
+  landed (`4098a8e`) — the deployed test runner still has the false-positive
+  bug in its cart-ops invariant checker; this affects test scoring, not
+  customer orders.
+- **Migrations 123–125, 127, 128 confirmed live** (column/table/row-level
+  checks against production). **126 and 129 were not independently
+  re-verified this session** — no read-only way was found to confirm a
+  trigger/function body applied without a raw SQL credential; taking the
+  authoring sessions' own live-verification claims at face value.
+- **`buildSystemPromptV2` / instruction-layer prompt renderer (items C1/C2)
+  and the `menu_overrides` actor wiring (item 9) are committed and their
+  migrations are live, but functionally inert** — gated on `shops.prompt_version`,
+  which is `null` for every shop (confirmed live).
+
+---
+
 ## Quickstart for development
 
 ```bash
