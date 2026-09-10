@@ -750,7 +750,7 @@ recipient is owner-only — but should be closed with the vault bearer
 | `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals + ticket delivery failures; write to issues table; set notified_at on source evals |
 | `issue-detector-escalation` | Every 2 min (pg_cron, 093, jobid 80) | Escalate paid+unacknowledged orders to `owner_mobile` by SMS after 7 min |
 | `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
-| `campaign-status-reader` | Hourly (pg_cron, 083, jobid 88) — **applied and running, functionally inert** | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
+| `campaign-status-reader` | Hourly (pg_cron, 083, jobid 89) — **applied, running, live** (2026-09-10: `DAILY_RESET_SECRET` generated and set as both the function secret and the matching `vault.secrets` entry — self-mintable shared secret, not a third-party credential, no Jason dependency; manually triggered the job's own auth path and confirmed a real 200 `{"ok":true,"read":0,"advanced":0}`, not 401/500) | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 
 **NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
