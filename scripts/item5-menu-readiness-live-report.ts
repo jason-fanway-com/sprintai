@@ -322,7 +322,7 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
     }
   }
 
-  console.log(`\n§8.3 generated menu walk (every orderable item, real resolver + ask-plan-engine + pricing + itemizer code):`);
+  console.log(`\n§8.3 generated menu walk (every orderable item, real phrase-split + ask-plan-engine + pricing + itemizer code):`);
   const walk = runMenuWalk(compileItems, compiledMap);
   console.log(`  total orderable items walked: ${walk.total_orderable}`);
   console.log(`  passed: ${walk.passed}`);
@@ -337,7 +337,7 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
   }
   if (failedResults.length > dumpLimit) console.log(`  ... and ${failedResults.length - dumpLimit} more failing walk cases`);
 
-  console.log(`\n§8.4 generated MULTI-item, multi-phrasing menu walk (multi-item cases derived from this shop's own menu, real resolver + ask-plan-engine + pricing + itemizer code):`);
+  console.log(`\n§8.4 generated MULTI-item, multi-phrasing menu walk (multi-item cases derived from this shop's own menu, real phrase-split + ask-plan-engine + pricing + itemizer code):`);
   const multiWalk = runMultiItemMenuWalk(compileItems, compiledMap);
   console.log(`  total multi-item cases: ${multiWalk.total_cases}`);
   console.log(`  passed: ${multiWalk.passed}`);

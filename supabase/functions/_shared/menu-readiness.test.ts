@@ -5,9 +5,11 @@
  * §8.1/§8.2 coverage (bot_state, the 8 menu-level invariants) already lives
  * in compile-menu.test.ts, since compile-menu.ts is where those are
  * implemented (item 4) — not duplicated here. This file covers what's new:
- * §8.3, the generated menu walk, executed against the real resolver +
+ * §8.3, the generated menu walk, executed against the real phrase-split +
  * ask-plan-engine + pricing + itemizer code (no fixtures pretending to be
- * that code — the actual imports).
+ * that code — the actual imports; see menu-readiness.ts's own header
+ * comment for why chat-sms/resolver.ts, used here until 2026-09-10, was
+ * removed — it is dead code, never wired into chat-sms/index.ts).
  *
  * Run: deno test --allow-net --allow-env --allow-read supabase/functions/_shared/menu-readiness.test.ts
  */
@@ -101,7 +103,7 @@ function buildPizzaFixture() {
 
 Deno.test("walk: happy path — ask + auto_single + apply_default resolve, offer_once stays unapplied, price and ticket are exact", () => {
   const { item: pizzaItem, compiled, compiledMap } = buildPizzaFixture();
-  const result = runItemWalk(pizzaItem, compiled, [pizzaItem], compiledMap);
+  const result = runItemWalk(pizzaItem, compiled);
 
   assertEquals(result.failures, [], `expected no failures, got: ${JSON.stringify(result.failures, null, 2)}`);
   assert(result.pass);
@@ -120,45 +122,25 @@ Deno.test("walk: happy path — ask + auto_single + apply_default resolve, offer
   assert(result.ticket_text!.includes("Cheese Pizza"));
 });
 
-// Both of these fixtures used to document genuine matching gaps ("Ay Ox" /
-// "Ex" vs "Oh" — displays made entirely of sub-3-character words, which
-// resolver.ts's and ask-plan-engine.ts's word-significance filters both
-// used to treat as zero significant stems). Two rounds of exact-whole-
-// string-match fixes closed both gaps: resolver.ts's findExactItemMatch
-// (round 2, commit a9c03a1) resolves an item to itself off a full-string
-// echo regardless of word length, and ask-plan-engine.ts's matchChoiceInText
-// (round 3, this fix) does the same for a slot's own choices[0].display.
-// The one GENUINE gap that survives an exact-string-match tier by design
-// (missing beats wrong) is two entities sharing the identical display text
-// — real, live examples of exactly this already exist (Zio's two distinct
-// "Double Burger" items, flagged by invariants #3/#4) — so both tests below
-// now exercise that instead.
-
-Deno.test("walk: resolver-add failure surfaces when two items share the exact same display_name (genuine duplicate-name gap, real Double Burger shape)", () => {
-  const soloChoice = choice({ name: "Only", display_name: "Only", price_cents: 0 });
-  const soloGroup = group({ name: "Size", slot_key: "size", kind: "slot", choices: [soloChoice] });
-  const itemA = item({ name: "TWIN-A", display_name: "Twin Special", price_cents: 500, groups: [soloGroup] });
-  const itemB = item({ name: "TWIN-B", display_name: "Twin Special", price_cents: 600, groups: [soloGroup] });
-
-  const compiledResult = compileMenu([itemA, itemB], [], "2026-09-09T00:00:00.000Z", true);
-  for (const c of compiledResult.items) {
-    assertEquals(c.bot_state, "orderable", `fixture must compile orderable, got: ${c.bot_state_reason}`);
-  }
-  const compiledMap = new Map(compiledResult.items.map(c => [c.item_id, c]));
-
-  const result = runItemWalk(itemA, compiledMap.get(itemA.id)!, [itemA, itemB], compiledMap);
-  assert(!result.pass);
-  assert(result.failures.some(f => f.step === "resolver-add"), `expected a resolver-add failure, got: ${JSON.stringify(result.failures)}`);
-});
+// REMOVED (2026-09-10 rewire): the "two items share the exact same
+// display_name" test used to document a genuine chat-sms/resolver.ts gap —
+// resolver.ts resolved an item id off free-text name matching, so two items
+// with an identical display_name were genuinely ambiguous to it. resolver.ts
+// is dead code (never wired into chat-sms/index.ts); this walk now supplies
+// each item's real id directly, the same way the live add_item handler
+// receives `menu_item_id` straight off the model's tool call — there is no
+// name-based lookup left in this walk for a duplicate display_name to break.
+// That gap is real for a future LLM-quality check, not for this
+// deterministic-pipeline gate.
 
 Deno.test("walk: ask-loop failure surfaces when two choices in the same group share the exact same display (genuine duplicate-choice gap)", () => {
   const optA = choice({ name: "Sauce A", display_name: "Extra Sauce", price_cents: 0 });
   const optB = choice({ name: "Sauce B", display_name: "Extra Sauce", price_cents: 0 });
   const unaskableGroup = group({ name: "Style", slot_key: "flavor", kind: "slot", choices: [optA, optB] });
   const badItem = item({ name: "Sandwich", display_name: "Turkey Sandwich", price_cents: 800, groups: [unaskableGroup] });
-  const { compiled, compiledMap } = compileOne(badItem);
+  const { compiled } = compileOne(badItem);
 
-  const result = runItemWalk(badItem, compiled, [badItem], compiledMap);
+  const result = runItemWalk(badItem, compiled);
   assert(!result.pass);
   assert(
     result.failures.some(f => f.step === "ask-loop" || f.step.startsWith("ask:")),
@@ -231,27 +213,28 @@ function buildMultiItemFixtureMenu(): { items: CompileItem[]; compiledMap: Map<s
   return { items: all, compiledMap: new Map(result.items.map(c => [c.item_id, c])) };
 }
 
-// KNOWN REAL GAP, not a test bug: resolver.ts's splitOnAndItem() probes 6
-// words past each "and" to decide whether it's an item boundary. With 3+
-// items chained by "and" and no commas ("one X and one Y and one Z and one
-// W"), the probe after the FIRST "and" runs far enough forward to also
-// contain the NEXT item's name, so both candidates score 1.0 and the tie
-// resolves to null ("missing beats wrong") — only the LAST "and" (nothing
-// left to bleed into) actually splits. The result: everything before the
-// last item collapses into one unresolved phrase. This is exactly the
-// "and"-separated case for 4 items, and this gate now catches it honestly
-// instead of silently passing.
-const KNOWN_AND_CHAIN_GAP_CASE_ID = "four-items-with-modifier:and-separated";
+// FORMER KNOWN GAP, now closed by the 2026-09-10 rewire: chat-sms/
+// resolver.ts's own splitOnAndItem() probed 6 words past each "and" to guess
+// an item boundary, and with 3+ items chained by "and" and no commas ("one X
+// and one Y and one Z and one W") that probe ran far enough forward to see
+// the NEXT item's name too, tying and returning null ("missing beats
+// wrong") — only the LAST "and" actually split. This walk no longer calls
+// resolver.ts's splitter at all; it calls chat-sms/phrase-split.ts's real
+// splitCustomerPhrases (the function chat-sms/index.ts's live add_item
+// handler actually uses), whose boundary rule is structural — a comma, "&",
+// or "and" immediately followed by a quantity/article token — not a
+// forward word-probe, so it has no equivalent tie to lose. All 4 case types
+// now pass across all 5 phrasings.
 
-Deno.test("multi-item walk: all 4 case types generate against a well-formed fixture menu, across all 5 phrasings — every case passes except the documented and-chain gap", () => {
+Deno.test("multi-item walk: all 4 case types generate against a well-formed fixture menu, across all 5 phrasings — every case passes", () => {
   const { items, compiledMap } = buildMultiItemFixtureMenu();
   const report = runMultiItemMenuWalk(items, compiledMap);
 
   assertEquals(report.skipped_case_types, [], `expected no skipped case types, got: ${JSON.stringify(report.skipped_case_types)}`);
   assertEquals(report.total_cases, 4 * 5); // 4 case types x 5 phrasings
   const failing = report.results.filter(r => !r.pass).map(r => r.case_id);
-  assertEquals(failing, [KNOWN_AND_CHAIN_GAP_CASE_ID], `expected only the documented and-chain gap to fail, got: ${JSON.stringify(failing)}`);
-  assertEquals(report.passed, report.total_cases - 1);
+  assertEquals(failing, [], `expected every case to pass, got failures: ${JSON.stringify(failing)}`);
+  assertEquals(report.passed, report.total_cases);
 });
 
 Deno.test("multi-item walk: two-same-item-different-modifiers case produces 2 distinct lines with isolated toppings, no leakage", () => {

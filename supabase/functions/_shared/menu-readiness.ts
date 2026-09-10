@@ -12,14 +12,44 @@
  * What's new here is §8.3 — the generated menu walk. For every `orderable`
  * item it synthesizes and executes the walk() case from the spec against
  * the REAL production code, no LLM, no synthetic shortcuts:
- *   - resolver.ts (item 3) resolves "add via resolver(item.display_name)"
- *     into a structured op, exactly as a fresh customer utterance would.
+ *   - phrase-split.ts's splitCustomerPhrases + resolveClaimedPhraseIndex
+ *     (item "P0 pepperoni-bleed") are the actual functions
+ *     chat-sms/index.ts calls to turn one customer message into phrase
+ *     boundaries and to validate a per-item modifier scope claim.
  *   - ask-plan-engine.ts's applyCompiledAddItem (item 8) is the actual
  *     sequencer + cart-mutation code the live compiled-item ordering path
  *     calls — reused here unchanged to answer each ask_plan step and build
  *     a real, priced cart line.
  *   - pricing.ts's computeCartSubtotalCents cross-checks the line total.
  *   - itemizer.ts's renderItemizedRecap renders the real ticket text.
+ *
+ * REWIRED (2026-09-10): this walk used to resolve free text to an item id
+ * and its named modifiers via chat-sms/resolver.ts. resolver.ts is dead
+ * code — grep confirms zero call sites for resolveUtterance/resolvePhrase
+ * anywhere in chat-sms/index.ts's live import tree, today or historically
+ * (see docs/PO-BRIEF.md §8, "a module list is not an architecture, check
+ * the import path"). Every gate report produced while this module called
+ * resolver.ts was certifying a code path a real customer message can never
+ * reach. There is no deterministic replacement for resolver.ts's job of
+ * "which item id does this free text name" — in production that decision
+ * is made by the LLM's own tool call (chat-sms/index.ts destructures
+ * `menu_item_id` straight off the model's `add_item` tool input; there is
+ * no text -> item-id function in the live path at all). This walk cannot
+ * invoke an LLM (spec's own "no LLM" constraint), so it supplies the
+ * already-known ground-truth item id per phrase directly — the same
+ * simplification resolver.ts's stand-in made, just without a fake resolver
+ * in between. What IS real and IS exercised now: the phrase-boundary
+ * splitting and the modifier-scope-per-phrase logic (splitCustomerPhrases /
+ * resolveClaimedPhraseIndex / the modifierScopeText derivation), copied
+ * verbatim from chat-sms/index.ts's own add_item handler, and
+ * ask-plan-engine.ts's modelAssertedChoiceTexts contract — the ONLY channel
+ * production uses to resolve a modifier (free-text modifier scanning was
+ * deliberately removed from resolveAskPlan, see that function's own "Rank-2
+ * fix" comment). The walk simulates a model that correctly names its item
+ * and correctly asserts the modifier it read, then checks whether the REAL
+ * phrase-scoping code still keeps modifiers from bleeding across items —
+ * that is the actual, current production defect class this walk exists to
+ * catch, not resolver.ts's fuzzy word matching.
  *
  * cart.ts (item 2) is NOT used here: every function it exports is a
  * hallucination GUARD — it verifies an LLM's free-text reply against
@@ -36,8 +66,7 @@ import {
   type CompiledItem,
   type MenuInvariantResult,
 } from "./compile-menu.ts";
-import { resolveUtterance, type ResolvedOp } from "../chat-sms/resolver.ts";
-import type { ComposeMenuItem } from "../chat-sms/pizza-topping-compose.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex } from "../chat-sms/phrase-split.ts";
 import {
   applyCompiledAddItem,
   allSlotsResolved,
@@ -95,17 +124,6 @@ export interface MenuWalkReport {
   results: WalkResult[];
 }
 
-function toComposeMenu(items: CompileItem[], compiled: Map<string, CompiledItem>): ComposeMenuItem[] {
-  return items.map(i => ({
-    id: i.id,
-    name: i.name,
-    category: i.category ?? "",
-    ask_plan: compiled.get(i.id)?.ask_plan ?? null,
-    bot_state: compiled.get(i.id)?.bot_state ?? null,
-    option_groups: i.groups.map(g => ({ id: g.id, name: g.name })),
-  }));
-}
-
 /**
  * Execute the §8.3 walk for exactly one orderable item against the real
  * resolver + compiled-item engine + pricing + itemizer code. Returns a
@@ -116,8 +134,6 @@ function toComposeMenu(items: CompileItem[], compiled: Map<string, CompiledItem>
 export function runItemWalk(
   item: CompileItem,
   compiledItem: CompiledItem,
-  allItems: CompileItem[],
-  allCompiled: Map<string, CompiledItem>,
 ): WalkResult {
   const failures: WalkFailure[] = [];
   const askPlan: AskPlan = compiledItem.ask_plan;
@@ -131,24 +147,12 @@ export function runItemWalk(
     ticket_text: null,
   };
 
-  // ── Step 1: "add via resolver(term = item.display_name)" ────────────────
-  const menuForResolver = toComposeMenu(allItems, allCompiled);
-  let ops: ResolvedOp[];
-  try {
-    ops = resolveUtterance(askPlan.display_name, menuForResolver);
-  } catch (e) {
-    failures.push({ step: "resolver-add", detail: `resolveUtterance threw: ${String(e)}` });
-    return empty;
-  }
-  if (ops.length !== 1 || ops[0].kind !== "add_item" || ops[0].itemId !== item.id) {
-    failures.push({
-      step: "resolver-add",
-      detail: `resolveUtterance("${askPlan.display_name}") did not resolve to a single add_item for ${item.id}: ${JSON.stringify(ops)}`,
-    });
-    return empty; // cannot proceed to cart assertions if the item can't even be added
-  }
-
   // ── Build the real cart line via the compiled add-item engine (item 8) ──
+  // Item id is known ground truth (this walk is testing exactly this item),
+  // mirroring chat-sms/index.ts's own add_item handler, which likewise never
+  // derives an item id from text — it reads `menu_item_id` straight off the
+  // model's tool call. What's real here is the ask-plan-engine.ts sequencer
+  // this call feeds into, unchanged from production.
   const cart: CompiledCartLine[] = [];
   const engineMenuItem: CompiledMenuItem = {
     ask_plan: askPlan,
@@ -225,15 +229,15 @@ export function runItemWalk(
   let expectedDelta = 0;
   const selectedDisplays: string[] = [];
   for (const step of askPlan.steps) {
-    const choiceId = line.ask_plan_selections?.[step.group_id];
-    if (!choiceId) continue;
-    const choice = step.choices.find(c => c.id === choiceId);
-    if (!choice) {
-      failures.push({ step: "pricing", detail: `selection ${choiceId} on group ${step.group_id} does not reference a real ask_plan choice` });
-      continue;
+    for (const choiceId of selectionIds(line.ask_plan_selections?.[step.group_id])) {
+      const choice = step.choices.find(c => c.id === choiceId);
+      if (!choice) {
+        failures.push({ step: "pricing", detail: `selection ${choiceId} on group ${step.group_id} does not reference a real ask_plan choice` });
+        continue;
+      }
+      expectedDelta += choice.price_delta_cents;
+      selectedDisplays.push(choice.display);
     }
-    expectedDelta += choice.price_delta_cents;
-    selectedDisplays.push(choice.display);
   }
   const expectedLineTotal = askPlan.base_price_cents + expectedDelta;
   if (line.price_cents !== expectedLineTotal) {
@@ -276,7 +280,7 @@ export function runItemWalk(
 /** Run the §8.3 walk for every orderable item in the compiled menu. */
 export function runMenuWalk(items: CompileItem[], compiled: Map<string, CompiledItem>): MenuWalkReport {
   const orderable = items.filter(i => compiled.get(i.id)?.bot_state === "orderable");
-  const results = orderable.map(i => runItemWalk(i, compiled.get(i.id)!, items, compiled));
+  const results = orderable.map(i => runItemWalk(i, compiled.get(i.id)!));
   return {
     total_orderable: orderable.length,
     passed: results.filter(r => r.pass).length,
@@ -294,29 +298,30 @@ export function runMenuWalk(items: CompileItem[], compiled: Map<string, Compiled
 // multi-item order) that kept recurring while this gate reported "passes."
 // This section closes that gap: for each shop's own compiled menu, it
 // generates real multi-item, multi-phrasing utterances and runs them through
-// the SAME in-process deterministic pipeline as the single-item walk —
-// resolver.ts's phrase splitter/resolver (item 3) turns one utterance into
-// one ResolvedOp per phrase, ask-plan-engine.ts's applyCompiledAddItem (item
-// 8) turns each op into a real, priced cart line, pricing.ts cross-checks
-// the subtotal, itemizer.ts renders the real ticket text. No LLM, no live
-// HTTP call to chat-sms — same reasoning as runItemWalk's own header comment.
+// the SAME functions chat-sms/index.ts's live add_item handler calls —
+// chat-sms/phrase-split.ts's splitCustomerPhrases + resolveClaimedPhraseIndex
+// compute this turn's phrase boundaries and validate each per-item modifier-
+// scope claim, and ask-plan-engine.ts's applyCompiledAddItem (item 8) turns
+// each planned item into a real, priced cart line via that same scoping,
+// pricing.ts cross-checks the subtotal, itemizer.ts renders the real ticket
+// text. No LLM, no live HTTP call to chat-sms — same reasoning as
+// runItemWalk's own header comment.
 //
 // HONESTY NOTE (read before trusting a "pass" here as proof the live bot is
-// fixed): resolver.ts is NOT wired into supabase/functions/chat-sms/index.ts
-// today — grep confirms zero call sites for resolveUtterance/resolvePhrase
-// outside this file and its own test. The live chat-sms function still
-// relies on the LLM's own tool-calling loop to decide how many times to call
-// add_item and what customerMessage text to pass each call (ask-plan-
-// engine.ts's own D1 fix comment documents that the live caller reuses the
-// WHOLE turn's raw text for every add_item call this turn, not a phrase-
-// isolated slice). This walk proves the DETERMINISTIC pipeline
-// (resolver.ts's phrase isolation + ask-plan-engine.ts's compiled apply
-// path) can build a correct multi-item cart when each add_item call is fed
-// its own isolated phrase — a real, load-bearing correctness property, and
-// the shape resolver.ts was explicitly built for (see resolver.ts's own
-// header, "why the original pepperoni-on-two-pizzas defect cannot recur in
-// this path"). It does NOT, by itself, prove today's live LLM-tool-calling
-// path is bug-free, because that path does not call resolver.ts at all.
+// fixed): there is no deterministic function anywhere in chat-sms/index.ts's
+// live import tree that turns free text into a menu item id or a modifier
+// selection — the LLM's own tool call supplies `menu_item_id` and the
+// asserted `modifiers`/`options` directly; index.ts only ever validates
+// those claims (resolveClaimedPhraseIndex, matchAssertedChoice), it never
+// derives them. This walk cannot invoke an LLM (the gate's own no-LLM
+// constraint), so it supplies each planned item's real id and its intended
+// modifier's real display name directly — simulating a model that read the
+// phrase correctly — and then runs that simulated call through the REAL
+// scoping/validation code path. A "pass" here proves the deterministic
+// phrase-boundary + modifier-scope + cart-mutation code is correct GIVEN a
+// model that identifies items and names modifiers correctly; it does not,
+// by itself, prove the model always does — that is a live-LLM-quality
+// question this gate is not built to answer.
 
 export interface MultiItemCaseResult {
   case_id: string;
@@ -353,13 +358,13 @@ interface PlannedItem {
 }
 
 // Items whose own display name contains "with" are excluded from case
-// generation entirely: resolvePhrase's "with X" clause-splitting has a known,
-// separate, pre-existing limitation on names like that (only the
-// whole-UTTERANCE exact-match short-circuit in resolveUtterance protects
-// against it, and that short-circuit only ever fires for a single-item
-// utterance — see resolver.ts's own header comment). Picking such a name here
-// would contaminate a multi-item/modifier-isolation test with an unrelated,
-// already-documented gap.
+// generation entirely. LEGACY REASON (2026-09-10 rewire): this guarded
+// against chat-sms/resolver.ts's dead-code "with X" clause-splitting, which
+// this module no longer calls — the real pipeline (splitCustomerPhrases +
+// modelAssertedChoiceTexts) has no equivalent "with"-parsing step to break.
+// Left in place rather than removed in this pass to keep the rewire scoped
+// to the resolution mechanism, not case-generation coverage; revisit
+// separately if broader "with"-named-item coverage is wanted.
 function hasWithInName(displayName: string): boolean {
   return /\bwith\b/i.test(displayName);
 }
@@ -476,8 +481,9 @@ interface PhrasingStyle {
 
 // The 5 required phrasing forms (item 5 follow-up spec). Each takes the raw
 // per-item phrase text (e.g. "Cheese Pizza with Pepperoni") and wraps it in
-// a distinct quantity/connector style — resolver.ts's splitPhrases/
-// parseQuantity must isolate each item correctly under every one of these.
+// a distinct quantity/connector style — chat-sms/phrase-split.ts's
+// splitCustomerPhrases must isolate each item correctly under every one of
+// these (the real function the live add_item handler calls).
 const PHRASING_STYLES: PhrasingStyle[] = [
   { key: "comma-digit-qty", build: parts => parts.map(p => `1 ${p}`).join(", ") },
   { key: "comma-word-qty", build: parts => parts.map(p => `one ${p}`).join(", ") },
@@ -494,10 +500,41 @@ const PHRASING_STYLES: PhrasingStyle[] = [
 ];
 
 /**
- * Execute one multi-item, one-phrasing case: resolve the utterance via
- * resolver.ts, build each resulting add_item op into a real cart line via
- * ask-plan-engine.ts (running the same ask-loop runItemWalk uses to resolve
- * any remaining required slots), then assert:
+ * A resolved ask_plan_selections entry is a bare string for the common
+ * single-choice case, or a string[] when a modifier group resolved more than
+ * one choice (P0 fix 2026-09-10, ask-plan-engine.ts's matchAllAssertedChoices)
+ * — normalize to an array so every consumer below handles both uniformly.
+ */
+function selectionIds(sel: string | string[] | undefined): string[] {
+  if (!sel) return [];
+  return Array.isArray(sel) ? sel : [sel];
+}
+
+/** All of an ask_plan's real modifier-choice displays whose id is in `ids`, in step order. */
+function modifierDisplaysForIds(askPlan: AskPlan, ids: Set<string>): string[] {
+  if (ids.size === 0) return [];
+  const out: string[] = [];
+  for (const step of askPlan.steps) {
+    if (step.kind !== "modifier") continue;
+    for (const choice of step.choices) {
+      if (ids.has(choice.id)) out.push(choice.display);
+    }
+  }
+  return out;
+}
+
+/**
+ * Execute one multi-item, one-phrasing case against the REAL live pipeline:
+ * chat-sms/phrase-split.ts's splitCustomerPhrases splits the utterance into
+ * phrase boundaries exactly as chat-sms/index.ts does before validating a
+ * per-call source_phrase claim; resolveClaimedPhraseIndex is that same
+ * validation, run here against each planned item's own phrase text; and
+ * ask-plan-engine.ts's applyCompiledAddItem builds each resulting cart line,
+ * fed the modifierScopeText/modelAssertedChoiceTexts a correctly-behaving
+ * model would produce (see this module's header comment for why item-id and
+ * modifier-assertion can't themselves be produced by a deterministic
+ * resolver — there isn't one in production; the LLM decides both). Then
+ * assert:
  *   - correct line count (no silent merge, no dropped phrase)
  *   - each line's MODIFIER selections are exactly the ones its own phrase
  *     named — nothing missing, nothing leaked in from another phrase or from
@@ -512,65 +549,84 @@ function runMultiItemCase(
   phrasingKey: string,
   utterance: string,
   planned: PlannedItem[],
-  allItems: CompileItem[],
-  allCompiled: Map<string, CompiledItem>,
 ): MultiItemCaseResult {
   const failures: WalkFailure[] = [];
   const caseId = `${caseType}:${phrasingKey}`;
-  const menuForResolver = toComposeMenu(allItems, allCompiled);
 
-  let ops: ResolvedOp[];
-  try {
-    ops = resolveUtterance(utterance, menuForResolver);
-  } catch (e) {
-    failures.push({ step: "multi-resolve", detail: `resolveUtterance threw on "${utterance}": ${String(e)}` });
-    return { case_id: caseId, case_type: caseType, phrasing: phrasingKey, utterance, pass: false, failures, expected_line_count: planned.length, actual_line_count: 0, subtotal_cents: null, ticket_text: null };
-  }
-
-  const addOps = ops.filter((o): o is Extract<ResolvedOp, { kind: "add_item" }> => o.kind === "add_item");
-  if (ops.length !== planned.length || addOps.length !== planned.length) {
+  // ── Real phrase-boundary splitting — the exact function chat-sms/index.ts
+  // calls to compute this turn's phrase boundaries before it ever validates
+  // a per-call source_phrase claim. ────────────────────────────────────────
+  const turnPhrases = splitCustomerPhrases(utterance);
+  if (turnPhrases.length !== planned.length) {
     failures.push({
-      step: "multi-resolve",
-      detail: `expected ${planned.length} add_item ops for "${utterance}", got ${ops.length} op(s) (${addOps.length} add_item): ${JSON.stringify(ops.map(o => ({ kind: o.kind, phrase: o.phrase })))}`,
+      step: "phrase-split",
+      detail: `expected ${planned.length} phrase(s) for "${utterance}", splitCustomerPhrases produced ${turnPhrases.length}: ${JSON.stringify(turnPhrases)}`,
     });
-  }
-  for (let idx = 0; idx < Math.min(addOps.length, planned.length); idx++) {
-    if (addOps[idx].itemId !== planned[idx].item.id) {
-      failures.push({
-        step: "multi-resolve-order",
-        detail: `phrase ${idx} ("${addOps[idx].phrase}") resolved to item ${addOps[idx].itemId}, expected ${planned[idx].item.id} (${planned[idx].askPlan.display_name})`,
-      });
-    }
   }
 
   const cart: CompiledCartLine[] = [];
   const opToLineIndex: (number | null)[] = [];
+  // Shared across every add_item call in this simulated turn — mirrors
+  // chat-sms/index.ts's consumedModifierChoiceIdsForTurn, created once per
+  // turn and threaded through every add_item call that turn makes.
+  const consumedModifierChoiceIds = new Set<string>();
 
-  for (let idx = 0; idx < addOps.length; idx++) {
-    const op = addOps[idx];
-    const opItem = allItems.find(i => i.id === op.itemId);
-    const compiledOpItem = opItem ? allCompiled.get(opItem.id) : undefined;
-    if (!opItem || !compiledOpItem) {
-      failures.push({ step: `multi-add:${idx}`, detail: `op ${idx} referenced unknown item id ${op.itemId}` });
-      opToLineIndex.push(null);
-      continue;
-    }
-    const askPlan = compiledOpItem.ask_plan;
+  for (let idx = 0; idx < planned.length; idx++) {
+    const p = planned[idx];
+    const askPlan = p.askPlan;
+    // Every planned item comes from the caller's `orderable` list — bot_state
+    // is always "orderable" by construction, no lookup needed.
     const engineMenuItem: CompiledMenuItem = {
       ask_plan: askPlan,
-      bot_state: compiledOpItem.bot_state,
-      option_groups: opItem.groups.map(g => ({ id: g.id, name: g.name, default_choice_id: g.default_choice_id })),
+      bot_state: "orderable",
+      option_groups: p.item.groups.map(g => ({ id: g.id, name: g.name, default_choice_id: g.default_choice_id })),
     };
 
+    // A model that correctly read this phrase supplies this item's real id
+    // directly (chat-sms/index.ts destructures `menu_item_id` straight off
+    // the tool call — there is no text-to-item-id resolver in the live path
+    // to test here) and claims, via `source_phrase`, the words of its own
+    // message that name this item. The walk's claim is its own phraseText
+    // (not the literal split phrase), so resolveClaimedPhraseIndex's real
+    // substring-validation logic is actually exercised here, not trivially
+    // short-circuited by an exact match.
+    const phraseIndex = resolveClaimedPhraseIndex(turnPhrases, p.phraseText);
+    if (phraseIndex !== null && phraseIndex !== idx) {
+      failures.push({
+        step: `phrase-index-mismatch:${idx}`,
+        detail: `resolveClaimedPhraseIndex matched phrase claim "${p.phraseText}" to turn-phrase index ${phraseIndex}, expected ${idx} (turnPhrases: ${JSON.stringify(turnPhrases)})`,
+      });
+    }
+    if (phraseIndex === null && turnPhrases.length > 1) {
+      failures.push({
+        step: `phrase-index-unresolved:${idx}`,
+        detail: `resolveClaimedPhraseIndex could not uniquely match phrase claim "${p.phraseText}" against turn-phrases ${JSON.stringify(turnPhrases)} — modifierScopeText will be empty this call, same as production`,
+      });
+    }
+    // Copied verbatim from chat-sms/index.ts's own add_item handler.
+    const modifierScopeText = turnPhrases.length <= 1
+      ? undefined
+      : (phraseIndex !== null ? turnPhrases[phraseIndex] : "");
+
+    // A correctly-behaving model asserts the modifier(s) it read for this
+    // item by exact display name — resolveAskPlan's ONLY channel for
+    // resolving a modifier (free-text modifier scanning was deliberately
+    // removed, see ask-plan-engine.ts's "Rank-2 fix" comment).
+    const modelAssertedChoiceTexts = modifierDisplaysForIds(askPlan, p.intendedModifierChoiceIds);
+
     const sizeBefore = cart.length;
-    const addResult = applyCompiledAddItem(cart, engineMenuItem, opItem.id, op.quantity, op.phrase, null);
+    const addResult = applyCompiledAddItem(
+      cart, engineMenuItem, p.item.id, 1, utterance, null,
+      consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText,
+      phraseIndex ?? undefined,
+    );
     if (!addResult.ok) {
-      failures.push({ step: `multi-add:${idx}`, detail: `applyCompiledAddItem failed for phrase "${op.phrase}": ${JSON.stringify(addResult.result)}` });
+      failures.push({ step: `multi-add:${idx}`, detail: `applyCompiledAddItem failed for phrase "${p.phraseText}": ${JSON.stringify(addResult.result)}` });
       opToLineIndex.push(null);
       continue;
     }
     if (cart.length !== sizeBefore + 1) {
-      failures.push({ step: `multi-add:${idx}`, detail: `expected a new cart line for phrase "${op.phrase}" (item ${opItem.id}); cart length went ${sizeBefore} -> ${cart.length} (likely merged into an existing line)` });
+      failures.push({ step: `multi-add:${idx}`, detail: `expected a new cart line for phrase "${p.phraseText}" (item ${p.item.id}); cart length went ${sizeBefore} -> ${cart.length} (likely merged into an existing line)` });
       opToLineIndex.push(cart.length > 0 ? cart.length - 1 : null);
       continue;
     }
@@ -587,20 +643,20 @@ function runMultiItemCase(
       if (allSlotsResolved(askPlan, resolvedIds)) break;
       guard++;
       if (guard > slotSteps.length + 2) {
-        failures.push({ step: `multi-ask-loop:${idx}`, detail: `slot resolution for ${opItem.id} (phrase "${op.phrase}") did not converge after ${guard} turns` });
+        failures.push({ step: `multi-ask-loop:${idx}`, detail: `slot resolution for ${p.item.id} (phrase "${p.phraseText}") did not converge after ${guard} turns` });
         break;
       }
       const nextStep = slotSteps.find(s => !resolvedIds.has(s.group_id));
       if (!nextStep || nextStep.choices.length === 0) {
-        failures.push({ step: `multi-ask-loop:${idx}`, detail: `no answerable next step for ${opItem.id}` });
+        failures.push({ step: `multi-ask-loop:${idx}`, detail: `no answerable next step for ${p.item.id}` });
         break;
       }
       const answerText = nextStep.choices[0].display;
       const beforeSize = resolvedIds.size;
-      const stepResult = applyCompiledAddItem(cart, engineMenuItem, opItem.id, 1, answerText, null);
+      const stepResult = applyCompiledAddItem(cart, engineMenuItem, p.item.id, 1, answerText, null, consumedModifierChoiceIds);
       const afterIds = new Set(Object.keys(cart[lineIndex].ask_plan_selections ?? {}));
       if (!stepResult.ok || !afterIds.has(nextStep.group_id) || afterIds.size <= beforeSize) {
-        failures.push({ step: `multi-ask:${idx}:${nextStep.slot_key ?? nextStep.group_id}`, detail: `answering "${answerText}" for ${opItem.id} did not record a selection` });
+        failures.push({ step: `multi-ask:${idx}:${nextStep.slot_key ?? nextStep.group_id}`, detail: `answering "${answerText}" for ${p.item.id} did not record a selection` });
         break;
       }
     }
@@ -621,8 +677,7 @@ function runMultiItemCase(
     const modifierChoiceIds = new Set<string>();
     for (const step of askPlan.steps) {
       if (step.kind !== "modifier") continue;
-      const choiceId = line.ask_plan_selections?.[step.group_id];
-      if (choiceId) modifierChoiceIds.add(choiceId);
+      for (const choiceId of selectionIds(line.ask_plan_selections?.[step.group_id])) modifierChoiceIds.add(choiceId);
     }
     const intended = planned[idx].intendedModifierChoiceIds;
     const missing = [...intended].filter(id => !modifierChoiceIds.has(id));
@@ -647,11 +702,11 @@ function runMultiItemCase(
     const askPlan = planned[idx].askPlan;
     for (const step of askPlan.steps) {
       if (step.kind !== "modifier") continue;
-      const choiceId = line.ask_plan_selections?.[step.group_id];
-      if (!choiceId) continue;
-      const arr = modifierChoiceIdToLines.get(choiceId) ?? [];
-      arr.push(lineIndex);
-      modifierChoiceIdToLines.set(choiceId, arr);
+      for (const choiceId of selectionIds(line.ask_plan_selections?.[step.group_id])) {
+        const arr = modifierChoiceIdToLines.get(choiceId) ?? [];
+        arr.push(lineIndex);
+        modifierChoiceIdToLines.set(choiceId, arr);
+      }
     }
   }
   for (const [choiceId, lines] of modifierChoiceIdToLines) {
@@ -676,10 +731,10 @@ function runMultiItemCase(
       const askPlan = planned[idx].askPlan;
       let expectedDelta = 0;
       for (const step of askPlan.steps) {
-        const choiceId = line.ask_plan_selections?.[step.group_id];
-        if (!choiceId) continue;
-        const choice = step.choices.find(c => c.id === choiceId);
-        if (choice) expectedDelta += choice.price_delta_cents;
+        for (const choiceId of selectionIds(line.ask_plan_selections?.[step.group_id])) {
+          const choice = step.choices.find(c => c.id === choiceId);
+          if (choice) expectedDelta += choice.price_delta_cents;
+        }
       }
       const expectedLineTotal = askPlan.base_price_cents + expectedDelta;
       if (line.price_cents !== expectedLineTotal) {
@@ -743,7 +798,7 @@ export function runMultiItemMenuWalk(items: CompileItem[], compiled: Map<string,
     }
     for (const style of PHRASING_STYLES) {
       const utterance = style.build(planned.map(p => p.phraseText));
-      results.push(runMultiItemCase(type, style.key, utterance, planned, items, compiled));
+      results.push(runMultiItemCase(type, style.key, utterance, planned));
     }
   }
 
