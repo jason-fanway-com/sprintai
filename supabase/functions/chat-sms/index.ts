@@ -7948,16 +7948,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         console.warn(`[chat-sms] HARD GATE (name-ask with unresolved required options) tripped (conv=${conversation.id}). Overriding reply that asked for the name while options were still pending.`);
         reply = renderMissingOptionsPrompt(pendingForPrompt);
       } else if (!hasPickupName && isAskingForPickupName(reply)) {
-        // FIX (2026-09-06, Jason): the itemized recap belongs at the ONE moment
-        // that matters — the customer is being asked for their pickup name,
-        // which is the last step before checkout, regardless of whether GUARD 2
-        // forced that ask or the model asked on its own initiative (the common
-        // case; GUARD 2 is only a backstop). A count-and-total footer here is
-        // exactly the gap Luca's $37 double-charge exposed: he only caught it
-        // because he happened to read a number, not because the bot itemized
-        // anything. This replaces the plain footer with the full receipt only
-        // at this one moment; every other turn keeps the short footer as before.
-        reply = `${reply}\n\n${renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)}`;
+        // FIX (2026-09-10, Jason — reported 2026-09-08 and twice more on
+        // 2026-09-10): the itemized recap appended here landed in the SAME
+        // reply as the name question, e.g. "Got it! What's your name for
+        // the order? Cheese - Large (16") $16.50 | Subtotal $16.50 |
+        // Service fee $0.99" — customers want just the question. Leave
+        // `reply` untouched on this turn: no recap, no footer. The
+        // itemized recap still shows at checkout (D1, above) and on other
+        // turns via the short footer below.
       } else {
         const footer = renderLedgerFooter(guardCart, guardCartRow?.phase ?? "building", guardDeliveryFee, guardDriverTip, !feeAlreadyDisclosed);
         if (footer) {
