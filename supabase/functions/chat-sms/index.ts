@@ -1140,7 +1140,15 @@ export function buildSystemPromptV2(
   const fulfilmentDeliveryConfigured = shopSettings
     ? shopSettings.fulfilment_modes.includes("delivery")
     : deliveryEnabled === true;
-  const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false;
+  // shop.delivery_paused_until/delivery_pause_reason were dead code in this
+  // renderer (2026-09-10 audit) — the phase==="greeting" hard short-circuit
+  // in handleChatSmsRequest catches a fresh pause on the first message of a
+  // conversation, but that check never re-fires once phase has moved past
+  // greeting (an order already in progress when a pause starts, or any
+  // test-mode conversation, which skips that short-circuit outright). Reading
+  // it here too means a mid-conversation or test-mode pause is still surfaced.
+  const deliveryPausedNow = !!(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date());
+  const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false && !deliveryPausedNow;
   const orderTypeInfo = orderTypeStr === "delivery"
     ? `\nORDER TYPE: Delivery`
     : orderTypeStr === "pickup"
@@ -1164,6 +1172,10 @@ export function buildSystemPromptV2(
   const deliveryAvail = (() => {
     if (!fulfilmentDeliveryConfigured) {
       return `\nDELIVERY AVAILABLE: No — this shop is pickup only. Never offer delivery.`;
+    }
+    if (deliveryPausedNow) {
+      const reason = shop.delivery_pause_reason ? ` ${shop.delivery_pause_reason}` : "";
+      return `\nDELIVERY AVAILABLE: No — delivery is temporarily paused right now.${reason} Please order for pickup only. Never offer delivery until the pause lifts.`;
     }
     if (deliveryGeoAvailable === false) {
       return `\nDELIVERY AVAILABLE: No — delivery is temporarily unavailable while we finalize our delivery zone. Please order for pickup only. Never offer delivery.`;
