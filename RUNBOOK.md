@@ -750,7 +750,7 @@ recipient is owner-only — but should be closed with the vault bearer
 | `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals + ticket delivery failures; write to issues table; set notified_at on source evals |
 | `issue-detector-escalation` | Every 2 min (pg_cron, 093, jobid 80) | Escalate paid+unacknowledged orders to `owner_mobile` by SMS after 7 min |
 | `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
-| `campaign-status-reader` | Deployed, **not yet scheduled** — migration 083 unapplied | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
+| `campaign-status-reader` | Hourly (pg_cron, 083, jobid 88) — **applied and running, functionally inert** | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 
 **NOTIFIED_AT contract:** `eval-sweep` DMs flagged evals but does NOT set
@@ -919,16 +919,24 @@ to `ticket_send_log` for per-attempt audit tracing. Migration `081` adds
 `campaign_assignment_status` to `shops` for the campaign assignment go-live
 gate (#13). Migration `082` restores shops config columns (prod-applied but
 previously untracked). Migration `083` schedules `campaign-status-reader` via
-pg_cron (hourly) — **unapplied**, blocked on Jason setting `DAILY_RESET_SECRET`
-and `TELNYX_API_KEY` as Supabase function secrets. The deployed function was
-also caught running `verify_jwt=true`, which would have rejected 083's
-non-JWT shared-secret cron POST at the platform edge (401
-`UNAUTHORIZED_INVALID_JWT_FORMAT`) before it ever reached the function's own
-secret check — meaning the job would have silently 401'd forever even after
-Jason set the secrets. Fixed 2026-09-04 (`config.toml` → `verify_jwt=false`,
-redeployed); the function's own shared-secret check is unchanged. Applying
-083 and setting the secrets remain the only steps left to close go-live
-gate #13's auto-advance path.
+pg_cron (hourly) — **applied** (`cron.job` jobid 88, `active=true`, confirmed
+running hourly and succeeding at the pg_cron level every hour since before
+2026-09-10). The deployed function was also caught running `verify_jwt=true`,
+which would have rejected 083's non-JWT shared-secret cron POST at the
+platform edge (401 `UNAUTHORIZED_INVALID_JWT_FORMAT`) before it ever reached
+the function's own secret check; fixed 2026-09-04 (`config.toml` →
+`verify_jwt=false`, redeployed). **Still blocked on Jason (verified live
+2026-09-10):** `TELNYX_API_KEY` is set as a Supabase function secret, but
+`DAILY_RESET_SECRET` is not, and the Vault secret `daily_reset_secret`
+(`vault.secrets`) does not exist. Direct proof: every hourly invocation
+(`net._http_response`, e.g. 2026-09-10 11:00 and 12:00 UTC) returns
+`{"status_code":500,"content":"{\"error\":\"Not configured\"}"}` — exactly the
+degrade-gracefully path the migration's own comment predicts. Separately, as
+of 2026-09-10 no shop is in `campaign_assignment_status = 'submitted'` (all
+are `not_started`), so even once the secret is set there is nothing yet for
+the job to advance. Setting `DAILY_RESET_SECRET` (function secret) + creating
+the matching `daily_reset_secret` Vault secret are the only remaining steps
+to close go-live gate #13's auto-advance path.
 
 ### RLS model
 
