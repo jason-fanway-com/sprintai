@@ -166,14 +166,22 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ received: true });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[stripe-webhook] Error handling ${event.type}:`, errMsg);
+    console.error(`[stripe-webhook] ALERT: Error handling ${event.type} (event ${event.id}, acct '${connectedAccount || "platform"}'):`, errMsg);
     // On real failures, roll back the idempotency record so Stripe's retry can
     // re-attempt this event rather than being silently skipped.
     await unrecordEvent(supabase, event.id, connectedAccount);
-    // Return 200 to prevent immediate Stripe retry storms; Stripe still retries
-    // on non-2xx, but we log internally. (Order events above will be retried
-    // because we removed the idempotency row.)
-    return jsonResponse({ received: true, error: errMsg });
+    // Fix (2026-09-10, vigil 684b7165): this used to return 200 here, which
+    // to Stripe means "delivered successfully" — it NEVER retries a 2xx
+    // response, no matter what the JSON body says. That made the comment
+    // that used to sit here ("Stripe still retries on non-2xx") wrong in the
+    // one case that mattered: a real handler failure (e.g. the order-number
+    // trigger's unique-constraint collision that swallowed cart
+    // 8cc9477d's paid-but-never-persisted webhook) got a 200 and was never
+    // retried, silently. Returning 500 here is what makes Stripe's own
+    // retry schedule (up to 3 days, exponential backoff) actually kick in —
+    // the idempotency row removed above means the retried delivery will be
+    // processed for real, not skipped as a duplicate.
+    return jsonResponse({ received: false, error: errMsg }, 500);
   }
 });
 
@@ -392,7 +400,18 @@ async function handleOrderPaymentComplete(
   connectedAccount: string,
 ): Promise<void> {
   const cartId = session.metadata?.order_cart_id;
-  if (!cartId) return;
+  if (!cartId) {
+    // Fix (2026-09-10, vigil 684b7165): this used to be a bare `return` —
+    // a paid Stripe session reaching here with no order_cart_id would
+    // vanish with zero trace. The caller already gates on
+    // sess.metadata?.order_cart_id before invoking this function, so this
+    // should be unreachable, but "should be unreachable" is exactly the
+    // condition that let cart 8cc9477d's payment go silent once already
+    // (a different cause, same shape: a paid order with no persisted
+    // record and nothing in the logs pointing at it). Log loudly instead.
+    console.error(`[stripe-webhook] ALERT: checkout.session.completed with NO order_cart_id in metadata — session ${session.id}, acct '${connectedAccount || "platform"}'. Payment may be unrecorded.`);
+    return;
+  }
   console.log(`[stripe-webhook] Order payment complete for cart: ${cartId} (acct ${connectedAccount || "platform"})`);
 
   // Capture the PaymentIntent + Charge id from the CONNECTED account so refund

@@ -54,7 +54,7 @@ import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 import { splitCustomerPhrases, resolveClaimedPhraseIndex } from "./phrase-split.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
@@ -2268,6 +2268,46 @@ async function executeTool(
     case "set_note": {
       const { note } = input as { note: string };
       await supabase.from("order_carts").update({ notes: note }).eq("id", cartId);
+
+      // Fix (2026-09-10, kaiser-roll structured-option gap): a customer note
+      // naming a bread/size/dressing-type choice for an item that still has
+      // an unresolved compiled ask_plan slot must not stay prose-only in
+      // `notes` — order_cart_lines.options (what the kitchen ticket and CRM
+      // read) needs a real structured selection. Reuses the same
+      // matchChoiceInText the compiled add_item path already trusts for this
+      // exact matching job; only touches items whose own name is actually
+      // referenced in the note, and only ever fills a slot that has zero
+      // resolved choices so far — never overwrites an existing selection.
+      let cartChanged = false;
+      for (const ci of cart) {
+        if ((ci as BundleItem).type === "bundle") continue;
+        const item = ci as CartItem;
+        const menuItem = item.menu_item_id ? menuMap.get(item.menu_item_id) : undefined;
+        if (!menuItem?.ask_plan?.steps?.length) continue;
+        const nameStems = significantStems(menuItem.name);
+        const noteStems = significantStems(note);
+        if (nameStems.size > 0 && ![...nameStems].some(s => noteStems.has(s))) continue;
+        const resolvedIds = new Set(Object.keys(item.ask_plan_selections ?? {}));
+        for (const step of menuItem.ask_plan.steps) {
+          if (resolvedIds.has(step.group_id)) continue;
+          const matched = matchChoiceInText(step.choices, note);
+          if (!matched) continue;
+          item.ask_plan_selections = { ...(item.ask_plan_selections ?? {}), [step.group_id]: matched.id };
+          const groupName = step.slot_key ?? "choice";
+          item.options = { ...(item.options ?? {}), [groupName]: [matched.display] };
+          item.pending_options = (item.pending_options ?? []).filter(g => g !== groupName);
+          item.price_cents += matched.price_delta_cents;
+          cartChanged = true;
+        }
+      }
+      if (cartChanged) {
+        const subtotal = computeCartSubtotalCents(cart);
+        const { error: backfillError } = await supabase.from("order_carts")
+          .update({ cart_json: cart, subtotal_cents: subtotal, total_cents: subtotal })
+          .eq("id", cartId);
+        if (backfillError) console.error(`[chat-sms] set_note structured-option backfill FAILED for cart=${cartId}: ${backfillError.message}`);
+      }
+
       return { ok: true, result: { message: `Order notes saved: ${note}` } };
     }
 
