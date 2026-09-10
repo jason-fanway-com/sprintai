@@ -6208,7 +6208,19 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (cartItems.length > 0 && guardCart.length === 0 && !isCancelSignal) {
       console.warn(`[chat-sms] PROOF-P2 tripped (conv=${conversation.id}): cart wiped from ${cartItems.length} items to 0 without cancel signal. Restoring.`);
       cart.cart_json = [...cartItems];
-      await supabase.from("order_carts").update({ cart_json: JSON.stringify(cartItems) }).eq("id", cart.id);
+      // BUG (2026-09-10, menu-single-506 live repro): this was the only
+      // cart_json write in the file that JSON.stringify'd the array before
+      // handing it to supabase-js — every other site (saveCart, clear_cart,
+      // etc.) passes the array itself so PostgREST serializes it as real
+      // jsonb. Stringifying first stores cart_json as a jsonb STRING
+      // holding escaped JSON text. The next read casts `cart.cart_json` to
+      // AnyCartItem[] with no runtime check, so `[...cart.cart_json]`
+      // elsewhere in this file spreads that STRING character-by-character
+      // into bogus single-char pseudo-items with no menu_item_id/name —
+      // cartLineKey() maps every one of them to the same "?::" key, which
+      // is exactly the "Duplicate cart lines: ?::" signature the test
+      // harness caught after PROOF-P2 fired under a concurrent-retry race.
+      await supabase.from("order_carts").update({ cart_json: cartItems }).eq("id", cart.id);
       // P0 fix (2026-09-09, item 2 — itemized recap): route through
       // itemizer.ts instead of a bare name list, same reasoning as the
       // correctionApplied short-circuit above.
