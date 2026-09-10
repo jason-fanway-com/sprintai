@@ -694,6 +694,9 @@ async function validateProposal(
       if (!proposal.special_price_cents || proposal.special_price_cents <= 0) {
         return { valid: false, error: "A special needs a price greater than $0.00." };
       }
+      if (proposal.linked_item_id && !menuMap.has(proposal.linked_item_id)) {
+        return { valid: false, error: "Linked item not found on this shop's menu." };
+      }
       return { valid: true };
     }
     case "END_SPECIAL": {
@@ -1758,6 +1761,37 @@ Deno.serve(async (req: Request) => {
 
     const eightySixList = await get86List(db, shop_id, businessDate);
     const specials = await getActiveSpecials(db, shop_id, businessDate);
+
+    // Re-validate against the CURRENT shop-scoped state before executing. The client only
+    // ever received a signed-nothing action_id — everything else in this payload (item_ids,
+    // item_id, special_id, linked_item_id, ...) is whatever JSON the client echoes back, and
+    // validateProposal() otherwise only ever runs once, at proposal-creation time. Without
+    // this, a tampered or stale confirm payload reaches executeAction() with no check that
+    // its entity ids actually belong to shop_id — see migration 129 for the DB-level backstop
+    // on the two write paths (availability_overrides, specials) that don't already get this
+    // from RLS (option_groups/option_choices/menu_items policies already join through to the
+    // owning shop; availability_overrides/specials's policies only check shop_id itself).
+    const revalidation = await validateProposal(proposal, shop_id, businessDate, supabase, menuItems, specials, eightySixList);
+    if (!revalidation.valid) {
+      const errorResponse = { error: revalidation.error ?? "This action is no longer valid — please try again." };
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "confirmation", outcome: "validation_error",
+        raw_message: message, parsed_intent: proposal.intent,
+        parsed_proposal: proposal, response_sent: errorResponse,
+        error_message: revalidation.error ?? "Confirm-time re-validation failed",
+      });
+      return jsonResponse(errorResponse, 400);
+    }
+    if (revalidation.clarification) {
+      logTranscript(supabase, requestStart, {
+        shop_id, user_id: userId, session_id: requestSessionId,
+        turn_type: "confirmation", outcome: "clarification",
+        raw_message: message, parsed_intent: proposal.intent,
+        parsed_proposal: proposal, response_sent: revalidation.clarification,
+      });
+      return jsonResponse(revalidation.clarification);
+    }
 
     const executed = await executeAction(
       proposal, confirmed_action_id, shop_id, userId, `[confirmed: ${confirmed_action_id}]`,
