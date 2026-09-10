@@ -128,6 +128,7 @@ interface Proposal {
   wing_mix_extra?: boolean | null;
   // ── Address lookup + delivery config (owner-facing Settings page) ──
   address?: string;
+  confirm?: boolean;
   delivery_radius_mi?: number | null;
   delivery_fee_cents?: number | null;
 }
@@ -895,7 +896,7 @@ async function validateProposal(
 }
 
 // Delivery cannot function without a confirmed address (lat/lng from a
-// Places confirmation, never hand-typed) AND a radius greater than 0 —
+// geocoded confirmation, never hand-typed) AND a radius greater than 0 —
 // chat-sms's deliveryGeoAvailable gate (index.ts ~line 5049) already refuses
 // to offer delivery on a shop missing either, but until now nothing stopped
 // an owner from flipping delivery_enabled=true anyway: the console would say
@@ -1489,12 +1490,12 @@ async function executeAction(
       break;
     }
     case "SET_SHOP_ADDRESS": {
-      const { data: curShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
+      const { data: curShop } = await supabase.from("shops").select("formatted_address, latitude, longitude").eq("id", shopId).single();
       beforeSnapshot = { type: "address_set", before: curShop ?? null };
       const lookupRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/google-places-lookup`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
-        body: JSON.stringify({ shop_id: shopId, mode: "set", address: proposal.address }),
+        body: JSON.stringify({ shop_id: shopId, mode: "set", address: proposal.address, confirm: proposal.confirm === true }),
       });
       const lookupBody = await lookupRes.json().catch(() => ({}));
       if (!lookupRes.ok || lookupBody.error) {
@@ -1508,18 +1509,30 @@ async function executeAction(
         resultMsg = `No match found for "${proposal.address}" — try a more complete address. Nothing was changed.`;
         break;
       }
+      if (lookupBody.needs_confirmation) {
+        // Resolved address doesn't closely match what was typed — nothing was
+        // written. Hand the candidate to the frontend; only an explicit
+        // confirm:true retry turns this into a write.
+        afterSnapshot = { type: "address_set", found: true, saved: false, needs_confirmation: true, before: curShop ?? null };
+        actionData = { needs_confirmation: true, candidate: { formattedAddress: lookupBody.candidate.formattedAddress } };
+        resultMsg = `Did you mean "${lookupBody.candidate.formattedAddress}"? Confirm to save it — nothing was changed yet.`;
+        break;
+      }
       // Read the shop back through the owner's own client before claiming success —
       // the write happened inside google-places-lookup's service-role client, so this
       // confirms it actually landed and is visible to this owner, not just that the
       // call returned 200.
-      const { data: freshShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
-      if (!freshShop?.google_place_id || freshShop.google_place_id !== lookupBody.candidate.place_id) {
+      const { data: freshShop } = await supabase.from("shops").select("formatted_address, latitude, longitude").eq("id", shopId).single();
+      const savedOk = freshShop?.formatted_address === lookupBody.candidate.formattedAddress
+        && Math.abs((freshShop?.latitude ?? NaN) - lookupBody.candidate.latitude) < 0.0005
+        && Math.abs((freshShop?.longitude ?? NaN) - lookupBody.candidate.longitude) < 0.0005;
+      if (!savedOk) {
         afterSnapshot = { type: "address_set", found: true, saved: false, before: curShop ?? null };
         resultMsg = "Found a match but couldn't confirm it was saved — the change may not have gone through.";
         break;
       }
       logEdit({ table_name: "shops", row_id: shopId, before: curShop ?? null, after: freshShop });
-      actionData = { candidate: { formattedAddress: freshShop.formatted_address, place_id: freshShop.google_place_id } };
+      actionData = { candidate: { formattedAddress: freshShop.formatted_address } };
       afterSnapshot = { type: "address_set", found: true, saved: true, after: freshShop };
       resultMsg = `Address set: ${freshShop.formatted_address}`;
       break;
