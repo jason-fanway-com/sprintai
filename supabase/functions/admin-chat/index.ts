@@ -123,6 +123,7 @@ interface Proposal {
   open_hours?: Record<string, DayHours>;
   delivery_hours?: Record<string, DayHours>;
   delivery_enabled?: boolean;
+  upsell_enabled?: boolean;
   ai_instructions?: string;
   wing_flavors_included?: number | null;
   wing_mix_extra?: boolean | null;
@@ -451,6 +452,19 @@ const ADMIN_TOOLS = [
         summary: { type: "string", description: "e.g. 'Turn delivery off for this shop permanently'" },
       },
       required: ["delivery_enabled", "needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_UPSELL_ENABLED",
+    description: "Turn the ordering bot's upsell suggestions on or off for this shop (e.g. offering cream cheese with a bagel, or a drink with a sandwich). When off, the bot takes exactly what the customer asks for and doesn't suggest add-ons.",
+    input_schema: {
+      type: "object",
+      properties: {
+        upsell_enabled: { type: "boolean" },
+        needs_clarification: { type: "boolean" },
+        summary: { type: "string", description: "e.g. 'Turn off upsell suggestions for this shop'" },
+      },
+      required: ["upsell_enabled", "needs_clarification", "summary"],
     },
   },
   {
@@ -836,6 +850,15 @@ async function validateProposal(
       if (proposal.delivery_enabled === true) {
         const gateErr = await checkDeliveryEnableGate(supabase, shopId, null);
         if (gateErr) return { valid: false, error: gateErr };
+      }
+      return { valid: true };
+    }
+    case "SET_UPSELL_ENABLED": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (typeof proposal.upsell_enabled !== "boolean") {
+        return { valid: false, error: "Specify whether upsell suggestions should be on or off." };
       }
       return { valid: true };
     }
@@ -1487,6 +1510,17 @@ async function executeAction(
       resultMsg = proposal.delivery_enabled
         ? "Delivery is now enabled for this shop."
         : "Delivery is now turned off for this shop — the bot will refuse delivery orders.";
+      break;
+    }
+    case "SET_UPSELL_ENABLED": {
+      const { data: curShop } = await supabase.from("shops").select("upsell_enabled").eq("id", shopId).single();
+      beforeSnapshot = { type: "upsell_enabled", upsell_enabled_before: curShop?.upsell_enabled ?? null };
+      await supabase.from("shops").update({ upsell_enabled: proposal.upsell_enabled }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { upsell_enabled: curShop?.upsell_enabled ?? null }, after: { upsell_enabled: proposal.upsell_enabled } });
+      afterSnapshot = { type: "upsell_enabled", upsell_enabled_after: proposal.upsell_enabled };
+      resultMsg = proposal.upsell_enabled
+        ? "Upsell suggestions are now on for this shop."
+        : "Upsell suggestions are now off for this shop — the bot will only offer what's asked for.";
       break;
     }
     case "SET_SHOP_ADDRESS": {
