@@ -31,11 +31,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import {
   compileMenu,
+  buildOwnerQuestionSummaries,
   type CompileItem,
   type CompileGroup,
   type CompileChoice,
   type CompiledItem,
+  type PendingQuestion,
+  type InferSourceItem,
 } from "../supabase/functions/_shared/compile-menu.ts";
+import type { ExtractedGroup } from "../supabase/functions/_shared/archetypes.ts";
 import { normalizeMenuItems, pickDescriptionSlot, pickSideDescriptionSlot, type RawMenuItemRow } from "../supabase/functions/_shared/normalize.ts";
 import { itemEntityKey, groupEntityKey, choiceEntityKey } from "../supabase/functions/_shared/menu-entity-key.ts";
 import { summarizeItemStates, runMenuWalk, runMultiItemMenuWalk } from "../supabase/functions/_shared/menu-readiness.ts";
@@ -100,6 +104,10 @@ interface OptionChoiceRow {
   id: string; option_group_id: string; name: string; display_name: string | null;
   price_cents: number; is_default: boolean; provenance: string; import_key: string | null;
   not_composable: boolean;
+}
+interface OwnerQuestionRow {
+  scope_type: string; scope_id: string; slot_key: string | null;
+  status: string; question_text: string; proposal: unknown;
 }
 
 const COMPILED_AT = "2026-09-09T00:00:00.000Z";
@@ -178,6 +186,71 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
   }));
   const normalizedById = new Map(normalizeMenuItems(rawForNorm).map(n => [n.id, n]));
 
+  // Classify/infer (item 3, archetypes.ts via compile-menu.ts's
+  // buildOwnerQuestionSummaries) — same call compile-menu/index.ts makes.
+  // Without this, a category whose slot the source text never states (e.g.
+  // "does this shop ask a temperature on Burgers?") is invisible to this
+  // script: it would score those items orderable/8-of-8-invariants-passing
+  // when the real deployed compiler blocks them pending an owner answer.
+  const inferSourceItems: InferSourceItem[] = itemRows.map(row => {
+    const normalized = normalizedById.get(row.id);
+    const nameSlot = normalized?.slots.find(s => s.source === "name");
+    const descriptionSlot = normalized ? pickDescriptionSlot(normalized) : undefined;
+    const sideSlot = normalized ? pickSideDescriptionSlot(normalized) : undefined;
+    const extractedGroups: ExtractedGroup[] = (groupsByItem.get(row.id) ?? []).map(g => ({
+      name: g.name,
+      required: g.kind === "slot",
+      choiceNames: (choicesByGroup.get(g.id) ?? []).map(c => c.display_name ?? c.name),
+      provenance: g.provenance,
+    }));
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      category: row.category,
+      productKey: normalized?.product_key ?? row.product_key,
+      extractedGroups,
+      nameSlotChoices: nameSlot ? nameSlot.choices.map(c => c.display_name) : null,
+      descriptionSlotChoices: descriptionSlot ? descriptionSlot.choices.map(c => c.display_name) : null,
+      sideSlotChoices: sideSlot ? sideSlot.choices.map(c => c.display_name) : null,
+      priceCents: row.price_cents,
+    };
+  });
+  const freshDrafts = buildOwnerQuestionSummaries(inferSourceItems).flatMap(s => s.questions);
+
+  // Existing owner_questions rows (read-only — this script never writes).
+  // A shop already compiled at least once (e.g. via the compile-menu edge
+  // function) will have real answered/dismissed/pending rows here; a
+  // never-compiled shop won't, and freshDrafts alone carries the picture.
+  const { data: questionRows } = await supabase.from("owner_questions")
+    .select("scope_type, scope_id, slot_key, status, question_text, proposal")
+    .eq("menu_id", menuId);
+  const existingQuestions = (questionRows ?? []) as OwnerQuestionRow[];
+  const existingQuestionKeys = new Set(
+    existingQuestions.map(q => `${q.scope_type}|${q.scope_id}|${q.slot_key ?? ""}`),
+  );
+  const newDrafts = freshDrafts.filter(
+    d => !existingQuestionKeys.has(`${d.scope_type}|${d.scope_id}|${d.slot_key}`),
+  );
+  const toPendingQuestion = (q: {
+    scope_type: string; scope_id: string; slot_key: string | null;
+    status: string; question_text: string; proposal: unknown; blocking?: boolean;
+  }): PendingQuestion => ({
+    scope_type: q.scope_type as PendingQuestion["scope_type"],
+    scope_id: q.scope_id,
+    slot_key: q.slot_key,
+    blocking: q.blocking ?? true,
+    status: q.status as PendingQuestion["status"],
+    question_text: q.question_text,
+    exclusions: Array.isArray((q.proposal as { exclusions?: unknown } | null)?.exclusions)
+      ? (q.proposal as { exclusions: string[] }).exclusions
+      : [],
+  });
+  const allQuestions: PendingQuestion[] = [
+    ...existingQuestions.map(toPendingQuestion),
+    ...newDrafts.map(d => toPendingQuestion({ ...d, status: "pending" })),
+  ];
+
   const groupEntityKeys = new Map<string, string>();
   const choiceEntityKeys = new Map<string, string>();
 
@@ -224,7 +297,7 @@ for (const [shopName, shopId] of Object.entries(SHOPS)) {
 
   // acknowledgedDisplayOnly=false — we want to SEE invariant 8's real ratio,
   // not have it silently pass via acknowledgement.
-  const { items: compiledItems, invariants } = compileMenu(compileItems, [], COMPILED_AT, false);
+  const { items: compiledItems, invariants } = compileMenu(compileItems, allQuestions, COMPILED_AT, false);
   const compiledMap = new Map<string, CompiledItem>(compiledItems.map(c => [c.item_id, c]));
 
   const states = summarizeItemStates(compileItems, compiledMap);
