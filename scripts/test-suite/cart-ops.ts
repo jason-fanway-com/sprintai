@@ -1250,26 +1250,49 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
   // Intent is NEVER inferred from natural-language text.
   const expectShrink = run.expectCartShrink === true;
   if (expectShrink) {
-    // Verify the cart actually shrunk from turn to turn when a
-    // correction-turn message was followed by a cart reply.
-    let shrinkViolations: string[] = [];
+    // Verify the cart shrinks SOMEWHERE across the transcript, not on every
+    // consecutive turn pair. A case like conv-cancel-item legitimately runs
+    // turns past the cancellation (checkout, pickup name) where the cart
+    // correctly holds steady at its new, smaller size — that "1 → 1" pair is
+    // the correction having already landed, not a failure to shrink. Live
+    // NJB repro (2026-09-10): a 4-turn conversation (seed 2 items → cancel
+    // one → checkout → name) shrank correctly on turn 2 (2→1) and then
+    // legitimately held at 1 item on turns 3 and 4 — the old "every pair
+    // must strictly decrease" check flagged those steady turns as
+    // "did not shrink", failing a case where the product behaved perfectly.
+    // A genuine regression — the cart growing back — is still caught.
+    let hadQualifyingPair = false;
+    let sawShrink = false;
+    const growViolations: string[] = [];
     if (transcript.length >= 2) {
       for (let i = 1; i < transcript.length; i++) {
         const prevCart = (transcript[i - 1].cart as CartItemLike[] | undefined) ?? [];
         const thisCart = (transcript[i].cart as CartItemLike[] | undefined) ?? [];
         if (prevCart.length > 0 && thisCart.length > 0) {
+          hadQualifyingPair = true;
           const prevCount = cartItemCount(prevCart);
           const thisCount = cartItemCount(thisCart);
-          if (thisCount >= prevCount) {
-            shrinkViolations.push(
-              `Turn ${i}: cart did not shrink: ${prevCount} → ${thisCount} items`
+          if (thisCount < prevCount) {
+            sawShrink = true;
+          } else if (thisCount > prevCount) {
+            growViolations.push(
+              `Turn ${i}: cart grew instead of shrinking: ${prevCount} → ${thisCount} items`
             );
           }
+          // thisCount === prevCount: the correction already landed on an
+          // earlier turn; holding steady here is expected, not a violation.
         }
       }
     }
-    // If no cart-pair was available for comparison, pass (nothing to check).
-    if (shrinkViolations.length === 0 && transcript.some((t) => (t.cart as any[])?.length > 0)) {
+    if (growViolations.length > 0) {
+      invariants.push({
+        id: "correction_reflected",
+        description: "Corrections that reduce/remove are reflected in cart_json",
+        passed: false,
+        detail: growViolations.join("; "),
+        applied: true,
+      });
+    } else if (sawShrink) {
       invariants.push({
         id: "correction_reflected",
         description: "Corrections that reduce/remove are reflected in cart_json",
@@ -1277,12 +1300,12 @@ export function verifyCartOpsInvariants(run: RunResult): CartOpsVerification {
         detail: "Cart shrunk as expected",
         applied: true,
       });
-    } else if (shrinkViolations.length > 0) {
+    } else if (hadQualifyingPair) {
       invariants.push({
         id: "correction_reflected",
         description: "Corrections that reduce/remove are reflected in cart_json",
         passed: false,
-        detail: shrinkViolations.join("; "),
+        detail: "expectCartShrink set, but the cart never shrank across the transcript",
         applied: true,
       });
     } else {
