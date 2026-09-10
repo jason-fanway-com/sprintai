@@ -704,7 +704,7 @@ export function buildSystemPrompt(
           const filled = b.selections.reduce((s, sel) => s + sel.quantity, 0);
           if (b.complete) {
             const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-            return `${b.name} [${detail}] - $${(b.price_cents / 100).toFixed(2)}`;
+            return `${b.name} [${detail}]`;
           }
           return `[ACTIVE BUNDLE] ${b.name}: ${filled} of ${b.target} selected. Selections so far: ${b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ") || "none"}`;
         }
@@ -716,7 +716,7 @@ export function buildSystemPrompt(
         const unverified = r.unverified_requests?.length
           ? ` [customer asked for: ${r.unverified_requests.join(", ")} (not a menu option — unconfirmed, pass to shop)]`
           : "";
-        return `${qty}x ${r.name}${mods}${opts}${unverified} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
+        return `${qty}x ${r.name}${mods}${opts}${unverified}`;
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
@@ -912,12 +912,12 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly (e.g. "a tub of cream cheese" when the menu lists "Cream Cheese Spread (per pound)"), use the menu's real item name and unit — e.g. offer "Cream Cheese Spread (per pound)", not "a tub". The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)} (for your reference only — do NOT quote in your reply)` : ""}
+${cartStr}${cart.length > 0 ? `\n(No pricing shown above by design — you do not have subtotal, fees, or total for this cart. The system computes and states these figures; you never see or say them.)` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
 - Keep ALL responses under 300 characters for SMS
-- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
+- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure for the customer's cart/order in your response. The system appends the correct numbers from the Ledger automatically. You are not given the cart's subtotal, fees, or total anywhere in this prompt (by design — you cannot leak or misstate a figure you were never shown), so there is nothing to recall or reconstruct; never estimate, compute, or invent one either. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. (Menu prices for items NOT yet in the cart are still shown above under each item and may be quoted normally when the customer is browsing.)
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
 - REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
@@ -1054,7 +1054,7 @@ export function buildSystemPromptV2(
           const filled = b.selections.reduce((s, sel) => s + sel.quantity, 0);
           if (b.complete) {
             const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-            return `${b.name} [${detail}] - $${(b.price_cents / 100).toFixed(2)}`;
+            return `${b.name} [${detail}]`;
           }
           return `[ACTIVE BUNDLE] ${b.name}: ${filled} of ${b.target} selected. Selections so far: ${b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ") || "none"}`;
         }
@@ -1065,7 +1065,7 @@ export function buildSystemPromptV2(
         const unverified = r.unverified_requests?.length
           ? ` [customer asked for: ${r.unverified_requests.join(", ")} (not a menu option — unconfirmed, pass to shop)]`
           : "";
-        return `${qty}x ${r.name}${mods}${opts}${unverified} - $${((r.price_cents * qty) / 100).toFixed(2)}`;
+        return `${qty}x ${r.name}${mods}${opts}${unverified}`;
       }).join("\n");
   const subtotal = cart.reduce((s, i) => {
     if ((i as BundleItem).type === "bundle") {
@@ -1282,12 +1282,12 @@ ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a cust
 PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, ${hoursLabel}, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly, use the menu's real item name and unit instead. The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}${shopNotesBlock}
 CURRENT CART:
-${cartStr}${cart.length > 0 ? `\nSubtotal: $${(subtotal / 100).toFixed(2)}\nService fee: $${(SERVICE_FEE_CENTS / 100).toFixed(2)}${deliveryFeeCents ? `\nDelivery fee: $${(deliveryFeeCents / 100).toFixed(2)}` : ""}${driverTipCents ? `\nDriver tip: $${(driverTipCents / 100).toFixed(2)}` : ""}\nOrder total: $${((subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0)) / 100).toFixed(2)} (for your reference only — do NOT quote in your reply)` : ""}
+${cartStr}${cart.length > 0 ? `\n(No pricing shown above by design — you do not have subtotal, fees, or total for this cart. The system computes and states these figures; you never see or say them.)` : ""}
 ${notes ? `\nORDER NOTES: ${notes}` : ""}
 
 RULES:
 - Keep ALL responses under 300 characters for SMS
-- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure in your response. The system appends the correct numbers from the Ledger automatically. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. The numbers BELOW in the CURRENT CART section are for YOUR reference only — do NOT quote them in your reply.
+- MONEY/SCOPE RULE (CRITICAL): NEVER state a total, subtotal, service fee, delivery fee, tip amount, item count, or dollar figure for the customer's cart/order in your response. The system appends the correct numbers from the Ledger automatically. You are not given the cart's subtotal, fees, or total anywhere in this prompt (by design — you cannot leak or misstate a figure you were never shown), so there is nothing to recall or reconstruct; never estimate, compute, or invent one either. If you need to summarize the cart, say "I've got your items" without listing how many. When asking for the customer's name, say "What's your name for the order?" without quoting a total. When confirming before submit_order, say "All good — confirm?" without restating the price. (Menu prices for items NOT yet in the cart are still shown above under each item and may be quoted normally when the customer is browsing.)
 - Only use item IDs exactly as shown in the menu (the ID: prefix is part of the ID)
 - Never add items not in the available menu
 - REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
