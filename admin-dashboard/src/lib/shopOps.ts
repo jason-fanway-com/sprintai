@@ -41,7 +41,7 @@ export type FormOp =
   | { intent: 'SET_DELIVERY_ENABLED'; delivery_enabled: boolean }
   | { intent: 'SET_SHOP_INSTRUCTIONS'; ai_instructions: string }
   | { intent: 'SET_WING_POLICY'; wing_flavors_included?: number | null; wing_mix_extra?: boolean | null }
-  | { intent: 'SET_SHOP_ADDRESS'; address: string }
+  | { intent: 'SET_SHOP_ADDRESS'; address: string; confirm?: boolean }
   | { intent: 'SET_DELIVERY_CONFIG'; delivery_enabled: boolean; delivery_radius_mi: number | null; delivery_fee_cents: number | null }
 
 export interface FormOpResult {
@@ -49,7 +49,7 @@ export interface FormOpResult {
   intent: string
   result?: string
   error?: string
-  data?: { candidate?: { formattedAddress: string; place_id: string } }
+  data?: { needs_confirmation?: boolean; candidate?: { formattedAddress: string } }
 }
 
 export interface FormBatchResult {
