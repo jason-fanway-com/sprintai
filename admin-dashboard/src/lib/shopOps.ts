@@ -39,6 +39,7 @@ export type FormOp =
   | { intent: 'SET_STORE_HOURS'; open_hours: Record<string, DayHoursOp> }
   | { intent: 'SET_DELIVERY_HOURS'; delivery_hours: Record<string, DayHoursOp> }
   | { intent: 'SET_DELIVERY_ENABLED'; delivery_enabled: boolean }
+  | { intent: 'SET_UPSELL_ENABLED'; upsell_enabled: boolean }
   | { intent: 'SET_SHOP_INSTRUCTIONS'; ai_instructions: string }
   | { intent: 'SET_WING_POLICY'; wing_flavors_included?: number | null; wing_mix_extra?: boolean | null }
   | { intent: 'SET_SHOP_ADDRESS'; address: string; confirm?: boolean }

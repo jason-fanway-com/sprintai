@@ -21,6 +21,7 @@ export interface OwnerShopSettings {
   ai_instructions: string | null
   wing_flavors_included: number | null
   wing_mix_extra: boolean | null
+  upsell_enabled: boolean
 }
 
 const DAYS: { key: string; label: string }[] = [
@@ -207,6 +208,7 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
   const [wingMixExtra, setWingMixExtra] = useState<'unset' | 'included' | 'extra'>(
     settings?.wing_mix_extra === true ? 'extra' : settings?.wing_mix_extra === false ? 'included' : 'unset',
   )
+  const [upsellEnabled, setUpsellEnabled] = useState<boolean>(settings?.upsell_enabled ?? true)
   const [saving, setSaving] = useState(false)
 
   // Re-sync drafts when the shop or its settings load/change (e.g. switching shops in preview).
@@ -219,7 +221,8 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
     setInstructions(settings?.ai_instructions ?? '')
     setWingFlavorsIncluded(settings?.wing_flavors_included != null ? String(settings.wing_flavors_included) : '')
     setWingMixExtra(settings?.wing_mix_extra === true ? 'extra' : settings?.wing_mix_extra === false ? 'included' : 'unset')
-  }, [settings?.id, settings?.open_hours, settings?.delivery_hours, settings?.delivery_enabled, settings?.delivery_radius_mi, settings?.delivery_fee_cents, settings?.ai_instructions, settings?.wing_flavors_included, settings?.wing_mix_extra])
+    setUpsellEnabled(settings?.upsell_enabled ?? true)
+  }, [settings?.id, settings?.open_hours, settings?.delivery_hours, settings?.delivery_enabled, settings?.delivery_radius_mi, settings?.delivery_fee_cents, settings?.ai_instructions, settings?.wing_flavors_included, settings?.wing_mix_extra, settings?.upsell_enabled])
 
   if (!settings) return <div className="text-center py-12 text-gray-400">Loading settings...</div>
 
@@ -254,6 +257,9 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
     const mixExtra = wingMixExtra === 'unset' ? null : wingMixExtra === 'extra'
     if (flavorsNum !== settings.wing_flavors_included || mixExtra !== settings.wing_mix_extra) {
       ops.push({ intent: 'SET_WING_POLICY', wing_flavors_included: flavorsNum, wing_mix_extra: mixExtra })
+    }
+    if (upsellEnabled !== settings.upsell_enabled) {
+      ops.push({ intent: 'SET_UPSELL_ENABLED', upsell_enabled: upsellEnabled })
     }
 
     if (ops.length === 0) {
@@ -383,6 +389,23 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
             <input type="radio" name="wing-mix" checked={wingMixExtra === 'extra'} onChange={() => setWingMixExtra('extra')} />
             Mixing flavors costs extra
           </label>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-2">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700">Upsell suggestions</h4>
+            <p className="text-xs text-gray-400 mt-0.5">
+              When on, the bot may suggest add-ons (like a drink with a sandwich). When off, it takes exactly what's asked for.
+            </p>
+          </div>
+          <button
+            onClick={() => setUpsellEnabled(!upsellEnabled)}
+            className={`text-xs px-3 py-1 rounded-full border flex-shrink-0 ${upsellEnabled ? 'border-green-200 text-green-700 bg-green-50' : 'border-gray-200 text-gray-500 bg-gray-50'}`}
+          >
+            {upsellEnabled ? 'Upsells on' : 'Upsells off'}
+          </button>
         </div>
       </div>
 

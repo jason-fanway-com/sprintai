@@ -156,7 +156,7 @@ export default function ShopOwnerMenuSettings() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('shops')
-        .select('id, name, timezone, open_hours, delivery_hours, delivery_enabled, delivery_radius_mi, delivery_fee_cents, formatted_address, latitude, longitude, ai_instructions, wing_flavors_included, wing_mix_extra')
+        .select('id, name, timezone, open_hours, delivery_hours, delivery_enabled, delivery_radius_mi, delivery_fee_cents, formatted_address, latitude, longitude, ai_instructions, wing_flavors_included, wing_mix_extra, upsell_enabled')
         .eq('id', activeShopId!).single()
       if (error) throw error
       return data
