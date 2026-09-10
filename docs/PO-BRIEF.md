@@ -188,18 +188,24 @@ ssh openclaw-air 'ls -t ~/.openclaw-sprintai/agents/*/sessions/*.jsonl | head'
   `STRIPE_TEST_SECRET_KEY` is the one that works for test sessions
 - `~/.openclaw-sprintai/po-inbox/firecrawl.env` — mode 600
 
-**What these credentials cannot do — learned the hard way 2026-09-10.** The service-role
-key in `.secrets` does **not** authenticate to edge functions; a direct call returns
-`Unauthorized`. Functions accept the value they see as `SUPABASE_SERVICE_ROLE_KEY` (a
-different value) or `INTERNAL_FUNCTION_SECRET`, neither of which is in `.secrets`. There is
-no `SUPABASE_ACCESS_TOKEN` either, so `supabase functions list` and the Management API are
-both unavailable to you.
+**Which credential opens which door.** This project has two live, valid Supabase key
+pairs: the original legacy JWT pair (`SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY` in
+`.secrets`) and a newer `sb_secret_…` pair auto-provisioned by Supabase's key-format
+migration. Edge Functions' reserved `SUPABASE_SERVICE_ROLE_KEY` env var holds the **new**
+value, which Supabase never re-exposes as plaintext. So:
 
-So **you cannot prove an edge-function deploy by invoking it.** Use the front-door bundle
-check for anything with a frontend, and for a function, verify the behaviour it causes —
-the DB row it writes, the reply it produces through `public-tester` — rather than the
-version number. Say which one you did. If you need to invoke a function directly, ask the
-crew for a credential that works; do not conclude "deployed" from a commit.
+- **PostgREST** (`/rest/v1/…`, direct table reads and writes) — legacy service-role key
+- **Functions that compare a bearer by hand** (`google-places-lookup`, `onboarding-save`,
+  `admin-chat`) — `SPRINTAI_INTERNAL_FUNCTION_SECRET` in `.secrets`. The legacy key returns
+  `Unauthorized` here, and that is **not** a bug; it is the wrong key for that door
+- **`supabase functions list` / Management API** — unavailable, and deliberately so. A
+  `SUPABASE_ACCESS_TOKEN` is an account-wide PAT, a bigger exposure than the problem it
+  solves. Do not ask for one
+
+So you **can** prove a function deploy by invoking it — do that. Where you cannot, verify
+the behaviour a function causes (the DB row it writes, the reply through `public-tester`)
+rather than a version number, and say which method you used. Never conclude "deployed"
+from a commit.
 
 **Verifying a frontend deploy — the front door, not the origin:**
 ```bash
