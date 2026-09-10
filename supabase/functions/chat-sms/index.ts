@@ -3062,7 +3062,20 @@ function repairOrphanedPunctuation(text: string): string {
 }
 
 export function stripLlmMoneyLines(text: string): string {
-  let out = text;
+  // P0 (2026-09-10, NJB live money defect — category-coverage-extras-add-ins):
+  // markdown emphasis (**bold**, __bold__) sitting between a money label and
+  // its amount ("**Subtotal:** $0.99") defeats every regex below, which match
+  // against plain text. stripMarkdown() only runs much later on the FINAL
+  // reply (after the deterministic footer is appended below this function's
+  // call site), so a model-fabricated markdown ledger line survived this
+  // strip untouched, then had its ** markers removed by that later pass —
+  // leaving a bogus "Subtotal: $0.99" indistinguishable from, and scanned
+  // ahead of, the real footer's own "Subtotal: $0.75" a few lines down.
+  // Demarking here (safe: this function only ever runs on the model's own
+  // text before the real footer is appended, at every call site) closes that
+  // gap at the source instead of relying on the later pass to have run first.
+  const demarked = stripMarkdown(text);
+  let out = demarked;
 
   // Dollar amounts in prose: "$X.XX total", "$X.XX (includes...)", "comes to $X.XX", etc.
   out = out.replace(/(?:[Tt]hat['’]s|That is|[Tt]otal is|[Cc]omes to|[Tt]hat['’]ll be|[Yy]ou owe|[It]t['’]s|is)\s+\$?\d+[.,]\d{2}(?:\s*(?:total|with|each|plus|\+.*?fee))?/g, "");
@@ -3077,8 +3090,8 @@ export function stripLlmMoneyLines(text: string): string {
   // standalone dollar amounts that are totals/fees, not line-item prices.
   // Revert that last over-broad regex — rebuild more precisely.
 
-  // Re-apply: remove total-line patterns from the original text
-  out = text;
+  // Re-apply: remove total-line patterns from the demarked text
+  out = demarked;
   // "Your total is $X.XX (includes $0.99 service fee)"
   out = out.replace(/\b(?:[Yy]our|the|order)\s+total\s+(?:is|comes to|of)\s*\$\d+[.,]\d{2}(?:\s*(?:\(includes?[^)]*\)|\+\s*\$0[.,]\d{2}\s*service fee))?/g, "");
   // "$X.XX total (includes $0.99 fee)"
@@ -3087,6 +3100,16 @@ export function stripLlmMoneyLines(text: string): string {
   out = out.replace(/\b(?:comes to|that['’]ll be|that will be|you owe|adds up to|comes out to)\s*\$\d+[.,]\d{2}/gi, "");
   // "Subtotal: $X.XX" / "Subtotal $X.XX"
   out = out.replace(/\b[Ss]ubtotal[\s:]*\$\d+[.,]\d{2}/g, "");
+  // "Total: $X.XX" / "Total $X.XX" — label-then-amount, the mirror of the
+  // "$X.XX total" prose pattern above. \bTotal\b never matches inside
+  // "Subtotal" (no word boundary before the "t"), so this can't eat the
+  // subtotal line already handled above. A model fabricating its own ledger
+  // in this format is the exact class this whole function exists to strip —
+  // the real total only ever comes from the deterministic footer appended
+  // AFTER this function returns.
+  out = out.replace(/\b[Tt]otal[\s:]*\$\d+[.,]\d{2}/g, "");
+  // "Service fee: $X.XX" — label-then-amount mirror of "$0.99 service fee" below.
+  out = out.replace(/\b[Ss]ervice\s+fee[\s:]*\$\d+[.,]\d{2}/g, "");
   // "+ $0.99 service fee" / "$0.99 service fee"
   out = out.replace(/(?:\+\s*)?\$0[.,]\d{2}\s*(?:service\s+)?fee/gi, "");
   // "I've got X items in your cart" / "X items in your cart"
