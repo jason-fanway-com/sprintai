@@ -1885,3 +1885,30 @@ migration's *effects* (a column, a row, a table) but not trigger/function
 bodies, which aren't exposed over PostgREST — there is no read-only way found
 so far to confirm a `CREATE TRIGGER` migration actually applied without a raw
 SQL credential or a live write test against a real trigger condition.
+
+## PO edge-function verification credential, and the service_role mismatch resolved — 2026-09-10
+
+Follow-up to the "Operational note" above (same day): the legacy `service_role`
+JWT / `Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")` mismatch is not a bug.
+`supabase projects api-keys` shows this project has two live, valid key pairs —
+the original legacy JWT pair (`anon`/`service_role`, what's in `.secrets` as
+`SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY`) and a newer `sb_publishable_…`/
+`sb_secret_…` pair Supabase auto-provisioned 2026-03-29 as part of its
+platform-wide key-format migration. Edge Functions' reserved
+`SUPABASE_SERVICE_ROLE_KEY` env var is populated with the *new* `sb_secret_…`
+value, which Supabase never re-exposes as plaintext after creation — so there
+is no way to read it back out. The legacy JWT still works fine for PostgREST
+and `verify_jwt=true` functions; it just isn't what the manual bearer-compare
+functions (`google-places-lookup`, `onboarding-save`, `admin-chat`) check
+against. Nothing depends on a stale value; no live auth bug.
+
+Gave the PO a working credential rather than the legacy key: minted a fresh
+`INTERNAL_FUNCTION_SECRET` (self-minted, project-internal, same pattern as
+`DAILY_RESET_SECRET`), set via `supabase secrets set`, live-verified against the
+deployed `google-places-lookup` (wrong bearer → 401, correct bearer + fake
+shop_id → 404 with zero mutation), and wrote it into
+`~/.openclaw-sprintai/.secrets` as `SPRINTAI_INTERNAL_FUNCTION_SECRET`. Chose it
+over a `SUPABASE_ACCESS_TOKEN` (account-wide Management API PAT — bigger
+exposure than the problem) and over the real service-role key (bypasses RLS on
+every table, not just these 3 functions). Nothing Jason-facing changed — the
+legacy JWT is untouched, and this secret is invisible to him either way.
