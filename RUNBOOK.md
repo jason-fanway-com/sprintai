@@ -356,6 +356,67 @@ project), since any other tooling that authenticates to edge functions by
 comparing against the "legacy service_role key" shown in the CLI may have the
 same silent gap.
 
+## Shipped 2026-09-10: shop_settings single-source-of-truth (P1)
+
+Follow-up to the address P0 above, same afternoon. Root defect: admin-chat's
+console setters write `shops.*`; `buildSystemPromptV2` (live for all three
+shops, `prompt_version=1`) reads `shop_settings.*`/`shop_voice`. Jason flipped
+delivery in the owner console and the bot's behavior didn't change — nothing
+synced the two tables for the columns that mattered.
+
+**Already fixed earlier today by a parallel build, verified rather than
+re-done**: migrations 124/130/131 establish `shops` as the single writable
+home and `shop_settings` as a trigger-derived, non-writable projection —
+migration 124 already `REVOKE`s INSERT/UPDATE/DELETE on `shop_settings` from
+`anon`/`authenticated` (confirmed live: an anon-key PATCH to `shop_settings`
+returns Postgres `42501 permission denied`, not merely a discouraged path),
+and the `sync_shop_settings_from_shop()` trigger keeps
+`hours_line`/`fulfilment_modes`/`delivery_radius_miles` in step with
+`delivery_enabled`/`open_hours`/`delivery_radius_mi` on every UPDATE. Verified
+live: flipping `shops.delivery_enabled` immediately flips
+`shop_settings.fulfilment_modes`, and a real chat-sms conversation reflects
+it with no deploy in between. `ai_instructions`/`wing_flavors_included`/
+`wing_mix_extra`/`delivery_fee_cents` were never actually duplicated — both
+prompt renderers read those straight off `shop.*` — so there was nothing to
+fix there. Delivery-pause state (`delivery_paused_until`/
+`delivery_pause_reason`) is deliberately read straight off `shops`, not
+`shop_settings`, for freshness (chat-sms:1143).
+
+**The one real gap**: `shop_settings.upsell_enabled` (chat-sms:1266) had no
+owner-facing writer at all — set once at row creation, frozen ever since.
+Migration 133 (commit `b3c77d4`) adds `shops.upsell_enabled` (default true, a
+behavior no-op matching chat-sms's existing `?? true` fallback), extends the
+same trigger to sync it, and adds a `SET_UPSELL_ENABLED` admin-chat op +
+console toggle (commit `70d6bea`, bundle `index-B9clOHvN.js`).
+
+Deployed and live-verified, not just committed: `admin-chat` v43. Full round
+trips via real chat-sms conversations against Zio's Pizzeria
+(`2cba7b51-211c-4437-8910-1af4dcc03498`, `prompt_version=1`): delivery
+off→refuses→on→resumes; store hours (Monday close set to a distinctive
+23:47, bot states it, restored to 22:00); upsell config change confirmed to
+reach the prompt via the trigger, though a single-turn conversational
+before/after comparison came back inconclusive either way, since the upsell
+offer is explicitly discretionary/soft even when enabled (see the
+`UPSELL RESTRAINT` prompt block) — not a clean instrumented signal the way a
+flat refusal or a stated hour is. Vito's canary re-confirmed unchanged
+($8.49 + $0.99 = $9.48) and its address/coordinates/nulled Google fields
+confirmed untouched by any of the above.
+
+**Operational note — applying a migration when `supabase db push` is
+drifted**: this project's remote migration tracker is known-stale (RUNBOOK,
+2026-09-06 entry below) — `db push --dry-run` reports ~30 old migrations as
+"missing" that are actually already live, and `--include-all` would replay
+non-idempotent `CREATE TRIGGER`/`CREATE POLICY`/bare `INSERT INTO
+program_*`/`build_status_*` statements a second time. Applied migration 133
+directly instead via the Supabase **Management API**'s
+`POST /v1/projects/{ref}/database/query` (`Authorization: Bearer
+$SUPABASE_ACCESS_TOKEN`), which executes raw SQL against the live database
+with full privileges and needs no Postgres password — safer than trying to
+reconcile the tracker mid-task. This is the same "applied directly against
+prod, documented after the fact" pattern migrations 130/131's own headers
+already describe; worth using again over `db push --include-all` until the
+tracker drift itself gets a dedicated cleanup pass.
+
 ## System overview
 
 SprintAI replaces a restaurant's phone ordering: customers text a shop's number,
