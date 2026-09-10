@@ -15,7 +15,7 @@
  * Run: deno test scripts/test-suite/stated-total-guard.test.ts
  */
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { verifyStatedTotal } from "./cart-ops.ts";
+import { verifyStatedTotal, verifyCartOpsInvariants } from "./cart-ops.ts";
 import type { RunResult } from "./runner.ts";
 
 function run(reply: string, cart: unknown): RunResult {
@@ -127,4 +127,78 @@ Deno.test("receipt format: wrong stated total on the Total line still FAILS (gua
   const r = verifyStatedTotal(run(reply, cart));
   assertEquals(r.applied, true);
   assertEquals(r.passed, false);
+});
+
+// ── RED→GREEN (2026-09-10): findQuotedTotal's own service-fee cleaning step
+// must not cross a newline either. Vito's Pizza category-coverage-pizza-
+// finish-buffalo-chicken (Bleu Cheese, a $0.00 modifier-priced item) FAILED
+// the cartops quoted_total_matches_cart invariant with "Quoted $1.98
+// (subtotal Subtotal: : $0.99 + $0.99 fee) but cart computes to $0.99" even
+// though the bot's actual reply was byte-for-byte correct. Root cause: the
+// pre-clean `\$0[.,]\d{2}\s*(?:service\s+)?fee` regex used \s* (crosses
+// newlines), so on a sub-$1.00 subtotal ("Subtotal: $0.00\nService fee:
+// $0.99\n...") it matched "$0.00\nService fee" as ONE span across the line
+// break and deleted it, splicing the Subtotal label's ": " onto the Service
+// fee line's ": $0.99" — producing a corrupted "Subtotal: : $0.99" that
+// Pattern 2 then misread as a $0.99 subtotal, doubling the $0.99 fee on top
+// to get $1.98. This is a harness false-positive, not a live money defect —
+// fixed by constraining the cleaning regex to [ \t]* / [ \t]+ so it can never
+// span a line break, matching every other newline-safety guard in this file.
+Deno.test("sub-$1.00 subtotal immediately followed by the fee line is not corrupted into a phantom double-fee total", () => {
+  const cart = [{ name: "Bleu Cheese", quantity: 1, price_cents: 0 }];
+  const reply =
+    `Got the Bleu Cheese added. Is this for pickup or delivery today? And ` +
+    `were you looking to add that as a finish to a Buffalo Chicken pizza, ` +
+    `or just on its own?\n\n` +
+    `Subtotal: $0.00\nService fee: $0.99\nTotal: $0.99\n\n` +
+    `Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.`;
+  const r = verifyStatedTotal(run(reply, cart));
+  assertEquals(r.applied, true);
+  assertEquals(r.passed, true);
+});
+
+// verifyCartOpsInvariants scans EVERY turn (not just the last, unlike
+// verifyStatedTotal's reverse-scan), so it hit the corrupted-parse bug above
+// on turn 1 even though the later checkout turn's total was fine — this is
+// the invariant ("cartops:quoted_total_matches_cart") that actually failed
+// on the real Vito's Pizza run. Reproduced with the real 3-turn shape.
+Deno.test("cartops quoted_total_matches_cart: real Vito's Pizza Bleu Cheese transcript no longer false-fails", () => {
+  const cart = [{ name: "Bleu Cheese", quantity: 1, price_cents: 0 }];
+  const runResult = {
+    transcript: [
+      {
+        role: "customer",
+        message: "Hi, can I get a Bleu Cheese?",
+        cart,
+        phase: "building",
+        reply:
+          `Got the Bleu Cheese added. Is this for pickup or delivery today? And ` +
+          `were you looking to add that as a finish to a Buffalo Chicken pizza, ` +
+          `or just on its own?\n\n` +
+          `Subtotal: $0.00\nService fee: $0.99\nTotal: $0.99\n\n` +
+          `Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.`,
+      },
+      {
+        role: "customer",
+        message: "That's it, checkout please",
+        cart,
+        phase: "building",
+        reply: "Got it! What's your name for the order?",
+      },
+      {
+        role: "customer",
+        message: "Jason",
+        cart,
+        phase: "checkout",
+        reply:
+          `Payment link sent! Your total is $0.99 (includes a $0.99 service fee). ` +
+          `Tap it to complete your order. Check your text or email.\n\n` +
+          `Pay here: https://pay.getsprintai.com/o/6701669a`,
+      },
+    ],
+  } as unknown as RunResult;
+  const result = verifyCartOpsInvariants(runResult);
+  const totalInv = result.invariants.find((i) => i.id === "quoted_total_matches_cart");
+  assertEquals(totalInv?.passed, true, totalInv?.detail);
+  assertEquals(result.passed, true);
 });

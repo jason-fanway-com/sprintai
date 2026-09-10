@@ -169,9 +169,18 @@ function isTipMessage(msg: string): boolean {
 function findQuotedTotal(text: string): { cents: number; raw: string } | null {
   // Strip the service-fee mention FIRST so "$8.98 total (includes $0.99 service
   // fee)" can never let the $0.99 be mistaken for the grand total.
+  // [ \t]* / [ \t]+ (not \s*/\s+) so this can never cross a newline — a receipt
+  // like "Subtotal: $0.00\nService fee: $0.99\nTotal: $0.99" must NOT let this
+  // regex span the line break and eat "$0.00\nService fee" as one match, which
+  // splices the Subtotal line's ": " onto the Service-fee line's ": $0.99" and
+  // corrupts it into "Subtotal: : $0.99" (2026-09-10: a sub-$1.00 subtotal
+  // immediately followed by the fee line on the next line produced exactly
+  // this — a false-positive quoted_total_matches_cart FAIL on Vito's Pizza
+  // category-coverage-pizza-finish-buffalo-chicken, where the bot's actual
+  // reply was correct and the harness's own cleaning step was the bug).
   const cleaned = text
     .replace(/\([^)]*service fee[^)]*\)/gi, "")
-    .replace(/(?:\+\s*|includes?\s+)?\$0[.,]\d{2}\s*(?:service\s+)?fee/gi, "");
+    .replace(/(?:\+[ \t]*|includes?[ \t]+)?\$0[.,]\d{2}[ \t]*(?:service[ \t]+)?fee/gi, "");
   // Pattern 1: amount immediately BEFORE the word total — "$8.98 total", "$8.98 due".
   // [ \t]* (not \s*) so this can never cross a newline — a formatted receipt like
   // "Service fee   $0.99\nTotal   $17.98" must NOT let "$0.99" match against the
