@@ -188,6 +188,26 @@ ssh openclaw-air 'ls -t ~/.openclaw-sprintai/agents/*/sessions/*.jsonl | head'
   `STRIPE_TEST_SECRET_KEY` is the one that works for test sessions
 - `~/.openclaw-sprintai/po-inbox/firecrawl.env` — mode 600
 
+**What these credentials cannot do — learned the hard way 2026-09-10.** The service-role
+key in `.secrets` does **not** authenticate to edge functions; a direct call returns
+`Unauthorized`. Functions accept the value they see as `SUPABASE_SERVICE_ROLE_KEY` (a
+different value) or `INTERNAL_FUNCTION_SECRET`, neither of which is in `.secrets`. There is
+no `SUPABASE_ACCESS_TOKEN` either, so `supabase functions list` and the Management API are
+both unavailable to you.
+
+So **you cannot prove an edge-function deploy by invoking it.** Use the front-door bundle
+check for anything with a frontend, and for a function, verify the behaviour it causes —
+the DB row it writes, the reply it produces through `public-tester` — rather than the
+version number. Say which one you did. If you need to invoke a function directly, ask the
+crew for a credential that works; do not conclude "deployed" from a commit.
+
+**Verifying a frontend deploy — the front door, not the origin:**
+```bash
+curl -s https://getsprintai.com/admin/ | grep -o 'assets/index-[^"]*\.js'
+grep -o 'assets/index-[^"]*\.js' ~/sprintai-ordering/admin-dashboard/dist/index.html
+```
+The two hashes must match. The live admin SPA is `getsprintai.com/admin`.
+
 **Never paste a secret value into a message, commit, log or reply.**
 
 **Dispatching:** `scp <file>.msg openclaw-air:'~/.openclaw-sprintai/po-outbox/NN-name.msg'`.
@@ -207,6 +227,12 @@ embedded runner that cannot authenticate.
 - **No LLM grading an LLM** — `proof_score` is deterministic and gates launch;
   `quality_score` is advisory
 - **Never send Jason to a URL or screen you haven't personally confirmed**
+- **An owner-stated fact must be resolved, never ranked.** When an owner types a value,
+  resolve it with something that can fail (a geocoder, an exact lookup) — never a
+  relevance search that always returns a plausible winner, and never blended with other
+  fields like the shop name. A relevance search cannot report "no match", so any no-write
+  safety branch behind one is dead code. Write only the fields the owner was editing; a
+  bad match must not be able to reach neighbouring columns
 - **Do not raise key rotation** until he says dev is complete
 - **Do not extract Slice's client API key** from their JS bundle without written authorization
 - **PII stays out of `qa_ro`** — conversations, messages, customer phone, pickup name, address
@@ -221,6 +247,14 @@ When choosing a fix, prefer in this order:
 3. **Decide in code before the model**
 4. **Clean up after the model**
 5. **Prompt instructions** ← weakest, and where regressions come back from
+
+Worked example at level 2, 2026-09-10: owner address entry resolved
+`"<shop name>, <typed address>"` through a Places *relevance* search, which returned a
+different business and silently overwrote the shop's address, coordinates, Google place id,
+rating and review count. Level 5 would have been "tell it to prefer the address". The
+durable fix removed the capability: the name is gone from the query, an address *resolver*
+replaced the search so "no match" became reachable, and the write is restricted to the three
+address columns — so a bad match now has nowhere to go.
 
 A defect fixed at level 5 will return. A modifier-scope bug survived three fixes across
 three days because each was at level 4 or 5; it stopped recurring when the phrase identity
