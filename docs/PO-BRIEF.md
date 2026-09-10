@@ -78,6 +78,80 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 Roughly forty other shop rows are fictional test data. `is_test` distinguishes them —
 **check it before escalating anything as a real-money incident.**
 
+
+## 4b. How the system is built
+
+**The pipeline, menu to order:**
+
+```
+menu source            importer / parse-menu-pdf / Slice loader
+   ↓                   raw items, option groups, choices
+compile-menu           the COMPILER — turns a menu into an order script
+   ↓                   ask_plan, bot_state, lexicon, derived rows
+chat-sms               the ordering engine — one function, one state machine
+   ↓                   resolver → sequencer → cart → pricing → itemizer
+Stripe → stripe-webhook → kitchen ticket + confirmation
+```
+
+**The components that matter:**
+- **`chat-sms`** — the single ordering state machine. Every customer turn goes through it.
+  It is very large (8,000+ lines) and carries most of the guard history.
+  Extracted modules now live beside it: `resolver`, `sequencer`, `cart`, `pricing`,
+  `itemizer`, `intent-router` — all importable and testable without the LLM.
+- **`compile-menu`** — reads the menu tables and writes `ask_plan` (the ordered questions
+  for an item), `bot_state` (orderable / blocked / display_only / stale), the lexicon
+  (what customers call things), and derived rows.
+- **`admin-chat`** — the owner's conversational console: 86 an item, add a special,
+  delivery controls.
+- **`public-tester`** — the Test Kitchen. Pinned to one shop via `app_config`.
+- **The model** is `deepseek/deepseek-v4-pro` via OpenRouter, set by the `CHAT_MODEL`
+  secret. Jason's deliberate choice, 2026-09-04.
+
+**Two ideas do most of the work:**
+- **Slots vs modifiers.** A *slot* must be answered (size, bread, temp); a *modifier* is
+  optional (toppings). The ask_plan is the compiled, ordered list of slot questions.
+- **Provenance.** Every fact carries where it came from: `stated` (the menu says so),
+  `owner_confirmed` (a human said so), `inferred` (we guessed), `derived` (built from two
+  stated facts). Live behaviour must be traceable to a quote or a human.
+
+## 4c. The architecture direction — Fable's design
+
+Two documents define where this is going. Read them before proposing structural change:
+- `docs/specs/2026-09-07-conversation-ready-menu-design.md` — the compiler design.
+  Core move: *"The importer produces a menu. The conversation needs an order script."*
+- `docs/specs/2026-09-09-instruction-layers-and-precomposition.md` (or the Downloads copy)
+  — instruction layers, pre-composition, and the money path. **Jason signed off all nine
+  items on 2026-09-09.**
+
+**The nine-item plan**, in dependency order: money path → module extraction → resolver →
+derived rows → readiness gate → Phase 0 acceptance → prompt rebuild → guard retirement →
+overrides trigger. Plus two side streams: instruction layers as data (C1/C2) and
+pre-composition (D1 derived rows, D2 learn-on-first-order).
+
+**Three principles from those docs worth holding on to:**
+- *The model phrases; code decides.* The model may propose; code validates and mutates.
+- *Live behaviour must be traceable to a quote or a human.* No invented shop policy.
+- *Materialised rows over runtime synthesis.* If a combination is predictable, make it a
+  menu row rather than composing it in conversation. This is why "pepperoni pizza" is now
+  a derived row instead of a runtime composition — the runtime version broke four times.
+
+**The instruction split (settled):** every shop gets its own instruction set **as data** —
+`shop_settings`, `shop_voice`, capped `shop_notes` — rendered into one short global
+template. No free-prose per-shop prompt. Before this, all shops shared one prompt and
+Zio's pizza bot was told about Not Just Bagels' sandwich acronyms on every message.
+
+## 4d. The critical path
+
+Cut by Jason 2026-09-06 to exactly two things, still current:
+1. **The bot takes a normal order correctly.**
+2. **The Test Kitchen is fit to put in front of human testers.**
+
+Explicitly **off** the path: the Expo Screen (hypothetical until a real customer, already
+looks right), junk-shop sweep, carrier approval chain.
+
+A design partner judges one thing — whether the order was right. Everything else is
+worthless until that holds.
+
 ## 5. Live state — always query, never remember
 
 Written status goes stale within hours. These are the checks:
