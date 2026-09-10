@@ -41,6 +41,13 @@ verify_jwt = false  # Twilio webhooks don't send JWT
 [functions.onboard-tenant]
 verify_jwt = false  # Called internally with service key
 
+[functions.google-places-lookup]
+verify_jwt = false  # Called internally: onboarding-save's fire-and-forget kickPlaces and
+                    # admin-chat's LOOKUP_SHOP_ADDRESS/CONFIRM_SHOP_ADDRESS both authenticate
+                    # with INTERNAL_FUNCTION_SECRET, not a Supabase JWT — found deployed with
+                    # verify_jwt=true (2026-09-10), which silently 401s the platform gateway
+                    # before either caller's app-level bearer check ever runs.
+
 [functions.stripe-webhook]
 verify_jwt = false  # Stripe webhooks don't send JWT
 

@@ -32,6 +32,12 @@ interface Shop {
   delivery_paused_until: string | null;
   delivery_pause_reason: string | null;
   email_ticket_recipient: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  delivery_radius_mi: number | null;
+  delivery_fee_cents: number | null;
+  google_place_id: string | null;
+  formatted_address: string | null;
 }
 
 interface MenuItem {
@@ -120,6 +126,11 @@ interface Proposal {
   ai_instructions?: string;
   wing_flavors_included?: number | null;
   wing_mix_extra?: boolean | null;
+  // ── Address lookup + delivery config (owner-facing Delivery & Address page) ──
+  address?: string;
+  place_id?: string;
+  delivery_radius_mi?: number | null;
+  delivery_fee_cents?: number | null;
 }
 
 interface ConfirmationCard {
@@ -139,6 +150,7 @@ interface ExecutedAction {
   intent: string;
   undo_token: string;
   status_header: StatusHeader;
+  data?: Record<string, unknown>;
 }
 
 interface StatusHeader {
@@ -821,6 +833,43 @@ async function validateProposal(
       if (typeof proposal.delivery_enabled !== "boolean") {
         return { valid: false, error: "Specify whether delivery should be permanently on or off." };
       }
+      if (proposal.delivery_enabled === true) {
+        const gateErr = await checkDeliveryEnableGate(supabase, shopId, null);
+        if (gateErr) return { valid: false, error: gateErr };
+      }
+      return { valid: true };
+    }
+    case "LOOKUP_SHOP_ADDRESS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (!proposal.address?.trim()) return { valid: false, error: "Enter an address to look up." };
+      return { valid: true };
+    }
+    case "CONFIRM_SHOP_ADDRESS": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (!proposal.place_id?.trim()) return { valid: false, error: "No address match to confirm — look one up first." };
+      return { valid: true };
+    }
+    case "SET_DELIVERY_CONFIG": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (typeof proposal.delivery_enabled !== "boolean") {
+        return { valid: false, error: "Specify whether delivery should be on or off." };
+      }
+      if (proposal.delivery_radius_mi != null && (typeof proposal.delivery_radius_mi !== "number" || proposal.delivery_radius_mi <= 0)) {
+        return { valid: false, error: "Delivery radius must be greater than 0 miles." };
+      }
+      if (proposal.delivery_fee_cents != null && (!Number.isInteger(proposal.delivery_fee_cents) || proposal.delivery_fee_cents < 0)) {
+        return { valid: false, error: "Delivery fee must be a whole number of cents, 0 or more." };
+      }
+      if (proposal.delivery_enabled === true) {
+        const gateErr = await checkDeliveryEnableGate(supabase, shopId, proposal.delivery_radius_mi ?? null);
+        if (gateErr) return { valid: false, error: gateErr };
+      }
       return { valid: true };
     }
     case "SET_SHOP_INSTRUCTIONS": {
@@ -851,6 +900,35 @@ async function validateProposal(
     default:
       return { valid: false, error: `Unknown intent: ${proposal.intent}` };
   }
+}
+
+// Delivery cannot function without a confirmed address (lat/lng from a
+// Places confirmation, never hand-typed) AND a radius greater than 0 —
+// chat-sms's deliveryGeoAvailable gate (index.ts ~line 5049) already refuses
+// to offer delivery on a shop missing either, but until now nothing stopped
+// an owner from flipping delivery_enabled=true anyway: the console would say
+// "on" while the bot silently never offered it, with no error anywhere. This
+// is the actual bug — enabling delivery must fail loudly when it can't take
+// effect, not succeed and lie.
+// pendingRadiusMi: the radius value about to be written in the SAME request
+// (SET_DELIVERY_CONFIG may set radius and enable delivery together), so a
+// first-time setup in one save doesn't get rejected for not existing yet.
+async function checkDeliveryEnableGate(
+  supabase: ReturnType<typeof createClient>,
+  shopId: string,
+  pendingRadiusMi: number | null,
+): Promise<string | null> {
+  const { data: shopRow } = await supabase
+    .from("shops").select("latitude, longitude, delivery_radius_mi").eq("id", shopId).single();
+  const hasCoords = shopRow?.latitude != null && shopRow?.longitude != null;
+  const effectiveRadius = pendingRadiusMi ?? (shopRow?.delivery_radius_mi as number | null);
+  if (!hasCoords) {
+    return "Delivery can't be turned on yet — this shop has no confirmed address. Look up and confirm an address first.";
+  }
+  if (!(Number(effectiveRadius) > 0)) {
+    return "Delivery can't be turned on yet — set a delivery radius greater than 0 miles first.";
+  }
+  return null;
 }
 
 const HOUR_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -915,6 +993,9 @@ async function executeAction(
   let resultMsg = "";
   let beforeSnapshot: Record<string, unknown> = {};
   let afterSnapshot: Record<string, unknown> = {};
+  // Structured payload for ops the caller needs more than a message from — currently
+  // only LOOKUP_SHOP_ADDRESS, which must hand the frontend a place_id to confirm.
+  let actionData: Record<string, unknown> | undefined;
 
   // Fire-and-forget audit trail — never blocks the response, never throws into the caller.
   // Both the chat path and the form path call this same executeAction(), so both produce
@@ -1415,6 +1496,73 @@ async function executeAction(
         : "Delivery is now turned off for this shop — the bot will refuse delivery orders.";
       break;
     }
+    case "LOOKUP_SHOP_ADDRESS": {
+      beforeSnapshot = { type: "address_lookup" };
+      const lookupRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/google-places-lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
+        body: JSON.stringify({ shop_id: shopId, mode: "search", address: proposal.address }),
+      });
+      const lookupBody = await lookupRes.json().catch(() => ({}));
+      if (!lookupRes.ok || lookupBody.error) {
+        afterSnapshot = { type: "address_lookup", found: false };
+        resultMsg = `Couldn't look up that address: ${lookupBody.error ?? "lookup failed"}.`;
+        break;
+      }
+      if (lookupBody.skipped || !lookupBody.candidate) {
+        afterSnapshot = { type: "address_lookup", found: false };
+        resultMsg = `No match found for "${proposal.address}" — try a more complete address.`;
+        break;
+      }
+      afterSnapshot = { type: "address_lookup", found: true, candidate: lookupBody.candidate };
+      actionData = { candidate: { formattedAddress: lookupBody.candidate.formattedAddress, place_id: lookupBody.candidate.place_id } };
+      resultMsg = `Found: ${lookupBody.candidate.formattedAddress}`;
+      break;
+    }
+    case "CONFIRM_SHOP_ADDRESS": {
+      const { data: curShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
+      beforeSnapshot = { type: "address_confirm", before: curShop ?? null };
+      const confirmRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/google-places-lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
+        body: JSON.stringify({ shop_id: shopId, mode: "confirm", place_id: proposal.place_id }),
+      });
+      const confirmBody = await confirmRes.json().catch(() => ({}));
+      if (!confirmRes.ok || confirmBody.error || !confirmBody.ok) {
+        afterSnapshot = { type: "address_confirm", after: null, confirmed: false, before: curShop ?? null };
+        resultMsg = `Couldn't confirm that address: ${confirmBody.error ?? "confirm failed"} — nothing was saved.`;
+        break;
+      }
+      // Read the shop back through the owner's own client before claiming success —
+      // the write happened inside google-places-lookup's service-role client, so this
+      // confirms it actually landed and is visible to this owner, not just that the
+      // call returned 200.
+      const { data: freshShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
+      if (!freshShop?.google_place_id || freshShop.google_place_id !== proposal.place_id) {
+        afterSnapshot = { type: "address_confirm", after: null, confirmed: false, before: curShop ?? null };
+        resultMsg = "Couldn't confirm the address was saved — the change may not have gone through.";
+        break;
+      }
+      logEdit({ table_name: "shops", row_id: shopId, before: curShop ?? null, after: freshShop });
+      afterSnapshot = { type: "address_confirm", after: freshShop };
+      resultMsg = `Address confirmed: ${freshShop.formatted_address}`;
+      break;
+    }
+    case "SET_DELIVERY_CONFIG": {
+      const { data: curShop } = await supabase.from("shops").select("delivery_enabled, delivery_radius_mi, delivery_fee_cents").eq("id", shopId).single();
+      beforeSnapshot = { type: "delivery_config", before: curShop ?? null };
+      const update: Record<string, unknown> = { delivery_enabled: proposal.delivery_enabled };
+      if (proposal.delivery_radius_mi !== undefined) update.delivery_radius_mi = proposal.delivery_radius_mi;
+      if (proposal.delivery_fee_cents !== undefined) update.delivery_fee_cents = proposal.delivery_fee_cents;
+      await supabase.from("shops").update(update).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: curShop ?? null, after: update });
+      const { data: fresh } = await supabase.from("shops").select("delivery_enabled, delivery_radius_mi, delivery_fee_cents").eq("id", shopId).single();
+      afterSnapshot = { type: "delivery_config", after: fresh ?? null };
+      resultMsg = fresh?.delivery_enabled
+        ? `Delivery is on — radius ${fresh.delivery_radius_mi ?? "not set"} mi, fee $${((fresh.delivery_fee_cents ?? 0) / 100).toFixed(2)}.`
+        : "Delivery is off for this shop — the bot will refuse delivery orders.";
+      break;
+    }
     case "SET_SHOP_INSTRUCTIONS": {
       const { data: curShop } = await supabase.from("shops").select("ai_instructions").eq("id", shopId).single();
       beforeSnapshot = { type: "shop_instructions", ai_instructions_before: curShop?.ai_instructions ?? null };
@@ -1497,6 +1645,7 @@ async function executeAction(
       items_86d_names: fresh86.map(e => e.item.name),
       active_specials_names: freshSpecials.map(s => s.name),
     },
+    data: actionData,
   };
 }
 
@@ -1690,7 +1839,7 @@ Deno.serve(async (req: Request) => {
     const eightySixList = await get86List(db, shop_id, businessDate);
     const specials = await getActiveSpecials(db, shop_id, businessDate);
 
-    const results: Array<{ ok: boolean; intent: string; result?: string; error?: string }> = [];
+    const results: Array<{ ok: boolean; intent: string; result?: string; error?: string; data?: Record<string, unknown> }> = [];
     for (const raw of form_ops) {
       const proposal: Proposal = { needs_clarification: false, summary: "", ...raw, intent: raw.intent };
 
@@ -1710,7 +1859,7 @@ Deno.serve(async (req: Request) => {
           businessDate, shop.timezone, db, menuItems, eightySixList, specials,
           shop.tenant_id, supabase, "form",
         );
-        results.push({ ok: true, intent: proposal.intent, result: executed.result });
+        results.push({ ok: true, intent: proposal.intent, result: executed.result, data: executed.data });
       } catch (err) {
         // Honest failure beats a false confirmation — never claim a write succeeded that didn't.
         results.push({ ok: false, intent: proposal.intent, error: err instanceof Error ? err.message : "Write failed" });
