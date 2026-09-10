@@ -1690,11 +1690,11 @@ needs its own equivalent trigger, RLS doesn't provide this by default (see
 migration 129's own header comment for which existing RLS policies do vs
 don't already join through to verify tenant ownership).
 
-**As of this writing, `admin-chat` is deployed at v35 (2026-09-09 17:48 UTC),
-which predates this fix and the two related phantom-success fixes
-(`627d8a3`, `952fc67`) — the code is committed on `main`, not live.** Confirm
-via `supabase functions list` before assuming any of the three are protecting
-production.
+**Update, 2026-09-10: `admin-chat` redeployed to v36 (2026-09-10 11:32 UTC).**
+This fix and the two related phantom-success fixes (`627d8a3`, `952fc67`) are
+now live in production. Confirm via `supabase functions list` before
+assuming this holds — a future commit to `admin-chat` without a matching
+deploy would reopen the same gap.
 
 ## Modifier resolution: reactive text-stem scanning was removed, don't re-add it — 2026-09-09
 

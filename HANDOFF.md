@@ -968,6 +968,16 @@ key (not assumed from commit messages):
   migrations are live, but functionally inert** — gated on `shops.prompt_version`,
   which is `null` for every shop (confirmed live).
 
+### Update — 2026-09-10
+
+- **`admin-chat` redeployed to v36** (`supabase functions list`, updated_at
+  2026-09-10 11:32 UTC), closing the gap above. The two phantom-success
+  fixes and the cross-tenant confirm-time write vulnerability fix
+  (`3f76dd1`) are now live — no commits landed on `admin-chat` between the
+  v35 snapshot and this deploy, so v36 is current with `HEAD`.
+- **`test-runner`** is still v34 as of this check — the `4098a8e`
+  false-positive fix has not been redeployed.
+
 ---
 
 ## Quickstart for development
