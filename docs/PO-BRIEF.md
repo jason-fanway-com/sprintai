@@ -89,15 +89,22 @@ menu source            importer / parse-menu-pdf / Slice loader
 compile-menu           the COMPILER — turns a menu into an order script
    ↓                   ask_plan, bot_state, lexicon, derived rows
 chat-sms               the ordering engine — one function, one state machine
-   ↓                   resolver → sequencer → cart → pricing → itemizer
+   ↓                   phrase-split → ask-plan-engine → sequencer → cart →
+   ↓                   pricing → itemizer
 Stripe → stripe-webhook → kitchen ticket + confirmation
 ```
 
 **The components that matter:**
 - **`chat-sms`** — the single ordering state machine. Every customer turn goes through it.
   It is very large (8,000+ lines) and carries most of the guard history.
-  Extracted modules now live beside it: `resolver`, `sequencer`, `cart`, `pricing`,
-  `itemizer`, `intent-router` — all importable and testable without the LLM.
+  Extracted modules live beside it: `sequencer`, `cart`, `pricing`, `itemizer`,
+  `intent-router` — all imported by `index.ts` and testable without the LLM.
+  **`resolver.ts` is NOT one of them.** It exists, it has 597 lines of tests, and
+  nothing in the live path imports it — directly or transitively. The live phrase
+  work is `phrase-split.ts` (`splitCustomerPhrases`) plus `ask-plan-engine.ts`.
+  Verified 2026-09-10 by reading `index.ts`'s import list and every module in it.
+  Do not infer from a module's existence, its tests, or the nine-item plan that it
+  is running.
 - **`compile-menu`** — reads the menu tables and writes `ask_plan` (the ordered questions
   for an item), `bot_state` (orderable / blocked / display_only / stale), the lexicon
   (what customers call things), and derived rows.
@@ -261,6 +268,14 @@ rating and review count. Level 5 would have been "tell it to prefer the address"
 durable fix removed the capability: the name is gone from the query, an address *resolver*
 replaced the search so "no match" became reachable, and the write is restricted to the three
 address columns — so a bad match now has nowhere to go.
+
+A second worked example, 2026-09-10: Fable item 3 was reported done on the strength of
+`resolver.ts` passing 6/6 phrasings. The module was never wired into `chat-sms/index.ts`.
+The live behaviour was in fact correct — `phrase-split.ts` does that job, and a live test of
+"a large cheese pizza with extra cheese and a plain large cheese pizza" returns two lines
+with the modifier on one — so the right outcome hid a wrong story about why. **A module list
+is not an architecture. Check the import path.** The cost of not checking would have been
+item 8 retiring guards in favour of code that never ran.
 
 A defect fixed at level 5 will return. A modifier-scope bug survived three fixes across
 three days because each was at level 4 or 5; it stopped recurring when the phrase identity
