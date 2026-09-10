@@ -1474,7 +1474,7 @@ async function executeTool(
         // probably belongs to this item" — the model states it, code checks
         // it against real boundaries, and an unconfirmed claim resolves to
         // nothing rather than something merely plausible.
-        const turnPhrases = splitCustomerPhrases(customerMessage ?? "");
+        const turnPhrases = splitCustomerPhrases(customerMessage ?? "", menu);
         const phraseIndex = resolveClaimedPhraseIndex(turnPhrases, source_phrase ?? "");
         const modifierScopeText = turnPhrases.length <= 1
           ? undefined
@@ -1827,7 +1827,7 @@ async function executeTool(
         // See the identical block in the add_item case above for the full
         // explanation — same phrase-identity validation, applied
         // symmetrically so modify_item isn't left as a known bleed vector.
-        const turnPhrasesModify = splitCustomerPhrases(customerMessage ?? "");
+        const turnPhrasesModify = splitCustomerPhrases(customerMessage ?? "", menu);
         const phraseIndexModify = resolveClaimedPhraseIndex(turnPhrasesModify, source_phrase ?? "");
         const modifierScopeTextModify = turnPhrasesModify.length <= 1
           ? undefined

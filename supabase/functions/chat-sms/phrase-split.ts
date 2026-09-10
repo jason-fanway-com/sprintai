@@ -30,7 +30,58 @@ const QTY_LEAD = "\\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|the
 const PHRASE_SEPARATOR_RE = new RegExp(`,|&|\\band\\s+(?=(?:${QTY_LEAD})\\b)`, "i");
 const IMPLICIT_DIGIT_REPEAT_RE = /\s+(?=\d+\s)/;
 
-export function splitCustomerPhrases(text: string): string[] {
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A menu item's own display name is data, not phrasing — it must never be
+// torn apart by the generic boundary heuristics above just because it
+// happens to contain one of their trigger characters/words (e.g. Zio's real
+// "Mac & Cheese Bites": the '&' is part of the dish name, not a separator
+// between two dishes — live regression, 2026-09-10, §8.4 gate run against
+// real Zio's data, 5/20 multi-item cases). Only names that actually contain
+// a trigger are worth the match cost; a plain "Cheese Pizza" can't be
+// mis-split regardless.
+function findProtectedNames(menu: { name: string }[] | undefined): string[] {
+  if (!menu || menu.length === 0) return [];
+  return menu
+    .map(m => m.name)
+    .filter(name => name && /[,&]|\band\b/i.test(name))
+    // Longest first: if one item's name is a substring of another's
+    // (e.g. "Mac & Cheese Bites" vs. a hypothetical "Cheese Bites"), the
+    // longer, more specific match must claim the span first.
+    .sort((a, b) => b.length - a.length);
+}
+
+export function splitCustomerPhrases(text: string, menu?: { name: string }[]): string[] {
+  const protectedNames = findProtectedNames(menu);
+  if (protectedNames.length === 0) {
+    return splitOnBoundaries(text);
+  }
+
+  // Mask every occurrence of a protected name behind a sentinel token before
+  // splitting, then restore the original text into whichever phrase it
+  // landed in — this keeps the name's own internal punctuation invisible to
+  // PHRASE_SEPARATOR_RE without having to special-case any specific name.
+  const restore: string[] = [];
+  const nameRe = new RegExp(
+    protectedNames.map(n => escapeRegex(n).replace(/\s+/g, "\\s+")).join("|"),
+    "gi",
+  );
+  // Plain ASCII marker (no punctuation the boundary regexes react to, and no
+  // digit directly touching whitespace) so masking never itself creates or
+  // hides a phrase boundary.
+  const masked = text.replace(nameRe, match => {
+    restore.push(match);
+    return `XPROTECTEDNAMEX${restore.length - 1}XPROTECTEDNAMEX`;
+  });
+
+  return splitOnBoundaries(masked).map(seg =>
+    seg.replace(/XPROTECTEDNAMEX(\d+)XPROTECTEDNAMEX/g, (_m, i) => restore[Number(i)]),
+  );
+}
+
+function splitOnBoundaries(text: string): string[] {
   return text
     .split(PHRASE_SEPARATOR_RE)
     .flatMap(seg => seg.split(IMPLICIT_DIGIT_REPEAT_RE))

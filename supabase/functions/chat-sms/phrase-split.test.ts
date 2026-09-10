@@ -55,3 +55,79 @@ Deno.test("splitCustomerPhrases: empty/whitespace input never crashes", () => {
   assertEquals(splitCustomerPhrases(""), []);
   assertEquals(splitCustomerPhrases("   "), []);
 });
+
+// Item 3 Phase 1a (2026-09-10): the four resolver.test.ts acceptance cases
+// (resolver.ts is dead code — never wired into chat-sms/index.ts — but its
+// test suite is the regression record for the pepperoni-bleed defect), ported
+// onto the live splitter every add_item call actually goes through.
+Deno.test("splitCustomerPhrases: PHRASE ISOLATION direction A — 'Hawaiian with pepperoni, Meat Lover's' splits at the comma, pepperoni stays in the Hawaiian phrase", () => {
+  assertEquals(
+    splitCustomerPhrases("1 Hawaiian with pepperoni, 1 Meat Lover's"),
+    ["1 Hawaiian with pepperoni", "1 Meat Lover's"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: PHRASE ISOLATION direction B — reversed order still splits cleanly (not just 'first phrase wins')", () => {
+  assertEquals(
+    splitCustomerPhrases("1 Meat Lover's, 1 Hawaiian with pepperoni"),
+    ["1 Meat Lover's", "1 Hawaiian with pepperoni"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: THREE-PIZZA ORDER — three comma-separated phrases, including two identical 'large cheese' base items", () => {
+  assertEquals(
+    splitCustomerPhrases("1 large cheese with pepperoni, 1 large cheese with mushrooms, 1 Hawaiian"),
+    ["1 large cheese with pepperoni", "1 large cheese with mushrooms", "1 Hawaiian"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: MULTI-TOPPING — 'with pepperoni and mushrooms' stays ONE phrase ('mushrooms' is not a quantity/article, so 'and' is not a boundary here)", () => {
+  assertEquals(
+    splitCustomerPhrases("large cheese pizza with pepperoni and mushrooms"),
+    ["large cheese pizza with pepperoni and mushrooms"],
+  );
+});
+
+// Live regression (2026-09-10, §8.4 gate run against real Zio's Pizzeria
+// data, tenant 2cba7b51-211c-4437-8910-1af4dcc03498): the generic separator
+// set above treats '&' as an unconditional boundary, but Zio's has a real
+// menu item literally named "Mac & Cheese Bites" — its OWN name contains
+// that trigger character. Any message naming that item plus anything else
+// tore the item's own name in half and bled phrase-scoping into whatever
+// came after. The fix (findProtectedNames in phrase-split.ts) generalizes to
+// ANY shop with an '&'/','/'and'-containing item name — these cases pass a
+// menu list, not a hardcoded string match, on purpose.
+const ZIOS_MENU = [
+  { name: "Mac & Cheese Bites" },
+  { name: "Coke" },
+  { name: "Meat Lover's" },
+  { name: "Garlic Knots" },
+];
+
+Deno.test("splitCustomerPhrases: '&'-containing item name ordered ALONE stays one phrase, not split on its own '&'", () => {
+  assertEquals(
+    splitCustomerPhrases("1 Mac & Cheese Bites", ZIOS_MENU),
+    ["1 Mac & Cheese Bites"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: '&'-containing item name ordered FIRST in a multi-item message", () => {
+  assertEquals(
+    splitCustomerPhrases("Mac & Cheese Bites and a Coke", ZIOS_MENU),
+    ["Mac & Cheese Bites", "a Coke"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: '&'-containing item name ordered LAST in a multi-item message", () => {
+  assertEquals(
+    splitCustomerPhrases("a Coke and a Mac & Cheese Bites", ZIOS_MENU),
+    ["a Coke", "a Mac & Cheese Bites"],
+  );
+});
+
+Deno.test("splitCustomerPhrases: '&'-containing item name ordered in the MIDDLE, with items before and after", () => {
+  assertEquals(
+    splitCustomerPhrases("a Coke, Mac & Cheese Bites, and a Meat Lover's", ZIOS_MENU),
+    ["a Coke", "Mac & Cheese Bites", "a Meat Lover's"],
+  );
+});

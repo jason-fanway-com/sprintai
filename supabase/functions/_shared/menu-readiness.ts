@@ -549,14 +549,18 @@ function runMultiItemCase(
   phrasingKey: string,
   utterance: string,
   planned: PlannedItem[],
+  menu: CompileItem[],
 ): MultiItemCaseResult {
   const failures: WalkFailure[] = [];
   const caseId = `${caseType}:${phrasingKey}`;
 
   // ── Real phrase-boundary splitting — the exact function chat-sms/index.ts
   // calls to compute this turn's phrase boundaries before it ever validates
-  // a per-call source_phrase claim. ────────────────────────────────────────
-  const turnPhrases = splitCustomerPhrases(utterance);
+  // a per-call source_phrase claim. `menu` is passed through so a shop's own
+  // item names (e.g. Zio's "Mac & Cheese Bites") get the same name-atomicity
+  // protection index.ts gives them live — see phrase-split.ts's
+  // findProtectedNames. ───────────────────────────────────────────────────
+  const turnPhrases = splitCustomerPhrases(utterance, menu);
   if (turnPhrases.length !== planned.length) {
     failures.push({
       step: "phrase-split",
@@ -798,7 +802,10 @@ export function runMultiItemMenuWalk(items: CompileItem[], compiled: Map<string,
     }
     for (const style of PHRASING_STYLES) {
       const utterance = style.build(planned.map(p => p.phraseText));
-      results.push(runMultiItemCase(type, style.key, utterance, planned));
+      // Active items only, matching chat-sms/index.ts's buildEffectiveMenu
+      // (`.eq("active", true)`) — the live `menu` array this gate is meant
+      // to mirror never contains an inactive item's name.
+      results.push(runMultiItemCase(type, style.key, utterance, planned, items.filter(i => i.active)));
     }
   }
 

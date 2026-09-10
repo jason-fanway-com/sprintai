@@ -199,7 +199,7 @@ const NUMBER_WORDS: Record<string, number> = {
   a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
 };
 
-function splitIntoSegments(message: string): Segment[] {
+function splitIntoSegments(message: string, menu: ComposeMenuItem[]): Segment[] {
   // P0 fix (2026-09-09): was comma-only (plus a bare "and", unconditionally
   // recursed via splitOnAndItem-like matching elsewhere) — see phrase-
   // split.ts's header for the live regression this widened separator set
@@ -208,7 +208,7 @@ function splitIntoSegments(message: string): Segment[] {
   // very split, but a message with NO comma/and at all ("1 cheese 1
   // pepperoni 1 meat lover 1 hawaiian") had no recognized boundary whatsoever
   // and collapsed to one giant segment.
-  const parts = splitCustomerPhrases(message);
+  const parts = splitCustomerPhrases(message, menu);
   const segments: Segment[] = [];
   // P0 fix (2026-09-09, matrix case 6: "gimme a plain and a pepperoni and a
   // meat lovers and a hawaiian"): the quantity token used to have to be the
@@ -268,7 +268,7 @@ export function composeDeterministicPizzaLines(
     .flatMap(s => s.choices);
 
   const results: ComposedPizzaToken[] = [];
-  const segments = splitIntoSegments(customerMessage);
+  const segments = splitIntoSegments(customerMessage, menu);
   for (let phraseIndex = 0; phraseIndex < segments.length; phraseIndex++) {
     const seg = segments[phraseIndex];
     // Bare "plain"/"cheese" (with only size/format/course words alongside,
