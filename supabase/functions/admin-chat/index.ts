@@ -126,9 +126,8 @@ interface Proposal {
   ai_instructions?: string;
   wing_flavors_included?: number | null;
   wing_mix_extra?: boolean | null;
-  // ── Address lookup + delivery config (owner-facing Delivery & Address page) ──
+  // ── Address lookup + delivery config (owner-facing Settings page) ──
   address?: string;
-  place_id?: string;
   delivery_radius_mi?: number | null;
   delivery_fee_cents?: number | null;
 }
@@ -839,18 +838,11 @@ async function validateProposal(
       }
       return { valid: true };
     }
-    case "LOOKUP_SHOP_ADDRESS": {
+    case "SET_SHOP_ADDRESS": {
       if (proposal.needs_clarification) {
         return { valid: true, clarification: makeClarificationCard(proposal) };
       }
       if (!proposal.address?.trim()) return { valid: false, error: "Enter an address to look up." };
-      return { valid: true };
-    }
-    case "CONFIRM_SHOP_ADDRESS": {
-      if (proposal.needs_clarification) {
-        return { valid: true, clarification: makeClarificationCard(proposal) };
-      }
-      if (!proposal.place_id?.trim()) return { valid: false, error: "No address match to confirm — look one up first." };
       return { valid: true };
     }
     case "SET_DELIVERY_CONFIG": {
@@ -923,7 +915,7 @@ async function checkDeliveryEnableGate(
   const hasCoords = shopRow?.latitude != null && shopRow?.longitude != null;
   const effectiveRadius = pendingRadiusMi ?? (shopRow?.delivery_radius_mi as number | null);
   if (!hasCoords) {
-    return "Delivery can't be turned on yet — this shop has no confirmed address. Look up and confirm an address first.";
+    return "Delivery can't be turned on yet — this shop has no address set. Set an address first.";
   }
   if (!(Number(effectiveRadius) > 0)) {
     return "Delivery can't be turned on yet — set a delivery radius greater than 0 miles first.";
@@ -994,7 +986,7 @@ async function executeAction(
   let beforeSnapshot: Record<string, unknown> = {};
   let afterSnapshot: Record<string, unknown> = {};
   // Structured payload for ops the caller needs more than a message from — currently
-  // only LOOKUP_SHOP_ADDRESS, which must hand the frontend a place_id to confirm.
+  // only SET_SHOP_ADDRESS, which hands the frontend the matched formatted_address to render.
   let actionData: Record<string, unknown> | undefined;
 
   // Fire-and-forget audit trail — never blocks the response, never throws into the caller.
@@ -1496,41 +1488,24 @@ async function executeAction(
         : "Delivery is now turned off for this shop — the bot will refuse delivery orders.";
       break;
     }
-    case "LOOKUP_SHOP_ADDRESS": {
-      beforeSnapshot = { type: "address_lookup" };
+    case "SET_SHOP_ADDRESS": {
+      const { data: curShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
+      beforeSnapshot = { type: "address_set", before: curShop ?? null };
       const lookupRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/google-places-lookup`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
-        body: JSON.stringify({ shop_id: shopId, mode: "search", address: proposal.address }),
+        body: JSON.stringify({ shop_id: shopId, mode: "set", address: proposal.address }),
       });
       const lookupBody = await lookupRes.json().catch(() => ({}));
       if (!lookupRes.ok || lookupBody.error) {
-        afterSnapshot = { type: "address_lookup", found: false };
-        resultMsg = `Couldn't look up that address: ${lookupBody.error ?? "lookup failed"}.`;
+        afterSnapshot = { type: "address_set", found: false, before: curShop ?? null };
+        resultMsg = `Couldn't look up that address: ${lookupBody.error ?? "lookup failed"} — nothing was changed.`;
         break;
       }
       if (lookupBody.skipped || !lookupBody.candidate) {
-        afterSnapshot = { type: "address_lookup", found: false };
-        resultMsg = `No match found for "${proposal.address}" — try a more complete address.`;
-        break;
-      }
-      afterSnapshot = { type: "address_lookup", found: true, candidate: lookupBody.candidate };
-      actionData = { candidate: { formattedAddress: lookupBody.candidate.formattedAddress, place_id: lookupBody.candidate.place_id } };
-      resultMsg = `Found: ${lookupBody.candidate.formattedAddress}`;
-      break;
-    }
-    case "CONFIRM_SHOP_ADDRESS": {
-      const { data: curShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
-      beforeSnapshot = { type: "address_confirm", before: curShop ?? null };
-      const confirmRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/google-places-lookup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("INTERNAL_FUNCTION_SECRET")}` },
-        body: JSON.stringify({ shop_id: shopId, mode: "confirm", place_id: proposal.place_id }),
-      });
-      const confirmBody = await confirmRes.json().catch(() => ({}));
-      if (!confirmRes.ok || confirmBody.error || !confirmBody.ok) {
-        afterSnapshot = { type: "address_confirm", after: null, confirmed: false, before: curShop ?? null };
-        resultMsg = `Couldn't confirm that address: ${confirmBody.error ?? "confirm failed"} — nothing was saved.`;
+        // No match — never keep a stale geocode while implying something new was set.
+        afterSnapshot = { type: "address_set", found: false, before: curShop ?? null };
+        resultMsg = `No match found for "${proposal.address}" — try a more complete address. Nothing was changed.`;
         break;
       }
       // Read the shop back through the owner's own client before claiming success —
@@ -1538,14 +1513,15 @@ async function executeAction(
       // confirms it actually landed and is visible to this owner, not just that the
       // call returned 200.
       const { data: freshShop } = await supabase.from("shops").select("formatted_address, google_place_id, latitude, longitude").eq("id", shopId).single();
-      if (!freshShop?.google_place_id || freshShop.google_place_id !== proposal.place_id) {
-        afterSnapshot = { type: "address_confirm", after: null, confirmed: false, before: curShop ?? null };
-        resultMsg = "Couldn't confirm the address was saved — the change may not have gone through.";
+      if (!freshShop?.google_place_id || freshShop.google_place_id !== lookupBody.candidate.place_id) {
+        afterSnapshot = { type: "address_set", found: true, saved: false, before: curShop ?? null };
+        resultMsg = "Found a match but couldn't confirm it was saved — the change may not have gone through.";
         break;
       }
       logEdit({ table_name: "shops", row_id: shopId, before: curShop ?? null, after: freshShop });
-      afterSnapshot = { type: "address_confirm", after: freshShop };
-      resultMsg = `Address confirmed: ${freshShop.formatted_address}`;
+      actionData = { candidate: { formattedAddress: freshShop.formatted_address, place_id: freshShop.google_place_id } };
+      afterSnapshot = { type: "address_set", found: true, saved: true, after: freshShop };
+      resultMsg = `Address set: ${freshShop.formatted_address}`;
       break;
     }
     case "SET_DELIVERY_CONFIG": {

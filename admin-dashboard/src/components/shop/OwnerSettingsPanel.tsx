@@ -23,11 +23,6 @@ export interface OwnerShopSettings {
   wing_mix_extra: boolean | null
 }
 
-interface AddressCandidate {
-  formattedAddress: string
-  place_id: string
-}
-
 const DAYS: { key: string; label: string }[] = [
   { key: 'mon', label: 'Monday' }, { key: 'tue', label: 'Tuesday' }, { key: 'wed', label: 'Wednesday' },
   { key: 'thu', label: 'Thursday' }, { key: 'fri', label: 'Friday' }, { key: 'sat', label: 'Saturday' },
@@ -103,25 +98,35 @@ function HoursEditor({ title, draft, onChange }: { title: string; draft: DraftHo
   )
 }
 
-function AddressSection({ shopId, settings, onConfirmed }: { shopId: string; settings: OwnerShopSettings; onConfirmed: () => void }) {
-  const [addressInput, setAddressInput] = useState('')
-  const [candidate, setCandidate] = useState<AddressCandidate | null>(null)
+function AddressSection({ shopId, settings, onSet }: { shopId: string; settings: OwnerShopSettings; onSet: () => void }) {
+  const [addressInput, setAddressInput] = useState(settings.formatted_address ?? '')
   const [looking, setLooking] = useState(false)
-  const [confirming, setConfirming] = useState(false)
+  const [notFound, setNotFound] = useState<string | null>(null)
 
-  const hasConfirmedAddress = settings.latitude != null && settings.longitude != null
+  useEffect(() => {
+    setAddressInput(settings.formatted_address ?? '')
+    setNotFound(null)
+  }, [settings.id, settings.formatted_address])
 
-  const lookup = async () => {
-    if (!addressInput.trim()) return
+  const hasAddress = settings.latitude != null && settings.longitude != null
+
+  const lookupAndSet = async () => {
+    const address = addressInput.trim()
+    if (!address) return
     setLooking(true)
-    setCandidate(null)
+    setNotFound(null)
     try {
-      const result = await applyFormOps(shopId, [{ intent: 'LOOKUP_SHOP_ADDRESS', address: addressInput.trim() }])
+      const result = await applyFormOps(shopId, [{ intent: 'SET_SHOP_ADDRESS', address }])
       const r = result.results[0]
       if (!r.ok) { toast.error(r.error ?? 'Lookup failed'); return }
       const found = r.data?.candidate
-      if (!found) { toast.error(r.result ?? 'No match found for that address.'); return }
-      setCandidate(found)
+      if (!found) {
+        // No match — the field says so plainly, and nothing on the shop changes.
+        setNotFound(r.result ?? 'No match found for that address.')
+        return
+      }
+      setAddressInput(found.formattedAddress)
+      onSet()
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
@@ -129,71 +134,37 @@ function AddressSection({ shopId, settings, onConfirmed }: { shopId: string; set
     }
   }
 
-  const confirm = async () => {
-    if (!candidate) return
-    setConfirming(true)
-    try {
-      const result = await applyFormOps(shopId, [{ intent: 'CONFIRM_SHOP_ADDRESS', place_id: candidate.place_id }])
-      const r = result.results[0]
-      if (!r.ok) { toast.error(r.error ?? 'Could not confirm address'); return }
-      toast.success('Address confirmed')
-      setCandidate(null)
-      setAddressInput('')
-      onConfirmed()
-    } catch (err) {
-      toast.error((err as Error).message)
-    } finally {
-      setConfirming(false)
-    }
-  }
-
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-3">
       <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" /> Address</h4>
-      {hasConfirmedAddress && (
-        <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-          Confirmed: {settings.formatted_address}
+      <p className="text-xs text-gray-400">
+        Type the shop's address and press Enter — this is what the delivery radius below measures from.
+      </p>
+      <input
+        type="text"
+        value={addressInput}
+        onChange={e => { setAddressInput(e.target.value); setNotFound(null) }}
+        onKeyDown={e => { if (e.key === 'Enter') lookupAndSet() }}
+        placeholder="123 Main St, Allentown PA"
+        disabled={looking}
+        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+      />
+      {looking && (
+        <p className="text-xs text-gray-500 flex items-center gap-1.5">Looking that up...</p>
+      )}
+      {!looking && notFound && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          {notFound} Nothing was changed — retype and press Enter to try again.
         </p>
       )}
-      <p className="text-xs text-gray-400">
-        {hasConfirmedAddress ? 'Enter a new address below to replace it.' : 'Required before delivery can be turned on — this is what the radius below measures from.'}
-      </p>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={addressInput}
-          onChange={e => setAddressInput(e.target.value)}
-          placeholder="123 Main St, Allentown PA"
-          className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-        />
-        <button
-          onClick={lookup}
-          disabled={looking || !addressInput.trim()}
-          className="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 flex-shrink-0"
-        >
-          {looking ? 'Looking up...' : 'Look up'}
-        </button>
-      </div>
-      {candidate && (
-        <div className="border border-brand-200 bg-brand-50 rounded-lg p-3 space-y-2">
-          <p className="text-sm text-gray-800">Is this you? <span className="font-medium">{settings.name}, {candidate.formattedAddress}</span></p>
-          <div className="flex gap-2">
-            <button
-              onClick={confirm}
-              disabled={confirming}
-              className="px-3 py-1.5 text-xs bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50"
-            >
-              {confirming ? 'Confirming...' : 'Yes, that’s us'}
-            </button>
-            <button
-              onClick={() => setCandidate(null)}
-              className="px-3 py-1.5 text-xs border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50"
-            >
-              Not this one
-            </button>
-          </div>
-        </div>
+      {!looking && !notFound && hasAddress && (
+        <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
+          <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          Set: {settings.formatted_address}
+        </p>
+      )}
+      {!looking && !notFound && !hasAddress && (
+        <p className="text-xs text-gray-400">Required before delivery can be turned on.</p>
       )}
     </div>
   )
@@ -225,6 +196,14 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
   }, [settings?.id, settings?.open_hours, settings?.delivery_hours, settings?.delivery_enabled, settings?.delivery_radius_mi, settings?.delivery_fee_cents, settings?.ai_instructions, settings?.wing_flavors_included, settings?.wing_mix_extra])
 
   if (!settings) return <div className="text-center py-12 text-gray-400">Loading settings...</div>
+
+  const hasAddress = settings.latitude != null && settings.longitude != null
+  const hasRadius = parseFloat(deliveryRadius || '0') > 0
+  const deliveryGateOk = hasAddress && hasRadius
+  const missingForDelivery = [
+    ...(hasAddress ? [] : ['a confirmed address']),
+    ...(hasRadius ? [] : ['a delivery radius greater than 0 miles']),
+  ]
 
   const save = async () => {
     const ops: FormOp[] = []
@@ -276,28 +255,41 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
         <HoursEditor title="Store hours" draft={openHoursDraft} onChange={setOpenHoursDraft} />
       </div>
 
-      <AddressSection shopId={shopId} settings={settings} onConfirmed={onSaved} />
+      <AddressSection shopId={shopId} settings={settings} onSet={onSaved} />
 
       <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-semibold text-gray-700">Delivery</h4>
           <button
-            onClick={() => setDeliveryEnabled(v => !v)}
+            onClick={() => {
+              if (deliveryEnabled) { setDeliveryEnabled(false); return }
+              if (!deliveryGateOk) {
+                toast.error('Set an address above and a radius greater than 0 miles before turning delivery on.')
+                return
+              }
+              setDeliveryEnabled(true)
+            }}
             className={`text-xs px-3 py-1 rounded-full border ${deliveryEnabled ? 'border-green-200 text-green-700 bg-green-50' : 'border-gray-200 text-gray-500 bg-gray-50'}`}
           >
             {deliveryEnabled ? 'Delivery on' : 'Delivery off'}
           </button>
         </div>
-        {!deliveryEnabled && (
+        {!deliveryEnabled && !deliveryGateOk && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            Delivery can't be turned on yet — missing: {missingForDelivery.join(', ')}.
+          </p>
+        )}
+        {!deliveryEnabled && deliveryGateOk && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
             Turning delivery off makes the bot refuse delivery orders for this shop, permanently — this isn't a same-day pause. Use "pause delivery" in chat for a temporary stop instead.
           </p>
         )}
-        {deliveryEnabled && (settings.latitude == null || settings.longitude == null || !(parseFloat(deliveryRadius || '0') > 0)) && (
+        {deliveryEnabled && !deliveryGateOk && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            This won't actually turn delivery on for customers yet — a confirmed address (above) and a radius greater than 0 miles are both required. The save will fail with a reason until both are set.
+            This won't actually turn delivery on for customers yet — missing: {missingForDelivery.join(', ')}. The save will fail with a reason until both are set.
           </p>
         )}
         <div className="flex items-center gap-4">

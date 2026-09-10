@@ -4,23 +4,23 @@
  * Phase 6: Find a shop on Google Maps via Places API (New) and merge
  * authoritative address, phone, rating, and review count into the shops row.
  *
- * Three modes, selected by `mode` in the request body:
+ * Two modes, selected by `mode` in the request body:
  *   - (default / "auto") — original onboarding behavior: search by shop_id,
  *     SKIP if google_place_id is already set, write the top match straight
  *     to `shops` with no confirmation step. Called by onboarding-save
  *     (fire-and-forget, async, non-blocking).
- *   - "search" — owner-facing address entry (admin-chat's SET_SHOP_ADDRESS
- *     flow). Takes shop_id + address, searches, returns the top candidate
- *     WITHOUT writing to `shops`. Never skips on an existing place_id — the
- *     owner is explicitly looking up a (possibly new) address.
- *   - "confirm" — second half of the same flow. Takes shop_id + place_id
- *     (must be one `search` just returned), re-fetches place details for
- *     that exact place_id, and writes it to `shops`. A client can only ever
- *     confirm a place_id this function itself produced — it cannot inject
- *     an arbitrary address/lat/lng.
+ *   - "set" — owner-facing address entry (admin-chat's SET_SHOP_ADDRESS,
+ *     the Settings page's live address field). Takes shop_id + address,
+ *     searches, and on a match writes it to `shops` in the same call — the
+ *     owner types an address, presses Enter, and either sees the matched
+ *     formatted_address or a "no match" message; there is no separate
+ *     confirm step. Never skips on an existing place_id — the owner is
+ *     explicitly (re-)looking up an address, possibly replacing one already
+ *     set. On no match, nothing is written — the caller must never keep a
+ *     stale geocode while implying a new one was set.
  *
- * All three modes share the same two Google Places calls (search, details)
- * — one implementation of "talk to Google", three callers.
+ * Both modes share the same two Google Places calls (search, details) —
+ * one implementation of "talk to Google", two callers.
  *
  * Auth: Edge function key (service_role via Supabase internal) or
  * INTERNAL_FUNCTION_SECRET. Never called directly from a browser — the
@@ -128,7 +128,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
-  let body: { shop_id?: string; name?: string; address_hint?: string; mode?: "search" | "confirm"; address?: string; place_id?: string } = {};
+  let body: { shop_id?: string; name?: string; address_hint?: string; mode?: "set"; address?: string } = {};
   try { body = await req.json(); } catch { /* ok */ }
 
   const { shop_id, name, address_hint, mode } = body;
@@ -146,8 +146,8 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "Shop not found", detail: shopErr?.message }), { status: 404 });
   }
 
-  // ── mode: "search" — owner typed an address, look it up, do NOT write ──
-  if (mode === "search") {
+  // ── mode: "set" — owner typed an address, look it up, write on a match ──
+  if (mode === "set") {
     const address = (body.address ?? "").trim();
     if (!address) {
       return new Response(JSON.stringify({ error: "address required" }), { status: 400 });
@@ -158,23 +158,10 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify(searched), { status: searched.status });
     }
     if ("skipped" in searched) {
-      return new Response(JSON.stringify({ skipped: true, reason: searched.reason }));
+      // No write — a miss must never touch the existing geocode.
+      return new Response(JSON.stringify({ ok: true, skipped: true, reason: searched.reason }));
     }
     const details = await fetchPlaceDetails(searched.placeId);
-    if ("error" in details) {
-      return new Response(JSON.stringify(details), { status: details.status });
-    }
-    // No DB write — the owner confirms this candidate before anything is stored.
-    return new Response(JSON.stringify({ ok: true, candidate: details }));
-  }
-
-  // ── mode: "confirm" — write a place_id the "search" step already returned ──
-  if (mode === "confirm") {
-    const placeId = (body.place_id ?? "").trim();
-    if (!placeId) {
-      return new Response(JSON.stringify({ error: "place_id required" }), { status: 400 });
-    }
-    const details = await fetchPlaceDetails(placeId);
     if ("error" in details) {
       return new Response(JSON.stringify(details), { status: details.status });
     }
@@ -194,7 +181,7 @@ Deno.serve(async (req: Request) => {
       console.error("DB update failed:", updateErr.message);
       return new Response(JSON.stringify({ error: "DB update failed", detail: updateErr.message, result: details }), { status: 500 });
     }
-    return new Response(JSON.stringify({ ok: true, result: details }));
+    return new Response(JSON.stringify({ ok: true, candidate: details }));
   }
 
   // ── default / "auto" mode — original onboarding behavior, unchanged ────
