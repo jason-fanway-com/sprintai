@@ -235,3 +235,29 @@ was carried in the data structure so the wrong thing had nowhere to go.
    → one line, Temp: Medium, **$8.49 + $0.99 = $9.48**. Read it from the cart or a
    read-only receipt, not the checkout reply.
 4. Read `BLOCKED.txt` for what the crew thinks is happening — then verify it.
+
+## 10. Keeping this file true
+
+**This file has no automatic updater. It decays unless you maintain it.**
+
+Update it when a **rule, structure or direction** changes — not when the build moves:
+
+| Change | Update |
+|---|---|
+| A new component ships, or a pipeline stage changes | §4b |
+| A structural decision is made or a spec is superseded | §4c |
+| Jason changes what's on the critical path | §4d |
+| A new standing constraint, or one is lifted | §7 |
+| A lesson is learned the hard way | §8, and write a memory file |
+| A shop changes role (demo / real / retired) | §4 |
+
+**Never add** counts, versions, deploy status, or what's currently in flight. If a number
+appears in this file it has decayed into a handoff doc. §5 exists so that information is
+queried and therefore true.
+
+**The test:** if a fresh thread read this and then ran §5's commands, would it be right
+about the world? If not, this file is what's wrong.
+
+**Do it in the moment.** The reason handoff docs existed was that recording was deferred to
+session end. A one-line edit when the decision is made costs nothing; reconstructing it a
+day later costs an hour and is less accurate.
