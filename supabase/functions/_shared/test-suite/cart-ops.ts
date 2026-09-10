@@ -66,7 +66,15 @@ function cartSubtotalCents(cart: CartItemLike[] | undefined | null): number {
   let sum = 0;
   for (const item of cart) {
     if (item.type === "bundle") {
-      sum += (item.price_cents ?? 0) * (item.complete ? 1 : 0);
+      // P0 (2026-09-10, NJB false-positive): bundle price is fixed at
+      // start_bundle time, independent of flavor-selection completeness —
+      // this mirrors the same fix already applied to chat-sms/index.ts's
+      // subtotal computations on 2026-09-09 (see its "P0 (2026-09-09, NJB
+      // live defect)" comments). This verifier copy was never updated,
+      // so it kept expecting $0 for a correctly-quoted in-progress bundle
+      // and flagged menu-single-2 / menu-baker-dozen as false "wrong_total"
+      // failures — the bot and real Stripe charge were both already correct.
+      sum += (item.price_cents ?? 0);
     } else {
       sum += (item.price_cents ?? 0) * (item.quantity ?? 1);
     }
