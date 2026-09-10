@@ -2275,20 +2275,45 @@ async function executeTool(
       // `notes` — order_cart_lines.options (what the kitchen ticket and CRM
       // read) needs a real structured selection. Reuses the same
       // matchChoiceInText the compiled add_item path already trusts for this
-      // exact matching job; only touches items whose own name is actually
-      // referenced in the note, and only ever fills a slot that has zero
-      // resolved choices so far — never overwrites an existing selection.
+      // exact matching job; only ever fills a slot that has zero resolved
+      // choices so far — never overwrites an existing selection.
+      //
+      // Melvin QA fix (same day): gating on ANY shared stem let a note
+      // mentioning one item bleed onto a second, unrelated item whose name
+      // happens to share a generic word (e.g. two different "... Sandwich"
+      // lines both unresolved — "sandwich" alone would pass the old gate
+      // for both). Gate on a DISTINCTIVE stem instead: one this item's name
+      // contributes that no OTHER still-unresolved cart item's name shares.
+      // "sandwich" stops counting as identifying evidence for either line;
+      // "bobo"/"turkey" still do. A genuinely ambiguous note (no distinctive
+      // stem for any candidate) is left alone rather than guessed at, same
+      // "missing beats wrong" discipline the rest of this engine follows.
+      const noteStems = significantStems(note);
+      const unresolvedCandidates = cart
+        .filter((ci): ci is CartItem => (ci as BundleItem).type !== "bundle")
+        .filter(ci => {
+          const mi = ci.menu_item_id ? menuMap.get(ci.menu_item_id) : undefined;
+          if (!mi?.ask_plan?.steps?.length) return false;
+          const resolved = new Set(Object.keys(ci.ask_plan_selections ?? {}));
+          return mi.ask_plan.steps.some(s => !resolved.has(s.group_id));
+        });
+      const nameStemsByItem = new Map(unresolvedCandidates.map(ci => {
+        const mi = menuMap.get(ci.menu_item_id)!;
+        return [ci, significantStems(mi.name)] as const;
+      }));
       let cartChanged = false;
-      for (const ci of cart) {
-        if ((ci as BundleItem).type === "bundle") continue;
-        const item = ci as CartItem;
-        const menuItem = item.menu_item_id ? menuMap.get(item.menu_item_id) : undefined;
-        if (!menuItem?.ask_plan?.steps?.length) continue;
-        const nameStems = significantStems(menuItem.name);
-        const noteStems = significantStems(note);
-        if (nameStems.size > 0 && ![...nameStems].some(s => noteStems.has(s))) continue;
+      for (const item of unresolvedCandidates) {
+        const menuItem = menuMap.get(item.menu_item_id)!;
+        const askPlan = menuItem.ask_plan!;
+        const ownStems = nameStemsByItem.get(item)!;
+        const otherStems = new Set<string>();
+        for (const [other, stems] of nameStemsByItem) {
+          if (other !== item) for (const s of stems) otherStems.add(s);
+        }
+        const distinctiveStems = [...ownStems].filter(s => !otherStems.has(s));
+        if (distinctiveStems.length === 0 || !distinctiveStems.some(s => noteStems.has(s))) continue;
         const resolvedIds = new Set(Object.keys(item.ask_plan_selections ?? {}));
-        for (const step of menuItem.ask_plan.steps) {
+        for (const step of askPlan.steps) {
           if (resolvedIds.has(step.group_id)) continue;
           const matched = matchChoiceInText(step.choices, note);
           if (!matched) continue;
