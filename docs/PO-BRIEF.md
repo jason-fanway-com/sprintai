@@ -241,6 +241,16 @@ embedded runner that cannot authenticate.
 - **Never modify the 10DLC registration.** Brand `BJ8MUGY`, campaign `C8RNN6Y`
 - **Stripe test mode is deliberate** until the first real customer — never flag it as a defect
 - **Never weaken a gate** to make something pass
+- **`critical_failures` is not a defect list — reproduce every entry live before escalating
+  it.** Overnight 2026-09-10/11, three of three criticals across the three shops were
+  artifacts, not defects: the Bleu Cheese "quoted $1.98 vs cart $0.99" was a verifier regex
+  crossing a newline on a $0-price modifier row a customer cannot order standalone; the
+  "duplicate lines for same menu_item_id" reproduced as one line at qty 2 with a correct
+  $15.98 subtotal (`price_cents` is **per unit**, so a qty-2 line showing 799 is right, not
+  an undercharge); the third was scored against a turn where `toolCallCount` was 0.
+  Reproduce the exact utterance five times on the live path, read `toolCallCount`, and only
+  then call it real. Escalating an artifact costs more credibility than missing one for an
+  hour
 - **An empty cart is not proof of a code defect — the model sometimes makes no tool call at
   all.** Measured 2026-09-10: one Zio's phrase, five consecutive live turns, two with
   `toolCallCount: 0` and an empty cart ("before I add that, are you ordering pickup or
