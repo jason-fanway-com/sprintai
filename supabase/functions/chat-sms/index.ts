@@ -8181,7 +8181,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     guardCart.length > 0 && !guardReplyHadPickupDelivery && !guardOrderTypeBefore &&
     !userSaidPickupDelivery;
 
-  if (needsDeliveryGate) {
+  // A delivery address captured THIS TURN is not a silent set — it is the most
+  // explicit statement of intent a customer can make, and set_delivery_address
+  // only writes it after a positively-qualified, in-zone geocode. Reverting
+  // order_type here left the row holding a real delivery address with
+  // order_type null; the phantom-link recovery below then defaulted that null to
+  // "pickup" to clear its own gate, so the customer was told to come and collect
+  // a delivery order. Observed live on the demo shop 2026-09-11, orders #11/#12:
+  // the customer answered "Delivery" one turn, gave the address the next, and the
+  // address turn contains neither the word pickup nor delivery — so
+  // userSaidPickupDelivery was false and this gate fired on the wrong turn.
+  const guardAddressSetThisTurn = guardCartRow?.delivery_address != null &&
+    guardOrderTypeAfter === "delivery";
+
+  if (needsDeliveryGate && !guardAddressSetThisTurn) {
     // LLM silently set order_type (pickup or delivery) via tool call
     // without asking the customer — revert so next turn still gates.
     if (guardOrderTypeAfter) {
