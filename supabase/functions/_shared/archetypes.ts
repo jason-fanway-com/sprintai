@@ -727,6 +727,45 @@ function hasOnlySingletonGroups(item: InferItemInput): boolean {
   return requiredGroups.length > 0 && requiredGroups.every(g => g.choiceNames.length <= 1);
 }
 
+// Generalized version of the "prefer a real found list over asking" rule
+// bind_to_list_named already expresses BY NAME (§3 stage 5) — for a slot the
+// archetype library gives no name pattern at all, the compiler must still
+// not manufacture an owner_question when the item already carries a real,
+// unused option_group that answers exactly this slot's question. Real Vito's
+// incident: Entrees' `side` slot has no bind_to_list_named, so 9 items each
+// already carrying a real, owner_confirmed "Pasta" group (Spaghetti/Penne/
+// Angel Hair/Linguine) sat needs_question anyway, indistinguishable from a
+// genuine data gap, even though the item's OWN row already answers it.
+//
+// Deliberately conservative in two ways:
+//  1. Only ever consulted for slots with NO bind_to_list_named of their own
+//     (checked by the caller) — a slot that DOES have a name pattern
+//     (bread, temp, dressing, ...) already tried and failed to find its
+//     answer by name; falling back to "whatever unclaimed group happens to
+//     exist" for THOSE slots would risk wiring an unrelated group to the
+//     wrong question (real Vito's shape: Buffalo Chicken Cheesesteak has a
+//     real "Sauce" group and a genuinely missing "Bread" group — auto-
+//     wiring bread to Sauce because it's the only other group around would
+//     be exactly the kind of wrong-not-missing guess P3 forbids).
+//  2. Exactly one unclaimed candidate, not "any" — an item with two or more
+//     real unclaimed groups is a genuine ambiguity (which one answers THIS
+//     slot?) the compiler must not guess at; it still falls through to
+//     needs_question rather than picking wrong.
+// "Claimed" means already matched by some OTHER slot in this archetype via
+// ITS OWN bind_to_list_named pattern — a group a named slot already spoke
+// for is never available as a guess for an unnamed one.
+function findUnclaimedRealGroup(item: InferItemInput, archetype: Archetype): ExtractedGroup | undefined {
+  const claimedNames = new Set<string>();
+  for (const s of archetype.slots) {
+    if (!s.bind_to_list_named) continue;
+    const bound = item.extractedGroups.find(g => s.bind_to_list_named!.test(g.name));
+    if (bound) claimedNames.add(bound.name);
+  }
+  const candidates = item.extractedGroups.filter(g =>
+    g.required && g.choiceNames.length > 1 && !claimedNames.has(g.name));
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchetype: ArchetypeKey): SlotOutcome {
   const base = { item_id: item.id, slot_key: slot.slot_key };
 
@@ -777,6 +816,13 @@ function resolveSlotForItem(slot: SlotRule, item: InferItemInput, currentArchety
   if (slot.default_from_name && slot.default_from_name.test(item.name)) {
     const m = item.name.match(slot.default_from_name);
     return { ...base, kind: "default", default_choice: m?.[0] };
+  }
+
+  if (!slot.bind_to_list_named) {
+    const unclaimed = findUnclaimedRealGroup(item, getArchetype(currentArchetype));
+    if (unclaimed) {
+      return { ...base, kind: "stated", source: "bind", choices: unclaimed.choiceNames };
+    }
   }
 
   if (hasStatedProvenanceGroup(item) || hasOnlySingletonGroups(item)) {

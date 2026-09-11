@@ -437,6 +437,61 @@ Deno.test("platter: side binds from the normalizer's description slot when prese
   assertEquals(outcomes.find(o => o.item_id === noOr.id)!.kind, "needs_question");
 });
 
+Deno.test("platter: side wires an item's own real unclaimed option_group instead of asking, when no description clause exists (Fix 1, real Vito's Chicken Parmesan/Pasta shape)", () => {
+  const withPasta = item({
+    name: "Chicken Parmesan", category: "Entrees",
+    description: "Served with choice of pasta, garlic knots, side salad.",
+    descriptionSlotChoices: null,
+    extractedGroups: [
+      { name: "Pasta", required: true, choiceNames: ["Spaghetti", "Penne", "Angel Hair", "Linguine"], provenance: "owner_confirmed" },
+    ],
+  });
+  const noGroup = item({
+    name: "Chicken Marsala", category: "Entrees",
+    description: "Served with choice of pasta, garlic knots, side salad.",
+    descriptionSlotChoices: null,
+  });
+  const result = inferCategory("Entrees", [withPasta, noGroup]);
+  const outcomes = result.slotOutcomes.filter(o => o.slot_key === "side");
+  const wired = outcomes.find(o => o.item_id === withPasta.id)!;
+  assertEquals(wired.kind, "stated");
+  assertEquals(wired.source, "bind");
+  assertEquals(wired.choices, ["Spaghetti", "Penne", "Angel Hair", "Linguine"]);
+  assertEquals(outcomes.find(o => o.item_id === noGroup.id)!.kind, "needs_question");
+  // withPasta is excluded from the resulting question; noGroup is still the
+  // one genuine gap left in the category.
+  const question = result.questions.find(q => q.slot_key === "side")!;
+  assertEquals(question.items_affected, 1);
+  assert(question.proposal.exclusions.includes("Chicken Parmesan"));
+});
+
+Deno.test("sandwich: bread does NOT wire an item's unrelated, unclaimed group (guard against red herrings, real Vito's Buffalo Chicken Cheesesteak shape: a real 'Sauce' group exists, 'Bread' genuinely doesn't)", () => {
+  const noBreadButSauce = item({
+    name: "Buffalo Chicken Cheesesteak", category: "Hot Sandwiches",
+    extractedGroups: [
+      { name: "Sauce", required: true, choiceNames: ["Hot", "Mild", "BBQ", "Sweet & Spicy"], provenance: "owner_confirmed" },
+    ],
+  });
+  const result = inferCategory("Hot Sandwiches", [noBreadButSauce]);
+  const outcome = result.slotOutcomes.find(o => o.slot_key === "bread")!;
+  // bread HAS its own bind_to_list_named (/bread|roll/i) — the generalized
+  // fallback must never kick in for a slot that already tried and failed to
+  // find its answer by name; "Sauce" must stay unclaimed, not misread as bread.
+  assertEquals(outcome.kind, "needs_question");
+});
+
+Deno.test("platter: side falls through to needs_question (not a wrong guess) when an item has TWO real unclaimed groups (genuine ambiguity, no bind pattern to disambiguate)", () => {
+  const twoGroups = item({
+    name: "Sampler Platter", category: "Entrees",
+    extractedGroups: [
+      { name: "Pasta", required: true, choiceNames: ["Spaghetti", "Penne"], provenance: "owner_confirmed" },
+      { name: "Vegetable", required: true, choiceNames: ["Broccoli", "Green Beans"], provenance: "owner_confirmed" },
+    ],
+  });
+  const result = inferCategory("Entrees", [twoGroups]);
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "side")!.kind, "needs_question");
+});
+
 Deno.test("size/count: multiple sibling rows -> stated with no question; a single row -> not_applicable", () => {
   const folded = [
     item({ name: "Cheese - Small", category: "Pizza", productKey: "pizza:cheese", siblingCount: 3 }),
