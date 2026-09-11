@@ -128,8 +128,15 @@ Deno.test("GUARD 7c wiring: same already-said test applied ahead of the generic-
 Deno.test("compiledRenderedGroups wiring: populated from enforceVerbatimStepQuestion's output, in scope before GUARD 7c runs", () => {
   assert(INDEX_SOURCE.includes("const compiledRenderedGroups = new Map<string, Set<string>>();"),
     "compiledRenderedGroups must be declared once at outer scope so both GUARD 7c and GUARD 8 see the same instance");
-  assert(INDEX_SOURCE.includes("reply = enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);"),
-    "item 2's enforcement must run and its enforced groups must feed compiledRenderedGroups");
+  // PO fix (2026-09-11, two-question-collision guard): enforceVerbatimStepQuestion
+  // now only runs when the order-type question DIDN'T already go out this
+  // turn; the collision branch calls stripDeferredStepQuestion instead
+  // (never appends a canonical question the customer wasn't asked). Both
+  // branches still feed the SAME compiledRenderedGroups instance either way.
+  assert(INDEX_SOURCE.includes("enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays)"),
+    "item 2's enforcement must still run (non-collision turns) and its enforced groups must feed compiledRenderedGroups");
+  assert(INDEX_SOURCE.includes("stripDeferredStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName)"),
+    "the two-question-collision turn must strip the deferred slot question rather than force it in alongside the order-type question");
   assert(INDEX_SOURCE.includes("groups.add(sq.groupName);"),
-    "the enforced group name must be recorded so GUARD 8 can recognize it was already said");
+    "the enforced/deferred group name must be recorded either way so GUARD 8 can recognize it was already handled this turn");
 });

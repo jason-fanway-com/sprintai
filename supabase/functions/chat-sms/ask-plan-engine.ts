@@ -273,15 +273,24 @@ export function matchAllAssertedChoices(choices: EngineChoice[], assertedTexts: 
   return choices.filter(c => normalizedAsserted.has(c.display.trim().toLowerCase()));
 }
 
-/** Appendix C: identical wording every run. The LLM never rewrites these. */
+// PO fix (2026-09-11, live quality regression — compiled path scored 40% vs
+// legacy's 70% on the same 10 cases, proof unaffected): these used to always
+// interpolate the FULL enumerated choice list into the question itself
+// ("How would you like the Cheese Burger cooked? Well Done, Medium, Rare,
+// Medium Well, or Medium Rare"), on every single turn, for a group as short
+// as two choices. renderStepQuestion (below) now renders these SHORT by
+// default and enumerates only when the customer's answer didn't match a
+// real choice or they explicitly asked what the options are — see that
+// function's doc. Appendix C: identical wording every run regardless; the
+// LLM never rewrites these, it only relays them verbatim.
 const TEMPLATE_QUESTIONS: Record<string, string> = {
-  temp:      "How would you like the {display_name} cooked? {choices}.",
-  bread:     "What bread for the {display_name}? {choices}.",
-  dressing:  "Which dressing on the {display_name}? {choices}.",
-  size:      "What size {display_name}? {choices_with_prices}.",
-  flavor:    "Which flavor for the {display_name}? {choices}.",
-  protein:   "{choices_or} for the {display_name}?",
-  bagel:     "Which bagel? {choices}.",
+  temp:      "How would you like the {display_name} cooked?",
+  bread:     "What bread for the {display_name}?",
+  dressing:  "Which dressing on the {display_name}?",
+  size:      "What size {display_name}?",
+  flavor:    "Which flavor for the {display_name}?",
+  protein:   "Which protein for the {display_name}?",
+  bagel:     "Which bagel?",
 };
 
 /** `{choices}` renders <=6 as "a, b, or c"; more truncates to 5 + "or something else". */
@@ -325,20 +334,44 @@ function formatDelta(cents: number): string {
  * canonical semantic tag for canonical step ordering (SLOT_RANK) and entity
  * keys; it is deliberately not consulted here anymore.
  */
-export function renderStepQuestion(step: CompiledStep, displayName: string): string {
+// PO fix (2026-09-11): `enumerate` is false by default — the short,
+// non-enumerating question is the DEFAULT canonical text now, generalized
+// across any group name (this function never hardcodes a per-group choice
+// list; TEMPLATE_QUESTIONS's fixed rows and the generic fallback both stay
+// name-only). Pass `enumerate: true` ONLY for the two deterministic
+// fallback cases the spec still requires the customer see the real choices
+// for: (a) their answer didn't match any real choice for this slot, or (b)
+// they explicitly asked what the options/choices are (see asksForOptions).
+// Both cases are decided by the caller (resolveAndPriceSelections below),
+// never by the model — same "code decides, model relays" discipline as
+// before, just against a shorter default.
+export function renderStepQuestion(step: CompiledStep, displayName: string, enumerate = false): string {
   const key = step.prompt_template.split(".")[0] || "";
   const template = TEMPLATE_QUESTIONS[key];
-  if (template) {
-    return template
-      .replace("{display_name}", displayName)
-      .replace("{choices_with_prices}", renderChoiceList(step.choices, true))
-      .replace("{choices_or}", renderChoiceList(step.choices, false))
-      .replace("{choices}", renderChoiceList(step.choices, false));
-  }
-  // Generic fallback for a slot_key not in the fixed Appendix C list —
-  // still fully deterministic, still built only from compiled choices.
-  const label = key ? key.replace(/_/g, " ") : "option";
-  return `What ${label} would you like for the ${displayName}? ${renderChoiceList(step.choices, true)}.`;
+  const base = template
+    ? template.replace("{display_name}", displayName)
+    // Generic fallback for a slot_key not in the fixed Appendix C list —
+    // still fully deterministic, still built only from compiled choices.
+    : `What ${key ? key.replace(/_/g, " ") : "option"} would you like for the ${displayName}?`;
+  if (!enumerate) return base;
+  // "size" (and the generic fallback, which has never had its own template
+  // row to omit prices from) show price deltas alongside each choice, same
+  // as before this fix; every other known group lists bare choice names.
+  const withPrices = !template || key === "size";
+  return `${base} ${renderChoiceList(step.choices, withPrices)}.`;
+}
+
+// PO fix (2026-09-11): deterministic detector for "the customer is asking
+// what the choices/options are" — the second of the two cases that must
+// still enumerate a slot's real choices (see renderStepQuestion above).
+// Deliberately narrow/literal (not a fuzzy stem match) since this only
+// needs to catch the customer directly asking the question, not any
+// message that happens to share a word with it.
+const ASKS_FOR_OPTIONS_RE =
+  /\bwhat\s+(?:are\s+)?(?:my|the|your)?\s*(?:options|choices)\b|\b(?:options|choices)\s+(?:do (?:you|ya) have|are there|are available)\b|\bwhat\s+do\s+you\s+have\b|\bwhat(?:'|’)s\s+available\b/i;
+
+export function asksForOptions(text: string): boolean {
+  return !!text && ASKS_FOR_OPTIONS_RE.test(text);
 }
 
 /**
@@ -350,35 +383,107 @@ export function renderStepQuestion(step: CompiledStep, displayName: string): str
  * instruction, not a guarantee, and the model reworded it every run. This
  * is a CODE-level guarantee instead, same mechanical shape as index.ts's
  * GUARD 8 (programmatically appending a clause the model's own text is
- * missing): if the model's reply already contains `nextQuestion` byte-for-
- * byte, it's left alone (a warm lead-in before it is fine — spec Appendix
- * C, "may add one warm sentence... first turn only"). Otherwise, any
- * sentence in the model's reply that already named one of the step's real
- * choices is dropped (that's the model's own paraphrase attempt — keeping
- * it alongside the canonical line would show the customer two different,
- * possibly contradictory, renderings of the same question) and the
- * canonical question is appended after whatever warmth is left. Reuses
- * `significantStems` (same primitive `matchChoiceInText` above already
- * uses for choice matching) rather than a new ad hoc quote/format regex —
- * it strips punctuation, so "12"" vs "12''" no longer causes a false miss.
+ * missing): any sentence in the model's reply that already names one of
+ * the step's real choices is dropped (that's the model's own paraphrase
+ * attempt — keeping it alongside the canonical line would show the
+ * customer two different, possibly contradictory, renderings of the same
+ * question, or, since the 2026-09-11 fix below, a stray enumerated tail
+ * next to an otherwise-correct short question) and the canonical question
+ * is appended after whatever warmth is left, unless it's there already.
+ * Reuses `significantStems` (same primitive `matchChoiceInText` above
+ * already uses for choice matching) rather than a new ad hoc quote/format
+ * regex — it strips punctuation, so "12"" vs "12''" no longer causes a
+ * false miss.
  */
+// PO fix (2026-09-11): factored out of enforceVerbatimStepQuestion so
+// stripDeferredStepQuestion (two-question-collision guard, below) can reuse
+// the identical sentence-level filter rather than a second copy of it.
+function filterOutSentencesMatchingStems(text: string, dropStems: Set<string>): string {
+  if (dropStems.size === 0) return text;
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const kept = sentences.filter(s => {
+    const stems = significantStems(s);
+    return ![...dropStems].some(ds => stems.has(ds));
+  });
+  return kept.join(" ").trim();
+}
+
+// PO fix (2026-09-11): the old byte-for-byte early return ("if modelReply
+// already contains nextQuestion, leave the WHOLE reply alone") skipped
+// filtering entirely whenever `nextQuestion` (now a much shorter default —
+// see renderStepQuestion above) appeared anywhere in modelReply, even as a
+// strict prefix of a longer reply that then went on to append its OWN
+// choice list right after it ("...cooked? Well Done, Medium, Rare...") — a
+// short canonical question followed by content nextQuestion itself never
+// contained) — that trailing enumeration used to reach the customer
+// unfiltered. Fixed by locating nextQuestion's own span in modelReply (when
+// present) and filtering only the text BEFORE and AFTER that span, leaving
+// the span itself untouched — so a long, already-enumerated nextQuestion
+// that legitimately contains choice names in the model's verbatim relay
+// survives (the original "left alone" case, still covered), while a SHORT
+// nextQuestion with extra choice-mentioning content stapled onto it gets
+// that extra content dropped, same as any other paraphrase attempt.
 export function enforceVerbatimStepQuestion(
   modelReply: string,
   nextQuestion: string,
   choiceDisplays: string[],
 ): string {
-  if (modelReply.includes(nextQuestion)) return modelReply;
-
   const choiceStems = new Set(choiceDisplays.flatMap(d => [...significantStems(d)]));
-  if (choiceStems.size === 0) return `${modelReply} ${nextQuestion}`.trim();
+  const idx = modelReply.indexOf(nextQuestion);
+  if (idx >= 0) {
+    const before = filterOutSentencesMatchingStems(modelReply.slice(0, idx), choiceStems);
+    const after = filterOutSentencesMatchingStems(modelReply.slice(idx + nextQuestion.length), choiceStems);
+    return [before, nextQuestion, after].filter(Boolean).join(" ").trim();
+  }
+  const leadIn = filterOutSentencesMatchingStems(modelReply, choiceStems);
+  return leadIn ? `${leadIn} ${nextQuestion}` : nextQuestion;
+}
+
+/**
+ * Two-question-collision guard support (2026-09-11, PO-directed fix): when
+ * the order-type question (pickup/delivery) already went out this same
+ * turn — see index.ts's collision guard, right where this is called — a
+ * compiled slot question opened THIS turn must be deferred rather than
+ * stacked on top of it. This strips whatever form of the slot question the
+ * model wrote — its own short paraphrase, an enumerated tail, or both —
+ * out of the reply entirely (nothing is appended in its place; the caller
+ * re-asks it alone, next turn, if it's still unresolved).
+ *
+ * Reuses enforceVerbatimStepQuestion's own sentence filter for choice
+ * names (ANY real choice name mentioned drops that sentence — choice
+ * names are specific enough that a false-positive match is vanishingly
+ * unlikely). The BASE question phrasing needs a stricter rule: its own
+ * significant words (e.g. "how", "would", "cooked") are ordinary enough
+ * that requiring just ONE to appear in a sentence would misfire on
+ * unrelated content — the order-type question ("Are you ordering pickup
+ * or delivery today?") shares the word "you" with "How would you like the
+ * Cheese Burger cooked?" but is obviously not the same question. So the
+ * base question requires EVERY one of its distinctive words (its own
+ * words minus the item's display name, which the unrelated "item added"
+ * confirmation sentence legitimately also contains) to be present in a
+ * candidate sentence — full-subset, not any-overlap, same discipline as
+ * matchChoiceByStems above. Fewer than two distinctive words left is too
+ * weak a signal to act on at all (missing beats wrong) — that sentence is
+ * left alone.
+ */
+export function stripDeferredStepQuestion(
+  modelReply: string,
+  nextQuestion: string,
+  choiceDisplays: string[],
+  displayName: string,
+): string {
+  const choiceStems = new Set(choiceDisplays.flatMap(d => [...significantStems(d)]));
+  const displayStems = significantStems(displayName);
+  const questionStems = [...significantStems(nextQuestion)].filter(s => !displayStems.has(s));
 
   const sentences = modelReply.split(/(?<=[.!?])\s+/).filter(Boolean);
-  const keptSentences = sentences.filter(s => {
-    const sentenceStems = significantStems(s);
-    return ![...choiceStems].some(cs => sentenceStems.has(cs));
+  const kept = sentences.filter(s => {
+    const stems = significantStems(s);
+    if ([...choiceStems].some(cs => stems.has(cs))) return false;
+    if (questionStems.length >= 2 && questionStems.every(qs => stems.has(qs))) return false;
+    return true;
   });
-  const leadIn = keptSentences.join(" ").trim();
-  return leadIn ? `${leadIn} ${nextQuestion}` : nextQuestion;
+  return kept.join(" ").trim();
 }
 
 /**
@@ -694,6 +799,18 @@ function resolveAndPriceSelections(
   consumedModifierChoiceIds: Set<string> | undefined,
   modelAssertedChoiceTexts: string[],
   modifierScopeText?: string,
+  // PO fix (2026-09-11): true iff this call is resolving a line that ALREADY
+  // existed before this turn's customer text arrived (add_item's
+  // continuationIdx >= 0, or any modify_item call — that handler only ever
+  // targets an existing line by definition). Combined with the engine
+  // resolving nothing new this call, that means the step now left as
+  // `nextStep` was ALSO the open question on the line before this call ran
+  // — i.e. it was already asked, in a prior turn, and whatever the customer
+  // just said didn't answer it. That's the deterministic "wrong answer"
+  // trigger for enumerating real choices (renderStepQuestion's `enumerate`
+  // — see its doc); a brand new line's very first open question is never
+  // enumerated by this signal, only a genuine repeat is.
+  isContinuation = false,
 ): ResolveAndPriceOutcome {
   const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
   const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText);
@@ -735,7 +852,12 @@ function resolveAndPriceSelections(
 
   const { resolvedOptions, priceCents } = priceSelections(askPlan, itemGroups, newSelections);
 
-  const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name) : null;
+  // PO fix (2026-09-11): enumerate real choices ONLY on a genuine repeat
+  // (this call resolved nothing new on an already-existing line — see
+  // isContinuation's doc above) or an explicit ask for the options — never
+  // as the default. See renderStepQuestion's doc for the full rationale.
+  const shouldEnumerateChoices = (isContinuation && engineResult.resolved.length === 0) || asksForOptions(customerText);
+  const nextQuestion = engineResult.nextStep ? renderStepQuestion(engineResult.nextStep, askPlan.display_name, shouldEnumerateChoices) : null;
   const pendingGroupNames = engineResult.nextStep
     ? [itemGroups.find(g => g.id === engineResult.nextStep!.group_id)?.name ?? engineResult.nextStep.slot_key ?? "option"]
     : undefined;
@@ -833,7 +955,7 @@ export function applyCompiledAddItem(
 
   const {
     newSelections, resolvedCount, resolvedOptions, priceCents, nextQuestion, pendingGroupNames, nextStep,
-  } = resolveAndPriceSelections(askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText);
+  } = resolveAndPriceSelections(askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText, continuationIdx >= 0);
 
   // Bug-3-class guard (2026-09-07 quantity-doubling incident): a redundant
   // add_item call for an item ALREADY fully resolved, carrying text that
@@ -1030,6 +1152,9 @@ export function applyCompiledModifyItem(
   const outcome = resolveAndPriceSelections(
     askPlan, itemGroups, priorSelections, customerMessage, defaultChoiceIdByGroup,
     consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText,
+    // modify_item, by definition, always targets an EXISTING line — see
+    // isContinuation's doc on resolveAndPriceSelections.
+    true,
   );
 
   const explicitlyClearedGroupIds = new Set(

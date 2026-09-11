@@ -13,6 +13,8 @@ import {
   resolveAskPlan,
   allSlotsResolved,
   enforceVerbatimStepQuestion,
+  stripDeferredStepQuestion,
+  asksForOptions,
   applyCompiledAddItem,
   applyCompiledModifyItem,
   isRemovalRequested,
@@ -139,22 +141,43 @@ Deno.test("renderChoiceList: more than 6 choices truncates to 5 plus 'or somethi
   assertEquals(rendered, "Choice0, Choice1, Choice2, Choice3, Choice4, or something else");
 });
 
-Deno.test("renderStepQuestion: known slot_key 'size' uses the exact Appendix C template with real prices", () => {
+// PO fix (2026-09-11, live quality regression): renderStepQuestion's DEFAULT
+// (enumerate=false, or omitted) is now the SHORT question — no choice list —
+// generalized across any group name. The old always-enumerated behavior is
+// still available, deterministically, via enumerate=true — see the
+// dedicated tests below for when the caller (resolveAndPriceSelections) is
+// required to pass that.
+Deno.test("renderStepQuestion: known slot_key 'size' — default is the short question, no enumeration", () => {
   const q = renderStepQuestion(SIZE_STEP, "Buffalo Chicken Pizza");
+  assertEquals(q, "What size Buffalo Chicken Pizza?");
+});
+
+Deno.test("renderStepQuestion: known slot_key 'size' with enumerate=true uses the exact Appendix C template with real prices", () => {
+  const q = renderStepQuestion(SIZE_STEP, "Buffalo Chicken Pizza", true);
   assertEquals(q, "What size Buffalo Chicken Pizza? Small (no extra charge) or Large +$5.00.");
 });
 
-Deno.test("renderStepQuestion: unknown slot_key falls back to a generic deterministic template, never the raw Slice group name", () => {
+Deno.test("renderStepQuestion: unknown slot_key falls back to a generic deterministic template, never the raw Slice group name — short by default", () => {
   const step: CompiledStep = {
     group_id: "grp-x", slot_key: "spice_level", kind: "slot", ask_mode: "ask",
     prompt_template: "spice_level.ask",
     choices: [{ id: "c-mild", display: "Mild", price_delta_cents: 0 }, { id: "c-hot", display: "Hot", price_delta_cents: 0 }],
   };
   const q = renderStepQuestion(step, "Wings");
-  assertEquals(q, "What spice level would you like for the Wings? Mild (no extra charge) or Hot (no extra charge).");
+  assertEquals(q, "What spice level would you like for the Wings?");
   // Bug 2 regression: the raw platform label ("Choose an option") must
   // never appear in a rendered question, known template or fallback.
   assert(!q.toLowerCase().includes("choose an option"));
+});
+
+Deno.test("renderStepQuestion: unknown slot_key with enumerate=true still enumerates via the generic fallback", () => {
+  const step: CompiledStep = {
+    group_id: "grp-x", slot_key: "spice_level", kind: "slot", ask_mode: "ask",
+    prompt_template: "spice_level.ask",
+    choices: [{ id: "c-mild", display: "Mild", price_delta_cents: 0 }, { id: "c-hot", display: "Hot", price_delta_cents: 0 }],
+  };
+  const q = renderStepQuestion(step, "Wings", true);
+  assertEquals(q, "What spice level would you like for the Wings? Mild (no extra charge) or Hot (no extra charge).");
 });
 
 // REGRESSION (2026-09-08, item 8 follow-up): the exact drift this fix
@@ -164,7 +187,7 @@ Deno.test("renderStepQuestion: unknown slot_key falls back to a generic determin
 // renderStepQuestion read slot_key directly and always missed, no matter
 // what prompt_template said. Now it reads prompt_template, so a null
 // slot_key no longer defeats a fallback the compiler already computed.
-Deno.test("renderStepQuestion: null slot_key with a compiler-derived prompt_template still hits the Appendix C template (the Zio's turkey sub repro)", () => {
+Deno.test("renderStepQuestion: null slot_key with a compiler-derived prompt_template still hits the Appendix C template (the Zio's turkey sub repro) — short by default, enumerated on request", () => {
   const step: CompiledStep = {
     group_id: "grp-turkey-size", slot_key: null, kind: "slot", ask_mode: "ask",
     prompt_template: "size.ask",
@@ -173,21 +196,21 @@ Deno.test("renderStepQuestion: null slot_key with a compiler-derived prompt_temp
       { id: "c-lg", display: 'Large 16"', price_delta_cents: 800 },
     ],
   };
-  const q = renderStepQuestion(step, "Turkey Sub");
-  assertEquals(q, 'What size Turkey Sub? Medium 12" (no extra charge) or Large 16" +$8.00.');
+  assertEquals(renderStepQuestion(step, "Turkey Sub"), "What size Turkey Sub?");
+  assertEquals(renderStepQuestion(step, "Turkey Sub", true), 'What size Turkey Sub? Medium 12" (no extra charge) or Large 16" +$8.00.');
 });
 
 // Same null-slot_key case, but the group name doesn't resolve to any known
 // Appendix C key — prompt_template's own name-derived fallback becomes the
 // readable label instead of the old bare "option" fallback.
-Deno.test("renderStepQuestion: null slot_key with an unrecognized name-derived prompt_template uses a readable fallback label", () => {
+Deno.test("renderStepQuestion: null slot_key with an unrecognized name-derived prompt_template uses a readable fallback label — short by default, enumerated on request", () => {
   const step: CompiledStep = {
     group_id: "grp-x", slot_key: null, kind: "slot", ask_mode: "ask",
     prompt_template: "choose_an_option.ask",
     choices: [{ id: "c-a", display: "Basket", price_delta_cents: 0 }],
   };
-  const q = renderStepQuestion(step, "Chicken Fingers & Fries");
-  assertEquals(q, "What choose an option would you like for the Chicken Fingers & Fries? Basket (no extra charge).");
+  assertEquals(renderStepQuestion(step, "Chicken Fingers & Fries"), "What choose an option would you like for the Chicken Fingers & Fries?");
+  assertEquals(renderStepQuestion(step, "Chicken Fingers & Fries", true), "What choose an option would you like for the Chicken Fingers & Fries? Basket (no extra charge).");
 });
 
 Deno.test("resolveAskPlan: 'large buffalo chicken pizza' resolves size to Large with the real $5.00 delta (bug 1)", () => {
@@ -1222,4 +1245,97 @@ Deno.test("applyCompiledModifyItem: D1 fix — removal on a qty-2 line also spli
   assertEquals(cart[0].price_cents, 2199, "the untouched unit keeps Extra Cheese");
   assertEquals(cart[1].quantity, 1);
   assertEquals(cart[1].price_cents, 1799, "the split-off unit lost Extra Cheese");
+});
+
+// ── PO fix (2026-09-11, live quality regression) — short-default question, ─
+// deterministic enumeration fallback, and the two-question-collision guard.
+
+const TEMP_STEP: CompiledStep = {
+  group_id: "grp-temp", slot_key: "temp", kind: "slot", ask_mode: "ask",
+  prompt_template: "temp.ask",
+  choices: [
+    { id: "c-welldone", display: "Well Done", price_delta_cents: 0 },
+    { id: "c-medium", display: "Medium", price_delta_cents: 0 },
+    { id: "c-rare", display: "Rare", price_delta_cents: 0 },
+    { id: "c-medwell", display: "Medium Well", price_delta_cents: 0 },
+    { id: "c-medrare", display: "Medium Rare", price_delta_cents: 0 },
+  ],
+};
+const TEMP_ASK_PLAN: AskPlan = {
+  compiled_at: "2026-09-11T00:00:00Z", compiler_version: 1,
+  display_name: "Cheese Burger", base_price_cents: 849, steps: [TEMP_STEP],
+  recap_template: "{qty} {display_name}", ticket_template: "{name}",
+};
+function cheeseBurgerMenuItem(): CompiledMenuItem {
+  return { ask_plan: TEMP_ASK_PLAN, bot_state: "orderable", option_groups: [{ id: "grp-temp", name: "Temp" }] };
+}
+
+Deno.test("asksForOptions: recognizes the customer directly asking what the choices/options are", () => {
+  assert(asksForOptions("what are my options?"));
+  assert(asksForOptions("what are the choices"));
+  assert(asksForOptions("what options do you have"));
+  assert(asksForOptions("what's available?"));
+});
+
+Deno.test("asksForOptions: ordinary order text is never mistaken for asking about options", () => {
+  assert(!asksForOptions("medium"));
+  assert(!asksForOptions("cheeseburger"));
+  assert(!asksForOptions("thats it"));
+});
+
+Deno.test("applyCompiledAddItem: PO fix — first-time add renders the SHORT question, no enumeration (the canary's actual live defect)", () => {
+  const cart: CompiledCartLine[] = [];
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "cheeseburger", null);
+  const r = result.result as { next_question?: string | null };
+  assertEquals(r.next_question, "How would you like the Cheese Burger cooked?");
+  assert(!r.next_question!.includes("Well Done"), "the default must never enumerate the choices");
+});
+
+Deno.test("applyCompiledAddItem: PO fix — a genuine retry (continuation call resolves nothing new) enumerates the real choices", () => {
+  const cart: CompiledCartLine[] = [];
+  applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "cheeseburger", null);
+  // Customer's answer doesn't match any real Temp choice — same line, same
+  // still-open question, second time around.
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "huh what", null);
+  const r = result.result as { next_question?: string | null };
+  assertEquals(r.next_question, "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare.");
+});
+
+Deno.test("applyCompiledAddItem: PO fix — explicitly asking what the options are enumerates immediately, even on the first call", () => {
+  const cart: CompiledCartLine[] = [];
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "cheeseburger, what are my options for that?", null);
+  const r = result.result as { next_question?: string | null };
+  assertEquals(r.next_question, "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare.");
+});
+
+Deno.test("applyCompiledAddItem: PO fix — a real answer on the FIRST call resolves cleanly and never enumerates", () => {
+  const cart: CompiledCartLine[] = [];
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "medium", null);
+  const r = result.result as { next_question?: string | null };
+  assertEquals(r.next_question, null);
+  assertEquals(cart[0].options?.["Temp"], ["Medium"]);
+  assertEquals(cart[0].price_cents, 849);
+});
+
+Deno.test("stripDeferredStepQuestion: strips the model's own short-question paraphrase AND any freelanced enumeration, leaves the order-type question intact (the canary's exact reported defect)", () => {
+  const modelReply = "Got it - one Cheese Burger added. Are you ordering pickup or delivery today? "
+    + "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare";
+  const result = stripDeferredStepQuestion(
+    modelReply,
+    "How would you like the Cheese Burger cooked?",
+    ["Well Done", "Medium", "Rare", "Medium Well", "Medium Rare"],
+    "Cheese Burger",
+  );
+  assertEquals(result, "Got it - one Cheese Burger added. Are you ordering pickup or delivery today?");
+});
+
+Deno.test("stripDeferredStepQuestion: does not touch the reply when the model never mentioned the deferred question at all", () => {
+  const modelReply = "Got it - one Cheese Burger added. Are you ordering pickup or delivery today?";
+  const result = stripDeferredStepQuestion(
+    modelReply,
+    "How would you like the Cheese Burger cooked?",
+    ["Well Done", "Medium", "Rare", "Medium Well", "Medium Rare"],
+    "Cheese Burger",
+  );
+  assertEquals(result, modelReply);
 });
