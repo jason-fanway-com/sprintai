@@ -996,3 +996,275 @@ migrations are live**, but gated off in practice: no shop has
 `5c19835`, `d10fafb`, `a9c03a1`, `c375903`, `db2abe0` are earlier-in-the-day
 resolver/prompt/refactor commits whose effects are already folded into the
 `chat-sms` v341 status above; see each commit's own message for specifics.
+
+## 2026-09-10
+
+Commit range `d811c24..HEAD` (this journal's last entry, `59c1808`, closed out
+the previous day), 41 commits, 07:33–21:55 ET. Headline: a P0 payment bug
+(paid orders silently vanishing) was found, fixed, and confirmed deployed.
+The "pepperoni bleeds onto every pizza" defect family — documented in the
+2026-09-09 entry as fixed by deleting the reactive stem-scanner — recurred
+again tonight in a new shape, and unlike everything else in this range, it is
+**not closed**: uncommitted verification run after tonight's deploy shows a
+live, 100%-reproducing money leak on Vito's Flatbreads that the commits
+landed tonight explicitly did not touch. Verified directly against
+`supabase functions list`, three downloaded deployed function sources
+(byte-diffed against local `HEAD`), a live `supabase migration list`, and
+direct REST queries against the production DB — not taken on commit-message
+faith.
+
+### Fixed and deployed: paid orders silently vanishing (P0)
+
+`d84f2c2` (08:24 ET). Root cause: `checkout.session.completed` found the
+cart and tried to write `payment_status`/`stripe_payment_intent_id`, but the
+same `UPDATE` also ran the order-number trigger, which recomputes
+`MAX(order_number)` scoped to `payment_status='paid'` rows only, while the
+actual unique index spans every row regardless of status. One shop had an
+`EXPIRED` cart already sitting on `order_number=6`, so every paid order
+landed on the same number, threw a unique-constraint violation, and rolled
+back the payment fields with it — Stripe took the money, the order left zero
+trace beyond raw function logs. Confirmed against Stripe's own event log for
+the specific incident (`evt_1UE68qFPm1l8Fm1TMrBWVgoH`), not guessed.
+
+Fix: `assign_order_number()` now advances past a collision against all rows
+regardless of status (migration `132_order_number_collision_retry.sql`); a
+handler failure now returns HTTP 500 instead of 200 so Stripe's own retry
+schedule actually fires (a 2xx response is never retried, no matter the JSON
+body — the previous comment claiming otherwise was wrong); the
+`if (!cartId) return` silent-exit branch now logs loudly instead.
+
+**Confirmed live**: migration 132 shows applied in `supabase migration list`
+(Local/Remote both `132`). `stripe-webhook` is deployed at **v82**,
+2026-09-10 12:20:13 UTC — downloaded and diffed against local `HEAD`, byte-
+identical (the ALERT log lines and the `vigil 684b7165` fix comments are
+present in the deployed source). Current with `HEAD`.
+
+### Fixed and deployed: owner console could save a wrong business address (P0)
+
+`c27c7c1` (16:14 ET). `google-places-lookup`'s `mode:"set"` called Places'
+`searchText` with `"<shop name>, <address>"` — a relevance search, not a
+geocoder — so a same-named business could outrank the address actually
+typed, and the pre-existing "no match" guard could never fire because
+`searchText` almost always returns something plausible. It also overwrote
+`google_place_id`/`google_rating`/`google_review_count`/`business_status` in
+addition to the address fields. Fix switches to the real Geocoding API
+against the raw address only, narrows the write to
+`formatted_address`/`latitude`/`longitude`, and adds a `confirm:true` gate
+keyed on Google's `partial_match` flag, house-number survival, and
+`location_type` precision. No ticket/incident ID is attached to this one —
+the only evidence is the commit's own narrative (specific addresses, "~1.4mi
+off"); verification is "live-verified against the deployed function" in
+prose, not an automated regression test.
+
+Companion commits: `020269d`/`e359a50`/`e000449` collapse the owner console's
+address lookup+confirm into one live-on-Enter flow and gate the delivery
+toggle (client- and server-side) on having a confirmed lat/lng and a radius
+`> 0`. `020269d` also fixes a real gateway bug: `google-places-lookup` was
+deployed with `verify_jwt=true`, so Supabase's platform gateway 401'd every
+call before the function's own internal-secret check ever ran;
+`supabase/config.toml` now sets `verify_jwt=false` for it. Admin dashboard
+rebuilt twice (`ec3a676`, plus the address-confirm rebuild in `e000449`).
+
+**Confirmed live**: `google-places-lookup` v38 (2026-09-10 20:10:37 UTC) and
+`admin-chat` v47 (2026-09-10 20:46:28 UTC) both downloaded and diffed against
+local `HEAD` — byte-identical (only cosmetic bundler-comment differences).
+Current with `HEAD`.
+
+### `shops` → `shop_settings` sync: real fix, but the migration tracker lies about it
+
+`519e15f` (08:06 ET) found that `admin-chat`'s delivery/hours/pause setters
+write `shops.*`, while `buildSystemPromptV2` (the prompt renderer live for
+any shop with `prompt_version=1`) reads the equivalent facts off
+`shop_settings.*` — nothing kept them in sync. Migration
+`130_sync_shop_settings_delivery_hours.sql` adds an `AFTER UPDATE` trigger
+plus a one-time backfill; `131_shop_settings_sync_delivery_radius.sql`
+(added inside `020269d`) extends it to `delivery_radius_mi`. `b3c77d4`
+(16:29 ET) closes the one column the trigger didn't yet cover —
+`shop_settings.upsell_enabled` had no owner-facing writer at all since row
+creation — via migration `133_upsell_enabled_single_source.sql`, plus a real
+`SET_UPSELL_ENABLED` admin-chat op and console toggle (`70d6bea`, not just a
+rebuild: real changes in `OwnerSettingsPanel.tsx`/`shopOps.ts`/
+`ShopOwnerMenuSettings.tsx`).
+
+`supabase migration list` shows migrations 130, 131, and 133 with a blank
+**Remote** column — the CLI's tracker thinks none of them are applied to
+production. **They are.** Queried live directly instead: `shops.upsell_enabled`
+and `shop_settings.upsell_enabled` both exist and agree (`true`) across
+sampled shops; `shop_settings.fulfilment_modes`/`hours_line`/
+`delivery_radius_miles` are populated correctly per shop (e.g. Vito's shows
+`["delivery","pickup"]`, radius `3.00`; Not Just Bagels shows `["pickup"]`,
+radius `null`) — the trigger is live and correct. This is the same
+migration-tracker/CLI drift documented on 2026-09-09; today's docs commits
+(`dc58ae8`) say these were applied directly via the Management API rather
+than `db push`, which is why the tracker never saw them. Migration 132
+(the stripe-webhook fix, above) *is* tracked normally — the drift is not
+universal, just inconsistent.
+
+**One correction to today's own RUNBOOK entry**: it states `buildSystemPromptV2`
+is "live for all three shops, `prompt_version=1`." Queried live: only **Zio's
+Pizzeria** and **Vito's Pizza** have `prompt_version=1`; **Not Just Bagels**
+is still `null`. Two of three, not three of three — RUNBOOK overstates this
+by one shop.
+
+### Recurrence, not closure: the pepperoni-bleed defect family, again
+
+`a062fa5` (19:50 ET), `5528fbf` (18:45 ET), `b2e1ebf` (21:47 ET), `c2f8e3c`
+(21:55 ET) are four more fixes in the same defect family the 2026-09-09
+entry described as closed by deleting the reactive stem-scanner. They are
+real, targeted fixes to real bugs:
+
+- `a062fa5`: Zio's has a menu item literally named "Mac & Cheese Bites."
+  `splitCustomerPhrases()` breaks one SMS into per-item phrases on `,`/`&`/
+  "and" — ordering it alongside anything else tore that item's own name into
+  extra phrases and shifted every phrase index after it, corrupting the
+  scoping every other guard depends on. Fixed by masking menu-item names
+  containing a trigger character before splitting.
+- `5528fbf`: `matchAssertedChoice` returned only the *first* matching
+  modifier per step, so "pepperoni and mushrooms" priced pepperoni and
+  silently dropped mushrooms' $3.00 — a real undercharge, paired with a
+  self-contradictory reply that claimed both were added. Now resolves all
+  matching choices per step.
+- `b2e1ebf`/`c2f8e3c`: GUARD 16 and GUARD 12 (the compiled and legacy
+  modifier-claim checks that decide whether to flag an "unverified" request
+  onto the kitchen ticket) both scanned the **whole turn's raw text** for a
+  modifier name, so a topping named in one pizza's own phrase satisfied the
+  check for every other item touched that turn — a phantom "unverified"
+  flag on tickets for items that never asked for it. Both now scope the
+  match to the cart line's own `sourcePhraseIndex`. Both commits explicitly
+  state pricing/GUARD 2c is untouched by this fix — they only claim to fix
+  the ticket-flag leak, not a money leak.
+
+**What the commits do not say, found in uncommitted scratch files written
+after tonight's deploy** (`scripts/tmp-guard16-verify-results-20260910.log`,
+`scripts/tmp-guard12-verify-results-20260910.log`, both untracked, mtimes
+22:03 and 22:22 ET — after the 21:55 ET `chat-sms` redeploy): a live replay
+matrix (5 phrasings × 5 runs each) against the real deployed endpoint shows
+
+- **GUARD 12 (Vito's Flatbreads — chicken bacon ranch / BBQ chicken with
+  pepperoni / cheesesteak / margherita, one order)**: a real **money leak**
+  — the $0.50 pepperoni topping charge landed on a flatbread other than the
+  one that asked for it — in **25 of 25 runs**, every phrasing. This is not
+  a regression from tonight's commits (they never touched pricing on this
+  path) but it is a live, currently-reproducing, unfixed instance of the
+  exact same bug class ("modifier bleeds onto the wrong line") that this
+  journal has repeatedly described as closed. It is not yet in RUNBOOK,
+  PO-BRIEF, or any tracked test.
+- **GUARD 16 (Zio's pizzas)**: the kitchen-ticket leak this fix targeted
+  still fired in **15 of 25 runs** post-fix — the `sourcePhraseIndex`
+  fallback-to-whole-turn path is apparently still reachable often enough to
+  matter.
+- A **Vito's canary** (a fixed 4-pizza order with a known-correct total)
+  failed: final total `849` cents against an expected `948`.
+
+None of this is committed, and none of it is reflected in RUNBOOK/PO-BRIEF
+yet — it is sitting in the working tree as scratch output. Treat tonight's
+GUARD 12/16 fixes as a real narrowing of scope (ticket-flag leak, partially),
+not as a closed defect, and do not read `e191af3`'s "zero walk failures"
+(below) as covering this scenario — it is a different harness testing a
+different thing.
+
+### Menu-readiness gate: rewired off dead code
+
+`a934f71` (19:30 ET) found the §8.3/§8.4 readiness gate (single- and
+multi-item ordering walks, `docs/specs/2026-09-03-READINESS.md`) was built
+against `resolver.ts` — code `chat-sms` does not call. Rewired onto
+`phrase-split.ts`'s `splitCustomerPhrases`/`resolveClaimedPhraseIndex`, the
+functions the live pipeline actually uses, and fixed the §8.4 runner to
+actually pass `modelAssertedChoiceTexts` into `applyCompiledAddItem` (it
+never had, so every modifier-bearing multi-item case failed structurally
+regardless of the resolver.ts problem). The rewire itself is unit-tested
+(`menu-readiness.test.ts` rewritten with concrete pass assertions).
+`e191af3` (21:13 ET) reports a real live run against Zio's/Vito's/NJB via
+`scripts/item5-menu-readiness-live-report.ts` — 20/20, 20/20, 5/5 multi-item
+walks, no failures — but this is a docs commit reporting a run, not a
+checked-in, re-runnable proof, and as noted above it is a different test
+surface than the GUARD 12/16 money leak found later the same night.
+`menu-readiness.ts` is consumed only by that local script, not by any
+deployed edge function — its rewire has no deploy dependency.
+
+### Fixed: cart-restore was silently corrupting carts
+
+`90d0ded` (15:37 ET). The PROOF-P2 cart-restore path was the only cart
+write site that called `JSON.stringify()` before handing an array to
+supabase-js, double-encoding `cart_json` into a jsonb *string* instead of a
+jsonb array. Later code spread it (`[...cart.cart_json]`), which iterated
+the string character-by-character into fake single-character cart items,
+all colliding on the same line-key. Fixed by passing the array directly.
+
+### Also shipped and deployed today (chat-sms, lower-stakes)
+
+- `b58c636`: a model-fabricated markdown ledger (`**Subtotal:** $0.99`) slipped
+  past `stripLlmMoneyLines` because markdown stripping ran too late; now runs
+  first.
+- `707da59`: removed dollar figures from cart/order data in the system prompt
+  entirely, rather than just instructing the model not to quote them.
+- `9be3ca5`: the itemized recap no longer gets appended to the "what name for
+  pickup" reply.
+- `d605031`: `set_note`'s structured-option backfill now requires a stem
+  unique to one unresolved cart item, not any shared stem (mis-attribution
+  risk QA found between similarly-named items).
+- `41d5165`: one added prompt-rule line — the model must call `add_item`
+  immediately for a standalone Extras/Add-Ins row rather than asking a
+  clarifying question first.
+
+All five are in `chat-sms` v359 (2026-09-11 01:55:21 UTC, i.e. 21:55 ET — the
+same minute as `c2f8e3c`), confirmed via the GUARD 12/16 fix comments present
+in the downloaded deployed source. Current with `HEAD`.
+
+### Test-suite fixes: real, local-only, not in the deployed test runner
+
+`228f9f1` (fee-strip regex crossing a newline, false-failing a Vito's Bleu
+Cheese case — `\s*/\s+` could eat past a line break; fixed to
+`[ \t]*/[ \t]+`), `8855278` (`correction_reflected` now tolerates steady
+turns after a cart shrink already landed, instead of requiring every
+consecutive turn pair to strictly decrease), `61d369c` (cart-ops verifier
+was still zeroing bundle price pre-`complete`, while chat-sms has quoted the
+full bundle price since 2026-09-09 — verifier just hadn't caught up), and
+`39631ba` (persists `debug_perf.toolCallCount` per turn — pure
+instrumentation, no pass/fail logic touched) all land in
+`supabase/functions/_shared/test-suite/`. `d565b5e` similarly fixes
+`item5-menu-readiness-live-report.ts` calling `compileMenu()` with no items,
+which meant `buildOwnerQuestionSummaries` never ran and every real blocking
+`owner_questions` was invisible to the report.
+
+None of this reaches production directly: `_shared` only ships via
+`test-runner`/`eval-sweep`/`generate-test-cases`, and `supabase functions
+list` shows `test-runner` last deployed 2026-09-09 20:50:53 UTC — before all
+four of today's `_shared` fixes. This affects test scoring, not customer
+orders, but the gap is now four fixes deep instead of one.
+
+Also uncommitted and in progress: `scripts/test-suite/category-coverage.ts`
+has a local, uncommitted fix (found live against Vito's, run `9bc5adab`) to
+stop generating test cases against `price_cents=0` menu rows that are
+modifier/finish choices, not orderable items (e.g. Vito's "Bleu Cheese" under
+a pizza-finish category) — the bot correctly refuses to order these
+standalone, which was tripping an invariant the generated case was never
+entitled to assert. Not yet committed.
+
+### Deploy status summary (edge functions touched this range)
+
+- `chat-sms`: **v359**, 2026-09-11 01:55:21 UTC (21:55 ET) — current with
+  `HEAD`, confirmed by downloading the deployed source.
+- `stripe-webhook`: **v82**, 2026-09-10 12:20:13 UTC — current with `HEAD`,
+  confirmed by downloading the deployed source.
+- `admin-chat`: **v47**, 2026-09-10 20:46:28 UTC — current with `HEAD`,
+  confirmed by downloading the deployed source.
+- `google-places-lookup`: **v38**, 2026-09-10 20:10:37 UTC — current with
+  `HEAD`, confirmed by downloading the deployed source.
+- `test-runner`: still **v40**, 2026-09-09 20:50:53 UTC — stale, predates
+  four `_shared/test-suite` fixes from today (see above).
+- `compile-menu`/`eval-sweep`/`generate-test-cases`: not touched by any
+  commit in this range.
+
+### Migrations touched this range
+
+- **132** (`order_number_collision_retry`): tracked and applied normally —
+  `supabase migration list` shows it in both Local and Remote.
+- **130** (`sync_shop_settings_delivery_hours`), **131**
+  (`shop_settings_sync_delivery_radius`), **133**
+  (`upsell_enabled_single_source`): `supabase migration list` shows these as
+  Local-only (blank Remote column), but direct REST queries against
+  production confirm all three are actually live — applied via the
+  Management API, not `db push`, which is why the CLI's tracker doesn't see
+  them. Verify by data, not by the tracker, for any migration touched this
+  way.

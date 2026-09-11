@@ -978,6 +978,38 @@ key (not assumed from commit messages):
 - **`test-runner`** is still v34 as of this check — the `4098a8e`
   false-positive fix has not been redeployed.
 
+### Update — 2026-09-10, end of day (41 commits, `d811c24..HEAD`)
+
+Verified by downloading each deployed function's source and byte-diffing
+against local `HEAD`, plus direct REST queries against production — not
+from commit messages. Full detail in `docs/DAILY.md`'s 2026-09-10 entry and
+`RUNBOOK.md`'s same-day entries.
+
+- **`chat-sms` v359, `stripe-webhook` v82, `admin-chat` v47,
+  `google-places-lookup` v38 — all current with `HEAD`.** This includes a
+  real P0 fix (paid Stripe orders silently vanishing on an order-number
+  collision, `d84f2c2`) and a real P0 fix (owner console address save could
+  write the wrong business's address, `c27c7c1`).
+- **`test-runner` still stale** (v40, predates today) — four more
+  `_shared/test-suite` fixes landed today on top of yesterday's gap.
+  `compile-menu`/`eval-sweep`/`generate-test-cases` untouched today.
+- **Migrations 130/131/133 are live in production** despite
+  `supabase migration list` showing them as not-applied — confirmed by
+  querying the actual columns/trigger effects, not the CLI tracker. They
+  were applied via the Management API rather than `db push`. Migration 132
+  (the stripe-webhook fix) is tracked normally.
+- **`buildSystemPromptV2` is live for two of the three real shops** —
+  Zio's Pizzeria and Vito's Pizza have `prompt_version=1`; Not Just Bagels
+  is still `null` and runs the legacy renderer. (A same-day RUNBOOK entry
+  says "all three" — that's off by one; corrected in RUNBOOK.)
+- **Not closed, despite the commit messages**: today's GUARD 12/16 fixes
+  (`b2e1ebf`, `c2f8e3c`) narrowed a kitchen-ticket false-flag leak but
+  explicitly did not touch pricing. An uncommitted live-verification run
+  *after* tonight's deploy found the underlying "modifier bleeds onto the
+  wrong line" bug still causes a real money leak on Vito's Flatbreads in
+  25 of 25 test runs. See RUNBOOK's "OPEN, LIVE MONEY BUG" entry — this is
+  the top open item, not the address or payment P0s above.
+
 ---
 
 ## Quickstart for development

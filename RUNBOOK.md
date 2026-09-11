@@ -1912,3 +1912,63 @@ over a `SUPABASE_ACCESS_TOKEN` (account-wide Management API PAT — bigger
 exposure than the problem) and over the real service-role key (bypasses RLS on
 every table, not just these 3 functions). Nothing Jason-facing changed — the
 legacy JWT is untouched, and this secret is invisible to him either way.
+
+## OPEN, LIVE MONEY BUG: modifier price leak on Vito's Flatbreads — found 2026-09-10, NOT fixed
+
+Found late on 2026-09-10 (22:03–22:22 ET) via an uncommitted live replay
+matrix (`scripts/tmp-guard12-verify-results-20260910.log`, run against the
+real deployed `chat-sms` after that night's `v359` deploy, not before it).
+Ordering all four Vito's Flatbreads in one message (chicken bacon ranch,
+BBQ chicken with pepperoni, cheesesteak, margherita — only the BBQ chicken
+line should carry the $0.50 pepperoni topping charge) put the pepperoni
+charge on a *different* flatbread line in **25 of 25 runs**, across all 5
+phrasings tested. See `docs/DAILY.md`'s 2026-09-10 entry ("Recurrence, not
+closure") for the full detail and the companion GUARD 16 result (Zio's
+pizzas: the kitchen-ticket leak that commit was written to fix still fired
+in 15/25 runs) and the failed Vito's canary (849¢ vs an expected 948¢).
+
+This is the same defect shape ("a modifier resolved for one line applies to
+another line in the same multi-item message") as the "pepperoni bleeds onto
+every pizza" family documented above under [[Modifier resolution: reactive
+text-stem scanning was removed, don't re-add it]] — that entry describes the
+*pricing/resolution* side as closed by `49a34d1`. This result says otherwise
+for Vito's legacy/`option_groups` path specifically. `b2e1ebf`/`c2f8e3c`
+(2026-09-10) fixed a related but distinct bug — GUARD 12/16 scanning the
+whole turn's text instead of the item's own phrase for the *ticket-flag*
+check — and explicitly did not touch pricing. **Do not read those two
+commits, or `e191af3`'s "zero walk failures" menu-readiness report, as
+having closed this.** The readiness gate's walk tests exercise a different
+scenario (single/sequential item adds) than this matrix (one message naming
+four differently-modified items of the same base type) and did not catch it.
+
+Not yet triaged, not filed as its own commit, not reproduced against Zio's
+or NJB. Whoever picks this up next: start from the uncommitted script
+(`scripts/tmp-item4-f0ecf0fe-live-replay-20260910.ts`, `classifyGuard12()`/
+`--guard12-only`), not from scratch — it already isolates the repro.
+
+## Correction: `prompt_version=1` is live for two shops, not three — 2026-09-10
+
+The "shop_settings single-source-of-truth" entry above (same day) states
+`buildSystemPromptV2` is "live for all three shops, `prompt_version=1`."
+Queried live directly against `shops`: **Zio's Pizzeria**
+(`2cba7b51-211c-4437-8910-1af4dcc03498`) and **Vito's Pizza**
+(`e0000000-0000-0000-0000-000000000001`) have `prompt_version=1`. **Not Just
+Bagels** (`b0000000-0000-0000-0000-000000000001`) is still `prompt_version:
+null` and runs the legacy prompt renderer. Two of three, not three of three.
+
+## Migration-tracker drift, reconfirmed with a live example — 2026-09-10
+
+Migrations `130`, `131`, and `133` (all 2026-09-10) show a blank **Remote**
+column in `supabase migration list` — the CLI's tracker believes none of
+them reached production. Direct REST queries against the live DB confirm
+all three are actually applied and working (the `sync_shop_settings_from_shop`
+trigger's effects — `shop_settings.fulfilment_modes`/`hours_line`/
+`delivery_radius_miles`/`upsell_enabled` — are present and correct per shop).
+Per today's docs commit (`dc58ae8`), these were applied directly via the
+Supabase Management API rather than `db push`, which is why the tracker
+never recorded them. This is the same class of drift as the 2026-09-06 entry
+above ([[Migration tracking has drifted from actual schema state]]) — for
+any migration you suspect was applied this way, verify against the data
+(a column, a trigger's effect), not against `supabase migration list`.
+Migration `132` (stripe-webhook fix, same day) *is* tracked normally, so the
+drift is per-migration, not a blanket CLI failure — check each one.
