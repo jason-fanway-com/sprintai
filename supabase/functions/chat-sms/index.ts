@@ -59,7 +59,7 @@ import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier
 import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
-import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
+import { countUnresolvedSegments, phraseCountShortfall } from "./unresolved-item-segment-guard.ts";
 import { decideShortfallRetry } from "./enumeration-shortfall-retry.ts";
 import {
   claimsItemInCart,
@@ -5567,6 +5567,25 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       }
       if (!feeAlreadyDisclosed7c) {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
+      }
+      // STRUCTURAL SAFETY NET (2026-09-11, PO-mandated invariant — see
+      // phraseCountShortfall's doc): GUARD 7c resolves and confirms exactly
+      // ONE item, then returns immediately — it never reaches the LLM loop's
+      // OWN countUnresolvedSegments check further down this function. Fixing
+      // GUARD 7c's own leftover-check (above) closes THIS incident's exact
+      // trigger; this check is independent of that fix and exists so the
+      // NEXT guard or resolver that silently drops an item — whatever the
+      // cause — still can't leave a clean, no-loose-ends "Got it" reply
+      // uncontested. `linesBefore`/`linesAfter` use the pre-turn snapshot
+      // (`cart.cart_json`) vs this call's own result, not the whole cart's
+      // final size, so a pre-existing cart from an earlier turn never
+      // pollutes the count.
+      const shortfall7c = phraseCountShortfall(userMessage, effectiveMenu as unknown as { name: string }[], cart.cart_json.length, localCartItems.length);
+      if (shortfall7c > 0) {
+        console.warn(`[chat-sms] GUARD 7c safety-net: phrase-count shortfall ${shortfall7c} (conv=${conversation.id}). Message="${userMessage}"`);
+        const clause7c = shortfall7c === 1 ? "One of those didn't go through" : `${shortfall7c} of those didn't go through`;
+        const sentence7c = `${clause7c} — could you tell me again exactly what you'd like? I don't want to miss anything.`;
+        if (!reply7c.includes(sentence7c)) reply7c = `${reply7c} ${sentence7c}`.trim();
       }
       console.log(`[chat-sms] GUARD 7c (proactive category resolution) tripped (conv=${conversation.id}). "${name7c}" -> ${resolved7c.name} (${resolved7c.category ?? "no category"}).`);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply7c);

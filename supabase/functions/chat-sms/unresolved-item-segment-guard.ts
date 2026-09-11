@@ -31,6 +31,46 @@
  * isn't a list (fewer than 2 segments) at all. Only the LENGTH of
  * cartBefore/cartAfter matters, so any cart-line-shaped array works.
  */
+import { splitCustomerPhrases } from "./phrase-split.ts";
+
+// PO-mandated structural invariant (2026-09-11, not-forgivable #1 — GUARD
+// 7c silently collapsed a 4-item Vito's order to 1 line with a cheerful
+// "Got it... Anything else?"): countUnresolvedSegments above is deliberately
+// narrow — digit-quantity lists only ("1 X, 1 Y"), by design (see its own
+// test "single free-form sentence... out of scope, never flags", using
+// "can I get a pepperoni pizza" as the canonical example of what must NOT
+// trip it). That narrowness is correct for where it's wired in today (after
+// the main LLM/tool loop completes), but it left every DETERMINISTIC
+// PRE-LLM guard (7, 7b, 7c, pending-disambiguation/option-answer
+// resolution) with NO invariant at all — each can resolve exactly one item
+// and `return` before ever reaching countUnresolvedSegments's call site.
+// The GUARD 7c incident's actual message ("can I get a chicken bacon ranch
+// flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a
+// margherita") has zero digit-quantity segments — countUnresolvedSegments
+// would return 0 even if it WERE wired in there.
+//
+// This is the general-purpose counterpart: splitCustomerPhrases already
+// recognizes digit AND article/quantity-word boundaries ("a", "an", "one",
+// two, ...), the same primitive every phrase-scoping fix tonight already
+// unified on, per PO direction. A guard about to silently confirm-and-
+// return after resolving exactly one item must check phraseCountShortfall
+// first — independent of WHICH upstream resolver or guard would otherwise
+// have caused the miscount, this is the last line of defense, not another
+// point patch.
+export function phraseCountShortfall(
+  currentMessage: string,
+  menu: { name: string }[] | undefined,
+  linesBefore: number,
+  linesAfter: number,
+): number {
+  const phrases = splitCustomerPhrases(currentMessage, menu);
+  if (phrases.length < 2) return 0; // not a multi-item message — no signal either way
+  const newLineCount = Math.max(linesAfter - linesBefore, 0);
+  if (newLineCount === 0) return 0; // not an add-items turn — same "0 new lines" exemption as countUnresolvedSegments
+  const shortfall = phrases.length - newLineCount;
+  return shortfall > 0 ? shortfall : 0;
+}
+
 export function countUnresolvedSegments(
   currentMessage: string,
   cartBefore: unknown[],

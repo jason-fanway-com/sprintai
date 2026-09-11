@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
+import { countUnresolvedSegments, phraseCountShortfall } from "./unresolved-item-segment-guard.ts";
 
 Deno.test("the exact real repro: 4 named segments, only 3 new lines -> shortfall of 1", () => {
   const before: unknown[] = [];
@@ -64,5 +64,47 @@ Deno.test("a genuine numeric quantity is still counted even when an ordinal appe
   const before: unknown[] = [];
   const after = [{}]; // only 1 of the 2 named items landed
   const result = countUnresolvedSegments("1st time ordering, 1 pepperoni, 1 plain", before, after);
+  assertEquals(result, 1);
+});
+
+// phraseCountShortfall (2026-09-11, PO-mandated invariant — GUARD 7c
+// collapse incident): the article/quantity-word-aware counterpart of
+// countUnresolvedSegments above, for guards that resolve BEFORE the main
+// loop's own countUnresolvedSegments call site ever runs.
+
+Deno.test("phraseCountShortfall: the exact GUARD 7c live repro — 4 named phrases, only 1 new line -> shortfall of 3", () => {
+  const message = "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita";
+  const result = phraseCountShortfall(message, [{ name: "Chicken Bacon Ranch" }, { name: "BBQ Chicken" }, { name: "Cheesesteak" }, { name: "Margherita" }], 0, 1);
+  assertEquals(result, 3);
+});
+
+Deno.test("phraseCountShortfall: counts match -> 0, no false trigger", () => {
+  const message = "a chicken bacon ranch, a bbq chicken, a cheesesteak and a margherita";
+  const result = phraseCountShortfall(message, [], 0, 4);
+  assertEquals(result, 0);
+});
+
+Deno.test("phraseCountShortfall: single free-form sentence (not a list) is out of scope, never flags — same guarantee countUnresolvedSegments makes", () => {
+  const result = phraseCountShortfall("can I get a pepperoni pizza", [], 0, 1);
+  assertEquals(result, 0);
+});
+
+Deno.test("phraseCountShortfall: a pure correction turn (0 new lines) never trips the guard", () => {
+  const message = "a large one and a small one";
+  const result = phraseCountShortfall(message, [], 3, 3);
+  assertEquals(result, 0);
+});
+
+Deno.test("phraseCountShortfall: empty message -> 0, never crashes", () => {
+  assertEquals(phraseCountShortfall("", [], 0, 0), 0);
+});
+
+Deno.test("phraseCountShortfall: more new lines than phrases named never produces a negative shortfall", () => {
+  const result = phraseCountShortfall("a pepperoni pizza and a plain pizza", [], 0, 5);
+  assertEquals(result, 0);
+});
+
+Deno.test("phraseCountShortfall: digit-quantity lists are also caught, same as countUnresolvedSegments's own domain", () => {
+  const result = phraseCountShortfall("1 pepp, 1 plain, 1 hawaiin, 1 meat lovers", [], 0, 3);
   assertEquals(result, 1);
 });
