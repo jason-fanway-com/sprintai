@@ -151,6 +151,22 @@ prompt for it first and proving that on the Test Kitchen before it goes anywhere
 near live traffic — cost is real but a bot that loops and double-charges is not a
 cost optimization.
 
+### Third correction: the diagnosis above was wrong, flash was never the cause — 2026-09-11
+
+The entry directly above blamed flash for the greeting loop, the missing item, and
+the doubled fries. It wasn't the model. Testing after the pro revert (13:54)
+isolated the real causes to three unrelated defects, fixed in the commits that
+follow the model swap chronologically, not because of it:
+`6af0f47` (13:57, GUARD 20 reverting a topped variant of "the regular"),
+`66232fa` (14:29, GUARD 2b reverting an order_type backed by a captured address),
+`8547d64` (14:47, paid-order confirmation SMS / delivery-collect wording).
+With those fixed, flash is back: both the `CHAT_MODEL` secret and the code
+fallback (`index.ts:85`) are on `deepseek/deepseek-v4-flash` again. Cost was
+never wrong — ~$0.017/order on flash vs ~$0.182/order on pro — the earlier
+correction just blamed the wrong layer for a real bug that had nothing to do
+with model choice. If flash misbehaves again, check the guards and the prompt
+before blaming the model a third time.
+
 ### Owner-editable option data — migration 097 (partially reverted, read this)
 
 Migration **097 is applied to production**: `owner_edited` on `option_groups` and
@@ -809,12 +825,14 @@ billing, separate from order checkout).
 
 ### LLM (OpenRouter)
 
-Model: `deepseek/deepseek-v4-pro` for chat-sms (configurable via env; see the
-2026-09-11 corrections above — flash was tried twice and failed live both times).
+Model: `deepseek/deepseek-v4-flash` for chat-sms (configurable via env; see the
+2026-09-11 corrections above — the model swapped three times in one day, the
+last swap's "failed live" diagnosis was itself wrong, read the third correction
+before touching this again).
 API key: `OPENROUTER_API_KEY` with `ANTHROPIC_API_KEY` fallback.
 
 Models per function:
-- `chat-sms`: `CHAT_MODEL` env (default pro, as of 2026-09-11)
+- `chat-sms`: `CHAT_MODEL` env (default flash, as of 2026-09-11 ~15:20)
 - `admin-chat`: own hardcoded default, flash (`admin-chat/index.ts:19`) — a
   separate literal, not the same env default as chat-sms despite the name;
   admin-chat is the internal owner-console assistant, not customer order
