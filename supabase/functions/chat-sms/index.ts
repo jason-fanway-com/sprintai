@@ -1418,6 +1418,26 @@ async function executeTool(
   // spent on a compiled sibling line could bleed onto that uncompiled
   // item's own reactive match too.
   composedPhraseTexts?: string[],
+  // BARE-LIST GAP FIX (2026-09-10/11, PO-flagged residual — the bf6023b fix
+  // scopes reactive matching to the item's own claimed phrase, but that
+  // depends on splitCustomerPhrases finding a boundary at all. A fully
+  // unpunctuated list ("chicken bacon ranch bbq chicken pepperoni
+  // cheesesteak margherita") has no comma/"and"/digit-repeat boundary
+  // anywhere, so the splitter returns exactly ONE phrase and every item's
+  // claim resolves to that same phrase — scopedModifierText's single-phrase
+  // fallback then reverts to the whole raw turn text, reopening the exact
+  // leak bf6023b closed. Rather than widen the boundary regex (risks
+  // regressing GUARD 2c's hardened money-path splitting), the caller
+  // (runOrderingLoop) detects the ambiguity directly: 2+ DISTINCT menu
+  // items being added from the SAME model response, on a turn the
+  // splitter could not divide. When true, the legacy reactive-modifier
+  // match (raw-text topping/modifier guessing) is disabled for every
+  // add_item/modify_item call this turn — the model's own explicit
+  // modifiers/options on each call are untouched and still price
+  // correctly; only the "guess a topping from surrounding words" fallback,
+  // which cannot safely attribute text it can't scope, is suppressed.
+  // Generalizes to any shop/menu, not special-cased to flatbreads.
+  ambiguousPhraseAttributionThisTurn?: boolean,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1609,7 +1629,9 @@ async function executeTool(
       // whole defect family — same primitive GUARD 12/16 use below — scoping
       // to this item's own claimed phrase and stripping the item's own name
       // out of it first.
-      const reactiveMatchText = scopedModifierText(turnPhrasesLegacy, phraseIndexLegacy, menuItem.name, customerMessage ?? "");
+      const reactiveMatchText = ambiguousPhraseAttributionThisTurn
+        ? ""
+        : scopedModifierText(turnPhrasesLegacy, phraseIndexLegacy, menuItem.name, customerMessage ?? "");
       // D1 fix (2026-09-08 P0): a reactive match already granted to an
       // EARLIER new cart line for this SAME item this turn must not be
       // reactively re-claimed by this call too (see param doc above) —
@@ -1965,7 +1987,9 @@ async function executeTool(
       {
         const turnPhrasesModifyLegacy = splitCustomerPhrases(customerMessage ?? "", menu);
         const phraseIndexModifyLegacy = resolveClaimedPhraseIndex(turnPhrasesModifyLegacy, source_phrase ?? "");
-        const reactiveMatchTextModify = scopedModifierText(turnPhrasesModifyLegacy, phraseIndexModifyLegacy, menuItem?.name ?? "", customerMessage ?? "");
+        const reactiveMatchTextModify = ambiguousPhraseAttributionThisTurn
+          ? ""
+          : scopedModifierText(turnPhrasesModifyLegacy, phraseIndexModifyLegacy, menuItem?.name ?? "", customerMessage ?? "");
         const modifyItemGroups = menuItem?.option_groups || [];
         const reactiveAlreadyNamed = new Set<string>([
           ...newModifiers.map(m => m.toLowerCase()),
@@ -2737,6 +2761,22 @@ async function runOrderingLoop(
     const toolBlocks = content.filter(b => b.type === "tool_use");
     const textBlocks = content.filter(b => b.type === "text");
 
+    // BARE-LIST GAP FIX (2026-09-10/11) — see executeTool's
+    // ambiguousPhraseAttributionThisTurn param doc for the full defect.
+    // Detect it here, once per model response: 2+ DISTINCT menu items being
+    // added/modified in the SAME response, on a turn splitCustomerPhrases
+    // could not divide into more than one phrase at all — the splitter
+    // found no boundary, so every item's phrase claim would otherwise
+    // resolve to the same single "phrase" (the whole turn), reopening the
+    // whole-turn-text leak. Counts add_item AND modify_item together since
+    // both share the identical reactive-match defect shape.
+    const legacyItemToolBlocks = toolBlocks.filter(b => b.name === "add_item" || b.name === "modify_item");
+    const distinctItemIdsThisResponse = new Set(
+      legacyItemToolBlocks.map(b => (b.input as { menu_item_id?: string })?.menu_item_id).filter(Boolean),
+    );
+    const ambiguousPhraseAttributionThisTurn =
+      distinctItemIdsThisResponse.size >= 2 && splitCustomerPhrases(userMessage, menu).length === 1;
+
     // Only finish when there are NO pending tool calls. Previously an `end_turn`
     // stop_reason short-circuited here even when the model had emitted tool_use
     // blocks in the same turn (DeepSeek Flash does this for some items, e.g.
@@ -2849,6 +2889,7 @@ async function runOrderingLoop(
         consumedModifierChoiceIdsForTurn,
         undefined, // consumedReactiveExtraKeys — legacy path only, not exercised here
         composedPhraseTexts,
+        ambiguousPhraseAttributionThisTurn,
       );
       debugToolMs.push({ name: toolBlock.name!, ms: Math.round(performance.now() - debugToolT0) });
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
@@ -5433,9 +5474,40 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // leftover content word (a verb, a question word, an inquiry noun)
       // means this isn't a bare order — fall through and let the model
       // actually answer it.
+      //
+      // ROOT-CAUSE FIX (2026-09-11, PO-escalated not-forgivable #1 — Vito's
+      // live repro): the leftover-word check below used to run ONLY when
+      // hasOrderIntent7c was false — i.e. the moment the message contained
+      // ANY order-intent phrase ("can I get..."), the ENTIRE leftover check
+      // was skipped, not just relaxed. "can I get a chicken bacon ranch
+      // flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and
+      // a margherita" matches "can I get" -> hasOrderIntent7c=true -> the
+      // check that would have caught "chicken", "bacon", "ranch", "bbq",
+      // "margherita" as leftover content never ran at all -> GUARD 7c
+      // silently added ONLY the Cheesesteak (the duplicate-name candidate it
+      // was resolving) and returned, discarding the other three named items
+      // with a cheerful "Got it... Anything else?" Removing "can I get" from
+      // the SAME message (PO's isolation test) left hasOrderIntent7c=false,
+      // the leftover check ran, correctly found the other items' words as
+      // leftover, and fell through to the LLM/tool loop that handles them
+      // all — this is the entire "preamble" effect, not a phrase-splitter
+      // issue (splitCustomerPhrases splits this exact message into 4 correct
+      // phrases regardless of the preamble; verified directly).
+      //
+      // Fix: the leftover check now ALWAYS runs, order-intent or not — an
+      // order-intent phrase is a reason to ALLOW words like "can"/"get" to
+      // not count as leftover (added to the filler set below), never a
+      // reason to skip checking for OTHER named items entirely.
       const hasOrderIntent7c = /\b(?:i'?ll\s+(?:have|take|get)|i\s+want|i'?d\s+like|give\s+me|let\s+me\s+get|(?:can|could)\s+(?:i|we|you)\s+(?:get|have|order|grab|add))\b/i.test(userMessage);
-      if (!hasOrderIntent7c) {
-        const FILLER_WORDS_7C = new Set(["a", "an", "the", "i", "want", "please", "get", "order", "one", "some", "and", "also", "plus", "for", "me", "ill", "id", "like", "that", "some"]);
+      {
+        const FILLER_WORDS_7C = new Set([
+          "a", "an", "the", "i", "want", "please", "get", "order", "one", "some", "and", "also", "plus", "for", "me", "ill", "id", "like", "that", "some",
+          // Order-intent phrasing's own words (can, could, we, you, have,
+          // give, let, grab, add, take) — recognizing order intent is a
+          // reason not to count THESE specific words as leftover content,
+          // never a reason to skip the leftover scan altogether.
+          "can", "could", "we", "you", "have", "give", "let", "grab", "add", "take",
+        ]);
         const itemStems7c = new Set(resolved7c.name.toLowerCase().split(/\s+/).map(stemWord));
         const categoryStem7c = resolved7c.category ? stemWord(categoryDisplayWord(resolved7c.category)) : null;
         const cleaned7c = userMessage.toLowerCase().replace(/\b(?:no|with|without|extra)\s+\w+/g, " ");
