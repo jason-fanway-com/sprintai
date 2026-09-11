@@ -137,6 +137,12 @@ pre-composition (D1 derived rows, D2 learn-on-first-order).
 
 **Three principles from those docs worth holding on to:**
 - *The model phrases; code decides.* The model may propose; code validates and mutates.
+  Read this precisely: **item identity is the model's job.** There is no deterministic
+  text-to-item-id resolver in production — the model's own `add_item` tool call supplies
+  `menu_item_id` directly. What code owns is everything after that: phrase-boundary
+  splitting and per-item modifier scope (`phrase-split.ts`), choice resolution through the
+  `modelAssertedChoiceTexts` contract (`ask-plan-engine.ts` — free-text modifier scanning
+  was deliberately removed), and every price string (the itemizer).
 - *Live behaviour must be traceable to a quote or a human.* No invented shop policy.
 - *Materialised rows over runtime synthesis.* If a combination is predictable, make it a
   menu row rather than composing it in conversation. This is why "pepperoni pizza" is now
@@ -235,6 +241,13 @@ embedded runner that cannot authenticate.
 - **Never modify the 10DLC registration.** Brand `BJ8MUGY`, campaign `C8RNN6Y`
 - **Stripe test mode is deliberate** until the first real customer — never flag it as a defect
 - **Never weaken a gate** to make something pass
+- **An empty cart is not proof of a code defect — the model sometimes makes no tool call at
+  all.** Measured 2026-09-10: one Zio's phrase, five consecutive live turns, two with
+  `toolCallCount: 0` and an empty cart ("before I add that, are you ordering pickup or
+  delivery?"), three correct. The phantom-add guard catches the variant where the model
+  *claims* an add it never performed. So read `toolCallCount` before diagnosing, and
+  **sample five before calling any model-driven turn defective** — two samples is enough to
+  invent a regression that is not there
 - **"Proof" is a product name** — say "acceptance checks"; *"run the proofs"* triggers a
   128-case harness run
 - **No LLM grading an LLM** — `proof_score` is deterministic and gates launch;
