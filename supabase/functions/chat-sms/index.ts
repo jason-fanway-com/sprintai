@@ -1523,6 +1523,18 @@ async function executeTool(
         return { ok: engineOutcome.ok, result: engineOutcome.result };
       }
 
+      // GUARD 12 fix (2026-09-10, PO-authorized follow-up to the GUARD 16
+      // phrase-scope fix above): legacy/option_groups lines never carried
+      // sourcePhraseIndex, so GUARD 12 (below, ~line 6703) could only ever
+      // scan the whole turn's text for a modifier name — same "pepperoni"
+      // leak class as GUARD 16, just on the option_groups path instead of
+      // ask_plan. Same source_phrase claim, same splitCustomerPhrases/
+      // resolveClaimedPhraseIndex validation already used for the compiled
+      // path just above — this only populates the field; it changes no
+      // pricing or resolution behavior on this path.
+      const turnPhrasesLegacy = splitCustomerPhrases(customerMessage ?? "", menu);
+      const phraseIndexLegacy = resolveClaimedPhraseIndex(turnPhrasesLegacy, source_phrase ?? "");
+
       const validMods    = menuItem.modifiers_json?.map(m => m.name) ?? [];
       let inputMods      = (modifiers as string[]).slice();
 
@@ -1753,6 +1765,7 @@ async function executeTool(
         const existingUnverified = target.unverified_requests ?? [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
         target.unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
+        if (phraseIndexLegacy !== null) target.sourcePhraseIndex = phraseIndexLegacy;
       } else if (existing >= 0) {
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
@@ -1767,7 +1780,7 @@ async function executeTool(
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
         (cart[existing] as CartItem).unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined, sourcePhraseIndex: phraseIndexLegacy ?? undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -6762,7 +6775,22 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // (e.g. "Bacon Burger Pizza", where "Bacon" is also an on-request
       // topping) would look like the customer asked for that modifier just
       // by naming the item, which they didn't.
-      let userMessageLower12 = userMessage.toLowerCase();
+      // PHRASE-SCOPE FIX (2026-09-10, PO-authorized follow-up to GUARD 16's
+      // f0ecf0fe fix): same defect, legacy/option_groups path — this used to
+      // scan the ENTIRE turn's raw text, so a modifier name in ONE phrase
+      // (e.g. "pepperoni" on its own pizza line) satisfied nameRe.test for
+      // every OTHER item touched this turn too. GUARD 16 solved this for the
+      // compiled path via sourcePhraseIndex recorded at add_item time (see
+      // that guard's comment below, ~line 6980); the legacy add_item write
+      // site now records the same field for option_groups lines (see the
+      // GUARD 12 fix comment at ~line 1526), so the identical scoping applies
+      // here. Same fallback: single-phrase turn or unset sourcePhraseIndex
+      // falls back to the whole turn (no worse than before this fix).
+      const turnPhrases12 = splitCustomerPhrases(userMessage, effectiveMenu as unknown as { name: string }[]);
+      const scopedText12 = turnPhrases12.length > 1 && ci.sourcePhraseIndex !== undefined && ci.sourcePhraseIndex < turnPhrases12.length
+        ? turnPhrases12[ci.sourcePhraseIndex]
+        : userMessage;
+      let userMessageLower12 = scopedText12.toLowerCase();
       for (const w of menuItem.name.toLowerCase().split(/\s+/).filter(Boolean)) {
         userMessageLower12 = userMessageLower12.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
       }

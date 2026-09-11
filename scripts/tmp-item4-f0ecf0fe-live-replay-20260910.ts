@@ -137,6 +137,144 @@ function classify(lines: Line[]) {
   return { leakedOnto, moneyLeakApplied };
 }
 
+// GUARD 12 EXTENSION (2026-09-10, PO-authorized follow-up dispatch): the
+// GUARD 16 fix above only covers the compiled/ask_plan path (Zio's). GUARD
+// 12 is the identical whole-turn-text-scan defect on the LEGACY/option_groups
+// path (Vito's, NJB pizzas). Live-shop check: NJB carries ZERO option_groups
+// rows menu-wide (confirmed via qa_ro query, 2026-09-10) — its items use
+// modifiers_json instead, a structurally different guard's domain, so GUARD
+// 12's code path cannot be exercised there at all; NJB is out of scope for
+// this verification, not because it's fixed but because it was never
+// exposed. Vito's Flatbreads category (Chicken Bacon Ranch/BBQ Chicken/
+// Cheesesteak/Margherita, all $10.50, all sharing a non-required "Toppings"
+// option group that includes a plain "Pepperoni" choice, +$0.50) is the
+// closest live structural analog to the Zio's pizza repro and IS exposed.
+// Run with `--guard12-only` to skip phase 1 (already covered by a prior
+// still-running/completed process against the same results file) and only
+// append this phase's runs.
+const GUARD12_ONLY = Deno.args.includes("--guard12-only");
+
+const CHICKEN_BACON_RANCH_ID = "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d";
+const BBQ_CHICKEN_ID = "80d49c72-d238-4ef9-8b29-12ec7097b213"; // the ONLY line pepperoni should ever attach to
+const CHEESESTEAK_ID = "80f8624c-358c-4004-9b94-75d8c66e6008";
+const MARGHERITA_ID = "a37a47a9-7f6c-47bb-acdd-933f572890de";
+const FLATBREAD_BASE_CENTS = 1050;
+const VITOS_ID = VITOS_SHOP_ID;
+
+const GUARD12_TURN1 = "I'd like 4 flatbreads please";
+const GUARD12_PHRASINGS: { label: string; turn2: string }[] = [
+  { label: "comma+digit", turn2: "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita" },
+  { label: "comma+word", turn2: "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita" },
+  { label: "and-separated", turn2: "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita" },
+  { label: "bare list", turn2: "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads" },
+  { label: "conversational", turn2: "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please" },
+];
+
+function classifyGuard12(lines: Line[]) {
+  const leakedOnto = lines.filter(l =>
+    l.menu_item_id !== BBQ_CHICKEN_ID &&
+    [CHICKEN_BACON_RANCH_ID, CHEESESTEAK_ID, MARGHERITA_ID].includes(l.menu_item_id) &&
+    (l.unverified_requests ?? []).some(u => u.toLowerCase().includes("pepperoni")),
+  );
+  const bbq = lines.find(l => l.menu_item_id === BBQ_CHICKEN_ID);
+  const others = lines.filter(l => l.menu_item_id !== BBQ_CHICKEN_ID && [CHICKEN_BACON_RANCH_ID, CHEESESTEAK_ID, MARGHERITA_ID].includes(l.menu_item_id));
+  const moneyLeakApplied = others.some(l => l.price_cents !== FLATBREAD_BASE_CENTS);
+  return { leakedOnto, moneyLeakApplied, bbq };
+}
+
+async function waitForPriorPhaseDone(): Promise<Record<string, unknown>> {
+  // Deliberate hand-off, not a busy loop the caller blocks on: this whole
+  // script runs as a detached background OS process, so polling here costs
+  // the caller (this dispatch's turn) nothing. It exists because the phase-1
+  // (GUARD 16/Zio's) process still writing this exact file overwrites the
+  // WHOLE file on every persistResults() call from its own in-memory state —
+  // starting phase 2 before phase 1 sets done:true would race and could
+  // silently drop either phase's data, invisible until someone reads the
+  // file expecting both.
+  while (true) {
+    try {
+      const raw = await Deno.readTextFile(RESULTS_PATH);
+      const parsed = JSON.parse(raw);
+      if (parsed.done === true) return parsed;
+    } catch {
+      // file not yet created or mid-write (invalid JSON) — keep polling
+    }
+    await new Promise(r => setTimeout(r, 15000));
+  }
+}
+
+if (GUARD12_ONLY) {
+  console.log("=== GUARD 12 phase: waiting for phase-1 (GUARD 16/Zio's) results to finish before touching the shared results file ===");
+  const priorState = await waitForPriorPhaseDone();
+  resultsState.startedAt = priorState.startedAt as string ?? resultsState.startedAt;
+  resultsState.runs = (priorState.runs as RunResult[]) ?? [];
+  resultsState.canary = priorState.canary as CanaryResult | undefined;
+  resultsState.done = false; // reopen: this phase still has work to persist
+  await persistResults();
+  console.log("Phase 1 confirmed done — proceeding with GUARD 12 (Vito's Flatbreads) matrix.\n");
+}
+
+interface Guard12RunResult {
+  phrasing: string;
+  turn2: string;
+  run: number;
+  lines: number;
+  toolCallCount2: number;
+  moneyLeakApplied: boolean;
+  leakedOntoLines: string[];
+  totalCents: number;
+  cartLines: { name: string; menu_item_id: string; price_cents: number; quantity: number; unverified_requests?: string[] }[];
+}
+
+const guard12ResultsState: { runs: Guard12RunResult[] } = { runs: [] };
+(resultsState as unknown as { guard12Runs: Guard12RunResult[] }).guard12Runs = guard12ResultsState.runs;
+
+if (GUARD12_ONLY) {
+  console.log(`=== GUARD 12 matrix replay (Vito's Flatbreads, ${GUARD12_PHRASINGS.length} phrasings x ${RUNS_PER_PHRASING} runs) ===\n`);
+  let g12TotalRuns = 0, g12MoneyLeaks = 0, g12TicketLeaks = 0, g12NoToolCall = 0;
+  for (const { label, turn2 } of GUARD12_PHRASINGS) {
+    console.log(`\n--- Phrasing: ${label} ---`);
+    console.log(`  turn2: "${turn2}"`);
+    for (let run = 1; run <= RUNS_PER_PHRASING; run++) {
+      g12TotalRuns++;
+      const sessionId = `guard12-vitos-flatbread-${Math.floor(Math.random() * 1e9)}`;
+      await send(GUARD12_TURN1, sessionId, VITOS_ID);
+      const r2 = await send(turn2, sessionId, VITOS_ID);
+      const lines = await fetchCart(sessionId);
+      const { leakedOnto, moneyLeakApplied } = classifyGuard12(lines);
+      const toolCallCount2 = r2.debug_perf?.toolCallCount ?? -1;
+      if (toolCallCount2 === 0) g12NoToolCall++;
+      if (moneyLeakApplied) g12MoneyLeaks++;
+      if (leakedOnto.length > 0) g12TicketLeaks++;
+      const totalCents = lines.reduce((s, l) => s + l.price_cents * l.quantity, 0);
+      console.log(
+        `  run ${run}: lines=${lines.length} toolCallCount(turn2)=${toolCallCount2} ` +
+        `moneyLeak=${moneyLeakApplied ? "YES" : "no"} ` +
+        `ticketLeak=${leakedOnto.length > 0 ? `YES (${leakedOnto.map(l => l.name).join(", ")})` : "no"} ` +
+        `total=${totalCents}`,
+      );
+      guard12ResultsState.runs.push({
+        phrasing: label, turn2, run, lines: lines.length, toolCallCount2, moneyLeakApplied,
+        leakedOntoLines: leakedOnto.map(l => l.name), totalCents,
+        cartLines: lines.map(l => ({ name: l.name, menu_item_id: l.menu_item_id, price_cents: l.price_cents, quantity: l.quantity, unverified_requests: l.unverified_requests })),
+      });
+      await persistResults();
+    }
+  }
+  resultsState.done = true;
+  await persistResults();
+  console.log(`\n=== GUARD 12 SUMMARY ===`);
+  console.log(`total runs: ${g12TotalRuns}`);
+  console.log(`money leak (priced pepperoni topping on wrong line): ${g12MoneyLeaks}/${g12TotalRuns}`);
+  console.log(`kitchen-ticket leak (unverified_requests pepperoni on wrong line): ${g12TicketLeaks}/${g12TotalRuns}`);
+  console.log(`turn2 made zero tool calls: ${g12NoToolCall}/${g12TotalRuns}`);
+  console.log(`results file: ${RESULTS_PATH}`);
+  console.log(g12MoneyLeaks === 0 && g12TicketLeaks === 0
+    ? "\nPASS — GUARD 12 pepperoni-bleed did not reproduce across the Vito's Flatbreads matrix."
+    : "\nFAIL — see per-run detail above for which phrasing.");
+  Deno.exit(0);
+}
+
 console.log(`=== f0ecf0fe matrix replay (${PHRASINGS.length} phrasings x ${RUNS_PER_PHRASING} runs) ===\n`);
 
 let totalRuns = 0;
