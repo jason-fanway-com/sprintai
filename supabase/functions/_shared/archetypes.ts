@@ -754,7 +754,33 @@ function hasOnlySingletonGroups(item: InferItemInput): boolean {
 // "Claimed" means already matched by some OTHER slot in this archetype via
 // ITS OWN bind_to_list_named pattern — a group a named slot already spoke
 // for is never available as a guess for an unnamed one.
+//
+// A THIRD guard (2026-09-11, caught by independent review before this ever
+// shipped): "claimed by a bind pattern" only rules out a group some OTHER
+// slot already spoke for BY NAME — it says nothing about a group that's
+// simply unrelated to every slot in the archetype. Real eggs shape: eggs has
+// TWO slots with no bind_to_list_named (egg_style, egg_side) plus one that
+// has one (toast). An item with a real "Toast" group (claimed by toast's
+// bind) AND a real, unrelated "Fillings" group (Ham & Cheese / Veggie / Meat
+// Lovers — nothing to do with a side dish) would leave exactly ONE unclaimed
+// candidate ("Fillings") and Step 2's "exactly one" check would happily wire
+// it to egg_side as if omelette fillings answered "do customers pick a
+// side" — wrong, not missing, precisely what this function exists to avoid.
+// The claim-by-name-pattern check alone cannot distinguish "unrelated real
+// group" from "the group this slot is actually looking for" once an
+// archetype has more than one slot with nothing to bind by name — there's
+// no way to tell which no-bind slot (or neither) an unclaimed group
+// answers. So this fallback is restricted to archetypes with EXACTLY ONE
+// slot lacking a bind_to_list_named — platter's lone `side` slot today,
+// the one real shape this was written for. `eggs` (two such slots) is
+// deliberately excluded; egg_side keeps falling through to needs_question
+// exactly as it did before this fix, which is the safe default.
+function archetypeSafeForUnclaimedGroupFallback(archetype: Archetype): boolean {
+  return archetype.slots.filter(s => !s.bind_to_list_named).length === 1;
+}
+
 function findUnclaimedRealGroup(item: InferItemInput, archetype: Archetype): ExtractedGroup | undefined {
+  if (!archetypeSafeForUnclaimedGroupFallback(archetype)) return undefined;
   const claimedNames = new Set<string>();
   for (const s of archetype.slots) {
     if (!s.bind_to_list_named) continue;

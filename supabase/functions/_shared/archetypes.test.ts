@@ -480,6 +480,22 @@ Deno.test("sandwich: bread does NOT wire an item's unrelated, unclaimed group (g
   assertEquals(outcome.kind, "needs_question");
 });
 
+Deno.test("eggs: egg_side does NOT wire an unrelated leftover group even when exactly one is unclaimed (Fix 1 restricted to archetypes with exactly one no-bind slot; eggs has two — egg_style AND egg_side — so this fallback must never fire there, real-shape catch from independent review)", () => {
+  const westernOmelette = item({
+    name: "Western Omelette Platter", category: "Omelette & Egg Platters",
+    extractedGroups: [
+      { name: "Toast", required: true, choiceNames: ["Bagel", "Toast"], provenance: "owner_confirmed" },
+      { name: "Fillings", required: true, choiceNames: ["Ham & Cheese", "Veggie", "Meat Lovers"], provenance: "owner_confirmed" },
+    ],
+  });
+  const result = inferCategory("Omelette & Egg Platters", [westernOmelette]);
+  // Toast's own bind_to_list_named (/toast|bread/i) correctly claims "Toast".
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "toast")!.kind, "stated");
+  // egg_side must NOT wire "Fillings" just because it's the only unclaimed
+  // group left -- Fillings answers nothing about a side dish.
+  assertEquals(result.slotOutcomes.find(o => o.slot_key === "egg_side")!.kind, "needs_question");
+});
+
 Deno.test("platter: side falls through to needs_question (not a wrong guess) when an item has TWO real unclaimed groups (genuine ambiguity, no bind pattern to disambiguate)", () => {
   const twoGroups = item({
     name: "Sampler Platter", category: "Entrees",
