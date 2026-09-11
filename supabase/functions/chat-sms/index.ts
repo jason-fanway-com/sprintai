@@ -7814,9 +7814,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // own `name` never contains "pepperoni" at all, so the guard misread a
   // perfectly ordinary order as ungrounded and silently dropped it. This
   // menu shape (base item + topping/option groups) is Zio's primary ordering
-  // path, so the false-positive rate was not an edge case. See
-  // guard18-zero-grounding-item-invention.ts (kept, unwired) and its test
-  // file for the design and both regressions found. Needs a rework that
+  // path, so the false-positive rate was not an edge case. The unwired
+  // guard18-zero-grounding-item-invention.ts and its test file were deleted
+  // 2026-09-11 as dead code (never imported); see
+  // docs/specs/2026-09-11-guard-retirement-audit.md and git history at that
+  // commit for the design and both regressions found. Needs a rework that
   // checks grounding against the item's resolved OPTIONS/modifiers as well
   // as its base name before this is safe to re-wire -- do not re-enable
   // without new evidence it no longer false-positives on option-driven
@@ -8311,6 +8313,17 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
+  // ── Guard F (fake-checkout gate) ──────────────────────────────────────────
+  // Doc/code drift fix (2026-09-11): RUNBOOK item 13 names this "Guard F" but
+  // no comment in index.ts carried that label — this block, not P1
+  // (~line 6436), is where it actually lives. Confirmed by matching RUNBOOK's
+  // description ("after submit_order returns a real checkoutUrl, the reply is
+  // deterministically replaced with the real payment link") against this
+  // exact substitution. Guard 3 (~line 8173) remains the post-turn backstop
+  // for when the model claims a payment link WITHOUT a real checkoutUrl; this
+  // guard is the complementary case — WITH a real checkoutUrl, the model's
+  // own prose is discarded outright so it can never under/over-state the
+  // total or invent confirmation language around a real link.
   // If checkout was created, override the model's reply entirely — prevents hallucinated confirmations.
   // Deterministically state the fee-inclusive total from the authoritative cart row so the service
   // fee is always disclosed with the payment link (not left to the model, which may quote subtotal only).

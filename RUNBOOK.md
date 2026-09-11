@@ -1207,10 +1207,13 @@ to close go-live gate #13's auto-advance path.
       is skipped (never scores). `fragmentGuard` tightened to match only when
       the fragment is absent — a model that happens to include correct text nearby
       no longer passes by accident. SCORER_VERSION bumped to 3.
-    - Guard F (fake-checkout gate): after `submit_order` returns a real
-      checkoutUrl, the reply is deterministically replaced with the real
-      payment link — the model can never emit a hallucinated "order placed"
-      confirmation. Guard 3 remains as the post-turn backstop.
+    - Guard F (fake-checkout gate, chat-sms/index.ts ~line 8316, labeled
+      2026-09-11 after a doc/code drift audit found the comment missing):
+      after `submit_order` returns a real checkoutUrl, the reply is
+      deterministically replaced with the real payment link — the model can
+      never emit a hallucinated "order placed" confirmation. Guard 3
+      (~line 8173) remains as the post-turn backstop for the inverse case:
+      the model claims a link was sent without a real checkoutUrl.
     - Item disambiguation: `buildMenuItemNames()` detects duplicate canonical
       names and qualifies them by category (e.g. "tuna (salads)" vs "tuna
       (wraps)") so the LLM can distinguish same-named items.
