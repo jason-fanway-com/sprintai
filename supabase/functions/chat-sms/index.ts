@@ -1825,6 +1825,69 @@ async function executeTool(
         if (JSON.stringify(ciMods) !== JSON.stringify(normalizedMods)) return false;
         return true;
       });
+
+      // MODIFIER-FOLLOWUP GUARD (2026-09-11, live money, NJB repro
+      // conv-pickup-only-clarification, run 3e607524-d84a-460b-8136-
+      // bfe9dbfd3b82): "Can I get provolone on that?" — a bare pronoun
+      // reference to the sandwich the customer had JUST ordered, not a
+      // restated order — reached this add_item branch (the model should
+      // have called modify_item). This item has zero recorded option
+      // groups, so "Provolone" can never validate and lands only in
+      // unverifiedRequests; the full-identity match above then (correctly,
+      // per the D1 comment above) refuses to merge it onto the existing
+      // line, so this call's own quantity — here, hallucinated as 3 — spawns
+      // a genuine duplicate line, tripping both no_duplicate_lines and
+      // no_mutation_on_non_order.
+      // Distinct from D1's "two pizzas in one turn" case: D1's two add_item
+      // calls each restate their own item/topping as a fresh phrase within
+      // the SAME turn's message ("large cheese pizza" + "extra cheese
+      // pizza"); here the turn's own message never names the item at all,
+      // only refers to it by pronoun — the customer cannot be describing a
+      // second, distinct unit of an item they never named. Scoped to calls
+      // that carry no options/modifiers of their own (an item WITH a real
+      // pending group to answer is already handled by the phantom-add guard
+      // above) and exactly one existing line for this item — 2+ existing
+      // lines, or the item named again, fall through to the identity match
+      // unchanged. Does not attempt to recognize "another one"-style repeat
+      // orders that also skip the item's name; those still create a new
+      // line, same as before this fix.
+      let unnamedModifierFollowupIdx = -1;
+      if (
+        resolvingPendingIdx < 0 &&
+        normalizedOptions === undefined &&
+        normalizedMods === undefined &&
+        normalizedUnverified !== undefined
+      ) {
+        const sameItemLines = cart.reduce<number[]>((acc, i, idx) => {
+          if ((i as CartItem).menu_item_id === menu_item_id) acc.push(idx);
+          return acc;
+        }, []);
+        if (sameItemLines.length === 1) {
+          const namesItem = new RegExp(`\\b${menuItem.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(customerMessage ?? "");
+          if (!namesItem) unnamedModifierFollowupIdx = sameItemLines[0];
+        }
+      }
+
+      if (unnamedModifierFollowupIdx >= 0) {
+        const target = cart[unnamedModifierFollowupIdx] as CartItem;
+        const existingUnverified = target.unverified_requests ?? [];
+        const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
+        target.unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
+        await saveCart(supabase, cartId, cart, "building");
+        const followupTotal = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
+        return {
+          ok: true,
+          result: {
+            added: menuItem.name,
+            quantity: target.quantity,
+            cart_total: `$${(followupTotal / 100).toFixed(2)}`,
+            unverified_requests: mergedUnverified,
+            note: `${unverifiedRequests.join(", ")} could not be verified against this item's menu options and was NOT recorded as a selection. It was attached to the EXISTING ${menuItem.name} already in the cart as an unverified customer request for the shop to confirm — this is NOT a new/additional item. The cart still has ${target.quantity} of this item. Do not tell the customer another one was added; say the request will be passed along to the shop for confirmation.`,
+          },
+          newPhase: "building",
+        };
+      }
+
       if (resolvingPendingIdx >= 0) {
         const target = cart[resolvingPendingIdx] as CartItem;
         const mergedOptions = { ...(target.options ?? {}), ...inputOptions };
