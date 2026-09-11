@@ -1426,18 +1426,17 @@ async function executeTool(
   // anywhere, so the splitter returns exactly ONE phrase and every item's
   // claim resolves to that same phrase — scopedModifierText's single-phrase
   // fallback then reverts to the whole raw turn text, reopening the exact
-  // leak bf6023b closed. Rather than widen the boundary regex (risks
-  // regressing GUARD 2c's hardened money-path splitting), the caller
-  // (runOrderingLoop) detects the ambiguity directly: 2+ DISTINCT menu
-  // items being added from the SAME model response, on a turn the
-  // splitter could not divide. When true, the legacy reactive-modifier
-  // match (raw-text topping/modifier guessing) is disabled for every
-  // add_item/modify_item call this turn — the model's own explicit
-  // modifiers/options on each call are untouched and still price
-  // correctly; only the "guess a topping from surrounding words" fallback,
-  // which cannot safely attribute text it can't scope, is suppressed.
+  // leak bf6023b closed. The caller (runOrderingLoop) detects ambiguity and
+  // passes the SET of menu_item_ids whose reactive text-guessing cannot be
+  // safely scoped. When a call's menu_item_id is in this set, the legacy
+  // reactive-modifier match is disabled for that specific call — the model's
+  // own explicit modifiers/options are untouched and still price correctly;
+  // only the "guess a topping from surrounding words" fallback, which cannot
+  // safely attribute text it can't scope, is suppressed. Scoping to a set of
+  // IDs (not a turn-level boolean) ensures correctly-scoped items in the same
+  // turn are NOT suppressed — only the ambiguous ones lose the text fallback.
   // Generalizes to any shop/menu, not special-cased to flatbreads.
-  ambiguousPhraseAttributionThisTurn?: boolean,
+  suppressedReactiveMatchIds?: Set<string>,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1629,7 +1628,7 @@ async function executeTool(
       // whole defect family — same primitive GUARD 12/16 use below — scoping
       // to this item's own claimed phrase and stripping the item's own name
       // out of it first.
-      const reactiveMatchText = ambiguousPhraseAttributionThisTurn
+      const reactiveMatchText = suppressedReactiveMatchIds?.has(menu_item_id)
         ? ""
         : scopedModifierText(turnPhrasesLegacy, phraseIndexLegacy, menuItem.name, customerMessage ?? "");
       // D1 fix (2026-09-08 P0): a reactive match already granted to an
@@ -1987,7 +1986,7 @@ async function executeTool(
       {
         const turnPhrasesModifyLegacy = splitCustomerPhrases(customerMessage ?? "", menu);
         const phraseIndexModifyLegacy = resolveClaimedPhraseIndex(turnPhrasesModifyLegacy, source_phrase ?? "");
-        const reactiveMatchTextModify = ambiguousPhraseAttributionThisTurn
+        const reactiveMatchTextModify = suppressedReactiveMatchIds?.has(menu_item_id)
           ? ""
           : scopedModifierText(turnPhrasesModifyLegacy, phraseIndexModifyLegacy, menuItem?.name ?? "", customerMessage ?? "");
         const modifyItemGroups = menuItem?.option_groups || [];
@@ -2762,33 +2761,44 @@ async function runOrderingLoop(
     const textBlocks = content.filter(b => b.type === "text");
 
     // BARE-LIST GAP FIX (2026-09-10/11) — see executeTool's
-    // ambiguousPhraseAttributionThisTurn param doc for the full defect.
-    // CORRECTED (2026-09-11, live re-verification caught the first version's
-    // gap): checking `splitCustomerPhrases(userMessage, menu).length === 1`
-    // alone missed a real case — "chicken bacon ranch bbq chicken pepperoni
-    // cheesesteak margherita, four flatbreads" has a trailing comma, so the
-    // splitter DOES return 2 phrases (the run-on item list, then "four
-    // flatbreads"), but every item's source_phrase claim still lands on
-    // that same FIRST phrase (none of the 4 items can be told apart within
-    // it) — leaked live, 4550¢ vs an expected 4250¢, confirmed post-deploy.
-    // The right signal isn't "did the turn split into exactly one phrase"
-    // but "did 2+ DISTINCT items end up resolving to the SAME phraseIndex"
-    // — computed here by running the identical resolveClaimedPhraseIndex
-    // resolution executeTool runs per-call, once per item, and checking for
-    // a collision. Generalizes correctly to both shapes (no boundary at
-    // all, or a boundary that doesn't separate the items that matter).
+    // suppressedReactiveMatchIds param doc for the full defect.
+    // Build a set of menu_item_ids whose reactive text-guessing cannot be
+    // safely scoped for this turn. Two cases:
+    //   (a) Phrase-index collision: 2+ distinct items' source_phrase claims
+    //       resolve to the SAME phrase index — scopedModifierText would hand
+    //       them all the same undifferentiated phrase and cannot tell which
+    //       topping belongs to which item. Suppressed IDs: all items in any
+    //       colliding phrase index.
+    //   (b) Null-resolution on multi-phrase turn: item's source_phrase is
+    //       absent or unresolvable AND the turn splits into ≥2 phrases —
+    //       scopedModifierText would fall back to whole-turn text, reopening
+    //       the overcharge bleed. If ≥2 such items exist (single-item turns
+    //       with no source_phrase aren't a risk), all are suppressed.
+    // Items NOT in the suppressed set — including items in the same turn
+    // whose phrases are correctly separated — retain reactive matching via
+    // scopedModifierText on their own scoped phrase. Only the ambiguous ones
+    // lose the text fallback.
     const legacyItemToolBlocks = toolBlocks.filter(b => b.name === "add_item" || b.name === "modify_item");
     const turnPhrasesForAmbiguity = splitCustomerPhrases(userMessage, menu);
     const itemIdsByPhraseIndex = new Map<number, Set<string>>();
+    const nullResolutionIds = new Set<string>(); // source_phrase absent on multi-phrase turn
     for (const b of legacyItemToolBlocks) {
       const menuItemId = (b.input as { menu_item_id?: string })?.menu_item_id;
       if (!menuItemId) continue;
       const claimedIdx = resolveClaimedPhraseIndex(turnPhrasesForAmbiguity, (b.input as { source_phrase?: string })?.source_phrase ?? "");
-      if (claimedIdx === null) continue;
+      if (claimedIdx === null) {
+        if (turnPhrasesForAmbiguity.length > 1) nullResolutionIds.add(menuItemId);
+        continue;
+      }
       if (!itemIdsByPhraseIndex.has(claimedIdx)) itemIdsByPhraseIndex.set(claimedIdx, new Set());
       itemIdsByPhraseIndex.get(claimedIdx)!.add(menuItemId);
     }
-    const ambiguousPhraseAttributionThisTurn = [...itemIdsByPhraseIndex.values()].some(s => s.size >= 2);
+    const suppressedReactiveMatchIds = new Set<string>();
+    for (const idSet of itemIdsByPhraseIndex.values()) {
+      if (idSet.size >= 2) for (const id of idSet) suppressedReactiveMatchIds.add(id);
+    }
+    if (nullResolutionIds.size >= 2) for (const id of nullResolutionIds) suppressedReactiveMatchIds.add(id);
+    const ambiguousPhraseAttributionThisTurn = suppressedReactiveMatchIds.size > 0;
 
     // Only finish when there are NO pending tool calls. Previously an `end_turn`
     // stop_reason short-circuited here even when the model had emitted tool_use
@@ -2902,7 +2912,7 @@ async function runOrderingLoop(
         consumedModifierChoiceIdsForTurn,
         undefined, // consumedReactiveExtraKeys — legacy path only, not exercised here
         composedPhraseTexts,
-        ambiguousPhraseAttributionThisTurn,
+        suppressedReactiveMatchIds.size > 0 ? suppressedReactiveMatchIds : undefined,
       );
       debugToolMs.push({ name: toolBlock.name!, ms: Math.round(performance.now() - debugToolT0) });
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
