@@ -56,7 +56,7 @@ import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
-import { splitCustomerPhrases, resolveClaimedPhraseIndex } from "./phrase-split.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
 import { countUnresolvedSegments } from "./unresolved-item-segment-guard.ts";
@@ -1562,6 +1562,30 @@ async function executeTool(
         }
       }
 
+      // ── Normalize option-group choices misrouted into `modifiers` ──────
+      // ROOT-CAUSE FIX (2026-09-10, PO live repro, Vito's "BBQ Chicken
+      // flatbread with pepperoni"): symmetric with the block above, but the
+      // reverse direction had no handling at all. The model sometimes states
+      // a real option_groups choice (e.g. "Pepperoni", a Toppings choice)
+      // through the `modifiers` tool-call field instead of `options`. With
+      // no reverse normalization, that name fell straight into the
+      // invalidMods reject/unverified-request branch below and NEVER
+      // reached option-group validation or pricing at all — the one line
+      // that actually asked for a real topping was consistently the line
+      // most likely to silently lose it (2 of 3 live runs). Route any
+      // `modifiers` entry that matches a real, recorded option-group choice
+      // name into that group's options instead of leaving it to fail
+      // modifier validation.
+      for (const name of [...inputMods]) {
+        if (modifierNames.has(name)) continue; // already a real modifier — leave it
+        const group = itemGroups.find(g => g.choices.some(c => c.name.toLowerCase() === name.toLowerCase()));
+        if (!group) continue;
+        const canonical = group.choices.find(c => c.name.toLowerCase() === name.toLowerCase())!.name;
+        if (!inputOptions[group.name]) inputOptions[group.name] = [];
+        if (!inputOptions[group.name].includes(canonical)) inputOptions[group.name].push(canonical);
+        inputMods = inputMods.filter(m => m !== name);
+      }
+
       // ── Reactive modifier/topping match (bug 4, 2026-09-07) ────────────
       // "buffalo chicken pizza with pepperoni" silently dropped the topping
       // and its $3.00 price: this legacy path applies ONLY what the LLM's
@@ -1571,6 +1595,21 @@ async function executeTool(
       // non-required option_groups' choices (toppings/add-ons — required/
       // slot-like groups such as size are untouched, they stay on the
       // existing pending/ask flow). See reactive-modifier-match.ts.
+      //
+      // ROOT-CAUSE FIX (2026-09-10, PO live repro — real, PRICED overcharge:
+      // Vito's "Chicken Bacon Ranch flatbread, BBQ Chicken flatbread with
+      // pepperoni, Cheesesteak flatbread, Margherita flatbread" charged a
+      // "Bacon" topping on all four lines, sourced from nothing but the
+      // three letters "Bacon" inside item 1's OWN display name): this used
+      // to scan the RAW WHOLE-TURN customerMessage against every candidate
+      // topping for EVERY item's add_item call, so a word from one phrase
+      // (or even from an item's own name) could apply and PRICE a modifier
+      // no phrase ever actually asked for, on every line touched this turn.
+      // scopedModifierText (phrase-split.ts) is the one shared fix for this
+      // whole defect family — same primitive GUARD 12/16 use below — scoping
+      // to this item's own claimed phrase and stripping the item's own name
+      // out of it first.
+      const reactiveMatchText = scopedModifierText(turnPhrasesLegacy, phraseIndexLegacy, menuItem.name, customerMessage ?? "");
       // D1 fix (2026-09-08 P0): a reactive match already granted to an
       // EARLIER new cart line for this SAME item this turn must not be
       // reactively re-claimed by this call too (see param doc above) —
@@ -1591,7 +1630,7 @@ async function executeTool(
         ...itemGroups.filter(g => !g.required).flatMap(g =>
           g.choices.map(c => ({ groupName: g.name, name: c.name, price_cents: c.price_cents }))),
       ];
-      for (const m of matchReactiveExtras(reactiveCandidates, customerMessage ?? "", reactiveAlreadyNamed)) {
+      for (const m of matchReactiveExtras(reactiveCandidates, reactiveMatchText, reactiveAlreadyNamed)) {
         if (m.groupName === null) {
           if (!inputMods.includes(m.name)) inputMods.push(m.name);
         } else {
@@ -1917,7 +1956,16 @@ async function executeTool(
       // chicken pizza" then, next turn, "add pepperoni"): catch anything
       // customerMessage names that the LLM's modify_item call itself
       // didn't. See reactive-modifier-match.ts / add_item's identical block.
+      // ROOT-CAUSE FIX (2026-09-10): same scopedModifierText fix as add_item
+      // above — a turn that modify_items TWO different existing lines at
+      // once shares this same raw customerMessage across both calls, so
+      // without scoping, a word from one line's own phrase (or its own item
+      // name) could reactively apply to the OTHER line's modify_item call
+      // too.
       {
+        const turnPhrasesModifyLegacy = splitCustomerPhrases(customerMessage ?? "", menu);
+        const phraseIndexModifyLegacy = resolveClaimedPhraseIndex(turnPhrasesModifyLegacy, source_phrase ?? "");
+        const reactiveMatchTextModify = scopedModifierText(turnPhrasesModifyLegacy, phraseIndexModifyLegacy, menuItem?.name ?? "", customerMessage ?? "");
         const modifyItemGroups = menuItem?.option_groups || [];
         const reactiveAlreadyNamed = new Set<string>([
           ...newModifiers.map(m => m.toLowerCase()),
@@ -1928,7 +1976,7 @@ async function executeTool(
           ...modifyItemGroups.filter(g => !g.required).flatMap(g =>
             g.choices.map(c => ({ groupName: g.name, name: c.name, price_cents: c.price_cents }))),
         ];
-        for (const m of matchReactiveExtras(reactiveCandidates, customerMessage ?? "", reactiveAlreadyNamed)) {
+        for (const m of matchReactiveExtras(reactiveCandidates, reactiveMatchTextModify, reactiveAlreadyNamed)) {
           if (m.groupName === null) {
             if (!newModifiers.includes(m.name)) newModifiers.push(m.name);
           } else {
@@ -1938,6 +1986,21 @@ async function executeTool(
             newOptions = merged;
           }
         }
+      }
+
+      // Symmetric with add_item's identical fix above: a real option-group
+      // choice named through `modifiers` instead of `options` must not hard-
+      // fail the whole modify_item call — route it into options first.
+      for (const name of [...newModifiers]) {
+        if (modifierNames.has(name)) continue;
+        const group = (menuItem?.option_groups || []).find(g => g.choices.some(c => c.name.toLowerCase() === name.toLowerCase()));
+        if (!group) continue;
+        const canonical = group.choices.find(c => c.name.toLowerCase() === name.toLowerCase())!.name;
+        const merged = { ...(newOptions ?? {}) };
+        if (!merged[group.name]) merged[group.name] = [];
+        if (!merged[group.name].includes(canonical)) merged[group.name].push(canonical);
+        newOptions = merged;
+        newModifiers = newModifiers.filter(m => m !== name);
       }
 
       const invalidMods = newModifiers.filter(m => !validMods.includes(m));
@@ -6775,25 +6838,21 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // (e.g. "Bacon Burger Pizza", where "Bacon" is also an on-request
       // topping) would look like the customer asked for that modifier just
       // by naming the item, which they didn't.
-      // PHRASE-SCOPE FIX (2026-09-10, PO-authorized follow-up to GUARD 16's
-      // f0ecf0fe fix): same defect, legacy/option_groups path — this used to
-      // scan the ENTIRE turn's raw text, so a modifier name in ONE phrase
-      // (e.g. "pepperoni" on its own pizza line) satisfied nameRe.test for
-      // every OTHER item touched this turn too. GUARD 16 solved this for the
-      // compiled path via sourcePhraseIndex recorded at add_item time (see
-      // that guard's comment below, ~line 6980); the legacy add_item write
-      // site now records the same field for option_groups lines (see the
-      // GUARD 12 fix comment at ~line 1526), so the identical scoping applies
-      // here. Same fallback: single-phrase turn or unset sourcePhraseIndex
-      // falls back to the whole turn (no worse than before this fix).
+      // SHARED SCOPING FIX (2026-09-10, PO-authorized structural follow-up —
+      // this guard, GUARD 16, and legacy add_item's reactive-modifier match
+      // (index.ts ~line 1594) had each independently re-derived their own
+      // "what text may this item's modifier claim be matched against" logic.
+      // scopedModifierText (phrase-split.ts) is now the ONE shared answer:
+      // scope to this item's own claimed phrase (never the whole turn — a
+      // modifier name in ONE phrase must never satisfy the match for every
+      // OTHER item touched this turn), then strip the item's own display
+      // name out as one contiguous unit (not word-by-word — see that
+      // function's doc for why a word-by-word strip would also destroy a
+      // genuinely separate later mention of the same word). Same fallback
+      // as before this fix: single-phrase turn or unset sourcePhraseIndex
+      // falls back to the whole turn.
       const turnPhrases12 = splitCustomerPhrases(userMessage, effectiveMenu as unknown as { name: string }[]);
-      const scopedText12 = turnPhrases12.length > 1 && ci.sourcePhraseIndex !== undefined && ci.sourcePhraseIndex < turnPhrases12.length
-        ? turnPhrases12[ci.sourcePhraseIndex]
-        : userMessage;
-      let userMessageLower12 = scopedText12.toLowerCase();
-      for (const w of menuItem.name.toLowerCase().split(/\s+/).filter(Boolean)) {
-        userMessageLower12 = userMessageLower12.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
-      }
+      const userMessageLower12 = scopedModifierText(turnPhrases12, ci.sourcePhraseIndex, menuItem.name, userMessage).toLowerCase();
       for (const name of unselectedChoiceNames) {
         const nameRe = new RegExp(`\\b${name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
         if (!nameRe.test(userMessageLower12)) continue;
@@ -6993,29 +7052,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // is also a separately orderable on-request topping) must not read as
       // the customer asking for that topping just by naming the item.
       //
-      // PHRASE-SCOPE FIX (2026-09-10, f0ecf0fe recurrence — PO live repro,
-      // 3/4 runs on "1 plain, 1 pepperoni, 1 meat lovers and one hawaii"):
-      // this used to check the ENTIRE turn's raw text, so "pepperoni" named
-      // by ONE phrase (the pepperoni pizza's own) satisfied nameRe.test for
-      // every OTHER pizza line touched this turn too — the same token
-      // consumed twice the PO diagnosed, just landing on unverified_requests/
-      // the kitchen ticket instead of price this time (the money-side fix
-      // upstream, GUARD 2c, already covers the price leg). The add_item/
-      // compiled-engine path already solved this exact problem for pricing
-      // via source_phrase/phraseIndex (see line ~1461's P0 fix comment) and
-      // stores the winning claim on the line as sourcePhraseIndex — reuse
-      // that here instead of re-deriving a second, weaker text match.
-      // Falls back to the whole turn only when there's a single phrase (the
-      // distinction is moot) or when sourcePhraseIndex is unset (residual
-      // risk, no worse than before this fix, for whichever resolution paths
-      // don't yet record it).
+      // SHARED SCOPING FIX (2026-09-10, PO-authorized structural follow-up —
+      // f0ecf0fe recurrence, PO live repro, 3/4 runs on "1 plain, 1
+      // pepperoni, 1 meat lovers and one hawaii"): this used to check the
+      // ENTIRE turn's raw text, so "pepperoni" named by ONE phrase satisfied
+      // the match for every OTHER pizza line touched this turn too — the
+      // same token-consumed-twice defect the PO diagnosed, just landing on
+      // unverified_requests instead of price (GUARD 2c covers the price
+      // leg). scopedModifierText (phrase-split.ts) is now the ONE shared
+      // scope+strip primitive this guard, GUARD 12, and legacy add_item's
+      // reactive-modifier match all read from, instead of each re-deriving
+      // its own version. Same fallback as before: whole turn when there's a
+      // single phrase or sourcePhraseIndex is unset.
       const turnPhrases16 = splitCustomerPhrases(userMessage, effectiveMenu as unknown as { name: string }[]);
-      const scopedText16 = turnPhrases16.length > 1 && ci.sourcePhraseIndex !== undefined && ci.sourcePhraseIndex < turnPhrases16.length
-        ? turnPhrases16[ci.sourcePhraseIndex]
-        : userMessage;
-      let userMessageLower16 = scopedText16.toLowerCase();
-      userMessageLower16 = userMessageLower16.replace(
-        new RegExp(`\\b${dn16.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+      const userMessageLower16 = scopedModifierText(turnPhrases16, ci.sourcePhraseIndex, menuItem.ask_plan.display_name, userMessage).toLowerCase();
       for (const displayName of allModifierDisplays16) {
         if (confirmedDisplays16.has(displayName.toLowerCase())) continue;
         const nameRe = new RegExp(

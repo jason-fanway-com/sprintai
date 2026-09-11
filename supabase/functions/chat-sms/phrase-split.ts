@@ -113,3 +113,53 @@ export function resolveClaimedPhraseIndex(phrases: string[], claimedPhrase: stri
   });
   return matches.length === 1 ? matches[0] : null;
 }
+
+function escapeRegexPublic(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// P0 fix (2026-09-10, PO-authorized structural follow-up — fourth live
+// recurrence of the pepperoni/bacon-bleed defect family, this time as a real
+// PRICED overcharge: "Chicken Bacon Ranch flatbread, BBQ Chicken flatbread
+// with pepperoni, Cheesesteak flatbread, Margherita flatbread" applied and
+// CHARGED a "Bacon" topping (present only as three letters of item 1's own
+// display name, never requested) onto all four lines, via
+// reactive-modifier-match.ts's matchReactiveExtras being handed the RAW,
+// UNSCOPED, UN-STRIPPED whole-turn customerMessage). Three call sites
+// (legacy reactive-modifier matching, GUARD 12, GUARD 16) had each
+// independently re-derived their own version of "what text may this item's
+// modifier claim be matched against" — this is the ONE shared answer, so a
+// future guard or resolver gets this defect class fixed for free instead of
+// becoming a fifth ad hoc re-derivation.
+//
+// Two rules, both required (a live incident exists for skipping either):
+//  1. Scope to the item's OWN claimed phrase, never the whole turn — a word
+//     spoken for ONE phrase (e.g. "pepperoni" naming its own pizza) must
+//     never be readable as a claim for any OTHER phrase's item.
+//  2. Strip the item's OWN display name from that phrase, as one contiguous
+//     unit (not word-by-word) — naming the item is not the customer asking
+//     for an ingredient of its name as a separate modifier, but stripping
+//     word-by-word would also destroy a genuinely separate, later mention of
+//     the same word in the same phrase ("Chicken Bacon Ranch with extra
+//     bacon" must still see the real "extra bacon" request after "chicken
+///    bacon ranch" is removed as one unit — word-by-word erasure would wipe
+//     BOTH, wrongly dropping a real customer ask).
+//
+// Fallback is "whole text" (not "" / not undefined) for a single-phrase turn
+// or an unresolved phrase claim — same "no worse than before this fix"
+// contract every caller already had; this function only ever narrows what a
+// caller used to see, never taking away resolution ability nothing here
+// alone was regressing.
+export function scopedModifierText(
+  phrases: string[],
+  phraseIndex: number | null | undefined,
+  itemName: string,
+  wholeText: string,
+): string {
+  const scoped = phrases.length > 1 && phraseIndex !== null && phraseIndex !== undefined && phraseIndex < phrases.length
+    ? phrases[phraseIndex]
+    : wholeText;
+  if (!itemName) return scoped;
+  const nameRe = new RegExp(`\\b${escapeRegexPublic(itemName).replace(/\s+/g, "\\s+")}\\b`, "gi");
+  return scoped.replace(nameRe, " ");
+}
