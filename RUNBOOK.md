@@ -138,6 +138,19 @@ and at the measured ~10 LLM calls/order that's ~$0.182/order on pro vs ~$0.017/o
 flash. Both the `CHAT_MODEL` secret and the code's literal fallback (`index.ts:85`) are
 back on flash so an unset secret can't silently mean pro again.
 
+### Correction on the correction: flash tested live, failed, reverted to pro — 2026-09-11
+
+The entry directly above did not hold. Jason tested flash live on the deployed
+function within minutes of the change: it looped on the greeting question verbatim,
+never added the pizza he asked for, and silently added fries twice ($4.99, then
+$9.98) across turns. Flash is not viable against the current instruction set — the
+prompt has been tuned to pro since 2026-09-04, and that tuning is load-bearing, not
+incidental. Both the `CHAT_MODEL` secret and the code fallback (`index.ts:85`) are
+back on `deepseek/deepseek-v4-pro`. Do not re-enable flash without re-tuning the
+prompt for it first and proving that on the Test Kitchen before it goes anywhere
+near live traffic — cost is real but a bot that loops and double-charges is not a
+cost optimization.
+
 ### Owner-editable option data — migration 097 (partially reverted, read this)
 
 Migration **097 is applied to production**: `owner_edited` on `option_groups` and
@@ -796,12 +809,16 @@ billing, separate from order checkout).
 
 ### LLM (OpenRouter)
 
-Model: `deepseek/deepseek-v4-flash` for chat-sms (configurable via env).
+Model: `deepseek/deepseek-v4-pro` for chat-sms (configurable via env; see the
+2026-09-11 corrections above — flash was tried twice and failed live both times).
 API key: `OPENROUTER_API_KEY` with `ANTHROPIC_API_KEY` fallback.
 
 Models per function:
-- `chat-sms`: `CHAT_MODEL` env (default flash)
-- `admin-chat`: `CHAT_MODEL` env (same)
+- `chat-sms`: `CHAT_MODEL` env (default pro, as of 2026-09-11)
+- `admin-chat`: own hardcoded default, flash (`admin-chat/index.ts:19`) — a
+  separate literal, not the same env default as chat-sms despite the name;
+  admin-chat is the internal owner-console assistant, not customer order
+  traffic, so it was never part of this cost/quality tradeoff
 - `eval-sweep`: `JUDGE_MODEL` env (default flash)
 
 ### Segment economics
