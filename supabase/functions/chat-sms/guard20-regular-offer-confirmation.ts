@@ -80,6 +80,36 @@ export interface Guard20CartLine {
   menu_item_id?: string;
   name?:         string;
   quantity?:     number;
+  /** Customer-chosen option selections, e.g. { Toppings: ["Pepperoni"] }. */
+  options?:      Record<string, string[]> | null;
+  /** Free-text modifiers carried on the line. */
+  modifiers?:    unknown[] | null;
+}
+
+/**
+ * A line that carries option or modifier choices is NOT the bare regular being
+ * silently re-added — it is a different order that happens to share the regular's
+ * base menu row.
+ *
+ * Vito's "Cheese - Large (16\")" is both the plain pizza and the base row for every
+ * topped large pizza. A returning customer whose regular is that plain pizza asking
+ * for "a large pepperoni pizza" produces a line with the same name and id plus
+ * Toppings: ["Pepperoni"]. Before this check, GUARD 20 reverted it and re-offered the
+ * regular, so the pizza silently vanished from the cart and only the side survived —
+ * observed live 2026-09-11 on the demo shop.
+ *
+ * The guard's purpose is to stop the model slipping the regular in unasked. An
+ * explicit option choice is the customer describing the item themselves, which is the
+ * opposite of that, so those lines are left alone.
+ */
+function carriesExplicitChoices(line: Guard20CartLine): boolean {
+  const opts = line.options;
+  if (opts && typeof opts === "object") {
+    for (const sels of Object.values(opts)) {
+      if (Array.isArray(sels) && sels.length > 0) return true;
+    }
+  }
+  return Array.isArray(line.modifiers) && line.modifiers.length > 0;
 }
 
 export interface RegularOfferContext {
@@ -119,6 +149,7 @@ export function computeGuard20<T extends Guard20CartLine>(
   const reverted: T[] = [];
   for (const line of guardCart) {
     if (!line.name || !namesMatch(line.name, regularItem.name)) continue;
+    if (carriesExplicitChoices(line)) continue; // a topped variant is not the bare regular
     const before = line.menu_item_id ? (beforeQtyById.get(line.menu_item_id) || 0) : 0;
     if (before > 0) continue; // already legitimately in the cart before this turn
     reverted.push(line);
