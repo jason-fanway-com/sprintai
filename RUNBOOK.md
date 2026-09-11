@@ -579,11 +579,30 @@ basename>` are BOTH `/admin/`. `deploy-root/_redirects` rewrites `/admin/*` →
 ### Supabase edge functions
 
 ```bash
-# Deploy a single function:
-supabase functions deploy <name>
-# Deploy all:
-supabase functions deploy
+./scripts/deploy-function.sh <name>
 ```
+
+This is the ONLY supported way to deploy an edge function. `supabase functions
+deploy <name>` on its own is NOT a deploy procedure — it does not type-check,
+does not run tests, and does not verify the deploy took effect. That gap is
+exactly how `delivery_address` shipped missing from a `select()` on
+2026-08-29's fix and stayed silently broken until 2026-09-11 17:00: a TS2339
+on the exact line, invisible because Deno deploys without type-checking.
+
+`deploy-function.sh` runs, in order, aborting on the first failure: `deno
+check` the entrypoint, `deno test --allow-all` its directory, records the
+current deployed version, deploys, confirms the version actually moved, then
+downloads the deployed artifact and confirms every string literal in it
+traces back to the working tree. It prints one verdict line: function, old
+version -> new version, HEAD sha, artifact-match yes/no. A version number
+that didn't move, or an artifact that doesn't match, is a FAILED deploy —
+not a no-op, not something to shrug at.
+
+Before claiming any flag-gated feature (e.g. `compiled_ordering_engine_enabled`)
+is live for a shop, run `./scripts/check-switches.sh` — it prints the real
+flag state per shop and the live `CHAT_MODEL` default, so "built and deployed"
+is never confused with "switched on." `compiled_ordering_engine_enabled`
+sitting `false` on Not Just Bagels for days, invisibly, is what this catches.
 
 Functions that need `verify_jwt = false` have it in `supabase/config.toml`.
 New functions: add the entry before deploying.
