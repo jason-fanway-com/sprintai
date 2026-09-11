@@ -26,6 +26,7 @@ import { runCase } from "./runner.ts";
 import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
 import { persistResults, TRIGGER_TYPES, type TriggerType } from "./persist.ts";
+import { getFlagValue, hasFlag, UnrecognizedFlagError, validateFlags } from "./cli-args.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
@@ -63,6 +64,8 @@ function usage(): void {
   console.log("  --dry-run    Generate + print cases, NO bot calls, NO LLM cost, NO persist.");
   console.log("  --limit N    Run at most N cases.");
   console.log("  --cases CSV  Run only the listed case ids (comma-separated).");
+  console.log("  All value flags accept either '--flag value' or '--flag=value'.");
+  console.log("  An unrecognized --flag is a hard error, not a silent no-op.");
 }
 
 const args = Deno.args;
@@ -71,26 +74,31 @@ if (args.length === 0 || args.includes("--help")) {
   Deno.exit(0);
 }
 
+try {
+  validateFlags(args);
+} catch (e) {
+  if (e instanceof UnrecognizedFlagError) {
+    console.error(`\n${e.message}\n`);
+    usage();
+    Deno.exit(1);
+  }
+  throw e;
+}
+
 const shopId = args[0];
-const dryRun = args.includes("--dry-run");
-const limitIdx = args.indexOf("--limit");
-const limit = limitIdx >= 0 && limitIdx + 1 < args.length ? parseInt(args[limitIdx + 1], 10) : null;
-const casesIdx = args.indexOf("--cases");
-const casesFilter = casesIdx >= 0 && casesIdx + 1 < args.length
-  ? new Set(args[casesIdx + 1].split(",").map((s) => s.trim()).filter(Boolean))
+const dryRun = hasFlag(args, "dry-run");
+const limitRaw = getFlagValue(args, "limit");
+const limit = limitRaw !== null ? parseInt(limitRaw, 10) : null;
+const casesRaw = getFlagValue(args, "cases");
+const casesFilter = casesRaw !== null
+  ? new Set(casesRaw.split(",").map((s) => s.trim()).filter(Boolean))
   : null;
 
 // ── Provenance (required unless --dry-run, which never persists) ──────────
 
-function getFlagValue(flag: string): string | null {
-  const prefix = `--${flag}=`;
-  const found = args.find((a) => a.startsWith(prefix));
-  return found ? found.slice(prefix.length) : null;
-}
-
-const triggerTypeRaw = getFlagValue("trigger");
-const changeSetRef = getFlagValue("change-set");
-const initiatedBy = getFlagValue("initiated-by");
+const triggerTypeRaw = getFlagValue(args, "trigger");
+const changeSetRef = getFlagValue(args, "change-set");
+const initiatedBy = getFlagValue(args, "initiated-by");
 
 if (!dryRun) {
   const missing: string[] = [];
