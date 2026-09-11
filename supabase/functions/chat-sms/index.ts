@@ -54,7 +54,7 @@ import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, stripDeferredStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
@@ -2683,7 +2683,7 @@ async function runOrderingLoop(
   // See executeTool's matching param doc — threaded straight through to
   // every add_item tool call this loop dispatches.
   composedPhraseTexts?: string[],
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }> }> {
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }> }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
   // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency): per-round-trip
@@ -2736,7 +2736,7 @@ async function runOrderingLoop(
   // StepQuestion) instead of trusting the model's own free-text reply to
   // relay it, and so GUARD 8 (in the caller) can tell it was already said
   // when deciding whether to append its own "Choices for X" clause (item 1).
-  const compiledStepQuestions: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[] }> = [];
+  const compiledStepQuestions: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }> = [];
 
   // ── Fix 1 & 2: Deterministic pre-loop guards ──────────────────────────
   //
@@ -3003,6 +3003,7 @@ async function runOrderingLoop(
           compiledStepQuestions.push({
             menuItemId: addedId, groupName: r.next_question_group,
             nextQuestion: r.next_question, choiceDisplays: r.next_question_choices ?? [],
+            displayName: menu.find(m => m.id === addedId)?.name ?? "",
           });
         }
       }
@@ -6403,8 +6404,28 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // BEFORE stripInventedActions below — that scrub only touches invented
     // kitchen-check promises, not this, but ordering the code-authored
     // canonical text first means downstream guards see the final wording.
+    //
+    // TWO-QUESTION-COLLISION GUARD (2026-09-11, PO-directed fix): the EARLY
+    // ORDER TYPE GATE requires the model to ask pickup/delivery in the SAME
+    // reply as an item-added confirmation when order type is still unset —
+    // that carve-out is correct and unchanged. But a compiled slot question
+    // opened by THIS SAME add_item call used to get force-enforced right
+    // alongside it, stacking two questions in one message ("...added. Are
+    // you ordering pickup or delivery today? How would you like the Cheese
+    // Burger cooked?..."). Order type wins: when the reply already asks it
+    // this turn (checked directly off the model's own text — `cart.order_type`
+    // is still the PRE-loop value here, so this only fires while order type
+    // is genuinely still unresolved), the slot question is stripped instead
+    // of enforced — in whatever form the model wrote it — and the group is
+    // still marked rendered so the stale-pending-option guard below doesn't
+    // force it right back in. It asks again, alone, next turn, if the
+    // customer still hasn't answered it.
+    const deferSlotQuestionForOrderType = cart.order_type == null &&
+      /\bpickup\b/i.test(reply) && /\bdelivery\b/i.test(reply) && /\?/.test(reply);
     for (const sq of loopResult.compiledStepQuestions ?? []) {
-      reply = enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);
+      reply = deferSlotQuestionForOrderType
+        ? stripDeferredStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName)
+        : enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);
       const groups = compiledRenderedGroups.get(sq.menuItemId) ?? new Set<string>();
       groups.add(sq.groupName);
       compiledRenderedGroups.set(sq.menuItemId, groups);
@@ -6441,7 +6462,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
 
   // Fetch order-level metadata for guards (pickup_name, checkout session, etc).
   const { data: guardCartRow } = await supabase
-    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_fee_cents, driver_tip_cents, fee_disclosed_at")
+    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_address, delivery_fee_cents, driver_tip_cents, fee_disclosed_at")
     .eq("id", cart.id).single();
   const guardCart: AnyCartItem[] = cart.cart_json as AnyCartItem[];
 
