@@ -245,9 +245,14 @@ embedded runner that cannot authenticate.
   it.** Overnight 2026-09-10/11, three of three criticals across the three shops were
   artifacts, not defects: the Bleu Cheese "quoted $1.98 vs cart $0.99" was a verifier regex
   crossing a newline on a $0-price modifier row a customer cannot order standalone; the
-  "duplicate lines for same menu_item_id" reproduced as one line at qty 2 with a correct
-  $15.98 subtotal (`price_cents` is **per unit**, so a qty-2 line showing 799 is right, not
-  an undercharge); the third was scored against a turn where `toolCallCount` was 0.
+  "duplicate lines for same menu_item_id" — the **same-item re-add** case — reproduced as one
+  line at qty 2 with a correct $15.98 subtotal (`price_cents` is **per unit**, so a qty-2
+  line showing 799 is right, not an undercharge); the third was scored against a turn where
+  `toolCallCount` was 0. **But do not generalise from that to the whole class:** a *real*
+  duplicate-line overcharge existed in the same window on a **modifier follow-up** (the
+  handler used `add_item` where it needed `modify_item`), fixed 2026-09-11. Same symptom
+  name, different trigger, one artifact and one genuine money bug — which is exactly why
+  each entry gets reproduced on its own rather than dismissed by family.
   Reproduce the exact utterance five times on the live path, read `toolCallCount`, and only
   then call it real. Escalating an artifact costs more credibility than missing one for an
   hour
