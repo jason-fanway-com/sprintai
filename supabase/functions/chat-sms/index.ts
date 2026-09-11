@@ -4224,9 +4224,13 @@ export async function handleSystemEvent(
     const total  = ((cartRow.total_cents ?? 0) / 100).toFixed(2);
     const pickup = cartRow.pickup_name ? ` for ${cartRow.pickup_name}` : "";
     // Reconciliation line shown only when a service fee was charged (new orders).
-    const feeLine = (cartRow.service_fee_cents ?? 0) > 0
-      ? ` (Subtotal $${subtotal} + Service fee $${serviceFee})`
-      : "";
+    // Trimmed 2026-09-11: the subtotal/fee split was already disclosed in the
+    // payment-link message and again at checkout, and repeating it here pushed
+    // every confirmation past 160 chars — a second billed SMS segment on every
+    // order. Kept only when no fee was charged is meaningless, so it is dropped
+    // outright; the total remains, which is the number that matters on a receipt.
+    const feeLine = "";
+    void subtotal; void serviceFee;
 
     const today    = getBusinessDayKey(shop.timezone);
     const hours    = dayWindows(shop.open_hours?.[today]);
@@ -4238,7 +4242,13 @@ export async function handleSystemEvent(
     const orderNum = cartRow.order_number ? ` ORDER #${cartRow.order_number} ` : " ";
     const closeTime = hours.length > 0 ? fmt12Confirm(hours[hours.length - 1].close) : null;
     const closePart  = closeTime ? ` (we're open til ${closeTime})` : "";
-    message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}${feeLine}. Give us about 10 - 15 minutes for pick up${closePart}. Thank you for your business!!`;
+    // Fulfilment wording must follow the order, not assume pickup: a delivery
+    // order previously read "come pick it up", sending the customer to the shop
+    // for food that was on its way to them (observed live, orders #11/#12).
+    const readyPart = cartRow.order_type === "delivery"
+      ? "On its way in about 30-45 min"
+      : `Ready for pickup in about 10-15 min${closePart}`;
+    message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}. ${readyPart}.`;
   } else if (system_event === "payment_expired") {
     // KILLED (TCPA/10DLC, lead directive 2026-06-22): a checkout link expiring
     // is NOT a customer action. We never push an unsolicited "your link
