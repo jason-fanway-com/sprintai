@@ -178,7 +178,12 @@ async function sendMessage(
 
 // ── Retry + Timeout Wrapper ────────────────────────────────────────────────
 
-const PROOF_TURN_TIMEOUT_MS = parseInt(Deno.env.get("PROOF_TURN_TIMEOUT_MS") ?? "30000", 10);
+// Default raised from 30s to 100s (2026-09-11, PO direction): real multi-item
+// turns on the compiled ordering engine observed taking 90s+, so 30s was
+// producing false timeout failures (menu-two-5, menu-two-6 burning retries on
+// harness timeouts, not real product failures) rather than genuine hangs.
+// Still env-overridable via PROOF_TURN_TIMEOUT_MS.
+const PROOF_TURN_TIMEOUT_MS = parseInt(Deno.env.get("PROOF_TURN_TIMEOUT_MS") ?? "100000", 10);
 const PROOF_MAX_RETRIES = 2;
 
 /**

@@ -65,7 +65,7 @@ const EFFECTIVE_FN_URL = TIMEOUT_TEST
 
 console.log(`Proof: shop_id=${SHOP_ID}`);
 console.log(`Edge function: ${EFFECTIVE_FN_URL}`);
-console.log(`Timeout: ${Deno.env.get("PROOF_TURN_TIMEOUT_MS") ?? "30000"}ms, retries: 2`);
+console.log(`Timeout: ${Deno.env.get("PROOF_TURN_TIMEOUT_MS") ?? "100000"}ms, retries: 2`);
 console.log("");
 
 // ── Main ───────────────────────────────────────────────────────────────────
