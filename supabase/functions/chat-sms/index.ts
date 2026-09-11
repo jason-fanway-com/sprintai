@@ -6964,7 +6964,28 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // message too — a real item like "Bacon Burger Pizza" (where "Bacon"
       // is also a separately orderable on-request topping) must not read as
       // the customer asking for that topping just by naming the item.
-      let userMessageLower16 = userMessage.toLowerCase();
+      //
+      // PHRASE-SCOPE FIX (2026-09-10, f0ecf0fe recurrence — PO live repro,
+      // 3/4 runs on "1 plain, 1 pepperoni, 1 meat lovers and one hawaii"):
+      // this used to check the ENTIRE turn's raw text, so "pepperoni" named
+      // by ONE phrase (the pepperoni pizza's own) satisfied nameRe.test for
+      // every OTHER pizza line touched this turn too — the same token
+      // consumed twice the PO diagnosed, just landing on unverified_requests/
+      // the kitchen ticket instead of price this time (the money-side fix
+      // upstream, GUARD 2c, already covers the price leg). The add_item/
+      // compiled-engine path already solved this exact problem for pricing
+      // via source_phrase/phraseIndex (see line ~1461's P0 fix comment) and
+      // stores the winning claim on the line as sourcePhraseIndex — reuse
+      // that here instead of re-deriving a second, weaker text match.
+      // Falls back to the whole turn only when there's a single phrase (the
+      // distinction is moot) or when sourcePhraseIndex is unset (residual
+      // risk, no worse than before this fix, for whichever resolution paths
+      // don't yet record it).
+      const turnPhrases16 = splitCustomerPhrases(userMessage, effectiveMenu as unknown as { name: string }[]);
+      const scopedText16 = turnPhrases16.length > 1 && ci.sourcePhraseIndex !== undefined && ci.sourcePhraseIndex < turnPhrases16.length
+        ? turnPhrases16[ci.sourcePhraseIndex]
+        : userMessage;
+      let userMessageLower16 = scopedText16.toLowerCase();
       userMessageLower16 = userMessageLower16.replace(
         new RegExp(`\\b${dn16.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
       for (const displayName of allModifierDisplays16) {
