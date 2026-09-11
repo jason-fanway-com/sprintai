@@ -2763,19 +2763,32 @@ async function runOrderingLoop(
 
     // BARE-LIST GAP FIX (2026-09-10/11) — see executeTool's
     // ambiguousPhraseAttributionThisTurn param doc for the full defect.
-    // Detect it here, once per model response: 2+ DISTINCT menu items being
-    // added/modified in the SAME response, on a turn splitCustomerPhrases
-    // could not divide into more than one phrase at all — the splitter
-    // found no boundary, so every item's phrase claim would otherwise
-    // resolve to the same single "phrase" (the whole turn), reopening the
-    // whole-turn-text leak. Counts add_item AND modify_item together since
-    // both share the identical reactive-match defect shape.
+    // CORRECTED (2026-09-11, live re-verification caught the first version's
+    // gap): checking `splitCustomerPhrases(userMessage, menu).length === 1`
+    // alone missed a real case — "chicken bacon ranch bbq chicken pepperoni
+    // cheesesteak margherita, four flatbreads" has a trailing comma, so the
+    // splitter DOES return 2 phrases (the run-on item list, then "four
+    // flatbreads"), but every item's source_phrase claim still lands on
+    // that same FIRST phrase (none of the 4 items can be told apart within
+    // it) — leaked live, 4550¢ vs an expected 4250¢, confirmed post-deploy.
+    // The right signal isn't "did the turn split into exactly one phrase"
+    // but "did 2+ DISTINCT items end up resolving to the SAME phraseIndex"
+    // — computed here by running the identical resolveClaimedPhraseIndex
+    // resolution executeTool runs per-call, once per item, and checking for
+    // a collision. Generalizes correctly to both shapes (no boundary at
+    // all, or a boundary that doesn't separate the items that matter).
     const legacyItemToolBlocks = toolBlocks.filter(b => b.name === "add_item" || b.name === "modify_item");
-    const distinctItemIdsThisResponse = new Set(
-      legacyItemToolBlocks.map(b => (b.input as { menu_item_id?: string })?.menu_item_id).filter(Boolean),
-    );
-    const ambiguousPhraseAttributionThisTurn =
-      distinctItemIdsThisResponse.size >= 2 && splitCustomerPhrases(userMessage, menu).length === 1;
+    const turnPhrasesForAmbiguity = splitCustomerPhrases(userMessage, menu);
+    const itemIdsByPhraseIndex = new Map<number, Set<string>>();
+    for (const b of legacyItemToolBlocks) {
+      const menuItemId = (b.input as { menu_item_id?: string })?.menu_item_id;
+      if (!menuItemId) continue;
+      const claimedIdx = resolveClaimedPhraseIndex(turnPhrasesForAmbiguity, (b.input as { source_phrase?: string })?.source_phrase ?? "");
+      if (claimedIdx === null) continue;
+      if (!itemIdsByPhraseIndex.has(claimedIdx)) itemIdsByPhraseIndex.set(claimedIdx, new Set());
+      itemIdsByPhraseIndex.get(claimedIdx)!.add(menuItemId);
+    }
+    const ambiguousPhraseAttributionThisTurn = [...itemIdsByPhraseIndex.values()].some(s => s.size >= 2);
 
     // Only finish when there are NO pending tool calls. Previously an `end_turn`
     // stop_reason short-circuited here even when the model had emitted tool_use

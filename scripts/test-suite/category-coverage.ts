@@ -177,11 +177,30 @@ export async function buildCategoryCoverageCases(
       .sort((a, b) => a.display_order - b.display_order);
     if (itemsInCategory.length === 0) continue;
 
+    // Exclude price_cents=0 rows — these are modifier/finish CHOICES stored
+    // as standalone menu_items rows (e.g. Vito's "Bleu Cheese" under "Pizza
+    // Finish (Buffalo Chicken)"), not independently orderable products. The
+    // live bot correctly refuses to add them as a standalone order, so
+    // scripting "can I get a Bleu Cheese?" as a direct order produces
+    // whatever ad-hoc conversation the bot actually has — not the order this
+    // case assumes — and expectedItemCents: 0 combined with the real $0.99
+    // service-fee-only cart then trips the cartops quoted-total invariant on
+    // an assertion this case was never entitled to make (2026-09-10 Vito's
+    // run 9bc5adab, case category-coverage-pizza-finish-buffalo-chicken).
+    const orderableItems = itemsInCategory.filter((i) => i.price_cents > 0);
+    if (orderableItems.length === 0) {
+      console.log(
+        `category-coverage: skipping category "${category}" — all ${itemsInCategory.length} active item(s) ` +
+        `have price_cents=0 (modifier-choice rows, not independently orderable)`,
+      );
+      continue;
+    }
+
     // Prefer an item with at least one required option group, to exercise
-    // the option-answer flow — falls back to any active item (e.g. Stromboli,
-    // which has zero option groups shop-wide).
-    const withRequired = itemsInCategory.find((i) => (groupsByItem.get(i.id)?.length ?? 0) > 0);
-    const item = withRequired ?? itemsInCategory[0];
+    // the option-answer flow — falls back to any orderable active item (e.g.
+    // Stromboli, which has zero option groups shop-wide).
+    const withRequired = orderableItems.find((i) => (groupsByItem.get(i.id)?.length ?? 0) > 0);
+    const item = withRequired ?? orderableItems[0];
     const requiredGroups = groupsByItem.get(item.id) ?? [];
 
     const ambiguous = isNameAmbiguousAcrossCategories(item, activeItems);
