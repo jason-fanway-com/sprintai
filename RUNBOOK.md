@@ -1913,38 +1913,53 @@ exposure than the problem) and over the real service-role key (bypasses RLS on
 every table, not just these 3 functions). Nothing Jason-facing changed — the
 legacy JWT is untouched, and this secret is invisible to him either way.
 
-## OPEN, LIVE MONEY BUG: modifier price leak on Vito's Flatbreads — found 2026-09-10, NOT fixed
+## ~~OPEN, LIVE MONEY BUG: modifier price leak on Vito's Flatbreads~~ — FIXED 2026-09-11
 
-Found late on 2026-09-10 (22:03–22:22 ET) via an uncommitted live replay
-matrix (`scripts/tmp-guard12-verify-results-20260910.log`, run against the
-real deployed `chat-sms` after that night's `v359` deploy, not before it).
-Ordering all four Vito's Flatbreads in one message (chicken bacon ranch,
-BBQ chicken with pepperoni, cheesesteak, margherita — only the BBQ chicken
-line should carry the $0.50 pepperoni topping charge) put the pepperoni
-charge on a *different* flatbread line in **25 of 25 runs**, across all 5
-phrasings tested. See `docs/DAILY.md`'s 2026-09-10 entry ("Recurrence, not
-closure") for the full detail and the companion GUARD 16 result (Zio's
-pizzas: the kitchen-ticket leak that commit was written to fix still fired
-in 15/25 runs) and the failed Vito's canary (849¢ vs an expected 948¢).
+**Bug closed 2026-09-11.** See commits `bf6023b`, `301a7a0`, `9b747a2`,
+`44b82b1`, `3b0f425`, `f9f3b2c` (all on `main`, deployed via
+`supabase functions deploy chat-sms`).
 
-This is the same defect shape ("a modifier resolved for one line applies to
-another line in the same multi-item message") as the "pepperoni bleeds onto
-every pizza" family documented above under [[Modifier resolution: reactive
-text-stem scanning was removed, don't re-add it]] — that entry describes the
-*pricing/resolution* side as closed by `49a34d1`. This result says otherwise
-for Vito's legacy/`option_groups` path specifically. `b2e1ebf`/`c2f8e3c`
-(2026-09-10) fixed a related but distinct bug — GUARD 12/16 scanning the
-whole turn's text instead of the item's own phrase for the *ticket-flag*
-check — and explicitly did not touch pricing. **Do not read those two
-commits, or `e191af3`'s "zero walk failures" menu-readiness report, as
-having closed this.** The readiness gate's walk tests exercise a different
-scenario (single/sequential item adds) than this matrix (one message naming
-four differently-modified items of the same base type) and did not catch it.
+**Root cause:** `reactive-modifier-match.ts`'s `matchReactiveExtras` was
+called with the raw, unscoped, un-stripped whole-turn `customerMessage` from
+both legacy `add_item` and `modify_item`. A word from ANY phrase (including
+words in an item's own display name, e.g. "Bacon" in "Chicken BACON Ranch")
+could apply and PRICE a modifier on every item resolved that turn.
 
-Not yet triaged, not filed as its own commit, not reproduced against Zio's
-or NJB. Whoever picks this up next: start from the uncommitted script
-(`scripts/tmp-item4-f0ecf0fe-live-replay-20260910.ts`, `classifyGuard12()`/
-`--guard12-only`), not from scratch — it already isolates the repro.
+**Structural fix:** `scopedModifierText` (`phrase-split.ts`) — one shared
+primitive that (a) scopes to the item's own claimed phrase, (b) strips the
+item's own display name out as one contiguous unit before matching. GUARD 12
+and GUARD 16 are repointed at this same function. Additionally:
+`suppressedReactiveMatchIds` replaces the turn-level boolean: only items
+whose phrase attribution is genuinely ambiguous (multiple items resolved to
+the SAME phrase index) lose reactive text-guessing — correctly-scoped items
+in the same turn retain it. When suppression is active, model-explicit
+non-required option-group choices for suppressed items are also moved to
+`unverified_requests` (prevents overcharge from model-assigned choices on
+ambiguous items; kitchen ticket shows the topping for manual resolution).
+
+**Verified live (2026-09-11, post-deploy):**
+- comma+digit, comma+word, and-sep, conversational phrasings: 20/20 PASS
+  (correct subtotals, pepperoni on BBQ Chicken only, no other-item charges)
+- Bare-list phrasing ("chicken bacon ranch bbq chicken pepperoni cheesesteak
+  margherita, four flatbreads"): no overcharge confirmed (0/5 priced
+  toppings on wrong items); undercharge ($0.50 pepperoni in
+  `unverified_requests`, not priced) — this is the correct "missing beats
+  wrong" outcome for a genuinely ambiguous input that cannot be phrase-scoped
+  to individual items without better splitter boundary recognition. Kitchen
+  ticket shows pepperoni as unverified for manual resolution.
+
+**Known residual — bare-list inputs:** When the customer sends all items as
+one unpunctuated or minimally-punctuated dump (no "," or "and" between them),
+phrase splitting cannot distinguish which topping belongs to which item. The
+code correctly suppresses guessing, which means the $0.50 topping goes to
+unverified_requests instead of being priced — undercharge, not overcharge.
+Real customers use natural language; this is a synthetic worst case. The fix
+that would address this (widening phrase-boundary rules) risks regressing the
+GUARD 2c money-path and is out of scope for this dispatch.
+
+Original bug detail: found 2026-09-10 (22:03–22:22 ET), 25/25 wrong subtotals
+across all phrasings. See `docs/DAILY.md` 2026-09-10 "Recurrence, not closure"
+for the full pre-fix evidence.
 
 ## Correction: `prompt_version=1` is live for two shops, not three — 2026-09-10
 
