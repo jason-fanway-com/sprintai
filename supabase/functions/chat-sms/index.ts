@@ -82,7 +82,7 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-pro";
+const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
 const CHAT_API   = "https://openrouter.ai/api/v1/messages";
 const MAX_RETRIES = 8;
 
@@ -930,6 +930,7 @@ RULES:
 - When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
+- ONE QUESTION PER MESSAGE (CRITICAL): ask exactly one question per reply. If more than one thing is genuinely unresolved, ask the most important one now and let the next turn handle the rest — do not stack two questions (e.g. a modifier choice AND the pickup/delivery order type) into one message. This does NOT override the EARLY ORDER TYPE GATE exception below: when items are named in the customer's first message, pairing the item-added confirmation with the single pickup/delivery question in the same turn is still required — that turn asks only ONE question, it just also states that the item was added.
 - SERVICE FEE: A $0.99 service fee is added to every order. The system automatically displays it with the total and checkout link — you do NOT need to state or calculate it. Never quote any dollar amount in your reply.
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
 - CLEAR_CART RESTRICTION (CRITICAL): NEVER call clear_cart unless the customer explicitly asks to cancel, restart, or start a new order. Words like "also", "add another", "and a", "can I also get", "let me also", "I also want" are ADDITIVE — they mean ADD to the existing cart, not replace it. Calling clear_cart when the customer asks to add more items will DESTROY their existing order. Only call clear_cart for explicit cancel/restart messages.
@@ -1300,6 +1301,7 @@ RULES:
 - When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
+- ONE QUESTION PER MESSAGE (CRITICAL): ask exactly one question per reply. If more than one thing is genuinely unresolved, ask the most important one now and let the next turn handle the rest — do not stack two questions (e.g. a modifier choice AND the pickup/delivery order type) into one message. This does NOT override the EARLY ORDER TYPE GATE exception below: when items are named in the customer's first message, pairing the item-added confirmation with the single pickup/delivery question in the same turn is still required — that turn asks only ONE question, it just also states that the item was added.
 - SERVICE FEE: A $0.99 service fee is added to every order. The system automatically displays it with the total and checkout link — you do NOT need to state or calculate it. Never quote any dollar amount in your reply.
 - OFF-MENU ITEMS: If a customer asks for an item that is NOT on the available menu, politely tell them it is not available and suggest similar items that ARE on the menu. NEVER call clear_cart when handling an off-menu request. NEVER remove items already in the cart. Off-menu requests only get a polite "sorry, we don't have that" — nothing more.
 - CLEAR_CART RESTRICTION (CRITICAL): NEVER call clear_cart unless the customer explicitly asks to cancel, restart, or start a new order. Words like "also", "add another", "and a", "can I also get", "let me also", "I also want" are ADDITIVE — they mean ADD to the existing cart, not replace it. Calling clear_cart when the customer asks to add more items will DESTROY their existing order. Only call clear_cart for explicit cancel/restart messages.
@@ -4136,6 +4138,39 @@ async function isOptedOut(
 
 // ─── SMS dispatcher ─────────────────────────────────────────────────────────
 
+// ── Outbound SMS segment counting (measurement only — mirrors the exact
+// math in _shared/test-suite/persist.ts so these numbers agree with the
+// test harness's own segment counting) ─────────────────────────────────────
+const OUTBOUND_GSM7_BASIC = new Set(
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+    .split(""),
+);
+const OUTBOUND_GSM7_EXTENDED = new Set("|^{}[]~\\€");
+
+function outboundIsGsm7(text: string): boolean {
+  for (const ch of text) {
+    if (!OUTBOUND_GSM7_BASIC.has(ch) && !OUTBOUND_GSM7_EXTENDED.has(ch)) return false;
+  }
+  return true;
+}
+
+function outboundGsm7CharCount(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    count += OUTBOUND_GSM7_EXTENDED.has(ch) ? 2 : 1;
+  }
+  return count;
+}
+
+function outboundSegmentCount(text: string): number {
+  if (text.length === 0) return 0;
+  if (outboundIsGsm7(text)) {
+    const chars = outboundGsm7CharCount(text);
+    return chars <= 160 ? 1 : 1 + Math.ceil((chars - 160) / 153);
+  }
+  return text.length <= 70 ? 1 : 1 + Math.ceil((text.length - 70) / 67);
+}
+
 /**
  * Single routing function for all outbound SMS. Routes to Telnyx or Twilio
  * based on the provider argument. Always wraps in guardedSend (via the
@@ -4151,6 +4186,9 @@ async function sendSms(
   message:    string,
 ): Promise<void> {
   const cleaned = stripEmDashes(message);
+  const segCount = outboundSegmentCount(cleaned);
+  console.log(`[chat-sms] outbound-segments (shop=${shopId}): chars=${cleaned.length} segments=${segCount}`);
+  if (segCount > 1) console.warn(`[chat-sms] SMS OVERFLOW (shop=${shopId}): chars=${cleaned.length} segments=${segCount} text="${cleaned.slice(0, 80)}..."`);
   if (provider === "telnyx") {
     await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, cleaned);
   } else {
@@ -5659,7 +5697,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             if (groupChoicesAlreadySaid(resolved7c.id, groupName, group.choices.map(c => c.name), askText7c, compiledRenderedGroups, resolved7c.name)) return "";
             const label7c = displayGroupName(group.name);
             if (label7c.toLowerCase() === "option") return "";
-            return `Choices for ${label7c}: ${group.choices.map(c => c.name).join(", ")}.`;
+            // askText7c already asks the question naturally (renderMissingOptionsPrompt) —
+            // this clause used to exist only to enumerate choices, which we no longer do.
+            return "";
           })
           .filter(Boolean)
           .join(" ");
@@ -5814,7 +5854,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const reply = !modResult.ok
           ? "Sorry, I had trouble setting that — mind trying again?"
           : nextQuestion
-            ? `Got it — ${appliedNames}. For the ${nextQuestion.item_name}: what ${displayGroupName(nextQuestion.group_name).toLowerCase()} — ${nextQuestion.choices.map(c => c.name).join(", ")}?${footer ? `\n\n${footer}` : ""}`
+            ? `Got it — ${appliedNames}. For the ${nextQuestion.item_name}: what ${displayGroupName(nextQuestion.group_name).toLowerCase()} would you like?${footer ? `\n\n${footer}` : ""}`
             : `Got it — ${appliedNames} on the ${pendingQuestion.item_name}.${footer ? `\n\n${footer}` : ""} Anything else?`;
         if (modResult.ok && !feeAlreadyDisclosed) {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
@@ -7582,7 +7622,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (groupChoicesAlreadySaid(added.menu_item_id, groupName, group.choices.map(c => c.name), reply, compiledRenderedGroups, menuItem.name)) continue;
         const label8 = displayGroupName(group.name);
         if (label8.toLowerCase() === "option") continue;
-        missingClauses.push(`Choices for ${label8}: ${group.choices.map(c => c.name).join(", ")}.`);
+        missingClauses.push(`For the ${menuItem.name}: what ${label8.toLowerCase()} would you like?`);
       }
     }
     if (missingClauses.length > 0) {

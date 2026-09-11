@@ -128,6 +128,16 @@ overwrite the bot:
 - Reply punctuation was being mangled and dangling-dash totals shipped to diners.
 - `CHAT_MODEL` now defaults to `deepseek/deepseek-v4-pro` (3e6055d).
 
+### Correction: `CHAT_MODEL` reverted back to flash — 2026-09-11
+
+The bullet above (3e6055d) moved the default to `deepseek/deepseek-v4-pro`. That stood
+from 2026-09-04 to today — during which the "default flash" line elsewhere in this
+runbook (now corrected below) was actually wrong, since the code was on pro. Reversed
+back to `deepseek/deepseek-v4-flash` today: pro runs 10.9x flash's cost on OpenRouter,
+and at the measured ~10 LLM calls/order that's ~$0.182/order on pro vs ~$0.017/order on
+flash. Both the `CHAT_MODEL` secret and the code's literal fallback (`index.ts:85`) are
+back on flash so an unset secret can't silently mean pro again.
+
 ### Owner-editable option data — migration 097 (partially reverted, read this)
 
 Migration **097 is applied to production**: `owner_edited` on `option_groups` and
