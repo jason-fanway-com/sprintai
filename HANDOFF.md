@@ -1030,10 +1030,48 @@ suppresses to an undercharge ($0.50 topping goes to `unverified_requests`
 for manual kitchen-ticket resolution) rather than an overcharge —
 "missing beats wrong" by design, not a new bug.
 
-`chat-sms` is at **v367** (`supabase functions list`, updated 2026-09-11
-04:51 UTC) — current with `HEAD`. `test-runner` remains stale at v40
-(2026-09-09); the `_shared/test-suite` fixes since then affect test
-scoring only, not customer orders.
+`chat-sms` is at **v368** (`supabase functions list`, updated 2026-09-11
+10:24 UTC / 06:24 EDT) — current with `HEAD` (`ebc2a36`, NJB duplicate-line
+fix). `test-runner` remains stale at v40 (2026-09-09); the
+`_shared/test-suite` fixes since then affect test scoring only, not
+customer orders. Admin bundle live at `getsprintai.com/admin/dashboard`:
+`assets/index-B9clOHvN.js`, built from `70d6beae` (2026-09-10 16:29 EDT,
+upsell toggle) — confirmed by curling the live page, not assumed from git.
+
+## HALT — 2026-09-11 08:50 EDT, Jason's instruction, effective until he says otherwise
+
+Development on chat-sms/the ordering engine is stopped: no fixes, no
+refactors, no guard work, item 6, item 8, or resolver cleanup. All
+testing (suites, matrices, canaries, background runs) is stopped. No
+further deploys. Facts only, no plan — a plan is Jason's to write.
+
+**In flight at halt:**
+- The overnight chat-sms change-set (GUARD 12/16, legacy reactive-modifier
+  scope, GUARD 7c, phrase-count safety net, bare-list ambiguity, NJB
+  duplicate-line — commits `b2e1ebf`..`ebc2a36`) is finished, committed,
+  and deployed as v368 above. Each fix's own dispatch reported live
+  verification at the time; none of that was re-checked in aggregate
+  before the halt landed.
+- A `test_runs` traceability change (adds required `trigger_type` /
+  `change_set_ref` / `initiated_by` so every future test run records what
+  triggered it) was mid-flight in a builder subagent when the halt order
+  arrived. Commit `f1d9219` is pushed to `main` — migration + `persist.ts`
+  changes to `scripts/test-suite/`. **Not verified**: the builder's
+  independent-QA (verifier) handoff had not confirmed PASS before the
+  halt. **Not resolved**: whether `supabase/functions/_shared/test-suite/persist.ts`
+  is a live second copy needing the same change, or dead — the builder
+  was investigating that when stopped. **Not deployed**: `test-runner`
+  is still v40; nothing from this change reached it.
+- I could not confirm the builder subagent actually stopped. A gateway
+  fault (`ws://127.0.0.1:18790` closing mid-connection, error 1006) blocked
+  every attempt to message it a stop signal — `subagents list` still
+  showed it `running` (1h22m) as of this halt. I did not restart the
+  gateway to force the issue; that's a bigger, more disruptive action
+  than this warranted, and Jason asked to be told about anything that
+  looks on fire rather than have it fixed unilaterally. Whether it made
+  any further changes after this note was written is unknown until
+  someone checks `git log` on `main` and `supabase functions list` for
+  `test-runner` again.
 
 ---
 
