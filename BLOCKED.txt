@@ -6735,3 +6735,53 @@ Commits: 1baa81d (D1 Vito's legacy merge key + D2 groupChoicesAlreadySaid fix),
 6c52cf2 (D1 Zio's compiled no-op guard fix), this session (D1 invalid-modifier
 code fix + prompt differentiation instruction).
 Deployed: chat-sms v340 (2026-09-09 23:02 UTC).
+
+── Item 5 gate re-run (2026-09-10) ─────────────────────────────────────────
+
+Re-ran item5-menu-readiness-live-report.ts against all three shops. Two
+separate numbers reported as required — individual-item walk and multi-item
+walk are distinct. NJB extension already landed in commit 860013d.
+
+TOP-LINE RESULTS:
+
+Zio's Pizzeria: 298/300 orderable (99.3%)
+  invariants: 7/8 — FAILING #1 (2 blocked in active category: Double Burger,
+    Regular Burger — pending owner questions)
+  items individually orderable: 298/298 (100%)
+  real multi-item orders correct: 20/20 (100%)
+
+Vito's Pizza: 197/221 orderable (89.1%)
+  invariants: 6/8 — FAILING #1 (22 blocked: wraps + chicken items),
+    FAILING #8 (89.1% < 90% threshold, not acknowledged)
+  items individually orderable: 197/197 (100%)
+  real multi-item orders correct: 20/20 (100%)
+
+Not Just Bagels: 166/170 orderable (97.6%)
+  invariants: 7/8 — FAILING #1 (4 blocked: Turkey Melt, Tuna Melt, Garden
+    Salad, Chef's Salad — the items Jason owes bread/cheese/dressing answers
+    for, per PO handoff §5)
+  items individually orderable: 166/166 (100%)
+  real multi-item orders correct: 5/5 (3 case types skipped — menu lacks
+    items shaped for four-items-with-modifier, two-same-item-different-modifiers,
+    item-plus-non-composed)
+
+WALK VERDICT: every orderable item on every shop walks cleanly, single and
+multi. Zero walk failures. The gate is 100% on the orderable fraction.
+
+INVARIANT #1 FINDING: blocked items in active categories on all three shops.
+Roots:
+  - Zio's 2: existing burgers pending owner answer (pre-existing, low priority)
+  - Vito's 22: wraps + chicken items pending owner questions about fillings/bread
+    — this drives invariant #8 fail (89.1% < 90%). Demo risk: if Erin's prospect
+    orders a wrap, the bot will ask for the item but be blocked mid-order.
+  - NJB 4: Turkey Melt, Tuna Melt, Garden Salad, Chef's Salad — Jason's answers
+    needed (bread/cheese on melts, dressings on salads). These are flagged in
+    PO handoff §5 as the last open data gap before 170/170.
+
+Previous numbers for reference (pre-multi-item-walk, pre-Double-Burger-dedupe):
+  Zio's 299/301 (single-item only), Vito's 219/219 (single-item only).
+  Those numbers are now retired.
+
+f0ecf0fe live replay also committed this session (da43a50). The original P0
+(pepperoni double-applied as a priced modifier to Meat Lover's + Hawaiian) does
+NOT reproduce on the live pipeline. Three consecutive PASS runs.

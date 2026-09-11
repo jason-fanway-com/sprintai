@@ -192,6 +192,13 @@ Status vocabulary: `not started` · `building` · `in verification` · `built`.
   + `git rm`; pushed; Netlify rebuilt; verified live 404 (control page still 200). Single kit source
   of truth is now `/admin/demo-kit`. Item stays **in verification**: L-2 (kit CTA behind
   `ShopOwnerRoute` — does Erin have a login?) is Jason's call, and the on-phone scan is his leg.
+- 2026-09-10 21:10 EDT — Item 5 gate re-run (all three shops, both walk types). Commits this
+  session: da43a50 (f0ecf0fe live replay — Zio's P0 does not reproduce), 39631ba (toolCallCount
+  per turn in test runner). Item 5 gate results: Zio's 298/298 individual + 20/20 multi; Vito's
+  197/197 + 20/20; NJB 166/166 + 5/5 (3 case types skipped, menu too simple). Zero walk failures
+  on any shop. Invariant #1 fails on all three (blocked items in active categories); Vito's also
+  fails #8 (89.1% orderable < 90%). Blockers: Zio's 2 burgers, Vito's 22 wraps/chicken items,
+  NJB 4 items (Turkey Melt, Tuna Melt, salads) awaiting Jason's bread/cheese/dressing answers.
 - 2026-09-10 10:35 EDT — Board review per INSTRUCTION-10 continuation: no item is `not started`.
   A–O are all `built` except G (`building`, blocked on Jason's on-device Expo check) and L
   (`in verification`, blocked on Jason's login-vs-public decision + phone walk). Per rule 9, no
