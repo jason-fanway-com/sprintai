@@ -3,8 +3,15 @@
  * run.ts — CLI entrypoint for the shop conversation test suite engine.
  *
  * Usage:
- *   deno run --allow-net --allow-env --allow-read scripts/test-suite/run.ts <shop_id> [--limit N] [--dry-run]
+ *   deno run --allow-net --allow-env --allow-read scripts/test-suite/run.ts <shop_id> \
+ *     --trigger=<fix-verification|change-set-batch|onboarding|manual-investigation> \
+ *     --change-set=<ref> --initiated-by=<who> [--limit N] [--dry-run]
  *
+ * --trigger/--change-set/--initiated-by are REQUIRED (except for --dry-run,
+ * which never persists). This is the provenance the 2026-09-10/11 overnight
+ * run of 9 unlabeled full-suite runs against Vito's Pizza was missing — see
+ * persist.ts assertValidProvenance. There is no default; an omitted flag is a
+ * usage error, not a silently-inserted placeholder.
  * --dry-run: generate + print cases, NO bot calls, NO LLM cost, NO persist.
  * --limit N: run at most N cases (default: run all generated cases).
  *
@@ -18,7 +25,7 @@ import { generateCases } from "./generator.ts";
 import { runCase } from "./runner.ts";
 import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
-import { persistResults } from "./persist.ts";
+import { persistResults, TRIGGER_TYPES, type TriggerType } from "./persist.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
@@ -47,12 +54,20 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 // ── CLI parsing ────────────────────────────────────────────────────────────
 
-const args = Deno.args;
-if (args.length === 0 || args.includes("--help")) {
-  console.log("Usage: deno run --allow-net --allow-env --allow-read scripts/test-suite/run.ts <shop_id> [--limit N] [--dry-run] [--cases id1,id2,...]");
-  console.log("  --dry-run    Generate + print cases, NO bot calls, NO LLM cost.");
+function usage(): void {
+  console.log("Usage: deno run --allow-net --allow-env --allow-read scripts/test-suite/run.ts <shop_id> \\");
+  console.log("         --trigger=<type> --change-set=<ref> --initiated-by=<who> [--limit N] [--dry-run] [--cases id1,id2,...]");
+  console.log("  --trigger=<type>    REQUIRED (unless --dry-run). One of: " + TRIGGER_TYPES.join(", "));
+  console.log("  --change-set=<ref>  REQUIRED (unless --dry-run). What this run verifies (commit SHA, fix id, etc).");
+  console.log("  --initiated-by=<who> REQUIRED (unless --dry-run). Who/what triggered this run.");
+  console.log("  --dry-run    Generate + print cases, NO bot calls, NO LLM cost, NO persist.");
   console.log("  --limit N    Run at most N cases.");
   console.log("  --cases CSV  Run only the listed case ids (comma-separated).");
+}
+
+const args = Deno.args;
+if (args.length === 0 || args.includes("--help")) {
+  usage();
   Deno.exit(0);
 }
 
@@ -64,6 +79,35 @@ const casesIdx = args.indexOf("--cases");
 const casesFilter = casesIdx >= 0 && casesIdx + 1 < args.length
   ? new Set(args[casesIdx + 1].split(",").map((s) => s.trim()).filter(Boolean))
   : null;
+
+// ── Provenance (required unless --dry-run, which never persists) ──────────
+
+function getFlagValue(flag: string): string | null {
+  const prefix = `--${flag}=`;
+  const found = args.find((a) => a.startsWith(prefix));
+  return found ? found.slice(prefix.length) : null;
+}
+
+const triggerTypeRaw = getFlagValue("trigger");
+const changeSetRef = getFlagValue("change-set");
+const initiatedBy = getFlagValue("initiated-by");
+
+if (!dryRun) {
+  const missing: string[] = [];
+  if (!triggerTypeRaw) missing.push("--trigger");
+  if (!changeSetRef) missing.push("--change-set");
+  if (!initiatedBy) missing.push("--initiated-by");
+  if (missing.length > 0) {
+    console.error(`\nMissing required provenance flag(s): ${missing.join(", ")}\n`);
+    usage();
+    Deno.exit(1);
+  }
+  if (!TRIGGER_TYPES.includes(triggerTypeRaw as TriggerType)) {
+    console.error(`\nInvalid --trigger value "${triggerTypeRaw}". Must be one of: ${TRIGGER_TYPES.join(", ")}\n`);
+    Deno.exit(1);
+  }
+}
+const triggerType = triggerTypeRaw as TriggerType;
 
 // ── Generate cases ─────────────────────────────────────────────────────────
 
@@ -344,6 +388,9 @@ try {
     scored: scored.map((s) => s),
     modelTier: "deepseek-v4-flash-test-suite",
     scorerVersion: SCORER_VERSION,
+    triggerType,
+    changeSetRef: changeSetRef as string,
+    initiatedBy: initiatedBy as string,
   });
   console.log(`  Run ID: ${persistResult.runId}`);
   console.log(`  test_runs: 1 row inserted`);

@@ -53,6 +53,25 @@ function conversationReachedCheckout(transcript: Array<{ role: string; reply?: s
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/**
+ * Why a test_runs row exists. Kept as a small fixed union (not free text) so
+ * a run's cause is always queryable, never a fresh string someone typed once.
+ * "onboarding" reuses the existing test_run_queue.reason literal rather than
+ * inventing parallel vocabulary for the same event.
+ */
+export type TriggerType =
+  | "fix-verification"    // targeted re-run to confirm one specific fix
+  | "change-set-batch"    // full-suite pass at the end of a batch of changes
+  | "onboarding"          // queue-triggered automatic run (new shop onboarding, cron)
+  | "manual-investigation"; // ad-hoc run not tied to a specific fix or batch
+
+export const TRIGGER_TYPES: readonly TriggerType[] = [
+  "fix-verification",
+  "change-set-batch",
+  "onboarding",
+  "manual-investigation",
+];
+
 export interface PersistInput {
   supabaseUrl: string;
   serviceRoleKey: string;
@@ -63,6 +82,9 @@ export interface PersistInput {
   scored: ScoredCase[];
   modelTier: string;
   scorerVersion: number;
+  triggerType: TriggerType;
+  changeSetRef: string;
+  initiatedBy: string;
 }
 
 export interface PersistResult {
@@ -88,11 +110,35 @@ export function assertValidProofData(scored: ScoredCase[]): void {
   }
 }
 
+/**
+ * Every test_runs row must carry a populated triggerType/changeSetRef/initiatedBy.
+ * The 2026-09-10/11 overnight run of 9 unlabeled full-suite runs against Vito's
+ * Pizza — indistinguishable re-runs vs. real per-fix checks — happened because
+ * nothing enforced this. Fail loud BEFORE inserting, same discipline as
+ * assertValidProofData.
+ */
+export function assertValidProvenance(
+  input: Pick<PersistInput, "triggerType" | "changeSetRef" | "initiatedBy">,
+): void {
+  if (!input.triggerType || !TRIGGER_TYPES.includes(input.triggerType)) {
+    throw new Error(
+      `persist.ts: triggerType "${input.triggerType}" is invalid — must be one of: ${TRIGGER_TYPES.join(", ")}.`,
+    );
+  }
+  if (!input.changeSetRef) {
+    throw new Error("persist.ts: changeSetRef is empty — every run must record what it was verifying.");
+  }
+  if (!input.initiatedBy) {
+    throw new Error("persist.ts: initiatedBy is empty — every run must record who/what triggered it.");
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export async function persistResults(input: PersistInput): Promise<PersistResult> {
   // Fail loud on invalid v3 data before any DB write (see assertValidProofData).
   assertValidProofData(input.scored);
+  assertValidProvenance(input);
 
   const supabase = createClient(input.supabaseUrl, input.serviceRoleKey, {
     auth: { persistSession: false },
@@ -128,6 +174,9 @@ export async function persistResults(input: PersistInput): Promise<PersistResult
       status: "completed",
       scorer_version: input.scorerVersion,
       notes: `Test suite run against ${input.shopName}`,
+      trigger_type: input.triggerType,
+      change_set_ref: input.changeSetRef,
+      initiated_by: input.initiatedBy,
     })
     .select("id")
     .single();

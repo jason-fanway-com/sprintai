@@ -20,7 +20,7 @@ import { judgeCase } from "../_shared/test-suite/judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "../_shared/test-suite/scorecard.ts";
 import { verifyCartOpsInvariants, verifyStatedTotal, verifyCheckoutFinalize, verifyHallucinationGuard, verifyCartPersistence, verifyNoWrongPriceCharge, verifyTenantIsolationNoLeak, verifyStopOptOutHonored, verifyRequiredOptionsCovered } from "../_shared/test-suite/cart-ops.ts";
 import { verifyHoursClosed } from "../_shared/test-suite/hours-closed.ts";
-import { persistResults } from "../_shared/test-suite/persist.ts";
+import { persistResults, type TriggerType } from "../_shared/test-suite/persist.ts";
 // fix.ts NOT imported here — root-cause generation is a SEPARATE
 // post-run/on-demand concern, never called inline in the scoring loop.
 import type { AnyCase } from "../_shared/test-suite/library.ts";
@@ -31,6 +31,15 @@ const BATCH_SIZE = 2;
 const SCORER_VERSION = 3;
 const PROJECT_REF = "rvdqfxtrskxekfkqnegx";
 const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-sms`;
+
+// ── Provenance — map test_run_queue.reason into the persist.ts vocabulary ──
+// Mirrors scripts/test-suite/worker.ts's mapping (see that file for why).
+function mapQueueReasonToTriggerType(reason: string | null): TriggerType {
+  if (reason === "onboarding") return "onboarding";
+  if (reason === "manual") return "manual-investigation";
+  console.warn(`test-runner: unrecognized test_run_queue.reason "${reason}" — falling back to manual-investigation`);
+  return "manual-investigation";
+}
 
 // ── Entry ──────────────────────────────────────────────────────────────────
 
@@ -465,6 +474,7 @@ Deno.serve(async (_req: Request) => {
           `(${rocSkippedCount} skipped — no required-option cart lines or no expectedLineCount declared)`,
       );
 
+      const queueReason: string | null = (job as any).reason ?? null;
       const persistResult = await persistResults({
         supabaseUrl,
         serviceRoleKey,
@@ -475,6 +485,11 @@ Deno.serve(async (_req: Request) => {
         scored: scored as ScoredCase[],
         modelTier: "deepseek-v4-flash-test-suite",
         scorerVersion: SCORER_VERSION,
+        triggerType: mapQueueReasonToTriggerType(queueReason),
+        // No deployed-function-version signal exists in this codebase today —
+        // an explicit literal beats a silent empty string (see persist.ts).
+        changeSetRef: `queue-${queueReason ?? "unlabeled"}`,
+        initiatedBy: `queue-test-runner:${queueReason ?? "no-reason"}`,
       });
 
       await supabase.from("test_run_queue").update({

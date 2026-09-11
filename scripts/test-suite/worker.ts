@@ -27,8 +27,19 @@ import { judgeCase } from "./judge.ts";
 import { buildScorecard, formatScorecard, type ScoredCase } from "./scorecard.ts";
 import { verifyCartOpsInvariants, verifyStatedTotal } from "./cart-ops.ts";
 import { verifyHoursClosed } from "./hours-closed.ts";
-import { persistResults } from "./persist.ts";
+import { persistResults, type TriggerType } from "./persist.ts";
 import { generateRootCauseFix } from "./fix.ts";
+
+// ── Provenance — map test_run_queue.reason into the persist.ts vocabulary ──
+// Reuses the existing reason literals ('onboarding' | 'manual' | ...) rather
+// than inventing parallel vocabulary. Falls back loudly (never silently) to
+// manual-investigation for any reason not yet mapped.
+function mapQueueReasonToTriggerType(reason: string | null): TriggerType {
+  if (reason === "onboarding") return "onboarding";
+  if (reason === "manual") return "manual-investigation";
+  console.warn(`worker: unrecognized test_run_queue.reason "${reason}" — falling back to manual-investigation`);
+  return "manual-investigation";
+}
 
 // ── SCORER_VERSION — frozen 2026-08-28 ────────────────────────────────────
 // ⚠️ BUMP on any judge/scoring/criteria change. This gets persisted so the
@@ -63,7 +74,7 @@ while (true) {
     // ── Claim next pending row ──────────────────────────────────────────
     const { data: rows, error: pollErr } = await supabase
       .from("test_run_queue")
-      .select("id, shop_id, tenant_id")
+      .select("id, shop_id, tenant_id, reason")
       .eq("status", "pending")
       .order("requested_at", { ascending: true })
       .limit(1);
@@ -80,7 +91,12 @@ while (true) {
     }
 
     const job = rows[0];
-    const { id: queueId, shop_id: shopId, tenant_id: tenantId } = job;
+    const { id: queueId, shop_id: shopId, tenant_id: tenantId, reason: queueReason } = job;
+    const triggerType = mapQueueReasonToTriggerType(queueReason);
+    const initiatedBy = `queue-worker:${queueReason ?? "no-reason"}`;
+    // No deployed-function-version signal exists in this codebase today — an
+    // explicit literal beats a silent empty string (see persist.ts).
+    const changeSetRef = `queue-${queueReason ?? "unlabeled"}`;
 
     console.log(`worker: picked job ${queueId} (shop ${shopId})`);
 
@@ -192,6 +208,9 @@ while (true) {
         scored,
         modelTier: "deepseek-v4-flash-test-suite",
         scorerVersion: SCORER_VERSION,
+        triggerType,
+        changeSetRef,
+        initiatedBy,
       });
 
       // ── Mark done ────────────────────────────────────────────────────
