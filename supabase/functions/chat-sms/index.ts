@@ -1723,24 +1723,6 @@ async function executeTool(
         }
       }
 
-      // When this item's phrase attribution is ambiguous (it's in
-      // suppressedReactiveMatchIds), not only is the reactive text-guessing
-      // fallback suppressed above, but the model's OWN explicit non-required
-      // option choices cannot be trusted either — they were chosen from an
-      // undifferentiated phrase that the model cannot scope to this item
-      // alone, so it may be wrong. Move them to unverified_requests rather
-      // than pricing them ("missing beats wrong"). Required groups (size/
-      // style) are untouched and follow the normal pending/ask flow.
-      if (suppressedReactiveMatchIds?.has(menu_item_id)) {
-        for (const group of itemGroups) {
-          if (group.required) continue;
-          const sels = inputOptions[group.name];
-          if (!sels?.length) continue;
-          for (const sel of sels) unverifiedRequests.push(`${group.name}: ${sel}`);
-          delete inputOptions[group.name];
-        }
-      }
-
       for (const group of itemGroups) {
         const selections = inputOptions[group.name] || [];
         if (group.required && selections.length === 0) {
