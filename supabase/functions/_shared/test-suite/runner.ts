@@ -26,6 +26,9 @@ export interface TurnResult {
   reply?: string | null;
   cart?: unknown;
   phase?: string;
+  /** From chat-sms debug_perf.toolCallCount (test_mode only) — distinguishes
+   *  "the model never called the tool" from "the tool call resolved wrong". */
+  toolCallCount?: number;
 }
 
 export interface RunResult {
@@ -134,7 +137,7 @@ async function sendMessage(
   message: string,
   sessionId: string,
   hoursMode?: "open" | "closed",
-): Promise<{ reply: string | null; cart?: unknown; phase?: string }> {
+): Promise<{ reply: string | null; cart?: unknown; phase?: string; debug_perf?: { toolCallCount?: number } }> {
   // ── Build the request body ───────────────────────────────────────────
   const requestBody: Record<string, unknown> = {
     shop_id: shopId,
@@ -191,7 +194,7 @@ async function sendMessageWithRetry(
   sessionId: string,
   hoursMode?: "open" | "closed",
   turnLabel?: string,
-): Promise<{ reply: string | null; cart?: unknown; phase?: string }> {
+): Promise<{ reply: string | null; cart?: unknown; phase?: string; debug_perf?: { toolCallCount?: number } }> {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= PROOF_MAX_RETRIES; attempt++) {
@@ -335,6 +338,7 @@ async function runScriptedCase(
         reply: result.reply ?? null,
         cart: result.cart,
         phase: result.phase,
+        toolCallCount: result.debug_perf?.toolCallCount,
       });
     } catch (e) {
       const errMsg = (e as Error).message;
@@ -430,6 +434,7 @@ async function runConversationalCase(
         reply: result.reply ?? null,
         cart: result.cart,
         phase: result.phase,
+        toolCallCount: result.debug_perf?.toolCallCount,
       });
       history.push(`Customer: ${message}`);
       lastPhase = result.phase;
