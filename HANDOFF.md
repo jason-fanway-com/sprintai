@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-05
+Last updated: 2026-09-11
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -1009,6 +1009,31 @@ from commit messages. Full detail in `docs/DAILY.md`'s 2026-09-10 entry and
   wrong line" bug still causes a real money leak on Vito's Flatbreads in
   25 of 25 test runs. See RUNBOOK's "OPEN, LIVE MONEY BUG" entry — this is
   the top open item, not the address or payment P0s above.
+
+### Update — 2026-09-11: Vito's Flatbread money leak, now CLOSED
+
+The bug flagged as the top open item above is fixed. Root cause and fix
+detail in RUNBOOK's "~~OPEN, LIVE MONEY BUG~~ — FIXED 2026-09-11" entry;
+short version: `matchReactiveExtras` was matching against the raw,
+unscoped whole-turn message, so a word from any phrase (including a word
+inside an item's own name) could price a modifier onto the wrong line.
+Fixed via `scopedModifierText` (scopes matching to the item's own claimed
+phrase, strips the item's own name first) plus `suppressedReactiveMatchIds`
+(per-item, not per-turn, suppression when phrase attribution is genuinely
+ambiguous). Commits `bf6023b`..`f9f3b2c`.
+
+**Verified live post-deploy:** 20/20 PASS across comma/and/conversational
+phrasings — correct subtotals, no cross-item charges. One known residual:
+a fully unpunctuated "bare-list" dump of four items (a synthetic worst
+case, not how real customers text) can't be phrase-scoped and correctly
+suppresses to an undercharge ($0.50 topping goes to `unverified_requests`
+for manual kitchen-ticket resolution) rather than an overcharge —
+"missing beats wrong" by design, not a new bug.
+
+`chat-sms` is at **v367** (`supabase functions list`, updated 2026-09-11
+04:51 UTC) — current with `HEAD`. `test-runner` remains stale at v40
+(2026-09-09); the `_shared/test-suite` fixes since then affect test
+scoring only, not customer orders.
 
 ---
 
