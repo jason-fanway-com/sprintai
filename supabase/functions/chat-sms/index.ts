@@ -52,6 +52,8 @@ import { computeGuard19 } from "./guard19-quantity-only-no-item-named.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import { shouldRevertOrderType } from "./guard2b-order-type-revert.ts";
+import { computeDeliveryOffer, type DeliveryOffer } from "./delivery-memory-offer.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
@@ -110,6 +112,15 @@ const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messa
 // SMS containing it to UCS-2 (67 chars/segment instead of 153).
 // NOTE: C2's askedForName detector (below) must keep matching this string.
 const NAME_ASK = "What's your name for the order?";
+
+// Returning-customer delivery memory (docs/specs/2026-09-12-returning-
+// customer-delivery-memory.md, addendum). A known customer is CONFIRMED, not
+// asked — "why should it ask me for my name again if it already knows my
+// name?" (Jason, live-test verbatim). Second sanctioned form alongside
+// NAME_ASK, never a replacement for it — an unknown customer still gets the
+// plain ask unchanged. isConfirmingPickupName's detector (below) must keep
+// matching this exact wording.
+const nameConfirm = (name: string) => `Putting this in for ${name}, right?`;
 
 // ─── Provider resolution ─────────────────────────────────────────────────────
 function resolveSmsProvider(shop?: { sms_provider?: string | null } | null): "telnyx" | "twilio" {
@@ -697,7 +708,7 @@ export function buildSystemPrompt(
   deliveryEnabled?: boolean,
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
-  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean } | null,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer } | null,
   conversationJustExpired = false,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
@@ -904,8 +915,19 @@ export function buildSystemPrompt(
     const regularClause = customerContext.regularItem
       ? ` Their usual order is "${customerContext.regularItem.name}". You MAY offer it (e.g. "want your regular, the ${customerContext.regularItem.name}, or something else today?") — this is an OFFER, not an instruction to add it. NEVER call add_item for this item unless the customer explicitly confirms your offer in their own next message (e.g. "yes", "sounds good", "the usual please") or names the item themselves. If they haven't confirmed yet, just ask — do not add it preemptively.`
       : "";
-    if (!nameClause && !regularClause) return "";
-    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}`;
+    // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
+    // customer-delivery-memory.md). Offer, never assume — mirrors regularClause's
+    // "OFFER, not an instruction" discipline. isFirstMessage-gated only: this
+    // offer only makes sense on the very first reply of a NEW conversation,
+    // unlike the regular-item offer which can repeat. GUARD C2b/C2b-name in
+    // index.ts is the deterministic enforcement; this text is advisory.
+    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
+      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
+        ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+        : "";
+    if (!nameClause && !regularClause && !deliveryOfferClause) return "";
+    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
   })();
 
   return `You are the ordering assistant for ${shop.name}. Help customers order for pickup or delivery via text.
@@ -933,7 +955,7 @@ RULES:
 - REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
-- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"
+- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). ${customerContext?.name ? `This customer's name is already known to be ${customerContext.name} — CONFIRM it, do NOT ask for it again ("why should it ask me for my name again if it already knows my name" is a real customer complaint). Say EXACTLY: "Putting this in for ${customerContext.name}, right?" If they confirm, proceed with that name. If they correct it (e.g. "no, it's Jay"), use the corrected name they gave instead of ${customerContext.name}.` : `Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"`}
 - When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
@@ -1039,7 +1061,7 @@ export function buildSystemPromptV2(
   deliveryEnabled?: boolean,
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
-  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean } | null,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer } | null,
   shopSettings?:  ShopSettingsRow | null,
   shopVoice?:     ShopVoiceRow | null,
   shopNotes:      ShopNoteRow[] = [],
@@ -1227,8 +1249,19 @@ export function buildSystemPromptV2(
     const regularClause = customerContext.regularItem
       ? ` Their usual order is "${customerContext.regularItem.name}". You MAY offer it (e.g. "want your regular, the ${customerContext.regularItem.name}, or something else today?") — this is an OFFER, not an instruction to add it. NEVER call add_item for this item unless the customer explicitly confirms your offer in their own next message (e.g. "yes", "sounds good", "the usual please") or names the item themselves. If they haven't confirmed yet, just ask — do not add it preemptively.`
       : "";
-    if (!nameClause && !regularClause) return "";
-    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}`;
+    // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
+    // customer-delivery-memory.md). Offer, never assume — mirrors regularClause's
+    // "OFFER, not an instruction" discipline. isFirstMessage-gated only: this
+    // offer only makes sense on the very first reply of a NEW conversation,
+    // unlike the regular-item offer which can repeat. GUARD C2b/C2b-name in
+    // index.ts is the deterministic enforcement; this text is advisory.
+    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
+      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
+        ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+        : "";
+    if (!nameClause && !regularClause && !deliveryOfferClause) return "";
+    return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
   })();
 
   // (d) shop_voice: identity + tone. Falls back to the old boilerplate role
@@ -1304,7 +1337,7 @@ RULES:
 - REMEMBERED-CUSTOMER GROUNDING (CRITICAL): even if RETURNING CUSTOMER CONTEXT above tells you this customer's name or usual order, that is background you may OFFER, never a substitute for what the customer actually says. NEVER call add_item, add_to_bundle, or start_bundle for an item the customer did not name in their OWN message this turn, unless it is the exact item you just offered as "the regular" and the customer's very next message clearly confirms it (or the customer names the item themselves). If a message states only a quantity ("I want four", "give me three", "the usual amount") with no specific item named, do NOT guess an item from memory or history — ask which item they mean.
 - SOLD OUT ITEMS: If a customer asks for an item that is listed as SOLD OUT TODAY, tell them we're temporarily out of it today (e.g., "We're actually out of Everything bagels today — sorry about that!"). Do NOT say the item doesn't exist or isn't on the menu. Suggest alternatives if available.
 - Never use em dashes in responses
-- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"
+- When cart has items and customer says they are done or asks to check out, ask for the customer's name. Do NOT restate every item in the cart — they just built it, they know what's in it. Do NOT quote a total (the system adds it). ${customerContext?.name ? `This customer's name is already known to be ${customerContext.name} — CONFIRM it, do NOT ask for it again ("why should it ask me for my name again if it already knows my name" is a real customer complaint). Say EXACTLY: "Putting this in for ${customerContext.name}, right?" If they confirm, proceed with that name. If they correct it (e.g. "no, it's Jay"), use the corrected name they gave instead of ${customerContext.name}.` : `Ask it EXACTLY like this, for pickup AND delivery orders alike: "What's your name for the order?"`}
 - When confirming before submit_order, just say "Confirm?" — not the full itemised receipt and do NOT quote a total
 - Only call submit_order after the customer explicitly confirms (e.g., "yes", "confirm", "that's it", "place order")
 - Be friendly but concise — every character over 160 costs a segment
@@ -3195,6 +3228,38 @@ function isAskingForPickupName(text: string): boolean {
     && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
 }
 
+/**
+ * Returning-customer delivery memory (docs/specs/2026-09-12-returning-
+ * customer-delivery-memory.md, step 6). Was the bot's own immediately-
+ * preceding message the delivery/pickup-again offer from the
+ * customerContextBlock's deliveryOfferClause? "again to" only appears in
+ * this codebase in that clause's own worded example ("Delivery again to
+ * ..."); "pickup again" likewise only appears in its pickup counterpart —
+ * narrow enough not to fire on an ordinary "delivery" mention elsewhere,
+ * matching the isAskingForPickupName precedent above.
+ */
+function offeredDeliveryAgain(text: string): "delivery" | "pickup" | null {
+  if (!text) return null;
+  if (/\bagain to\b/i.test(text)) return "delivery";
+  if (/\bpickup again\b/i.test(text)) return "pickup";
+  return null;
+}
+
+/**
+ * Checkout name-confirm (docs/specs/2026-09-12-returning-customer-delivery-
+ * memory.md, addendum). Was the bot's own immediately-preceding message the
+ * `nameConfirm(...)` wording for THIS specific known name? Scoped to the
+ * expected name (not just any "putting this in for X, right?") so a stale
+ * confirm for a DIFFERENT customer's name earlier in history can't be
+ * mistaken for consent — same freshness discipline as GUARD 9/20's
+ * "immediately preceding message" checks.
+ */
+function isConfirmingPickupName(text: string, expectedName: string): boolean {
+  if (!text || !expectedName) return false;
+  const escaped = expectedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`putting this in for ${escaped}, right\\?`, "i").test(text);
+}
+
 // renderMissingOptionsPrompt and groupChoicesAlreadySaid now live in
 // sequencer.ts (imported above) — same importable-without-Deno.serve reason
 // as the itemizer/pricing extractions above.
@@ -4969,11 +5034,24 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       if (customerRow) regularItem = regularEligibility(customerRow.favorite_items ?? []);
     }
   }
+  // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
+  // customer-delivery-memory.md). Gated on the SAME customer_personalization_
+  // enabled flag as the rest of this block (spec item 5 — no second flag).
+  // Cheap re-validation only (spec item 3): reuses shop fields already
+  // loaded this turn, never a live geocode — see delivery-memory-offer.ts's
+  // header for why.
+  const deliveryOffer = (customerRow && shop.customer_personalization_enabled !== false)
+    ? computeDeliveryOffer(customerRow.last_order_type ?? null, customerRow.last_delivery_address ?? null, {
+        deliveryEnabled: shop.delivery_enabled === true,
+        deliveryPausedNow: !!(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()),
+        deliveryRadiusMi: shop.delivery_radius_mi ?? null,
+      })
+    : null;
   // AC4: only greet by name on a genuinely returning customer (a stored
   // name AND not their first-ever contact) — never on a first-ever
   // conversation, even if a name were somehow already on file.
   const customerContext = (customerRow && !isLifetimeFirstContact)
-    ? { name: customerRow.name, regularItem, isFirstMessage }
+    ? { name: customerRow.name, regularItem, isFirstMessage, deliveryOffer }
     : null;
 
   // ITEM 1 (2026-09-08, PO live verification): menu_item_id -> option-group
@@ -6121,6 +6199,62 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
+  // ── C2b (2026-09-12): Pre-LLM delivery/pickup-again offer confirm ──────
+  // docs/specs/2026-09-12-returning-customer-delivery-memory.md, step 6. Same
+  // class of risk C2 (below) already guards against — never trust the LLM
+  // alone to correctly apply a high-stakes field like order_type from a bare
+  // "yes" — but the opposite, safer shape of GUARD 2b's fix: this ACTS
+  // deterministically BEFORE the LLM runs, rather than reverting a bad write
+  // after the fact. Placed before C2 so a "yes" answering the delivery offer
+  // can never be mistaken for a pickup-name reply (order_type is still null
+  // at that point, so C2's own gates don't apply here anyway).
+  //
+  // Fires only once per conversation by construction: it requires
+  // cart.order_type to still be null, and both branches below set it — so
+  // once it fires, the guard condition can never be true again this cart.
+  let deliveryOfferDeterministicReply: string | undefined;
+  {
+    const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+    const offeredKind = typeof lastAssistant?.content === "string" ? offeredDeliveryAgain(lastAssistant.content) : null;
+    if (customerContext?.deliveryOffer && !cart.order_type && offeredKind) {
+      if (offeredKind === "delivery" && customerContext.deliveryOffer.type === "delivery" && impliesOrderConfirmation(userMessage)) {
+        const addr = customerContext.deliveryOffer.address;
+        const shopGeoC2b = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
+          ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
+          : null;
+        console.log(`[chat-sms] C2b pre-LLM delivery-again confirm firing (conv=${conversation.id}, cart=${cart.id})`);
+        const addrResult = await executeTool(
+          "set_delivery_address",
+          { street: addr?.street, unit: addr?.unit, city: addr?.city, state: addr?.state, zip: addr?.zip },
+          cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeoC2b,
+        );
+        const { data: reloaded } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+        if (reloaded) {
+          cart.cart_json = (reloaded.cart_json as AnyCartItem[]);
+          cart.order_type = (reloaded.order_type as string | null) ?? cart.order_type;
+          cart.delivery_address = (reloaded.delivery_address as Record<string, unknown> | null) ?? cart.delivery_address;
+          cart.phase = (reloaded.phase as OrderPhase) || cart.phase;
+        }
+        if (cart.order_type !== "delivery" || !cart.delivery_address) {
+          // Fail-closed path fired (geocode down, no longer in zone, etc.) —
+          // set_delivery_address's own message is the honest, deterministic
+          // answer; letting the LLM improvise here is the exact hallucination
+          // risk this shortcut exists to prevent, so surface it directly.
+          const msg = (addrResult.result as { message?: string } | undefined)?.message;
+          if (msg) deliveryOfferDeterministicReply = msg;
+        }
+      } else if (offeredKind === "pickup" && customerContext.deliveryOffer.type === "pickup" && impliesOrderConfirmation(userMessage)) {
+        console.log(`[chat-sms] C2b pre-LLM pickup-again confirm firing (conv=${conversation.id}, cart=${cart.id})`);
+        await supabase.from("order_carts").update({ order_type: "pickup" }).eq("id", cart.id);
+        cart.order_type = "pickup";
+      }
+      // Anything else (a differently-worded address, "no", a correction) —
+      // do nothing here; fall through to the LLM as normal. The model still
+      // has the STEP 5 prompt instructions telling it to use whatever
+      // address/order type the customer actually named.
+    }
+  }
+
   // ── C2 (2026-08-29): Pre-LLM name→submit shortcut ──────────────────────
   // When the last assistant message asked for a pickup name and the customer's
   // next message is a short name, bypass the LLM entirely and call submit_order
@@ -6185,6 +6319,67 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
+  // ── C2b-name (2026-09-12): Pre-LLM name-confirm→submit shortcut ────────
+  // docs/specs/2026-09-12-returning-customer-delivery-memory.md, addendum.
+  // Mirrors C2 exactly, for the "Putting this in for X, right?" CONFIRM
+  // instead of the plain name ASK — same reason: never trust the LLM alone
+  // to correctly apply a high-stakes field (pickup_name) from a bare "yes".
+  // Placed alongside C2, after it: nameSubmitCheckoutUrl is shared, so if C2
+  // already submitted this turn (only possible when pickup_name was already
+  // unset AND the prior message was the plain NAME_ASK, mutually exclusive
+  // with the nameConfirm wording this block matches), this is a no-op.
+  if (!nameSubmitCheckoutUrl && customerContext?.name && cartItems.length > 0 && !(cart as any).pickup_name) {
+    const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
+    const confirmingName = typeof lastAssistant?.content === "string" &&
+      isConfirmingPickupName(lastAssistant.content, customerContext.name);
+    if (confirmingName) {
+      const trimmed = userMessage.trim();
+      let resolvedName: string | null = null;
+      if (impliesOrderConfirmation(trimmed)) {
+        resolvedName = customerContext.name;
+      } else {
+        const explicitCorrection = trimmed.match(/^(?:no,?\s*)?(?:it'?s|i'?m|my name is)\s+([A-Z][a-z]+)/i);
+        if (explicitCorrection) {
+          resolvedName = explicitCorrection[1];
+        } else {
+          const stripped = trimmed.replace(/^(?:no|actually)[,.]?\s*/i, "").trim();
+          if (/^[A-Z][A-Za-z .'-]{0,30}$/.test(stripped) && stripped.split(/\s+/).length <= 3 && stripped.length > 0) {
+            resolvedName = stripped;
+          }
+        }
+      }
+      if (resolvedName) {
+        const shopGeoC2bName = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
+          ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
+          : null;
+        const hasIncompleteBundle = cartItems.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
+        if (!cart.order_type) {
+          console.log(`[chat-sms] C2b-name defaulting order_type to "pickup" (was null, conv=${conversation.id})`);
+          await supabase.from("order_carts").update({ order_type: "pickup" }).eq("id", cart.id);
+          cart.order_type = "pickup";
+        }
+        if (!hasIncompleteBundle) {
+          console.log(`[chat-sms] C2b-name pre-LLM name-confirm→submit shortcut firing (conv=${conversation.id}, name="${resolvedName}", cart=${cart.id})`);
+          const submitInput: Record<string, unknown> = { pickup_name: resolvedName };
+          const submitResult = await executeTool("submit_order", submitInput, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeoC2bName);
+          if (submitResult.ok && submitResult.checkoutUrl) {
+            nameSubmitCheckoutUrl = submitResult.checkoutUrl;
+            const { data: reloaded } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+            if (reloaded) {
+              cart.cart_json = (reloaded.cart_json as AnyCartItem[]);
+              cart.phase = (reloaded.phase as OrderPhase) || "checkout";
+              (cart as any).pickup_name = resolvedName;
+            }
+          } else {
+            console.warn(`[chat-sms] C2b-name submit_order failed: ${JSON.stringify(submitResult.result).slice(0, 200)}. Falling through to LLM.`);
+          }
+        }
+      }
+      // Otherwise (a reply that neither confirms nor looks like a name
+      // correction) — fall through to the LLM as normal.
+    }
+  }
+
   // ── Deterministic cart-summary handler ────────────────────────────────────
   // "show me my order" / "what's in my cart" and obvious variants → call
   // renderItemizedRecap directly, no LLM. Same renderer the checkout summary
@@ -6197,7 +6392,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // covered), so the read fell through to the LLM, which then had to state
   // real money itself -- exactly the read-only path that must never touch
   // the LLM or a mutation guard.
-  if (!correctionApplied && !nameSubmitCheckoutUrl && cartItems.length > 0 && cart.phase === "building" && CART_SUMMARY_RE.test(userMessage.trim())) {
+  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cartItems.length > 0 && cart.phase === "building" && CART_SUMMARY_RE.test(userMessage.trim())) {
     const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
     const summaryReply = `Here's your order so far:\n\n${recap}`;
     console.log(`[chat-sms] cart-summary shortcut fired (conv=${conversation.id})`);
@@ -6236,7 +6431,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // residual case intentionally still falls through to the hint/GUARD-17
   // fallback below. The two paths cover disjoint scenarios (exactly-one vs.
   // 2+ zero-option cart items) and never both fire for the same turn.
-  if (!correctionApplied && !nameSubmitCheckoutUrl && cart.phase === "building" && cartItems.length > 0) {
+  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cart.phase === "building" && cartItems.length > 0) {
     const zeroOptionMenu: ZeroOptionMenuItemFull[] = effectiveMenu.map(mi => ({
       id: mi.id, ask_plan: mi.ask_plan, category: mi.category, price_cents: mi.price_cents,
     }));
@@ -6419,6 +6614,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (nameSubmitCheckoutUrl) {
     reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
     checkoutUrl = nameSubmitCheckoutUrl;
+  } else if (deliveryOfferDeterministicReply) {
+    // C2b fail-closed path (step 6): set_delivery_address's own honest
+    // message IS the reply — never hand this turn to the LLM, which has no
+    // way to know why the confirmed offer didn't apply.
+    reply = deliveryOfferDeterministicReply;
   } else {
     const loopResult = await runOrderingLoop(
       systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
@@ -8138,7 +8338,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // that owns this, since the model asks for the name on its own
     // initiative far more often than this guard has to force it) — keep
     // this reply plain so the receipt is never shown twice.
-    reply = NAME_ASK;
+    // Addendum (2026-09-12): a known customer is CONFIRMED, not asked — same
+    // nameConfirm/isConfirmingPickupName wording the checkout prompt and C2b-
+    // name shortcut use, so this guard's forced prompt still triggers them.
+    reply = customerContext?.name ? nameConfirm(customerContext.name) : NAME_ASK;
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────
@@ -8297,20 +8500,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     guardCart.length > 0 && !guardReplyHadPickupDelivery && !guardOrderTypeBefore &&
     !userSaidPickupDelivery;
 
-  // A delivery address captured THIS TURN is not a silent set — it is the most
-  // explicit statement of intent a customer can make, and set_delivery_address
-  // only writes it after a positively-qualified, in-zone geocode. Reverting
-  // order_type here left the row holding a real delivery address with
-  // order_type null; the phantom-link recovery below then defaulted that null to
-  // "pickup" to clear its own gate, so the customer was told to come and collect
-  // a delivery order. Observed live on the demo shop 2026-09-11, orders #11/#12:
-  // the customer answered "Delivery" one turn, gave the address the next, and the
-  // address turn contains neither the word pickup nor delivery — so
-  // userSaidPickupDelivery was false and this gate fired on the wrong turn.
-  const guardAddressSetThisTurn = guardCartRow?.delivery_address != null &&
-    guardOrderTypeAfter === "delivery";
-
-  if (needsDeliveryGate && !guardAddressSetThisTurn) {
+  // A delivery address captured THIS TURN is not a silent set — see
+  // guard2b-order-type-revert.ts's header for the full P0 incident writeup
+  // (commit 66232fa) and why this decision core lives in its own testable
+  // module rather than inline here.
+  if (shouldRevertOrderType({
+    needsDeliveryGate,
+    deliveryAddressAfter: guardCartRow?.delivery_address ?? null,
+    orderTypeAfter: guardOrderTypeAfter,
+  })) {
     // LLM silently set order_type (pickup or delivery) via tool call
     // without asking the customer — revert so next turn still gates.
     if (guardOrderTypeAfter) {

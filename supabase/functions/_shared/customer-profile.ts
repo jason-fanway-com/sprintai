@@ -24,6 +24,8 @@ export interface CustomerRow {
   favorite_items:    FavoriteItem[];
   last_order_id:     string | null;
   last_order_at:     string | null;
+  last_order_type:      "pickup" | "delivery" | null;
+  last_delivery_address: Record<string, unknown> | null;
 }
 
 const MAX_FAVORITE_ITEMS = 5;
@@ -140,7 +142,7 @@ export async function lookupCustomerContext(
   const key = canonicalizePhone(customerPhone) ?? customerPhone;
   const { data, error } = await supabase
     .from("customers")
-    .select("tenant_id, customer_phone, name, order_count, total_spent_cents, favorite_items, last_order_id, last_order_at")
+    .select("tenant_id, customer_phone, name, order_count, total_spent_cents, favorite_items, last_order_id, last_order_at, last_order_type, last_delivery_address")
     .eq("tenant_id", tenantId)
     .eq("customer_phone", key)
     .maybeSingle();
@@ -159,6 +161,8 @@ export interface PaidOrderForProfile {
   itemNames:     string[]; // cart_json item names for this one paid order (may contain dupes — deduped internally)
   orderId:       string;
   orderAt:       string;   // ISO timestamp
+  orderType:      "pickup" | "delivery";
+  deliveryAddress: Record<string, unknown> | null;
 }
 
 /**
@@ -210,6 +214,8 @@ export async function upsertCustomerProfile(
       favorite_items:    favoriteItems,
       last_order_id:     order.orderId,
       last_order_at:     order.orderAt,
+      last_order_type:      order.orderType,
+      last_delivery_address: order.deliveryAddress,
       updated_at:        order.orderAt,
       ...(existing ? {} : { first_seen_at: order.orderAt }),
     }, { onConflict: "tenant_id, customer_phone" });

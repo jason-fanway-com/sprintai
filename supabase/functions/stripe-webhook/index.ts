@@ -476,6 +476,8 @@ async function handleOrderPaymentComplete(
         itemNames,
         orderId: cartId,
         orderAt: new Date().toISOString(),
+        orderType: ((cart.order_type as string) || "pickup") as "pickup" | "delivery",
+        deliveryAddress: (cart.delivery_address as Record<string, unknown> | null) ?? null,
       });
       if (!result.ok) {
         console.error(`[stripe-webhook] customer-profile upsert failed for cart ${cartId}: ${result.error}`);
