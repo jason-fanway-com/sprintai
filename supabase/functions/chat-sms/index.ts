@@ -1068,18 +1068,28 @@ export function buildSystemPromptV2(
   shopVoice?:     ShopVoiceRow | null,
   shopNotes:      ShopNoteRow[] = [],
   conversationJustExpired = false,
+  // Injectable so the TODAY'S HOURS fix (2026-09-12) is testable at a
+  // specific day-of-week without depending on when the test happens to run.
+  // Defaults to real wall-clock time at the one real call site.
+  now = new Date(),
 ): string {
-  const today = getBusinessDayKey(shop.timezone);
+  const today = getBusinessDayKey(shop.timezone, now);
   const hours = dayWindows(shop.open_hours?.[today]);
-  const computedHoursStr = hours.length > 0
+  // TODAY'S HOURS is always computed deterministically from shop.open_hours
+  // via the same dayWindows/getBusinessDayKey helpers used for open/closed
+  // state — never left to the model to pick out of a full-week string. That
+  // used to be exactly what happened when shop_settings.hours_line was set:
+  // the model was handed the whole week ("Mon 11:00-22:00, ..., Sat
+  // 11:00-23:00, Sun 12:00-21:00") under a single HOURS line and asked to
+  // find today's row itself, and it picked the wrong day's close time (a
+  // live Saturday defect — quoted a weekday's 10 PM close on a night that
+  // actually closes at 11 PM). shop_settings.hours_line is still surfaced
+  // separately, unchanged, for "what are your hours this week"-type
+  // questions — it is just no longer the source for TODAY specifically.
+  const todaysHoursStr = hours.length > 0
     ? hours.map((h: { open: string; close: string }) => `${h.open}-${h.close}`).join(", ")
     : "Hours not specified";
-  // shop_settings.hours_line is a full-week summary (e.g. "Mon-Fri 7 AM-3
-  // PM, Sat ..."), not a single day's window, so it gets its own generic
-  // "HOURS" label rather than reusing legacy's "TODAY'S HOURS" framing.
-  // Falls back to the same per-day computation as legacy when unset.
-  const hoursLabel = shopSettings?.hours_line ? "HOURS" : "TODAY'S HOURS";
-  const hoursStr = shopSettings?.hours_line ?? computedHoursStr;
+  const weeklyHoursStr = shopSettings?.hours_line ?? null;
 
   const cartStr = cart.length === 0
     ? "Empty"
@@ -1322,12 +1332,12 @@ You are replying by SMS text message. Plain text only. Never use markdown, table
 
 CURRENT PHASE: ${phase}
 CURRENT TIME: ${currentTime}
-${hoursLabel}: ${hoursStr}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}${customerContextBlock}
+TODAY'S HOURS: ${todaysHoursStr}${weeklyHoursStr ? `\nTHIS WEEK'S HOURS: ${weeklyHoursStr} (use this only for "what are your hours this week"-type questions — for "are you open"/"what time do you close" today, use TODAY'S HOURS above, never derive today's window yourself from this weekly line)` : ""}${deliveryAvail}${orderTypeInfo}${deliveryInfo}${deliveryFeeInfo}${tipInfo}${wingPolicy}${customerContextBlock}
 
 AVAILABLE MENU:
 ${menuStr}
 ${soldOutNames.length > 0 ? `\nSOLD OUT TODAY (do not offer these, but if a customer asks, tell them we're temporarily out): ${soldOutNames.join(", ")}\n` : ""}${shop.ai_instructions ? `\nSPECIAL INSTRUCTIONS (HIGHEST PRIORITY, follow these exactly):\n${shop.ai_instructions}\n` : ""}${testModeDirective}
-PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, ${hoursLabel}, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly, use the menu's real item name and unit instead. The menu is the single source of truth for what items exist and what they cost.
+PRECEDENCE RULE: The structured fields above (DELIVERY AVAILABLE, TODAY'S HOURS, ORDER TYPE) are authoritative and override any conflicting statements in SPECIAL INSTRUCTIONS. If SPECIAL INSTRUCTIONS says "we do not deliver" but DELIVERY AVAILABLE says "Yes", delivery IS available — follow the structured field. ITEM-NAME PRECEDENCE: The AVAILABLE MENU is authoritative for item NAMES and PRICES. If SPECIAL INSTRUCTIONS (or ai_instructions) reference an item by a name or unit that does not match the AVAILABLE MENU exactly, use the menu's real item name and unit instead. The menu is the single source of truth for what items exist and what they cost.
 ${shop.shop_context ? `\nBackground information about this shop (use to answer customer questions about the business, NOT for ordering): ${shop.shop_context}\n` : ""}${shopNotesBlock}
 CURRENT CART:
 ${cartStr}${cart.length > 0 ? `\n(No pricing shown above by design — you do not have subtotal, fees, or total for this cart. The system computes and states these figures; you never see or say them.)` : ""}
@@ -3931,16 +3941,21 @@ function getCurrentTime(timezone: string): string {
 // midnight — e.g. 11:30pm Sun in America/New_York is already Mon in UTC, so the
 // bot would read Monday's hours on a Sunday night. open_hours is keyed by the
 // shop's local day, so the lookup must use the shop's local day too.
-function getBusinessDayKey(timezone: string): string {
+// `now` defaults to real wall-clock time at every existing call site
+// (all call unchanged as `getBusinessDayKey(shop.timezone)`); exported and
+// made injectable so the TODAY'S HOURS fix (2026-09-12) is testable at a
+// specific day-of-week without depending on when the test happens to run —
+// same isConversationExpired(now: Date, ...) precedent already used above.
+export function getBusinessDayKey(timezone: string, now: Date = new Date()): string {
   const dayMap: Record<string, string> = {
     Sun: "sun", Mon: "mon", Tue: "tue", Wed: "wed", Thu: "thu", Fri: "fri", Sat: "sat",
   };
   try {
-    const wd = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(new Date());
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(now);
     return dayMap[wd] ?? wd.slice(0, 3).toLowerCase();
   } catch {
     const fallback = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-    return fallback[new Date().getDay()];
+    return fallback[now.getDay()];
   }
 }
 
