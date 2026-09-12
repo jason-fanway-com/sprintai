@@ -19,6 +19,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { extractPdfText } from "./pdf-text.ts";
 import { validateMenu }     from "./validator.ts";
+import { extractLlmJson, indexOfBalancedClose } from "../_shared/llm-json.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":  "*",
@@ -566,12 +567,12 @@ async function extractMenuPass(text: string, orKey: string, prompt: string): Pro
 // ---- JSON PARSING ----------------------------------------------------------
 
 function parseExtractionResult(raw: string): ExtractionResult {
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-  let parsed: Record<string,unknown> | null = null;
-  try { parsed = JSON.parse(cleaned) as Record<string,unknown>; } catch {
-    parsed = recoverTruncated(cleaned);
-  }
-  if (!parsed) { console.error(`[parse-menu-pdf] Bad JSON. Start: ${cleaned.slice(0,200)}`); return {items:[],modifiers:[]}; }
+  const parsed = extractLlmJson<Record<string, unknown>>(raw, {
+    objectOnly: true,
+    recoverTruncated,
+    onFailure: (_reason, snippet) => console.error(`[parse-menu-pdf] Bad JSON. Start: ${snippet.slice(0, 200)}`),
+  });
+  if (!parsed) return { items: [], modifiers: [] };
   return { items: parseArr(parsed.items), modifiers: parseArr(parsed.modifiers) };
 }
 
@@ -590,7 +591,7 @@ function parseArr(arr: unknown): CanonicalRow[] {
 function recoverTruncated(raw: string): Record<string,unknown> | null {
   const idx = raw.indexOf('"items"');
   if (idx > 0) {
-    const last = findLastObj(raw, raw.indexOf('[', idx) + 1);
+    const last = indexOfBalancedClose(raw, raw.indexOf('[', idx) + 1, "{", "}");
     if (last > 0) {
       try { return JSON.parse(raw.slice(0, last + 1) + '], "modifiers": []}') as Record<string,unknown>; } catch {}
     }
@@ -599,14 +600,6 @@ function recoverTruncated(raw: string): Record<string,unknown> | null {
     if (raw[i] === "}") { try { return JSON.parse(raw.slice(0, i + 1)) as Record<string,unknown>; } catch { continue; } }
   }
   return null;
-}
-
-function findLastObj(s: string, start: number): number {
-  let d = 0;
-  for (let i = start; i < s.length; i++) {
-    if (s[i] === '{') d++; else if (s[i] === '}') { d--; if (d === 0) return i; }
-  }
-  return -1;
 }
 
 // ---- OPENROUTER -----------------------------------------------------------
