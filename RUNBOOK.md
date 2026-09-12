@@ -2186,3 +2186,18 @@ ready-to-run `git commit` command so every future flag change leaves a
 record. `check-switches.sh` is still the correct pre-flight read; this
 script is the correct write path — a raw REST `PATCH` against
 `shops.compiled_ordering_engine_enabled` is no longer how this gets done.
+
+## `resolver.ts` deleted as dead code — 2026-09-12
+
+`supabase/functions/chat-sms/resolver.ts` (+ `resolver.test.ts`) was removed.
+Confirmed via `grep` across the whole repo (excluding the two files
+themselves) that there was zero literal `from './resolver'` / `'../resolver'`
+import anywhere — every remaining hit for the word "resolver" was either a
+comment referencing other logic (the legacy pending-answer resolver inline
+in `index.ts`, `phrase-split.ts`, `ask-plan-engine.ts`) or test-file prose.
+`phrase-split.test.ts` and `ask-plan-engine.test.ts` already documented this
+explicitly ("resolver.ts is dead code — never wired into chat-sms/index.ts").
+It was never wired in; the live item-identity path is `add_item`'s
+`menu_item_id` plus `phrase-split.ts` + `ask-plan-engine.ts`, both built
+after `resolver.ts`. This is a deliberate removal of dead code, not a loss
+of functionality.
