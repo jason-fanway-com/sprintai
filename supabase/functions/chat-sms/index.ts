@@ -53,6 +53,7 @@ import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-af
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import { computeGuard19, statesQuantity } from "./guard19-quantity-only-no-item-named.ts";
 import { computeGuard21 } from "./guard21-unconsented-growth-no-signal-20260912.ts";
+import { resolveModifierMention, type ModifierChoiceOption } from "./regular-offer-modifier-20260912.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
@@ -1306,7 +1307,23 @@ export function buildSystemPromptV2(
       : customerContext.name
         ? `This is a RETURNING customer named ${customerContext.name}. You already greeted them by name earlier this conversation — do not repeat the greeting.`
         : "";
-    const regularClause = customerContext.regularItem
+    // ONE-QUESTION FIX (2026-09-12 P0, live incident, conv f60d3611): the
+    // regular-item offer and the delivery-again offer used to be two
+    // INDEPENDENT clauses, both injected on the same turn whenever both were
+    // eligible — "Want your usual, the X, or something else today? Delivery
+    // again to Y?" is two separate questions in one message, violating this
+    // prompt's own ONE QUESTION PER MESSAGE rule, and it produced exactly
+    // the compound "yes...but I want pepperoni" reply that then had nowhere
+    // deterministic to land (see C2b-regular in index.ts, and GUARD 20's own
+    // header, for the accept-with-modifier fix that reply now resolves
+    // against). Fix: when BOTH are eligible on the same turn, fold them into
+    // ONE combined sentence/question instead of asking twice — still a
+    // single compound offer the customer can answer (or modify) in one
+    // reply, just phrased as one question, not two.
+    const deliveryOfferForBoth = customerContext.deliveryOffer?.type === "delivery" ? customerContext.deliveryOffer : null;
+    const bothOffersActive = !!customerContext.regularItem &&
+      !!deliveryOfferForBoth && customerContext.deliveryOfferEligible;
+    const regularClause = customerContext.regularItem && !bothOffersActive
       ? ` Their usual order is "${customerContext.regularItem.name}". You MAY offer it (e.g. "want your regular, the ${customerContext.regularItem.name}, or something else today?") — this is an OFFER, not an instruction to add it. NEVER call add_item for this item unless the customer explicitly confirms your offer in their own next message (e.g. "yes", "sounds good", "the usual please") or names the item themselves. If they haven't confirmed yet, just ask — do not add it preemptively.`
       : "";
     // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
@@ -1321,13 +1338,15 @@ export function buildSystemPromptV2(
     // still only ever fires once per conversation even though it's no longer
     // pinned to message #1. GUARD C2b/C2b-name in index.ts is the
     // deterministic enforcement; this text is advisory.
-    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.deliveryOfferEligible
-      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your next reply, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
-      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.deliveryOfferEligible
-        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your next reply, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
-        : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOfferEligible
-          ? ` Their last order was PICKUP. As part of your next reply, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
-          : "";
+    const deliveryOfferClause = bothOffersActive
+      ? ` Their usual order is "${customerContext.regularItem!.name}" and their last order was DELIVERY to ${deliveryOfferForBoth!.address?.formatted}. Ask about BOTH as ONE combined question in a single sentence — do NOT ask two separate questions. Say something like: "Want your usual, the ${customerContext.regularItem!.name}, delivered again to ${deliveryOfferForBoth!.address?.formatted}?" This is ONE offer, asked ONCE. This is an OFFER, not a decision — do NOT call add_item, set_delivery_address, or set_order_type until the customer answers. A plain "yes" confirms both; a modified answer ("yes but add pepperoni", "yes but a different address") still confirms both parts except the specific thing they changed.`
+      : customerContext.deliveryOffer?.type === "delivery" && customerContext.deliveryOfferEligible
+        ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your next reply, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
+        : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.deliveryOfferEligible
+          ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your next reply, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
+          : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOfferEligible
+            ? ` Their last order was PICKUP. As part of your next reply, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+            : "";
     if (!nameClause && !regularClause && !deliveryOfferClause) return "";
     return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
   })();
@@ -6547,6 +6566,65 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
+  // ── C2b-regular (2026-09-12 P0, live money defect on Vito's, conv
+  // f60d3611): pre-LLM regular-offer accept, with modifier carry-through ──
+  // "Yes delivery again. But I want pepperoni on it today." combines a
+  // delivery confirmation (handled by C2b above) with ACCEPTING the regular
+  // item the bot just offered PLUS a topping. GUARD 20 already knows how to
+  // recognize this exact acceptance as authorized
+  // (regularItemAuthorizedThisTurn) -- but nothing in the codebase actually
+  // PERFORMED the add: the system prompt's instruction to do so is advisory
+  // only, and the model dropped both the item and the topping entirely,
+  // leaving the cart empty. GUARD 1f then correctly reported that true
+  // (empty) state -- the failure was upstream of any guard, in never
+  // resolving "yes + modifier" against the offer at all.
+  //
+  // Same class of fix as C2b immediately above: never trust the LLM alone
+  // to correctly apply a high-stakes cart add from a compound "yes,
+  // but..." answer -- ACT deterministically before the LLM runs. Modifier
+  // resolution itself lives in regular-offer-modifier-20260912.ts (pure,
+  // testable against the PO's explicit phrasing matrix); this block only
+  // wires it to the real menu item and calls add_item.
+  //
+  // Fires only once per conversation by construction: cartItems.length === 0
+  // is required, and a successful add makes that condition false for every
+  // later turn. Falls through silently to the LLM when the offered item
+  // can't be matched in the current menu (renamed/removed) or the add call
+  // itself fails -- never a hard error to the customer for this shortcut.
+  {
+    const lastAssistantReg = [...history].reverse().find(h => h.role === "assistant");
+    const priorAssistantMessageReg = typeof lastAssistantReg?.content === "string" ? lastAssistantReg.content : null;
+    if (
+      cartItems.length === 0 &&
+      regularItem &&
+      regularItemAuthorizedThisTurn(userMessage, priorAssistantMessageReg, regularItem.name)
+    ) {
+      const baseMenuItem = effectiveMenu.find(m => m.name.toLowerCase().trim() === regularItem.name.toLowerCase().trim());
+      if (baseMenuItem) {
+        const groupChoices: ModifierChoiceOption[] = (baseMenuItem.option_groups ?? []).flatMap(g =>
+          g.choices.map(c => ({ groupName: g.name, name: c.name })),
+        );
+        const modResult = resolveModifierMention(userMessage, groupChoices);
+        const addOptions = modResult?.action === "add" ? { [modResult.groupName]: [modResult.choiceName] } : undefined;
+        console.log(`[chat-sms] C2b-regular pre-LLM regular-offer accept firing (conv=${conversation.id}, item="${baseMenuItem.name}", modifier=${modResult ? `${modResult.action}:${modResult.choiceName || "(none)"}` : "none"})`);
+        const regAddResult = await executeTool(
+          "add_item", { menu_item_id: baseMenuItem.id, quantity: 1, options: addOptions },
+          cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, null,
+        );
+        if (regAddResult.ok) {
+          const { data: reloadedReg } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+          if (reloadedReg) {
+            cart.cart_json = (reloadedReg.cart_json as AnyCartItem[]);
+            cart.phase = (reloadedReg.phase as OrderPhase) || cart.phase;
+            cartItems = [...cart.cart_json];
+          }
+        } else {
+          console.warn(`[chat-sms] C2b-regular add_item failed: ${JSON.stringify(regAddResult.result).slice(0, 200)}. Falling through to LLM.`);
+        }
+      }
+    }
+  }
+
   // ── C2 (2026-08-29): Pre-LLM name→submit shortcut ──────────────────────
   // When the last assistant message asked for a pickup name and the customer's
   // next message is a short name, bypass the LLM entirely and call submit_order
@@ -7202,7 +7280,26 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (!portionCheck.tripped && guard1f.tripped) {
     console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation, ${guard1f.reason}) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     if (guardCart.length === 0) {
-      reply = "Your cart is empty. What would you like to order?";
+      // P0 fix (2026-09-12, live incident, conv f60d3611): the flat "Your
+      // cart is empty. What would you like to order?" is a TRUE statement
+      // that reads as though we ignored the customer even when they clearly
+      // named something this turn — because we did (this guard trips
+      // precisely when nothing the model claimed happened actually did).
+      // Never answer a specific request with a generic prompt: if this
+      // turn's own message named a real menu item, or confirmed a fresh
+      // regular-item offer, say so explicitly and re-ask for that one
+      // missing piece instead of a blank slate.
+      const menuItemNames1f = buildMenuItemNames(effectiveMenu);
+      const named1f = extractCustomerReferencedItems([{ role: "user", content: userMessage }], menuItemNames1f);
+      const lastAssistant1f = [...history].reverse().find(h => h.role === "assistant");
+      const priorAssistantMessage1f = typeof lastAssistant1f?.content === "string" ? lastAssistant1f.content : null;
+      if (named1f.size > 0) {
+        reply = `Sorry, that didn't go through — could you say "${[...named1f].join('", "')}" again?`;
+      } else if (regularItem && regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage1f, regularItem.name)) {
+        reply = `Sorry, that didn't go through — want me to add your usual, the ${regularItem.name}?`;
+      } else {
+        reply = "Your cart is empty. What would you like to order?";
+      }
     } else {
       // P0 fix (2026-09-09, item 2 — itemized recap): this is exactly the
       // reply the live incident showed the customer (BLOCKED.txt 2026-09-09,
