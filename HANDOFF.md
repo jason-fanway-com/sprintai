@@ -1073,6 +1073,40 @@ further deploys. Facts only, no plan — a plan is Jason's to write.
   someone checks `git log` on `main` and `supabase functions list` for
   `test-runner` again.
 
+## Update — 2026-09-11 21:30 EDT: un-halted, full day's work, two P0s closed, one standing rule broken off-commit
+
+Development resumed after the 08:50 halt above (per
+`docs/specs/2026-09-11-single-writer-po-role.md`, a PO-role collision
+incident mid-day — two Claude sessions both drove the crew as "the outside
+PO" for ~2 hours with contradictory halt/un-halt instructions; spec only,
+fix not built). Full narrative: `docs/DAILY.md` 2026-09-11.
+
+**What is LIVE right now (new since the halt):**
+
+| Thing | Where | State |
+|---|---|---|
+| `chat-sms` | Supabase | **v390**, 2026-09-12 01:25:06 UTC — confirmed current with `HEAD` by downloading and content-checking the live bundle, not just the timestamp. |
+| Two P0 double-charge bugs on the compiled ordering engine | `chat-sms` | Fixed and deployed (`8580903`, `a1b8979`) — cart-line identity surviving a menu recompile, and a disambiguation-resolution code path silently falling through to the legacy add-item branch on a compiled-engine shop. |
+| Vito's flatbread pepperoni/modifier price leak | `chat-sms` | Closed (`bf6023b`..`f9f3b2c`), after being left open in the previous entry. 20/20 PASS live post-deploy; one known undercharge residual on a synthetic bare-list input, by design. |
+| `test_runs` provenance (migration `134`) | Supabase DB | Applied — confirmed by direct query. Enforcement (`persist.ts`) cannot take effect until `test-runner` is redeployed (still v50, now five fixes behind). |
+| `deploy-function.sh` / `check-switches.sh` | `scripts/` | New, local-only tooling: type-checked/tested/version-confirmed deploys, and a live per-shop flag printout. Built after three same-day "shipped, did nothing" incidents. |
+
+**Standing rule contradicted by production state, not yet resolved**:
+`RUNBOOK.md` says Vito's `compiled_ordering_engine_enabled` must never be
+`true`. Queried live tonight: it is `true`. A same-day PO spec recorded it
+`FALSE` at ~15:00 ET and authorized only a menu recompile, explicitly not a
+flag change. No commit changes this DB column, so there is no record here
+of who flipped it or exactly when — only that it happened between ~15:00
+and ~16:57 ET on 2026-09-11. Both of tonight's P0 fixes above are bugs in
+that exact compiled path, on this exact shop. See RUNBOOK's "Correction:
+Vito's IS on the compiled engine" entry. This is a fact to check live
+before trusting either document, not something resolved by this update.
+
+**Still true from the halt note above, unchanged:** `test-runner` remains
+stale (now v50, last deployed 2026-09-09 — five fixes behind, not just the
+four noted at the halt). Whether the mid-flight builder subagent made
+further changes after the halt was never independently reconfirmed here.
+
 ---
 
 ## Quickstart for development

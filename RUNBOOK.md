@@ -2054,3 +2054,90 @@ any migration you suspect was applied this way, verify against the data
 (a column, a trigger's effect), not against `supabase migration list`.
 Migration `132` (stripe-webhook fix, same day) *is* tracked normally, so the
 drift is per-migration, not a blanket CLI failure — check each one.
+
+## Correction: Vito's IS on the compiled engine — the "do not flip on for Vito's" rule above is not current — 2026-09-11
+
+The section above ("`shops.compiled_ordering_engine_enabled`... do not flip
+on for Vito's") says the column "must never be set `true`" for Vito's.
+Queried live 2026-09-11 ~21:30 ET: `shops.compiled_ordering_engine_enabled`
+is **`true`** for Vito's Pizza. A PO spec written earlier the same day
+(`docs/specs/2026-09-11-vitos-compile-then-reply-inversion.md`) independently
+recorded the flag as `FALSE` at ~15:00 ET and explicitly authorized
+recompiling Vito's menu *without* touching the flag. A commit message at
+16:57 ET already treats the flip as a settled fact ("after flipping
+`compiled_ordering_engine_enabled`"). No commit in `main` changes this
+column — it is a DB value, not code — so there is no record here of who
+flipped it or exactly when, only that it happened between ~15:00 and ~16:57
+ET on 2026-09-11. This is not a documentation bug to fix by editing the rule
+above; it is a live conflict between a standing rule and production state.
+Two P0 double-charge bugs fixed the same night (`8580903`, `a1b8979` — cart-
+line identity not surviving a recompile, and a disambiguation-resolution
+code path silently falling through to the legacy add-item branch) were both
+bugs in this exact compiled path, on this exact shop. Check the flag live
+before assuming either document is still true.
+
+## `chat-sms`: two P0 double-charge bugs on the compiled ordering engine — fixed and deployed — 2026-09-11
+
+Both produced the same symptom live on Vito's: one real cart choice, two
+priced lines.
+
+1. `applyCompiledAddItem`'s "already in cart" check compared
+   `option_group_id`/`option_choice_id` pairs, which are not stable across a
+   menu recompile (Vito's menu was recompiled twice on 2026-09-11). A line
+   resolved against an older compile's ids and the same real choice
+   resolved against the current compile's ids shared no matching id and
+   both got priced. Fixed (`8580903`) by comparing option **display names**
+   instead — stable regardless of what a recompile does to internal ids.
+2. The actual root cause of the live incident: resolving a pending
+   disambiguation (GUARD 7's "which one did you mean" follow-up, e.g. the
+   numbered-pick backstop answering "1") calls `executeTool("add_item", ...)`
+   with only 8 of its positional arguments — `compiledEngineEnabled` and
+   everything after it is `undefined`, so this one call path silently fell
+   through to the **legacy** add-item branch even though Vito's is flagged
+   compiled, producing a raw line invisible to `applyCompiledAddItem`'s
+   identity checks entirely. The model's own next tool call for the same
+   item then went through the correct compiled path and added a second,
+   real, fully-priced line. Fixed (`a1b8979`) by passing
+   `compiledEngineEnabled`/`customerMessage`/`shopPhone` at that call site,
+   matching the option-removal branch just above it, which already got this
+   right.
+
+**Deployed**: `chat-sms` **v390**, 2026-09-12 01:25:06 UTC. Confirmed by
+downloading the live bundle — both fixes' distinguishing code are present,
+not inferred from the deploy timestamp alone.
+
+## `test-runner` is five fixes behind `main` — 2026-09-11
+
+Last deployed **v50**, 2026-09-09 20:50:53 UTC. Since then, `main` has
+picked up migration `134` (`test_runs` provenance columns) plus `f1d9219`'s
+`persist.ts` enforcement (`assertValidProvenance`, refuses to insert a
+`test_runs` row missing `trigger_type`/`change_set_ref`/`initiated_by`) and
+four `_shared/test-suite` fixes from 2026-09-10. None of this reaches a real
+test run until `test-runner` is redeployed. Migration `134` itself is
+confirmed applied directly against production (the three columns exist and
+are queryable; all null on existing rows, as designed).
+
+## New deploy tooling — `deploy-function.sh` / `check-switches.sh` — 2026-09-11
+
+Three same-day incidents shared one root cause: nothing gates "committed"
+from "actually works in production" — `run.ts`'s `--cases` filter silently
+no-op'd on equals-form flags, GUARD 2b's delivery-address fix shipped with a
+`TS2339` that `supabase functions deploy` doesn't catch (Deno doesn't
+type-check on deploy; `deno test --allow-all` does), and the standing
+compiled-engine flag state for Vito's changed with zero record of it (see
+above).
+
+`scripts/deploy-function.sh` is now the intended deploy path for chat-sms
+and friends: type-check, run unit tests, deploy, confirm the version number
+actually moved, confirm the deployed artifact's string literals trace back
+to the working tree. Aborts loudly on any step's failure.
+
+`scripts/check-switches.sh` prints `compiled_ordering_engine_enabled` for
+the three real shops (Vito's, Zio's, Not Just Bagels) plus the live vs
+local-default `CHAT_MODEL`, straight from a live DB read — run this before
+claiming anything is "live" for a shop. Requires
+`SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY` (`source
+~/.openclaw-sprintai/.secrets` first).
+
+Neither script is itself deployed — both are local dev tooling that shell
+out to the Supabase CLI and REST API.

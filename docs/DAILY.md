@@ -1268,3 +1268,264 @@ entitled to assert. Not yet committed.
   Management API, not `db push`, which is why the CLI's tracker doesn't see
   them. Verify by data, not by the tracker, for any migration touched this
   way.
+
+## 2026-09-11
+
+Commit range `c2f8e3c..a1b8979`, 35 commits, 2026-09-10 22:42 ET through
+2026-09-11 21:24 ET. Continues directly from the previous entry (which
+closed at `5503950`, 22:42). Headline: a standing rule was violated
+somewhere off-commit tonight — Vito's, the designated legacy-only canary
+shop, is now running the compiled ordering engine in production, not by any
+commit in this range — and two P0 double-charge bugs specific to that
+engine were found and fixed the same night. Verified directly against a
+downloaded `chat-sms` bundle and live REST queries against production, not
+taken on commit-message faith.
+
+### Reality check: Vito's is on the compiled engine, contradicting the standing rule — unresolved
+
+`RUNBOOK.md` (§"`shops.compiled_ordering_engine_enabled`... do not flip on
+for Vito's") states Vito's "must never be set `true`." The PO spec written
+today at ~15:00 ET (`docs/specs/2026-09-11-vitos-compile-then-reply-inversion.md`)
+independently confirms the flag was `FALSE` at that time and explicitly
+authorizes compiling Vito's menu *without* touching the flag ("V1 — COMPILE
+VITO'S... Do NOT touch the flag"). A commit message at 16:57 ET (`7044d7f`)
+already refers to "after flipping `compiled_ordering_engine_enabled`" as a
+settled fact. Queried live just now: `shops.compiled_ordering_engine_enabled`
+is **`true`** for Vito's Pizza. No commit in this range changes that column —
+it lives in the database, not in git, and whoever/whatever flipped it left no
+record here. This is a real, current conflict between the written rule and
+production state, not a misreading of either document — **the code/data
+wins, and it says Vito's is compiled.** Both of tonight's P0 money bugs
+below are bugs in that exact compiled path. Flagging; not mine to resolve.
+
+### Two P0 double-charge bugs on the compiled path, fixed and deployed
+
+Both hit the same symptom live on Vito's: the same cart line, charged twice.
+
+1. `8580903` (21:22) — `applyCompiledAddItem`'s "already in cart" check
+   compared `option_group_id`/`option_choice_id` pairs, which are not stable
+   across a menu recompile (Vito's menu was recompiled twice today per the
+   PO spec above). A line resolved against an older compile's ids and the
+   same real choice resolved fresh against the current compile's ids looked
+   like two different choices and both got priced. Fixed by comparing
+   display-name pairs ("Medium"/"Beef") instead of ids — what a receipt
+   actually shows, stable across a recompile.
+2. `a1b8979` (21:24) — the *actual* root cause of the live double-charge,
+   found by re-running the exact repro end to end after `8580903` landed:
+   resolving a pending disambiguation (GUARD 7's "which one did you mean"
+   follow-up) calls `executeTool("add_item", ...)` with only 8 of its
+   positional arguments, leaving `compiledEngineEnabled` and everything
+   after it `undefined` — so this one call path silently fell through to
+   the **legacy** add-item branch even on a compiled-engine shop, creating a
+   raw line invisible to `applyCompiledAddItem`'s identity checks entirely.
+   The model's own next tool call for the same item then went through the
+   correct compiled path and added a second, real, fully-priced line.
+   `8580903`'s fix was real (it closes a genuine recompile-identity gap) but
+   did not by itself explain the live incident; this did.
+
+**Deployed and content-verified**: `chat-sms` is **v390**
+(`supabase functions list`, 2026-09-12 01:25:06 UTC / 21:25:06 ET — seven
+seconds after `a1b8979`'s commit timestamp). Downloaded the live bundle and
+confirmed both fixes' distinguishing code are present (`compiledEngineEnabled,
+customerMessage, shopPhone` passed at the GUARD 7 resolution call site;
+`display_name` used in the resolved-add confirmation path) — not inferred
+from the deploy timestamp alone.
+
+### GUARD 7 disambiguation: wrong name shown, and a way to get stuck forever — fixed (`ac79c06`, 21:22)
+
+Live loop on Vito's: both Gyro candidates share the same raw menu name
+("Gyro (Beef or Chicken)"), so GUARD 7's re-ask rendered that identical
+ambiguous string back to the customer every turn regardless of their
+answer. Now uses the compiler's own disambiguated `display_name` ("Gyro
+Salad"/"Gyro Sandwich") everywhere the customer reads it. Separately: a
+customer answering with real words the resolver doesn't parse (a category
+word, an ordinal, or a price — nothing else) could get the same open
+question forever with no way to complete the order. After 2 consecutive
+unresolved turns, the bot now forces a numbered list so a bare "1"/"2"
+resolves through the existing ordinal path.
+
+### Vito's pepperoni/modifier price leak — closed tonight, after being flagged unclosed yesterday
+
+Yesterday's entry left this open as "not closed... a live, 100%-reproducing
+money leak." Closed tonight across five commits (`bf6023b`..`f9f3b2c`,
+22:42–00:50 ET): `matchReactiveExtras` was matching toppings against the
+raw, unscoped whole-turn message, so a word from *any* phrase — including a
+word inside an item's own name ("Bacon" in "Chicken Bacon Ranch") — could
+price a modifier onto every item resolved that turn. Fixed with
+`scopedModifierText` (scopes matching to the item's own claimed phrase,
+strips the item's own name first) and `suppressedReactiveMatchIds`
+(per-item, not per-turn, suppression when two items' phrase attribution
+genuinely collides). Verified live post-deploy: 20/20 PASS across natural
+phrasings. One residual, by design not by gap: a fully unpunctuated
+four-item dump can't be phrase-scoped, so the ambiguous topping goes to
+`unverified_requests` (undercharge) rather than being guessed onto the
+wrong line (overcharge) — "missing beats wrong."
+
+A same-night revert is part of this arc: `f9f3b2c` (00:50 ET) additionally
+moved every non-required option to `unverified_requests` whenever an item
+was phrase-suppressed, and was reverted 13 hours later (`e95c0cb`, 13:48 ET)
+because it regressed the ordinary two-item sentence ("a pepperoni pizza and
+some fries") — flagging one item as ambiguous doesn't mean a *different*
+item's own topping should be demoted too. Caught live before it did
+lasting damage; the underlying leak-fix commits it was layered on top of
+were not affected.
+
+Separately, a duplicate-line overcharge with the same symptom but a
+different cause was found and fixed the same morning: `ebc2a36` (06:23 ET) —
+a modifier follow-up ("Can I get provolone on that?") was routed through
+`add_item` with a hallucinated quantity of 3, and because the new
+unverified-request set didn't match the existing line's (empty) set, the
+strict merge check refused to merge and pushed a duplicate line instead.
+Three docs commits (`767c181`, `eef11c0`, `235248a`) worked through
+distinguishing this real bug from two *other* same-morning "critical
+failures" that turned out to be scoring artifacts, not defects (a fee-strip
+regex crossing a newline on a zero-price modifier row; a correctly-merged
+qty-2 line misread as a duplicate) — worth noting because it shows the
+`critical_failures` field is not self-evidently a defect list; each one was
+reproduced live before being treated as real or dismissed.
+
+### GUARD 2b: delivery orders ticketed as pickup — fixed twice, the second time for real
+
+`66232fa` (14:29 ET) fixed the logic: GUARD 2b was reverting `order_type`
+back to null after a customer said "Delivery" and then gave an address with
+neither word in it, and the phantom-link recovery path defaulted that null
+to pickup — so a delivery order shipped as a ticket telling the customer to
+come collect it. Live incident: orders #11/#12 on the demo shop, today.
+
+`b31f1b7` (16:57 ET) found why the first fix didn't fire: the query feeding
+`guardAddressSetThisTurn` never selected the `delivery_address` column, so
+the check was always false. This type-checks clean only because
+`supabase functions deploy` does not type-check — `deno test --allow-all`
+fails `TS2339` on the exact line. This is the second of three incidents
+today traced to the same gap (deploy succeeding on code that doesn't even
+compile); see `deploy-function.sh` below.
+
+### GUARD 20: a topped pizza reverted to the plain regular — fixed (`6af0f47`, 13:57 ET)
+
+A returning customer whose saved "regular" is a plain Cheese-Large ordered a
+large pepperoni pizza plus fries; the pizza was silently dropped from the
+cart and the regular re-offered instead. Cause: on the legacy path, the
+topped pizza's line shares its name and `menu_item_id` with the plain
+regular's base row, differing only in `options.Toppings`; GUARD 20 compared
+by name only and misread the topped line as the model re-offering the
+regular. Reproduced in a sandbox with a synthetic customer before fixing.
+
+### CHAT_MODEL: flash → pro → flash today, for real reasons each time, not model-blaming
+
+`22d2298` (13:38) set flash, `1050c54` (13:54) reverted to pro after a live
+test looped on the greeting and double-added fries, `91ca67c` (15:20) put it
+back to flash once the real causes turned out to be three unrelated defects
+(`6af0f47`, `66232fa`, `8547d64` — all above/below, none about the model).
+Final state, confirmed in both the secret and the code fallback: **flash**
+(~$0.017/order vs ~$0.182/order on pro at ~10 LLM calls/order; the
+OpenRouter balance was down to $84.38 at the time of the last switch).
+
+### SMS confirmation and reply shape
+
+`8547d64` (14:47) trimmed the paid-order confirmation below one SMS segment
+(264 → 159 chars on a representative order) by dropping a subtotal/fee
+reconciliation that's already disclosed on the payment-link message and the
+Stripe page, and made the "give us 10-15 minutes" line follow `order_type`
+instead of always saying pickup — a delivery customer was being told to
+come collect. Margin is thin: 159 of 160 chars on a two-item order; a longer
+item list could overflow again. `7044d7f` (16:57) stopped the compiled
+path's canonical slot questions from enumerating every choice by default
+(the enumerated form is now a fallback only, triggered when the customer's
+answer doesn't match or they ask what the options are) after a canary
+regression (quality 70%→40% legacy-vs-compiled, same 10 cases) traced to
+this, and fixed a second reply stacking two questions in one message.
+
+### Archetype/ask-plan fixes (menu compiler, not the chat runtime)
+
+`49a4840` (15:54) and `387a567` (16:00) fix the `side`/`egg_side` slot
+wiring in `supabase/functions/_shared/archetypes.ts` — a slot with no
+name-pattern to bind by now wires a genuinely unclaimed real option group
+(Vito's 9 pasta-side items) instead of asking a question the data already
+answers, restricted to archetypes with exactly *one* such no-bind slot
+(independent review caught `eggs` having two, which the first version of
+the fix would have mis-wired). This code only runs inside `compile-menu`,
+not `chat-sms` — `chat-sms` never imports `archetypes.ts` directly.
+`compile-menu` is deployed at **v35**, 2026-09-11 21:19:54 UTC (17:19:54
+ET), after both fix commits, so the deployed function has the fix. **Not
+verified**: whether any shop's menu has actually been recompiled since that
+deploy to pick up the corrected wiring — the fix being deployed and a
+shop's live `ask_plan` data reflecting it are two different claims, and I
+only checked the first one.
+
+### Test-suite and tooling
+
+- `d1a8070` (15:58) — `run.ts`'s flag parsing only matched `--flag value`
+  (space form); `--cases=a,b,c` (equals form) silently matched nothing, so
+  "filtered" runs ran the full unfiltered suite with no signal that the
+  filter was ignored. Extracted to `cli-args.ts`, both forms now work, and
+  an unrecognized flag is now a hard error instead of a silent no-op.
+- `d18bb05` (16:57) — per-turn test timeout raised 30s→100s; real
+  multi-item turns on the compiled engine were observed taking 90s+, so the
+  old timeout was failing the harness, not catching real hangs.
+- `f1d9219` (07:36) — migration `134_test_runs_provenance.sql` adds
+  nullable `trigger_type`/`change_set_ref`/`initiated_by` columns to
+  `test_runs`, enforced non-null at the app layer by `persist.ts`'s
+  `assertValidProvenance`, because nine unlabeled overnight test runs left
+  the product owner reconstructing intent from commit timestamps. **Applied
+  to production** — confirmed directly: `select trigger_type,
+  change_set_ref, initiated_by from test_runs limit 1` returns the three
+  columns (all null on existing rows, as designed; nullable at the DB level
+  only). **Not live in effect**: `test-runner` is still **v50**, last
+  deployed 2026-09-09 20:50:53 UTC, which predates this migration, `f1d9219`,
+  and four other `_shared/test-suite` fixes from yesterday's range — the
+  enforcement in `persist.ts` cannot run until `test-runner` is redeployed.
+- `2393dd5` (17:20) — new `scripts/deploy-function.sh` (type-check, unit
+  test, deploy, confirm the version moved, confirm the deployed artifact's
+  literals trace to the working tree — aborts loudly on any failure) and
+  `scripts/check-switches.sh` (prints `compiled_ordering_engine_enabled` per
+  real shop and the live vs local `CHAT_MODEL` default). Built in direct
+  response to three same-day incidents where something shipped and either
+  silently did nothing (`--cases` filter) or shipped broken (the GUARD 2b
+  `TS2339` above) because nothing gated "committed" from "actually works in
+  production." Neither script changes runtime behavior; both are local dev
+  tooling, not deployed functions.
+- `459a1d4` (06:54) — deleted `guard18-zero-grounding-item-invention.ts`
+  (confirmed dead: never imported into `index.ts`), corrected a RUNBOOK line
+  number for "Guard F" pointing at the wrong place in `index.ts`, and added
+  the first dedicated test for Guard 3 (payment-integrity phantom-link
+  backstop) — all 10 new tests pass against current behavior; no fix, just
+  the first coverage on a previously-untested money-path guard.
+- `e0e42b1` (05:02) — `docs/specs/2026-09-11-guard-retirement-audit.md`:
+  inventoried all 36 guards in `index.ts` against test coverage and incident
+  history. Finding: 22 keep, 12 need coverage first (several on the money
+  path), 1 safe to retire (`guard18`, acted on same day above), 0 other
+  retirements actionable yet.
+
+### Docs
+
+- `07d18fb` (21:22) — records a same-day incident (detailed in
+  `docs/specs/2026-09-11-single-writer-po-role.md`) where two separate
+  Claude sessions both assumed the "outside PO" role simultaneously for
+  ~2 hours, issued a halt and an un-halt ~100 minutes apart, and each
+  mutated production (secrets, deploys, a menu compile) without visibility
+  into the other. Proposed fix (an incumbency check on the PO skill) is
+  **not built** — spec only.
+- `df00ef1` (15:05) — PO spec authorizing compiling Vito's menu without
+  touching the compiled-engine flag, as phase 1 of a larger "code renders
+  the reply" inversion. Recorded as given, not executed past phase 1's own
+  V0 (a question, not an action). See the flag-state discrepancy noted at
+  the top of this entry — the spec's own "do NOT touch the flag" bound
+  didn't hold by day's end, whatever the cause.
+
+### Deploy status summary (edge functions touched this range)
+
+- `chat-sms`: **v390**, 2026-09-12 01:25:06 UTC — current with `HEAD`,
+  content-verified against two of tonight's fixes (see above).
+- `compile-menu`: **v35**, 2026-09-11 21:19:54 UTC — deployed after the
+  archetype fixes land in git; not independently content-verified, and no
+  check was done on whether any shop's menu was recompiled against it.
+- `test-runner`: still **v50**, 2026-09-09 20:50:53 UTC — stale, now five
+  fixes behind (`f1d9219` plus the four from yesterday's range).
+
+### Migrations touched this range
+
+- **134** (`test_runs_provenance`): shows blank in `supabase migration
+  list`'s Remote column (same drift pattern as 130/131/133 in yesterday's
+  entry), but confirmed **applied** directly — `test_runs.trigger_type`,
+  `change_set_ref`, `initiated_by` all exist and are queryable in
+  production.
