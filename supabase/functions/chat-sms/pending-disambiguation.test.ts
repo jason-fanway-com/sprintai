@@ -3,8 +3,11 @@
 // acceptance transcript (all four answer forms against the real public
 // tester) is the real proof; this file locks the pure logic down so it can't
 // silently regress.
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  candidateNameForConfirm,
+  candidateOptionText,
+  candidateShortText,
   categoryWordMatches,
   displayGroupName,
   extractPriceCentsFromMessage,
@@ -24,6 +27,14 @@ const BLT_CANDIDATES: PendingCandidate[] = [
 const CAESAR_CANDIDATES: PendingCandidate[] = [
   { menu_item_id: "caesar-salad", name: "Chicken Caesar", category: "Salads", price_cents: 1295 },
   { menu_item_id: "caesar-wrap", name: "Chicken Caesar", category: "Wraps", price_cents: 999 },
+];
+
+// Real Vito's rows (2026-09-11, PO live repro): raw `name` is identical for
+// both ("Gyro (Beef or Chicken)"), only `display_name` (menu-compiler
+// disambiguation rename) tells them apart.
+const GYRO_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "gyro-salad", name: "Gyro (Beef or Chicken)", display_name: "Gyro Salad", category: "Salads", price_cents: 1499 },
+  { menu_item_id: "gyro-sandwich", name: "Gyro (Beef or Chicken)", display_name: "Gyro Sandwich", category: "Hot Sandwiches", price_cents: 1099 },
 ];
 
 Deno.test("stemWord: singular/plural round-trips for the categories that actually collide", () => {
@@ -162,4 +173,57 @@ Deno.test("displayGroupName: a real, informative group name is returned unchange
   assertEquals(displayGroupName("Wing Flavor"), "Wing Flavor");
   assertEquals(displayGroupName("Bread Type"), "Bread Type");
   assertEquals(displayGroupName("Size"), "Size");
+});
+
+// BUG 1 (2026-09-11, PO — Vito's Gyro live loop): GUARD 7's re-ask (and every
+// other disambiguation render site) used to build its text from the raw,
+// duplicate `name` ("Gyro (Beef or Chicken)") even though `display_name`
+// ("Gyro Salad"/"Gyro Sandwich") was sitting right on the same candidate.
+Deno.test("candidateOptionText: a real display_name is used bare, no redundant category word", () => {
+  assertEquals(candidateOptionText(GYRO_CANDIDATES[0]), "Gyro Salad — $14.99");
+  assertEquals(candidateOptionText(GYRO_CANDIDATES[1]), "Gyro Sandwich — $10.99");
+});
+
+Deno.test("candidateOptionText: no display_name falls back to name + category word (unchanged old behavior)", () => {
+  assertEquals(candidateOptionText(CAESAR_CANDIDATES[0]), "the Chicken Caesar salad — $12.95");
+  assertEquals(candidateOptionText(CAESAR_CANDIDATES[1]), "the Chicken Caesar wrap — $9.99");
+});
+
+Deno.test("candidateShortText: real display_name, no fallback category word", () => {
+  assertEquals(candidateShortText(GYRO_CANDIDATES[0]), "Gyro Salad");
+  assertEquals(candidateShortText(GYRO_CANDIDATES[1]), "Gyro Sandwich");
+});
+
+Deno.test("candidateShortText: no display_name falls back to 'the {name} {word}'", () => {
+  assertEquals(candidateShortText(CAESAR_CANDIDATES[0]), "the Chicken Caesar salad");
+});
+
+Deno.test("candidateNameForConfirm: real display_name used bare for 'Got it — X added.'", () => {
+  assertEquals(candidateNameForConfirm(GYRO_CANDIDATES[0]), "Gyro Salad");
+});
+
+Deno.test("candidateNameForConfirm: no display_name falls back to 'name word' (unchanged old behavior)", () => {
+  assertEquals(candidateNameForConfirm(CAESAR_CANDIDATES[0]), "Chicken Caesar salad");
+});
+
+Deno.test("renderDisambiguationReask: Gyro-style candidates never leak the raw duplicate name into the numbered list", () => {
+  const reask = renderDisambiguationReask(GYRO_CANDIDATES);
+  assert(reask.includes("1) Gyro Salad — $14.99"), reask);
+  assert(reask.includes("2) Gyro Sandwich — $10.99"), reask);
+  assertEquals(reask.includes("Gyro (Beef or Chicken)"), false, reask);
+});
+
+// Backstop (2026-09-11): the numbered list's positions resolve through the
+// EXISTING matchOrdinalPosition/resolvePendingDisambiguation mechanism — a
+// bare "1"/"2" reply needs no new resolution logic, only the numbered render.
+Deno.test("Backstop: a bare '1' or '2' reply to the Gyro numbered list resolves via the existing ordinal matcher", () => {
+  assertEquals(resolvePendingDisambiguation("1", GYRO_CANDIDATES)?.menu_item_id, "gyro-salad");
+  assertEquals(resolvePendingDisambiguation("2", GYRO_CANDIDATES)?.menu_item_id, "gyro-sandwich");
+});
+
+// The exact scripted repro (menu-checkout-13): "Bleu Cheese, Beef" names
+// neither a category word, an ordinal, nor a price — it must NOT resolve
+// deterministically (that's the whole reason the backstop is needed at all).
+Deno.test("Backstop: a genuine real-world answer naming neither category/ordinal/price stays unresolved (why the backstop is needed)", () => {
+  assertEquals(resolvePendingDisambiguation("Bleu Cheese, Beef", GYRO_CANDIDATES), null);
 });

@@ -380,14 +380,24 @@ Deno.test("submit_order wiring: returns structured pending data (name + missingG
   assert(block.includes("pending: pendingItems"), "submit_order's result must expose the structured pending list for callers like D1");
 });
 
-Deno.test("Phase A wiring: the itemized recap is attached whenever the CURRENT reply asks for the pickup name, regardless of who composed it", () => {
+Deno.test("Phase A wiring: a name-ask reply is left untouched, no recap or footer tacked on (2026-09-10 fix — customers want just the question; the recap still shows at checkout via D1)", () => {
+  // Stale-test fix (2026-09-11): this originally asserted Phase A APPENDS
+  // the itemized recap at the name-ask moment. A later, already-shipped fix
+  // (2026-09-10, see the inline FIX comment right above this branch in
+  // index.ts) reversed that on purpose — the recap landing in the SAME
+  // reply as "What's your name for the order?" read as noise to customers,
+  // reported three separate times. Nothing about GUARD 2 or D1's own
+  // recap-at-checkout behavior changed; only this test's now-obsolete
+  // expectation for Phase A specifically needed correcting.
   const start = INDEX_SOURCE.indexOf("// ── Phase A: Deterministic money/status rendering");
   assert(start !== -1, "Phase A section must exist");
   const end = INDEX_SOURCE.indexOf("\n  }\n", start);
   const block = INDEX_SOURCE.slice(start, end);
   assert(block.includes("isAskingForPickupName(reply)"), "Phase A must check whether THIS TURN's reply is a name-ask");
-  assert(block.includes("!hasPickupName"), "Phase A must only attach the receipt when we don't already have a name");
-  assert(block.includes("renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip)"), "Phase A must attach the priced receipt, with fees, at the name-ask moment");
+  assert(block.includes("!hasPickupName"), "Phase A must only take the name-ask branch when we don't already have a name");
+  const nameAskBranch = block.match(/else if \(!hasPickupName && isAskingForPickupName\(reply\)\) \{([\s\S]*?)\} else \{/);
+  assert(nameAskBranch, "must have a dedicated branch for '!hasPickupName && isAskingForPickupName'");
+  assert(!nameAskBranch[1].includes("reply ="), "the name-ask branch must leave `reply` untouched — no recap, no footer appended in the same turn as the name question");
 });
 
 Deno.test("wiring: isAskingForPickupName is shared between C2 (prior-turn check) and Phase A (this-turn check)", () => {

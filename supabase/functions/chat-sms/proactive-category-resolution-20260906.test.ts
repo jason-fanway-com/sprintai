@@ -216,10 +216,20 @@ Deno.test("GUARD 7c wiring: never invents an option value — required-but-unspe
   assert(block.includes("addedLine7c?.pending_options"), "must read back whatever add_item itself decided is still pending (which already runs the is_default fill)");
 });
 
-Deno.test("GUARD 7c wiring: a still-pending required option is asked through the shared humanizer with the REAL recorded choices, never a raw tuple or an invented list", () => {
+Deno.test("GUARD 7c wiring: a still-pending required option is asked through the shared humanizer (ITEM 1, 2026-09-08: no separate bespoke choice enumeration — one short question per reply)", () => {
+  // Stale-test fix (2026-09-11): this used to assert a bespoke
+  // "group.choices.map(c => c.name).join" enumeration clause existed here.
+  // That clause was intentionally retired by the ITEM 1 fix (2026-09-08, PO
+  // live verification, "one question per reply") — askText7c/
+  // renderMissingOptionsPrompt is the ONE humanizer for this, and this
+  // guard's own inline comment says so explicitly ("this clause used to
+  // exist only to enumerate choices, which we no longer do"). Re-asserting
+  // the retired behavior here was pure test drift, unrelated to any of this
+  // guard's actual logic — nothing in production changed.
   const block = extractBlock(INDEX_SOURCE, "// ── Guard 7c (2026-09-06, Jason", "// ── Pending option-answer resolution (DEFECT 1");
   assert(block.includes("renderMissingOptionsPrompt([{ name: resolved7c.name, missingGroups: pending7c }])"), "must ask via the shared humanizer, same as GUARD 2 and D1");
-  assert(block.includes("group.choices.map(c => c.name).join"), "must list the real recorded choices, not leave the customer guessing");
+  assert(block.includes("this clause used to exist only to enumerate choices, which we no longer do"), "the bespoke enumeration clause must stay retired, not silently reintroduced");
+  assert(block.includes('reply7c = choiceClauses7c ? `${askText7c} ${choiceClauses7c}` : askText7c;'), "with nothing extra to add, reply7c must be exactly the shared humanizer's own text");
 });
 
 Deno.test("GUARD 7c wiring: a negation immediately before the item name is checked before resolving (adjacency-based, not bare co-occurrence)", () => {

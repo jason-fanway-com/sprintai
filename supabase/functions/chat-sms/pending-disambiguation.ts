@@ -16,6 +16,13 @@
 export interface PendingCandidate {
   menu_item_id: string;
   name:         string;
+  // Menu-compiler-assigned disambiguated name (e.g. "Gyro Salad" vs "Gyro
+  // Sandwich" for two rows that share the raw `name` "Gyro (Beef or
+  // Chicken)") — optional because only GUARD 7/7b's menu-item candidates
+  // (which come from EffectiveMenuItem.ask_plan) ever have one; cart-line
+  // candidates (option-removal, named-removal) never set it and fall back
+  // to `name` at every render site.
+  display_name?: string;
   category:     string | null;
   price_cents:  number;
 }
@@ -31,6 +38,13 @@ export interface PendingDisambiguation {
   // sets it) keeps its current add_item resolution unchanged.
   action?: "remove_option";
   option_phrase?: string;
+  // Backstop (2026-09-11, PO: "an infinite loop is worse than a wrong
+  // guess"): consecutive turns this exact disambiguation has gone unresolved
+  // with no tool call either (see index.ts's carriedDisambiguation handling).
+  // Undefined/0 on every freshly-persisted payload — a NEW pendingPayload is
+  // always built from scratch (never spread from the old one), so this can
+  // never leak from one disambiguation into an unrelated later one.
+  attempts?: number;
 }
 
 // Crude but sufficient stemmer: strips a trailing plural so "salad"/"salads"
@@ -260,6 +274,47 @@ export function resolveNamedCartRemoval(
   });
 }
 
+// BUG 1 (2026-09-11, PO — Vito's Gyro live loop): every disambiguation
+// render site used to build its text from the raw, duplicate `name` plus a
+// computed category word, ignoring `display_name` sitting right on the same
+// candidate. Convention matches this codebase's other display_name reads
+// (resolver.ts, pizza-topping-compose.ts): `display_name ?? name`.
+function candidateDisplayName(c: PendingCandidate): string {
+  return c.display_name && c.display_name.trim() ? c.display_name : c.name;
+}
+
+// A real display_name (e.g. "Gyro Salad") already disambiguates on its own —
+// appending the category word too would be redundant ("the Gyro Salad
+// salad"). Only candidates still on the shared raw name (no display_name
+// ever written for them, e.g. the option-removal/cart-line candidates that
+// never set this field) get the older name+category-word phrasing.
+function hasDistinctDisplayName(c: PendingCandidate): boolean {
+  return !!(c.display_name && c.display_name.trim() && c.display_name !== c.name);
+}
+
+/** "Gyro Sandwich" or, falling back, "Chicken Caesar salad". No article, no price — for a bare confirmation ("Got it — X added."). */
+export function candidateNameForConfirm(c: PendingCandidate): string {
+  if (hasDistinctDisplayName(c)) return candidateDisplayName(c);
+  const word = categoryDisplayWord(c.category);
+  return `${c.name}${word ? ` ${word}` : ""}`;
+}
+
+/** "Gyro Sandwich" or, falling back, "the Chicken Caesar salad". No price — for "did you want X or Y?" phrasing. */
+export function candidateShortText(c: PendingCandidate): string {
+  if (hasDistinctDisplayName(c)) return candidateDisplayName(c);
+  const word = categoryDisplayWord(c.category);
+  return `the ${c.name}${word ? ` ${word}` : ""}`;
+}
+
+/** "Gyro Sandwich — $10.99" or, falling back, "the Chicken Caesar salad — $12.95". For an options list. */
+export function candidateOptionText(c: PendingCandidate): string {
+  if (hasDistinctDisplayName(c)) {
+    return `${candidateDisplayName(c)} — $${(c.price_cents / 100).toFixed(2)}`;
+  }
+  const word = categoryDisplayWord(c.category);
+  return `the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
+}
+
 function replyNumbers(count: number): string {
   const nums = Array.from({ length: count }, (_, i) => String(i + 1));
   if (nums.length <= 1) return nums[0] ?? "1";
@@ -281,10 +336,7 @@ export function renderDisambiguationReask(
   priorReply?: string | null,
 ): string {
   const list = candidates
-    .map((c, i) => {
-      const word = categoryDisplayWord(c.category);
-      return `${i + 1}) the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
-    })
+    .map((c, i) => `${i + 1}) ${candidateOptionText(c)}`)
     .join("  ");
   const nums = replyNumbers(candidates.length);
   const primary = `Sorry, I didn't catch that — ${list}. Reply ${nums}.`;

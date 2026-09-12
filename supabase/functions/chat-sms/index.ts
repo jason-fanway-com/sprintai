@@ -26,10 +26,14 @@ import {
   type ZeroOptionMenuItemFull,
 } from "./zero-option-attribute-hint.ts";
 import {
+  candidateNameForConfirm,
+  candidateOptionText,
+  candidateShortText,
   categoryDisplayWord,
   categoryWordMatches,
   displayGroupName,
   isPendingDisambiguationDeclined,
+  renderDisambiguationReask,
   resolveNamedCartRemoval,
   resolvePendingDisambiguation,
   significantStems,
@@ -5423,6 +5427,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // isPendingDisambiguationDeclined; unlike a checkout signal it IS fully
   // resolved information, so it is not part of this fall-through.)
   let carriedDisambiguation: PendingDisambiguation | null = null;
+  // Backstop (2026-09-11): if GUARD 7/7b below replace pending_disambiguation
+  // with a FRESH disambiguation for a different item this same turn, the
+  // stale `carriedDisambiguation` captured above no longer describes what's
+  // actually pending — the attempt-counter logic near the end of this
+  // function must leave the fresh state alone rather than clobbering it with
+  // a stale attempt count for the wrong item.
+  let pendingDisambiguationOverwrittenThisTurn = false;
   if (cart.pending_disambiguation) {
     const pending = cart.pending_disambiguation;
 
@@ -5520,9 +5531,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       const footerGuard7 = addResult.ok
         ? renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosedGuard7)
         : "";
-      const resolvedWord = categoryDisplayWord(resolved.category);
       const reply = addResult.ok
-        ? `Got it — ${resolved.name}${resolvedWord ? ` ${resolvedWord}` : ""} added.${footerGuard7 ? `\n\n${footerGuard7}` : ""} Anything else?`
+        ? `Got it — ${candidateNameForConfirm(resolved)} added.${footerGuard7 ? `\n\n${footerGuard7}` : ""} Anything else?`
         : "Sorry, I had trouble adding that one — mind trying again?";
       if (addResult.ok && !feeAlreadyDisclosedGuard7) {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
@@ -5699,8 +5709,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         reply7c = choiceClauses7c ? `${askText7c} ${choiceClauses7c}` : askText7c;
       } else {
         const footer7c = renderLedgerFooter(localCartItems, "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed7c);
-        const resolvedWord7c = categoryDisplayWord(resolved7c.category);
-        reply7c = `Got it — ${resolved7c.name}${resolvedWord7c ? ` ${resolvedWord7c}` : ""} added.${footer7c ? `\n\n${footer7c}` : ""} Anything else?`;
+        // BUG 1 fix (2026-09-11): same raw-name-leak this whole guard family
+        // had — use the disambiguated display_name when one exists, exactly
+        // like GUARD 7's own resolved-reply confirmation above.
+        const confirmName7c = candidateNameForConfirm({ menu_item_id: resolved7c.id, name: resolved7c.name, display_name: resolved7c.ask_plan?.display_name ?? resolved7c.name, category: resolved7c.category ?? null, price_cents: resolved7c.price_cents });
+        reply7c = `Got it — ${confirmName7c} added.${footer7c ? `\n\n${footer7c}` : ""} Anything else?`;
       }
       if (!feeAlreadyDisclosed7c) {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
@@ -6380,6 +6393,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // label). Any code path that finalizes `reply` with the itemizer's own
   // output must set this so Phase A leaves it byte-for-byte alone.
   let moneyFooterAlreadyRendered = false;
+  // Backstop (2026-09-11): how many tool calls the LLM/tool loop actually
+  // made this turn — independent of the test_mode-gated debugPerf below, so
+  // the pending-disambiguation attempt counter near the end of this function
+  // can tell "nothing happened this turn" (toolCallCount === 0) from a real
+  // production request, not just test-mode traffic.
+  let toolCallCountThisTurn = 0;
   // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency) — see runOrderingLoop.
   let debugPerf: { attemptMs: number[]; toolCallCount: number } | undefined;
   const debugBeforeLoopMs = Math.round(performance.now() - debugReqT0);
@@ -6393,6 +6412,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     );
     reply = loopResult.reply;
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
+    toolCallCountThisTurn = loopResult.debugToolCallCount ?? 0;
     if (cart.test_mode && loopResult.debugAttemptMs) {
       debugPerf = { attemptMs: loopResult.debugAttemptMs, toolCallCount: loopResult.debugToolCallCount ?? 0 };
       (debugPerf as Record<string, unknown>).beforeLoopMs = debugBeforeLoopMs;
@@ -6869,12 +6889,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // before asking, not after.
         const idx = guardCart.indexOf(added);
         if (idx !== -1) guardCart.splice(idx, 1);
-        const optionsText = candidates
-          .map(c => {
-            const word = categoryDisplayWord(c.category);
-            return `the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
-          })
-          .join(" or ");
+        // BUG 1 (2026-09-11, PO — Vito's Gyro live loop): candidateOptionText
+        // reads c.display_name first (the menu-compiler's disambiguated name,
+        // e.g. "Gyro Sandwich"/"Gyro Salad") and only falls back to the raw
+        // shared `name` + a category word when no display_name was ever
+        // written — never the raw name outright, the way this used to.
+        const optionsText = candidates.map(c => candidateOptionText({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })).join(" or ");
         reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
         // deno-lint-ignore no-await-in-loop
         await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
@@ -6886,12 +6906,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           candidates: candidates.map((c): PendingCandidate => ({
             menu_item_id: c.id,
             name:         c.name,
+            display_name: c.ask_plan?.display_name ?? c.name,
             category:     c.category ?? null,
             price_cents:  c.price_cents,
           })),
         };
         // deno-lint-ignore no-await-in-loop
         await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
+        pendingDisambiguationOverwrittenThisTurn = true;
         break; // one clarification per turn is enough
       }
     } else {
@@ -6931,12 +6953,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             candidates: candidates.map((c): PendingCandidate => ({
               menu_item_id: c.id,
               name:         c.name,
+              display_name: c.ask_plan?.display_name ?? c.name,
               category:     c.category ?? null,
               price_cents:  c.price_cents,
             })),
           };
           // deno-lint-ignore no-await-in-loop
           await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload7b }).eq("id", cart.id);
+          pendingDisambiguationOverwrittenThisTurn = true;
           break; // one clarification per turn is enough
         }
       }
@@ -8447,18 +8471,46 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // does not need — and should never see — a leftover "did you want the
   // salad or wrap?" tacked onto their checkout link, and the state must not
   // ride along into the confirmed order either.
+  // Backstop (2026-09-11, PO — Vito's Gyro live loop, "an infinite loop is
+  // worse than a wrong guess"): resolvePendingDisambiguation only understands
+  // a category word, an ordinal, or a price — a legitimate real answer that
+  // names none of those ("Bleu Cheese, Beef") falls through to this "Still
+  // wondering" branch every single turn, forever. MAX_DISAMBIGUATION_RETRIES
+  // consecutive turns where the customer's answer ALSO produced no tool call
+  // (nothing else resolved it another way) trips a forced numbered list
+  // instead of repeating the same open-ended question — matchOrdinalPosition
+  // (pending-disambiguation.ts) already resolves a bare "1"/"2" reply through
+  // the existing top-of-turn resolution path above, so no new resolution
+  // logic is needed here, only the numbered rendering. Consistent with this
+  // file's other bounded-retry constant, MAX_SHORTFALL_RETRIES=2.
+  const MAX_DISAMBIGUATION_RETRIES = 2;
   if (carriedDisambiguation) {
     const reachedCheckout = !!checkoutUrl || currentCart.phase === "checkout";
     if (reachedCheckout) {
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
       console.log(`[chat-sms] Pending disambiguation cleared (conv=${conversation.id}): "${carriedDisambiguation.query_name}" abandoned; customer's turn reached checkout.`);
+    } else if (pendingDisambiguationOverwrittenThisTurn) {
+      // GUARD 7/7b already replaced pending_disambiguation with a fresh
+      // disambiguation for a DIFFERENT item this same turn — leave it alone.
+      // Nothing to append; that fresh guard already set its own reply/state.
+    } else if (toolCallCountThisTurn === 0) {
+      const attempts = (carriedDisambiguation.attempts ?? 0) + 1;
+      const updatedPending: PendingDisambiguation = { ...carriedDisambiguation, attempts };
+      await supabase.from("order_carts").update({ pending_disambiguation: updatedPending }).eq("id", cart.id);
+      if (attempts > MAX_DISAMBIGUATION_RETRIES) {
+        const priorAssistantTurn = [...history].reverse().find(h => h.role === "assistant");
+        const priorReplyText = typeof priorAssistantTurn?.content === "string" ? priorAssistantTurn.content : null;
+        finalReply = renderDisambiguationReask(carriedDisambiguation.candidates, priorReplyText);
+        console.log(`[chat-sms] Pending disambiguation backstop tripped (conv=${conversation.id}): "${carriedDisambiguation.query_name}" unresolved for ${attempts} consecutive turns with no tool call; forcing numbered list.`);
+      } else {
+        const stillOpenOptions = carriedDisambiguation.candidates.map(c => candidateShortText(c)).join(" or ");
+        finalReply = `${finalReply}\n\nStill wondering — did you want ${stillOpenOptions}?`;
+      }
     } else {
-      const stillOpenOptions = carriedDisambiguation.candidates
-        .map(c => {
-          const word = categoryDisplayWord(c.category);
-          return `the ${c.name}${word ? ` ${word}` : ""}`;
-        })
-        .join(" or ");
+      // A tool call happened this turn even though the disambiguation itself
+      // didn't resolve (e.g. an unrelated item was added) — not a stagnant
+      // repeat, so it doesn't count toward the streak either way.
+      const stillOpenOptions = carriedDisambiguation.candidates.map(c => candidateShortText(c)).join(" or ");
       finalReply = `${finalReply}\n\nStill wondering — did you want ${stillOpenOptions}?`;
     }
   }
