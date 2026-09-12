@@ -79,15 +79,19 @@ else
     tbl="${entry%%:*}"
     col="${entry##*:}"
     SQL="SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='${tbl}' AND column_name='${col}' LIMIT 1"
-    RESP=$(curl -sf -X POST \
+    RESP=$(curl -s -X POST \
       "https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query" \
       -H "Authorization: Bearer ${MGMT_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{\"query\":\"${SQL}\"}" 2>&1)
-    # Management API returns an array of rows; empty array means column absent
-    ROW_COUNT=$(echo "$RESP" | grep -o '"1"' | wc -l | tr -d ' ')
-    if [ "$ROW_COUNT" -eq 0 ]; then
+    # Management API returns a JSON array of row objects, e.g. [{"?column?":1}]
+    # for a present column, [] for an absent one. The value is a bare JSON
+    # number, not a quoted string — do not grep for '"1"', it never matches.
+    if [ "$RESP" = "[]" ]; then
       echo "FAIL: column '${tbl}.${col}' not found in live schema — migration not applied." >&2
+      SCHEMA_FAIL=1
+    elif ! echo "$RESP" | grep -q '^\['; then
+      echo "FAIL: schema check for '${tbl}.${col}' returned an unexpected response (not a JSON array): ${RESP}" >&2
       SCHEMA_FAIL=1
     fi
   done
