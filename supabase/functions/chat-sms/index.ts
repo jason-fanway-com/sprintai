@@ -8138,7 +8138,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // that owns this, since the model asks for the name on its own
     // initiative far more often than this guard has to force it) — keep
     // this reply plain so the receipt is never shown twice.
-    reply = `Got it! ${NAME_ASK}`;
+    reply = NAME_ASK;
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────
@@ -8254,7 +8254,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         } else if (errMsg && /delivery address/i.test(errMsg)) {
           reply = "What's the delivery address?";
         } else if (errMsg && /pickup name is required/i.test(errMsg)) {
-          reply = `Got it! ${NAME_ASK}`;
+          reply = NAME_ASK;
         } else {
           // Unmapped/unexpected failure — stay honest rather than reassuring.
           reply = errMsg ? `I couldn't finish that — ${errMsg}` : "I couldn't finish that order — let's try again.";

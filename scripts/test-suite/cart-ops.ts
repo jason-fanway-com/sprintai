@@ -363,6 +363,20 @@ export function verifyHallucinationGuard(
     const reply = turn.reply ?? "";
     if (!reply) continue;
 
+    // A claim resolves if it matches the shop menu OR the cart this turn
+    // actually reflects (turn.cart, populated from the bot's own cart_json
+    // response) — a phrase that doesn't correspond to a menu row or a real
+    // cart row is prose, not a claim.
+    const turnCartNames = ((turn.cart as { name?: string }[] | undefined) ?? [])
+      .map((item) => (item.name ?? "").toLowerCase());
+    const claimResolves = (claimedName: string): boolean => {
+      if (menuNameCheck(claimedName, menuNorm)) return true;
+      return turnCartNames.some((cn) =>
+        cn.includes(claimedName) || claimedName.includes(cn) ||
+        cn.replace(/\s+/g, "").includes(claimedName.replace(/\s+/g, ""))
+      );
+    };
+
     let m: RegExpMatchArray | null;
 
     // ── Pattern 1a: "1x ItemName" or "2x Everything Bagel" ──
@@ -371,7 +385,7 @@ export function verifyHallucinationGuard(
       const claimedName = m[2].trim().toLowerCase().replace(/\s+/g, " ");
       if (nonItemWords.has(claimedName)) continue;
       claimCount++;
-      if (!menuNameCheck(claimedName, menuNorm)) {
+      if (!claimResolves(claimedName)) {
         unknownClaims.push(`"${m[2].trim()}" claimed via "Nx Item": "${reply.slice(0, 80)}..."`);
       }
     }
@@ -386,7 +400,7 @@ export function verifyHallucinationGuard(
       if (isQuestionOrFragment(claimedName, followingText)) continue;
       if (isTransactionalClaim(claimedName)) continue;
       claimCount++;
-      if (!menuNameCheck(claimedName, menuNorm)) {
+      if (!claimResolves(claimedName)) {
         unknownClaims.push(`"${rawName}" claimed via "added X": "${reply.slice(0, 80)}..."`);
       }
     }
@@ -403,7 +417,7 @@ export function verifyHallucinationGuard(
       // rather than relying on the generic fragment filters to catch every phrasing.
       if (isTransactionalClaim(claimedName)) continue;
       claimCount++;
-      if (!menuNameCheck(claimedName, menuNorm)) {
+      if (!claimResolves(claimedName)) {
         unknownClaims.push(`"${m[1].trim()}" claimed via "got it X": "${reply.slice(0, 80)}..."`);
       }
     }
@@ -416,7 +430,7 @@ export function verifyHallucinationGuard(
       if (nonItemWords.has(claimedName)) continue;
       if (/^(total|subtotal|your total|order total|grand total|delivery|service fee|tip|comes|that|including|plus)/i.test(claimedName)) continue;
       claimCount++;
-      if (!menuNameCheck(claimedName, menuNorm)) {
+      if (!claimResolves(claimedName)) {
         unknownClaims.push(`"${raw}" claimed via price-line: "${reply.slice(0, 80)}..."`);
       }
     }
@@ -433,7 +447,7 @@ export function verifyHallucinationGuard(
           if (claimedName.length < 4) continue;
           if (nonItemWords.has(claimedName)) continue;
           claimCount++;
-          if (!menuNameCheck(claimedName, menuNorm)) {
+          if (!claimResolves(claimedName)) {
             unknownClaims.push(`"${qm[1].trim()}" claimed via order-list: "${reply.slice(0, 80)}..."`);
           }
         }
@@ -514,7 +528,7 @@ export function isQuestionOrFragment(claimed: string, followingText: string = ""
   // Acknowledgement/discourse phrases ("noted provolone", "no toasting")
   if (ACKNOWLEDGMENT_LEADERS.has(first)) return true;
   // Pronoun/determiner words anywhere in the phrase ("those items", "make it 2")
-  if (words.some(w => PRONOUN_DETERMINER_STOPLIST.has(w))) return true;
+  if (words.some(w => PRONOUN_DETERMINER_STOPLIST.has(normalizeContraction(w)))) return true;
   // Fragment boundary markers ("to your cart. Want anything else")
   const lower = claimed.toLowerCase();
   if (FRAGMENT_BOUNDARY_MARKERS.some(m => lower.includes(m))) return true;

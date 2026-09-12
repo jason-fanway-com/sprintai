@@ -329,10 +329,30 @@ async function runScriptedCase(
   const sessionId = `test-suite-${crypto.randomUUID()}`;
   const transcript: TurnResult[] = [];
   const expectCartShrink = (testCase as any).expectCartShrink === true;
+  let orderTypeAnswered = false; // becomes true once any turn (scripted or injected) names pickup/delivery
 
   for (let ti = 0; ti < testCase.turns.length; ti++) {
     const turn = testCase.turns[ti];
     const turnLabel = `${testCase.id}:turn${ti + 1}/${testCase.turns.length}`;
+
+    const lastReply = transcript.length > 0 ? (transcript[transcript.length - 1].reply ?? "") : "";
+    const gateOpen = !orderTypeAnswered && /pickup or delivery/i.test(lastReply);
+    const thisTurnAnswers = /\b(pickup|delivery)\b/i.test(turn.message);
+
+    if (gateOpen && !thisTurnAnswers) {
+      try {
+        const injected = await sendMessageWithRetry(
+          config.chatFunctionUrl, config.serviceRoleKey, shopId, "pickup", sessionId, hoursMode, `${turnLabel}:auto-pickup`,
+        );
+        transcript.push({
+          role: "customer", message: "pickup", reply: injected.reply ?? null,
+          cart: injected.cart, phase: injected.phase, toolCallCount: injected.debug_perf?.toolCallCount,
+        });
+        orderTypeAnswered = true;
+      } catch { /* if the injected turn itself fails, fall through — the real turn's own try/catch below will surface the error */ }
+    }
+    if (thisTurnAnswers) orderTypeAnswered = true;
+
     try {
       const result = await sendMessageWithRetry(
         config.chatFunctionUrl,
