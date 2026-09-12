@@ -3500,10 +3500,31 @@ Deno.serve(async (req: Request) => {
     cart = newCart as OrderCart;
   }
 
+  // Business hours check — computed once here (rather than only where the
+  // greeting-phase gate needed it, further below) because the RESET reply
+  // below also needs to know whether the kitchen is currently open. Day-of-week
+  // and current time are both computed in the SHOP'S timezone so the lookup
+  // is correct near midnight (see getBusinessDayKey/getLocalMinutes).
+  const todayKey    = getBusinessDayKey(shop.timezone);
+  const todayHours  = dayWindows(shop.open_hours?.[todayKey]);
+  const nowMins     = getLocalMinutes(shop.timezone);
+  // Check if current time falls within any open window (handles multi-window
+  // days, e.g. lunch + dinner, since open_hours[day] is an array).
+  const isOpen = todayHours.some((window: { open: string; close: string }) => {
+    const [openH, openM] = window.open.split(":").map(Number);
+    const [closeH, closeM] = window.close.split(":").map(Number);
+    const openMins = openH * 60 + openM;
+    const closeMins = closeH * 60 + closeM;
+    return nowMins >= openMins && nowMins < closeMins;
+  });
+  const effectiveOpen = forceClosed ? false : isOpen;
+
   // RESET keyword — expire current cart so next message gets a clean one
   if (userMessage.trim().toUpperCase() === "RESET") {
     await supabase.from("order_carts").update({ phase: "expired", test_mode: false }).eq("id", cart.id);
-    const reply = "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
+    const reply = effectiveOpen
+      ? "Session reset. Text anything to start a new order, or TESTMODE to test again."
+      : "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
     if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -3598,24 +3619,9 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Business hours check ────────────────────────────────────────────────
+  // todayKey/todayHours/nowMins/isOpen/effectiveOpen are computed once, above,
+  // before the RESET handler (which also needs to know if the kitchen is open).
   if (cart.phase === "greeting") {
-    // Day-of-week and current time are both computed in the SHOP'S timezone so
-    // the lookup is correct near midnight (see getBusinessDayKey/getLocalMinutes).
-    const todayKey = getBusinessDayKey(shop.timezone);
-    const todayHours = dayWindows(shop.open_hours?.[todayKey]);
-    const nowMins = getLocalMinutes(shop.timezone);
-
-    // Check if current time falls within any open window (handles multi-window
-    // days, e.g. lunch + dinner, since open_hours[day] is an array).
-    const isOpen = todayHours.some((window: { open: string; close: string }) => {
-      const [openH, openM] = window.open.split(":").map(Number);
-      const [closeH, closeM] = window.close.split(":").map(Number);
-      const openMins = openH * 60 + openM;
-      const closeMins = closeH * 60 + closeM;
-      return nowMins >= openMins && nowMins < closeMins;
-    });
-    const effectiveOpen = forceClosed ? false : isOpen;
-
     // Test mode is activated either by the customer-typed TESTMODE keyword
     // (any channel) OR by a WEB request carrying the gated `test` flag
     // (requestTestMode). Both have the identical effect below. requestTestMode
