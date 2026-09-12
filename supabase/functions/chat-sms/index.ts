@@ -58,7 +58,7 @@ import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currenc
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
-import { lookupCustomerContext, regularEligibility, type CustomerRow } from "../_shared/customer-profile.ts";
+import { lookupCustomerContext, regularEligibility, upsertOrderFulfillmentMemory, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, stripDeferredStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
@@ -2342,7 +2342,7 @@ export async function executeTool(
 
       // Fetch notes + delivery fields for Stripe metadata
       const { data: cartRow } = await supabase.from("order_carts")
-        .select("notes, order_type, delivery_address, delivery_fee_cents, driver_tip_cents")
+        .select("notes, order_type, delivery_address, delivery_fee_cents, driver_tip_cents, created_at, conversations(tenant_id, customer_phone)")
         .eq("id", cartId).single();
       const orderNotes = cartRow?.notes || "";
       const orderType = (cartRow?.order_type as string) || "pickup";
@@ -2360,6 +2360,31 @@ export async function executeTool(
       if (orderType === "delivery") {
         if (!deliveryAddress) {
           return { ok: false, result: { error: "Please provide a delivery address first." } };
+        }
+      }
+
+      // Customer CRM (docs/specs/2026-09-12-returning-customer-delivery-memory.md)
+      // — write the delivery-memory fields at SUBMISSION time, not just at
+      // payment time. stripe-webhook's upsertCustomerProfile only fires on a
+      // completed Stripe checkout, which in practice almost never happens
+      // (0 of the last 40 order_carts were ever marked paid), leaving the
+      // only writer of last_order_type/last_delivery_address permanently
+      // dormant. Deliberately calls the narrower upsertOrderFulfillmentMemory,
+      // not upsertCustomerProfile — order_count/total_spent_cents/
+      // favorite_items must stay paid-order-only; this cart isn't paid yet.
+      // Non-fatal: a profile-write failure must never block order submission.
+      const cartConversation = cartRow?.conversations as { tenant_id?: string; customer_phone?: string } | null;
+      if (cartConversation?.tenant_id && cartConversation?.customer_phone) {
+        const memoryResult = await upsertOrderFulfillmentMemory(supabase, {
+          tenantId:        cartConversation.tenant_id,
+          customerPhone:   cartConversation.customer_phone,
+          orderId:         cartId,
+          orderAt:         (cartRow?.created_at as string | null) ?? new Date().toISOString(),
+          orderType:       orderType as "pickup" | "delivery",
+          deliveryAddress,
+        });
+        if (!memoryResult.ok) {
+          console.error(`[chat-sms] submit_order fulfillment-memory upsert failed for cart ${cartId}: ${memoryResult.error}`);
         }
       }
 
