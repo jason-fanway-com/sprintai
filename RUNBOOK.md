@@ -2141,3 +2141,48 @@ claiming anything is "live" for a shop. Requires
 
 Neither script is itself deployed — both are local dev tooling that shell
 out to the Supabase CLI and REST API.
+
+## GUARD 7 disambiguation: `display_name` + 2-turn backstop, then a re-trip bug that defeated it — 2026-09-11/12
+
+Live incident (`menu-checkout-13`, Vito's): two candidates shared the raw
+`menu_items.name` ("Gyro (Beef or Chicken)"), so GUARD 7's re-ask and its
+persisted `PendingDisambiguation` payload rendered that same ambiguous
+string back every turn regardless of what the customer answered. Fixed
+(`ac79c06`) by using `display_name` (already disambiguated by the
+compiler's category-suffix rule, e.g. "Gyro Salad"/"Gyro Sandwich")
+everywhere the customer reads it. Backstop added for the case where the
+customer's real answer names neither a category word, an ordinal, nor a
+price ("Bleu Cheese, Beef") and `resolvePendingDisambiguation` re-asks the
+identical question forever: after 2 consecutive turns with no tool call and
+no resolution, force a numbered list so a bare "1"/"2" can resolve through
+the existing ordinal-matching path.
+
+That backstop never actually fired. Its counter lived behind two gates
+(`toolCallCountThisTurn === 0` and
+`!pendingDisambiguationOverwrittenThisTurn`) that assumed the model would
+refuse to answer when genuinely stuck — but the model instead **guesses**,
+calling `add_item` on the still-ambiguous item every turn. That guess
+re-trips GUARD 7 itself, which (a) sets `toolCallCountThisTurn > 0`,
+bypassing the first gate, and (b) writes a fresh `pendingPayload` with no
+`attempts` field and sets `pendingDisambiguationOverwrittenThisTurn`,
+bypassing the second — the counter could never reach
+`MAX_DISAMBIGUATION_RETRIES`. Fixed (`dbb6290`): GUARD 7 and GUARD 7b now
+check whether they're re-tripping on the SAME item already pending (a
+`query_name` match against `cart.pending_disambiguation` at the top of the
+turn) and, when they are, carry `attempts` forward and trip the backstop
+themselves, before the broken fallthrough logic gets a chance to reset it.
+`MAX_DISAMBIGUATION_RETRIES` is hoisted so all three sites share one
+threshold. 18 unit tests cover both bugs plus the re-trip forwarding.
+
+## `set-compiled-engine.sh` — the only auditable way to flip `compiled_ordering_engine_enabled` — 2026-09-12
+
+Directly closes the gap the "Correction: Vito's IS on the compiled engine"
+entry above flagged as unresolved: the flag changed in production between
+~15:00 and ~16:57 ET on 2026-09-11 with no commit anywhere recording who
+changed it or when, because it was flipped via a raw REST call.
+`scripts/set-compiled-engine.sh <njb|vitos|zios> <true|false>` reads the
+current value, writes the new one, verifies the read-back, and prints a
+ready-to-run `git commit` command so every future flag change leaves a
+record. `check-switches.sh` is still the correct pre-flight read; this
+script is the correct write path — a raw REST `PATCH` against
+`shops.compiled_ordering_engine_enabled` is no longer how this gets done.

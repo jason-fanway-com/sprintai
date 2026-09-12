@@ -1107,6 +1107,25 @@ stale (now v50, last deployed 2026-09-09 — five fixes behind, not just the
 four noted at the halt). Whether the mid-flight builder subagent made
 further changes after the halt was never independently reconfirmed here.
 
+## Update — 2026-09-12 08:20 EDT: GUARD 7 disambiguation backstop fixed for real; flag-flip tooling shipped
+
+- **GUARD 7 disambiguation** (`ac79c06`, `dbb6290`) — the customer-facing fix
+  (re-ask uses `display_name`, not the raw ambiguous menu name) and a 2-turn
+  backstop were both built the same night as the entry above, but the
+  backstop didn't actually work: a customer who guesses wrong every turn
+  re-trips GUARD 7 itself, which reset the counter meant to stop it. Fixed
+  this morning — see RUNBOOK's GUARD 7 entry for the mechanism. 18 unit
+  tests added; not yet re-verified live post-deploy.
+- **`set-compiled-engine.sh`** (`3203ca9`) — closes the exact gap the entry
+  above called out: `compiled_ordering_engine_enabled` can now only be
+  changed through a script that verifies the write and prints a commit
+  command, instead of a raw REST `PATCH` with no git record. Doesn't retroactively
+  explain who flipped Vito's on 2026-09-11 — only prevents the next
+  unrecorded flip.
+- Neither of tonight's two changes has been deployed yet as of this entry —
+  confirm `chat-sms` version with `check-switches.sh` / `deploy-function.sh`
+  before assuming the backstop fix is live.
+
 ---
 
 ## Quickstart for development
