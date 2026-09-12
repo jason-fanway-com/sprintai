@@ -35,30 +35,20 @@ fi
 SUPABASE_URL="https://rvdqfxtrskxekfkqnegx.supabase.co"
 KEY="$SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY"
 
-declare -A SHOP_IDS=(
-  ["njb"]="b0000000-0000-0000-0000-000000000001"
-  ["vitos"]="e0000000-0000-0000-0000-000000000001"
-  ["zios"]="2cba7b51-211c-4437-8910-1af4dcc03498"
-)
-
-declare -A SHOP_NAMES=(
-  ["njb"]="Not Just Bagels"
-  ["vitos"]="Vito's Pizza"
-  ["zios"]="Zio's Pizzeria"
-)
-
-SHOP_ID="${SHOP_IDS[$SLUG]:-}"
-SHOP_NAME="${SHOP_NAMES[$SLUG]:-}"
-
-if [ -z "$SHOP_ID" ]; then
-  echo "FAIL: unknown shop slug '${SLUG}'. Valid: njb, vitos, zios" >&2
-  exit 1
-fi
+case "$SLUG" in
+  njb)   SHOP_ID="b0000000-0000-0000-0000-000000000001"; SHOP_NAME="Not Just Bagels" ;;
+  vitos) SHOP_ID="e0000000-0000-0000-0000-000000000001"; SHOP_NAME="Vito's Pizza" ;;
+  zios)  SHOP_ID="2cba7b51-211c-4437-8910-1af4dcc03498"; SHOP_NAME="Zio's Pizzeria" ;;
+  *)
+    echo "FAIL: unknown shop slug '${SLUG}'. Valid: njb, vitos, zios" >&2
+    exit 1
+    ;;
+esac
 
 # Read current value before changing
 BEFORE=$(curl -s "${SUPABASE_URL}/rest/v1/shops?id=eq.${SHOP_ID}&select=compiled_ordering_engine_enabled" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY" | \
-  python3 -c "import json,sys; print(json.load(sys.stdin)[0]['compiled_ordering_engine_enabled'])")
+  python3 -c "import json,sys; print(str(json.load(sys.stdin)[0]['compiled_ordering_engine_enabled']).lower())")
 
 if [ "$BEFORE" = "$VALUE" ]; then
   echo "Already ${VALUE} for ${SHOP_NAME} — no change."
@@ -74,7 +64,7 @@ curl -s -X PATCH "${SUPABASE_URL}/rest/v1/shops?id=eq.${SHOP_ID}" \
 # Verify
 AFTER=$(curl -s "${SUPABASE_URL}/rest/v1/shops?id=eq.${SHOP_ID}&select=compiled_ordering_engine_enabled" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY" | \
-  python3 -c "import json,sys; print(json.load(sys.stdin)[0]['compiled_ordering_engine_enabled'])")
+  python3 -c "import json,sys; print(str(json.load(sys.stdin)[0]['compiled_ordering_engine_enabled']).lower())")
 
 if [ "$AFTER" != "$VALUE" ]; then
   echo "FAIL: DB read-back shows '${AFTER}', expected '${VALUE}'" >&2
