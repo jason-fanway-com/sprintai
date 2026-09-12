@@ -885,6 +885,30 @@ function resolveAndPriceSelections(
  * this file's header comment and resolveAskPlan's modelAssertedChoiceTexts
  * doc for the modifier-resolution contract.
  */
+
+/**
+ * Are two cart lines' resolved options the same real-world selection?
+ * Compares group name -> sorted choice display names, not the opaque
+ * option_group_id/option_choice_id pairs `ask_plan_selections` carries —
+ * those ids can differ across a recompile for the exact same human choice,
+ * which is what let a same-item, same-selection double-add through on
+ * 2026-09-11 (see the P0 fix note at its call sites).
+ */
+function sameResolvedOptions(
+  a: Record<string, string[]> | undefined,
+  b: Record<string, string[]> | undefined,
+): boolean {
+  const na = a ?? {};
+  const nb = b ?? {};
+  const keysA = Object.keys(na).sort();
+  const keysB = Object.keys(nb).sort();
+  if (keysA.length !== keysB.length || keysA.some((k, i) => k !== keysB[i])) return false;
+  return keysA.every(k => {
+    const va = [...na[k]].sort();
+    const vb = [...(nb[k] ?? [])].sort();
+    return va.length === vb.length && va.every((v, i) => v === vb[i]);
+  });
+}
 export function applyCompiledAddItem(
   cart: CompiledCartLine[],
   menuItem: CompiledMenuItem,
@@ -985,11 +1009,23 @@ export function applyCompiledAddItem(
   // redundant re-call for the SAME configuration — while a differently
   // configured second order for the same base item now correctly falls
   // through to the genuine-new-add path below instead of vanishing.
+  // P0 fix (2026-09-11, live money defect — Vito's Gyro double-charge):
+  // this used to compare `ask_plan_selections`, whose keys are opaque
+  // option_group_id/option_choice_id pairs. Vito's menu was recompiled
+  // twice today; a cart line created against an EARLIER compile's ids and
+  // a fresh resolution against the CURRENT compile's ids describe the
+  // exact same real-world selection ("Beef", "Ranch") but no longer share
+  // a single matching id, so this check silently stopped recognizing them
+  // as the same order and let a second, fully-priced line through — same
+  // item charged twice. `options` (group display name -> choice display
+  // name[]) is what a human/receipt actually sees and is stable across a
+  // recompile as long as the menu's real options don't change, so identity
+  // is now decided on that, never on internal ids that can churn under it.
   const fullyResolvedExistingIdx = continuationIdx < 0 && resolvedCount === 0
     ? cart.findIndex(ci =>
         ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
         allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))) &&
-        JSON.stringify(Object.entries(ci.ask_plan_selections).sort()) === JSON.stringify(Object.entries(newSelections).sort()))
+        sameResolvedOptions(ci.options, resolvedOptions))
     : -1;
   if (fullyResolvedExistingIdx >= 0) {
     const existingLine = cart[fullyResolvedExistingIdx];
@@ -1017,11 +1053,13 @@ export function applyCompiledAddItem(
   } else {
     // A genuine new add: merge into an existing FULLY-resolved line with
     // identical selections (real "another one, same way"), else push a
-    // new line.
+    // new line. Same identity fix as fullyResolvedExistingIdx above —
+    // compare human-meaningful `options`, never the opaque, recompile-
+    // fragile `ask_plan_selections` ids.
     const fullyResolved = allSlotsResolved(askPlan, new Set(Object.keys(newSelections)));
     const identicalExisting = fullyResolved ? cart.findIndex(ci =>
       ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
-      JSON.stringify(Object.entries(ci.ask_plan_selections).sort()) === JSON.stringify(Object.entries(newSelections).sort())
+      sameResolvedOptions(ci.options, resolvedOptions)
     ) : -1;
     if (identicalExisting >= 0) {
       cart[identicalExisting].quantity += quantity;

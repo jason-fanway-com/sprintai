@@ -1339,3 +1339,45 @@ Deno.test("stripDeferredStepQuestion: does not touch the reply when the model ne
   );
   assertEquals(result, modelReply);
 });
+
+// ── P0 fix (2026-09-11, live money defect — Vito's Gyro double-charge) ────
+// A cart line created against an OLDER compile's option_group_id/choice_id
+// pair, resolved fresh against the CURRENT compile's (different) ids for the
+// exact same real choice, must be recognized as the same order — not a
+// second, separately-priced line.
+
+Deno.test("applyCompiledAddItem: a stale line (group_id stable, choice_id from a PRIOR compile, same resolved options) merges instead of duplicating", () => {
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "cheeseburger-id",
+    name: "Cheese Burger",
+    quantity: 1,
+    price_cents: 849,
+    modifiers: [],
+    // "grp-temp" is the real, current group_id (allSlotsResolved must see
+    // this key to consider the line complete) — but "old-choice-medium-id"
+    // is a choice id from a PRIOR compile, no longer "c-medium" as
+    // TEMP_ASK_PLAN's real choices list it today. Same real slot, same
+    // real human choice (Medium, per `options`), stale internal id.
+    ask_plan_selections: { "grp-temp": "old-choice-medium-id" },
+    options: { "Temp": ["Medium"] },
+  }];
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "medium", null);
+  assertEquals(cart.length, 1, "must recognize the stale line as the same real order, not add a second, separately-priced line");
+  assertEquals(cart[0].quantity, 2, "correctly recognized as identical, so it merges as a quantity bump on ONE line — never a second $8.49 charge");
+  assertEquals(result.cartChanged, true);
+});
+
+Deno.test("applyCompiledAddItem: a stale line with a DIFFERENT resolved choice is correctly treated as a distinct new order", () => {
+  const cart: CompiledCartLine[] = [{
+    menu_item_id: "cheeseburger-id",
+    name: "Cheese Burger",
+    quantity: 1,
+    price_cents: 849,
+    modifiers: [],
+    ask_plan_selections: { "grp-temp": "old-choice-welldone-id" },
+    options: { "Temp": ["Well Done"] },
+  }];
+  const result = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "medium", null);
+  assertEquals(cart.length, 2, "a genuinely different resolved choice must still get its own line");
+  assertEquals(result.cartChanged, true);
+});
