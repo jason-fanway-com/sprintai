@@ -82,3 +82,49 @@ carrying the two facts onto the customer and using them in the opening turn.
 - Delivery disabled / outside radius falls back to pickup with an honest reason.
 - `customer_personalization_enabled = false` disables all of it.
 - The two prior order_type P0 repros still pass.
+
+## Addendum — Jason's live test, 2026-09-12
+
+He ran a real conversation. Verdict: "a pretty good experience." Two gaps, both
+the same principle — **when we already know a fact, confirm it; do not
+interrogate for it.**
+
+### 1. The greeting asked *whether* he wanted delivery, not *whether this
+address*
+
+It recognised him, called him Jason, and asked if he wanted delivery. It did not
+offer the address. That is the body of this spec — unchanged, still the ask.
+
+### 2. It asked for his name again at checkout (NEW)
+
+After greeting him **by name**, the bot finished with "What's your name for the
+order?" His words: "why should it ask me for my name again if it already knows
+my name? It should just be confirming all the details, not asking for my name.
+It's just not the way people behave."
+
+**Verified cause (2026-09-12):**
+- `index.ts:112` — `const NAME_ASK = "What's your name for the order?"`, a
+  hardcoded constant.
+- `index.ts:936` and `:1307` — the system prompt instructs the model to ask it
+  "EXACTLY like this, for pickup AND delivery orders alike." No branch for a
+  known customer.
+- `_shared/customer-profile.ts` exports `resolveCustomerName`. **`index.ts` does
+  not reference it anywhere.** The greeting path knows the name; the checkout
+  path was never told.
+
+**The work:** when `lookupCustomerContext` returns a name, the checkout turn
+confirms instead of asking — "Putting this in for Jason, right?" — and accepts a
+correction in the same turn. When there is no known name, the existing ask is
+unchanged. The verbatim-string rule at :936/:1307 has to grow a second sanctioned
+form rather than being loosened, so the money/scope rule around it still holds.
+
+**Combined, the returning-customer checkout should confirm, in one short turn:
+name, pickup-or-delivery, and the address if delivery.** Not three questions —
+one confirmation the customer can correct.
+
+### Acceptance additions
+- A known customer is never asked their name; they are asked to confirm it.
+- "no, it's Jay" corrects the stored name in the same turn without re-asking.
+- An unknown customer sees the current behaviour, unchanged.
+- The money/scope rule at :936/:1307 is not weakened — no total, subtotal or fee
+  appears in the confirmation line.
