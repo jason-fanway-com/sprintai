@@ -184,6 +184,11 @@ export interface JudgeGroundTruth {
   cart_phase: string | null;
   /** Cart payment status if any. */
   payment_status: string | null;
+  /** True iff the TEST HARNESS cut this conversation off at its max_turns cap
+   *  before the customer's goal was reached — not a customer give-up or a bot
+   *  failure. When true, do not flag order_not_completed/looped_no_progress
+   *  solely because the conversation didn't reach checkout by the cutoff. */
+  conversation_truncated?: boolean;
 }
 
 export interface JudgeTranscriptMessage {
@@ -269,7 +274,9 @@ ORDER STATE (authoritative):
   - has_real_checkout_session: ${ground.has_checkout_session}
   - cart_phase: ${ground.cart_phase ?? "none"}
   - payment_status: ${ground.payment_status ?? "none"}
-
+${ground.conversation_truncated
+    ? `  - conversation_truncated: true — this conversation was cut off by the TEST HARNESS's turn limit, not by the customer or the bot. This is NOT a customer give-up or bot failure. Do not flag order_not_completed or looped_no_progress solely because the conversation didn't reach checkout by the cutoff — grade only what actually happened in the transcript so far.\n`
+    : ""}
 TRANSCRIPT (chronological; each line is "[message_id] (role) text"):
 ${transcriptLines}
 

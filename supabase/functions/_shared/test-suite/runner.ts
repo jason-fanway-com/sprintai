@@ -39,6 +39,12 @@ export interface RunResult {
   error?: string;
   /** True when the case fixture declares that this case's correction turn genuinely expects cart shrink. */
   expectCartShrink?: boolean;
+  /** True when a conversational case hit max_turns before the simulator's goal was reached —
+   *  a harness turn-cap cutoff, NOT a customer give-up or bot failure. */
+  truncated?: boolean;
+  /** Human-readable note for a truncated run. Never spliced into transcript reply text
+   *  (the judge would otherwise read it as something the assistant said). */
+  truncationNote?: string;
 }
 
 export interface RunnerConfig {
@@ -413,6 +419,7 @@ async function runConversationalCase(
   const history: string[] = [];
   const expectCartShrink = testCase.expectCartShrink === true;
   let goalReached = false;
+  let brokeEarly = false;
   let lastPhase: string | undefined;
 
   // Opening turn: the customer speaks first (persona's seed message or a
@@ -460,9 +467,11 @@ async function runConversationalCase(
 
       if (decision.done) {
         goalReached = decision.goalReached ?? false;
+        brokeEarly = true;
         break;
       }
       if (!decision.nextMessage || !decision.nextMessage.trim()) {
+        brokeEarly = true;
         break;
       }
       message = decision.nextMessage.trim();
@@ -483,15 +492,16 @@ async function runConversationalCase(
     }
   }
 
-  // If the simulator ran out of turns without reaching the goal, annotate the
-  // last assistant reply so the judge sees the goal was NOT reached.
-  if (!goalReached && transcript.length > 0) {
-    const last = transcript[transcript.length - 1];
-    transcript[transcript.length - 1] = {
-      ...last,
-      reply: `${last.reply ?? ""}\n\n[SYSTEM: customer goal "${testCase.goal}" was NOT reached within ${testCase.max_turns} turns]`.trim(),
-    };
-  }
+  // The loop only exits without an early break when it ran through every
+  // iteration and hit the max_turns cap — that's a harness cutoff, not a
+  // customer give-up or bot failure, and must NOT be conflated with one by
+  // splicing a fake "assistant said this" marker into the transcript. A
+  // genuine simulator-decided give-up (decision.done / empty nextMessage)
+  // breaks early and is left as an ordinary unmet-goal result.
+  const truncated = !goalReached && !brokeEarly && transcript.length > 0;
+  const truncationNote = truncated
+    ? `customer goal "${testCase.goal}" was NOT reached within ${testCase.max_turns} turns (harness turn cap)`
+    : undefined;
 
   return {
     caseId: testCase.id,
@@ -499,6 +509,8 @@ async function runConversationalCase(
     transcript,
     sessionId,
     expectCartShrink,
+    truncated,
+    truncationNote,
   };
 }
 

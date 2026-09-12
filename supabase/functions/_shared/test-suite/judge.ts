@@ -262,6 +262,7 @@ export async function judgeCase(
   }
 
   const ground = await buildGroundTruth(config, shop, run.sessionId);
+  if (run.truncated) ground.conversation_truncated = true;
   const messages = transcriptToJudgeMessages(run);
 
   // Assemble the prompt but inject the case's success criteria as the grading focus.
