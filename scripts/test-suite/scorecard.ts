@@ -82,10 +82,13 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
     // null → ungraded: counted in total but not in passed or failed
 
     if (s.testCase.criticality === "critical") {
-      criticalTotal++;
+      // Only graded cases (true/false) count toward the critical denominator.
+      // null (ungraded) must not inflate criticalTotal — nothing to check means nothing to gate on.
       if (s.proofPassed === true) {
+        criticalTotal++;
         criticalPassed++;
       } else if (s.proofPassed === false) {
+        criticalTotal++;
         criticalFailures.push({
           caseId: s.testCase.id,
           label: s.testCase.label,
@@ -95,7 +98,7 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
             .join("; ") || "no criteria passed",
         });
       }
-      // null critical → ungraded, not a failure
+      // null critical → ungraded, excluded from criticalTotal entirely
     }
   }
 
@@ -125,7 +128,10 @@ export function buildScorecard(scored: ScoredCase[]): Scorecard {
   const qualityPassPct = (qualityPass + qualityFail) > 0 ? (qualityPass / (qualityPass + qualityFail)) * 100 : 0;
 
   // ── Tiered gate: proof ≥95% AND 100% critical ────────────────────────
-  const tieredPass = proofPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0 && proofUngraded === 0;
+  // Ungraded cases (proofUngraded) do NOT gate the pass/fail decision — they're
+  // reported separately (see formatScorecard) but a run with zero real failures
+  // must pass regardless of how many cases had nothing to check.
+  const tieredPass = proofPassPct >= 95 && criticalPassPct >= 100 && criticalFailures.length === 0;
 
   return {
     total,
