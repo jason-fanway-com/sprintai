@@ -275,7 +275,7 @@ ORDER STATE (authoritative):
   - cart_phase: ${ground.cart_phase ?? "none"}
   - payment_status: ${ground.payment_status ?? "none"}
 ${ground.conversation_truncated
-    ? `  - conversation_truncated: true — this conversation was cut off by the TEST HARNESS's turn limit, not by the customer or the bot. This is NOT a customer give-up or bot failure. Do not flag order_not_completed or looped_no_progress solely because the conversation didn't reach checkout by the cutoff — grade only what actually happened in the transcript so far.\n`
+    ? `  - conversation_truncated: true — this conversation hit the TEST HARNESS's turn limit. Grade only what actually happened in the transcript so far: do not flag order_not_completed or looped_no_progress solely because the cutoff prevented reaching checkout, but DO still flag genuine stalls or loops that are visible in the transcript itself.\n`
     : ""}
 TRANSCRIPT (chronological; each line is "[message_id] (role) text"):
 ${transcriptLines}

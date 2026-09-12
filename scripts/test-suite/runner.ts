@@ -16,6 +16,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import type { TestCase, ConversationalCase, AnyCase, Turn } from "./library.ts";
 import { isConversationalCase } from "./library.ts";
 import { enforceSafetyGate } from "./safety-gate.ts";
+import { computeTruncation } from "./truncation.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -421,6 +422,7 @@ async function runConversationalCase(
   let goalReached = false;
   let brokeEarly = false;
   let lastPhase: string | undefined;
+  const phasesSeen = new Set<string>();
 
   // Opening turn: the customer speaks first (persona's seed message or a
   // generated one from the goal if no explicit seed).
@@ -450,6 +452,7 @@ async function runConversationalCase(
       });
       history.push(`Customer: ${message}`);
       lastPhase = result.phase;
+      if (result.phase) phasesSeen.add(result.phase);
 
       const reply = result.reply ?? "";
       if (reply) history.push(`Assistant: ${reply}`);
@@ -497,11 +500,17 @@ async function runConversationalCase(
   // customer give-up or bot failure, and must NOT be conflated with one by
   // splicing a fake "assistant said this" marker into the transcript. A
   // genuine simulator-decided give-up (decision.done / empty nextMessage)
-  // breaks early and is left as an ordinary unmet-goal result.
-  const truncated = !goalReached && !brokeEarly && transcript.length > 0;
-  const truncationNote = truncated
-    ? `customer goal "${testCase.goal}" was NOT reached within ${testCase.max_turns} turns (harness turn cap)`
-    : undefined;
+  // breaks early and is left as an ordinary unmet-goal result. A cap-out
+  // where the tracked phase never moved at all is a genuine stall, not a
+  // harness artifact — see computeTruncation in truncation.ts.
+  const { truncated, truncationNote } = computeTruncation({
+    goalReached,
+    brokeEarly,
+    phaseAdvanced: phasesSeen.size > 1,
+    transcriptLength: transcript.length,
+    goal: testCase.goal,
+    maxTurns: testCase.max_turns,
+  });
 
   return {
     caseId: testCase.id,
