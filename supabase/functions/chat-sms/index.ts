@@ -6858,6 +6858,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // that would reintroduce GUARD 7's original bug in the other direction.
   const priorUserTurn = [...history].reverse().find(h => h.role === "user");
   const guard7CategoryContext = `${typeof priorUserTurn?.content === "string" ? priorUserTurn.content : ""} ${userMessage}`;
+  // Hoisted above GUARD 7/7b (2026-09-12, PO — backstop never fired on the
+  // Vito's Gyro live loop): both guards below need this threshold to detect
+  // when THEY are the ones re-persisting an unresolved disambiguation for
+  // the SAME item, not just the carriedDisambiguation fallthrough at the
+  // bottom of this function. Same value as the original single site.
+  const MAX_DISAMBIGUATION_RETRIES = 2;
   {
     const beforeIds = new Set(
       cartSnapshotBeforeTurn.filter(i => (i as CartItem).menu_item_id).map(i => (i as CartItem).menu_item_id),
@@ -6900,13 +6906,43 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // before asking, not after.
         const idx = guardCart.indexOf(added);
         if (idx !== -1) guardCart.splice(idx, 1);
-        // BUG 1 (2026-09-11, PO — Vito's Gyro live loop): candidateOptionText
-        // reads c.display_name first (the menu-compiler's disambiguated name,
-        // e.g. "Gyro Sandwich"/"Gyro Salad") and only falls back to the raw
-        // shared `name` + a category word when no display_name was ever
-        // written — never the raw name outright, the way this used to.
-        const optionsText = candidates.map(c => candidateOptionText({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })).join(" or ");
-        reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
+        // BUG 3 (2026-09-12, PO — backstop never fired on the Vito's Gyro live
+        // loop): the model doesn't just leave an unresolved answer in free
+        // text — it often GUESSES, calling add_item on the still-ambiguous
+        // item again, which is exactly this guard re-tripping on the SAME
+        // item every turn. That re-trip (a) counts as a tool call this turn,
+        // which used to buy a free pass past the bottom-of-function attempts
+        // counter entirely (`toolCallCountThisTurn === 0` was false), and
+        // (b) overwrites pending_disambiguation with a brand new payload with
+        // no `attempts` field, which ALSO short-circuits that counter via
+        // pendingDisambiguationOverwrittenThisTurn — the customer could be
+        // stuck here forever without the streak ever incrementing. Carry the
+        // attempt count forward when it's the same item as what was already
+        // pending, and trip the backstop right here rather than waiting on
+        // logic that this exact path was defeating.
+        const priorPendingForThisItem = cart.pending_disambiguation?.query_name === menuItem.name ? cart.pending_disambiguation : null;
+        const guard7Attempts = (priorPendingForThisItem?.attempts ?? 0) + 1;
+        const guard7CandidatesForPending = candidates.map((c): PendingCandidate => ({
+          menu_item_id: c.id,
+          name:         c.name,
+          display_name: c.ask_plan?.display_name ?? c.name,
+          category:     c.category ?? null,
+          price_cents:  c.price_cents,
+        }));
+        if (guard7Attempts > MAX_DISAMBIGUATION_RETRIES) {
+          const priorAssistantTurnGuard7 = [...history].reverse().find(h => h.role === "assistant");
+          const priorReplyTextGuard7 = typeof priorAssistantTurnGuard7?.content === "string" ? priorAssistantTurnGuard7.content : null;
+          reply = renderDisambiguationReask(guard7CandidatesForPending, priorReplyTextGuard7);
+          console.log(`[chat-sms] Pending disambiguation backstop tripped inside GUARD 7 (conv=${conversation.id}): "${menuItem.name}" unresolved for ${guard7Attempts} consecutive turns (including guessed add_item attempts); forcing numbered list.`);
+        } else {
+          // BUG 1 (2026-09-11, PO — Vito's Gyro live loop): candidateOptionText
+          // reads c.display_name first (the menu-compiler's disambiguated name,
+          // e.g. "Gyro Sandwich"/"Gyro Salad") and only falls back to the raw
+          // shared `name` + a category word when no display_name was ever
+          // written — never the raw name outright, the way this used to.
+          const optionsText = candidates.map(c => candidateOptionText({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })).join(" or ");
+          reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
+        }
         // deno-lint-ignore no-await-in-loop
         await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
         // BLOCKER 1: persist exactly what was offered so the NEXT message
@@ -6914,13 +6950,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // with no memory of which two items were on the table.
         const pendingPayload: PendingDisambiguation = {
           query_name: menuItem.name,
-          candidates: candidates.map((c): PendingCandidate => ({
-            menu_item_id: c.id,
-            name:         c.name,
-            display_name: c.ask_plan?.display_name ?? c.name,
-            category:     c.category ?? null,
-            price_cents:  c.price_cents,
-          })),
+          candidates: guard7CandidatesForPending,
+          attempts: guard7Attempts,
         };
         // deno-lint-ignore no-await-in-loop
         await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
@@ -6959,15 +6990,31 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           if (categoryMatches.length === 1) continue;
 
           console.warn(`[chat-sms] GUARD 7b (unprompted disambiguation ask) tripped (conv=${conversation.id}). Customer named "${name}" (${candidates.length} matches); model asked in free text without calling add_item. Persisting candidates.`);
+          // BUG 3 (2026-09-12, PO — backstop never fired on the Vito's Gyro
+          // live loop): same fix as GUARD 7 just above — carry the attempt
+          // count forward when the model is re-asking about the SAME item
+          // that was already pending, and trip the backstop here instead of
+          // relying on logic this path was defeating (see GUARD 7's comment
+          // for the full explanation).
+          const priorPendingForThisItem7b = cart.pending_disambiguation?.query_name === candidates[0].name ? cart.pending_disambiguation : null;
+          const guard7bAttempts = (priorPendingForThisItem7b?.attempts ?? 0) + 1;
+          const guard7bCandidatesForPending = candidates.map((c): PendingCandidate => ({
+            menu_item_id: c.id,
+            name:         c.name,
+            display_name: c.ask_plan?.display_name ?? c.name,
+            category:     c.category ?? null,
+            price_cents:  c.price_cents,
+          }));
+          if (guard7bAttempts > MAX_DISAMBIGUATION_RETRIES) {
+            const priorAssistantTurnGuard7b = [...history].reverse().find(h => h.role === "assistant");
+            const priorReplyTextGuard7b = typeof priorAssistantTurnGuard7b?.content === "string" ? priorAssistantTurnGuard7b.content : null;
+            reply = renderDisambiguationReask(guard7bCandidatesForPending, priorReplyTextGuard7b);
+            console.log(`[chat-sms] Pending disambiguation backstop tripped inside GUARD 7b (conv=${conversation.id}): "${name}" unresolved for ${guard7bAttempts} consecutive turns; forcing numbered list.`);
+          }
           const pendingPayload7b: PendingDisambiguation = {
             query_name: candidates[0].name,
-            candidates: candidates.map((c): PendingCandidate => ({
-              menu_item_id: c.id,
-              name:         c.name,
-              display_name: c.ask_plan?.display_name ?? c.name,
-              category:     c.category ?? null,
-              price_cents:  c.price_cents,
-            })),
+            candidates: guard7bCandidatesForPending,
+            attempts: guard7bAttempts,
           };
           // deno-lint-ignore no-await-in-loop
           await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload7b }).eq("id", cart.id);
@@ -8494,7 +8541,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // the existing top-of-turn resolution path above, so no new resolution
   // logic is needed here, only the numbered rendering. Consistent with this
   // file's other bounded-retry constant, MAX_SHORTFALL_RETRIES=2.
-  const MAX_DISAMBIGUATION_RETRIES = 2;
+  // (MAX_DISAMBIGUATION_RETRIES is declared once, above GUARD 7 — GUARD
+  // 7/7b need the same threshold to trip the backstop themselves; see the
+  // 2026-09-12 fix note there.)
   if (carriedDisambiguation) {
     const reachedCheckout = !!checkoutUrl || currentCart.phase === "checkout";
     if (reachedCheckout) {
