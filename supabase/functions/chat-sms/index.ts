@@ -7167,9 +7167,25 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
 
   // ── Guard 1d: narrated add without actual cart mutation ─────────────────
   // If the model says "added X to your cart" but guardCart is identical to
-  // the pre-loop cartItems, no tool was called — the add was imaginary.
+  // the true pre-turn snapshot, no tool was called — the add was imaginary.
+  //
+  // P0 fix (2026-09-12, live money defect on Vito's, conv ce84c64b): this
+  // used to compare against `cartItems`, NOT `cartSnapshotBeforeTurn`.
+  // `cartItems` is mutated IN PLACE by executeTool's push()/splice() calls
+  // during this same turn's tool loop (see cartSnapshotBeforeTurn's
+  // declaration comment and GUARD 9's above), so by the time this guard runs
+  // `cartItems` already reflects POST-turn state — identical to `guardCart`
+  // whether or not a real mutation happened. That made this guard structurally
+  // blind to genuine adds: it could only ever see "no diff" and would trip on
+  // reply *wording* alone (an ambiguous "want"/"one" phrase), overwriting a
+  // correct "added your pepperoni pizza" reply with "Your cart is empty" —
+  // which then made the customer re-order the same item, doubling the charge.
+  // GUARD 9 already carried this exact wiring-bug warning in its own comment;
+  // 1d/1f were never migrated. `cartSnapshotBeforeTurn` (frozen via
+  // JSON.parse(JSON.stringify(...)) before any tool call this turn) is the
+  // only correct "before" reference here.
   if (!portionCheck.tripped && !claimsItemInCart(reply, guardCart)) {
-    if (claimsAddedWithoutMutation(reply, cartItems, guardCart)) {
+    if (claimsAddedWithoutMutation(reply, cartSnapshotBeforeTurn, guardCart)) {
       console.warn(`[chat-sms] GUARD 1d (phantom-add) tripped (conv=${conversation.id}). Reply claimed add but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
       reply = "Sorry, I didn't actually add that — let me try again. What would you like?";
     }
@@ -7179,8 +7195,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // If the model says "fixed it, 1x" / "removed that" / "updated to just one"
   // but the cart didn't change, replace the reply with the real cart state.
   // Decision core (explicit vs. ambiguous split, and why) lives in
-  // guard1f-correction-claim-20260909.ts.
-  const guard1f = evaluateGuard1f(reply, cartItems, guardCart);
+  // guard1f-correction-claim-20260909.ts. Same P0 fix as GUARD 1d directly
+  // above: compare against `cartSnapshotBeforeTurn`, not `cartItems`.
+  const guard1f = evaluateGuard1f(reply, cartSnapshotBeforeTurn, guardCart);
   if (!portionCheck.tripped && guard1f.tripped) {
     console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation, ${guard1f.reason}) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
     if (guardCart.length === 0) {
