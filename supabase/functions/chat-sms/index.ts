@@ -51,7 +51,8 @@ import {
 } from "./pending-option.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
-import { computeGuard19 } from "./guard19-quantity-only-no-item-named.ts";
+import { computeGuard19, statesQuantity } from "./guard19-quantity-only-no-item-named.ts";
+import { computeGuard21 } from "./guard21-unconsented-growth-no-signal-20260912.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
@@ -8565,6 +8566,49 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       reply = guardCart.length > 0
         ? "Sorry, which item did you want more of?"
         : "Sorry, which item would you like? I don't have a specific one from that yet.";
+    }
+  }
+
+  // ── GUARD 21 (2026-09-12 P0, live money defect on Vito's, conv ce84c64b):
+  // general backstop for cart growth on a turn that gives NO ordering signal
+  // at all -- names no menu item AND states no quantity. GUARD 9 only checks
+  // bare affirmations ("yes"/"looks good"), GUARD 13 only checks turns with a
+  // pending required option, GUARD 19 only checks quantity-only messages.
+  // None of the three cover an ordinary reply like "You already know my
+  // name." (in answer to the bot asking for a pickup name) -- which is
+  // exactly the live incident: the cart already correctly held one pizza,
+  // the model non-deterministically re-issued add_item on this unrelated
+  // reply, and quantity silently doubled with zero textual grounding for the
+  // second unit anywhere in the message. See guard21-unconsented-growth-
+  // no-signal-20260912.ts for the full writeup and why this is a per-item
+  // selective revert, not GUARD 19's full-cart revert.
+  {
+    const menuItemNames21 = buildMenuItemNames(effectiveMenu);
+    const namedThisTurn21 = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuItemNames21,
+    );
+    const hasAnyOrderingSignal21 =
+      namedThisTurn21.size > 0 ||
+      deterministicComposedThisTurn ||
+      hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurn21.size) ||
+      statesQuantity(userMessage) ||
+      (!!regularItem && regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name));
+    const guard21Result = computeGuard21(cartSnapshotBeforeTurn, guardCart, hasAnyOrderingSignal21);
+    if (guard21Result.tripped) {
+      const revertedDesc21 = [
+        ...guard21Result.phantomAdds.map(r => `removed ${r.name}`),
+        ...guard21Result.qtyReverts.map(({ item, priorQty }) => `reverted ${item.name} qty ${(item as CartItem).quantity} -> ${priorQty}`),
+      ].join(", ");
+      console.warn(`[chat-sms] GUARD 21 (unconsented-growth-no-signal) tripped (conv=${conversation.id}). Message "${userMessage}" named nothing and stated no quantity; reverted: ${revertedDesc21}`);
+      for (const r of guard21Result.phantomAdds) {
+        const idx = guardCart.indexOf(r);
+        if (idx !== -1) guardCart.splice(idx, 1);
+      }
+      for (const { item, priorQty } of guard21Result.qtyReverts) {
+        (item as CartItem).quantity = priorQty;
+      }
+      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
     }
   }
 
