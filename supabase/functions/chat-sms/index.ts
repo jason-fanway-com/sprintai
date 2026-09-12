@@ -53,7 +53,7 @@ import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
 import { shouldRevertOrderType } from "./guard2b-order-type-revert.ts";
-import { computeDeliveryOffer, type DeliveryOffer } from "./delivery-memory-offer.ts";
+import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
@@ -330,6 +330,7 @@ interface OrderCart {
   driver_tip_cents:           number | null;
   ticket_send_attempt_at:     string | null;
   fee_disclosed_at:           string | null;
+  delivery_offer_made_at:     string | null;
   // BLOCKER 1 (docs/specs/2026-09-06-disambiguation-and-menu-gaps.md): the
   // candidates GUARD 7 offered, so the NEXT inbound message can be resolved
   // deterministically before the LLM ever runs. Null once resolved, reset,
@@ -708,7 +709,7 @@ export function buildSystemPrompt(
   deliveryEnabled?: boolean,
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
-  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer } | null,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer; deliveryOfferEligible?: boolean } | null,
   conversationJustExpired = false,
 ): string {
   const today = getBusinessDayKey(shop.timezone);
@@ -917,16 +918,22 @@ export function buildSystemPrompt(
       : "";
     // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
     // customer-delivery-memory.md). Offer, never assume — mirrors regularClause's
-    // "OFFER, not an instruction" discipline. isFirstMessage-gated only: this
-    // offer only makes sense on the very first reply of a NEW conversation,
-    // unlike the regular-item offer which can repeat. GUARD C2b/C2b-name in
-    // index.ts is the deterministic enforcement; this text is advisory.
-    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
-      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
-      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.isFirstMessage
-        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your first reply this conversation, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
-        : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
-          ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+    // "OFFER, not an instruction" discipline. deliveryOfferEligible-gated, NOT
+    // isFirstMessage: the offer must fire on whichever turn order_type is
+    // actually about to be resolved, which is often NOT the conversation's
+    // literal first message ("hi", "you open?", "menu?" routinely precede the
+    // real ordering turn). index.ts computes deliveryOfferEligible off
+    // cart.order_type (still unset) and cart.delivery_offer_made_at (not yet
+    // set) and persists delivery_offer_made_at the moment this fires, so it
+    // still only ever fires once per conversation even though it's no longer
+    // pinned to message #1. GUARD C2b/C2b-name in index.ts is the
+    // deterministic enforcement; this text is advisory.
+    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.deliveryOfferEligible
+      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your next reply, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.deliveryOfferEligible
+        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your next reply, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
+        : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOfferEligible
+          ? ` Their last order was PICKUP. As part of your next reply, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
           : "";
     if (!nameClause && !regularClause && !deliveryOfferClause) return "";
     return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
@@ -1063,7 +1070,7 @@ export function buildSystemPromptV2(
   deliveryEnabled?: boolean,
   testMode?: boolean,
   deliveryGeoAvailable?: boolean,
-  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer } | null,
+  customerContext?: { name: string | null; regularItem: RegularOfferContext | null; isFirstMessage: boolean; deliveryOffer?: DeliveryOffer; deliveryOfferEligible?: boolean } | null,
   shopSettings?:  ShopSettingsRow | null,
   shopVoice?:     ShopVoiceRow | null,
   shopNotes:      ShopNoteRow[] = [],
@@ -1263,16 +1270,22 @@ export function buildSystemPromptV2(
       : "";
     // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
     // customer-delivery-memory.md). Offer, never assume — mirrors regularClause's
-    // "OFFER, not an instruction" discipline. isFirstMessage-gated only: this
-    // offer only makes sense on the very first reply of a NEW conversation,
-    // unlike the regular-item offer which can repeat. GUARD C2b/C2b-name in
-    // index.ts is the deterministic enforcement; this text is advisory.
-    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
-      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
-      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.isFirstMessage
-        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your first reply this conversation, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
-        : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
-          ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+    // "OFFER, not an instruction" discipline. deliveryOfferEligible-gated, NOT
+    // isFirstMessage: the offer must fire on whichever turn order_type is
+    // actually about to be resolved, which is often NOT the conversation's
+    // literal first message ("hi", "you open?", "menu?" routinely precede the
+    // real ordering turn). index.ts computes deliveryOfferEligible off
+    // cart.order_type (still unset) and cart.delivery_offer_made_at (not yet
+    // set) and persists delivery_offer_made_at the moment this fires, so it
+    // still only ever fires once per conversation even though it's no longer
+    // pinned to message #1. GUARD C2b/C2b-name in index.ts is the
+    // deterministic enforcement; this text is advisory.
+    const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.deliveryOfferEligible
+      ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your next reply, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.deliveryOfferEligible
+        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your next reply, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
+        : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOfferEligible
+          ? ` Their last order was PICKUP. As part of your next reply, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
           : "";
     if (!nameClause && !regularClause && !deliveryOfferClause) return "";
     return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
@@ -5218,12 +5231,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         deliveryRadiusMi: shop.delivery_radius_mi ?? null,
       })
     : null;
-  // AC4: only greet by name on a genuinely returning customer (a stored
-  // name AND not their first-ever contact) — never on a first-ever
-  // conversation, even if a name were somehow already on file.
-  const customerContext = (customerRow && !isLifetimeFirstContact)
-    ? { name: customerRow.name, regularItem, isFirstMessage, deliveryOffer }
-    : null;
+  // customerContext itself (AC4 name-greeting rule included) is assembled
+  // further below, once `cart` is loaded — the delivery-offer eligibility
+  // check needs cart.order_type and cart.delivery_offer_made_at, neither of
+  // which exists yet at this point in the request (see FIX A, 2026-09-12).
 
   // ITEM 1 (2026-09-08, PO live verification): menu_item_id -> option-group
   // names whose real choices have already reached the customer this turn via
@@ -5341,6 +5352,40 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
     cart = newCart as OrderCart;
   }
+
+  // FIX A (2026-09-12, docs/specs/2026-09-12-returning-customer-delivery-
+  // memory.md follow-up): the returning-customer delivery/pickup-again offer
+  // used to be gated on isFirstMessage (the literal first message of the
+  // conversation), which closes the offer window the instant a customer
+  // opens with ANYTHING other than the order itself ("hi", "you open?",
+  // "menu?") — the common case, not an edge case. The offer must instead
+  // fire on whichever turn order_type is still unset (i.e. the turn the
+  // ordering flow is about to ask pickup-or-delivery), and must fire only
+  // ONCE per conversation regardless of how many turns that takes. Cart state
+  // (delivery_offer_made_at, same one-shot-flag pattern as fee_disclosed_at
+  // above) is the only durable signal for "once" here — isFirstMessage can't
+  // be reused for it since it's true on exactly one turn no matter what.
+  //
+  // Persisted the moment eligibility is computed true (this turn), not the
+  // moment the customer answers: this mirrors the old isFirstMessage
+  // semantics (the clause was only ever injected once, whether or not the
+  // LLM actually surfaced it, whether or not the customer replied to it) and
+  // keeps the offer from being re-injected turn after turn if the customer
+  // ignores it or answers something else. Never re-fires if order_type is
+  // later nulled out again (GUARD 2b reverting a silent set, etc.) because
+  // delivery_offer_made_at is never cleared once set.
+  const deliveryOfferEligible = isDeliveryOfferEligible(deliveryOffer, cart.order_type, cart.delivery_offer_made_at);
+  if (deliveryOfferEligible) {
+    const madeAt = new Date().toISOString();
+    await supabase.from("order_carts").update({ delivery_offer_made_at: madeAt }).eq("id", cart.id);
+    cart.delivery_offer_made_at = madeAt;
+  }
+  // AC4: only greet by name on a genuinely returning customer (a stored
+  // name AND not their first-ever contact) — never on a first-ever
+  // conversation, even if a name were somehow already on file.
+  const customerContext = (customerRow && !isLifetimeFirstContact)
+    ? { name: customerRow.name, regularItem, isFirstMessage, deliveryOffer, deliveryOfferEligible }
+    : null;
 
   // TRUE pre-turn snapshot, captured before any tool execution can mutate
   // cart_json. Guard 7 (ambiguous same-name match, below) needs to know what

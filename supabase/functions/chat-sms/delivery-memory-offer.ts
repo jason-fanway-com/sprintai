@@ -73,3 +73,30 @@ export function computeDeliveryOffer(
   if (lastOrderType === "pickup") return { type: "pickup" };
   return null;
 }
+
+/**
+ * FIX A (2026-09-12 follow-up): decides whether THIS turn is the one to
+ * inject the greeting's delivery/pickup-again offer into the system prompt.
+ *
+ * Previously this was gated on "is this the conversation's literal first
+ * message" — which meant the offer window closed for good the instant a
+ * customer opened with anything other than the order itself ("hi", "you
+ * open?", "menu?"). That's the common case, not an edge case: almost nobody's
+ * first message IS the order.
+ *
+ * The offer must instead fire on whichever turn order_type is still unset
+ * (the turn the ordering flow is about to ask pickup-or-delivery), which can
+ * land on any turn, not just the first — so "first message" can no longer
+ * double as the "have we already made this offer" guard. Callers must
+ * persist a one-shot flag (order_carts.delivery_offer_made_at) the moment
+ * this returns true, then pass it back in on every later turn so it never
+ * fires twice, and never re-fires if order_type is later nulled out again
+ * (e.g. GUARD 2b reverting a silent set).
+ */
+export function isDeliveryOfferEligible(
+  offer: DeliveryOffer,
+  orderType: string | null,
+  deliveryOfferMadeAt: string | null,
+): boolean {
+  return offer != null && orderType == null && deliveryOfferMadeAt == null;
+}
