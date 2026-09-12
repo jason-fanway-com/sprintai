@@ -61,7 +61,7 @@ import { shouldRevertOrderType } from "./guard2b-order-type-revert.ts";
 import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
-import { CART_SUMMARY_RE } from "./cart-summary-intent-20260909.ts";
+import { CART_SUMMARY_RE, CART_SUMMARY_MENTION_RE } from "./cart-summary-intent-20260909.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, upsertOrderFulfillmentMemory, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
@@ -5547,6 +5547,33 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
     const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
 
+    // P0 fix (2026-09-12, live trust incident, conv d79c1d98): "show me the
+    // order" was structurally unanswerable once a payment link existed —
+    // this whole `phase === "checkout"` block returns before the ordinary
+    // read-only cart-summary shortcut (further below in the function, gated
+    // on phase === "building") ever runs. Asked three times, refused three
+    // times with the canned "payment link was sent" reply. A read-only cart
+    // summary mutates nothing and cannot invalidate the link or overcharge
+    // anyone — it must work in every phase. Checked FIRST, before
+    // wantsRestart/wantsChange, so a compound "show me the order, yes it's
+    // for me" (see C2b-name's own fix for the auto-submit half of that same
+    // incident) still gets the order shown even if something upstream also
+    // read the message as a confirmation.
+    if (CART_SUMMARY_RE.test(userMessage.trim())) {
+      const recap = renderItemizedRecap(cart.cart_json as AnyCartItem[], cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
+      const { data: payLink } = await supabase
+        .from("pay_links").select("short_code").eq("cart_id", cart.id)
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      const linkLine = payLink?.short_code
+        ? `\n\nPay here: https://pay.getsprintai.com/o/${payLink.short_code}`
+        : "\n\nYour payment link is still active — check your texts for it.";
+      const reply = `Here's your order:\n\n${recap}${linkLine}`;
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+    }
+
     if (wantsRestart) {
       // Clear cart and start fresh
       cart.cart_json = [];
@@ -5577,9 +5604,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         .maybeSingle();
       const isRepeatCheck = lastBotMsg &&
         lastBotMsg.content && (lastBotMsg.content as string).includes("payment link was sent");
+      // P0 fix (2026-09-12, conv d79c1d98, point 2): the real fix is the
+      // CART_SUMMARY_RE branch above — this canned catch-all should now only
+      // ever be reached by something that isn't a read request, a restart, or
+      // a change. Still names "show order" alongside CHANGE/RESTART so a
+      // phrasing this shortcut doesn't yet recognize gets pointed at the
+      // right word instead of a dead end.
       const reply = isRepeatCheck
-        ? "Payment still pending — tap the link we sent to finish. Reply CHANGE to edit or RESTART to start over."
-        : "Your payment link was sent — check your texts for it. Reply CHANGE to edit your order or RESTART to start over.";
+        ? "Payment still pending — tap the link we sent to finish. Reply CHANGE to edit, SHOW ORDER to see it, or RESTART to start over."
+        : "Your payment link was sent — check your texts for it. Reply SHOW ORDER to see your order, CHANGE to edit it, or RESTART to start over.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
       if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -6704,6 +6737,26 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       isConfirmingPickupName(lastAssistant.content, customerContext.name);
     if (confirmingName) {
       const trimmed = userMessage.trim();
+      // P0 fix (2026-09-12, live trust incident, conv d79c1d98, point 3):
+      // "Show me the order. Yes it's for me" combines a READ request with
+      // the confirmation this block exists to detect. impliesOrderConfirmation
+      // matches the "yes" anywhere in the message with no length/shape limit,
+      // so the compound turn was read as a clean confirm — submit_order fired,
+      // a payment link went out, and the read request was dropped entirely.
+      // Sending a payment link is the one action in this flow that can't be
+      // taken back; it must never be the branch chosen on an ambiguous turn.
+      // When the message ALSO reads as a request to see the order, answer
+      // THAT deterministically and re-ask the same confirmation question
+      // instead — never resolve a name or submit on this turn.
+      if (CART_SUMMARY_MENTION_RE.test(trimmed)) {
+        const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
+        const reply = `Here's your order:\n\n${recap}\n\nPutting this in for ${customerContext.name}, right?`;
+        console.log(`[chat-sms] C2b-name held (conv=${conversation.id}): compound read+confirm turn — showed the order instead of auto-submitting.`);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
+      }
       let resolvedName: string | null = null;
       if (impliesOrderConfirmation(trimmed)) {
         resolvedName = customerContext.name;
@@ -6762,7 +6815,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // covered), so the read fell through to the LLM, which then had to state
   // real money itself -- exactly the read-only path that must never touch
   // the LLM or a mutation guard.
-  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cartItems.length > 0 && cart.phase === "building" && CART_SUMMARY_RE.test(userMessage.trim())) {
+  // P0 fix (2026-09-12, conv d79c1d98, point 1): dropped the old `cart.phase
+  // === "building"` restriction — a read-only cart summary mutates nothing
+  // and cannot overcharge anyone, so it must work in every phase this code
+  // is reachable in (checkout itself is handled by its own earlier, dedicated
+  // branch above, which returns before this point is ever reached).
+  // `cartItems.length > 0` alone is the real, sufficient gate: nothing to
+  // summarize on an empty cart regardless of phase.
+  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cartItems.length > 0 && CART_SUMMARY_RE.test(userMessage.trim())) {
     const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
     const summaryReply = `Here's your order so far:\n\n${recap}`;
     console.log(`[chat-sms] cart-summary shortcut fired (conv=${conversation.id})`);
@@ -8873,9 +8933,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // to create the real Stripe session. Stops the "what else?" / pickup-
   // delivery re-ask loop after a checkout signal. Reuses submit_order's own
   // C1 gate for safety (requires pickup_name + order_type). Runs between Guards 2c and 2b.
+  // P0 fix (2026-09-12, conv d79c1d98, point 3): same class as C2b-name's own
+  // fix above — impliesOrderConfirmation matches "yes" anywhere in the
+  // message with no shape constraint, so a compound "show me the order,
+  // yes..." would otherwise read as clean checkout intent here too. Never
+  // let a turn that ALSO asks to see the order trigger the one irreversible
+  // action in this flow.
   if (!checkoutUrl && guardCart.length > 0 && hasPickupName && orderTypePreLoop) {
     const hasIncompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
-    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage)) {
+    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage) && !CART_SUMMARY_MENTION_RE.test(userMessage.trim())) {
       console.log(`[chat-sms] D1 checkout-completion-driver firing (conv=${conversation.id}, cart=${cart.id}, name="${guardCartRow?.pickup_name}", order_type=${orderTypePreLoop})`);
       const submitInput: Record<string, unknown> = { pickup_name: guardCartRow?.pickup_name };
       const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
@@ -9223,6 +9289,32 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       const stillOpenOptions = carriedDisambiguation.candidates.map(c => candidateShortText(c)).join(" or ");
       finalReply = `${finalReply}\n\nStill wondering — did you want ${stillOpenOptions}?`;
     }
+  }
+
+  // ── GUARD 22 (2026-09-12 P0, live trust defect on Vito's, conv d79c1d98):
+  // never surface a checkout link the customer hasn't seen the cart reflect
+  // yet. "Add French fries" added the item correctly, then jumped straight
+  // to a NEW payment link for the updated total -- the customer never saw
+  // what changed, so with nothing visibly confirming the add landed, he
+  // re-sent the same message. That is the exact "no confirmation" shape
+  // that produced the money-duplication P0 earlier today (conv ce84c64b):
+  // a customer who can't see their change land will repeat themselves, and
+  // a repeat is exactly what turns one item into two.
+  //
+  // Deliberately keyed on "did the cart change this turn", not on whether
+  // the customer's own message implied confirmation -- an explicit "yes,
+  // add fries and check out" still deserves to see the fresh total before
+  // being asked to pay it, same principle GUARD 1f/21 already apply to
+  // narrower shapes today. Never touches money or the underlying Stripe
+  // session: submit_order already ran and the session it created stays
+  // valid; this only defers SHOWING the link by one turn, replacing it with
+  // the itemized recap so the customer sees the change land before anything
+  // asks them to pay.
+  const cartMutatedThisTurn = JSON.stringify(cartSnapshotBeforeTurn) !== JSON.stringify(currentCart.cart_json ?? []);
+  if (checkoutUrl && cartMutatedThisTurn) {
+    console.log(`[chat-sms] GUARD 22 (checkout-link-after-unseen-mutation) tripped (conv=${conversation.id}): cart changed this turn, holding the payment link until the customer sees the update.`);
+    finalReply = `Here's your updated order:\n\n${renderItemizedRecap(currentCart.cart_json as AnyCartItem[], currentCart.delivery_fee_cents ?? undefined, currentCart.driver_tip_cents ?? undefined)}\n\nReady to check out? I'll send the payment link.`;
+    checkoutUrl = undefined;
   }
 
   if (isLifetimeFirstContact) {
