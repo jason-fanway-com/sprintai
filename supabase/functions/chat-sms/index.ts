@@ -5515,9 +5515,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
     } else if (resolved) {
       const localCartItems = [...cart.cart_json];
+      // P0 fix (2026-09-11, live money defect — Vito's Gyro double-charge):
+      // this call never passed `compiledEngineEnabled` (or anything after
+      // it), so it silently fell through to the LEGACY add_item branch even
+      // for a shop on the compiled engine — a second, differently-shaped
+      // line (raw `name`, no `ask_plan_selections`) for an item ALREADY
+      // resolving on the compiled path, invisible to applyCompiledAddItem's
+      // identity checks entirely (they only ever look at compiled-shaped
+      // lines). Same compiled-aware call shape as the option-removal branch
+      // just above, which already gets this right.
       const addResult = await executeTool(
         "add_item", { menu_item_id: resolved.menu_item_id, quantity: 1 },
         localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+        undefined, undefined,
+        shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
       );
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
       // DEFECT 2 fix (2026-09-06, P0 money defect): this reply used to state
