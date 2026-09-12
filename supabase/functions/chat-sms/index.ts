@@ -3841,6 +3841,31 @@ function getLocalMinutes(timezone: string): number {
   }
 }
 
+// Whether `nowMins` (minutes-since-midnight) falls inside any of the given
+// open windows. Exported so the RESET handler and the greeting-phase hours
+// gate share one check instead of each re-deriving it.
+export function isWithinAnyWindow(
+  windows: Array<{ open: string; close: string }>,
+  nowMins: number,
+): boolean {
+  return windows.some((window) => {
+    const [openH, openM] = window.open.split(":").map(Number);
+    const [closeH, closeM] = window.close.split(":").map(Number);
+    const openMins = openH * 60 + openM;
+    const closeMins = closeH * 60 + closeM;
+    return nowMins >= openMins && nowMins < closeMins;
+  });
+}
+
+// The RESET reply must reflect whether the kitchen is actually open right
+// now — telling an open-shop customer to "come back when we're open" was a
+// real defect (2026-09-12). Exported so the fix is directly testable.
+export function buildResetReply(effectiveOpen: boolean): string {
+  return effectiveOpen
+    ? "Session reset. Text anything to start a new order, or TESTMODE to test again."
+    : "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
+}
+
 async function saveMessage(
   supabase:       SupabaseClient,
   conversationId: string,
@@ -5200,13 +5225,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   const nowMins     = getLocalMinutes(shop.timezone);
   // Check if current time falls within any open window (handles multi-window
   // days, e.g. lunch + dinner, since open_hours[day] is an array).
-  const isOpen = todayHours.some((window: { open: string; close: string }) => {
-    const [openH, openM] = window.open.split(":").map(Number);
-    const [closeH, closeM] = window.close.split(":").map(Number);
-    const openMins = openH * 60 + openM;
-    const closeMins = closeH * 60 + closeM;
-    return nowMins >= openMins && nowMins < closeMins;
-  });
+  const isOpen = isWithinAnyWindow(todayHours, nowMins);
   const effectiveOpen = forceClosed ? false : isOpen;
 
   // RESET keyword — expire current cart AND close out the conversation, so
@@ -5235,9 +5254,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (userMessage.trim().toUpperCase() === "RESET") {
     await supabase.from("order_carts").update({ phase: "expired", test_mode: false, pending_disambiguation: null }).eq("id", cart.id);
     await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
-    const reply = effectiveOpen
-      ? "Session reset. Text anything to start a new order, or TESTMODE to test again."
-      : "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
+    const reply = buildResetReply(effectiveOpen);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
     if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
