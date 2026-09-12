@@ -408,6 +408,32 @@ function filterOutSentencesMatchingStems(text: string, dropStems: Set<string>): 
   return kept.join(" ").trim();
 }
 
+// Regression fix (2026-09-12, PO live testing): the choice-stem filter above
+// only catches a model paraphrase that NAMES one of the step's real choices
+// ("...cooked rare?"). A paraphrase of the canonical question itself that
+// never names a choice ("What temp would you like the Cheese Burger
+// cooked?" vs. canonical "How would you like the Cheese Burger cooked?")
+// shares no choice stems, so both sentences used to ship in the same reply.
+// significantStems doesn't strip question-y filler words ("what"/"how"/
+// "would"/"like"/"you"/...), so those are excluded here explicitly — left
+// in, they'd cause the loose any-overlap match below (same discipline as
+// the choice-stem filter above) to drop unrelated sentences that merely
+// contain "you" or "like". What's left after stripping filler and the
+// item's own display name (an unrelated "item added" sentence may
+// legitimately contain that) is the canonical question's real distinctive
+// content — e.g. just "cooked" for the temp template.
+const GENERIC_QUESTION_STEMS = new Set([
+  "what", "how", "which", "who", "would", "will", "do", "does", "did",
+  "you", "your", "like", "want", "on",
+]);
+
+function canonicalQuestionStems(nextQuestion: string, displayName: string): Set<string> {
+  const displayStems = significantStems(displayName);
+  return new Set(
+    [...significantStems(nextQuestion)].filter(s => !displayStems.has(s) && !GENERIC_QUESTION_STEMS.has(s)),
+  );
+}
+
 // PO fix (2026-09-11): the old byte-for-byte early return ("if modelReply
 // already contains nextQuestion, leave the WHOLE reply alone") skipped
 // filtering entirely whenever `nextQuestion` (now a much shorter default —
@@ -427,15 +453,17 @@ export function enforceVerbatimStepQuestion(
   modelReply: string,
   nextQuestion: string,
   choiceDisplays: string[],
+  displayName = "",
 ): string {
   const choiceStems = new Set(choiceDisplays.flatMap(d => [...significantStems(d)]));
+  const dropStems = new Set([...choiceStems, ...canonicalQuestionStems(nextQuestion, displayName)]);
   const idx = modelReply.indexOf(nextQuestion);
   if (idx >= 0) {
-    const before = filterOutSentencesMatchingStems(modelReply.slice(0, idx), choiceStems);
-    const after = filterOutSentencesMatchingStems(modelReply.slice(idx + nextQuestion.length), choiceStems);
+    const before = filterOutSentencesMatchingStems(modelReply.slice(0, idx), dropStems);
+    const after = filterOutSentencesMatchingStems(modelReply.slice(idx + nextQuestion.length), dropStems);
     return [before, nextQuestion, after].filter(Boolean).join(" ").trim();
   }
-  const leadIn = filterOutSentencesMatchingStems(modelReply, choiceStems);
+  const leadIn = filterOutSentencesMatchingStems(modelReply, dropStems);
   return leadIn ? `${leadIn} ${nextQuestion}` : nextQuestion;
 }
 

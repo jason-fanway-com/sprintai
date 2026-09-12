@@ -5038,6 +5038,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       if (customerRow) regularItem = regularEligibility(customerRow.favorite_items ?? []);
     }
   }
+  // Real order history on the customer row means we've heard from this
+  // customer before, regardless of whether a `conversations` row happens to
+  // exist for this phone (e.g. history seeded/migrated directly into
+  // `customers`) — the conversations-count check above can't see that.
+  if (customerRow && ((customerRow.order_count ?? 0) > 0 || customerRow.last_order_type)) {
+    isLifetimeFirstContact = false;
+  }
   // Returning-customer delivery memory (docs/specs/2026-09-12-returning-
   // customer-delivery-memory.md). Gated on the SAME customer_personalization_
   // enabled flag as the rest of this block (spec item 5 — no second flag).
@@ -6663,7 +6670,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     for (const sq of loopResult.compiledStepQuestions ?? []) {
       reply = deferSlotQuestionForOrderType
         ? stripDeferredStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName)
-        : enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays);
+        : enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName);
       const groups = compiledRenderedGroups.get(sq.menuItemId) ?? new Set<string>();
       groups.add(sq.groupName);
       compiledRenderedGroups.set(sq.menuItemId, groups);

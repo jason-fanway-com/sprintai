@@ -463,17 +463,18 @@ Deno.test("resolveAskPlan: chicken cheesesteak sub 'large' applies the real $8.0
 // paraphrase and assert the canonical text is what survives.
 const TURKEY_QUESTION = "What size Turkey Sub? Medium 12'' (no extra charge) or Large 16'' +$8.00.";
 const TURKEY_CHOICES = ["Medium 12''", "Large 16''"];
+const TURKEY_NAME = "Turkey Sub";
 
 Deno.test("enforceVerbatimStepQuestion: model relayed it verbatim — left untouched, warm lead-in preserved", () => {
   const reply = `Turkey Sub added! ${TURKEY_QUESTION}`;
-  assertEquals(enforceVerbatimStepQuestion(reply, TURKEY_QUESTION, TURKEY_CHOICES), reply);
+  assertEquals(enforceVerbatimStepQuestion(reply, TURKEY_QUESTION, TURKEY_CHOICES, TURKEY_NAME), reply);
 });
 
 Deno.test("enforceVerbatimStepQuestion: quote-style paraphrase (the exact PO repro) is dropped, canonical text appended", () => {
   // Straight double-quote inch marks instead of the stored two-apostrophe
   // choice names — the exact mismatch that broke the old raw-substring check.
   const modelReply = `Turkey Sub added! What size - medium 12" or large 16" (+$8)?`;
-  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES, TURKEY_NAME);
   assertEquals(result, `Turkey Sub added! ${TURKEY_QUESTION}`);
   // The customer must see the canonical line exactly once, never the model's
   // own paraphrase attempt alongside it.
@@ -483,14 +484,42 @@ Deno.test("enforceVerbatimStepQuestion: quote-style paraphrase (the exact PO rep
 
 Deno.test("enforceVerbatimStepQuestion: reply with no lead-in at all — canonical question stands alone, nothing to duplicate", () => {
   const modelReply = `Medium or large? Medium's free and large is eight bucks more.`;
-  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES, TURKEY_NAME);
   assertEquals(result, TURKEY_QUESTION);
 });
 
 Deno.test("enforceVerbatimStepQuestion: reply has real warmth AND a wrong price attempt — warmth kept, price attempt dropped", () => {
   const modelReply = `Great choice! Turkey Sub added to your order. What size, medium or large (large is $8 more)?`;
-  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES);
+  const result = enforceVerbatimStepQuestion(modelReply, TURKEY_QUESTION, TURKEY_CHOICES, TURKEY_NAME);
   assertEquals(result, `Great choice! Turkey Sub added to your order. ${TURKEY_QUESTION}`);
+});
+
+// ── Regression (2026-09-12, PO live testing): "asked twice in one reply" ──
+// The choice-stem filter alone only catches a paraphrase that NAMES a real
+// choice. A paraphrase of the canonical QUESTION itself, naming no choice,
+// used to survive alongside the canonical line untouched.
+const BURGER_QUESTION = "How would you like the Cheese Burger cooked?";
+const BURGER_CHOICES = ["Rare", "Medium", "Medium Well", "Well Done"];
+const BURGER_NAME = "Cheese Burger";
+
+Deno.test("enforceVerbatimStepQuestion: canonical-question paraphrase naming no choice is dropped, not just choice-naming paraphrases", () => {
+  const modelReply = `Cheese Burger added! What temp would you like the Cheese Burger cooked?`;
+  const result = enforceVerbatimStepQuestion(modelReply, BURGER_QUESTION, BURGER_CHOICES, BURGER_NAME);
+  assertEquals(result, `Cheese Burger added! ${BURGER_QUESTION}`);
+  assertEquals(result.split(BURGER_QUESTION).length - 1, 1, "the question must appear exactly once");
+  assert(!result.includes("What temp"), "the model's own paraphrase must not survive alongside the canonical question");
+});
+
+Deno.test("enforceVerbatimStepQuestion: choice-naming paraphrase of the canonical question still gets dropped (no regression)", () => {
+  const modelReply = `Cheese Burger added! Would you like that well done?`;
+  const result = enforceVerbatimStepQuestion(modelReply, BURGER_QUESTION, BURGER_CHOICES, BURGER_NAME);
+  assertEquals(result, `Cheese Burger added! ${BURGER_QUESTION}`);
+});
+
+Deno.test("enforceVerbatimStepQuestion: unrelated upsell sentence survives alongside the canonical question — no over-stripping", () => {
+  const modelReply = `Cheese Burger added! Want to add a drink for two dollars more? ${BURGER_QUESTION}`;
+  const result = enforceVerbatimStepQuestion(modelReply, BURGER_QUESTION, BURGER_CHOICES, BURGER_NAME);
+  assertEquals(result, modelReply, "the upsell sentence is not a paraphrase of the question and must survive");
 });
 
 // ─── applyCompiledAddItem: D1 fix, the real Zio's "1 pepperoni, 1 plain,

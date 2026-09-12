@@ -133,7 +133,7 @@ Deno.test("compiledRenderedGroups wiring: populated from enforceVerbatimStepQues
   // turn; the collision branch calls stripDeferredStepQuestion instead
   // (never appends a canonical question the customer wasn't asked). Both
   // branches still feed the SAME compiledRenderedGroups instance either way.
-  assert(INDEX_SOURCE.includes("enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays)"),
+  assert(INDEX_SOURCE.includes("enforceVerbatimStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName)"),
     "item 2's enforcement must still run (non-collision turns) and its enforced groups must feed compiledRenderedGroups");
   assert(INDEX_SOURCE.includes("stripDeferredStepQuestion(reply, sq.nextQuestion, sq.choiceDisplays, sq.displayName)"),
     "the two-question-collision turn must strip the deferred slot question rather than force it in alongside the order-type question");
