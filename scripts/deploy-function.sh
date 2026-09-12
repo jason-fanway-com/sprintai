@@ -14,6 +14,23 @@
 
 set -euo pipefail
 
+# stamp_entrypoint FILE SHA — prepend a `// DEPLOY_SHA: <sha>` comment line to
+# FILE. Deterministic in SHA alone, so re-running against the same commit
+# with no other source changes reproduces byte-identical output — that's
+# what lets Supabase's own "No change found" detection keep working.
+stamp_entrypoint() {
+  local file="$1" sha="$2" tmp
+  tmp=$(mktemp)
+  { printf '// DEPLOY_SHA: %s\n' "$sha"; cat "$file"; } > "$tmp"
+  mv "$tmp" "$file"
+}
+
+# verify_stamp FILE SHA — true if FILE contains the exact stamp for SHA.
+verify_stamp() {
+  local file="$1" sha="$2"
+  grep -q "DEPLOY_SHA: ${sha}" "$file"
+}
+
 FUNCTION_NAME="${1:-}"
 if [ -z "$FUNCTION_NAME" ]; then
   echo "Usage: ./scripts/deploy-function.sh <function-name>" >&2
@@ -23,6 +40,8 @@ fi
 PROJECT_REF="rvdqfxtrskxekfkqnegx"
 FUNC_DIR="supabase/functions/${FUNCTION_NAME}"
 ENTRYPOINT="${FUNC_DIR}/index.ts"
+HEAD_SHA_FULL=$(git rev-parse HEAD)
+HEAD_SHA_SHORT=$(git rev-parse --short HEAD)
 
 if [ ! -f "$ENTRYPOINT" ]; then
   echo "FAIL: no entrypoint at ${ENTRYPOINT}" >&2
@@ -53,11 +72,24 @@ fi
 echo "Current deployed version: ${OLD_VERSION}"
 
 echo "== 4/6 deploying =="
+# Deploy FROM a stamped copy, never the working tree directly, so the deployed
+# artifact carries proof of exactly which commit produced it (step 6 checks
+# this). `supabase functions deploy` needs the full project structure
+# (config.toml + the function's directory + anything it imports, e.g.
+# `_shared`), not a single file, so the whole `supabase/` tree is copied and
+# only the target entrypoint's copy is stamped.
+BUILD_DIR=$(mktemp -d)
+DOWNLOAD_DIR=$(mktemp -d)
+trap 'rm -rf "$BUILD_DIR" "$DOWNLOAD_DIR"' EXIT
+cp -R supabase "${BUILD_DIR}/supabase"
+STAMPED_ENTRYPOINT="${BUILD_DIR}/supabase/functions/${FUNCTION_NAME}/index.ts"
+stamp_entrypoint "$STAMPED_ENTRYPOINT" "$HEAD_SHA_FULL"
+
 # Capture the output so step 5 can tell the two reasons a version might not move
 # apart: Supabase printing "No change found" (source byte-identical to what is
 # already live — fine) versus a deploy that silently did nothing (a real
 # failure). Conflating them made the gate fail a correct no-op deploy.
-DEPLOY_OUT=$(supabase functions deploy "$FUNCTION_NAME" 2>&1)
+DEPLOY_OUT=$(supabase functions deploy "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --workdir "$BUILD_DIR" 2>&1)
 echo "$DEPLOY_OUT"
 
 echo "== 5/6 re-reading version =="
@@ -68,7 +100,7 @@ NEW_VERSION=$(supabase functions list 2>/dev/null | awk -F'|' -v fn="$FUNCTION_N
 if [ "$NEW_VERSION" = "$OLD_VERSION" ] && echo "$DEPLOY_OUT" | grep -q "No change found"; then
   echo "Version unchanged (${OLD_VERSION}) because Supabase reported \"No change found\" — the source is byte-identical to what is already deployed. That is a correct no-op, not a failure."
   echo ""
-  echo "VERDICT: ${FUNCTION_NAME}  ${OLD_VERSION} (unchanged, source identical)  HEAD $(git rev-parse --short HEAD)"
+  echo "VERDICT: ${FUNCTION_NAME}  ${OLD_VERSION} (unchanged, source identical)  HEAD ${HEAD_SHA_SHORT}"
   exit 0
 fi
 if [ "$NEW_VERSION" = "$OLD_VERSION" ]; then
@@ -77,80 +109,26 @@ if [ "$NEW_VERSION" = "$OLD_VERSION" ]; then
 fi
 echo "Version moved: ${OLD_VERSION} -> ${NEW_VERSION}"
 
-echo "== 6/6 downloading deployed artifact, comparing against working tree =="
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
-( cd "$TMPDIR" && supabase functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" >/dev/null 2>&1 )
-DEPLOYED_ENTRYPOINT="${TMPDIR}/supabase/functions/${FUNCTION_NAME}/index.ts"
+echo "== 6/6 downloading deployed artifact, confirming commit-SHA stamp =="
+# Replaces the old string-literal-fingerprint comparison (downgraded to
+# advisory in 3155aca0 after it false-failed two perfect deploys, v393 and
+# v397 — Supabase's transpile/reflow makes quote-pairing over the bundle
+# fundamentally unsound). The real invariant isn't "these strings match" —
+# it's identity: does the live artifact contain the exact stamp step 4
+# planted for this exact commit? That's a grep, not a heuristic, so there's
+# no false-fail mode.
+( cd "$DOWNLOAD_DIR" && supabase functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" >/dev/null 2>&1 )
+DEPLOYED_ENTRYPOINT="${DOWNLOAD_DIR}/supabase/functions/${FUNCTION_NAME}/index.ts"
 if [ ! -f "$DEPLOYED_ENTRYPOINT" ]; then
   echo "FAIL: could not download the deployed artifact for ${FUNCTION_NAME}." >&2
   exit 1
 fi
 
-# The downloaded artifact is transpiled (TS types fully erased: generics,
-# annotations, `as X["y"]` index-type strings, and whole `import type {...}`
-# statements all vanish) and reformatted, so a raw source diff never matches
-# even for an identical deploy. Comparing double-quoted string literals is a
-# much more robust fingerprint: real runtime strings (log lines, error text,
-# route paths, model names, etc.) survive transpilation untouched, while
-# type-only constructs are exactly what disappears. The real invariant is
-# "everything in the deployed artifact traces back to what's on disk" — i.e.
-# every string literal found in the deployed file must also appear in the
-# local file. A FOREIGN string in the deployed artifact (present in deployed,
-# absent locally) means something other than this working tree was deployed;
-# that's the actual "committed is not deployed" failure mode this catches. A
-# few local-only strings from erased type-cast literals are expected noise,
-# not a sign of drift, so this is deliberately a subset check, not equality.
-ARTIFACT_MATCH="yes"
-if ! python3 - "$ENTRYPOINT" "$DEPLOYED_ENTRYPOINT" <<'PYEOF'
-import re, sys
-def string_literals(path):
-    text = open(path).read()
-    # A JS/TS double-quoted literal cannot contain a RAW NEWLINE. The old
-    # class [^"\\] included \n, so once the bundler reflowed code the naive
-    # quote-pairing slurped multi-line spans of source and reported them as
-    # "foreign strings". That false-failed two perfect deploys on 2026-09-12
-    # (v393, v397) — a gate that cries wolf gets ignored, and then a real
-    # failure slips through. Excluding \n restores the intended check.
-    return set(re.findall(r'"(?:[^"\\\n]|\\.)*"', text))
-local_strings = string_literals(sys.argv[1])
-deployed_strings = string_literals(sys.argv[2])
-foreign = deployed_strings - local_strings
-if foreign:
-    print(f"{len(foreign)} string(s) in the deployed artifact do not appear anywhere in the local file:")
-    for s in sorted(foreign)[:20]:
-        print(f"  {s}")
-    sys.exit(1)
-sys.exit(0)
-PYEOF
-then
-  # ADVISORY, NOT A GATE (downgraded 2026-09-12 by PO).
-  #
-  # This comparison cannot be made sound. Supabase reflows and type-strips the
-  # bundle, so pairing double-quotes over the deployed file manufactures spans
-  # that were never string literals — e.g. "${i.name}" and "').replace(/\s+/g, "
-  # are fragments between two unrelated quotes, not content that was deployed
-  # without being on disk.
-  #
-  # It hard-failed two PERFECT deploys (v393, v397) before this change. A gate
-  # that is usually wrong gets ignored, and then a real failure walks through
-  # it — so it now warns instead of blocking.
-  #
-  # Steps 1-5 remain the real gate and they are sound: type-check, unit tests,
-  # and a version number that actually moved.
-  #
-  # The correct replacement is an IDENTITY check, not a text comparison: stamp
-  # the commit SHA into the function at build time and assert the deployed
-  # artifact contains the current HEAD sha. That needs a one-line source change
-  # in the entrypoint, so it is queued as crew work.
-  ARTIFACT_MATCH="advisory-mismatch"
-  echo "" >&2
-  echo "NOTE (advisory, not a failure): the string-subset comparison above is unsound against a" >&2
-  echo "reflowed bundle and is NOT blocking this deploy. Steps 1-5 passed, which is the real gate." >&2
-  echo "Verify by hand if this deploy carried a change you specifically care about." >&2
+if ! verify_stamp "$DEPLOYED_ENTRYPOINT" "$HEAD_SHA_FULL"; then
+  echo "FAIL: deployed artifact does not contain 'DEPLOY_SHA: ${HEAD_SHA_FULL}'. The version number moved but the live code is not proven to be this commit." >&2
+  exit 1
 fi
-echo "Artifact matches working tree: yes (every deployed string literal traces back to local source)"
+echo "Stamp confirmed: deployed artifact contains DEPLOY_SHA: ${HEAD_SHA_FULL}"
 
-HEAD_SHA=$(git rev-parse --short HEAD)
 echo ""
-echo "VERDICT: ${FUNCTION_NAME}  ${OLD_VERSION} -> ${NEW_VERSION}  HEAD ${HEAD_SHA}  artifact-match: ${ARTIFACT_MATCH}"
+echo "VERDICT: ${FUNCTION_NAME} deployed, confirmed HEAD ${HEAD_SHA_FULL} live (${OLD_VERSION} -> ${NEW_VERSION})"
