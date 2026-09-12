@@ -1,0 +1,40 @@
+[
+  {
+    "n": 6,
+    "url": "https://www.biaggiopizza.com/",
+    "label": "HTML rung-1 PASS, 124 items (largest HTML menu in sample)",
+    "http": 200,
+    "ms": 83298,
+    "fn_ok": true,
+    "fn_error": null,
+    "crawl_status": "done",
+    "crawl_error": null,
+    "pages_scraped": 8,
+    "menu_items_extracted": 215,
+    "menu_items_inserted": 215,
+    "items_in_db": 215,
+    "items_with_price": 215,
+    "sample_items": [
+      {
+        "name": "Thin Crust Cheese Pizza",
+        "price_cents": 1236
+      },
+      {
+        "name": "Thick Crust Sicilian Square Pizza",
+        "price_cents": 2369
+      },
+      {
+        "name": "Half Sheet Cheese Pizza",
+        "price_cents": 1906
+      },
+      {
+        "name": "Full Sheet Cheese Pizza (24 Hour Notice Required)",
+        "price_cents": 3605
+      },
+      {
+        "name": "Gluten Free Pizza",
+        "price_cents": 2060
+      }
+    ]
+  }
+]

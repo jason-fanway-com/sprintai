@@ -1,0 +1,56 @@
+=== POST-FIX (v362) verification: original 5-phrasing matrix + truly-bare variant ===
+
+--- Phrasing: comma+digit ---
+  turn2: "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita"
+  run 1: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 2: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 3: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 4: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 5: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+
+--- Phrasing: comma+word ---
+  turn2: "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita"
+  run 1: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 2: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 3: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 4: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 5: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+
+--- Phrasing: and-separated ---
+  turn2: "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita"
+  run 1: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 2: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 3: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 4: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 5: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+
+--- Phrasing: bare list ---
+  turn2: "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads"
+  run 1: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 2: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 3: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 4: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 5: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+
+--- Phrasing: conversational ---
+  turn2: "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please"
+  run 1: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 2: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 3: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 4: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+  run 5: lines=4 bbqPrice=1100 moneyLeak=no leakedOnto=none bbqMissingCharge=false total=4250 sourcePhraseIndexes=0,1,2,3
+
+--- Phrasing: truly bare (no punctuation at all) ---
+  turn2: "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita"
+  run 1: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 2: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 3: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 4: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+  run 5: lines=4 bbqPrice=1050 moneyLeak=YES leakedOnto=none bbqMissingCharge=true total=4200 sourcePhraseIndexes=0,0,0,0
+
+=== SUMMARY ===
+main matrix: 5/25 leaked, 0 no-tool-call
+truly-bare variant: 5/5 leaked, 0 no-tool-call
+grand total: 10/30 money leaks (0 runs skipped as model no-ops)
+
+FAIL — see per-run detail above.

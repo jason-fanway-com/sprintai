@@ -1,0 +1,1590 @@
+{
+  "runs": [
+    {
+      "phrasing": "comma+digit",
+      "turn2": "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita",
+      "run": 1,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+digit",
+      "turn2": "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita",
+      "run": 2,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+digit",
+      "turn2": "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita",
+      "run": 3,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+digit",
+      "turn2": "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita",
+      "run": 4,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+digit",
+      "turn2": "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita",
+      "run": 5,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+word",
+      "turn2": "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita",
+      "run": 1,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+word",
+      "turn2": "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita",
+      "run": 2,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+word",
+      "turn2": "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita",
+      "run": 3,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+word",
+      "turn2": "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita",
+      "run": 4,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "comma+word",
+      "turn2": "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita",
+      "run": 5,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "and-separated",
+      "turn2": "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita",
+      "run": 1,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "and-separated",
+      "turn2": "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita",
+      "run": 2,
+      "skipped": true,
+      "reason": "no tool call / empty cart"
+    },
+    {
+      "phrasing": "and-separated",
+      "turn2": "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita",
+      "run": 3,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "and-separated",
+      "turn2": "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita",
+      "run": 4,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "and-separated",
+      "turn2": "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita",
+      "run": 5,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "bare list",
+      "turn2": "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads",
+      "run": 1,
+      "moneyLeakApplied": true,
+      "leakedOntoLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "price_cents": 1100
+        },
+        {
+          "name": "Cheesesteak",
+          "price_cents": 1150
+        },
+        {
+          "name": "Margherita",
+          "price_cents": 1150
+        }
+      ],
+      "bbqMissingCharge": true,
+      "bbqPrice": 1150,
+      "totalCents": 4550,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "bare list",
+      "turn2": "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads",
+      "run": 2,
+      "moneyLeakApplied": true,
+      "leakedOntoLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "price_cents": 1100
+        },
+        {
+          "name": "Cheesesteak",
+          "price_cents": 1150
+        },
+        {
+          "name": "Margherita",
+          "price_cents": 1150
+        }
+      ],
+      "bbqMissingCharge": true,
+      "bbqPrice": 1150,
+      "totalCents": 4550,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "options": {
+            "Toppings": [
+              "Pepperoni",
+              "Bacon"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "bare list",
+      "turn2": "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads",
+      "run": 3,
+      "moneyLeakApplied": true,
+      "leakedOntoLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "price_cents": 1100
+        },
+        {
+          "name": "Cheesesteak",
+          "price_cents": 1150
+        },
+        {
+          "name": "Margherita",
+          "price_cents": 1150
+        }
+      ],
+      "bbqMissingCharge": true,
+      "bbqPrice": 1150,
+      "totalCents": 4550,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "bare list",
+      "turn2": "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads",
+      "run": 4,
+      "moneyLeakApplied": true,
+      "leakedOntoLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "price_cents": 1100
+        },
+        {
+          "name": "Cheesesteak",
+          "price_cents": 1150
+        },
+        {
+          "name": "Margherita",
+          "price_cents": 1150
+        }
+      ],
+      "bbqMissingCharge": true,
+      "bbqPrice": 1150,
+      "totalCents": 4550,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "options": {
+            "Toppings": [
+              "Pepperoni",
+              "Bacon"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "options": {
+            "Toppings": [
+              "Bacon",
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1150,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "bare list",
+      "turn2": "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads",
+      "run": 5,
+      "moneyLeakApplied": true,
+      "leakedOntoLines": [
+        {
+          "name": "Cheesesteak",
+          "price_cents": 1100
+        }
+      ],
+      "bbqMissingCharge": true,
+      "bbqPrice": 1050,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Pepperoni"
+          ]
+        },
+        {
+          "name": "BBQ Chicken",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon",
+            "Pepperoni"
+          ]
+        },
+        {
+          "name": "Cheesesteak",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon"
+          ]
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon",
+            "Pepperoni"
+          ]
+        }
+      ]
+    },
+    {
+      "phrasing": "conversational",
+      "turn2": "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please",
+      "run": 1,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "conversational",
+      "turn2": "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please",
+      "run": 2,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "conversational",
+      "turn2": "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please",
+      "run": 3,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "conversational",
+      "turn2": "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please",
+      "run": 4,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "conversational",
+      "turn2": "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please",
+      "run": 5,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 2
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 3
+        }
+      ]
+    },
+    {
+      "phrasing": "truly bare (no punctuation at all)",
+      "turn2": "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita",
+      "run": 1,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "truly bare (no punctuation at all)",
+      "turn2": "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita",
+      "run": 2,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "truly bare (no punctuation at all)",
+      "turn2": "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita",
+      "run": 3,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "truly bare (no punctuation at all)",
+      "turn2": "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita",
+      "run": 4,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0
+        }
+      ]
+    },
+    {
+      "phrasing": "truly bare (no punctuation at all)",
+      "turn2": "chicken bacon ranch bbq chicken with pepperoni cheesesteak margherita",
+      "run": 5,
+      "moneyLeakApplied": false,
+      "leakedOntoLines": [],
+      "bbqMissingCharge": false,
+      "bbqPrice": 1100,
+      "totalCents": 4250,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Pepperoni"
+          ]
+        },
+        {
+          "name": "BBQ Chicken",
+          "options": {
+            "Toppings": [
+              "Pepperoni"
+            ]
+          },
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1100,
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon"
+          ]
+        },
+        {
+          "name": "Cheesesteak",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon",
+            "Pepperoni"
+          ]
+        },
+        {
+          "name": "Margherita",
+          "quantity": 1,
+          "modifiers": [],
+          "price_cents": 1050,
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "sourcePhraseIndex": 0,
+          "unverified_requests": [
+            "Bacon",
+            "Pepperoni"
+          ]
+        }
+      ]
+    }
+  ],
+  "done": true
+}

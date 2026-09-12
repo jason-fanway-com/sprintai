@@ -1,0 +1,17 @@
+tenant: ea4885ec-0189-41e2-bf1c-5d43b94c1583
+
+[site 6] invoking local scrape-shop for https://www.biaggiopizza.com/ ...
+[site 6] http=500 ms=346 fn_ok=false status=running items_db=0 priced=0
+   fn_error: "FIRECRAWL_API_KEY not configured"
+pausing 10s before next site (Firecrawl pacing)...
+
+[site 17] invoking local scrape-shop for https://www.hoagiesandhops.com/ ...
+[site 17] http=500 ms=94 fn_ok=false status=running items_db=0 priced=0
+   fn_error: "FIRECRAWL_API_KEY not configured"
+pausing 10s before next site (Firecrawl pacing)...
+
+[site 7] invoking local scrape-shop for https://www.myfamilypizzas.com/ ...
+[site 7] http=500 ms=107 fn_ok=false status=running items_db=0 priced=0
+   fn_error: "FIRECRAWL_API_KEY not configured"
+
+wrote results + ids. Run with 'cleanup' to delete tenant.

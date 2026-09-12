@@ -1,0 +1,54 @@
+=== GUARD 12 phase: waiting for phase-1 (GUARD 16/Zio's) results to finish before touching the shared results file ===
+Phase 1 confirmed done — proceeding with GUARD 12 (Vito's Flatbreads) matrix.
+
+=== GUARD 12 matrix replay (Vito's Flatbreads, 5 phrasings x 5 runs) ===
+
+
+--- Phrasing: comma+digit ---
+  turn2: "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita"
+  run 1: lines=4 toolCallCount(turn2)=6 moneyLeak=YES ticketLeak=no total=4600
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+
+--- Phrasing: comma+word ---
+  turn2: "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+
+--- Phrasing: and-separated ---
+  turn2: "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+
+--- Phrasing: bare list ---
+  turn2: "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4600
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=YES (Cheesesteak) total=4550
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4600
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=YES (Cheesesteak) total=4550
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4600
+
+--- Phrasing: conversational ---
+  turn2: "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=YES ticketLeak=no total=4550
+
+=== GUARD 12 SUMMARY ===
+total runs: 25
+money leak (priced pepperoni topping on wrong line): 25/25
+kitchen-ticket leak (unverified_requests pepperoni on wrong line): 2/25
+turn2 made zero tool calls: 0/25
+results file: /Users/joestrazza/sprintai-ordering/scripts/tmp-guard16-consumed-token-verify-20260910-results.json
+
+FAIL — see per-run detail above for which phrasing.

@@ -1,0 +1,99 @@
+Zio's expected subtotal: 9096 cents
+Vito's expected subtotal: 4250 cents
+
+=== Suite 1: Zio's (compiled), 5 phrasings x 5 runs ===
+
+
+--- Phrasing: comma+digit (verbatim incident) ---
+  turn2: "1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 2: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 3: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 4: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 5: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+
+--- Phrasing: comma+word ---
+  turn2: "one plain, one pepperoni, one meat lover and one hawaiian"
+  run 1: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 2: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 3: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 4: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+  run 5: toolCallCount(turn2)=3 leak=no subtotal=9096 (expected 9096) OK
+
+--- Phrasing: and-separated ---
+  turn2: "a plain one and a pepperoni one and a meat lovers and a hawaiian"
+  run 1: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 2: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 3: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 4: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 5: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+
+--- Phrasing: bare list ---
+  turn2: "plain pepperoni meat lovers hawaiian"
+  run 1: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 2: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 3: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 4: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 5: toolCallCount(turn2)=4 leak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) subtotal=9096 (expected 9096) OK
+
+--- Phrasing: conversational ---
+  turn2: "can I get one with nothing on it, one pepperoni, one meat lovers, and one hawaiian please"
+  run 1: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 2: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 3: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 4: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+  run 5: toolCallCount(turn2)=4 leak=no subtotal=9096 (expected 9096) OK
+
+=== Suite 2: Vito's (legacy), 5 phrasings x 5 runs ===
+
+
+--- Phrasing: comma+digit ---
+  turn2: "1 chicken bacon ranch, 1 bbq chicken with pepperoni, 1 cheesesteak and 1 margherita"
+  run 1: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 2: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 3: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 4: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 5: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+
+--- Phrasing: comma+word ---
+  turn2: "one chicken bacon ranch, one bbq chicken with pepperoni, one cheesesteak and one margherita"
+  run 1: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 2: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 3: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 4: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 5: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+
+--- Phrasing: and-separated ---
+  turn2: "a chicken bacon ranch and a bbq chicken with pepperoni and a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 2: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 3: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 4: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 5: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+
+--- Phrasing: bare list ---
+  turn2: "chicken bacon ranch bbq chicken pepperoni cheesesteak margherita, four flatbreads"
+  run 1: toolCallCount(turn2)=4 leak=YES (Chicken Bacon Ranch, Cheesesteak, Margherita) missingOwnTopping=YES subtotal=4550 (expected 4250) WRONG
+  run 2: toolCallCount(turn2)=4 leak=YES (Chicken Bacon Ranch, Cheesesteak, Margherita) missingOwnTopping=YES subtotal=4550 (expected 4250) WRONG
+  run 3: toolCallCount(turn2)=4 leak=YES (Chicken Bacon Ranch, Cheesesteak, Margherita) missingOwnTopping=YES subtotal=4550 (expected 4250) WRONG
+  run 4: toolCallCount(turn2)=4 leak=YES (Chicken Bacon Ranch, Cheesesteak, Margherita) missingOwnTopping=YES subtotal=4550 (expected 4250) WRONG
+  run 5: toolCallCount(turn2)=4 leak=YES (Chicken Bacon Ranch, Cheesesteak, Margherita) missingOwnTopping=YES subtotal=4550 (expected 4250) WRONG
+
+--- Phrasing: conversational ---
+  turn2: "can I get a chicken bacon ranch, a bbq chicken with pepperoni on it, a cheesesteak, and a margherita please"
+  run 1: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 2: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 3: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 4: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+  run 5: toolCallCount(turn2)=4 leak=no missingOwnTopping=no subtotal=4250 (expected 4250) OK
+
+=== VITO'S CANARY (cheeseburger, medium) ===
+  cart subtotal: 849 cents (expected 849) -> PASS
+
+=== SUMMARY ===
+Zio's (compiled):  25 runs, 1 ticket-leaks, 0 wrong subtotal, 0 zero-tool-call turns
+Vito's (legacy):   25 runs, 5 leaks-onto, 5 missing-own-topping, 5 wrong subtotal, 0 zero-tool-call turns
+canary: PASS
+results file: /Users/joestrazza/sprintai-ordering/scripts/tmp-consumed-token-fix-verify-20260910-results.json
+
+FAIL — see per-run detail above for which suite, phrasing, and direction.

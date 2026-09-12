@@ -1,0 +1,54 @@
+=== f0ecf0fe matrix replay (5 phrasings x 5 runs) ===
+
+
+--- Phrasing: comma+digit (verbatim incident) ---
+  turn2: "1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 2: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 3: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 4: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 5: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+
+--- Phrasing: comma+word ---
+  turn2: "one plain, one pepperoni, one meat lover and one hawaiian"
+  run 1: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=no total=9096
+  run 2: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 3: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 4: lines=4 toolCallCount(turn2)=3 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+
+--- Phrasing: and-separated ---
+  turn2: "a plain one and a pepperoni one and a meat lovers and a hawaiian"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+
+--- Phrasing: bare list ---
+  turn2: "plain pepperoni meat lovers hawaiian"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=YES (Large 18'' Neapolitan Cheese Pizza, Large 18'' Meat Lover's Pizza, Large 18'' Hawaiian Pizza) total=9096
+
+--- Phrasing: conversational ---
+  turn2: "can I get one with nothing on it, one pepperoni, one meat lovers, and one hawaiian please"
+  run 1: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 2: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 3: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 4: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+  run 5: lines=4 toolCallCount(turn2)=4 moneyLeak=no ticketLeak=no total=9096
+
+=== VITO'S CANARY (expect $9.48) ===
+  final total: 849 cents (expected 948) -> FAIL
+
+=== SUMMARY ===
+total runs: 25
+money leak (priced pepperoni modifier on wrong line): 0/25
+kitchen-ticket leak (unverified_requests pepperoni on wrong line): 15/25
+turn2 made zero tool calls (model never acted): 0/25
+results file: /Users/joestrazza/sprintai-ordering/scripts/tmp-guard16-consumed-token-verify-20260910-results.json
+
+FAIL — see per-run detail above for which leg and which phrasing.

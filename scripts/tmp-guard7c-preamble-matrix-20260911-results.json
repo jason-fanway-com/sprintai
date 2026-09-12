@@ -1,0 +1,2906 @@
+{
+  "startedAt": "2026-09-11T03:29:42.600Z",
+  "runs": [
+    {
+      "shop": "vitos-legacy",
+      "preamble": "can I get",
+      "turn2": "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "can I get",
+      "turn2": "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "can I get",
+      "turn2": "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "can I get",
+      "turn2": "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "can I get",
+      "turn2": "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'd like",
+      "turn2": "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'd like",
+      "turn2": "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'd like",
+      "turn2": "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'd like",
+      "turn2": "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'd like",
+      "turn2": "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'll take",
+      "turn2": "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'll take",
+      "turn2": "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'll take",
+      "turn2": "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'll take",
+      "turn2": "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "I'll take",
+      "turn2": "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "could I get",
+      "turn2": "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "could I get",
+      "turn2": "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "could I get",
+      "turn2": "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "could I get",
+      "turn2": "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "could I get",
+      "turn2": "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "lemme get",
+      "turn2": "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "lemme get",
+      "turn2": "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "lemme get",
+      "turn2": "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "lemme get",
+      "turn2": "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "lemme get",
+      "turn2": "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "gimme",
+      "turn2": "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "gimme",
+      "turn2": "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "gimme",
+      "turn2": "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "gimme",
+      "turn2": "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "gimme",
+      "turn2": "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "we want",
+      "turn2": "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "we want",
+      "turn2": "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "we want",
+      "turn2": "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "we want",
+      "turn2": "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "we want",
+      "turn2": "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "",
+      "turn2": "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 1,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "",
+      "turn2": "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 2,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "",
+      "turn2": "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 3,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "",
+      "turn2": "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 4,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "vitos-legacy",
+      "preamble": "",
+      "turn2": "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita",
+      "run": 5,
+      "toolCallCount2": 4,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Chicken Bacon Ranch",
+          "menu_item_id": "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "BBQ Chicken",
+          "menu_item_id": "80d49c72-d238-4ef9-8b29-12ec7097b213",
+          "price_cents": 1100,
+          "quantity": 1
+        },
+        {
+          "name": "Cheesesteak",
+          "menu_item_id": "80f8624c-358c-4004-9b94-75d8c66e6008",
+          "price_cents": 1050,
+          "quantity": 1
+        },
+        {
+          "name": "Margherita",
+          "menu_item_id": "a37a47a9-7f6c-47bb-acdd-933f572890de",
+          "price_cents": 1050,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "can I get",
+      "turn2": "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "can I get",
+      "turn2": "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "can I get",
+      "turn2": "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "can I get",
+      "turn2": "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "can I get",
+      "turn2": "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'd like",
+      "turn2": "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'd like",
+      "turn2": "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'd like",
+      "turn2": "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'd like",
+      "turn2": "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'd like",
+      "turn2": "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'll take",
+      "turn2": "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'll take",
+      "turn2": "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'll take",
+      "turn2": "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'll take",
+      "turn2": "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "I'll take",
+      "turn2": "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "could I get",
+      "turn2": "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "could I get",
+      "turn2": "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "could I get",
+      "turn2": "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "could I get",
+      "turn2": "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "could I get",
+      "turn2": "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "lemme get",
+      "turn2": "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "lemme get",
+      "turn2": "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "lemme get",
+      "turn2": "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "lemme get",
+      "turn2": "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "lemme get",
+      "turn2": "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "gimme",
+      "turn2": "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "gimme",
+      "turn2": "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "gimme",
+      "turn2": "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "gimme",
+      "turn2": "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "gimme",
+      "turn2": "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "we want",
+      "turn2": "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "we want",
+      "turn2": "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "we want",
+      "turn2": "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "we want",
+      "turn2": "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "we want",
+      "turn2": "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "shop": "zios-compiled",
+      "preamble": "",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "namedItemCount": 4,
+      "lineCount": 4,
+      "collapseDetected": false,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "label": "positive-bare-single-item",
+      "message": "cheesesteak flatbread",
+      "reply": "Got it - Cheesesteak flatbread added.\n\nSubtotal: $10.50\nService fee: $0.99\nTotal: $11.49 Anything else?",
+      "toolCallCount": -1,
+      "lineCount": 1,
+      "expectedBehavior": "GUARD 7c still resolves a genuine bare single-item order",
+      "pass": true
+    },
+    {
+      "label": "negative-unrelated-leftover-content",
+      "message": "can I get a cheesesteak flatbread and can you tell me if you have parking",
+      "reply": "Cheesesteak flatbread added! I'm not sure about the parking situation though - you'd want to call the shop directly for that. You mentioned 4 flatbreads - which other three would you like? And is this for pickup or delivery?\n\nSubtotal: $10.50\nService fee: $0.99\nTotal: $11.49",
+      "toolCallCount": 1,
+      "lineCount": 1,
+      "expectedBehavior": "leftover check still blocks GUARD 7c's fast path when unrelated content is present",
+      "pass": true
+    }
+  ],
+  "done": true
+}

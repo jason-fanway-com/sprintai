@@ -266,8 +266,11 @@ interface Shop {
   latitude:                 number | null;
   longitude:                number | null;
   delivery_radius_mi:       number | null;
-  // Item 8 (spec §7/§11 item 8). Default false in the DB (migration 118) —
-  // must stay false for Vito's. See ask-plan-engine.ts.
+  // Item 8 (spec §7/§11 item 8). Default false in the DB (migration 118).
+  // Vito's was flipped to true on 2026-09-11 (commit a1b89793 root-caused the
+  // P0 money defect — disambiguation resolution was never enabling the compiled
+  // engine). All three real shops (Not Just Bagels, Vito's Pizza, Zio's Pizzeria)
+  // now run the compiled engine; the legacy path is being deprecated.
   compiled_ordering_engine_enabled?: boolean;
   // Customer CRM (docs/specs/2026-09-03-customer-crm.md) — owner-level kill
   // switch for personalization. Default true (migration 121).

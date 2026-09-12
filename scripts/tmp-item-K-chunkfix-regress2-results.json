@@ -1,0 +1,42 @@
+[
+  {
+    "n": 6,
+    "url": "https://www.biaggiopizza.com/",
+    "label": "HTML rung-1 PASS, 124 items (largest HTML menu in sample)",
+    "http": 200,
+    "ms": 82980,
+    "fn_ok": true,
+    "fn_error": null,
+    "crawl_status": "done",
+    "crawl_error": null,
+    "pages_scraped": 9,
+    "menu_items_extracted": 166,
+    "menu_items_inserted": 166,
+    "menu_extraction_chunks_failed": 0,
+    "menu_extraction_truncated": false,
+    "items_in_db": 166,
+    "items_with_price": 166,
+    "sample_items": [
+      {
+        "name": "Thin Crust Cheese Pizza -Small",
+        "price_cents": 1236
+      },
+      {
+        "name": "Thin Crust Cheese Pizza",
+        "price_cents": 1236
+      },
+      {
+        "name": "Thin Crust Cheese Pizza-Large",
+        "price_cents": 1236
+      },
+      {
+        "name": "Thick Crust Sicilian Square Pizza",
+        "price_cents": 2369
+      },
+      {
+        "name": "Margherita Pizza",
+        "price_cents": 1648
+      }
+    ]
+  }
+]

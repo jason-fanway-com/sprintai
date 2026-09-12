@@ -45,7 +45,10 @@ Do gate on ticket delivery, money correctness, and not inventing shop policy.
 
 Jason: *"Let's not set the bar that everything has to be perfect, or we will never launch."*
 
-All the verification discipline below exists to protect items 1–4. Nothing else is worth
+All the verification discipline below exists to protect items 1–4.
+
+**The suite's Quality score is not a trustworthy signal.** Proof and money are. Measured 2026-09-11: of five Quality failures, two were outright judge bugs (a self-negating flag the filter missed; a correctly-issued Stripe *test-mode* checkout read as a phantom link) and one was a harness-truncated conversation graded as if the customer gave up. Do not quote Quality as evidence, and never gate a rollout on it, until the judge is fixed.
+ Nothing else is worth
 stopping the line for.
 
 ## 3. Your role
@@ -73,7 +76,7 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 |---|---|
 | **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, legacy ordering path, **the canary** |
 | **Zio's Pizzeria** | Slice-imported menu, compiled engine, **web only — no phone by Jason's decision**. Proof that an imported menu can be made conversation-ready |
-| **Not Just Bagels** | The one real restaurant, being prepared for a real customer. Twilio. Treat its menu as precious |
+| **Not Just Bagels** | Pre-prod, like every other shop. Twilio, 10DLC-approved. Intended as an early sale, but has NO live customers — do not treat it as production or gate work on it (Jason, 2026-09-12). Its menu is hand-corrected, so do not re-import it casually |
 
 Roughly forty other shop rows are fictional test data. `is_test` distinguishes them —
 **check it before escalating anything as a real-money incident.**

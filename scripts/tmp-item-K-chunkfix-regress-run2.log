@@ -1,0 +1,10 @@
+/Users/joestrazza/sprintai-ordering/scripts/tmp-item-K-chunkfix-regress-runner.cjs:37
+  if (!res.ok) throw new Error(`REST ${method} ${path} -> ${res.status}: ${txt.slice(0,300)}`);
+                     ^
+
+Error: REST POST /tenants -> 409: {"code":"23505","details":"Key (slug)=(itemk-chunkfix-regress-20260907-tenant) already exists.","hint":null,"message":"duplicate key value violates unique constraint \"tenants_slug_key\""}
+    at rest (/Users/joestrazza/sprintai-ordering/scripts/tmp-item-K-chunkfix-regress-runner.cjs:37:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async /Users/joestrazza/sprintai-ordering/scripts/tmp-item-K-chunkfix-regress-runner.cjs:73:18
+
+Node.js v22.22.0

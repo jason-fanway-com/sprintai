@@ -1,0 +1,147 @@
+=== GUARD 7c preamble matrix: 8 preambles x 5 runs x 2 shops ===
+
+
+### Shop: vitos-legacy ###
+
+--- preamble: "can I get" ---
+  turn2: "can I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "I'd like" ---
+  turn2: "I'd like a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "I'll take" ---
+  turn2: "I'll take a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "could I get" ---
+  turn2: "could I get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "lemme get" ---
+  turn2: "lemme get a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "gimme" ---
+  turn2: "gimme a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "we want" ---
+  turn2: "we want a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+--- preamble: "(bare)" ---
+  turn2: "a chicken bacon ranch flatbread, a bbq chicken one with pepperoni on it, a cheesesteak and a margherita"
+  run 1: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=4 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=4 named=4 lines=4 OK
+
+### Shop: zios-compiled ###
+
+--- preamble: "can I get" ---
+  turn2: "can I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "I'd like" ---
+  turn2: "I'd like 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "I'll take" ---
+  turn2: "I'll take 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "could I get" ---
+  turn2: "could I get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "lemme get" ---
+  turn2: "lemme get 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "gimme" ---
+  turn2: "gimme 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "we want" ---
+  turn2: "we want 1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+--- preamble: "(bare)" ---
+  turn2: "1 plain, 1 pepperoni, 1 meat lovers and one hawaii"
+  run 1: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 2: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 3: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 4: toolCallCount(turn2)=3 named=4 lines=4 OK
+  run 5: toolCallCount(turn2)=3 named=4 lines=4 OK
+
+=== CONTROL CASES ===
+  POSITIVE control: "cheesesteak flatbread" -> lines=1 (Cheesesteak) toolCallCount=-1 -> PASS
+  NEGATIVE control: "...cheesesteak...and...parking" -> lines=1 toolCallCount=1 -> PASS (fell through to LLM as expected)
+
+=== SUMMARY ===
+total runs: 80
+collapses detected (lines < named items): 0/80
+zero-tool-call turns: 0/80
+control cases: 2/2 passed
+results file: /Users/joestrazza/sprintai-ordering/scripts/tmp-guard7c-preamble-matrix-20260911-results.json
+
+PASS — no collapse across either shop's preamble matrix, both control cases behaved correctly.

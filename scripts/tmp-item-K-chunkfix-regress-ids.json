@@ -1,0 +1,19 @@
+{
+  "tenant_id": "e58cbb8d-6620-477e-bd93-7c41ec119050",
+  "shops": [
+    {
+      "n": 6,
+      "url": "https://www.biaggiopizza.com/",
+      "label": "HTML rung-1 PASS, 124 items (largest HTML menu in sample)",
+      "shop_id": "9c7ad541-e8d4-4cef-ac00-5865bb8a9168",
+      "menu_id": "9d12359b-310c-421b-a618-90dc9c710207"
+    },
+    {
+      "n": 17,
+      "url": "https://www.hoagiesandhops.com/",
+      "label": "HTML rung-1 PASS",
+      "shop_id": "26c65dfd-1adf-46ad-a100-bb6043d72320",
+      "menu_id": "24f315ba-c662-49d9-ac02-21c29cceb143"
+    }
+  ]
+}

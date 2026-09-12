@@ -1,0 +1,468 @@
+{
+  "startedAt": "2026-09-11T03:53:19.474Z",
+  "runs": [
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+digit (verbatim incident)",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 1,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+digit (verbatim incident)",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 2,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+digit (verbatim incident)",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 3,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+digit (verbatim incident)",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 4,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+digit (verbatim incident)",
+      "turn2": "1 plain, 1 pepperoni, 1 meat lovers and one hawaii",
+      "run": 5,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+word",
+      "turn2": "one plain, one pepperoni, one meat lover and one hawaiian",
+      "run": 1,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+word",
+      "turn2": "one plain, one pepperoni, one meat lover and one hawaiian",
+      "run": 2,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+word",
+      "turn2": "one plain, one pepperoni, one meat lover and one hawaiian",
+      "run": 3,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+word",
+      "turn2": "one plain, one pepperoni, one meat lover and one hawaiian",
+      "run": 4,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "comma+word",
+      "turn2": "one plain, one pepperoni, one meat lover and one hawaiian",
+      "run": 5,
+      "toolCallCount2": 3,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    },
+    {
+      "suite": "zios-compiled",
+      "phrasing": "and-separated",
+      "turn2": "a plain one and a pepperoni one and a meat lovers and a hawaiian",
+      "run": 1,
+      "toolCallCount2": 4,
+      "leakedOntoLines": [],
+      "missingOwnTopping": false,
+      "subtotalCents": 9096,
+      "expectedSubtotalCents": 9096,
+      "subtotalCorrect": true,
+      "cartLines": [
+        {
+          "name": "Large 18'' Neapolitan Cheese Pizza",
+          "menu_item_id": "35b44d0b-9aaa-4ac8-bf0e-4f8a8bf252bd",
+          "price_cents": 1799,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "18'' Pepperoni Pizza",
+          "menu_item_id": "6ac9c4cf-255b-4098-bdbb-f006cf2cf3c6",
+          "price_cents": 2299,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Meat Lover's Pizza",
+          "menu_item_id": "0b7a33b7-f02c-4609-b7d2-1b99c08e805a",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        },
+        {
+          "name": "Large 18'' Hawaiian Pizza",
+          "menu_item_id": "5eb4554f-d4f7-4f8d-8440-55b051856650",
+          "price_cents": 2499,
+          "quantity": 1,
+          "ask_plan_selections": {}
+        }
+      ]
+    }
+  ],
+  "done": false
+}
