@@ -31,7 +31,7 @@ export interface DeliveryOfferAddress {
 
 export type DeliveryOffer =
   | { type: "delivery"; address: DeliveryOfferAddress }
-  | { type: "pickup" }
+  | { type: "pickup"; downgradeReason?: string }
   | null;
 
 function toAddress(raw: Record<string, unknown>): DeliveryOfferAddress {
@@ -58,16 +58,17 @@ export function computeDeliveryOffer(
   shop:               DeliveryOfferShopContext,
 ): DeliveryOffer {
   if (lastOrderType === "delivery") {
-    const stillDeliverable = lastDeliveryAddress != null &&
-      shop.deliveryEnabled === true &&
-      !shop.deliveryPausedNow &&
-      (shop.deliveryRadiusMi ?? 0) > 0;
-    if (stillDeliverable) {
-      return { type: "delivery", address: toAddress(lastDeliveryAddress!) };
+    if (lastDeliveryAddress == null) return { type: "pickup" };
+    if (shop.deliveryEnabled !== true) {
+      return { type: "pickup", downgradeReason: "we're not doing delivery right now" };
     }
-    // Downgrade to pickup when: address missing, delivery disabled/paused, or
-    // radius zero — per spec item 3: never drop the personalization entirely.
-    return { type: "pickup" };
+    if (shop.deliveryPausedNow) {
+      return { type: "pickup", downgradeReason: "delivery is paused right now" };
+    }
+    if ((shop.deliveryRadiusMi ?? 0) <= 0) {
+      return { type: "pickup", downgradeReason: "we're not doing delivery right now" };
+    }
+    return { type: "delivery", address: toAddress(lastDeliveryAddress) };
   }
   if (lastOrderType === "pickup") return { type: "pickup" };
   return null;

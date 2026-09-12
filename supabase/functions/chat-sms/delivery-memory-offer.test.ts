@@ -8,19 +8,19 @@ Deno.test("offers delivery again when last order was delivery and the shop still
   assertEquals(offer, { type: "delivery", address });
 });
 
-Deno.test("downgrades to pickup when delivery is now disabled", () => {
+Deno.test("downgrades to pickup with an honest reason when delivery is now disabled", () => {
   const offer = computeDeliveryOffer("delivery", address, { deliveryEnabled: false, deliveryPausedNow: false, deliveryRadiusMi: 5 });
-  assertEquals(offer, { type: "pickup" });
+  assertEquals(offer, { type: "pickup", downgradeReason: "we're not doing delivery right now" });
 });
 
-Deno.test("downgrades to pickup when delivery is currently paused", () => {
+Deno.test("downgrades to pickup with an honest reason when delivery is currently paused", () => {
   const offer = computeDeliveryOffer("delivery", address, { deliveryEnabled: true, deliveryPausedNow: true, deliveryRadiusMi: 5 });
-  assertEquals(offer, { type: "pickup" });
+  assertEquals(offer, { type: "pickup", downgradeReason: "delivery is paused right now" });
 });
 
-Deno.test("downgrades to pickup when delivery radius is zero/unset", () => {
+Deno.test("downgrades to pickup with an honest reason when delivery radius is zero/unset", () => {
   const offer = computeDeliveryOffer("delivery", address, { deliveryEnabled: true, deliveryPausedNow: false, deliveryRadiusMi: 0 });
-  assertEquals(offer, { type: "pickup" });
+  assertEquals(offer, { type: "pickup", downgradeReason: "we're not doing delivery right now" });
 });
 
 Deno.test("downgrades to pickup when last order says delivery but no address is on file", () => {

@@ -923,9 +923,11 @@ export function buildSystemPrompt(
     // index.ts is the deterministic enforcement; this text is advisory.
     const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
       ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
-      : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
-        ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
-        : "";
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.isFirstMessage
+        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your first reply this conversation, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
+        : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
+          ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+          : "";
     if (!nameClause && !regularClause && !deliveryOfferClause) return "";
     return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
   })();
@@ -1257,9 +1259,11 @@ export function buildSystemPromptV2(
     // index.ts is the deterministic enforcement; this text is advisory.
     const deliveryOfferClause = customerContext.deliveryOffer?.type === "delivery" && customerContext.isFirstMessage
       ? ` Their last order was DELIVERY to ${customerContext.deliveryOffer.address?.formatted}. As part of your first reply this conversation, ask if they want delivery again to that address, e.g. "Delivery again to ${customerContext.deliveryOffer.address?.formatted}?" This is ONE question, asked ONCE. This is an OFFER, not a decision — do NOT call set_delivery_address or set_order_type until the customer confirms (a plain "yes"/"sounds good") or corrects it (a different address). If they name a different address, use THAT one, not the offered one.`
-      : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
-        ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
-        : "";
+      : customerContext.deliveryOffer?.type === "pickup" && customerContext.deliveryOffer.downgradeReason && customerContext.isFirstMessage
+        ? ` Their last order was DELIVERY, but ${customerContext.deliveryOffer.downgradeReason} — as part of your first reply this conversation, offer pickup instead and say why in one honest, brief clause (e.g. "we are not doing delivery right now, but I can get this ready for pickup"). Never imply delivery is available when it is not.`
+        : customerContext.deliveryOffer?.type === "pickup" && customerContext.isFirstMessage
+          ? ` Their last order was PICKUP. As part of your first reply this conversation, you may mention pickup again briefly (e.g. "pickup again today?") but this is optional and low-stakes compared to the delivery case — do not force it if the customer already stated what they want.`
+          : "";
     if (!nameClause && !regularClause && !deliveryOfferClause) return "";
     return `\nRETURNING CUSTOMER CONTEXT (private — never recite this to the customer verbatim, never state how many times they've ordered or list their order history): ${nameClause}${regularClause}${deliveryOfferClause}`;
   })();
