@@ -54,7 +54,7 @@ Deno.test("resolvePendingOptionAnswer: empty message resolves to nothing", () =>
 
 Deno.test("findPendingOptionQuestion: finds the open group on the cart line that has one", () => {
   const menuById = new Map([
-    ["burger-1", { name: "Cheese Burger", option_groups: [{ name: "Temp", choices: TEMP_CHOICES }] }],
+    ["burger-1", { name: "Cheese Burger", option_groups: [{ id: "og-temp", name: "Temp", choices: TEMP_CHOICES }] }],
   ]);
   const cart = [
     { menu_item_id: "burger-1", pending_options: ["Temp"] },
@@ -67,7 +67,7 @@ Deno.test("findPendingOptionQuestion: finds the open group on the cart line that
 
 Deno.test("findPendingOptionQuestion: no pending groups anywhere returns null", () => {
   const menuById = new Map([
-    ["burger-1", { name: "Cheese Burger", option_groups: [{ name: "Temp", choices: TEMP_CHOICES }] }],
+    ["burger-1", { name: "Cheese Burger", option_groups: [{ id: "og-temp", name: "Temp", choices: TEMP_CHOICES }] }],
   ]);
   const cart = [
     { menu_item_id: "burger-1", pending_options: undefined },
@@ -76,7 +76,7 @@ Deno.test("findPendingOptionQuestion: no pending groups anywhere returns null", 
 });
 
 Deno.test("findPendingOptionQuestion: ignores lines with no menu_item_id (bundles)", () => {
-  const menuById = new Map<string, { name: string; option_groups?: { name: string; choices: PendingOptionChoice[] }[] }>();
+  const menuById = new Map<string, { name: string; option_groups?: { id: string; name: string; choices: PendingOptionChoice[] }[] }>();
   const cart = [{ pending_options: ["Temp"] }];
   assertEquals(findPendingOptionQuestion(cart, menuById), null);
 });

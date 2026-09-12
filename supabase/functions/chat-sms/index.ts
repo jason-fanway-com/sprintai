@@ -42,9 +42,12 @@ import {
   type PendingDisambiguation,
 } from "./pending-disambiguation.ts";
 import {
+  canonicalizeStoredOptions,
   findPendingOptionQuestion,
   resolveAdditionalGroupSelections,
+  resolveOptionGroupByStoredKey,
   resolvePendingOptionAnswer,
+  snapshotGroupIds,
 } from "./pending-option.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
@@ -215,6 +218,15 @@ interface CartItem {
   modifiers:    string[];
   options?:     Record<string, string[]>;
   pending_options?: string[];  // option group names not yet chosen (required groups with no selection)
+  // C1 fix (2026-09-12, docs/DEFECT-CLASSES.md): name->id snapshot of this
+  // item's option groups, taken every time add_item/modify_item touches
+  // them. `options`/`pending_options` above are still keyed by group NAME
+  // (every other guard/matcher/render path in this file depends on that),
+  // but a name is not stable across an owner rename — this snapshot lets
+  // resolveOptionGroupByStoredKey recover a renamed group by the id it had
+  // when the name was recorded, instead of silently losing the selection
+  // (or the still-open required question) the instant the name diverges.
+  option_group_ids?: Record<string, string>;
   // A customer request naming something that doesn't match any real option
   // group (e.g. a wing flavor when the shop never recorded the flavor list).
   // NEVER treated as a validated menu selection and NEVER priced — surfaced
@@ -1884,9 +1896,21 @@ export async function executeTool(
       if (Object.keys(inputOptions).length > 0) {
         resolvingPendingIdx = cart.findIndex(i => {
           const ci = i as CartItem;
-          return ci.menu_item_id === menu_item_id &&
-            (ci.pending_options?.length ?? 0) > 0 &&
-            ci.pending_options!.some(p => (inputOptions[p]?.length ?? 0) > 0);
+          if (ci.menu_item_id !== menu_item_id || !(ci.pending_options?.length ?? 0)) return false;
+          // C1 fix (2026-09-12): `p` is a group name recorded on a PRIOR
+          // turn; if the group has since been renamed, `inputOptions[p]`
+          // (keyed by the group's CURRENT name, resolved against THIS
+          // turn's live menu above) never matches, this call is never
+          // recognized as "answering the pending question," and a
+          // duplicate line gets pushed instead of the pending one being
+          // resolved. Resolve `p` to its live group (by id snapshot if the
+          // name no longer matches) and check under the group's CURRENT
+          // name instead.
+          return ci.pending_options!.some(p => {
+            const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, ci.option_group_ids);
+            const currentName = liveGroup?.name ?? p;
+            return (inputOptions[currentName]?.length ?? 0) > 0;
+          });
         });
       }
 
@@ -1980,8 +2004,11 @@ export async function executeTool(
 
       if (resolvingPendingIdx >= 0) {
         const target = cart[resolvingPendingIdx] as CartItem;
-        const mergedOptions = { ...(target.options ?? {}), ...inputOptions };
+        // C1 fix: re-key stored options to current group names before merging
+        const canonicalExisting = canonicalizeStoredOptions(target.options, itemGroups, target.option_group_ids, menuItem.prompt_for) ?? {};
+        const mergedOptions = { ...canonicalExisting, ...inputOptions };
         target.options = Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined;
+        target.option_group_ids = snapshotGroupIds(target.option_group_ids, itemGroups);
         target.modifiers = inputMods;
         let mergedExtraCents = 0;
         for (const group of itemGroups) {
@@ -1991,7 +2018,12 @@ export async function executeTool(
           }
         }
         target.price_cents = menuItem.price_cents + mergedExtraCents + modPriceCents;
-        const remainingPending = (target.pending_options ?? []).filter(p => !(inputOptions[p]?.length));
+        // C1 fix: translate stored pending name to current name before checking inputOptions
+        const remainingPending = (target.pending_options ?? []).filter(p => {
+          const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, target.option_group_ids);
+          const currentName = liveGroup?.name ?? p;
+          return !(inputOptions[currentName]?.length);
+        });
         target.pending_options = remainingPending.length > 0 ? remainingPending : undefined;
         const existingUnverified = target.unverified_requests ?? [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
@@ -2001,17 +2033,22 @@ export async function executeTool(
         (cart[existing] as CartItem).quantity += (quantity as number);
         (cart[existing] as CartItem).modifiers = inputMods;
         (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
+        (cart[existing] as CartItem).option_group_ids = snapshotGroupIds((cart[existing] as CartItem).option_group_ids, itemGroups);
         // Merge pending_options — resolve any that now have selections
         const existingPending = (cart[existing] as CartItem).pending_options || [];
-        const mergedPending = [...new Set([...existingPending, ...pending])].filter(
-          p => !(inputOptions[p] && inputOptions[p].length > 0)
-        );
+        const existingGroupIds8 = (cart[existing] as CartItem).option_group_ids;
+        // C1 fix: translate stored pending name to current name before checking inputOptions
+        const mergedPending = [...new Set([...existingPending, ...pending])].filter(p => {
+          const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, existingGroupIds8);
+          const currentName = liveGroup?.name ?? p;
+          return !(inputOptions[currentName] && inputOptions[currentName].length > 0);
+        });
         (cart[existing] as CartItem).pending_options = mergedPending.length > 0 ? mergedPending : undefined;
         const existingUnverified = (cart[existing] as CartItem).unverified_requests || [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
         (cart[existing] as CartItem).unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined, sourcePhraseIndex: phraseIndexLegacy ?? undefined });
+        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, option_group_ids: snapshotGroupIds(undefined, itemGroups), pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined, sourcePhraseIndex: phraseIndexLegacy ?? undefined });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -2108,6 +2145,12 @@ export async function executeTool(
           ? modifiers.slice()
           : [...new Set([...((cart[idx] as CartItem).modifiers ?? []), ...modifiers])];
       let newOptions = options ?? (cart[idx] as CartItem).options;
+      // C1 fix: when no new options provided, canonicalize stored options to live group
+      // names so price computation and pending-recompute at the bottom of this
+      // handler use the current name as key, not the pre-rename name.
+      if (options === undefined && newOptions && menuItem?.option_groups) {
+        newOptions = canonicalizeStoredOptions(newOptions, menuItem.option_groups, (cart[idx] as CartItem).option_group_ids, menuItem.prompt_for) ?? newOptions;
+      }
       let newUnverified = (cart[idx] as CartItem).unverified_requests ?? [];
       let unverifiedNote: string | undefined;
       if (options !== undefined) {
@@ -2120,7 +2163,8 @@ export async function executeTool(
         // real recorded option group — see below) — without this carve-out
         // an unrelated later modify_item call (e.g. a bare quantity change
         // that happens to also pass options) would silently wipe it.
-        const existingOpts = (cart[idx] as CartItem).options ?? {};
+        // C1 fix: re-key stored options to current group names before checking groupNames.has(k)
+        const existingOpts = canonicalizeStoredOptions((cart[idx] as CartItem).options, menuItem?.option_groups, (cart[idx] as CartItem).option_group_ids, menuItem?.prompt_for) ?? {};
         const cleaned: Record<string, string[]> = {};
         for (const [k, v] of Object.entries(existingOpts)) {
           if (groupNames.has(k) || (menuItem?.prompt_for && k === menuItem.prompt_for)) cleaned[k] = v;
@@ -2257,6 +2301,7 @@ export async function executeTool(
           newPending.push(menuItem.prompt_for);
         }
         (cart[idx] as CartItem).pending_options = newPending.length > 0 ? newPending : undefined;
+        (cart[idx] as CartItem).option_group_ids = snapshotGroupIds((cart[idx] as CartItem).option_group_ids, menuItem.option_groups);
       }
       await saveCart(supabase, cartId, cart, "building");
       return {

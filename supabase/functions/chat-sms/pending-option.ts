@@ -103,6 +103,85 @@ export function resolvePendingOptionAnswer(
   return null;
 }
 
+// ── C1 rename-tolerant option-group identity (2026-09-12) ──────────────────
+// docs/DEFECT-CLASSES.md, C1: "two pieces of OUR OWN data are compared by a
+// human-readable string when a stable id exists. A rename ... silently
+// breaks the link. It fails quietly — no error, no exception, just wrong
+// behaviour." This file's own header above used to claim "cart_json's own
+// per-line `pending_options` already IS the persisted 'what's still open'
+// state (recovered fresh every turn from cart_json + the live menu)" — true
+// only as long as the group's name never changes between the turn it was
+// recorded and the turn it's read back. If a shop owner renames an option
+// group in between (real operation, not hypothetical), the plain
+// `g.name === groupName` match below returns nothing and the required
+// question — or a priced selection sharing the same storage shape in
+// index.ts's `options` record — silently vanishes. No error, no crash, just
+// a customer who never gets asked, or a price that quietly goes to zero.
+//
+// Fix: index.ts now snapshots a name->id map (`option_group_ids`) onto each
+// cart line every time it touches that item's live option_groups. When an
+// exact name match fails, resolveOptionGroupByStoredKey falls back to the
+// id captured in that snapshot — which survives a rename because ids never
+// change — and recovers the group under its CURRENT name. Callers that
+// rebuild a keyed record (index.ts's `cleaned`/`mergedOptions` construction)
+// re-key onto the group's current name as they go, so the stored data
+// self-heals onto the new name the very next time it's touched; nothing
+// downstream that still compares by name needs to change.
+//
+// Pre-fix carts (no `option_group_ids` snapshot recorded yet) get no
+// recovery — same behavior as before this fix, not worse — until they're
+// next touched and a snapshot is taken.
+export interface OptionGroupIdentity {
+  id:   string;
+  name: string;
+}
+
+export function resolveOptionGroupByStoredKey<G extends OptionGroupIdentity>(
+  liveGroups: ReadonlyArray<G> | null | undefined,
+  storedKey: string,
+  groupIdSnapshot: Record<string, string> | null | undefined,
+): G | undefined {
+  const byName = liveGroups?.find(g => g.name === storedKey);
+  if (byName) return byName;
+  const snapshotId = groupIdSnapshot?.[storedKey];
+  if (!snapshotId) return undefined;
+  return liveGroups?.find(g => g.id === snapshotId);
+}
+
+/** Merges the CURRENT name->id map for `liveGroups` into `existing`, never removing an older (possibly since-renamed) entry — that history is exactly what lets a later rename still resolve. */
+export function snapshotGroupIds(
+  existing: Record<string, string> | null | undefined,
+  liveGroups: ReadonlyArray<OptionGroupIdentity> | null | undefined,
+): Record<string, string> | undefined {
+  if (!liveGroups || liveGroups.length === 0) return existing ?? undefined;
+  const fresh = Object.fromEntries(liveGroups.map(g => [g.name, g.id]));
+  return { ...(existing ?? {}), ...fresh };
+}
+
+/**
+ * Re-keys a stored `options` record onto the LIVE group names, recovering
+ * any entry whose stored key was a group name that has since been renamed
+ * (via groupIdSnapshot) instead of silently dropping it. A key that matches
+ * neither a live group nor the snapshot (group genuinely removed, or a
+ * prompt_for free-text slot) is left under its original key, unchanged —
+ * same as this function not having run at all.
+ */
+export function canonicalizeStoredOptions(
+  stored: Record<string, string[]> | null | undefined,
+  liveGroups: ReadonlyArray<OptionGroupIdentity> | null | undefined,
+  groupIdSnapshot: Record<string, string> | null | undefined,
+  promptForKey?: string | null,
+): Record<string, string[]> | undefined {
+  if (!stored) return stored ?? undefined;
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(stored)) {
+    if (promptForKey && k === promptForKey) { out[k] = v; continue; }
+    const group = resolveOptionGroupByStoredKey(liveGroups, k, groupIdSnapshot);
+    out[group ? group.name : k] = v;
+  }
+  return out;
+}
+
 /**
  * Find the first cart line still waiting on a required-option answer, and
  * the real choice list for its first unresolved group — this is presumed to
@@ -112,8 +191,8 @@ export function resolvePendingOptionAnswer(
  * open at once.
  */
 export function findPendingOptionQuestion(
-  cartItems: ReadonlyArray<{ menu_item_id?: string; pending_options?: string[] }>,
-  menuById: ReadonlyMap<string, { name: string; option_groups?: ReadonlyArray<{ name: string; choices: PendingOptionChoice[] }> }>,
+  cartItems: ReadonlyArray<{ menu_item_id?: string; pending_options?: string[]; option_group_ids?: Record<string, string> }>,
+  menuById: ReadonlyMap<string, { name: string; option_groups?: ReadonlyArray<{ id: string; name: string; choices: PendingOptionChoice[] }> }>,
 ): PendingOptionQuestion | null {
   for (const item of cartItems) {
     const pendingGroups = item.pending_options ?? [];
@@ -121,7 +200,7 @@ export function findPendingOptionQuestion(
     const menuItem = menuById.get(item.menu_item_id);
     if (!menuItem) continue;
     for (const groupName of pendingGroups) {
-      const group = menuItem.option_groups?.find(g => g.name === groupName);
+      const group = resolveOptionGroupByStoredKey(menuItem.option_groups, groupName, item.option_group_ids);
       if (group && group.choices.length > 0) {
         return { menu_item_id: item.menu_item_id, item_name: menuItem.name, group_name: group.name, choices: group.choices };
       }
