@@ -475,7 +475,12 @@ async function handleOrderPaymentComplete(
         totalCents: (cart.total_cents as number | null) ?? 0,
         itemNames,
         orderId: cartId,
-        orderAt: new Date().toISOString(),
+        // The order's OWN created_at, not wall-clock payment time — a
+        // payment webhook can be delayed and land after the customer has
+        // already placed (and submitted) a newer order. Using created_at
+        // lets shouldUpdateLastOrder compare orders by when they were
+        // placed, not by when each writer happened to run.
+        orderAt: (cart.created_at as string | null) ?? new Date().toISOString(),
         orderType: ((cart.order_type as string) || "pickup") as "pickup" | "delivery",
         deliveryAddress: (cart.delivery_address as Record<string, unknown> | null) ?? null,
       });

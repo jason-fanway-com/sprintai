@@ -153,6 +153,94 @@ export async function lookupCustomerContext(
   return (data as CustomerRow | null) ?? null;
 }
 
+/**
+ * Whether a write carrying `candidateOrderAt` is allowed to overwrite the
+ * `last_order_*` denormalized fields, given whatever order timestamp is
+ * already stored. There are now two writers of these fields — chat-sms at
+ * submission time and stripe-webhook at payment time — and they can race:
+ * a payment webhook can land (and run) after a customer has already placed
+ * a NEWER order whose submission-time write already updated the row. Both
+ * writers pass the ORDER'S OWN timestamp (order_carts.created_at), not
+ * wall-clock "now" at write time, so this comparison is stable regardless
+ * of processing delay: an older order can never clobber a newer order's
+ * already-recorded state, whichever writer runs second.
+ */
+export function shouldUpdateLastOrder(
+  existingLastOrderAt: string | null | undefined,
+  candidateOrderAt:    string,
+): boolean {
+  if (!existingLastOrderAt) return true;
+  return new Date(candidateOrderAt).getTime() >= new Date(existingLastOrderAt).getTime();
+}
+
+export interface OrderFulfillmentMemory {
+  tenantId:        string;
+  customerPhone:   string;
+  orderId:         string;
+  orderAt:         string; // ISO — the order's own created_at, not wall-clock write time (see shouldUpdateLastOrder).
+  orderType:       "pickup" | "delivery";
+  deliveryAddress: Record<string, unknown> | null;
+}
+
+/**
+ * Write ONLY the last_order_type/last_delivery_address denormalized fields,
+ * at ORDER SUBMISSION time — deliberately separate from upsertCustomerProfile,
+ * which runs at PAID-order time and also increments order_count/
+ * total_spent_cents/favorite_items. Those counters must only ever reflect
+ * paid orders (see their column comments in migration 121), so this function
+ * must never touch them — it exists because upsertCustomerProfile's only
+ * call site (a completed Stripe checkout) fires so rarely in practice that
+ * the delivery-memory columns it was meant to populate stayed permanently
+ * NULL (docs/specs/2026-09-12-returning-customer-delivery-memory.md).
+ *
+ * Idempotent/upsert, and safe to call whether or not the order is ever paid:
+ * whichever of this or upsertCustomerProfile last passes the
+ * shouldUpdateLastOrder check simply reflects the latest known fulfillment
+ * state.
+ */
+export async function upsertOrderFulfillmentMemory(
+  supabase: SupabaseClient,
+  memory:   OrderFulfillmentMemory,
+): Promise<{ ok: boolean; error?: string; skipped?: boolean }> {
+  if (!memory.tenantId || !memory.customerPhone) {
+    return { ok: false, error: "missing tenantId/customerPhone" };
+  }
+  const customerPhone = canonicalizePhone(memory.customerPhone) ?? memory.customerPhone;
+
+  const { data: existing, error: fetchErr } = await supabase
+    .from("customers")
+    .select("last_order_at")
+    .eq("tenant_id", memory.tenantId)
+    .eq("customer_phone", customerPhone)
+    .maybeSingle();
+  if (fetchErr) {
+    console.error(`[customer-profile] upsertOrderFulfillmentMemory fetch error for ${customerPhone}:`, fetchErr.message);
+    return { ok: false, error: fetchErr.message };
+  }
+
+  if (!shouldUpdateLastOrder(existing?.last_order_at as string | null, memory.orderAt)) {
+    return { ok: true, skipped: true };
+  }
+
+  const { error: upsertErr } = await supabase
+    .from("customers")
+    .upsert({
+      tenant_id:             memory.tenantId,
+      customer_phone:        customerPhone,
+      last_order_id:         memory.orderId,
+      last_order_at:         memory.orderAt,
+      last_order_type:       memory.orderType,
+      last_delivery_address: memory.deliveryAddress,
+      last_seen_at:          memory.orderAt,
+      updated_at:            memory.orderAt,
+    }, { onConflict: "tenant_id, customer_phone" });
+  if (upsertErr) {
+    console.error(`[customer-profile] upsertOrderFulfillmentMemory upsert error for ${customerPhone}:`, upsertErr.message);
+    return { ok: false, error: upsertErr.message };
+  }
+  return { ok: true };
+}
+
 export interface PaidOrderForProfile {
   tenantId:      string;
   customerPhone: string;
@@ -189,7 +277,7 @@ export async function upsertCustomerProfile(
 
   const { data: existing, error: fetchErr } = await supabase
     .from("customers")
-    .select("name, order_count, total_spent_cents, favorite_items")
+    .select("name, order_count, total_spent_cents, favorite_items, last_order_at")
     .eq("tenant_id", order.tenantId)
     .eq("customer_phone", customerPhone)
     .maybeSingle();
@@ -201,6 +289,13 @@ export async function upsertCustomerProfile(
   const existingFavorites = (existing?.favorite_items as FavoriteItem[] | null) ?? [];
   const favoriteItems = computeFavoriteItemsUpdate(existingFavorites, order.itemNames);
   const name = resolveCustomerName(existing?.name ?? null, order.pickupName);
+  // order_count/total_spent_cents/favorite_items always accumulate — this is
+  // the one authoritative "a paid order just happened" event regardless of
+  // arrival order. Only the "most recent order" denormalized fields need the
+  // recency guard, since chat-sms's submission-time write (see
+  // upsertOrderFulfillmentMemory above) may have already recorded a NEWER
+  // order by the time this payment webhook for an OLDER order is processed.
+  const updateLastOrder = shouldUpdateLastOrder(existing?.last_order_at as string | null, order.orderAt);
 
   const { error: upsertErr } = await supabase
     .from("customers")
@@ -212,10 +307,12 @@ export async function upsertCustomerProfile(
       order_count:       (existing?.order_count ?? 0) + 1,
       total_spent_cents: (existing?.total_spent_cents ?? 0) + order.totalCents,
       favorite_items:    favoriteItems,
-      last_order_id:     order.orderId,
-      last_order_at:     order.orderAt,
-      last_order_type:      order.orderType,
-      last_delivery_address: order.deliveryAddress,
+      ...(updateLastOrder ? {
+        last_order_id:         order.orderId,
+        last_order_at:         order.orderAt,
+        last_order_type:       order.orderType,
+        last_delivery_address: order.deliveryAddress,
+      } : {}),
       updated_at:        order.orderAt,
       ...(existing ? {} : { first_seen_at: order.orderAt }),
     }, { onConflict: "tenant_id, customer_phone" });
