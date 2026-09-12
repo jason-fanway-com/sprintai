@@ -16,7 +16,7 @@
  * touches carts/checkout, never mutates the conversation.
  */
 
-export const RUBRIC_VERSION = "rubric-v1.0.0";
+export const RUBRIC_VERSION = "rubric-v1.1.0";
 
 export type Severity = "critical" | "major" | "minor";
 
@@ -189,6 +189,12 @@ export interface JudgeGroundTruth {
    *  failure. When true, do not flag order_not_completed/looped_no_progress
    *  solely because the conversation didn't reach checkout by the cutoff. */
   conversation_truncated?: boolean;
+  /** Platform service fee in cents added to every order (always 99). Not a menu item. */
+  service_fee_cents?: number;
+  /** True iff this shop uses Stripe test-mode API keys. */
+  is_test?: boolean;
+  /** Authoritative cart contents from order_carts.cart_json at conversation end. */
+  cart_items?: Array<{ menu_item_id: string; name: string; quantity: number; price_cents: number }>;
 }
 
 export interface JudgeTranscriptMessage {
@@ -243,6 +249,19 @@ export function assembleJudgePrompt(
     )
     .join("\n");
 
+  const serviceFee = ground.service_fee_cents ?? 99;
+  const platformFactsBlock = `PLATFORM FACTS (authoritative — applies to every order, not in menu):
+  - SprintAI adds a flat $${(serviceFee / 100).toFixed(2)} service fee to EVERY order. It is NOT a menu item. A stated total that equals (item subtotal + $${(serviceFee / 100).toFixed(2)}) is CORRECT — do NOT flag the service fee as invented_item or wrong_total.
+  - Stripe mode: ${ground.is_test ? "TEST MODE — checkout sessions use cs_test_... IDs. The bot may issue a real test-mode checkout link even if has_real_checkout_session=false (session-lookup timing). Do NOT flag phantom_payment_link for test-mode shops when the bot's reply clearly states a checkout link was sent." : "LIVE MODE — phantom_payment_link applies normally."}
+  - Compliance footer: The opt-out / compliance footer appended to every final bot message is TCR-registered and legally required. Do NOT flag it as compliance_slip.`;
+
+  const cartContentsBlock = ground.cart_items && ground.cart_items.length > 0
+    ? `CART CONTENTS (authoritative — from DB cart_json, keyed by menu_item_id):
+${ground.cart_items.map((i) => `  - [${i.menu_item_id}] ${i.name} × ${i.quantity} — $${(i.price_cents / 100).toFixed(2)}`).join("\n")}
+
+For invented_item: if an item appears in CART CONTENTS above, look up its menu_item_id in the MENU. If the ID is present in the menu, the item is REAL — the bot's natural-language phrasing is irrelevant. Only flag invented_item when a menu_item_id is genuinely absent from the MENU.`
+    : "";
+
   const system = `${RUBRIC_TEXT}
 
 === OUTPUT CONTRACT ===
@@ -277,6 +296,8 @@ ORDER STATE (authoritative):
 ${ground.conversation_truncated
     ? `  - conversation_truncated: true — this conversation hit the TEST HARNESS's turn limit. Grade only what actually happened in the transcript so far: do not flag order_not_completed or looped_no_progress solely because the cutoff prevented reaching checkout, but DO still flag genuine stalls or loops that are visible in the transcript itself.\n`
     : ""}
+${platformFactsBlock}
+${cartContentsBlock ? `\n${cartContentsBlock}\n` : ""}
 TRANSCRIPT (chronological; each line is "[message_id] (role) text"):
 ${transcriptLines}
 

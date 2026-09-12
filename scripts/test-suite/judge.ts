@@ -91,6 +91,8 @@ async function buildGroundTruth(
   let hasCheckoutSession = false;
   let cartPhase: string | null = null;
   let paymentStatus: string | null = null;
+  let isTest = false;
+  let cartItems: Array<{ menu_item_id: string; name: string; quantity: number; price_cents: number }> = [];
 
   if (config.supabaseUrl && config.serviceRoleKey) {
     try {
@@ -101,12 +103,13 @@ async function buildGroundTruth(
       // Shop's own timezone + hours — same columns generator.ts reads.
       const { data: shopRow } = await supabase
         .from("shops")
-        .select("timezone, open_hours")
+        .select("timezone, open_hours, is_test")
         .eq("id", shop.id)
         .maybeSingle();
       if (shopRow) {
         timezone = shopRow.timezone ?? timezone;
         openHours = (shopRow.open_hours as JudgeGroundTruth["open_hours"]) ?? {};
+        isTest = shopRow.is_test ?? false;
       }
 
       // Latest menu for THIS shop, then its active items — mirrors generator.ts
@@ -154,7 +157,7 @@ async function buildGroundTruth(
         if (conv?.id) {
           const { data: cart } = await supabase
             .from("order_carts")
-            .select("stripe_checkout_session_id, phase, payment_status")
+            .select("stripe_checkout_session_id, phase, payment_status, cart_json")
             .eq("conversation_id", conv.id)
             .order("created_at", { ascending: false })
             .limit(1)
@@ -163,6 +166,13 @@ async function buildGroundTruth(
             hasCheckoutSession = !!cart.stripe_checkout_session_id;
             cartPhase = cart.phase ?? null;
             paymentStatus = cart.payment_status ?? null;
+            const rawCartJson = (cart.cart_json as any[]) ?? [];
+            cartItems = rawCartJson.map((i: any) => ({
+              menu_item_id: i.menu_item_id ?? "",
+              name: i.name ?? "",
+              quantity: i.quantity ?? 1,
+              price_cents: i.price_cents ?? 0,
+            }));
           }
         }
       }
@@ -181,6 +191,9 @@ async function buildGroundTruth(
     has_checkout_session: hasCheckoutSession,
     cart_phase: cartPhase,
     payment_status: paymentStatus,
+    service_fee_cents: 99,
+    is_test: isTest,
+    cart_items: cartItems,
   };
 }
 

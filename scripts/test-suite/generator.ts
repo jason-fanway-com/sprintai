@@ -248,6 +248,16 @@ function withModifier(items: MenuItemRow[], offset: number, counter: number, req
 function checkoutFlow(items: MenuItemRow[], offset: number, counter: number, requiredChoicesByItem: RequiredChoicesByItem): TestCase {
   const item = pickItem(items, offset);
   const turns: Turn[] = [{ role: "customer", message: `I'll take a ${item.name}` }];
+  // If this item's root name matches another item's name (e.g. "Gyro Salad" and
+  // "Gyro Sandwich" both start with "Gyro"), the bot will ask for clarification.
+  // Answer with the exact item name so the script is always winnable.
+  const itemRoot = item.name.toLowerCase().split(/[\s(]/)[0];
+  const hasAmbiguousPeer = items.some(
+    (other) => other.id !== item.id && other.name.toLowerCase().startsWith(itemRoot),
+  );
+  if (hasAmbiguousPeer) {
+    turns.push({ role: "customer", message: item.name });
+  }
   // Answer any required option group BEFORE the generic "yes" — the bot's
   // reply to the order message is where it asks the required-option
   // question, so the answer has to land in the very next turn.
@@ -273,6 +283,41 @@ function checkoutFlow(items: MenuItemRow[], offset: number, counter: number, req
     ],
     expects_checkout: true,
     expectedItemCents: item.price_cents,
+  };
+}
+
+/**
+ * Generates a test case where the customer orders an ambiguous item and
+ * NEVER provides a disambiguation answer. Asserts the GUARD 7 backstop fires
+ * (numbered options re-offered). The case must NOT assert checkout is reached.
+ */
+function backstopNoAnswer(items: MenuItemRow[], counter: number): TestCase | null {
+  // Find the first item that has an ambiguous peer (triggers bot disambiguation).
+  const pair = items.find((item) => {
+    const root = item.name.toLowerCase().split(/[\s(]/)[0];
+    return items.some((other) => other.id !== item.id && other.name.toLowerCase().startsWith(root));
+  });
+  if (!pair) return null;
+
+  return {
+    id: `backstop-no-answer-${counter}`,
+    category: "backstop",
+    criticality: "normal",
+    label: `GUARD7 backstop fires: ambiguous item never disambiguated (${pair.name})`,
+    turns: [
+      { role: "customer", message: pair.name },
+      { role: "customer", message: "hmm" },
+      { role: "customer", message: "whatever" },
+      { role: "customer", message: "I dunno" },
+    ],
+    success_criteria: [
+      {
+        id: "backstop_fires",
+        description:
+          "Bot offered numbered disambiguation options (e.g. '1) X 2) Y - Reply 1 or 2') before ending",
+      },
+    ],
+    // No expects_checkout — correct behavior is NOT to reach checkout here
   };
 }
 
@@ -785,6 +830,8 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
   pushCase(derivedCases, salad(activeItems));
   pushCase(derivedCases, fryerItem(activeItems));
   pushCase(derivedCases, combo(activeItems, requiredChoicesByItem));
+  const backstopCase = backstopNoAnswer(orderPool, ctr++);
+  if (backstopCase) pushCase(derivedCases, backstopCase);
   pushCase(derivedCases, bagelWithSpread(activeItems));
   pushCase(derivedCases, drinkCase(activeItems));
 
