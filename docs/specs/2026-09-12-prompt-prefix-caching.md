@@ -89,3 +89,42 @@ worse than doing nothing. **The flag is the last step, not the first.**
 - Vito's canary unchanged: one line, Temp: Medium, $8.49 + $0.99 = $9.48.
 - No change to what the model is told — same rules, same tools, same menu, only
   reordered.
+
+## How the cached prefix gets updated (Jason's question, 2026-09-12)
+
+**There is no invalidation mechanism, and none is needed.** Prefix caching is
+content-addressed: the cache key IS the exact bytes of the prefix.
+
+When an owner 86s an item, changes a price, or adds one:
+1. `admin-chat` / `compile-menu` update `menu_items` (`bot_state`, price,
+   `display_name`, `ask_plan`).
+2. The next turn calls `buildSystemPromptV2` with the new menu and the new
+   `soldOutNames`, producing different bytes.
+3. Those bytes match no existing cache entry. It is a MISS. That call writes a
+   new entry; subsequent turns hit the new one.
+
+**A stale cache can never serve an old menu.** An entry is only read when the
+bytes match exactly, so a changed menu makes the old entry unreachable rather
+than wrong. The failure mode of caching here is "we paid full price again",
+never "the bot quoted last week's price or sold an 86'd item".
+
+Cost of a menu change: one cache-write on the next order, then hits resume.
+Because TTL is minutes, a change made between conversations costs nothing at
+all — the entry would have expired anyway.
+
+### The actual danger is non-determinism, not staleness
+
+If the compiled menu is rendered from a query without an explicit, stable
+`ORDER BY`, the prefix bytes shuffle between calls. The result is a 0% hit rate
+with **no error and no symptom except the bill** — the same silent-failure shape
+as the `--cases` filter and the inert delivery guard. Hence the mandatory test:
+build the stable prefix twice, with different cart/time inputs, and assert the
+two strings are byte-identical.
+
+### Mid-conversation 86
+
+If an item is 86'd *during* a conversation, the prefix changes on the next turn
+and the rest of that conversation misses. That is correct and desirable — the
+customer must not be sold something the kitchen just turned off (bar item 3).
+Do not "optimise" this by holding a menu snapshot for the life of a conversation.
+
