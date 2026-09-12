@@ -48,6 +48,56 @@ if [ ! -f "$ENTRYPOINT" ]; then
   exit 1
 fi
 
+echo "== 0/6 schema validation: declared columns must exist in live DB =="
+# Declared (table, column) pairs this function reads from. Add a new entry
+# whenever you add a migration that introduces a column the function depends on.
+# The deploy aborts if any declared column is absent from the live schema —
+# the migration was never applied. This is a C2-class defect class: migration
+# absent → column absent → feature silently inert (3 occurrences 2026-09-12).
+DECLARED_COLUMNS=(
+  "order_carts:delivery_offer_made_at"
+  "order_carts:delivery_fee_cents"
+  "order_carts:pending_disambiguation"
+  "order_carts:fee_disclosed_at"
+  "order_carts:pickup_name"
+  "order_carts:driver_tip_cents"
+  "order_carts:test_mode"
+  "order_carts:order_type"
+  "order_carts:delivery_address"
+  "customers:last_order_type"
+  "customers:last_delivery_address"
+  "customers:name"
+  "customers:order_count"
+  "shop_settings:fulfilment_modes"
+)
+MGMT_TOKEN="${SUPABASE_ACCESS_TOKEN:-}"
+if [ -z "$MGMT_TOKEN" ]; then
+  echo "WARN: SUPABASE_ACCESS_TOKEN not set — skipping schema validation (set it to enable the C2 guard)." >&2
+else
+  SCHEMA_FAIL=0
+  for entry in "${DECLARED_COLUMNS[@]}"; do
+    tbl="${entry%%:*}"
+    col="${entry##*:}"
+    SQL="SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='${tbl}' AND column_name='${col}' LIMIT 1"
+    RESP=$(curl -sf -X POST \
+      "https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query" \
+      -H "Authorization: Bearer ${MGMT_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "{\"query\":\"${SQL}\"}" 2>&1)
+    # Management API returns an array of rows; empty array means column absent
+    ROW_COUNT=$(echo "$RESP" | grep -o '"1"' | wc -l | tr -d ' ')
+    if [ "$ROW_COUNT" -eq 0 ]; then
+      echo "FAIL: column '${tbl}.${col}' not found in live schema — migration not applied." >&2
+      SCHEMA_FAIL=1
+    fi
+  done
+  if [ "$SCHEMA_FAIL" -ne 0 ]; then
+    echo "FAIL: schema validation failed — one or more required columns are missing. Apply the pending migration(s) before deploying." >&2
+    exit 1
+  fi
+  echo "Schema validation passed: all ${#DECLARED_COLUMNS[@]} declared columns confirmed in live DB."
+fi
+
 echo "== 1/6 deno check: ${ENTRYPOINT} =="
 if ! deno check "$ENTRYPOINT"; then
   echo "FAIL: type check failed for ${FUNCTION_NAME}. Deploy aborted — a TS error here is exactly how the delivery_address bug shipped silently." >&2
