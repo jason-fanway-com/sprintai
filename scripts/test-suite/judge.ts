@@ -83,10 +83,14 @@ function transcriptToJudgeMessages(run: RunResult): JudgeTranscriptMessage[] {
 async function buildGroundTruth(
   config: JudgeConfig,
   shop: { id: string; name: string },
+  sessionId?: string,
 ): Promise<JudgeGroundTruth> {
   let timezone = "America/New_York";
   let openHours: JudgeGroundTruth["open_hours"] = {};
   let menu: JudgeGroundTruth["menu"] = [];
+  let hasCheckoutSession = false;
+  let cartPhase: string | null = null;
+  let paymentStatus: string | null = null;
 
   if (config.supabaseUrl && config.serviceRoleKey) {
     try {
@@ -132,6 +136,36 @@ async function buildGroundTruth(
           modifiers: i.modifiers_json,
         })) as any;
       }
+
+      // Real (test-mode or live) checkout session signal, keyed off the run's
+      // session_id -> conversations.id -> order_carts.conversation_id. The
+      // live Proof runs hit the real deployed chat-sms function, which DOES
+      // create real Stripe checkout sessions (test-mode API keys for every
+      // shop) — test mode vs live mode is irrelevant to whether a session
+      // genuinely exists, so this only checks for a session row/id, not mode.
+      if (sessionId) {
+        const { data: conv } = await supabase
+          .from("conversations")
+          .select("id")
+          .eq("session_id", sessionId)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (conv?.id) {
+          const { data: cart } = await supabase
+            .from("order_carts")
+            .select("stripe_checkout_session_id, phase, payment_status")
+            .eq("conversation_id", conv.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (cart) {
+            hasCheckoutSession = !!cart.stripe_checkout_session_id;
+            cartPhase = cart.phase ?? null;
+            paymentStatus = cart.payment_status ?? null;
+          }
+        }
+      }
     } catch (e) {
       console.error(
         `[judge] failed to load ground truth for shop ${shop.id}: ${(e as Error).message}`,
@@ -139,15 +173,14 @@ async function buildGroundTruth(
     }
   }
 
-  // No checkout session for test runs (the test path never hits Stripe).
   return {
     shop_name: shop.name,
     timezone,
     open_hours: openHours,
     menu,
-    has_checkout_session: false,
-    cart_phase: null,
-    payment_status: null,
+    has_checkout_session: hasCheckoutSession,
+    cart_phase: cartPhase,
+    payment_status: paymentStatus,
   };
 }
 
@@ -228,7 +261,7 @@ export async function judgeCase(
     };
   }
 
-  const ground = await buildGroundTruth(config, shop);
+  const ground = await buildGroundTruth(config, shop, run.sessionId);
   const messages = transcriptToJudgeMessages(run);
 
   // Assemble the prompt but inject the case's success criteria as the grading focus.
