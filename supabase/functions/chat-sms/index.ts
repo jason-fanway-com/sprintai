@@ -1213,12 +1213,25 @@ export function buildSystemPromptV2(
   // it here too means a mid-conversation or test-mode pause is still surfaced.
   const deliveryPausedNow = !!(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date());
   const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false && !deliveryPausedNow;
+  // When the returning-customer delivery-offer clause is eligible (injected
+  // via RETURNING CUSTOMER CONTEXT), the generic REQUIRED "pickup or delivery?"
+  // instruction would compete with and override it: the model follows REQUIRED
+  // directives literally, ignoring the softer personalized offer. When the
+  // offer is active, the offer IS the pickup/delivery question — confirming
+  // the remembered address → delivery, naming a different address → pickup.
+  // Don't also ask the generic version (confirmed live: model says "pickup or
+  // delivery?" and ignores "Delivery again to <address>?" — 2026-09-12).
+  const hasActiveDeliveryOffer = canActuallyDeliver &&
+    !!(customerContext?.deliveryOfferEligible) &&
+    customerContext?.deliveryOffer != null;
   const orderTypeInfo = orderTypeStr === "delivery"
     ? `\nORDER TYPE: Delivery`
     : orderTypeStr === "pickup"
       ? `\nORDER TYPE: Pickup`
       : canActuallyDeliver
-        ? `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`
+        ? hasActiveDeliveryOffer
+          ? `\nORDER TYPE: Not chosen. RETURNING CUSTOMER DELIVERY OFFER ACTIVE — make the personalized offer in RETURNING CUSTOMER CONTEXT below instead of the generic "pickup or delivery?" question. The customer's answer to that offer IS their pickup/delivery selection.`
+          : `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`
         : `\nORDER TYPE: Pickup — this shop cannot take delivery orders right now, so there is nothing to choose. Do NOT ask \"pickup or delivery?\". Mention pickup once, in passing, and keep the order moving.`;
 
   const deliveryInfo = deliveryAddress
