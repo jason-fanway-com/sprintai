@@ -1224,13 +1224,21 @@ export function buildSystemPromptV2(
   const hasActiveDeliveryOffer = canActuallyDeliver &&
     !!(customerContext?.deliveryOfferEligible) &&
     customerContext?.deliveryOffer != null;
+  // When the returning-customer delivery offer is active, embed the actual
+  // offer question into ORDER TYPE so the model has a concrete script to
+  // follow — a reference to "RETURNING CUSTOMER CONTEXT below" is not
+  // concrete enough: confirmed live that the model ignores it and falls back
+  // to the generic "pickup or delivery?" even when the override is in place
+  // (2026-09-12). Also suppresses the DELIVERY AVAILABLE: Yes gate text that
+  // triggers the EARLY ORDER TYPE GATE's MUST-ask instruction.
+  const offerAddress = (customerContext?.deliveryOffer as { address?: { formatted?: string } } | null)?.address?.formatted ?? "";
   const orderTypeInfo = orderTypeStr === "delivery"
     ? `\nORDER TYPE: Delivery`
     : orderTypeStr === "pickup"
       ? `\nORDER TYPE: Pickup`
       : canActuallyDeliver
         ? hasActiveDeliveryOffer
-          ? `\nORDER TYPE: Not chosen. RETURNING CUSTOMER DELIVERY OFFER ACTIVE — make the personalized offer in RETURNING CUSTOMER CONTEXT below instead of the generic "pickup or delivery?" question. The customer's answer to that offer IS their pickup/delivery selection.`
+          ? `\nORDER TYPE: Not chosen. RETURNING CUSTOMER OFFER — ask EXACTLY this (no paraphrase): "Delivery again to ${offerAddress}?" If they say yes/confirm, call set_order_type("delivery") then set_delivery_address with that address. If they give a different address, use that. If they say pickup, call set_order_type("pickup"). Do NOT also ask a generic "pickup or delivery?" question — this IS the pickup/delivery question.`
           : `\nORDER TYPE: Not chosen. REQUIRED: In your response, ask the customer \"pickup or delivery?\" Do NOT proceed without asking.`
         : `\nORDER TYPE: Pickup — this shop cannot take delivery orders right now, so there is nothing to choose. Do NOT ask \"pickup or delivery?\". Mention pickup once, in passing, and keep the order moving.`;
 
@@ -1256,6 +1264,13 @@ export function buildSystemPromptV2(
     }
     if (deliveryGeoAvailable === false) {
       return `\nDELIVERY AVAILABLE: No — delivery is temporarily unavailable while we finalize our delivery zone. Please order for pickup only. Never offer delivery.`;
+    }
+    // When the returning-customer delivery offer is active, suppress "Yes" so
+    // the EARLY ORDER TYPE GATE (which fires on "DELIVERY AVAILABLE is Yes")
+    // does not also demand "pickup or delivery?" — the offer in ORDER TYPE is
+    // the pickup/delivery question and asking it twice confuses the model.
+    if (hasActiveDeliveryOffer) {
+      return `\nDELIVERY AVAILABLE: Yes — returning customer offer active (see ORDER TYPE above for the exact question to ask).`;
     }
     return `\nDELIVERY AVAILABLE: Yes — the customer can choose delivery or pickup.`;
   })();
