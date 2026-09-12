@@ -314,11 +314,15 @@ export async function judgeCase(
     // but still emits a flag. Drop those.
     const selfNegate = /this is actually correct|this is correct|does exist on the menu|does list those items|this is not an invented item|this is not a .* item|does not constitute|does not represent|not an error here|\bno error\b|\bnot an error\b|\bnot actually an error\b|\bno explicit total\b|\bdoes not apply\b|\bdoes not fire\b|\bis on the menu\b|\bis actually on the menu\b|\bon the menu, so\b|\bwithout .*actually\b|\bno flag here\b|\bfalse positive\b|\bshould not fire\b|the menu does list|so this is not|are separate menu items|are distinct menu items|are listed menu items|distinct menu item|listed as modifiers|is a real .*modifier|are real .*modifiers|cream cheese.*does exist|spread .*does exist|\bdoes exist as a standalone|\bis a standalone item\b|\bare standalone items\b|unit word|wrong unit|clunky_phrasing not invented_item|not an invented.*just a|is not an invented|\bwhich is actually correct\b|\bthis is actually the correct|\bthe correct total is\b|\bactually correct\b|\bno flag\b/i;
     // Broader structural fallback: explanation contains a negation cue
-    // ("no"/"not"/"isn't"/"is not") near "flag"/"error"/"issue"/"problem" or
-    // near "correct"/"consistent". Catches phrasings the fixed phrase list
-    // above hasn't been updated for yet, so this filter doesn't need to keep
-    // growing one missed phrase at a time.
-    const selfNegateCue = /\b(no|not|isn'?t|is not)\b[^.;]{0,25}\b(flag|error|issue|problem|correct|consistent)\b/i;
+    // ("no"/"not"/"isn't"/"is not") near "flag"/"error"/"issue"/"problem".
+    // Catches phrasings the fixed phrase list above hasn't been updated for
+    // yet, so this filter doesn't need to keep growing one missed phrase at
+    // a time. Deliberately excludes "correct"/"consistent": negation near
+    // those words flips polarity the other way ("NOT correct" / "isn't
+    // consistent" IS the defect report, not a self-negation of one) and
+    // grouping them in here wrongly swallowed real flags like "this is not
+    // the correct total" or "not consistent with the listed prices".
+    const selfNegateCue = /\b(no|not|isn'?t|is not)\b[^.;]{0,25}\b(flag|error|issue|problem)\b/i;
     flags = rawFlags.filter((f) => {
       if (selfNegate.test(f.explanation) || selfNegateCue.test(f.explanation)) {
         console.log(`  [judge filter] Dropped self-negating flag "${f.check}": ${f.explanation}`);
