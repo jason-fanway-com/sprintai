@@ -6,7 +6,7 @@
  * Headers: stripe-signature required
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { deriveConnectStatus } from "../_shared/connect.ts";
 import { guardedSend } from "../_shared/outbound-guard.ts";
@@ -189,7 +189,7 @@ Deno.serve(async (req: Request) => {
 
 /** Insert (event_id, stripe_account); returns true if it was ALREADY present. */
 async function recordEventOnce(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   eventId: string,
   stripeAccount: string,
   eventType: string,
@@ -206,7 +206,7 @@ async function recordEventOnce(
 }
 
 async function unrecordEvent(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   eventId: string,
   stripeAccount: string,
 ): Promise<void> {
@@ -221,7 +221,7 @@ async function unrecordEvent(
 
 /** Update a shop's go-live flags from a changed connected account. */
 async function handleAccountUpdated(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   account: Stripe.Account,
 ): Promise<void> {
   const { data: shop } = await supabase
@@ -259,7 +259,7 @@ async function handleAccountUpdated(
  * this webhook just records the resulting refund totals on the order.
  */
 async function handleChargeRefunded(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   charge: Stripe.Charge,
   connectedAccount: string,
 ): Promise<void> {
@@ -299,7 +299,7 @@ async function handleChargeRefunded(
  * notifies the shop.
  */
 async function handleDisputeCreated(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   dispute: Stripe.Dispute,
   connectedAccount: string,
 ): Promise<void> {
@@ -334,7 +334,7 @@ async function handleDisputeCreated(
 
 /** Find the order_cart for a charge, by payment_intent then charge id. */
 async function findCartForCharge(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   charge: Stripe.Charge,
   _connectedAccount: string,
 ): Promise<{ id: string; shop_id: string; conversation_id: string | null } | null> {
@@ -357,7 +357,7 @@ async function findCartForCharge(
 
 /** Email the shop that a diner disputed an order (restaurant bears liability). */
 async function notifyShopOfDispute(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   shopId: string,
   cartId: string,
   dispute: Stripe.Dispute,
@@ -394,7 +394,7 @@ async function notifyShopOfDispute(
 
 /** checkout.session.completed with order_cart_id → mark order paid + log ticket */
 async function handleOrderPaymentComplete(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe:   Stripe,
   session:  Stripe.Checkout.Session,
   connectedAccount: string,
@@ -528,7 +528,7 @@ async function handleOrderPaymentComplete(
 
 /** checkout.session.expired with order_cart_id → mark order expired */
 async function handleOrderPaymentExpired(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   session:  Stripe.Checkout.Session,
 ): Promise<void> {
   const cartId = session.metadata?.order_cart_id;
@@ -552,7 +552,7 @@ async function handleOrderPaymentExpired(
 
 /** checkout.session.completed (with shop_id) → activate shop subscription */
 async function handleShopSubscriptionCheckout(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe: Stripe,
   session: Stripe.Checkout.Session
 ): Promise<void> {
@@ -695,7 +695,7 @@ async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Pr
 
 /** checkout.session.completed → create tenant, run onboarding, assign Twilio number */
 async function handleCheckoutComplete(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe: Stripe,
   session: Stripe.Checkout.Session
 ): Promise<void> {
@@ -829,7 +829,7 @@ async function handleCheckoutComplete(
 
 /** customer.subscription.updated → sync plan/status changes for tenants AND shops */
 async function handleSubscriptionUpdated(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   subscription: Stripe.Subscription
 ): Promise<void> {
   const customerId = subscription.customer as string;
@@ -862,7 +862,7 @@ async function handleSubscriptionUpdated(
 
 /** customer.subscription.deleted → deactivate tenant + shop, release Twilio number */
 async function handleSubscriptionDeleted(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe: Stripe,
   subscription: Stripe.Subscription
 ): Promise<void> {
@@ -911,7 +911,7 @@ async function handleSubscriptionDeleted(
 
 /** invoice.payment_failed → pause tenant + mark shop past_due */
 async function handlePaymentFailed(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe: Stripe,
   invoice: Stripe.Invoice
 ): Promise<void> {
@@ -952,7 +952,7 @@ async function handlePaymentFailed(
 
 /** invoice.payment_succeeded → reactivate tenant + shop if paused/past_due */
 async function handlePaymentSucceeded(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   stripe: Stripe,
   invoice: Stripe.Invoice
 ): Promise<void> {
@@ -1001,7 +1001,7 @@ function mapSubscriptionStatus(stripeStatus: string): string {
 
 /** Assign a new Twilio phone number to a tenant */
 async function assignTwilioNumber(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   tenantId: string
 ): Promise<string> {
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
@@ -1097,7 +1097,7 @@ async function releaseTwilioNumber(phoneNumber: string): Promise<void> {
 
 /** Trigger the onboard-tenant function asynchronously */
 async function triggerOnboarding(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   tenantId: string,
   websiteUrl: string
 ): Promise<void> {
@@ -1204,7 +1204,7 @@ function generateSlug(name: string): string {
 
 /** Ensure slug is unique by appending number if needed */
 async function ensureUniqueSlug(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   baseSlug: string
 ): Promise<string> {
   let slug = baseSlug;
