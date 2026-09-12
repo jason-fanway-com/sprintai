@@ -38,10 +38,21 @@ fi
 # Paths that provably never reach the root origin. Keep this in sync with the
 # allowlist in scripts/build-public-site.sh: if a path is not copied there,
 # it belongs here.
-NOT_ON_ORIGIN='^([^/]*\.md|docs/.*|_proof/.*|admin-dashboard/.*|supabase/.*|[^/]*\.htmltext)$'
+# scripts/ never reaches the origin EXCEPT the build script itself, which the
+# netlify.toml build command invokes directly. Checked before NOT_ON_ORIGIN so
+# a change to it always builds. Added 2026-09-12: 12+ commits in two days were
+# script-only (test-suite, deploy gate, switch report) and each bought a full
+# root npm install + cold shop-chat Vite build that published nothing.
+BUILD_CRITICAL='^scripts/build-public-site\.sh$'
+
+NOT_ON_ORIGIN='^([^/]*\.md|docs/.*|_proof/.*|admin-dashboard/.*|supabase/.*|scripts/.*|[^/]*\.htmltext)$'
 
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
+  if [[ "$f" =~ $BUILD_CRITICAL ]]; then
+    echo "[ignore] '$f' drives the build itself — building"
+    exit 1
+  fi
   if [[ ! "$f" =~ $NOT_ON_ORIGIN ]]; then
     echo "[ignore] '$f' can affect the origin — building"
     exit 1
