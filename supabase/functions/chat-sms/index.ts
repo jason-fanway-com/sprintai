@@ -1401,7 +1401,12 @@ function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number):
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
-async function executeTool(
+// Exported so the tool-execution logic (add_item/modify_item/submit_order —
+// the deterministic cart-mutation core, independent of the LLM/Supabase
+// plumbing around it) can be unit-tested directly against a minimal mock
+// Supabase client, same rationale as cart.ts/ask-plan-engine.ts's own
+// extraction-for-testability header comments.
+export async function executeTool(
   toolName:  string,
   input:     Record<string, unknown>,
   cart:      AnyCartItem[],
@@ -1483,6 +1488,12 @@ async function executeTool(
   // turn are NOT suppressed — only the ambiguous ones lose the text fallback.
   // Generalizes to any shop/menu, not special-cased to flatbreads.
   suppressedReactiveMatchIds?: Set<string>,
+  // See the doc comment at modifyItemMergeKeysThisTurn's declaration in
+  // runOrderingLoop. Undefined at every call site except the main tool
+  // loop — every other modify_item call site invokes executeTool exactly
+  // once per turn for a given item, so the "first call this turn" (full
+  // replace) behavior is already correct for them unchanged.
+  modifyItemMergeKeysThisTurn?: Set<string>,
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1742,13 +1753,32 @@ async function executeTool(
       // selection (the Boosenberry-wings defect).
       for (const [key, vals] of Object.entries(inputOptions)) {
         if (groupNames.has(key)) continue;
+        // Bug fix (2026-09-12, NJB live report): a required-slot (prompt_for)
+        // item has no recorded choice list to validate the customer's answer
+        // against, but the answer IS a real resolution of a real required
+        // question — not a stray aside. Record it as a genuine structured
+        // selection (keyed by the prompt_for question text itself, the one
+        // stable "group name" this slot has) so it satisfies the
+        // required-slot checkout gate below and reaches the kitchen ticket
+        // as a selection, the same as any menu-recorded modifier — instead
+        // of free-text unverified_requests, which the checkout gate and
+        // kitchen ticket both still treat as unresolved.
+        if (menuItem.prompt_for) {
+          const descriptor = menuItem.name.toLowerCase();
+          const answered = vals.filter(v => !descriptor.includes(String(v).toLowerCase()));
+          delete inputOptions[key];
+          if (answered.length > 0) {
+            inputOptions[menuItem.prompt_for] = [...(inputOptions[menuItem.prompt_for] ?? []), ...answered];
+          }
+          continue;
+        }
         // REGRESSION FIX (2026-09-05): an item with NO option groups recorded
         // has nothing to correct toward, so a hard reject only kills a
         // legitimate add. "large cheese pizza" failed on turn 1 — the page's
         // own suggested phrase — because the model tacked a size/style key
         // onto an item with zero groups. Drop the key rather than the order;
         // it still NEVER becomes a validated selection or affects price.
-        if (menuItem.prompt_for || itemGroups.length === 0) {
+        if (itemGroups.length === 0) {
           // The shop flagged this item as needing a choice but never recorded
           // the valid values — don't invent a menu selection, and don't block
           // the add. Preserve the customer's own words for a human to resolve.
@@ -1765,6 +1795,15 @@ async function executeTool(
           const validNames = itemGroups.map(g => g.name).join(", ");
           return { ok: false, result: { error: `"${key}" is not a valid option for ${menuItem.name}. ${validNames ? `Valid option groups: ${validNames}.` : "This item has no option groups recorded."}` } };
         }
+      }
+
+      // Required-slot (prompt_for) gate: if this item requires a choice and
+      // the customer's answer didn't resolve it via this call, mark it
+      // pending so checkout is blocked and the customer re-prompted until
+      // it's answered — same mechanism real required option_groups already
+      // use just below.
+      if (menuItem.prompt_for && !(inputOptions[menuItem.prompt_for]?.length)) {
+        pending.push(menuItem.prompt_for);
       }
 
       for (const group of itemGroups) {
@@ -2032,7 +2071,19 @@ async function executeTool(
       if (quantity !== undefined) (cart[idx] as CartItem).quantity = quantity;
       const validMods = menuItem?.modifiers_json?.map(m => m.name) ?? [];
       const modifierNames = new Set(validMods);
-      let newModifiers = (modifiers ?? (cart[idx] as CartItem).modifiers ?? []).slice();
+      // Bug fix (2026-09-12): see modifyItemMergeKeysThisTurn's doc at its
+      // declaration in runOrderingLoop — only the FIRST modify_item call
+      // this turn for a given line may replace its modifiers wholesale
+      // (preserves single-call removal via "modifiers: []"); every later
+      // call in the same turn merges instead, so a second add-on clause's
+      // own call doesn't erase what the first clause's call just added.
+      const isFirstModifyThisTurn = !modifyItemMergeKeysThisTurn?.has(menu_item_id);
+      modifyItemMergeKeysThisTurn?.add(menu_item_id);
+      let newModifiers = modifiers === undefined
+        ? ((cart[idx] as CartItem).modifiers ?? []).slice()
+        : isFirstModifyThisTurn
+          ? modifiers.slice()
+          : [...new Set([...((cart[idx] as CartItem).modifiers ?? []), ...modifiers])];
       let newOptions = options ?? (cart[idx] as CartItem).options;
       let newUnverified = (cart[idx] as CartItem).unverified_requests ?? [];
       let unverifiedNote: string | undefined;
@@ -2041,10 +2092,15 @@ async function executeTool(
         // Seed with existing valid group selections so partial-resolve calls
         // (e.g. "Bleu cheese or ranch" answered on turn 3) don't erase a group
         // that was already resolved on an earlier turn (e.g. "Sauce" on turn 2).
+        // Also preserve a previously-resolved required-slot (prompt_for)
+        // answer, stored under the prompt_for text as its own key (never a
+        // real recorded option group — see below) — without this carve-out
+        // an unrelated later modify_item call (e.g. a bare quantity change
+        // that happens to also pass options) would silently wipe it.
         const existingOpts = (cart[idx] as CartItem).options ?? {};
         const cleaned: Record<string, string[]> = {};
         for (const [k, v] of Object.entries(existingOpts)) {
-          if (groupNames.has(k)) cleaned[k] = v;
+          if (groupNames.has(k) || (menuItem?.prompt_for && k === menuItem.prompt_for)) cleaned[k] = v;
         }
         const unverifiedThisCall: string[] = [];
         for (const [key, vals] of Object.entries(options)) {
@@ -2055,16 +2111,29 @@ async function executeTool(
             continue;
           }
           if (groupNames.has(key)) {
-            cleaned[key] = vals;
+            cleaned[key] = isFirstModifyThisTurn ? vals : [...new Set([...(cleaned[key] ?? []), ...vals])];
             continue;
           }
-          // Unknown key — same rule as add_item: reject unless the shop
-          // flagged this item as needing an unrecorded choice, in which case
-          // preserve the customer's ask as unverified rather than as a
-          // validated selection (the Boosenberry-wings defect, via modify_item).
-          // Same regression fix as add_item: zero recorded groups means there
-          // is nothing to correct toward, so never fail the modify over it.
-          if (menuItem?.prompt_for || (menuItem?.option_groups || []).length === 0) {
+          // Unknown key. A required-slot (prompt_for) item has no recorded
+          // choice list to validate against, but this IS the customer's
+          // answer to a real required question — record it as a genuine
+          // structured selection (keyed by the prompt_for question text
+          // itself, the one stable "group name" this slot has) so it
+          // satisfies the required-slot checkout gate below and reaches the
+          // kitchen ticket as a selection, like any other modifier, instead
+          // of free-text notes/unverified_requests (which the checkout gate
+          // and kitchen ticket both still treat as unresolved). Zero
+          // recorded groups with no prompt_for flag keeps the prior
+          // unverified-request handling — nothing to correct toward, so
+          // never fail the modify over it; a real recorded option-group
+          // list still hard-rejects an unknown key.
+          if (menuItem?.prompt_for) {
+            const descriptor = (menuItem?.name ?? "").toLowerCase();
+            const answered = vals.filter(v => !(descriptor && descriptor.includes(String(v).toLowerCase())));
+            if (answered.length > 0) {
+              cleaned[menuItem.prompt_for] = [...(cleaned[menuItem.prompt_for] ?? []), ...answered];
+            }
+          } else if ((menuItem?.option_groups || []).length === 0) {
             const descriptor = (menuItem?.name ?? "").toLowerCase();
             for (const v of vals) {
               if (descriptor && descriptor.includes(String(v).toLowerCase())) continue;
@@ -2158,6 +2227,12 @@ async function executeTool(
         const newPending = (menuItem.option_groups || [])
           .filter(g => g.required && (!newOptions || !newOptions[g.name] || newOptions[g.name].length === 0))
           .map(g => g.name);
+        // Required-slot (prompt_for) gate: unanswered stays pending so
+        // submit_order's pending_options check blocks checkout and the
+        // customer gets re-prompted, same as any other required group.
+        if (menuItem.prompt_for && !(newOptions?.[menuItem.prompt_for]?.length)) {
+          newPending.push(menuItem.prompt_for);
+        }
         (cart[idx] as CartItem).pending_options = newPending.length > 0 ? newPending : undefined;
       }
       await saveCart(supabase, cartId, cart, "building");
@@ -2752,6 +2827,25 @@ async function runOrderingLoop(
   // than one NEW cart line for the same base item in a single turn.
   const consumedModifierChoiceIdsForTurn = new Set<string>(preConsumedModifierChoiceIds ?? []);
 
+  // Bug fix (2026-09-12, NJB live report): a single customer message with two
+  // add-on clauses ("add bacon and add extra cheese") produces two SEPARATE
+  // modify_item tool calls in the SAME assistant turn, each written blind of
+  // the other's effect — the model never sees this turn's own earlier
+  // tool_results before emitting the next call in the same batch (see the
+  // toolBlocks loop below). The legacy modify_item handler's `modifiers`
+  // field is documented "Full list... replaces existing," which is correct
+  // for the FIRST modify_item call on a line this turn (so a genuine
+  // removal, "modifiers: []", still works) but wrong for every call after
+  // it: a second call's array only reflects that call's own belief about
+  // the full state, not the first call's addition, so treating it as a
+  // literal replacement silently erased the first add-on. Tracks which
+  // menu_item_ids have already had a modify_item call resolved this turn so
+  // only the first is a full replace; every later call in the same turn
+  // merges instead. Same discipline the compiled engine's
+  // applyCompiledModifyItem already follows (it merges into
+  // ask_plan_selections, never replaces wholesale).
+  const modifyItemMergeKeysThisTurn = new Set<string>();
+
   const messages: Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }> = [
     ...history,
     { role: "user", content: userMessage },
@@ -3022,6 +3116,7 @@ async function runOrderingLoop(
         undefined, // consumedReactiveExtraKeys — legacy path only, not exercised here
         composedPhraseTexts,
         suppressedReactiveMatchIds.size > 0 ? suppressedReactiveMatchIds : undefined,
+        modifyItemMergeKeysThisTurn,
       );
       debugToolMs.push({ name: toolBlock.name!, ms: Math.round(performance.now() - debugToolT0) });
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
