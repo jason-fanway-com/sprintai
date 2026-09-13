@@ -102,11 +102,56 @@ export function claimsItemInCart(reply: string, guardCart: CartLine[]): string |
     // topping-qualified claim is recognized instead of false-tripping this
     // guard onto "Sorry, I got mixed up" over a cart that was actually
     // correct.
+    const namedExtras: string[] = [];
     const cartNames = guardCart.flatMap(item => {
       if (item.type === "bundle") return [item.name];
       const extras = [...(item.modifiers ?? []), ...Object.values(item.options ?? {}).flat()];
-      return extras.length > 0 ? [item.name, `${item.name} ${extras.join(" ")}`] : [item.name];
+      if (extras.length === 0) return [item.name];
+      // Live regression (2026-09-13, conv v430, Vito's, defect 3): Vito's
+      // "Cheese - Large (16\")" base row is reused for every topping (see
+      // guard20-regular-offer-confirmation.ts's carriesExplicitChoices
+      // comment) — swapping the topping to Pepperoni changes only
+      // options.Toppings, never the base `name`. A customer-facing reply
+      // that (correctly) calls the item "your Pepperoni" or "the Pepperoni
+      // pizza" — using the distinguishing topping, not the generic base
+      // name — used to fail BOTH the substring check (neither direction is
+      // a substring of "Cheese - Large (16\") Pepperoni") and the 3-stem
+      // overlap fallback (only "pepperoni" itself overlaps), so a truthful
+      // claim was flagged as a hallucination and the honest reply was
+      // discarded for "Sorry, I got mixed up about your order there."
+      // Each individual extra (options/modifier value) is also a valid
+      // standalone name for a real cart line — collect it separately (not
+      // into cartNames) so it goes through matchesStandaloneExtra below
+      // rather than the loose substring check. Length-gated the same as
+      // `claimed` above so a short/generic option value (a size letter,
+      // "No", etc.) can't loosely match everything.
+      for (const e of extras) if (typeof e === "string" && e.length >= 4) namedExtras.push(e);
+      return [item.name, `${item.name} ${extras.join(" ")}`];
     });
+    // Regression (2026-09-13, Melvin adversarial pass on defect 3's fix): a
+    // plain `claimed.includes(extra)` substring check let a claim that names
+    // a DIFFERENT, LARGER item that merely contains the option word as a
+    // substring slip through as "truthful" — "A Pepperoni Sub is already in
+    // your cart" against a cart holding only a cheese pizza with a Pepperoni
+    // topping (no sub) was wrongly treated as matching, because "pepperoni
+    // sub" contains "pepperoni". A claim naming the option value ALONE (with
+    // only a leading filler word, and optionally one trailing generic
+    // pizza-format word — the customer still just means "the pizza") is
+    // truthful; a claim that tacks on any OTHER word ("Sub", "Roll", ...) is
+    // naming a compound item that isn't in the cart and must stay flagged.
+    const FILLER_WORDS = new Set(["a", "an", "the", "your", "my", "one"]);
+    const GENERIC_PIZZA_SUFFIX_RE = /^(?:pizzas?|pies?|slices?)$/i;
+    const matchesStandaloneExtra = (claimedText: string, extra: string): boolean => {
+      const words = claimedText.trim().split(/\s+/);
+      if (words.length && FILLER_WORDS.has(words[0].toLowerCase())) words.shift();
+      const extraWordCount = extra.trim().split(/\s+/).length;
+      if (words.length < extraWordCount) return false;
+      const core = words.slice(0, extraWordCount).join(" ");
+      if (core.toLowerCase() !== extra.toLowerCase()) return false;
+      const rest = words.slice(extraWordCount);
+      if (rest.length === 0) return true;
+      return rest.length === 1 && GENERIC_PIZZA_SUFFIX_RE.test(rest[0]);
+    };
     const found = cartNames.some(n => {
       if (n.toLowerCase().includes(claimed.toLowerCase())) return true;
       if (claimed.toLowerCase().includes(n.toLowerCase())) return true;
@@ -121,7 +166,7 @@ export function claimsItemInCart(reply: string, guardCart: CartLine[]): string |
       let overlap = 0;
       for (const s of nStems) if (cStems.has(s)) overlap++;
       return overlap >= 3;
-    });
+    }) || namedExtras.some(e => matchesStandaloneExtra(claimed, e));
     if (!found) return claimed;
   }
 

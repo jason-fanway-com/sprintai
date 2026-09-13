@@ -2,10 +2,11 @@
 // full incident background. These exercise the REAL exported function, not a
 // hand-copied mirror (same discipline as guard9/guard13's test files).
 
-import { assert, assertFalse } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertFalse } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   isExplicitCheckoutIntent,
   shouldRedirectNameAskToCheckoutGate,
+  renderGuard23Redirect,
   CHECKOUT_READY_QUESTION_RE,
   PICKUP_NAME_QUESTION_RE,
   FINAL_CONFIRM_QUESTION_RE,
@@ -223,4 +224,210 @@ Deno.test("GUARD 23: gate does NOT fire on a reply that makes no name-ask", () =
     "Anything else, or ready to check out?",
     false, false, false,
   ));
+});
+
+// ── Defects 1 & 2 (live, conv v430, Vito's, 2026-09-13): GUARD 23's redirect
+//    used to discard the ENTIRE reply, including any legitimate item-
+//    confirmation and upsell-offer content, whenever it fired. The fix
+//    (renderGuard23Redirect) must preserve everything except the offending
+//    name-ask/confirm sentence. ──────────────────────────────────────────────
+
+Deno.test("renderGuard23Redirect: preserves item-confirmation content, strips only the name-ask sentence", () => {
+  const out = renderGuard23Redirect("Got it, swapped to pepperoni! Putting this in for Jason, right?", 1);
+  assert(out.includes("swapped to pepperoni"), `expected item-confirmation to survive, got: ${out}`);
+  assert(!/putting this in for jason/i.test(out), `expected name-ask sentence to be removed, got: ${out}`);
+  assert(out.includes("Anything else, or ready to check out?"));
+});
+
+Deno.test("renderGuard23Redirect: preserves item-confirmation AND an upsell offer riding in the same reply", () => {
+  const out = renderGuard23Redirect(
+    "Got it — Pepperoni - Large (16\") added! Want to add a Coke to that? What's your name for the order?",
+    1,
+  );
+  assert(out.includes("Pepperoni - Large (16\") added"), `expected item name to survive, got: ${out}`);
+  assert(/want to add a coke/i.test(out), `expected upsell offer to survive, got: ${out}`);
+  assert(!/what'?s your name/i.test(out), `expected name-ask sentence to be removed, got: ${out}`);
+  assert(out.includes("Anything else, or ready to check out?"));
+});
+
+Deno.test("renderGuard23Redirect: cold name-ask embedded mid-reply is also stripped, not just name-confirm", () => {
+  const out = renderGuard23Redirect("Awesome, added the Fries! What's your name for the order?", 1);
+  assert(out.includes("Awesome, added the Fries"), `expected content before the name-ask to survive, got: ${out}`);
+  assertFalse(/what'?s your name/i.test(out));
+});
+
+Deno.test("renderGuard23Redirect: falls back to the generic cart-count tally only when the WHOLE reply was the name-ask/confirm", () => {
+  assertEquals(
+    renderGuard23Redirect("Putting this in for Jason, right?", 1),
+    "You've got 1 item in your cart. Anything else, or ready to check out?",
+  );
+  assertEquals(
+    renderGuard23Redirect("What's your name for the order?", 2),
+    "You've got 2 items in your cart. Anything else, or ready to check out?",
+  );
+});
+
+// ── Defect 4 (live, conv v430, Vito's, 2026-09-13): "yes im ready to check
+//    out" authorized nothing — BARE_AFFIRMATIVE_RE requires the message to be
+//    NOTHING but the bare word, EXPLICIT_CHECKOUT_PHRASE_RE requires the
+//    phrase to BE the whole message. Neither shape matches trailing/leading
+//    text around real checkout language. GUARD 23 re-asked the identical
+//    question, ignoring unambiguous customer intent. PO-mandated: a MATRIX,
+//    not a single case — every row below asserts isExplicitCheckoutIntent's
+//    actual output for that exact string. ───────────────────────────────────
+
+// Positive: a bare affirmative alone — context-dependent on what was asked
+// (existing, unchanged behavior; not part of the broadened matching).
+Deno.test("matrix: bare affirmatives alone only authorize when answering the ready-to-checkout question", () => {
+  for (const word of ["yes", "yeah", "yep", "sure"]) {
+    assert(isExplicitCheckoutIntent(word, READY_Q, false), `"${word}" answering the ready-to-checkout question should authorize`);
+    assertFalse(isExplicitCheckoutIntent(word, ANYTHING_ELSE_ONLY, false), `"${word}" answering a plain "anything else?" should NOT authorize`);
+    assertFalse(isExplicitCheckoutIntent(word, null, false), `"${word}" with no prior question should NOT authorize`);
+  }
+});
+
+// Positive: affirmative word + explicit checkout phrase combined, anywhere in
+// the message, regardless of what the bot last asked (the live defect shape).
+Deno.test("matrix: affirmative + explicit checkout phrase combined authorizes on the FIRST attempt, regardless of prior question", () => {
+  const combos = [
+    "yes im ready to check out",
+    "yes ready to checkout",
+    "yeah, checkout",
+    "yeah let's check out",
+    "yes ready to checkout please",
+    "yep that's it",
+    "ok send the link",
+    "Yes, I'm ready to check out!",
+    "yup, that's all",
+  ];
+  for (const msg of combos) {
+    assert(isExplicitCheckoutIntent(msg, ANYTHING_ELSE_ONLY, false), `expected "${msg}" to authorize checkout (wrong prior question)`);
+    assert(isExplicitCheckoutIntent(msg, null, false), `expected "${msg}" to authorize checkout (no prior question)`);
+    assert(isExplicitCheckoutIntent(msg, "Delivery again to 12 Main St?", false), `expected "${msg}" to authorize checkout (unrelated prior question)`);
+  }
+});
+
+// Positive: explicit phrases alone, unaccompanied by any affirmative word —
+// already-covered ground, kept in the matrix for completeness per the PO ask.
+Deno.test("matrix: explicit checkout phrases alone authorize regardless of what was asked", () => {
+  for (const phrase of ["checkout", "that's it", "ready to check out", "send the link", "done", "i'm done"]) {
+    assert(isExplicitCheckoutIntent(phrase, null, false), `expected "${phrase}" alone to authorize`);
+  }
+});
+
+// Negative (Incident A shape, must NOT regress): a bare "yes" answering an
+// UNRELATED question, with competing intent in the same turn, never
+// authorizes — even now that combined affirmative+checkout matching exists,
+// because there is no checkout-phrase substring in this message at all.
+Deno.test("matrix: bare 'yes' with competing intent and no checkout language never authorizes (Incident A, C4 money-bug class)", () => {
+  const msg = "yes to delivery but I want pepperoni this time";
+  assertFalse(isExplicitCheckoutIntent(msg, "Delivery again to 12 Main St?", true));
+  assertFalse(isExplicitCheckoutIntent(msg, READY_Q, true));
+  assertFalse(isExplicitCheckoutIntent(msg, NAME_CONFIRM, true));
+});
+
+// Negative: a bare "yes" answering an unrelated question with NO competing
+// intent computed by the caller still must not authorize on its own — it has
+// no checkout language and isn't answering a recognized question.
+Deno.test("matrix: bare 'yes' answering an unrelated question does not authorize even without competing intent", () => {
+  assertFalse(isExplicitCheckoutIntent("yes", "Delivery again to 12 Main St?", false));
+});
+
+// Negative: message merely CONTAINS an item name or unrelated content
+// alongside "yes", with no real checkout language — must not authorize.
+Deno.test("matrix: 'yes' plus an item name or unrelated content, with no checkout language, does not authorize", () => {
+  for (const msg of ["yes pepperoni", "yes, add a coke too", "yes I'll take the fries", "sure, extra cheese please"]) {
+    assertFalse(isExplicitCheckoutIntent(msg, ANYTHING_ELSE_ONLY, false), `expected "${msg}" to NOT authorize (no checkout language)`);
+    assertFalse(isExplicitCheckoutIntent(msg, null, false), `expected "${msg}" to NOT authorize (no checkout language, no prior question)`);
+  }
+});
+
+// Negative: checkout-language word embedded in an unrelated sentence, with an
+// affirmative word elsewhere, must still not be misread as the combo —
+// "check out" here is about the menu, not the order.
+Deno.test("matrix: affirmative word plus an unrelated 'check out' (about the menu, not the order) still does not authorize via the combo path alone when it also carries competing intent", () => {
+  assertFalse(isExplicitCheckoutIntent("yes I'll check out the menu but add pepperoni too", READY_Q, true));
+});
+
+// ── Regression (2026-09-13, Melvin adversarial pass): the AFFIRMATIVE_LEAD_IN_RE
+//    + CHECKOUT_PHRASE_SUFFIX_RE combo check used to run BEFORE the
+//    hasCompetingIntentThisTurn gate, so it authorized checkout whenever
+//    competing intent happened to be named BEFORE the trailing checkout
+//    phrase — even though the identical competing intent named AFTER the
+//    checkout phrase was already correctly blocked. Word order must never
+//    change whether competing intent blocks this combo path. ───────────────
+
+Deno.test("matrix: competing intent blocks the checkout-phrase combo regardless of word order", () => {
+  // Item named AFTER the checkout phrase — already worked before this fix.
+  assertFalse(isExplicitCheckoutIntent("yes, ready to checkout, and also add fries", READY_Q, true));
+  // Item named BEFORE the checkout phrase — the regression Melvin found.
+  assertFalse(isExplicitCheckoutIntent("yes add fries and ready to checkout", READY_Q, true));
+  // Item named in the MIDDLE, checkout phrase still trailing.
+  assertFalse(isExplicitCheckoutIntent("yes, add fries, ready to checkout", READY_Q, true));
+  // Multiple checkout phrases in the same message — competing intent still
+  // must win regardless of how many checkout-shaped phrases surround it.
+  assertFalse(isExplicitCheckoutIntent("yes checkout, add fries, ready to checkout", READY_Q, true));
+});
+
+Deno.test("matrix: the checkout-phrase combo still authorizes when there is genuinely no competing intent, in any order", () => {
+  assert(isExplicitCheckoutIntent("yes, ready to checkout", READY_Q, false));
+  assert(isExplicitCheckoutIntent("yes I'm ready to check out", READY_Q, false));
+});
+
+// ── Regression (2026-09-13, third-party independent verification): the
+//    AFFIRMATIVE_LEAD_IN_RE + CHECKOUT_PHRASE_SUFFIX_RE combo was blind to
+//    leading negation — "yeah, I'm not ready to check out" satisfied both
+//    halves and authorized checkout, reading an explicit DECLINE as intent
+//    to close. Fixed via hasNegatedCheckoutClause: a negation cue in the
+//    same clause as the matched checkout phrase blocks the combo. ─────────
+
+Deno.test("matrix: a negated decline is never read as checkout intent via the combo path", () => {
+  const declines = [
+    "yeah, I'm not ready to check out",
+    "sure, maybe later — not ready to check out",
+    "correct, I don't want to check out",
+    "nah, not ready to checkout",
+  ];
+  for (const msg of declines) {
+    assertFalse(isExplicitCheckoutIntent(msg, READY_Q, false), `expected "${msg}" to NOT authorize (negated decline)`);
+    assertFalse(isExplicitCheckoutIntent(msg, ANYTHING_ELSE_ONLY, false), `expected "${msg}" to NOT authorize (negated decline)`);
+    assertFalse(isExplicitCheckoutIntent(msg, null, false), `expected "${msg}" to NOT authorize (negated decline)`);
+  }
+});
+
+// "...not ready to check out yet" already returned false before this fix,
+// but only by accident: "yet" breaks CHECKOUT_PHRASE_SUFFIX_RE's end anchor,
+// not because of any negation-awareness. Kept as a sanity check that the
+// real fix doesn't change this pre-existing (if accidental) correct result.
+Deno.test("matrix: 'not ready to check out yet' still does not authorize (pre-existing, now for the right reason too)", () => {
+  assertFalse(isExplicitCheckoutIntent("not ready to check out yet", READY_Q, false));
+});
+
+// "not yet, but almost ready to check out" carries no affirmative lead-in
+// word at all (no yes/yeah/yea/yep/yup/sure/ok/okay/correct), so it never
+// reaches the combo path in the first place — it's genuinely ambiguous
+// hedging, not a case the combo path was ever meant to authorize. Included
+// to confirm the negation fix doesn't accidentally start authorizing it.
+Deno.test("matrix: 'not yet, but almost ready to check out' does not authorize (no affirmative lead-in, genuinely hedging)", () => {
+  assertFalse(isExplicitCheckoutIntent("not yet, but almost ready to check out", READY_Q, false));
+});
+
+// The false-positive-avoidance case from the spec ("no, not the pepperoni,
+// add the sausage, ready to check out") never actually reaches the combo
+// path at all: it has no affirmative lead-in word (no yes/yeah/yea/yep/yup/
+// sure/ok/okay/correct — "no" is not one of those), so AFFIRMATIVE_LEAD_IN_RE
+// fails regardless of the negation fix, and it falls through to hasCompetingIntentThisTurn/
+// bare-affirmative below. The adapted version here swaps in "yes" so the
+// combo path is genuinely exercised, to prove an early decline-shaped "not"
+// belonging to an EARLIER clause (about a topping) does not block a
+// genuinely trailing, unnegated checkout phrase in a LATER clause.
+// hasCompetingIntentThisTurn is passed as false specifically to isolate the
+// negation-clause logic under test — in production this turn would also
+// carry real competing intent (naming items) and would be blocked by that
+// gate regardless, same as the other word-order tests above.
+Deno.test("matrix: an early negation about an item does not block genuinely trailing, unnegated checkout intent", () => {
+  assert(isExplicitCheckoutIntent("yes, not the pepperoni, add the sausage, ready to check out", READY_Q, false));
+  // The literal spec example itself: no affirmative lead-in word at all, so
+  // it never reaches the combo path — still correctly does not authorize.
+  assertFalse(isExplicitCheckoutIntent("no, not the pepperoni, add the sausage, ready to check out", READY_Q, false));
 });
