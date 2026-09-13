@@ -31,7 +31,18 @@ const NOT_A_PERSON =
 // Verbs that assert an add. "put" is deliberately NOT here on its own: bare
 // "put" matches scheduling narration ("I'll put your order in for Pickup"),
 // which is not a cart claim. Only first-person "I put" / "I've put" qualify.
-const ADD_VERB = "(?:i['\"\u2019]?ve\\s+added|i\\s+added|added|i['\"\u2019]?ve\\s+put|i\\s+put|threw|tossed)";
+// Same reasoning extends "putting" - only "I'm putting" / "I am putting"
+// qualify, never bare "putting" ("I'll be putting your order in").
+//
+// 2026-09-13 P0: live reply said "Got it, adding a large plain cheese pizza"
+// with an unchanged cart. Every verb above was past tense, so present-
+// progressive "adding" matched nothing and the phantom add shipped. "added"
+// and "threw"/"tossed" are safe bare (no scheduling-narration collision), so
+// their progressive forms ("adding", "throwing", "tossing") are bare too.
+const ADD_VERB =
+  "(?:i['\"\u2019]?ve\\s+added|i\\s+added|added|i['\"\u2019]?m\\s+adding|i\\s+am\\s+adding|adding|" +
+  "i['\"\u2019]?ve\\s+put|i\\s+put|i['\"\u2019]?m\\s+putting|i\\s+am\\s+putting|" +
+  "threw|tossed|throwing|tossing)";
 const ITEM = "([\\w][\\w\\s&'()/-]{0,60}?)";
 
 // (1a) Explicit cart phrasing, or a recipient named by relationship/pronoun.
@@ -61,7 +72,8 @@ const ADDRESSED_BY_NAME = new RegExp(
 //     let the pattern truncate at a clause boundary and fire on references to
 //     earlier adds ("Earlier I added the Greek salad, want me to remove it?").
 const BARE = new RegExp(
-  `\\b(?:i['"\u2019]?ve\\s+added|i\\s+added|added|i['"\u2019]?ve\\s+put|i\\s+put)\\s+(?:a|an|the|your|some)\\s+${ITEM}\\s*(?:[.!?\\n(]|$)`,
+  `\\b(?:i['"\u2019]?ve\\s+added|i\\s+added|added|i['"\u2019]?m\\s+adding|i\\s+am\\s+adding|adding|` +
+    `i['"\u2019]?ve\\s+put|i\\s+put|i['"\u2019]?m\\s+putting|i\\s+am\\s+putting)\\s+(?:a|an|the|your|some)\\s+${ITEM}\\s*(?:[.!?\\n(]|$)`,
   "i",
 );
 

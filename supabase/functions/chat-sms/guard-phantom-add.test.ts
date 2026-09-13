@@ -142,3 +142,50 @@ Deno.test("SEV-1 review: capitalised verbs still caught (no /i regression)", () 
     assertEquals(claimsAddedWithoutMutation(r, cart, cart), true, r);
   }
 });
+
+// ── 2026-09-13 P0: present-progressive "adding" was invisible to every guard
+// regex, which only knew past tense ("added"/"threw"/"tossed"). Live reply
+// listed a phantom third item and a total matching the real 2-item cart.
+// Conversation 2ba731f7, Vito's, 2026-09-13 19:07:20Z.
+
+const PRESENT_PROGRESSIVE_REPRO =
+  "Got it, adding a large plain cheese pizza. I've got your items: large cheese " +
+  "pepperoni pizza, french fries, and a large plain cheese pizza. Confirm? " +
+  "Subtotal: $25.99  Service fee: $0.99  Total: $26.98";
+
+Deno.test("P0: present-progressive 'adding' phantom add is caught (2ba731f7)", () => {
+  const cart = [
+    { name: "Large Cheese Pizza (Pepperoni)", price_cents: 2100 },
+    { name: "French Fries", price_cents: 499 },
+  ];
+  assertEquals(claimsAddedWithoutMutation(PRESENT_PROGRESSIVE_REPRO, cart, cart), true);
+});
+
+Deno.test("present-progressive: 'I'm adding' / 'I am adding' bare claims are caught", () => {
+  assertEquals(claimsAddedWithoutMutation("I'm adding a large plain pizza!", [], []), true);
+  assertEquals(claimsAddedWithoutMutation("I am adding a garlic knot to your cart.", [], []), true);
+});
+
+Deno.test("present-progressive: 'throwing'/'tossing' bare claims are caught", () => {
+  assertEquals(claimsAddedWithoutMutation("Throwing in a large pepperoni for you!", [], []), true);
+  assertEquals(claimsAddedWithoutMutation("Tossing a garlic knot in your cart.", [], []), true);
+});
+
+Deno.test("present-progressive: fee/note narration still excluded, no regression", () => {
+  const cart = [{ name: "Cheese - Large" }];
+  for (const r of [
+    "I'm adding a $2 tip for the driver.",
+    "I'm adding a note to your order for the kitchen.",
+    "Adding the service fee at checkout.",
+  ]) {
+    assertEquals(claimsAddedWithoutMutation(r, cart, cart), false, r);
+  }
+});
+
+Deno.test("present-progressive: bare 'putting' scheduling narration is not a claim", () => {
+  const cart = [{ name: "Cheese - Large" }];
+  assertEquals(
+    claimsAddedWithoutMutation("I'll be putting your order in for Pickup at 6.", cart, cart),
+    false,
+  );
+});
