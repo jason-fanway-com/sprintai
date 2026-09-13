@@ -44,6 +44,48 @@ Deno.test("claimsItemInCart: a fabricated item name not in the cart is flagged",
   assertEquals(claimsItemInCart("A Meatball Sub is already in your cart", cart), "A Meatball Sub");
 });
 
+// ── Defect 3 (live, conv v430, Vito's, 2026-09-13): GUARD 1c false-positive
+//    hallucination fallback on a truthful decline reply. Vito's "Cheese -
+//    Large (16")" base row is reused for every topping (see
+//    guard20-regular-offer-confirmation.ts) — swapping to Pepperoni changes
+//    only options.Toppings, never the base `name`. A reply that (correctly)
+//    calls the item by its distinguishing topping alone used to fail both
+//    the substring check and the 3-stem-overlap fallback. ───────────────────
+
+Deno.test("claimsItemInCart: naming a cart item by its topping alone (base name unchanged) is not flagged", () => {
+  const cart: CartLine[] = [{ name: "Cheese - Large (16\")", options: { Toppings: ["Pepperoni"] } }];
+  assertEquals(claimsItemInCart("Your Pepperoni pizza is already in your cart", cart), null);
+  assertEquals(claimsItemInCart("No worries — the Pepperoni is in your cart. Ready when you are!", cart), null);
+});
+
+Deno.test("claimsItemInCart: a short/generic option value does not loosen the match for an unrelated fabricated claim", () => {
+  const cart: CartLine[] = [{ name: "Cheese - Large (16\")", options: { Size: ["16\""] } }];
+  assertEquals(claimsItemInCart("A Meatball Sub is already in your cart", cart), "A Meatball Sub");
+});
+
+// ── Regression (2026-09-13, Melvin adversarial pass on defect 3's fix): the
+//    standalone-option-value match must not let a claim naming a DIFFERENT,
+//    LARGER compound item ("Pepperoni Sub") slip through just because it
+//    contains the option word ("Pepperoni") as a substring. ────────────────
+
+Deno.test("claimsItemInCart: naming the topping alone still passes (defect 3 stays fixed)", () => {
+  const cart: CartLine[] = [{ name: "Cheese - Large (16\")", options: { Toppings: ["Pepperoni"] } }];
+  assertEquals(claimsItemInCart("Your Pepperoni pizza is already in your cart", cart), null);
+  assertEquals(claimsItemInCart("No worries — the Pepperoni is in your cart. Ready when you are!", cart), null);
+});
+
+Deno.test("claimsItemInCart: naming a different compound item that merely contains the topping word is flagged", () => {
+  const cart: CartLine[] = [{ name: "Cheese - Large (16\")", options: { Toppings: ["Pepperoni"] } }];
+  assertEquals(
+    claimsItemInCart("A Pepperoni Sub is already in your cart", cart),
+    "A Pepperoni Sub",
+  );
+  assertEquals(
+    claimsItemInCart("The Pepperoni Roll is already in your cart", cart),
+    "The Pepperoni Roll",
+  );
+});
+
 Deno.test("replyAcknowledgesCart: generic cart language is coherent", () => {
   assertEquals(replyAcknowledgesCart("Got it, anything else for your cart?", []), true);
 });

@@ -88,7 +88,7 @@ import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } fro
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE, CART_SUMMARY_MENTION_RE } from "./cart-summary-intent-20260909.ts";
-import { isExplicitCheckoutIntent, shouldRedirectNameAskToCheckoutGate } from "./checkout-intent-gate-20260913.ts";
+import { isExplicitCheckoutIntent, shouldRedirectNameAskToCheckoutGate, renderGuard23Redirect } from "./checkout-intent-gate-20260913.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, upsertOrderFulfillmentMemory, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
@@ -9535,8 +9535,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // (checkout_intent_confirmed_at, migration 139). Redirect to the
         // ready-to-checkout question instead — the ONE question this reply
         // may carry, never combined with the name question in the same turn.
-        console.warn(`[chat-sms] GUARD 23 (name-ask before checkout-intent confirmed) tripped (conv=${conversation.id}). Redirecting to the ready-to-checkout question.`);
-        reply = `You've got ${guardCart.length} item${guardCart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`;
+        console.warn(`[chat-sms] GUARD 23 (name-ask before checkout-intent confirmed) tripped (conv=${conversation.id}). Redirecting to the ready-to-checkout question, preserving any item-confirmation/upsell content.`);
+        reply = renderGuard23Redirect(reply, guardCart.length);
       } else if (!hasPickupName && isAskingForPickupName(reply)) {
         // FIX (2026-09-10, Jason — reported 2026-09-08 and twice more on
         // 2026-09-10): the itemized recap appended here landed in the SAME
