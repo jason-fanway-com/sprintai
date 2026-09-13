@@ -2201,3 +2201,66 @@ It was never wired in; the live item-identity path is `add_item`'s
 `menu_item_id` plus `phrase-split.ts` + `ask-plan-engine.ts`, both built
 after `resolver.ts`. This is a deliberate removal of dead code, not a loss
 of functionality.
+
+## Deploy verification: `DEPLOY_SHA` stamp — 2026-09-12
+
+`scripts/deploy-function.sh` (via `6febc702`) now proves a deploy landed the
+commit you think it did, instead of a heuristic string-comparison that could
+never be sound against a transpiled bundle. Mechanism: it copies
+`supabase/` to a temp dir, prepends `// DEPLOY_SHA: <full HEAD sha>` to only
+the copied entrypoint (never the working-tree file), deploys from that copy,
+then downloads the live artifact and greps it for the exact stamp string.
+Missing stamp = hard fail; a byte-identical redeploy still short-circuits
+correctly since the stamp is deterministic per-SHA.
+
+To check what commit is actually live for any function, without deploying
+anything:
+
+```bash
+source ~/.openclaw-sprintai/.secrets
+curl -s "https://api.supabase.com/v1/projects/rvdqfxtrskxekfkqnegx/functions/<fn>/body" \
+  -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" -o /tmp/deployed.eszip
+strings /tmp/deployed.eszip | grep -m1 "DEPLOY_SHA"
+```
+
+Only functions deployed via `deploy-function.sh` since `6febc702` carry this
+stamp. As of 2026-09-12, `chat-sms` has one (stamped `59833e02`);
+`chat-sms-mtest`, `parse-menu-pdf`, and `stripe-webhook` do not, because they
+were last deployed before this mechanism existed or without this script — for
+those, function version + `updated_at` timestamp vs. `git log -- <path>` is
+the best available signal, not a content proof.
+
+## Deploy-gate schema pre-check — 2026-09-12
+
+`deploy-function.sh` now queries `information_schema.columns` via the
+Supabase Management API for a hardcoded list of (table, column) pairs the
+function depends on, and refuses to deploy if any is missing — built after a
+migration failing to apply before a deploy happened three times in one week
+(`7426344d`). Watch out if adding a new dependency: the check greps the
+Management API's response for the literal `"[]"` empty-array string to
+detect a missing column, not for the string `"1"` — a same-day bug
+(`74a8734f`) shipped that first version broken (the API returns bare
+unquoted JSON numbers, not quoted strings, so `"1"` never matched and every
+deploy failed closed).
+
+## Turn reconciler — replaces GUARD 9/13/20/21 for cart-growth aggregation (NOT YET LIVE) — 2026-09-12
+
+`supabase/functions/chat-sms/turn-reconciler.ts` (branch
+`fix/turn-reconciler-20260912`, commit `b7bd0404`) is a single pure function,
+`reconcileAddProposals(preTurnCart, loopFinalCart, proposals[],
+customerText)`, that decides add/merge/no-op/drop for an entire turn's
+proposals together, replacing four guards that each validated one tool call
+at a time and could not see when several individually-valid calls summed to
+the wrong cart (defect class C4 in `docs/DEFECT-CLASSES.md`). Confirmed by
+diff: GUARD 9/13/20/21's call sites and `computeGuardN` imports are actually
+deleted from `index.ts`, not left running alongside the new code.
+
+**As of 2026-09-12 this is on an unmerged branch and not deployed.** The
+commit's own message says not to merge or deploy until an acceptance matrix
+(script `scripts/tmp-turn-reconciler-acceptance-matrix-20260912.ts`, still
+untracked) runs clean against staging. `main` is currently one revert behind
+this (at `59833e02`), meaning defect class C4 has no live mitigation at all
+right now — two earlier per-call-site attempts at fixing it
+(`2d6d55a1`, `f471525a`) were each committed and then reverted the same day.
+Before claiming C4 is fixed in production, check the `DEPLOY_SHA` stamp on
+the live `chat-sms` artifact (see above) — do not infer it from `git log`.

@@ -1126,6 +1126,47 @@ further changes after the halt was never independently reconfirmed here.
   confirm `chat-sms` version with `check-switches.sh` / `deploy-function.sh`
   before assuming the backstop fix is live.
 
+## Update — 2026-09-12 22:18 EDT: defect class C4 — mitigations shipped and deployed, but the real fix is not
+
+Full detail in `docs/DAILY.md`'s 2026-09-12 entry; RUNBOOK has the
+turn-reconciler and `DEPLOY_SHA` mechanism entries. Summary of what's
+actually live vs. committed, confirmed by downloading and grepping the
+deployed artifact (not inferred from git history):
+
+- **`chat-sms` v412 is live and its `DEPLOY_SHA` stamp reads `59833e02`** —
+  that is the second of two same-day reverts of attempted C4 fixes. Today's
+  other fixes ARE in this deploy (GUARD 1d/1f P0 fix, GUARD 21, the
+  show-my-order fix, the C1 option-group-rename sweep, TODAY'S HOURS,
+  returning-customer delivery offer's submission-time write). **Defect class
+  C4 itself (cart-growth aggregation from multiple valid same-turn add
+  proposals) has no live mitigation right now** — two per-call-site patch
+  attempts (`2d6d55a1`, `f471525a`) were each committed and reverted the
+  same day, and `main` currently sits at the second revert.
+- **The real fix — `turn-reconciler.ts`, replacing GUARD 9/13/20/21 —
+  exists only on unmerged branch `fix/turn-reconciler-20260912`
+  (`b7bd0404`).** Its own commit message says not to merge or deploy until
+  an acceptance matrix runs clean against staging; that script exists
+  (`scripts/tmp-turn-reconciler-acceptance-matrix-20260912.ts`) but is
+  untracked and there's no evidence it has been run. The branch's test
+  suite also has 4 known failures (stale `guard9`/`guard13` tests that grep
+  `index.ts` for call sites this commit deleted) that were not cleaned up
+  in the same commit.
+- **The returning-customer delivery-memory feature (`8cb73036` and
+  follow-ups) is half-deployed.** Its submission-time write path is live in
+  `chat-sms` v412. Its payment-time write path and a race-condition fix live
+  in `stripe-webhook`, which is still v92 from 2026-09-10 — none of today's
+  `stripe-webhook` changes are deployed. `chat-sms-mtest` (v39, 2026-09-08)
+  and `parse-menu-pdf` (v114, 2026-09-05) are similarly stale against
+  today's commits to those functions.
+- Migrations 135 (`customer_delivery_memory`) and 136
+  (`order_carts_delivery_offer_made`) are both confirmed **applied** to
+  production by direct query — not blocked on anything above.
+- **Before doing anything with C4 or the turn reconciler**: check out
+  `fix/turn-reconciler-20260912`, run the acceptance matrix script, fix the
+  4 stale test failures, then follow the normal `deploy-function.sh` path
+  and confirm the `DEPLOY_SHA` moves to `b7bd0404` (or whatever it's
+  rebased to) before telling anyone C4 is closed.
+
 ---
 
 ## Quickstart for development

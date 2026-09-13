@@ -1529,3 +1529,301 @@ only checked the first one.
   entry), but confirmed **applied** directly — `test_runs.trigger_type`,
   `change_set_ref`, `initiated_by` all exist and are queryable in
   production.
+
+## 2026-09-12
+
+### Headline: defect class C4 fixed on paper three times; the real fix is not in production
+
+"C4" (name coined and registered today, `docs/DEFECT-CLASSES.md`) is: the
+model sees a confirmation-shaped word ("yes", "pickup", a bare name) anywhere
+in a turn and independently decides to add/re-add a cart item — sometimes
+from more than one code path in the same turn. Each individual tool call is
+individually valid; the sum is wrong (three legitimate "accept" calls → three
+pizzas; a $42 charge for one $21 pizza). No per-call validator catches this,
+because there is nothing wrong with any single call in isolation.
+
+Three attempts shipped today, on three different branches:
+
+1. `2d6d55a1` (19:27, on branch `c1-c4-fix-20260912`) — patched four call
+   sites (name-confirm→submit, checkout-completion, plain-name→submit) with a
+   shared `hasNonConfirmationContent` check. **Reverted** by `65416f7c`
+   (19:42). The revert commit itself gives no reason — it is a bare `git
+   revert` with no body. The next attempt's message says the sweep "missed a
+   fourth instance," which is the closest thing to a stated cause I could
+   find in the repo.
+2. `f471525a` (20:24, on the same branch) — cherry-picked attempt 1's fix,
+   added the fourth site (GUARD 9 itself was deleting a legitimate French
+   Fries add), plus an unrelated cart-line identity fix (C1). Its own commit
+   message admits an adjacent bug ("yep but drop the pepperoni") surfaced
+   during its acceptance run and was **not fixed**, filed as out-of-scope.
+   **Reverted** by `59833e02` (20:51) — again a bare revert, no stated
+   reason. **`main` currently sits at this revert** — as of right now, `main`
+   has none of today's C4 mitigations; the underlying bug is unfixed there.
+3. `b7bd0404` (22:18, branch `fix/turn-reconciler-20260912`, current HEAD)
+   — abandoned per-call patching entirely. New file `turn-reconciler.ts`:
+   one pure function, `reconcileAddProposals(preTurnCart, loopFinalCart,
+   proposals[], customerText)`, that owns the add/merge/no-op/drop decision
+   for a whole turn's proposals together, instead of four separate guards
+   each reacting to one call at a time. Verified by direct diff inspection
+   (not just the commit message): GUARD 9/13/20/21's `computeGuardN(...)`
+   call sites and their imports are actually deleted from `index.ts`, not
+   left alongside the new code. 22/22 new unit tests pass (reconfirmed
+   directly, `deno test`).
+
+**This is not deployed, and not merged.** The commit message for `b7bd0404`
+says so itself: *"Do not merge or deploy until full acceptance matrix (8
+cases + C4 + Vito canary + Proof suite) runs clean against a staging
+deploy."* That acceptance matrix script
+(`scripts/tmp-turn-reconciler-acceptance-matrix-20260912.ts`) exists but is
+untracked (`git status` shows it as `??`) — there is no evidence it has been
+run. Directly confirmed against the live deployed artifact: `chat-sms` is at
+version 412, and the deployed bundle's `DEPLOY_SHA` stamp reads
+`59833e02...` — the second revert. **Production chat-sms currently has none
+of today's three C4 attempts in it; whatever GUARD 9/13/20/21 looked like
+before today is what's live.** Running the full `chat-sms` test suite
+against the `fix/turn-reconciler-20260912` branch (836 passed / 4 failed)
+turned up one more concrete fact: the four failures are `guard9-*.test.ts`
+and `guard13-*.test.ts` assertions that literally grep `index.ts` for the
+GUARD 9/13 call sites the reconciler commit deleted — those two test files
+were not updated or removed when the guards were retired, so the branch as
+it stands has known-broken tests, separate from the acceptance-matrix gap
+above.
+
+### Returning-customer delivery memory (feature, partially live)
+
+New capability: a customer who previously ordered delivery or pickup gets
+offered "delivery again to [address]?" / "pickup again?" instead of being
+asked cold, and a known customer gets a "putting this in for [name], right?"
+confirmation at checkout instead of being asked their name again.
+
+- `8cb73036` (12:24) built it first with the write happening only at
+  **payment** time, inside `stripe-webhook`'s `upsertCustomerProfile`.
+  `b1aa8b3a` (16:51) found that essentially no carts in practice reach
+  `payment_status='paid'` before the conversation ends, so that writer was
+  dead code for this feature's purpose, and added a second, dedicated writer
+  (`upsertOrderFulfillmentMemory`) called from `submit_order` at
+  **order-submission** time instead — deliberately not reusing
+  `upsertCustomerProfile`, which also increments order-count/spend/favorites
+  and must stay paid-order-only. `1a1f7780` (18:14) then race-proofed both
+  writers against a delayed webhook clobbering a newer order's data, keying
+  off the order's own `created_at` instead of wall-clock write time.
+  `44b65abe` (14:13, chronologically first commit of this cluster) backfills
+  the two new columns for existing customers from order history. Net: the
+  submission-time write is the primary path today; the payment-time write is
+  a secondary reconciler, and the two are now mutually race-safe.
+- `90b7452f` (15:11) fixed the offer's trigger window: it originally only
+  fired on the conversation's literal first message, so any customer who
+  opened with "hi" before ordering never saw it. Now it fires on whichever
+  turn `order_type` is still unset, one-shot per cart via a new persisted
+  column.
+- `0841b9be`, `11115a0f`, `082d9aff` (16:39–16:45) are three follow-on
+  patches making the generic ORDER TYPE gate and the DELIVERY AVAILABLE gate
+  stand down while this specific offer is active, so the two systems don't
+  ask the same question two different ways in the same reply.
+- `a4a5dcc4` (12:36) makes the pickup-downgrade case (offering delivery to a
+  returning customer when delivery is currently off) state an honest reason
+  ("we're not doing delivery right now") instead of a generic non-answer.
+- **Migrations**: `135_customer_delivery_memory.sql`
+  (`customers.last_order_type`, `customers.last_delivery_address`) and
+  `136_order_carts_delivery_offer_made.sql`
+  (`order_carts.delivery_offer_made_at`) are both **confirmed applied** to
+  production — checked directly with a live `select` against both tables,
+  both columns exist and are queryable (not inferred from `supabase
+  migration list`, which is known to show blank/drifted status for recent
+  migrations independent of whether they're actually applied).
+- **Deploy status is mixed and matters here**: `chat-sms` v412 (live) has
+  the submission-time writer (`b1aa8b3a`), the trigger-window fix, and the
+  gate suppressions — that half of the feature is live. `stripe-webhook` is
+  still **v92, deployed 2026-09-10**, before any of today's commits — the
+  payment-time writer (`8cb73036`'s original code) and the race-safety fix
+  (`1a1f7780`) are **not deployed**. Since the submission-time path is now
+  the primary one, the feature mostly works despite this, but the secondary
+  reconciler path does not exist in production yet.
+
+### Other P0 money-path fixes today (deployed, in `chat-sms` v412)
+
+- `43f34471` (17:01) — concrete bug: customer says "Yes delivery. But I
+  wanted a pepperoni pizza." The ordering loop correctly adds the pizza, but
+  GUARD 1d/1f compared the model's reply against `cartItems`, an array
+  already mutated in place earlier in the same turn — so the guard always
+  saw the post-add state and couldn't tell a real add from a no-op. It
+  overwrote the correct "pepperoni pizza added" reply with "your cart is
+  empty," the customer believed the order failed and re-sent it, and the
+  charge doubled to $42 for one pizza. Fixed by comparing against the
+  untouched pre-turn snapshot instead (the same snapshot GUARD 9 already
+  used correctly).
+- `d9569e46` (17:14) — GUARD 21, a new backstop: reverts cart growth on any
+  turn where the customer's message names no item and states no quantity at
+  all (narrower and more general than the specific bugs above).
+- `1033e851` (17:37) — three bundled fixes: a deterministic path for
+  accepting a previously-offered item with a modifier in the same message,
+  collapsing the greeting to one question instead of two, and an honest
+  "your cart is empty" fallback instead of a fabricated one.
+- `70af6255` + `866a4e65` (19:04–19:12) — concrete bug (conv `d79c1d98`):
+  once a Stripe payment link existed, "Show me the order" was
+  structurally unanswerable — checkout-phase code replied with a canned
+  "payment link was sent" message before ever reaching the cart-summary
+  shortcut, which only ran in the `building` phase. A related bug: "Show me
+  the order. Yes it's for me" (a compound message) got read by
+  `impliesOrderConfirmation`'s bare substring match as just "yes," silently
+  firing `submit_order` and sending a payment link while dropping the read
+  request entirely. Fixed by running the cart-summary check first in every
+  phase, and gating the auto-submit paths on a narrower "does this message
+  actually just want to see the order" check. `866a4e65` adds a live
+  acceptance script against the deployed function; no committed output file
+  proves it was run and passed, only that the script exists.
+- `1687b8e3` (15:33) — C1 sweep (identity judged by name instead of a stable
+  id): audited ~10 places the ordering loop compares option-group names,
+  found 6 real breakage sites where a compiler rename would silently corrupt
+  the cart (pending-item merge, stuck disambiguation, dropped stored options
+  on `modify_item`, among others), fixed by snapshotting name→id at
+  add/modify time and falling back to that snapshot when a live name lookup
+  misses. `modifiers_json` is flagged as still having no id field — known,
+  unaddressed debt.
+- `de4aed0e` (13:17) — the "state the exact question, don't let the model
+  paraphrase" guard only stripped a paraphrase of the *choices*
+  ("rare/well done"); a paraphrase of the *question itself* ("What temp
+  would you like it cooked?" instead of the canonical wording) shipped
+  untouched. Now stripped too.
+
+### TODAY'S HOURS fix (deployed)
+
+`67bfe10c` + `3ae09769` (14:13–14:19) — the system prompt handed the model
+the shop's full seven-day hours string labeled generically "HOURS" and let
+it pick out today's row itself; on at least one live case it picked a
+weekday's closing time on a Saturday. Fixed by computing "TODAY'S HOURS"
+deterministically in code and keeping the full week as a separate "THIS
+WEEK'S HOURS" block for week-level questions. Test adds a fixed
+Saturday-timestamp regression across all three real shops' live hours data.
+
+### Deploy-gate tooling (three bugs, fixed same day)
+
+- `3155aca0` (13:47) — the artifact-verification step compared quoted
+  string literals between local source and the deployed (transpiled)
+  bundle; a regex bug let `\n` into the "literal" character class, so
+  reflowed code produced false "foreign string" hits that hard-failed two
+  genuinely correct deploys. Downgraded to advisory pending a real fix.
+- `7426344d` (16:52) — added a schema pre-check to `deploy-function.sh`:
+  before deploying, query `information_schema.columns` for the exact
+  (table, column) pairs the function depends on and abort if any is
+  missing. Built because a migration failing to apply before a deploy had
+  already happened three times this week, including today's
+  `delivery_offer_made_at`.
+- `74a8734f` (17:02) — that same pre-check was broken minutes after landing:
+  it grepped the Management API's response for the literal string `"1"` to
+  detect a present column, but the API returns bare unquoted JSON numbers
+  (`[{"?column?":1}]`), so the grep never matched, every column check
+  reported failure, and `set -e` killed the deploy on the first check. Fixed
+  by checking for the literal `"[]"` empty-array response instead.
+- `6febc702` (14:13) — replaces the whole advisory string-comparison
+  approach with a real identity check: `deploy-function.sh` now prepends a
+  `// DEPLOY_SHA: <full commit sha>` comment to a temp copy of the
+  entrypoint (never the working-tree file), deploys from that copy, then
+  downloads the live artifact and greps it for the exact stamp. Present =
+  proof this exact commit is live; absent = hard fail. This is the
+  mechanism this journal entry used above to confirm `chat-sms`'s deployed
+  code is stamped `59833e02`, not `b7bd0404` — i.e., the mechanism is
+  already load-bearing for this entry's own claims.
+
+### `docs/DEFECT-CLASSES.md` — new standing document
+
+`9ac9bd8c` (11:53) opened the register with three classes: **C1** (identity
+judged by rendered text/name instead of a stable id — five instances found
+in two days), **C2** (code shipped and reported done that was never actually
+wired or switched on — e.g. a flag flip, a CLI flag, `resolver.ts` itself),
+**C3** (trusting a broken measurement and reacting to the noise instead of
+the product — the test-suite Quality score swinging 40→90% on identical
+code from judge/harness bugs alone). **C4** (see headline above) was added
+later in the day by `2d6d55a1` (19:27) and rewritten to its final,
+aggregation-focused shape by `b7bd0404` (22:18) — the three commits
+describe C4 differently as understanding of it evolved over the day; the
+version in the file right now is the last one.
+
+### json-parsing consolidation (not on the ordering path)
+
+`9ed8272e` (18:14) — three separate hand-rolled JSON-from-LLM-output parsers
+(chat-sms's judge rubric, `parse-menu-pdf`'s truncation recovery, and a
+third inline copy) each had their own fence-stripping and brace-balancing
+logic, so a bug fixed in one never got fixed in the other two. Consolidated
+onto one shared `extractLlmJson` in `_shared/llm-json.ts`. Confirmed by
+import graph: this file is used by the judge, `parse-menu-pdf`,
+`extract-menu-items`, and `scrape-shop` — **not** by `chat-sms`,
+`chat-sms-mtest`, or `stripe-webhook`, so this has no effect on the live
+ordering conversation. `parse-menu-pdf` itself is still deployed at v114
+(2026-09-05), so even the functions this refactor does touch haven't picked
+it up yet.
+
+### Smaller fixes and test-suite hardening (committed; deploy status varies)
+
+- `dbb6290f`, `3203ca96`, `08eb807c`, `01fda3c5` — GUARD 7 backstop re-trip
+  fix, `set-compiled-engine.sh`, and `resolver.ts` deletion. Already
+  documented in RUNBOOK.md/HANDOFF.md from earlier today; not repeated here.
+- `68258603` (12:52) — `stripe-webhook` type-check fix, `SupabaseClient`
+  instead of `ReturnType<typeof createClient>` across ~19 sites, fixing 92
+  `deno check` errors. No runtime behavior change. Not deployed (stripe-webhook
+  is still v92, 2026-09-10).
+- `2e7b0417` (12:50) — a hardcoded example in the MONEY/SCOPE prompt rules
+  raced the newer "only ask a known customer's name if unknown" gate,
+  producing both a name-ask and a name-confirm in one reply to a returning
+  customer. The example is now qualified on the same gate.
+- `79d16eb0` / `540b92bb` (13:17–13:20) — the RESET command's reply
+  hardcoded "the kitchen is closed" regardless of actual hours, in both
+  `chat-sms` and its near-duplicate test-harness function `chat-sms-mtest`.
+  `chat-sms`'s fix is live (v412); `chat-sms-mtest`'s is not (still v39,
+  2026-09-08).
+- `0c3e350f`, `ee32d9e6` (13:20–13:26) — extracted the hours-window check
+  and reset-reply text into pure, unit-tested functions; no behavior change.
+- `76247921` (13:58) — exported `executeTool` for direct unit testing, plus
+  two bundled live fixes: same-turn duplicate `modify_item` calls on one
+  line now merge instead of overwrite, and a `prompt_for` required-slot
+  answer is now recorded as a structured selection (so `submit_order`'s
+  existing gate actually blocks on it) instead of only as free text that
+  nothing checked.
+- `bead3f54` (10:31) — Netlify's ignore-build script was implicitly
+  triggering a full build on script-only commits (12+ wasted builds over two
+  days); now special-cased to skip unless the one script Netlify actually
+  invokes changed.
+- Test-suite/harness hardening (morning, `_shared/test-suite/*`): judge now
+  compares cart contents by `menu_item_id` instead of rendered text and
+  knows platform facts like the $0.99 fee (`392ff041`); a self-negating-flag
+  filter gained and then had to be narrowed twice in the same day
+  (`e28647af`, `5df5dce1` — the second commit fixes a real regression the
+  first one introduced, wrongly suppressing genuine "not correct" flags);
+  ungraded critical cases no longer fail the go-live gate (`4776a667`);
+  ground truth for checkout now reads real `order_carts` rows instead of
+  assuming test runs never touch Stripe (`8e811ac8`); harness turn-cap
+  truncation is now tracked as a distinct flag instead of being spliced into
+  the transcript text the judge reads (`17389de1`), and that flag itself was
+  refined same-day to distinguish a genuine stall from a run that made
+  progress but ran out of turns (`30b7eea6`). Also: a contraction ("theyre")
+  was misread by the hallucination guard as a claimed item name, and the bot
+  said "Got it!" in response to a bare "checkout" that supplied no new
+  information (`6a0ffbf5`, `b78e979a`).
+
+### Deploy status summary (edge functions touched this range)
+
+Checked directly against the live project (Management API + downloaded
+deployed bundle), not inferred from commit history:
+
+- **`chat-sms`**: v412, deployed 2026-09-12 20:51:38 UTC. `DEPLOY_SHA` stamp
+  in the deployed bundle reads `59833e02...` — confirmed to be the second
+  C4 revert commit, i.e. everything on `main` through that commit is live,
+  and nothing after it (the turn-reconciler work) is.
+- **`chat-sms-mtest`**: v39, deployed 2026-09-08 22:48:17 UTC — stale,
+  predates all of today's changes to this function.
+- **`parse-menu-pdf`**: v114, deployed 2026-09-05 18:21:18 UTC — stale,
+  predates today's json-parsing consolidation.
+- **`stripe-webhook`**: v92, deployed 2026-09-10 12:20:13 UTC — stale,
+  predates today's type-check fix and the payment-time delivery-memory
+  writer/race-fix.
+- None of these four functions carry a `DEPLOY_SHA` stamp except
+  `chat-sms` — the other three were last deployed before the stamping
+  mechanism (`6febc702`) existed, or without using
+  `scripts/deploy-function.sh`.
+
+### Migrations touched this range
+
+- **135** (`customer_delivery_memory`) and **136**
+  (`order_carts_delivery_offer_made`) — both confirmed **applied** to
+  production via direct `select` against `customers` and `order_carts`;
+  both new columns exist and are queryable live.
