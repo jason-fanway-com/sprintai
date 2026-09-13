@@ -175,6 +175,47 @@ Deno.test("reconciler: a grounded add (fries named this turn) passes through unt
   assertEquals(changes[0].action, "added");
 });
 
+Deno.test("reconciler: two SEPARATE array entries for the same identity (v413 live money defect — legacy push + compiled push both wrote a line for the same bare-'yes' accept) collapse to ONE line at qty 1, not two lines summing to the same total", () => {
+  const pre: ReconcilerCartLine[] = [];
+  // Reproduces the exact $42-for-one-$21-pizza shape: the legacy add_item
+  // path wrote one line (name="Cheese - Large (16\")", no ask_plan_selections)
+  // and the compiled path's applyCompiledAddItem wrote a SECOND line for the
+  // identical menu_item_id+options (name="Large Cheese Pizza",
+  // ask_plan_selections set) because its own identity check requires
+  // ask_plan_selections on the existing line to recognize a match. Total
+  // quantity (1+1=2) never changes across the old buggy "just adjust
+  // lineIdx" logic, which is exactly why index.ts's old
+  // correctedTotal < loopTotal gate never caught this.
+  const loopFinal: ReconcilerCartLine[] = [
+    { menu_item_id: "pizza-1", quantity: 1, name: "Cheese - Large (16\")" } as ReconcilerCartLine,
+    { menu_item_id: "pizza-1", quantity: 1, name: "Large Cheese Pizza", ask_plan_selections: { g1: "c1" } } as ReconcilerCartLine,
+  ];
+  const proposals = [
+    { menu_item_id: "pizza-1", options: undefined, source_phrase: "", grounded: true },
+  ];
+  const { cart, changes } = reconcileAddProposals(pre, loopFinal, proposals, "yes");
+  const matches = cart.filter(l => l.menu_item_id === "pizza-1");
+  assertEquals(matches.length, 1);
+  assertEquals(matches[0].quantity, 1);
+  assertEquals(changes[0].action, "added");
+  assertEquals(changes[0].qty, 1);
+});
+
+Deno.test("reconciler: THREE separate array entries for the same identity (worse-case duplication) still collapse to ONE line", () => {
+  const pre: ReconcilerCartLine[] = [];
+  const loopFinal: ReconcilerCartLine[] = [
+    { menu_item_id: "pizza-1", quantity: 1 },
+    { menu_item_id: "pizza-1", quantity: 1 },
+    { menu_item_id: "pizza-1", quantity: 1 },
+  ];
+  const proposals = [
+    { menu_item_id: "pizza-1", options: undefined, source_phrase: "yes", grounded: true },
+  ];
+  const { cart } = reconcileAddProposals(pre, loopFinal, proposals, "yes");
+  assertEquals(cart.filter(l => l.menu_item_id === "pizza-1").length, 1);
+  assertEquals(cart.find(l => l.menu_item_id === "pizza-1")?.quantity, 1);
+});
+
 Deno.test("reconciler: lines with no proposals this turn pass through completely untouched", () => {
   const pre: ReconcilerCartLine[] = [{ menu_item_id: "salad-1", quantity: 1, options: { Dressing: ["Ranch"] } }];
   const loopFinal: ReconcilerCartLine[] = [{ menu_item_id: "salad-1", quantity: 1, options: { Dressing: ["Ranch"] } }];
