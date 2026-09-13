@@ -49,14 +49,39 @@ import {
   resolvePendingOptionAnswer,
   snapshotGroupIds,
 } from "./pending-option.ts";
-import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
-import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
+import { impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
 import { computeGuard19, statesQuantity } from "./guard19-quantity-only-no-item-named.ts";
-import { computeGuard21 } from "./guard21-unconsented-growth-no-signal-20260912.ts";
 import { resolveModifierMention, type ModifierChoiceOption } from "./regular-offer-modifier-20260912.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
-import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import { regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import {
+  reconcileAddProposals,
+  detectUnitCompletionEvent,
+  snapshotCartLines,
+  identityKey as reconcilerIdentityKey,
+  parseExplicitQuantity,
+  writeCartLine,
+  writeBundleLine,
+  applyCartSnapshot,
+  removeCartLine,
+  clearCart,
+  findCartLineIndexByIdentity,
+  type CartUnitProposal,
+  type CartLineSnapshot,
+  type ReconcilerCartLine,
+  type ExplicitQuantity,
+} from "./turn-reconciler.ts";
+
+// A proposal-worthy event detected mechanically (detectUnitCompletionEvent),
+// before the "was this actually asked for" grounding judgment is applied.
+// See turn-reconciler.ts's CartUnitProposal doc — `grounded` is added later,
+// once, in the outer handler.
+interface RawUnitProposal {
+  menu_item_id: string;
+  options?: Record<string, string[]>;
+  source_phrase: string;
+}
 import { shouldRevertOrderType } from "./guard2b-order-type-revert.ts";
 import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
@@ -1577,6 +1602,19 @@ export async function executeTool(
   // once per turn for a given item, so the "first call this turn" (full
   // replace) behavior is already correct for them unchanged.
   modifyItemMergeKeysThisTurn?: Set<string>,
+  // PO 2026-09-13 (x15/$331.50 live incident, v421): the cart snapshot from
+  // BEFORE this turn's tool loop started, used ONLY to resolve a "relative"
+  // explicitQuantity (parseExplicitQuantity's "another"/"one more" branch)
+  // to an absolute target. explicitQtyLegacy is re-derived from the turn's
+  // own text on every add_item call the model makes this turn for the same
+  // line — resolving the delta against the LIVE (already-growing)
+  // target.quantity would still restack on every repeat call; resolving it
+  // against this frozen pre-turn snapshot instead means every repeat call
+  // this turn computes the SAME absolute target, so writeCartLine's
+  // `value > preQty` guard makes calls 2..N genuine no-ops. Undefined at
+  // every call site except the main tool loop, matching
+  // consumedModifierChoiceIds/etc above.
+  preTurnCartForIdentity?: AnyCartItem[],
 ): Promise<{ ok: boolean; result: unknown; checkoutUrl?: string; newPhase?: OrderPhase }> {
   const menuMap = new Map(menu.map(m => [m.id, m]));
 
@@ -1975,18 +2013,15 @@ export async function executeTool(
       // charge) between "plain" and "with extra cheese." Two lines whose
       // modifiers or unverified_requests differ must never merge, regardless
       // of matching menu_item_id + options.
-      const normalizedUnverified = unverifiedRequests.length > 0 ? [...unverifiedRequests].sort() : undefined;
-      const normalizedMods = inputMods.length > 0 ? [...inputMods].sort() : undefined;
-      const existing = resolvingPendingIdx >= 0 ? -1 : cart.findIndex(i => {
-        const ci = i as CartItem;
-        if (ci.menu_item_id !== menu_item_id) return false;
-        if (JSON.stringify(ci.options ?? undefined) !== JSON.stringify(normalizedOptions)) return false;
-        const ciUnverified = (ci.unverified_requests?.length ?? 0) > 0 ? [...ci.unverified_requests!].sort() : undefined;
-        if (JSON.stringify(ciUnverified) !== JSON.stringify(normalizedUnverified)) return false;
-        const ciMods = (ci.modifiers?.length ?? 0) > 0 ? [...ci.modifiers!].sort() : undefined;
-        if (JSON.stringify(ciMods) !== JSON.stringify(normalizedMods)) return false;
-        return true;
-      });
+      // (2026-09-13) This used to be a hand-rolled JSON.stringify identity
+      // check — a second identity notion living alongside turn-reconciler.ts's
+      // identityKey(). findCartLineIndexByIdentity is that same function
+      // (menu_item_id + options, with modifiers/unverified_requests folded in
+      // so the D1 2026-09-09 "plain vs topped" distinction above still holds)
+      // — one identity rule, used everywhere a cart line is found or written.
+      const existing = resolvingPendingIdx >= 0 ? -1 : findCartLineIndexByIdentity(
+        cart as unknown as ReconcilerCartLine[], menu_item_id, normalizedOptions, inputMods, unverifiedRequests,
+      );
 
       // MODIFIER-FOLLOWUP GUARD (2026-09-11, live money, NJB repro
       // conv-pickup-only-clarification, run 3e607524-d84a-460b-8136-
@@ -2013,6 +2048,8 @@ export async function executeTool(
       // unchanged. Does not attempt to recognize "another one"-style repeat
       // orders that also skip the item's name; those still create a new
       // line, same as before this fix.
+      const normalizedMods = inputMods.length > 0 ? [...inputMods].sort() : undefined;
+      const normalizedUnverified = unverifiedRequests.length > 0 ? [...unverifiedRequests].sort() : undefined;
       let unnamedModifierFollowupIdx = -1;
       if (
         resolvingPendingIdx < 0 &&
@@ -2050,14 +2087,20 @@ export async function executeTool(
         };
       }
 
+      // (2026-09-13) writeCartLine (turn-reconciler.ts) is the only function
+      // in this codebase permitted to create or modify a cart line — see its
+      // header comment. Quantity growth on an EXISTING line requires the
+      // customer's own words this turn to say so (explicitQuantity); a bare
+      // re-add of an already-complete line is a no-op, never additive — the
+      // additive `quantity +=` this branch used to do unconditionally is
+      // exactly the shape-mismatch/duplicate-writer defect class this whole
+      // architecture change closes.
+      const explicitQtyLegacy = parseExplicitQuantity(source_phrase ?? customerMessage ?? "");
       if (resolvingPendingIdx >= 0) {
         const target = cart[resolvingPendingIdx] as CartItem;
         // C1 fix: re-key stored options to current group names before merging
         const canonicalExisting = canonicalizeStoredOptions(target.options, itemGroups, target.option_group_ids, menuItem.prompt_for) ?? {};
         const mergedOptions = { ...canonicalExisting, ...inputOptions };
-        target.options = Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined;
-        target.option_group_ids = snapshotGroupIds(target.option_group_ids, itemGroups);
-        target.modifiers = inputMods;
         let mergedExtraCents = 0;
         for (const group of itemGroups) {
           for (const sel of (mergedOptions[group.name] ?? [])) {
@@ -2065,38 +2108,78 @@ export async function executeTool(
             if (choice) mergedExtraCents += choice.price_cents;
           }
         }
-        target.price_cents = menuItem.price_cents + mergedExtraCents + modPriceCents;
         // C1 fix: translate stored pending name to current name before checking inputOptions
         const remainingPending = (target.pending_options ?? []).filter(p => {
           const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, target.option_group_ids);
           const currentName = liveGroup?.name ?? p;
           return !(inputOptions[currentName]?.length);
         });
-        target.pending_options = remainingPending.length > 0 ? remainingPending : undefined;
         const existingUnverified = target.unverified_requests ?? [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
-        target.unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
-        if (phraseIndexLegacy !== null) target.sourcePhraseIndex = phraseIndexLegacy;
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name,
+          price_cents: menuItem.price_cents + mergedExtraCents + modPriceCents,
+          options: Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined,
+          modifiers: inputMods,
+          option_group_ids: snapshotGroupIds(target.option_group_ids, itemGroups),
+          pending_options: remainingPending.length > 0 ? remainingPending : undefined,
+          unverified_requests: mergedUnverified.length > 0 ? mergedUnverified : undefined,
+          sourcePhraseIndex: phraseIndexLegacy !== null ? phraseIndexLegacy : undefined,
+          continuationIndex: resolvingPendingIdx,
+          source: "legacy",
+        });
       } else if (existing >= 0) {
-        (cart[existing] as CartItem).quantity += (quantity as number);
-        (cart[existing] as CartItem).modifiers = inputMods;
-        (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
-        (cart[existing] as CartItem).option_group_ids = snapshotGroupIds((cart[existing] as CartItem).option_group_ids, itemGroups);
+        const target = cart[existing] as CartItem;
         // Merge pending_options — resolve any that now have selections
-        const existingPending = (cart[existing] as CartItem).pending_options || [];
-        const existingGroupIds8 = (cart[existing] as CartItem).option_group_ids;
+        const existingPending = target.pending_options || [];
+        const existingGroupIds8 = target.option_group_ids;
         // C1 fix: translate stored pending name to current name before checking inputOptions
         const mergedPending = [...new Set([...existingPending, ...pending])].filter(p => {
           const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, existingGroupIds8);
           const currentName = liveGroup?.name ?? p;
           return !(inputOptions[currentName] && inputOptions[currentName].length > 0);
         });
-        (cart[existing] as CartItem).pending_options = mergedPending.length > 0 ? mergedPending : undefined;
-        const existingUnverified = (cart[existing] as CartItem).unverified_requests || [];
+        const existingUnverified = target.unverified_requests || [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
-        (cart[existing] as CartItem).unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
+        // PO 2026-09-13 (x15/$331.50 live incident): resolve relative -> absolute
+        // HERE, against the PRE-TURN quantity, before writeCartLine ever sees it —
+        // see preTurnCartForIdentity's doc comment above for why. writeCartLine's
+        // merge path only accepts an absolute target now.
+        let resolvedExplicitQty: ExplicitQuantity = null;
+        if (explicitQtyLegacy?.kind === "absolute") {
+          resolvedExplicitQty = explicitQtyLegacy;
+        } else if (explicitQtyLegacy?.kind === "relative") {
+          const preTurnIdx = findCartLineIndexByIdentity(
+            (preTurnCartForIdentity ?? []) as unknown as ReconcilerCartLine[],
+            menu_item_id, target.options, target.modifiers, target.unverified_requests,
+          );
+          const preTurnQty = preTurnIdx >= 0
+            ? ((preTurnCartForIdentity![preTurnIdx] as CartItem).quantity ?? 1)
+            : target.quantity;
+          resolvedExplicitQty = { kind: "absolute", value: preTurnQty + explicitQtyLegacy.delta };
+        }
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name,
+          price_cents: menuItem.price_cents + extraCents + modPriceCents,
+          options: normalizedOptions,
+          modifiers: inputMods,
+          option_group_ids: snapshotGroupIds(target.option_group_ids, itemGroups),
+          pending_options: mergedPending.length > 0 ? mergedPending : undefined,
+          unverified_requests: mergedUnverified.length > 0 ? mergedUnverified : undefined,
+          explicitQuantity: resolvedExplicitQty,
+          source: "legacy",
+        });
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, option_group_ids: snapshotGroupIds(undefined, itemGroups), pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined, sourcePhraseIndex: phraseIndexLegacy ?? undefined });
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name, quantity: quantity as number,
+          price_cents: menuItem.price_cents + extraCents + modPriceCents,
+          modifiers: inputMods, options: normalizedOptions,
+          option_group_ids: snapshotGroupIds(undefined, itemGroups),
+          pending_options: pending.length > 0 ? pending : undefined,
+          unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined,
+          sourcePhraseIndex: phraseIndexLegacy ?? undefined,
+          source: "legacy",
+        });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -2126,7 +2209,7 @@ export async function executeTool(
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not found in cart." } };
       const removed = (cart[idx] as CartItem).name;
-      cart.splice(idx, 1);
+      removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { removed } };
     }
@@ -2364,7 +2447,7 @@ export async function executeTool(
     }
 
     case "clear_cart": {
-      cart.splice(0, cart.length);
+      clearCart(cart as unknown as ReconcilerCartLine[]);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { cleared: true } };
     }
@@ -2618,15 +2701,9 @@ export async function executeTool(
         return { ok: false, result: { error: `Already have "${existingCompleted.name}" in cart. Ask the customer if they want to replace it or add another bundle.` } };
       }
 
-      const newBundle: BundleItem = {
-        type:        "bundle",
-        name:        bundle_item_name,
-        target:      bundle_size,
-        price_cents: bundle_price_cents,
-        selections:  [],
-        complete:    false,
-      };
-      cart.push(newBundle);
+      writeBundleLine(cart as unknown as ReconcilerCartLine[], {
+        name: bundle_item_name, target: bundle_size, price_cents: bundle_price_cents, source: "bundle",
+      });
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { message: `Bundle started: ${bundle_item_name}. 0 of ${bundle_size} selected. Ask the customer what flavors they want.` }, newPhase: "building" };
     }
@@ -2688,7 +2765,7 @@ export async function executeTool(
       if (bundleIdx < 0) {
         return { ok: false, result: { error: "No active bundle to cancel." } };
       }
-      cart.splice(bundleIdx, 1);
+      removeCartLine(cart as unknown as ReconcilerCartLine[], bundleIdx);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { message: "Bundle cancelled." } };
     }
@@ -2754,11 +2831,8 @@ export async function executeTool(
         }
       }
       if (cartChanged) {
-        const subtotal = computeCartSubtotalCents(cart);
-        const { error: backfillError } = await supabase.from("order_carts")
-          .update({ cart_json: cart, subtotal_cents: subtotal, total_cents: subtotal })
-          .eq("id", cartId);
-        if (backfillError) console.error(`[chat-sms] set_note structured-option backfill FAILED for cart=${cartId}: ${backfillError.message}`);
+        const backfillSaved = await saveCart(supabase, cartId, cart, "building");
+        if (!backfillSaved) console.error(`[chat-sms] set_note structured-option backfill FAILED for cart=${cartId}`);
       }
 
       return { ok: true, result: { message: `Order notes saved: ${note}` } };
@@ -2895,7 +2969,7 @@ async function saveCart(
 
   const subtotal = computeCartSubtotalCents(cart);
   const { error } = await supabase.from("order_carts")
-    .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal })
+    .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal }) // single-writer:blessed — saveCart is THE persister
     .eq("id", cartId);
   if (error) console.error(`[chat-sms] saveCart FAILED for cart=${cartId}: ${error.message}`);
   return !error;
@@ -2943,7 +3017,7 @@ async function runOrderingLoop(
   // See executeTool's matching param doc — threaded straight through to
   // every add_item tool call this loop dispatches.
   composedPhraseTexts?: string[],
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }> }> {
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }>; turnProposals?: RawUnitProposal[] }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
   // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency): per-round-trip
@@ -2952,6 +3026,18 @@ async function runOrderingLoop(
   const debugAttemptMs: number[] = [];
   let toolCallCountForDebug = 0;
   const debugToolMs: Array<{ name: string; ms: number }> = [];
+
+  // Turn-reconciler wiring (2026-09-12, replaces GUARD 9/13/20/21 — see
+  // turn-reconciler.ts header): every add_item-shaped tool call this turn
+  // that COMPLETES a cart line (brand-new, a continuation's final slot, or a
+  // merge into an already-complete identical line) is recorded here as a
+  // raw proposal — mechanical detection only (detectUnitCompletionEvent),
+  // no "was this actually asked for" judgment. The caller (index.ts's main
+  // handler, which has the customer-referenced-item extraction and the
+  // regular-offer authorization check) turns these into CartUnitProposals
+  // and calls reconcileAddProposals ONCE for the whole turn, after this
+  // loop and every pre-LLM shortcut are done mutating the cart.
+  const turnProposals: RawUnitProposal[] = [];
 
   // D1 fix (2026-09-08 P0, PO re-diagnosis, see enumeration-shortfall-retry.ts):
   // snapshot the cart BEFORE this turn touches it so a mid-turn count check
@@ -3170,12 +3256,12 @@ async function runOrderingLoop(
         continue;
       }
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
-      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs };
+      if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs, turnProposals };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
       const soft = cart.length > 0
         ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
         : "Sorry, I didn't quite catch that — what can I get started for you?";
-      return { reply: soft, checkoutUrl, finalPhase };
+      return { reply: soft, checkoutUrl, finalPhase, turnProposals };
     }
 
     messages.push({ role: "assistant", content });
@@ -3237,6 +3323,14 @@ async function runOrderingLoop(
         continue;
       }
 
+      // Turn-reconciler wiring: snapshot immediately before an add_item call
+      // so detectUnitCompletionEvent can classify what this specific call
+      // did, scoped to the item it targeted. Cheap (cart is small) and only
+      // taken for add_item, so every other tool call this loop dispatches is
+      // unaffected.
+      const beforeAddSnap: CartLineSnapshot[] | null =
+        toolBlock.name === "add_item" ? snapshotCartLines(cart as unknown as ReconcilerCartLine[]) : null;
+
       const debugToolT0 = performance.now();
       const result = await executeTool(
         toolBlock.name!,
@@ -3258,6 +3352,7 @@ async function runOrderingLoop(
         composedPhraseTexts,
         suppressedReactiveMatchIds.size > 0 ? suppressedReactiveMatchIds : undefined,
         modifyItemMergeKeysThisTurn,
+        cartSnapshotAtTurnStart,
       );
       debugToolMs.push({ name: toolBlock.name!, ms: Math.round(performance.now() - debugToolT0) });
       // OBSERVABILITY (2026-09-05): a failed tool call used to leave no trace at
@@ -3286,6 +3381,19 @@ async function runOrderingLoop(
             displayName: menu.find(m => m.id === addedId)?.name ?? "",
           });
         }
+        // Turn-reconciler wiring: record a proposal iff this call completed a
+        // real unit (see detectUnitCompletionEvent's doc) — a still-pending
+        // continuation (open next_question) never reaches here.
+        if (addedId && beforeAddSnap) {
+          const event = detectUnitCompletionEvent(beforeAddSnap, cart as unknown as ReconcilerCartLine[], addedId);
+          if (event) {
+            turnProposals.push({
+              menu_item_id: event.menu_item_id,
+              options: event.options,
+              source_phrase: (toolBlock.input as { source_phrase?: string })?.source_phrase ?? "",
+            });
+          }
+        }
       }
       toolResults.push({
         type:        "tool_result",
@@ -3299,6 +3407,7 @@ async function runOrderingLoop(
           reply:      "Payment link sent! Tap it to complete your order. Check your text or email.",
           checkoutUrl,
           finalPhase,
+          turnProposals,
         };
       }
       // Fix 1 (2026-09-01): After submit_order creates a real checkout session,
@@ -3309,13 +3418,14 @@ async function runOrderingLoop(
           reply:      `All set! Here's your payment link — tap to finish your order: ${checkoutUrl}`,
           checkoutUrl,
           finalPhase: finalPhase || "checkout",
+          turnProposals,
         };
       }
     }
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs };
+  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs, turnProposals };
 }
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
@@ -5542,10 +5652,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
+  let checkoutWantsChangeFired = false;
   if (cart.phase === "checkout") {
     const upper = userMessage.toUpperCase().trim();
     const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
-    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
+    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|ADD|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
 
     // P0 fix (2026-09-12, live trust incident, conv d79c1d98): "show me the
     // order" was structurally unanswerable once a payment link existed —
@@ -5589,7 +5700,79 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // Go back to building phase so the LLM can handle modifications
       await supabase.from("order_carts").update({ phase: "building", stripe_checkout_session_id: null }).eq("id", cart.id);
       cart.phase = "building" as OrderPhase;
-      // Fall through to the LLM loop below so it can process the change request
+      checkoutWantsChangeFired = true;
+
+      // Case 9 fix (2026-09-13, checkpoint 2 stress test): once "Payment
+      // link sent!" is in this conversation's history, the LLM has
+      // repeatedly failed to call add_item on a checkout-phase "add X" turn
+      // — it just re-sends the stale payment-link reply instead of acting,
+      // silently dropping the add (empirically confirmed: 1/6 stress-test
+      // runs on the LLM-only path did exactly this). For the narrow,
+      // unambiguous case — exactly one named item, no quantity language,
+      // item not already on the cart, item has no required option groups to
+      // prompt for — add it deterministically and skip the LLM this turn.
+      // Anything with quantity, multiple items, or required choices still
+      // falls through to the LLM loop, since those need judgment this
+      // shortcut can't safely automate.
+      const hasQuantitySignalC9 = /\b\d+\b|\b(two|three|four|five|six|seven|eight|nine|ten|another|double|triple|extra|more)\b/i.test(userMessage);
+      if (!hasQuantitySignalC9) {
+        const businessDateC9 = getBusinessDate(shop.timezone);
+        const { menu: menuC9 } = await buildEffectiveMenu(supabase, shop.id, businessDateC9);
+        const menuNamesC9 = buildMenuItemNames(menuC9);
+        const namedC9 = extractCustomerReferencedItems([{ role: "user", content: userMessage }], menuNamesC9);
+        // Fallback for a bare generic noun shared by several menu items
+        // ("fries" matching Crab Fries / Sweet Potato Fries / French Fries /
+        // etc.) — extractCustomerReferencedItems deliberately won't alias a
+        // word to any of them (see buildMenuItemNames: a word only becomes
+        // an alias when it belongs to exactly ONE item). Restaurant menus
+        // commonly name their plain/default variant as "[neutral qualifier]
+        // + noun" (French Fries, American Cheese, Regular Coffee) while every
+        // other variant adds a REAL descriptor (Crab, Sweet Potato, Iced).
+        // If dropping a small set of neutral origin/style qualifiers from a
+        // candidate's name leaves exactly the bare noun the customer said,
+        // and that's true for exactly one candidate, that's the plain/
+        // default item a customer means when they omit the descriptor other
+        // variants require — not a guess among genuinely different dishes.
+        let resolvedNameC9: string | null = null;
+        if (namedC9.size === 1) {
+          resolvedNameC9 = [...namedC9][0];
+        } else if (namedC9.size === 0) {
+          const NEUTRAL_QUALIFIERS_C9 = new Set(["french", "american", "regular", "original", "classic", "plain", "house", "home"]);
+          const messageWordsC9 = new Set(userMessage.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
+          for (const w of messageWordsC9) {
+            const bareMatchesC9 = menuC9.filter(m => {
+              const nameWords = m.name.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).filter(x => !NEUTRAL_QUALIFIERS_C9.has(x));
+              return nameWords.length === 1 && nameWords[0] === w;
+            });
+            if (bareMatchesC9.length === 1) { resolvedNameC9 = bareMatchesC9[0].name; break; }
+          }
+        }
+        if (resolvedNameC9) {
+          const addedC9 = resolvedNameC9;
+          const cartItemsC9 = (cart.cart_json ?? []) as AnyCartItem[];
+          const alreadyC9 = cartItemsC9.some(ci => (ci as CartItem).name?.toLowerCase() === addedC9.toLowerCase());
+          const menuItemC9 = menuC9.find(m => m.name === addedC9);
+          const hasRequiredOptionsC9 = menuItemC9?.option_groups?.some(g => g.required) ?? false;
+          if (!alreadyC9 && menuItemC9 && !hasRequiredOptionsC9) {
+            const addResC9 = await executeTool(
+              "add_item", { menu_item_id: menuItemC9.id, quantity: 1 },
+              cartItemsC9, menuC9, cart.id, supabase, shop.name, cart.test_mode,
+              undefined, null,
+              shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
+            );
+            if (addResC9.ok) {
+              const recapC9 = renderItemizedRecap(cartItemsC9, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
+              const replyC9 = `${addedC9} added! Here's your updated order:\n\n${recapC9}\n\nReply YES when you're ready for a new payment link.`;
+              console.log(`[chat-sms] checkout wantsChange deterministic add (conv=${conversation.id}): added "${addedC9}"`);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC9);
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC9); return emptyTwiml(); }
+              return jsonResponse({ reply: replyC9, cart: cartItemsC9, phase: "building", session_id: sessionId });
+            }
+          }
+        }
+      }
+      // Fall through to the LLM loop for anything the shortcut above didn't handle
     } else {
       // Default: remind about payment but offer options
       // If this is a repeated status check (same message as last bot message),
@@ -5796,6 +5979,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       role:    m.role === "customer" ? "user" as const : "assistant" as const,
       content: m.content,
     }));
+  if (checkoutWantsChangeFired) {
+    // Context bridge: prevents the LLM from seeing "Payment link sent!" as the
+    // last assistant turn and concluding the order is finalized. Injected into
+    // the in-memory history only (never saved to DB) so it's invisible to
+    // customers but visible to the LLM for this request, letting it correctly
+    // process "add fries" / "change X" as a building-phase modification.
+    history.push({ role: "assistant" as const, content: "No problem — I've cancelled that payment link. What would you like to change?" });
+  }
 
   // Save user message with dedup on message_sid (prevents double-processing on
   // retransmitted SMS or duplicate webhook). If this message_sid was already
@@ -6104,9 +6295,24 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       }
 
       const localCartItems = [...cart.cart_json];
+      // P0 fix (2026-09-13, live money — bare-"yes" duplicate-pizza defect
+      // root cause): this call used to omit compiledEngineEnabled entirely,
+      // so a compiled (ask_plan) item routed through the LEGACY push
+      // instead of applyCompiledAddItem — creating a line with no
+      // ask_plan_selections and name=menuItem.name. Any LATER add_item call
+      // for the same item that correctly passes compiledEngineEnabled=true
+      // (the main tool loop, other pre-LLM shortcuts) routes through
+      // applyCompiledAddItem, whose own identity check requires
+      // ask_plan_selections on the existing line to recognize a match —
+      // it never will here, so it pushes a SECOND line, same menu_item_id,
+      // different name (askPlan.display_name). Passing the real flag (same
+      // pattern as every other executeTool call site below) keeps this
+      // guard's write on the same path as every other writer for this item.
       const addResult7c = await executeTool(
         "add_item", { menu_item_id: resolved7c.id, quantity: 1 },
         localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+        undefined, undefined,
+        shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
       );
       if (!addResult7c.ok) break; // never swallow a real failure here — fall through to the normal loop
 
@@ -6640,9 +6846,29 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const modResult = resolveModifierMention(userMessage, groupChoices);
         const addOptions = modResult?.action === "add" ? { [modResult.groupName]: [modResult.choiceName] } : undefined;
         console.log(`[chat-sms] C2b-regular pre-LLM regular-offer accept firing (conv=${conversation.id}, item="${baseMenuItem.name}", modifier=${modResult ? `${modResult.action}:${modResult.choiceName || "(none)"}` : "none"})`);
+        // P0 fix (2026-09-13, live money — bare-"yes" duplicate-pizza
+        // defect ROOT CAUSE): this call used to omit compiledEngineEnabled,
+        // routing a compiled (ask_plan) regular item through the LEGACY
+        // push (name=menuItem.name, no ask_plan_selections) instead of
+        // applyCompiledAddItem. This block never returns — it falls
+        // through to the LLM tool loop with the same "yes" message still
+        // pending, and the model (per its own system-prompt instruction to
+        // confirm the regular item) frequently issues its OWN add_item call
+        // for the identical item. That call correctly passes
+        // compiledEngineEnabled=true and so routes through
+        // applyCompiledAddItem, whose identity check requires
+        // ask_plan_selections on the existing line to recognize a match —
+        // it never does here, so it pushes a SECOND line: same
+        // menu_item_id, same (empty) options, name=askPlan.display_name
+        // instead of menuItem.name. Passing the real flag (same pattern as
+        // every other executeTool add_item call site) keeps this shortcut's
+        // write on the same path as the loop's own, so the existing
+        // identity checks (both this file's and applyCompiledAddItem's) can
+        // actually recognize the two calls as the same item.
         const regAddResult = await executeTool(
           "add_item", { menu_item_id: baseMenuItem.id, quantity: 1, options: addOptions },
           cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, null,
+          shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
         );
         if (regAddResult.ok) {
           const { data: reloadedReg } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
@@ -6757,8 +6983,113 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
+      // P0 fix (2026-09-12, turn-reconciler acceptance matrix, C4 sweep):
+      // same shape as the CART_SUMMARY_MENTION_RE compound-turn check just
+      // above — impliesOrderConfirmation matches "yes" anywhere in the
+      // message with no length/shape limit, so "Yes to Jason. Can you add
+      // fries to that?" / "yep, and two cokes" / "yep but drop the
+      // pepperoni" all read as a clean name-confirm, and this shortcut fired
+      // submit_order (an irreversible payment-link send) before the LLM ever
+      // saw the trailing item request. Detect any of: a menu item named
+      // this turn (exact or fuzzy/topping-level, same signal set the turn
+      // reconciler above uses), an explicit quantity word, or a removal verb
+      // ("drop"/"remove"/"without"/"hold the") — any of which means this
+      // turn carries more intent than a bare name confirmation, so name
+      // resolution and the auto-submit must be skipped and the whole turn
+      // handed to the LLM/ordering-loop instead, where the reconciler and
+      // the existing per-line modify handlers can apply it correctly.
+      const menuNamesC2bName = buildMenuItemNames(effectiveMenu);
+      const namedThisTurnC2bName = extractCustomerReferencedItems(
+        [{ role: "user", content: trimmed }],
+        menuNamesC2bName,
+      );
+      const hasMixedIntentC2bName =
+        namedThisTurnC2bName.size > 0 ||
+        hasGuard19NamedSignal(trimmed, effectiveMenu, namedThisTurnC2bName.size) ||
+        statesQuantity(trimmed) ||
+        /\b(?:drop|remove|without|hold the|no more|minus)\b/i.test(trimmed);
+
       let resolvedName: string | null = null;
-      if (impliesOrderConfirmation(trimmed)) {
+      if (hasMixedIntentC2bName) {
+        // Compound "confirm + remove" turn (e.g. "yep but drop the pepperoni"):
+        // matchOptionRemovalPhrase is anchored to the start of the message, so
+        // it misses a removal clause that follows a confirmation word. Split on
+        // clause boundaries, try the removal half on its own, and if it maps
+        // to exactly one applied option in the cart, apply it deterministically
+        // and re-ask the name — same one-pass pattern as the standalone
+        // option-removal handler above, same safety contract.
+        const hasRemovalVerbC2bName = /\b(?:drop|remove|without|hold the|no more|minus)\b/i.test(trimmed);
+        if (hasRemovalVerbC2bName) {
+          const clausesC2bName = trimmed.split(/\b(?:but|and|also|plus)\b|[,.;]/);
+          for (const clause of clausesC2bName) {
+            const clauseNorm = clause.trim().toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+            const optPhraseC2bName = matchOptionRemovalPhrase(clauseNorm);
+            if (optPhraseC2bName) {
+              const optMatchesC2bName = findCartLinesWithOption(optPhraseC2bName, cartItems as unknown as OptionRemovalCartLine[]);
+              if (optMatchesC2bName.length === 1) {
+                const targetC2b = optMatchesC2bName[0];
+                const targetLineC2b = cartItems.find(ci => (ci as CartItem).menu_item_id === targetC2b.menu_item_id) as CartItem | undefined;
+                const removeArgsC2b: { menu_item_id: string; options?: Record<string, string[]>; modifiers?: string[] } = targetC2b.group_name
+                  ? { menu_item_id: targetC2b.menu_item_id, options: { [targetC2b.group_name]: (targetLineC2b?.options?.[targetC2b.group_name] ?? []).filter(v => v.toLowerCase() !== targetC2b.matched_value.toLowerCase()) } }
+                  : { menu_item_id: targetC2b.menu_item_id, modifiers: (targetLineC2b?.modifiers ?? []).filter(v => v.toLowerCase() !== targetC2b.matched_value.toLowerCase()) };
+                const removeResultC2b = await executeTool(
+                  "modify_item", removeArgsC2b, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+                  undefined, undefined,
+                  shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null, userMessage, undefined,
+                );
+                if (removeResultC2b.ok) {
+                  console.log(`[chat-sms] C2b-name compound removal (conv=${conversation.id}): removed "${targetC2b.matched_value}" from "${targetC2b.name}", re-asking name.`);
+                  const replyC2b = `Removed ${targetC2b.matched_value} from the ${targetC2b.name}. Putting this in for ${customerContext.name}, right?`;
+                  await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+                  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
+                  if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+                  return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
+                }
+              }
+              break;
+            }
+          }
+        } else if (namedThisTurnC2bName.size === 1) {
+          // Compound "confirm + add" turn (with or without a connector):
+          // "yes that's me, add a coke" / "yes, and add fries" / "yep,
+          // and two cokes". The LLM fallback non-deterministically dropped
+          // the addition on all of these shapes. A prior version excluded
+          // connector messages ("yes, and add fries") based on an incorrect
+          // assumption that the LLM handled them reliably; the 2026-09-12
+          // acceptance matrix run proved otherwise (cases 2 and 6). Extended
+          // here to cover all connector shapes and to extract quantity so
+          // "two cokes" → qty 2. Same one-pass, no-cart-ambiguity contract
+          // as the removal branch above.
+          const [addedNameC2b] = [...namedThisTurnC2bName];
+          const alreadyInCartC2b = cartItems.some(
+            ci => (ci as CartItem).name?.toLowerCase() === addedNameC2b.toLowerCase(),
+          );
+          const menuItemC2b = effectiveMenu.find(m => m.name === addedNameC2b);
+          if (!alreadyInCartC2b && menuItemC2b) {
+            const qtyWordsC2b: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 };
+            const qtyMatchC2b = trimmed.match(/\b(two|three|four|five|[2-9])\b/i);
+            const qtyC2b = qtyMatchC2b
+              ? (parseInt(qtyMatchC2b[1]) || qtyWordsC2b[qtyMatchC2b[1].toLowerCase()] || 1)
+              : 1;
+            const addResultC2b = await executeTool(
+              "add_item", { menu_item_id: menuItemC2b.id, quantity: qtyC2b },
+              cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+              undefined, undefined,
+              shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
+            );
+            if (addResultC2b.ok) {
+              const qtyPrefixC2b = qtyC2b > 1 ? `${qtyC2b}x ` : "";
+              console.log(`[chat-sms] C2b-name compound addition (conv=${conversation.id}): added "${addedNameC2b}" qty=${qtyC2b}, re-asking name.`);
+              const replyC2b = `${qtyPrefixC2b}${addedNameC2b} added. Putting this in for ${customerContext.name}, right?`;
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+              return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
+            }
+          }
+        }
+        // Fall through to the LLM as normal — see comment above.
+      } else if (impliesOrderConfirmation(trimmed)) {
         resolvedName = customerContext.name;
       } else {
         const explicitCorrection = trimmed.match(/^(?:no,?\s*)?(?:it'?s|i'?m|my name is)\s+([A-Z][a-z]+)/i);
@@ -7041,6 +7372,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency) — see runOrderingLoop.
   let debugPerf: { attemptMs: number[]; toolCallCount: number } | undefined;
   const debugBeforeLoopMs = Math.round(performance.now() - debugReqT0);
+  let loopProposals: RawUnitProposal[] = [];
   if (nameSubmitCheckoutUrl) {
     reply = "placeholder"; // Will be overridden by the deterministic checkoutUrl handler below
     checkoutUrl = nameSubmitCheckoutUrl;
@@ -7105,6 +7437,102 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       }
     }
     checkoutUrl = loopResult.checkoutUrl;
+    loopProposals = loopResult.turnProposals ?? [];
+  }
+
+  // ── Turn reconciler (2026-09-12, replaces GUARD 9/13/20/21) ──────────────
+  // Single place that decides the aggregate add/merge/no-op/drop outcome for a
+  // whole turn's add_item proposals — the structural fix for defect class C4
+  // (confirmation word anywhere licensed an irreversible action / model counted
+  // aggregate accepts). Runs before the DB reload so Guard 19 (still active)
+  // sees the already-corrected cart.
+  if (loopProposals.length > 0 && !checkoutUrl) {
+    const priorMsgRec = (() => {
+      const last = history[history.length - 1];
+      return last?.role === "assistant" ? (last.content as string) : null;
+    })();
+    const menuNamesRec = buildMenuItemNames(effectiveMenu);
+    const namedThisTurnRec = extractCustomerReferencedItems(
+      [{ role: "user", content: userMessage }],
+      menuNamesRec,
+    );
+    // Same broader signal set GUARD 21 (one of this reconciler's four
+    // predecessors) used, not just the narrow base-name substring match:
+    // deterministicComposedThisTurn is true whenever the compiled
+    // pizza-topping composer (above, this same request) actually resolved
+    // one of this turn's phrases into a real menu item + topping choice —
+    // e.g. "large pepperoni pizza" composes onto the "Large Cheese Pizza"
+    // base item, whose OWN catalog name never contains the word
+    // "pepperoni", so the plain substring check below always misses it.
+    // hasGuard19NamedSignal adds guard19's own fuzzy/word-level matching.
+    // Omitting both here (as this block originally did) meant almost any
+    // topping-described pizza order — the single most common phrasing at a
+    // pizza shop — got dropped as "unauthorized" on the very turn that
+    // ordered it, not just on the confirmation-word turns this reconciler
+    // was built to police.
+    const namedSignalRec = deterministicComposedThisTurn ||
+      hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurnRec.size);
+    console.log(`[chat-sms] DIAGNOSTIC namedSignalRec=${namedSignalRec} deterministicComposedThisTurn=${deterministicComposedThisTurn} hasGuard19=${hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurnRec.size)} userMessage=${JSON.stringify(userMessage)} loopProposals=${JSON.stringify(loopProposals)} preTurnSnap=${JSON.stringify(cartSnapshotBeforeTurn)} loopFinalCart=${JSON.stringify(cartItems)}`);
+    const reconcilerProposals: CartUnitProposal[] = loopProposals.map(raw => ({
+      ...raw,
+      grounded: (() => {
+        if (namedSignalRec) return true;
+        const itemName = effectiveMenu.find(m => m.id === raw.menu_item_id)?.name ?? "";
+        const itemLower = itemName.toLowerCase();
+        for (const n of namedThisTurnRec) {
+          const n2 = n.toLowerCase();
+          if (n2.includes(itemLower) || itemLower.includes(n2)) return true;
+        }
+        // RegularOfferContext only carries name (no id), so match by name.
+        if (regularItem && itemLower === regularItem.name.toLowerCase()) {
+          return regularItemAuthorizedThisTurn(userMessage, priorMsgRec, regularItem.name);
+        }
+        return false;
+      })(),
+    }));
+    const preTurnSnap = cartSnapshotBeforeTurn as unknown as ReconcilerCartLine[];
+    const loopFinalSnap = cartItems as unknown as ReconcilerCartLine[];
+    const { cart: correctedLines, changes } = reconcileAddProposals(
+      preTurnSnap, loopFinalSnap, reconcilerProposals, userMessage,
+    );
+    // P0 fix (2026-09-13, live money — v413 bare-"yes" duplicate-pizza
+    // defect): this used to gate on `correctedTotal < loopTotal` (summed
+    // quantity across all lines). That silently discarded the reconciler's
+    // own corrected cart whenever the loop's cart held the SAME identity
+    // as two separate array entries (one unit each) instead of one entry
+    // at quantity two — the sum is identical before and after the
+    // dedup-only correction (1+1=2 either way), so the gate never tripped
+    // and the still-duplicated cart (already persisted mid-loop by
+    // whichever tool call wrote it) shipped to checkout untouched.
+    //
+    // Compare structurally instead: same line count AND same
+    // menu_item_id/quantity at every position means the reconciler agrees
+    // with the loop's own cart byte-for-byte — nothing to replace, and
+    // (importantly) no reason to overwrite the model's own contextual
+    // reply with the generic recap below. This deliberately does NOT use
+    // `changes` directly — an ordinary single grounded "added" event with
+    // no prior duplicate/over-count records action "added" even when the
+    // loop's cart was already exactly right, and re-triggering the recap
+    // reply on every normal add would be a new, unwanted behavior change.
+    const changed = correctedLines.length !== loopFinalSnap.length ||
+      correctedLines.some((l, i) =>
+        l.menu_item_id !== loopFinalSnap[i]?.menu_item_id ||
+        (Number(l.quantity) || 1) !== (Number(loopFinalSnap[i]?.quantity) || 1),
+      );
+    if (changed) {
+      console.warn(
+        `[chat-sms] RECONCILER correction (conv=${conversation.id}). ` +
+        `loop_lines=${loopFinalSnap.length} corrected_lines=${correctedLines.length}. ` +
+        `changes=${JSON.stringify(changes)}`,
+      );
+      applyCartSnapshot(cartItems as unknown as ReconcilerCartLine[], correctedLines);
+      await saveCart(supabase, cart.id, cartItems, (cart.phase as OrderPhase) || "building");
+      cart.cart_json = cartItems;
+      reply = cartItems.length > 0
+        ? `Got it! Here's where things stand:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}\n\nAnything else?`
+        : "What would you like to order?";
+      if (cartItems.length > 0) moneyFooterAlreadyRendered = true;
+    }
   }
 
   // Snapshot pre-loop order_type before DB reload (guard 2b uses it).
@@ -7211,7 +7639,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // cartLineKey() maps every one of them to the same "?::" key, which
       // is exactly the "Duplicate cart lines: ?::" signature the test
       // harness caught after PROOF-P2 fired under a concurrent-retry race.
-      await supabase.from("order_carts").update({ cart_json: cartItems }).eq("id", cart.id);
+      await saveCart(supabase, cart.id, cartItems, "building");
       // P0 fix (2026-09-09, item 2 — itemized recap): route through
       // itemizer.ts instead of a bare name list, same reasoning as the
       // correctionApplied short-circuit above.
@@ -7574,7 +8002,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // An ambiguous charge must never stand silently — roll it back
         // before asking, not after.
         const idx = guardCart.indexOf(added);
-        if (idx !== -1) guardCart.splice(idx, 1);
+        if (idx !== -1) removeCartLine(guardCart as unknown as ReconcilerCartLine[], idx);
         // BUG 3 (2026-09-12, PO — backstop never fired on the Vito's Gyro live
         // loop): the model doesn't just leave an unresolved answer in free
         // text — it often GUESSES, calling add_item on the still-ambiguous
@@ -8541,72 +8969,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // (imported above) — pure, testable against the real function, and with no
   // access to `cartItems` at all so the wiring bug above can't recur here.
   // CUSTOMER CRM (docs/specs/2026-09-03-customer-crm.md, GUARD 20): the bot's
-  // own IMMEDIATELY PRECEDING message, used to decide whether a "the
-  // regular"/bare-affirmation reply this turn is confirming a FRESH offer
-  // (this turn's message replies to it) or a stale one from earlier in the
-  // conversation — same "Luca" incident shape GUARD 9 already guards
-  // against for upsell offers. `history` was loaded BEFORE this turn's
-  // customer message was saved (see "Load conversation history" above), so
-  // its last entry, if an assistant turn, is exactly the bot's last reply.
-  const priorAssistantMessage = (() => {
-    const last = history[history.length - 1];
-    return last?.role === "assistant" ? (last.content as string) : null;
-  })();
-
-  {
-    const menuItemNamesG9 = buildMenuItemNames(effectiveMenu);
-    const namedThisTurnG9 = extractCustomerReferencedItems(
-      [{ role: "user", content: userMessage }],
-      menuItemNamesG9,
-    );
-    const isNamedThisTurnG9 = (itemName: string): boolean => {
-      const itemLower = itemName.toLowerCase();
-      if ([...namedThisTurnG9].some(n => {
-        const n2 = n.toLowerCase();
-        return n2.includes(itemLower) || itemLower.includes(n2);
-      })) return true;
-      // GUARD 20's authorization: a genuinely just-offered-and-confirmed
-      // "regular" counts as named so GUARD 9 doesn't revert it as an
-      // unconsented affirmation-triggered add. See guard20-regular-offer-
-      // confirmation.ts's own header for why this must be the SAME
-      // authorization function used at GUARD 20's own call site below.
-      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
-        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
-      }
-      return false;
-    };
-
-    const guard9Result = computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, isNamedThisTurnG9);
-
-    if (guard9Result.tripped) {
-      const revertedDesc = [
-        ...guard9Result.phantomAdds.map(r => `removed ${r.name}`),
-        ...guard9Result.qtyReverts.map(({ item, priorQty }) => `reverted ${item.name} qty ${(item as CartItem).quantity} -> ${priorQty}`),
-      ].join(", ");
-      console.warn(`[chat-sms] GUARD 9 (unconsented-add-on-affirmation) tripped (conv=${conversation.id}). Message "${userMessage}" is a bare affirmation; reverted: ${revertedDesc}`);
-      // Mutate guardCart by OBJECT IDENTITY, not menu_item_id lookup —
-      // executeTool's remove_item/modify_item resolve by menu_item_id
-      // alone, which would delete/modify the WRONG line if the customer
-      // has two lines for the same item with different options (e.g. two
-      // pizzas, different toppings, one of which is the phantom add).
-      // Same pattern GUARD 7 above uses (guardCart.splice by indexOf).
-      for (const r of guard9Result.phantomAdds) {
-        const idx = guardCart.indexOf(r);
-        if (idx !== -1) guardCart.splice(idx, 1);
-      }
-      for (const { item, priorQty } of guard9Result.qtyReverts) {
-        (item as CartItem).quantity = priorQty;
-      }
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-      // Honest confirmation of the REAL (reverted) cart only. No dollar
-      // figure here by design — the deterministic Ledger footer below
-      // states the real total from the corrected guardCart; hand-rolling a
-      // total here would risk quoting the pre-revert number.
-      reply = guardCart.length > 0
-        ? "Got it! Anything else, or are you all set?"
-        : "Your cart is empty. What would you like to order?";
-    }
-  }
+  // GUARD 9 (bare-affirmation phantom add) retired 2026-09-12.
+  // Replaced by the turn reconciler above. See turn-reconciler.ts.
 
   // GUARD 18 (zero-grounding item invention) was attempted here 2026-09-08 as
   // a broader backstop for the RESET incident below, independent of the
@@ -8628,60 +8992,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // without new evidence it no longer false-positives on option-driven
   // menus.
 
-  // ── Guard 13 (2026-09-07, Jason: quantity-doubling on an unrelated reply
-  // while a required option is still pending) ──────────────────────────────
-  // CONFIRMED live against Zio's (session zios-bug3-repro-6-512ad83d...):
-  // turn 1 "large buffalo chicken pizza" -> cart qty=1, $19.99; turn 2
-  // "pickup" (a single, non-retried message, nothing to do with the pizza or
-  // its options) -> cart qty=2, $19.99. Root cause: the system prompt tells
-  // the model to call add_item immediately for an item with a pending
-  // required option (correct, turn 1), but nothing forbids the model from
-  // reaching for add_item AGAIN on a LATER, unrelated turn while that option
-  // is still open. add_item's own phantom-add guard only engages when the
-  // repeat call carries new `options` resolving the pending group — a repeat
-  // call with NO options falls to the plain existing-line match (same
-  // menu_item_id, options both undefined) and stacks quantity, exactly like
-  // a genuine "add another one" would.
-  //
-  // Distinct from GUARD 9 above: GUARD 9 only evaluates on a BARE
-  // AFFIRMATION (impliesOrderConfirmation — "yes", "looks good", ...); this
-  // bug's trigger ("pickup") is not an affirmation at all, so GUARD 9 never
-  // sees it. Deterministic backstop, mirroring GUARD 9's own before/after
-  // diff shape: any line that (a) already had an open required option
-  // BEFORE this turn, (b) grew in quantity this turn, (c) has IDENTICAL
-  // options before and after (nothing was actually resolved), and (d) was
-  // never named in the customer's own message this turn (so a genuine
-  // "another one, please" — which DOES name the item — is never reverted)
-  // is unconsented growth; revert the quantity to what it was before this
-  // turn's tool loop ran.
-  {
-    const menuItemNames13 = buildMenuItemNames(effectiveMenu);
-    const namedThisTurn13 = extractCustomerReferencedItems(
-      [{ role: "user", content: userMessage }],
-      menuItemNames13,
-    );
-    const isNamedThisTurn13 = (itemName: string): boolean => {
-      const itemLower = itemName.toLowerCase();
-      if ([...namedThisTurn13].some(n => {
-        const n2 = n.toLowerCase();
-        return n2.includes(itemLower) || itemLower.includes(n2);
-      })) return true;
-      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
-        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
-      }
-      return false;
-    };
-
-    const guard13Reverts = computeGuard13(cartSnapshotBeforeTurn, guardCart, isNamedThisTurn13);
-    if (guard13Reverts.length > 0) {
-      const revertedDesc13 = guard13Reverts.map(({ item, priorQty }) => `${(item as CartItem).name} qty ${(item as CartItem).quantity} -> ${priorQty}`).join(", ");
-      console.warn(`[chat-sms] GUARD 13 (unconsented quantity growth on pending item) tripped (conv=${conversation.id}). Message "${userMessage}" never named the item(s); reverted: ${revertedDesc13}`);
-      for (const { item, priorQty } of guard13Reverts) {
-        (item as CartItem).quantity = priorQty;
-      }
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-    }
-  }
+  // GUARD 13 (pending-option qty growth on unrelated reply) retired 2026-09-12.
+  // detectUnitCompletionEvent now emits a proposal for pending-line qty growth;
+  // the reconciler's idempotency rule reverts the qty. See turn-reconciler.ts.
+  // Incident writeup (Zio's session zios-bug3-repro-6-512ad83d) in git history.
 
   // ── GUARD 19 (2026-09-08, customer-CRM build): quantity-only message,
   // ZERO menu items named — any cart growth this turn has no grounding in
@@ -8717,8 +9031,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const guard19Result = computeGuard19(userMessage, cartSnapshotBeforeTurn, guardCart, hasNamedSignal19 ? 1 : 0);
     if (guard19Result.tripped) {
       console.warn(`[chat-sms] GUARD 19 (quantity-only, zero items named) tripped (conv=${conversation.id}). Message "${userMessage}" named no menu item; reverted cart to pre-turn snapshot (${guardCart.length} lines -> ${guard19Result.revertedCart.length}).`);
-      guardCart.length = 0;
-      guardCart.push(...guard19Result.revertedCart);
+      applyCartSnapshot(guardCart as unknown as ReconcilerCartLine[], guard19Result.revertedCart as unknown as ReconcilerCartLine[]);
       await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
       reply = guardCart.length > 0
         ? "Sorry, which item did you want more of?"
@@ -8726,86 +9039,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
-  // ── GUARD 21 (2026-09-12 P0, live money defect on Vito's, conv ce84c64b):
-  // general backstop for cart growth on a turn that gives NO ordering signal
-  // at all -- names no menu item AND states no quantity. GUARD 9 only checks
-  // bare affirmations ("yes"/"looks good"), GUARD 13 only checks turns with a
-  // pending required option, GUARD 19 only checks quantity-only messages.
-  // None of the three cover an ordinary reply like "You already know my
-  // name." (in answer to the bot asking for a pickup name) -- which is
-  // exactly the live incident: the cart already correctly held one pizza,
-  // the model non-deterministically re-issued add_item on this unrelated
-  // reply, and quantity silently doubled with zero textual grounding for the
-  // second unit anywhere in the message. See guard21-unconsented-growth-
-  // no-signal-20260912.ts for the full writeup and why this is a per-item
-  // selective revert, not GUARD 19's full-cart revert.
-  {
-    const menuItemNames21 = buildMenuItemNames(effectiveMenu);
-    const namedThisTurn21 = extractCustomerReferencedItems(
-      [{ role: "user", content: userMessage }],
-      menuItemNames21,
-    );
-    const hasAnyOrderingSignal21 =
-      namedThisTurn21.size > 0 ||
-      deterministicComposedThisTurn ||
-      hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurn21.size) ||
-      statesQuantity(userMessage) ||
-      (!!regularItem && regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name));
-    const guard21Result = computeGuard21(cartSnapshotBeforeTurn, guardCart, hasAnyOrderingSignal21);
-    if (guard21Result.tripped) {
-      const revertedDesc21 = [
-        ...guard21Result.phantomAdds.map(r => `removed ${r.name}`),
-        ...guard21Result.qtyReverts.map(({ item, priorQty }) => `reverted ${item.name} qty ${(item as CartItem).quantity} -> ${priorQty}`),
-      ].join(", ");
-      console.warn(`[chat-sms] GUARD 21 (unconsented-growth-no-signal) tripped (conv=${conversation.id}). Message "${userMessage}" named nothing and stated no quantity; reverted: ${revertedDesc21}`);
-      for (const r of guard21Result.phantomAdds) {
-        const idx = guardCart.indexOf(r);
-        if (idx !== -1) guardCart.splice(idx, 1);
-      }
-      for (const { item, priorQty } of guard21Result.qtyReverts) {
-        (item as CartItem).quantity = priorQty;
-      }
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-    }
-  }
-
-  // ── GUARD 20 (2026-09-08, customer-CRM build, AC6): "the regular" is an
-  // OFFER, never a silent add. Reverts a new cart line for the eligible
-  // regular item unless the bot's own immediately-preceding message actually
-  // offered it AND the customer's message this turn confirms or explicitly
-  // invokes "the regular"/"my usual" themselves. See guard20-regular-offer-
-  // confirmation.ts for the full design (mirrors GUARD 9's "no stale offer"
-  // discipline, scoped to the CRM's own offer instead of an upsell).
-  {
-    const menuItemNames20 = buildMenuItemNames(effectiveMenu);
-    const namedThisTurn20 = extractCustomerReferencedItems(
-      [{ role: "user", content: userMessage }],
-      menuItemNames20,
-    );
-    const isNamedThisTurn20 = (itemName: string): boolean => {
-      const itemLower = itemName.toLowerCase();
-      if ([...namedThisTurn20].some(n => {
-        const n2 = n.toLowerCase();
-        return n2.includes(itemLower) || itemLower.includes(n2);
-      })) return true;
-      if (regularItem && itemLower === regularItem.name.toLowerCase()) {
-        return regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage, regularItem.name);
-      }
-      return false;
-    };
-    const guard20Result = computeGuard20(cartSnapshotBeforeTurn, guardCart, regularItem, isNamedThisTurn20);
-    if (guard20Result.tripped) {
-      console.warn(`[chat-sms] GUARD 20 (regular-offer requires confirmation) tripped (conv=${conversation.id}). Message "${userMessage}" did not confirm a just-made offer for "${regularItem?.name}"; reverted: ${guard20Result.reverted.map(r => r.name).join(", ")}`);
-      for (const r of guard20Result.reverted) {
-        const idx = guardCart.indexOf(r);
-        if (idx !== -1) guardCart.splice(idx, 1);
-      }
-      await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-      reply = regularItem
-        ? `Want your regular, the ${regularItem.name}, or something else today?`
-        : "What would you like to order?";
-    }
-  }
+  // GUARD 21 (zero-signal cart growth) and GUARD 20 ("the regular" requires
+  // confirmation) retired 2026-09-12. Both replaced by the turn reconciler
+  // above. Incident writeup (Vito's conv ce84c64b) in git history at 59833e02
+  // and in guard21-unconsented-growth-no-signal-20260912.ts / guard20-regular-
+  // offer-confirmation.ts file headers.
 
   // ── Guard (menu link): send the live menu page, don't leave it to the model ──
   // FIX (2026-09-06, Jason): "we should be able to send a link to their
