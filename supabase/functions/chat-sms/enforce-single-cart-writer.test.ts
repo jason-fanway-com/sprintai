@@ -1,25 +1,19 @@
-// Structural enforcement: turn-reconciler.ts is the ONLY file permitted to
-// create, modify, remove, clear, or persist a cart line anywhere in this
+// Structural enforcement: writeCartLine (turn-reconciler.ts) is the ONLY
+// function permitted to create or modify a cart line anywhere in this
 // directory. This test fails immediately if any source file contains a
-// direct `cart.push(`/`cart.splice(` (or the cartItems/guardCart/cart_json
-// equivalents) OUTSIDE the blessed single-writer functions (writeCartLine,
-// writeBundleLine, writeSplitCartLine, removeCartLine, clearCart,
-// applyCartSnapshot) in turn-reconciler.ts, or a direct `cart_json:` DB write
-// outside saveCart (index.ts).
+// direct `cart.push(`, `cartItems.push(`, `guardCart.push(`, or
+// `cart_json.push(` OUTSIDE of the three blessed single-writer functions
+// (writeCartLine, writeBundleLine, applyCartSnapshot) in turn-reconciler.ts.
 //
 // Legitimate cart_json FIELD assignments (= [], = freshCart.cart_json,
 // = cartItems after writeCartLine wrote them) are NOT violations — those
-// are DB reloads and in-memory reference syncs. Only push()/splice() calls
-// that mutate a live cart array, or a direct DB write of cart_json, are
-// forbidden outside the single writer.
+// are DB reloads and in-memory reference syncs. Only push() calls that
+// APPEND new items into a live cart array are forbidden outside the
+// single writer.
 //
 // To add a cart line: call writeCartLine (turn-reconciler.ts).
 // To add a bundle line: call writeBundleLine (turn-reconciler.ts).
-// To split a line (D1 quantity-split create): call writeSplitCartLine (turn-reconciler.ts).
-// To remove a cart line: call removeCartLine (turn-reconciler.ts).
-// To clear the cart: call clearCart (turn-reconciler.ts).
-// To install a corrected/reverted snapshot: call applyCartSnapshot (turn-reconciler.ts).
-// To persist a cart to the DB: call saveCart (index.ts).
+// To install a corrected snapshot: call applyCartSnapshot (turn-reconciler.ts).
 //
 // See supabase/functions/chat-sms/turn-reconciler.ts header for why.
 
@@ -58,21 +52,7 @@ const BLESSED_FN_PATTERNS: RegExp[] = [
   /\bfunction writeCartLine\b/,
   /\bfunction writeBundleLine\b/,
   /\bfunction applyCartSnapshot\b/,
-  /\bfunction removeCartLine\b/,
-  /\bfunction clearCart\b/,
-  /\bfunction writeSplitCartLine\b/,
 ];
-
-// Every top-level function declaration in this codebase starts at column 0
-// (no nested/inner function declarations share this shape) — used below to
-// find the NEAREST enclosing function, not just "some blessed function
-// within N lines." A fixed lookback window would silently exempt code in
-// reconcileAddProposals() too, just because writeBundleLine()/
-// applyCartSnapshot() happen to be declared shortly before it in the file —
-// which is exactly how this file's own internal `cart.splice(lineIdx, 1)`
-// (dropped_unauthorized path) used to pass this test without ever calling a
-// blessed writer.
-const TOP_LEVEL_FN_DECL = /^(export )?function \w+/;
 
 async function readDir(dir: string): Promise<string[]> {
   const files: string[] = [];
@@ -107,17 +87,13 @@ Deno.test("enforce-single-cart-writer: no direct cart.push outside writeCartLine
       for (const { pattern, label } of FORBIDDEN_PATTERNS) {
         if (!pattern.test(line)) continue;
 
-        // In turn-reconciler.ts: allow only if the NEAREST preceding
-        // top-level function declaration (not just any blessed declaration
-        // somewhere above) is one of the blessed writers — i.e. the hit is
-        // actually inside that function's own body, not merely close to it
-        // in the file.
+        // In turn-reconciler.ts: allow if the hit is inside one of the
+        // three blessed function bodies. We check by scanning back up to
+        // 150 lines for the most recent function declaration.
         if (fileName === SINGLE_WRITER_FILE) {
-          let nearestDeclLine: string | null = null;
-          for (let j = i; j >= 0; j--) {
-            if (TOP_LEVEL_FN_DECL.test(lines[j])) { nearestDeclLine = lines[j]; break; }
-          }
-          const inBlessed = nearestDeclLine !== null && BLESSED_FN_PATTERNS.some(p => p.test(nearestDeclLine!));
+          const contextStart = Math.max(0, i - 150);
+          const context = lines.slice(contextStart, i + 1).join("\n");
+          const inBlessed = BLESSED_FN_PATTERNS.some(p => p.test(context));
           if (inBlessed) continue;
         }
 

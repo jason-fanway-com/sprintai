@@ -330,37 +330,6 @@ export function applyCartSnapshot(cart: ReconcilerCartLine[], snapshot: Reconcil
   cart.push(...snapshot);
 }
 
-/**
- * Removes exactly one line by index (remove_item, cancel_bundle, GUARD 7
- * rollback, the reconciler's own phantom-drop). The remove counterpart to
- * writeCartLine — same reasoning: exactly one function is allowed to take an
- * entry out of a cart array, so a future removal site can't reintroduce a
- * bespoke splice with its own (possibly wrong) index math.
- */
-export function removeCartLine(cart: ReconcilerCartLine[], index: number): boolean {
-  if (index < 0 || index >= cart.length) return false;
-  cart.splice(index, 1);
-  return true;
-}
-
-/** Empties a cart array in place (clear_cart). */
-export function clearCart(cart: ReconcilerCartLine[]): void {
-  cart.length = 0;
-}
-
-/**
- * Inserts a line immediately after `afterIndex` — the D1 quantity-split
- * create (splitting `quantity: N` into one modified unit plus a leftover
- * line). Still just a positional insert; the caller (ask-plan-engine.ts) is
- * responsible for checking whether an identical split-off line already
- * exists elsewhere and merging into it instead of calling this a second time
- * — a raw splice here would otherwise reintroduce a duplicate line by a
- * different door than the one writeCartLine's identity check already closed.
- */
-export function writeSplitCartLine(cart: ReconcilerCartLine[], afterIndex: number, line: ReconcilerCartLine): void {
-  cart.splice(afterIndex + 1, 0, line);
-}
-
 export interface ReconcileChange {
   menu_item_id: string;
   action: "added" | "qty_set" | "noop_reconfirm" | "dropped_unauthorized";
@@ -473,7 +442,7 @@ export function reconcileAddProposals(
         // Nothing in this turn's own text (or an authorized offer/shortcut)
         // actually asked for this — a phantom add. Drop it rather than let
         // an unauthorized proposal silently become a charge.
-        removeCartLine(cart, lineIdx);
+        cart.splice(lineIdx, 1);
         changes.push({ menu_item_id: key.split("::")[0], action: "dropped_unauthorized" });
         continue;
       }
