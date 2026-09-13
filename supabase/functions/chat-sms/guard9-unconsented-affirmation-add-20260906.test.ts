@@ -393,45 +393,7 @@ Deno.test("GUARD 4: the customer-facing upsell line is gone from index.ts (root 
   );
 });
 
-// ── Requirement/backstop: GUARD 9 itself exists and is wired as documented ─
-
-Deno.test("GUARD 9: exists in index.ts, keyed off impliesOrderConfirmation, and warns on trip", () => {
-  assert(INDEX_SOURCE.includes("GUARD 9 (unconsented-add-on-affirmation)"), "GUARD 9 warn marker must exist");
-  assert(/Guard 9: unconsented cart growth on a bare affirmation/.test(INDEX_SOURCE));
-});
-
-// ── Wiring regression guard (the QA-found bug specifically) ────────────────
-// Extracts the GUARD 9 block from index.ts (from its section-header comment
-// to the next guard's) and asserts the call site passes
-// `cartSnapshotBeforeTurn` into computeGuard9 and does NOT feed it
-// `cartItems`. This is the exact wiring mistake QA caught before ship: if it
-// ever recurs, this test fails even though computeGuard9 itself (tested
-// above) is correct in isolation.
-
-function extractGuard9Block(source: string): string {
-  const start = source.indexOf("// ── Guard 9: unconsented cart growth on a bare affirmation");
-  assert(start !== -1, "GUARD 9 section header comment must exist in index.ts");
-  const nextGuardMarker = "// ── Guard 2: order confirmation + no pickup name";
-  const end = source.indexOf(nextGuardMarker, start);
-  assert(end !== -1, "the guard following GUARD 9 must exist in index.ts (marker text may have moved)");
-  return source.slice(start, end);
-}
-
-Deno.test("GUARD 9 wiring: index.ts's call site passes cartSnapshotBeforeTurn, not cartItems, as the before-cart", () => {
-  const block = extractGuard9Block(INDEX_SOURCE);
-  assert(
-    /computeGuard9\(\s*userMessage,\s*cartSnapshotBeforeTurn,\s*guardCart,/.test(block),
-    "GUARD 9 must call computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, ...) — got:\n" + block,
-  );
-  // The historical bug: `cartItems` used as the before-snapshot. GUARD 9's
-  // CODE (comments deliberately still name `cartItems` as a warning — strip
-  // `//` line comments before checking) legitimately references `cartItems`
-  // nowhere — that variable belongs to earlier correction/short-circuit
-  // logic in the function, not to this guard.
-  const codeOnly = block.split("\n").map(line => line.replace(/\/\/.*$/, "")).join("\n");
-  assertEquals(
-    /\bcartItems\b/.test(codeOnly),
-    false,
-    "GUARD 9's executable code must never reference `cartItems` — it is mutated in place and cannot answer 'what changed this turn'",
-  );
-});
+// ── Requirement/backstop + wiring regression guards removed 2026-09-13:
+// GUARD 9's index.ts call site was retired when turn-reconciler.ts
+// (b7bd0404) took over the aggregate-growth decision; computeGuard9 and
+// impliesOrderConfirmation are kept and tested above as pure functions.
