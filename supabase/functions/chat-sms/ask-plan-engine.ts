@@ -46,7 +46,7 @@
 import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
-import { writeCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
+import { writeCartLine, writeSplitCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
 
 // REMOVED (2026-09-09 P0, third recurrence of the pepperoni-bleed defect):
 // isolatePhraseForItem used to re-derive "which phrase belongs to this item"
@@ -1292,19 +1292,34 @@ export function applyCompiledModifyItem(
     if (line.quantity > 1 && !ALL_UNITS_RE.test(customerMessage)) {
       // See ALL_UNITS_RE's doc above: split one unit off rather than
       // silently re-pricing every unit sharing this line.
-      line.quantity -= 1;
-      splitOffLine = {
-        menu_item_id: line.menu_item_id,
-        name: line.name,
-        quantity: 1,
-        price_cents: priceCents,
-        modifiers: line.modifiers,
-        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
-        pending_options: outcome.pendingGroupNames,
-        ask_plan_selections: selections,
-        sourcePhraseIndex: line.sourcePhraseIndex,
-      };
-      cart.splice(idx + 1, 0, splitOffLine);
+      const splitResolvedOptions = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+      // Idempotency (PO 2026-09-13): a retry of this same modify_item call
+      // must not insert a second split-off line for the same resolved
+      // options — that would reintroduce a duplicate by a different door
+      // than the one writeCartLine's identity check already closed. If a
+      // split-off line for this identity already exists elsewhere in the
+      // cart, this retry just grows its quantity instead of splitting again.
+      const alreadySplitIdx = cart.findIndex((ci, i) =>
+        i !== idx && ci.menu_item_id === line.menu_item_id && sameResolvedOptions(ci.options, splitResolvedOptions));
+      if (alreadySplitIdx >= 0) {
+        line.quantity -= 1;
+        cart[alreadySplitIdx].quantity += 1;
+        splitOffLine = cart[alreadySplitIdx];
+      } else {
+        line.quantity -= 1;
+        splitOffLine = {
+          menu_item_id: line.menu_item_id,
+          name: line.name,
+          quantity: 1,
+          price_cents: priceCents,
+          modifiers: line.modifiers,
+          options: splitResolvedOptions,
+          pending_options: outcome.pendingGroupNames,
+          ask_plan_selections: selections,
+          sourcePhraseIndex: line.sourcePhraseIndex,
+        };
+        writeSplitCartLine(cart as unknown as ReconcilerCartLine[], idx, splitOffLine as unknown as ReconcilerCartLine);
+      }
     } else {
       line.ask_plan_selections = selections;
       line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;

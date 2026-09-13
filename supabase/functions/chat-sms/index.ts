@@ -64,6 +64,8 @@ import {
   writeCartLine,
   writeBundleLine,
   applyCartSnapshot,
+  removeCartLine,
+  clearCart,
   findCartLineIndexByIdentity,
   type CartUnitProposal,
   type CartLineSnapshot,
@@ -2176,7 +2178,7 @@ export async function executeTool(
       const idx = cart.findIndex(i => (i as CartItem).menu_item_id === menu_item_id);
       if (idx < 0) return { ok: false, result: { error: "Item not found in cart." } };
       const removed = (cart[idx] as CartItem).name;
-      cart.splice(idx, 1);
+      removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { removed } };
     }
@@ -2414,7 +2416,7 @@ export async function executeTool(
     }
 
     case "clear_cart": {
-      cart.splice(0, cart.length);
+      clearCart(cart as unknown as ReconcilerCartLine[]);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { cleared: true } };
     }
@@ -2732,7 +2734,7 @@ export async function executeTool(
       if (bundleIdx < 0) {
         return { ok: false, result: { error: "No active bundle to cancel." } };
       }
-      cart.splice(bundleIdx, 1);
+      removeCartLine(cart as unknown as ReconcilerCartLine[], bundleIdx);
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { message: "Bundle cancelled." } };
     }
@@ -2798,11 +2800,8 @@ export async function executeTool(
         }
       }
       if (cartChanged) {
-        const subtotal = computeCartSubtotalCents(cart);
-        const { error: backfillError } = await supabase.from("order_carts")
-          .update({ cart_json: cart, subtotal_cents: subtotal, total_cents: subtotal })
-          .eq("id", cartId);
-        if (backfillError) console.error(`[chat-sms] set_note structured-option backfill FAILED for cart=${cartId}: ${backfillError.message}`);
+        const backfillSaved = await saveCart(supabase, cartId, cart, "building");
+        if (!backfillSaved) console.error(`[chat-sms] set_note structured-option backfill FAILED for cart=${cartId}`);
       }
 
       return { ok: true, result: { message: `Order notes saved: ${note}` } };
@@ -7608,7 +7607,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // cartLineKey() maps every one of them to the same "?::" key, which
       // is exactly the "Duplicate cart lines: ?::" signature the test
       // harness caught after PROOF-P2 fired under a concurrent-retry race.
-      await supabase.from("order_carts").update({ cart_json: cartItems }).eq("id", cart.id);
+      await saveCart(supabase, cart.id, cartItems, "building");
       // P0 fix (2026-09-09, item 2 — itemized recap): route through
       // itemizer.ts instead of a bare name list, same reasoning as the
       // correctionApplied short-circuit above.
@@ -7971,7 +7970,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // An ambiguous charge must never stand silently — roll it back
         // before asking, not after.
         const idx = guardCart.indexOf(added);
-        if (idx !== -1) guardCart.splice(idx, 1);
+        if (idx !== -1) removeCartLine(guardCart as unknown as ReconcilerCartLine[], idx);
         // BUG 3 (2026-09-12, PO — backstop never fired on the Vito's Gyro live
         // loop): the model doesn't just leave an unresolved answer in free
         // text — it often GUESSES, calling add_item on the still-ambiguous
