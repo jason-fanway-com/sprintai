@@ -5594,6 +5594,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
+  let checkoutWantsChangeFired = false;
   if (cart.phase === "checkout") {
     const upper = userMessage.toUpperCase().trim();
     const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
@@ -5641,6 +5642,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // Go back to building phase so the LLM can handle modifications
       await supabase.from("order_carts").update({ phase: "building", stripe_checkout_session_id: null }).eq("id", cart.id);
       cart.phase = "building" as OrderPhase;
+      checkoutWantsChangeFired = true;
       // Fall through to the LLM loop below so it can process the change request
     } else {
       // Default: remind about payment but offer options
@@ -5848,6 +5850,14 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       role:    m.role === "customer" ? "user" as const : "assistant" as const,
       content: m.content,
     }));
+  if (checkoutWantsChangeFired) {
+    // Context bridge: prevents the LLM from seeing "Payment link sent!" as the
+    // last assistant turn and concluding the order is finalized. Injected into
+    // the in-memory history only (never saved to DB) so it's invisible to
+    // customers but visible to the LLM for this request, letting it correctly
+    // process "add fries" / "change X" as a building-phase modification.
+    history.push({ role: "assistant" as const, content: "No problem — I've cancelled that payment link. What would you like to change?" });
+  }
 
   // Save user message with dedup on message_sid (prevents double-processing on
   // retransmitted SMS or duplicate webhook). If this message_sid was already
@@ -6873,6 +6883,44 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
                 }
               }
               break;
+            }
+          }
+        } else if (namedThisTurnC2bName.size === 1) {
+          // Compound "confirm + add" turn (with or without a connector):
+          // "yes that's me, add a coke" / "yes, and add fries" / "yep,
+          // and two cokes". The LLM fallback non-deterministically dropped
+          // the addition on all of these shapes. A prior version excluded
+          // connector messages ("yes, and add fries") based on an incorrect
+          // assumption that the LLM handled them reliably; the 2026-09-12
+          // acceptance matrix run proved otherwise (cases 2 and 6). Extended
+          // here to cover all connector shapes and to extract quantity so
+          // "two cokes" → qty 2. Same one-pass, no-cart-ambiguity contract
+          // as the removal branch above.
+          const [addedNameC2b] = [...namedThisTurnC2bName];
+          const alreadyInCartC2b = cartItems.some(
+            ci => (ci as CartItem).name?.toLowerCase() === addedNameC2b.toLowerCase(),
+          );
+          const menuItemC2b = effectiveMenu.find(m => m.name === addedNameC2b);
+          if (!alreadyInCartC2b && menuItemC2b) {
+            const qtyWordsC2b: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 };
+            const qtyMatchC2b = trimmed.match(/\b(two|three|four|five|[2-9])\b/i);
+            const qtyC2b = qtyMatchC2b
+              ? (parseInt(qtyMatchC2b[1]) || qtyWordsC2b[qtyMatchC2b[1].toLowerCase()] || 1)
+              : 1;
+            const addResultC2b = await executeTool(
+              "add_item", { menu_item_id: menuItemC2b.id, quantity: qtyC2b },
+              cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+              undefined, undefined,
+              shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
+            );
+            if (addResultC2b.ok) {
+              const qtyPrefixC2b = qtyC2b > 1 ? `${qtyC2b}x ` : "";
+              console.log(`[chat-sms] C2b-name compound addition (conv=${conversation.id}): added "${addedNameC2b}" qty=${qtyC2b}, re-asking name.`);
+              const replyC2b = `${qtyPrefixC2b}${addedNameC2b} added. Putting this in for ${customerContext.name}, right?`;
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+              return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
             }
           }
         }
