@@ -319,9 +319,13 @@ Deno.test("GUARD 2 wiring: unresolved required options are checked BEFORE the na
     "// ── Guard 2c: hallucinated total",
   );
   const pendingIdx = block.indexOf("guardPendingItems.length > 0");
-  const nameAskIdx = block.indexOf("!hasPickupName && impliesOrderConfirmation");
+  // docs/specs/2026-09-13-checkout-mode-insulation.md (incident A): GUARD 2's
+  // name-ask branch now uses checkoutOrNameIntentThisTurn (from
+  // isExplicitCheckoutIntent) instead of the old bare impliesOrderConfirmation,
+  // so a "yes" answering a delivery question no longer triggers it.
+  const nameAskIdx = block.indexOf("!hasPickupName && checkoutOrNameIntentThisTurn");
   assert(pendingIdx !== -1, "GUARD 2 must check guardPendingItems before asking for the name");
-  assert(nameAskIdx !== -1, "GUARD 2's name-ask branch must still exist");
+  assert(nameAskIdx !== -1, "GUARD 2's name-ask branch must still exist (now gated on checkoutOrNameIntentThisTurn, not bare impliesOrderConfirmation)");
   assert(pendingIdx < nameAskIdx, "the pending-options check must appear BEFORE the name-ask branch (it must run first)");
 });
 

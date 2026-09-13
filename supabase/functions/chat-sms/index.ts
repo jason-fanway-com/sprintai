@@ -88,6 +88,7 @@ import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } fro
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
 import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE, CART_SUMMARY_MENTION_RE } from "./cart-summary-intent-20260909.ts";
+import { isExplicitCheckoutIntent, shouldRedirectNameAskToCheckoutGate } from "./checkout-intent-gate-20260913.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
 import { lookupCustomerContext, regularEligibility, upsertOrderFulfillmentMemory, type CustomerRow } from "../_shared/customer-profile.ts";
 import type { AskPlan } from "../_shared/compile-menu.ts";
@@ -236,6 +237,14 @@ interface EffectiveMenuItem {
   ask_plan?:        AskPlan | null;
   bot_state?:       string | null;
   bot_state_reason?: string | null;
+  // docs/specs/2026-09-13-checkout-insulation.md: menu_items.upsell (migration
+  // 050) is populated for real shops ("Shrimp +6.00; Black Diamond Steak
+  // +8.00") but was never read anywhere in this file — the model was told to
+  // upsell (UPSELL RESTRAINT) with zero grounded data to reference, so it
+  // either stayed silent or would have had to invent an item, which the
+  // UPSELL GUARD rule explicitly forbids. Surfaced inline per item in the
+  // AVAILABLE MENU block below so the model has something real to offer.
+  upsell?:          string | null;
 }
 
 interface CartItem {
@@ -371,6 +380,16 @@ interface OrderCart {
   ticket_send_attempt_at:     string | null;
   fee_disclosed_at:           string | null;
   delivery_offer_made_at:     string | null;
+  // docs/specs/2026-09-13-checkout-mode-insulation.md, migration 138. Cart
+  // item subtotal (cents) at the moment the pickup-name ask/confirm was last
+  // issued for this cart. NULL = not yet asked (or moot — pickup_name set).
+  name_confirm_pending_total_cents: number | null;
+  // docs/specs/2026-09-13-checkout-insulation.md, migration 139. Timestamp
+  // checkout intent was first established for this cart (see
+  // shouldRedirectNameAskToCheckoutGate in checkout-intent-gate-20260913.ts).
+  // NULL means not yet established — a name-ask/name-confirm reply is not
+  // yet allowed to go out.
+  checkout_intent_confirmed_at: string | null;
   // BLOCKER 1 (docs/specs/2026-09-06-disambiguation-and-menu-gaps.md): the
   // candidates GUARD 7 offered, so the NEXT inbound message can be resolved
   // deterministically before the LLM ever runs. Null once resolved, reset,
@@ -610,10 +629,10 @@ async function buildEffectiveMenu(
 
   if (!menu) return { menu: [], soldOutNames: [] };
 
-  const items = await fetchAllRows<{ id: string; name: string; description: string | null; price_cents: number; category: string; modifiers_json: Array<{ name: string; price_cents: number }> | null; prompt_for: string | null; ask_plan: AskPlan | null; bot_state: string | null; bot_state_reason: string | null }>(() =>
+  const items = await fetchAllRows<{ id: string; name: string; description: string | null; price_cents: number; category: string; modifiers_json: Array<{ name: string; price_cents: number }> | null; prompt_for: string | null; ask_plan: AskPlan | null; bot_state: string | null; bot_state_reason: string | null; upsell: string | null }>(() =>
     supabase
       .from("menu_items")
-      .select("id, name, description, price_cents, category, modifiers_json, prompt_for, ask_plan, bot_state, bot_state_reason")
+      .select("id, name, description, price_cents, category, modifiers_json, prompt_for, ask_plan, bot_state, bot_state_reason, upsell")
       .eq("menu_id", menu!.id)
       .eq("active", true)
       .order("display_order", { ascending: true })
@@ -704,6 +723,7 @@ async function buildEffectiveMenu(
       ask_plan:         item.ask_plan ?? null,
       bot_state:        item.bot_state ?? null,
       bot_state_reason: item.bot_state_reason ?? null,
+      upsell:           item.upsell ?? null,
     }));
 
   return { menu: effectiveItems, soldOutNames };
@@ -817,13 +837,19 @@ export function buildSystemPrompt(
           : item.name;
         const price = `$${(item.price_cents / 100).toFixed(2)}`;
         const desc  = item.description ? ` - ${item.description}` : "";
+        // docs/specs/2026-09-13-checkout-insulation.md: real, grounded
+        // cross-sell text (semicolon-separated, e.g. "Shrimp +6.00; Black
+        // Diamond Steak +8.00") so the UPSELL RESTRAINT rule has something
+        // concrete to reference instead of nothing — this is what makes the
+        // upsell moment in the close sequence actually fireable.
+        const upsellText = item.upsell ? ` | Upsell: ${item.upsell}` : "";
         const groups = item.option_groups || [];
         if (groups.length > 0) {
           const groupLines = groups.map(g => {
             const reqLabel = optionCardinality(g);
             return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.is_default ? ' [default]' : '') + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
           }).join('\n');
-          return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}${upsellText}\n${groupLines}`;
         } else {
           const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
           // The importer knew this item needs a choice but never captured WHAT
@@ -833,7 +859,7 @@ export function buildSystemPrompt(
           const ask = (!mods && item.prompt_for)
             ? ` | REQUIRES A CHOICE: ${item.prompt_for} - the available choices are NOT recorded. ASK the customer; never state or guess a list.`
             : "";
-          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${ask}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${upsellText}${ask}`;
         }
       }).join("\n");
       return `${cat}:\n${rows}`;
@@ -1195,19 +1221,22 @@ export function buildSystemPromptV2(
           : item.name;
         const price = `$${(item.price_cents / 100).toFixed(2)}`;
         const desc  = item.description ? ` - ${item.description}` : "";
+        // docs/specs/2026-09-13-checkout-insulation.md: see the identical
+        // upsellText line in buildSystemPrompt above.
+        const upsellText = item.upsell ? ` | Upsell: ${item.upsell}` : "";
         const groups = item.option_groups || [];
         if (groups.length > 0) {
           const groupLines = groups.map(g => {
             const reqLabel = optionCardinality(g);
             return `    → ${g.name} (${reqLabel}): ${g.choices.map(c => c.name + (c.is_default ? ' [default]' : '') + (c.price_cents > 0 ? ` +$${(c.price_cents/100).toFixed(2)}` : '')).join(', ')}`;
           }).join('\n');
-          return `  ID:${item.id} | ${label} ${price}${desc}\n${groupLines}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}${upsellText}\n${groupLines}`;
         } else {
           const mods = item.modifiers_json?.map(m => m.name).join(", ") ?? "";
           const ask = (!mods && item.prompt_for)
             ? ` | REQUIRES A CHOICE: ${item.prompt_for} - the available choices are NOT recorded. ASK the customer; never state or guess a list.`
             : "";
-          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${ask}`;
+          return `  ID:${item.id} | ${label} ${price}${desc}${mods ? ` | Options: ${mods}` : ""}${upsellText}${ask}`;
         }
       }).join("\n");
       return `${cat}:\n${rows}`;
@@ -5874,6 +5903,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         pickup_name: null,
         pending_disambiguation: null,
         delivery_offer_made_at: null,
+        name_confirm_pending_total_cents: null,
+        checkout_intent_confirmed_at: null,
       }).eq("id", cart.id);
       cart.test_mode = true;
       cart.cart_json = [];
@@ -5902,6 +5933,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         pickup_name: null,
         pending_disambiguation: null,
         delivery_offer_made_at: null,
+        name_confirm_pending_total_cents: null,
+        checkout_intent_confirmed_at: null,
       }).eq("id", cart.id);
       cart.test_mode = true;
       cart.cart_json = [];
@@ -6978,8 +7011,24 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       // instead — never resolve a name or submit on this turn.
       if (CART_SUMMARY_MENTION_RE.test(trimmed)) {
         const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
-        const reply = `Here's your order:\n\n${recap}\n\nPutting this in for ${customerContext.name}, right?`;
-        console.log(`[chat-sms] C2b-name held (conv=${conversation.id}): compound read+confirm turn — showed the order instead of auto-submitting.`);
+        // docs/specs/2026-09-13-checkout-mode-insulation.md (incident B, conv
+        // fdf5ec8e): a pure read request ("show me the order") changes
+        // nothing about the cart, so re-appending the identical "Putting
+        // this in for X, right?" question here — on TOP of whatever turn
+        // already asked it — is a re-ask "for no new reason", exactly what
+        // produced the question appearing four times in one conversation.
+        // Only repeat it when the subtotal has actually moved since the last
+        // time it was asked (a real reason: the customer needs to
+        // re-confirm against a total they haven't seen yet).
+        const currentSubtotalC2bName = computeCartSubtotalCents(cartItems);
+        const alreadyAskedUnchanged = cart.name_confirm_pending_total_cents === currentSubtotalC2bName;
+        const reply = alreadyAskedUnchanged
+          ? `Here's your order:\n\n${recap}`
+          : `Here's your order:\n\n${recap}\n\nPutting this in for ${customerContext.name}, right?`;
+        if (!alreadyAskedUnchanged) {
+          await supabase.from("order_carts").update({ name_confirm_pending_total_cents: currentSubtotalC2bName }).eq("id", cart.id);
+        }
+        console.log(`[chat-sms] C2b-name held (conv=${conversation.id}): compound read+confirm turn — showed the order instead of auto-submitting${alreadyAskedUnchanged ? " (name-confirm already pending, suppressed repeat ask)" : ""}.`);
         await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
         await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
@@ -7042,6 +7091,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
                 if (removeResultC2b.ok) {
                   console.log(`[chat-sms] C2b-name compound removal (conv=${conversation.id}): removed "${targetC2b.matched_value}" from "${targetC2b.name}", re-asking name.`);
                   const replyC2b = `Removed ${targetC2b.matched_value} from the ${targetC2b.name}. Putting this in for ${customerContext.name}, right?`;
+                  // docs/specs/2026-09-13-checkout-mode-insulation.md: the cart
+                  // just changed, so re-asking here IS for a new reason —
+                  // track the NEW subtotal so a later no-op turn (e.g. "show
+                  // me the order") can tell it was already asked at this
+                  // total and not repeat it again.
+                  await supabase.from("order_carts").update({ name_confirm_pending_total_cents: computeCartSubtotalCents(cartItems) }).eq("id", cart.id);
                   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
                   await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
                   if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
@@ -7083,6 +7138,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
               const qtyPrefixC2b = qtyC2b > 1 ? `${qtyC2b}x ` : "";
               console.log(`[chat-sms] C2b-name compound addition (conv=${conversation.id}): added "${addedNameC2b}" qty=${qtyC2b}, re-asking name.`);
               const replyC2b = `${qtyPrefixC2b}${addedNameC2b} added. Putting this in for ${customerContext.name}, right?`;
+              // docs/specs/2026-09-13-checkout-mode-insulation.md: same reason
+              // as the compound-removal branch above — the cart just changed,
+              // so track the NEW subtotal for this re-ask.
+              await supabase.from("order_carts").update({ name_confirm_pending_total_cents: computeCartSubtotalCents(cartItems) }).eq("id", cart.id);
               await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
               await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
               if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
@@ -7575,7 +7634,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
 
   // Fetch order-level metadata for guards (pickup_name, checkout session, etc).
   const { data: guardCartRow } = await supabase
-    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_address, delivery_fee_cents, driver_tip_cents, fee_disclosed_at")
+    .from("order_carts").select("pickup_name, phase, stripe_checkout_session_id, order_type, delivery_address, delivery_fee_cents, driver_tip_cents, fee_disclosed_at, name_confirm_pending_total_cents, checkout_intent_confirmed_at")
     .eq("id", cart.id).single();
   const guardCart: AnyCartItem[] = cart.cart_json as AnyCartItem[];
 
@@ -9096,11 +9155,46 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   const guardPendingItems = guardCart.filter(
     i => (i as CartItem).pending_options && (i as CartItem).pending_options!.length > 0,
   ) as CartItem[];
+  // docs/specs/2026-09-13-checkout-mode-insulation.md (incident A): a bare
+  // impliesOrderConfirmation() match ("yes" anywhere in the message) used to
+  // be sufficient on its own to force the name ask/confirm below — so "Yes to
+  // delivery but I want pepperoni this time" (answering the DELIVERY
+  // question, not "anything else, or ready to check out?") jumped straight
+  // to "Putting this in for Jason, right?" with no "anything else?" in
+  // between. checkoutOrNameIntentThisTurn requires the bare affirmation to
+  // actually be answering the checkout-ready or pickup-name question the bot
+  // itself just asked (or an unambiguous customer-initiated phrase like
+  // "checkout"), and never fires when this turn also names an item, states a
+  // quantity, removes something, or asks to see the order.
+  const lastAssistantMsgForCheckoutGate = [...history].reverse().find(h => h.role === "assistant")?.content ?? null;
+  const namedThisTurnForCheckoutGate = extractCustomerReferencedItems(
+    [{ role: "user", content: userMessage }],
+    buildMenuItemNames(effectiveMenu),
+  );
+  const hasCompetingIntentThisTurnForCheckoutGate =
+    CART_SUMMARY_MENTION_RE.test(userMessage.trim()) ||
+    namedThisTurnForCheckoutGate.size > 0 ||
+    hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurnForCheckoutGate.size) ||
+    statesQuantity(userMessage) ||
+    /\b(?:drop|remove|without|hold the|no more|minus)\b/i.test(userMessage);
+  const checkoutOrNameIntentThisTurn = isExplicitCheckoutIntent(
+    userMessage, lastAssistantMsgForCheckoutGate, hasCompetingIntentThisTurnForCheckoutGate,
+  );
+  // docs/specs/2026-09-13-checkout-insulation.md, migration 139: the first
+  // turn checkout intent is genuinely established, persist it so later turns
+  // (this cart may take several more before a name is actually captured) can
+  // tell "the close was properly triggered earlier" apart from "never
+  // triggered" — see shouldRedirectNameAskToCheckoutGate below.
+  let checkoutIntentConfirmedPersisted = !!guardCartRow?.checkout_intent_confirmed_at;
+  if (checkoutOrNameIntentThisTurn && !checkoutIntentConfirmedPersisted) {
+    await supabase.from("order_carts").update({ checkout_intent_confirmed_at: new Date().toISOString() }).eq("id", cart.id);
+    checkoutIntentConfirmedPersisted = true;
+  }
   if (!checkoutUrl && guardCart.length > 0 && guardPendingItems.length > 0 && impliesOrderConfirmation(userMessage)) {
     const asks = guardPendingItems.map(i => `${i.name} (${i.pending_options!.join(", ")})`).join("; ");
     console.log(`[chat-sms] GUARD 2-pending (confirmation with unresolved required options) tripped (conv=${conversation.id}). Re-asking: ${asks}`);
     reply = renderMissingOptionsPrompt(guardPendingItems.map(i => ({ name: i.name, missingGroups: i.pending_options! })));
-  } else if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && impliesOrderConfirmation(userMessage)) {
+  } else if (!checkoutUrl && guardCart.length > 0 && !hasPickupName && checkoutOrNameIntentThisTurn) {
     console.log(`[chat-sms] GUARD 2 (confirmation sans pickup name) tripped (conv=${conversation.id}). Forcing name prompt.`);
     // The itemized receipt is attached below in Phase A (the single place
     // that owns this, since the model asks for the name on its own
@@ -9110,6 +9204,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // nameConfirm/isConfirmingPickupName wording the checkout prompt and C2b-
     // name shortcut use, so this guard's forced prompt still triggers them.
     reply = customerContext?.name ? nameConfirm(customerContext.name) : NAME_ASK;
+    // docs/specs/2026-09-13-checkout-mode-insulation.md (incident B): track
+    // that the name ask/confirm was just issued FOR THIS SUBTOTAL, so a later
+    // read-only turn (e.g. "show me the order") can tell "nothing changed,
+    // don't repeat yourself" apart from "the cart changed, re-confirm" — see
+    // the C2b-name CART_SUMMARY_MENTION_RE branch above, which reads this.
+    await supabase.from("order_carts").update({ name_confirm_pending_total_cents: guardCartSubtotal }).eq("id", cart.id);
   }
 
   // ── Guard 2c: hallucinated total ──────────────────────────────────────
@@ -9198,9 +9298,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // yes..." would otherwise read as clean checkout intent here too. Never
   // let a turn that ALSO asks to see the order trigger the one irreversible
   // action in this flow.
+  // docs/specs/2026-09-13-checkout-mode-insulation.md: reuses
+  // checkoutOrNameIntentThisTurn (computed above, ahead of GUARD 2) rather
+  // than a raw impliesOrderConfirmation() check, for the same incident-A
+  // reason — a bare "yes" must be answering the checkout-ready/pickup-name
+  // question, not some other question, before it can fire the one
+  // irreversible action in this flow.
   if (!checkoutUrl && guardCart.length > 0 && hasPickupName && orderTypePreLoop) {
     const hasIncompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
-    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage) && !CART_SUMMARY_MENTION_RE.test(userMessage.trim())) {
+    if (!hasIncompleteBundle && checkoutOrNameIntentThisTurn) {
       console.log(`[chat-sms] D1 checkout-completion-driver firing (conv=${conversation.id}, cart=${cart.id}, name="${guardCartRow?.pickup_name}", order_type=${orderTypePreLoop})`);
       const submitInput: Record<string, unknown> = { pickup_name: guardCartRow?.pickup_name };
       const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);
@@ -9415,6 +9521,22 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           .map(i => ({ name: (i as CartItem).name, missingGroups: (i as CartItem).pending_options! }));
         console.warn(`[chat-sms] HARD GATE (name-ask with unresolved required options) tripped (conv=${conversation.id}). Overriding reply that asked for the name while options were still pending.`);
         reply = renderMissingOptionsPrompt(pendingForPrompt);
+      } else if (shouldRedirectNameAskToCheckoutGate(reply, hasPickupName, checkoutOrNameIntentThisTurn, checkoutIntentConfirmedPersisted)) {
+        // GUARD 23 (2026-09-13, docs/specs/2026-09-13-checkout-insulation.md):
+        // the close sequence is item add -> at most one upsell -> "anything
+        // else, or ready to check out?" -> ONLY THEN the name-ask. The
+        // name-ask must never be what STARTS closing. Whatever produced this
+        // reply — GUARD 2 forcing it (already correctly gated on
+        // checkoutOrNameIntentThisTurn) or the model reaching for the name on
+        // its own initiative per the PICKUP NAME RULE (the actual bug: it
+        // rushes to the name-ask the moment an item lands) — a name-ask/
+        // name-confirm reply may only go out once checkout intent has
+        // actually been established, this turn or an earlier one
+        // (checkout_intent_confirmed_at, migration 139). Redirect to the
+        // ready-to-checkout question instead — the ONE question this reply
+        // may carry, never combined with the name question in the same turn.
+        console.warn(`[chat-sms] GUARD 23 (name-ask before checkout-intent confirmed) tripped (conv=${conversation.id}). Redirecting to the ready-to-checkout question.`);
+        reply = `You've got ${guardCart.length} item${guardCart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`;
       } else if (!hasPickupName && isAskingForPickupName(reply)) {
         // FIX (2026-09-10, Jason — reported 2026-09-08 and twice more on
         // 2026-09-10): the itemized recap appended here landed in the SAME
