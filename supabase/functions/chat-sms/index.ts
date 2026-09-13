@@ -12,6 +12,7 @@
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { guardedSend, type OutboundContext } from "../_shared/outbound-guard.ts";
+import { logError } from "../_shared/error-log.ts";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
@@ -4008,13 +4009,13 @@ function emptyTwiml(): Response {
 
 // NOTE: currently unused. Kept gated so it can NEVER become an ungated send
 // path: it requires an OutboundContext, same as every other call site.
-async function smsReply(ctx: OutboundContext, shop: Shop, toNumber: string, message: string): Promise<Response> {
+async function smsReply(supabase: SupabaseClient, ctx: OutboundContext, shop: Shop, toNumber: string, message: string): Promise<Response> {
   const replyFrom = shop.reply_from_e164 || shop.phone_number_e164;
   if (!replyFrom) {
     console.error("[chat-sms] No reply number configured for shop");
     return emptyTwiml();
   }
-  await sendSmsViaTwilio(ctx, replyFrom, toNumber, message);
+  await sendSmsViaTwilio(supabase, ctx, replyFrom, toNumber, message);
   return emptyTwiml();
 }
 
@@ -4248,6 +4249,7 @@ async function saveMessage(
 // network call lives inside guardedSend's `deliver` closure and runs ONLY on
 // ALLOW; on DENY the guard logs CRITICAL and nothing leaves the system.
 async function sendSmsViaTwilio(
+  supabase:   SupabaseClient,
   ctx:        OutboundContext,
   fromNumber: string,
   toNumber:   string,
@@ -4287,7 +4289,7 @@ async function sendSmsViaTwilio(
     } else {
       console.log(`[chat-sms] SMS sent to ${toNumber}`);
     }
-  });
+  }, { supabase, phase: "chat-sms", customerMessage: message });
 
   if (!sent) {
     // Watchdog blocked it. Already logged CRITICAL inside the guard.
@@ -4441,7 +4443,7 @@ async function sendSmsViaTelnyx(
     } else {
       console.error(`[chat-sms] Telnyx send failed: ${res.status} ${errText}`);
     }
-  });
+  }, { supabase, phase: "chat-sms", customerMessage: message });
 
   if (!sent) {
     console.warn(`[chat-sms] OUTBOUND BLOCKED by watchdog (reason=${ctx.reason}); no SMS sent.`);
@@ -4627,7 +4629,7 @@ async function sendSms(
   if (provider === "telnyx") {
     await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, cleaned);
   } else {
-    await sendSmsViaTwilio(ctx, fromNumber, toNumber, cleaned);
+    await sendSmsViaTwilio(supabase, ctx, fromNumber, toNumber, cleaned);
   }
 }
 
@@ -5029,7 +5031,7 @@ export async function handleSystemEvent(
         } else {
           console.log(`[chat-sms] Queued outbound iMessage to ${realPhone}`);
         }
-      });
+      }, { supabase, phase: "chat-sms", customerMessage: message });
       if (!sent) {
         console.warn(`[chat-sms] OUTBOUND QUEUE BLOCKED by watchdog (reason=${txnCtx.reason}); nothing queued.`);
       }
@@ -7382,10 +7384,29 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // way to know why the confirmed offer didn't apply.
     reply = deliveryOfferDeterministicReply;
   } else {
-    const loopResult = await runOrderingLoop(
-      systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
-      compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null, preConsumedModifierChoiceIds, composedPhraseTexts,
-    );
+    let loopResult: Awaited<ReturnType<typeof runOrderingLoop>>;
+    try {
+      loopResult = await runOrderingLoop(
+        systemPrompt, history, userMessage, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo, correctionApplied,
+        compiledOrderingEngineEnabled, shop.phone_number_e164 ?? null, preConsumedModifierChoiceIds, composedPhraseTexts,
+      );
+    } catch (loopErr) {
+      // Edge-function logs live ~1 minute (see migration 137) — persist this
+      // ourselves so the failed turn is diagnosable after the fact.
+      await logError(supabase, {
+        conversationId: conversation.id as string,
+        shopId: shop.id,
+        tenantId: shop.tenant_id,
+        phase: "chat-sms",
+        stage: "tool_loop",
+        customerMessage: userMessage,
+        error: loopErr,
+      });
+      if (loopErr && typeof loopErr === "object") {
+        (loopErr as { __errorLogged?: boolean }).__errorLogged = true;
+      }
+      throw loopErr;
+    }
     reply = loopResult.reply;
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
     toolCallCountThisTurn = loopResult.debugToolCallCount ?? 0;
@@ -9588,6 +9609,24 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // LLM call timing, test_mode only. Remove once the regression is closed.
     ...(debugPerf ? { debug_perf: { ...debugPerf, endMs: Math.round(performance.now() - debugReqT0) } } : {}),
   });
+  } catch (turnErr) {
+    // Catch-all for this turn. The tool-calling loop above logs its own
+    // failures as stage "tool_loop" (and outbound sends log "outbound_send"
+    // via guardedSend) and tags the error so it isn't double-logged here —
+    // anything else that throws in this block (guards, rendering, cart
+    // finalization) is genuinely a rendering-path failure.
+    if (!(turnErr && typeof turnErr === "object" && (turnErr as { __errorLogged?: boolean }).__errorLogged)) {
+      await logError(supabase, {
+        conversationId: conversation.id as string,
+        shopId: shop.id,
+        tenantId: shop.tenant_id,
+        phase: "chat-sms",
+        stage: "render",
+        customerMessage: userMessage,
+        error: turnErr,
+      });
+    }
+    throw turnErr;
   } finally {
     // Release the D3 turn lock (see acquire above) on every exit path —
     // every early return in the block above is inside this try, so this

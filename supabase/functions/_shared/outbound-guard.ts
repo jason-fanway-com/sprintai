@@ -33,6 +33,8 @@
  *   guard — there is no other door.
  */
 
+import { logError } from "./error-log.ts";
+
 // ─── Freshness window ─────────────────────────────────────────────────────────
 // A triggering inbound older than this is NOT a live inbound worth auto-
 // answering (mirrors the bridge MAX_MSG_AGE_SECONDS fail-closed gate).
@@ -220,16 +222,60 @@ export function assertOutboundAllowed(ctx: OutboundContext): GuardDecision {
  *
  * Because the real sender is reached only via this function, a rogue call site
  * with no valid ctx CANNOT send — it fails closed structurally.
+ *
+ * `errorLog`, when provided, persists a row to `error_log` (see migration 137
+ * / _shared/error-log.ts) on DENY (`stage: "guard_deny"`) and on a thrown
+ * `deliver()` (`stage: "outbound_send"`) — working around the ~1 minute
+ * Supabase edge-log retention that otherwise makes these failures
+ * unrecoverable. It is optional and fail-open: logError never throws, and a
+ * `deliver()` failure is always rethrown after logging so callers keep their
+ * existing error-handling behavior.
  */
 export async function guardedSend(
   ctx: OutboundContext,
   deliver: () => Promise<void>,
+  errorLog?: {
+    supabase: import("https://esm.sh/@supabase/supabase-js@2.39.3").SupabaseClient;
+    phase: string;
+    customerMessage?: string | null;
+  },
 ): Promise<{ sent: boolean; decision: GuardDecision }> {
   const decision = assertOutboundAllowed(ctx);
   if (!decision.allow) {
     logCritical(decision, ctx);
+    if (errorLog) {
+      await logError(errorLog.supabase, {
+        conversationId: ctx.conversationId,
+        shopId: ctx.shopId,
+        tenantId: ctx.tenantId,
+        phase: errorLog.phase,
+        stage: "guard_deny",
+        customerMessage: errorLog.customerMessage,
+        error: new Error(decision.why),
+      });
+    }
     return { sent: false, decision };
   }
-  await deliver();
+  try {
+    await deliver();
+  } catch (err) {
+    if (errorLog) {
+      await logError(errorLog.supabase, {
+        conversationId: ctx.conversationId,
+        shopId: ctx.shopId,
+        tenantId: ctx.tenantId,
+        phase: errorLog.phase,
+        stage: "outbound_send",
+        customerMessage: errorLog.customerMessage,
+        error: err,
+      });
+      // Mark so an outer catch that also persists to error_log (e.g. a
+      // top-level request handler) doesn't double-log this same failure.
+      if (err && typeof err === "object") {
+        (err as { __errorLogged?: boolean }).__errorLogged = true;
+      }
+    }
+    throw err;
+  }
   return { sent: true, decision };
 }
