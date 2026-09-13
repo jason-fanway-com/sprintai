@@ -525,6 +525,28 @@ beyond that one order (corrected), but it is a concrete instance of the
 exact risk this project's whole Proof/quality-monitoring investment exists to
 catch, and this time it slipped past process, not past the tooling.
 
+### Added 2026-09-13 — the duplicate-charge bug class has a structural fix, now live
+
+A pattern kept recurring under different disguises: a customer says something
+ordinary ("You already know my name," "pickup," a bare "yes") and the cart
+quietly grows an item nobody asked for — because several independently
+reasonable pieces of logic each decided, on their own, that the message
+justified adding to the cart, and nothing was checking their combined effect.
+Real instances hit real orders this week, including one that would have
+doubled a $21 pizza to $42. Patching each occurrence one at a time (four
+separate "guards" bolted on over time) kept missing the next disguise.
+
+The fix replaces all four patches with one rule: for any given customer
+message, one function looks at everything the system is about to add to the
+cart *at once* and decides what actually belongs there, instead of trusting
+each piece of logic's individual judgment. Verified against a 9-case
+scripted conversation matrix plus a live restaurant's real menu before
+shipping, then confirmed live against production — not just checked into
+the code. For a restaurant owner, this closes one of the more damaging
+failure modes a diner could hit: seeing a charge for food they didn't order.
+Trust in "the bot got my order right" is the whole product; a duplicate
+charge is the fastest way to lose it.
+
 ---
 
 ## What's next (near-term roadmap)

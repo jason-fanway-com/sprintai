@@ -2243,24 +2243,54 @@ detect a missing column, not for the string `"1"` — a same-day bug
 unquoted JSON numbers, not quoted strings, so `"1"` never matched and every
 deploy failed closed).
 
-## Turn reconciler — replaces GUARD 9/13/20/21 for cart-growth aggregation (NOT YET LIVE) — 2026-09-12
+## Turn reconciler — replaces GUARD 9/13/20/21 for cart-growth aggregation — LIVE 2026-09-13
 
-`supabase/functions/chat-sms/turn-reconciler.ts` (branch
-`fix/turn-reconciler-20260912`, commit `b7bd0404`) is a single pure function,
-`reconcileAddProposals(preTurnCart, loopFinalCart, proposals[],
-customerText)`, that decides add/merge/no-op/drop for an entire turn's
-proposals together, replacing four guards that each validated one tool call
-at a time and could not see when several individually-valid calls summed to
-the wrong cart (defect class C4 in `docs/DEFECT-CLASSES.md`). Confirmed by
-diff: GUARD 9/13/20/21's call sites and `computeGuardN` imports are actually
-deleted from `index.ts`, not left running alongside the new code.
+`supabase/functions/chat-sms/turn-reconciler.ts` (commit `b7bd0404`, now on
+`main`) is a single pure function, `reconcileAddProposals(preTurnCart,
+loopFinalCart, proposals[], customerText)`, that decides add/merge/no-op/drop
+for an entire turn's proposals together, replacing four guards that each
+validated one tool call at a time and could not see when several
+individually-valid calls summed to the wrong cart (defect class C4 in
+`docs/DEFECT-CLASSES.md`). Confirmed by diff: GUARD 9/13/20/21's call sites
+and `computeGuardN` imports are actually deleted from `index.ts`, not left
+running alongside the new code.
 
-**As of 2026-09-12 this is on an unmerged branch and not deployed.** The
-commit's own message says not to merge or deploy until an acceptance matrix
-(script `scripts/tmp-turn-reconciler-acceptance-matrix-20260912.ts`, still
-untracked) runs clean against staging. `main` is currently one revert behind
-this (at `59833e02`), meaning defect class C4 has no live mitigation at all
-right now — two earlier per-call-site attempts at fixing it
-(`2d6d55a1`, `f471525a`) were each committed and then reverted the same day.
-Before claiming C4 is fixed in production, check the `DEPLOY_SHA` stamp on
-the live `chat-sms` artifact (see above) — do not infer it from `git log`.
+Four acceptance-matrix cases surfaced real gaps in the new architecture and
+were fixed on top of it before deploy, not inside `b7bd0404` itself:
+
+- **C2b-Name compound removal** (`2ac3ea1a`) — `matchOptionRemovalPhrase` is
+  anchored to the start of the message, so "yep but drop the pepperoni" never
+  hit the deterministic option-removal path. Added a clause-split within
+  `hasMixedIntentC2bName` that isolates the removal half before matching.
+- **Checkout-phase "add X" not recognized as a change** (`2ac3ea1a`) — the
+  `wantsChange` regex didn't include "add", so saying "add fries" after a
+  payment link was sent hit the canned fallback instead of reopening the
+  order and clearing the stale Stripe session.
+- **C2b-name, case C6** (`9a58f012`) — a plain "yes that's me, add a coke"
+  with no and/also/plus connector fell through to the LLM, which
+  intermittently dropped the addition. Added a sibling deterministic branch
+  to the existing C2b-name removal-verb handler.
+- **C9, checkout-phase "add X"** (`b6b270ac`) — the LLM path could
+  misinterpret an add-after-payment-link as a re-checkout confirmation and
+  silently re-issue a payment link for the unchanged cart (~1/6 stress runs).
+  Added a deterministic pre-LLM shortcut with a quantity-signal guard, a
+  required-option-groups guard, and a bare-noun resolver for menu items that
+  share a word across multiple entries (e.g. "fries" → the one plain
+  "[qualifier] Fries" item, not the 9 other fries dishes).
+
+Full acceptance matrix (8 confirmation-word cases + checkout add-item +
+Vito's canary, `2ac3ea1a`) and a 10-case Proof-suite subset run against a
+local in-process server wrapping the unmodified `chat-sms` handler
+(`947faede`) both passed clean. The 4 stale GUARD 9/13 "call site still
+exists" tests — asserting code this architecture correctly deleted — were
+then removed (`ffcc26479`); the pure-function tests for
+`computeGuard9`/`computeGuard13` stay.
+
+**Deployed and confirmed live**: `chat-sms` v413, 2026-09-13 05:37:28 UTC.
+Confirmed by downloading the deployed artifact — its `DEPLOY_SHA` stamp
+reads `ffcc26479d6c86d7e324fac50cfa816ef206c86c`, current `main` HEAD, so
+everything above is live, not just committed. Defect class C4 is closed in
+production, not only in the codebase. `stripe-webhook` (v92), `parse-menu-pdf`
+(v114), and `chat-sms-mtest` (v39) are unrelated to this change and remain at
+the same stale versions noted in earlier entries — verify independently
+before assuming anything in those three moved.

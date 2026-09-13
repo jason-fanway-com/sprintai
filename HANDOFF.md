@@ -1167,6 +1167,27 @@ deployed artifact (not inferred from git history):
   and confirm the `DEPLOY_SHA` moves to `b7bd0404` (or whatever it's
   rebased to) before telling anyone C4 is closed.
 
+## Update — 2026-09-13 01:37 EDT: turn reconciler closed and deployed — C4 has a live fix now
+
+Follow-up to the entry above, which left C4 (cart-growth aggregation)
+unmitigated in production. Since then, `main` picked up the turn-reconciler
+work (`2ac3ea1a`..`ffcc26479`): two acceptance-matrix cases got real fixes
+(C2b-name plain-add confirm, checkout-phase deterministic add-item), the
+full 9-case matrix + a 10-case Proof-suite subset ran clean against a local
+in-process server, and 4 stale tests asserting the retired guards' call
+sites were removed. Detail in RUNBOOK's "Turn reconciler" entry.
+
+**Confirmed live, not just committed**: downloaded the deployed `chat-sms`
+artifact directly — v413, deployed 2026-09-13 05:37:28 UTC, `DEPLOY_SHA`
+stamp reads `ffcc26479d6c86d7e324fac50cfa816ef206c86c`, current `main` HEAD.
+Defect class C4 is closed in production.
+
+**Unchanged, still stale** (checked same pass): `stripe-webhook` v92
+(2026-09-10), `parse-menu-pdf` v114 (2026-09-05), `chat-sms-mtest` v39
+(2026-09-08) — none of this window's commits touch those three functions'
+live state. Migrations 135/136 remain the most recent applied; no new
+migration since.
+
 ---
 
 ## Quickstart for development
