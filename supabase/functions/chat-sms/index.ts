@@ -109,6 +109,7 @@ import {
 } from "./cart.ts";
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
 import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, buildMenuPriceIndex } from "./itemizer.ts";
+import { detectCartMutation, renderActionConfirmation, extractQuestionsOnly, type MutationCartLine } from "./action-confirmation.ts";
 import { matchOptionRemovalPhrase, findCartLinesWithOption, type OptionRemovalCartLine } from "./option-removal-20260909.ts";
 import { groupChoicesAlreadySaid, renderMissingOptionsPrompt } from "./sequencer.ts";
 import {
@@ -7467,6 +7468,70 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       throw loopErr;
     }
     reply = loopResult.reply;
+    // ── REPLY INVERSION, stage 1 (2026-09-13, docs/specs/2026-09-13-reply-
+    // inversion.md) ────────────────────────────────────────────────────────
+    // THE RULE: any sentence asserting cart contents, quantities, prices, or
+    // totals is rendered by CODE from cart_json. The model may add warmth
+    // around it. It may not author it. This is the taproot site (classified
+    // #21 in the reply-inversion classification pass) — every downstream
+    // guard (1c/1d/1f/1g, GUARD 23, stripLlmMoneyLines, ...) exists to catch
+    // what letting `loopResult.reply` become `reply` unconstrained, here,
+    // used to let through. Fixing it at the source collapses the defect
+    // class instead of adding a 33rd guard to it.
+    //
+    // "Did this turn mutate the cart" is answered the same way GUARD 22
+    // (below, line ~9694) already answers it for its own purpose — a
+    // structural diff of the pre-turn snapshot against the cart array the
+    // tool loop just finished mutating in place. This is cart_json truth,
+    // never the model's claim about it.
+    //
+    // When mutated: the fact half of the reply (what happened to the cart)
+    // is rendered by renderActionConfirmation from an actual before/after
+    // diff (detectCartMutation) — never from the model's prose. When the
+    // diff is too ambiguous to name in one sentence (multiple unrelated
+    // lines touched at once), this falls back to the itemizer's full
+    // recap — still 100% code-rendered, never a guess.
+    //
+    // The model's own text for the turn is reduced to its INTERROGATIVE
+    // sentences only (extractQuestionsOnly) and appended after the fact
+    // sentence. Every live prompt instruction that must survive a mutated
+    // turn (EARLY ORDER TYPE GATE's "pickup or delivery?", a clarifying
+    // re-ask, an upsell offer) is phrased as a question. Filtering on "?"
+    // alone is NOT sufficient on its own, though — a false item/price claim
+    // can be fused into the same interrogative sentence as a genuine confirm
+    // question (2026-09-13 FAILURE A). extractQuestionsOnly additionally
+    // drops any kept sentence that names a known cart/menu item or contains
+    // anything price-shaped, so a lie cannot survive merely by being phrased
+    // as a question — see action-confirmation.ts's header on that function.
+    //
+    // When NOT mutated: `reply` is untouched, exactly `loopResult.reply` —
+    // this is VOICE (a question, clarification, or answer to something not
+    // cart-related), the model's to author, per the rule above. GUARD 1d/1f
+    // (phantom add/correction claims with NO mutation) still watch this
+    // path — see phantom-add-guard.ts and guard1f-correction-claim-
+    // 20260909.ts; this stage does not retire them (see those files' own
+    // headers for why one more stage is needed before that's safe).
+    {
+      const cartMutatedAtLoop = JSON.stringify(cartSnapshotBeforeTurn) !== JSON.stringify(cartItems);
+      if (cartMutatedAtLoop) {
+        const modelReplyThisTurn = reply;
+        const event = detectCartMutation(
+          cartSnapshotBeforeTurn as unknown as MutationCartLine[],
+          cartItems as unknown as MutationCartLine[],
+        );
+        const factSentence = event
+          ? renderActionConfirmation(event)
+          : `Got it! Here's where things stand:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}`;
+        const knownItemNamesForWarmthFilter = [
+          ...cartSnapshotBeforeTurn.map(l => (l as { name?: unknown }).name),
+          ...cartItems.map(l => (l as { name?: unknown }).name),
+          ...effectiveMenu.map(mi => mi.name),
+        ].filter((n): n is string => typeof n === "string" && n.length > 0);
+        const warmthTail = extractQuestionsOnly(modelReplyThisTurn, knownItemNamesForWarmthFilter);
+        reply = warmthTail ? `${factSentence} ${warmthTail}` : factSentence;
+        console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)}`);
+      }
+    }
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
     toolCallCountThisTurn = loopResult.debugToolCallCount ?? 0;
     if (cart.test_mode && loopResult.debugAttemptMs) {
