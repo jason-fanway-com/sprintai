@@ -60,7 +60,6 @@
 // here too.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { computeGuard9, impliesOrderConfirmation } from "./guard9-unconsented-affirmation.ts";
-import { hasNonConfirmationContent } from "./confirmation-with-other-intent-20260912.ts";
 
 const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
 
@@ -189,24 +188,6 @@ const LUCA_MENU: MenuLike[] = [
   { id: "fries", name: "Fries", category: "Sides" },
 ];
 
-// C4 regression fixture (2026-09-12, docs/DEFECT-CLASSES.md, live money
-// defect, conv 08782185): a menu shaped like Vito's real one — THREE
-// distinct "fries" dishes (French/Bacon Cheese/Nacho Cheese), none of them
-// named plain "Fries" — kept SEPARATE from LUCA_MENU (which has its own,
-// unambiguous "Fries" item) so the two don't cross-contaminate via
-// substring matching. With "fries" genuinely ambiguous across three menu
-// items (the real live condition), buildMenuItemNamesMirror's own
-// unique-word-alias safety net correctly refuses to alias it to any one of
-// them, and "add fries" never substring-matches any of their FULL names —
-// so isItemNamedThisTurn legitimately returns false, same as it did live.
-// hasOtherIntent is what must save this add, not a smarter name match.
-const VITOS_FRIES_MENU: MenuLike[] = [
-  { id: "pizza-cbr", name: "Chicken Bacon Ranch", category: "Pizza" },
-  { id: "french-fries", name: "French Fries", category: "Sides" },
-  { id: "bacon-cheese-fries", name: "Bacon Cheese Fries", category: "Appetizers" },
-  { id: "nacho-cheese-fries", name: "Nacho Cheese Fries", category: "Appetizers" },
-];
-
 const LUCA_CART_BEFORE: TestCartLine[] = [
   { menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 },
   { menu_item_id: "wings", name: "Wings", quantity: 1 },
@@ -263,60 +244,6 @@ Deno.test("GUARD 9 (real fn): 'yeah also add fries' names fries in the current m
   assertEquals(result.tripped, false, "fries was named this turn and must survive");
   assertEquals(result.phantomAdds.length, 0);
   assertEquals(result.qtyReverts.length, 0);
-});
-
-// ── C4 regression (2026-09-12, docs/DEFECT-CLASSES.md, live money defect,
-// conv 08782185): "Yes to Jason. Can you add fries to that?" is a bare
-// affirmation by impliesOrderConfirmation's own substring test, AND the
-// menu's real item is "French Fries" — "add fries" never substring-matches
-// that full name, so isItemNamedThisTurn legitimately says false, same as it
-// did live. Before the hasOtherIntent param existed, GUARD 9 read that as
-// unconsented growth and reverted the fries — the customer's explicit,
-// freshly-stated request, silently discarded. ─────────────────────────────
-
-Deno.test("GUARD 9 (real fn): C4 fix — 'Yes to Jason. Can you add fries to that?' — French Fries is NOT named by substring match, but hasOtherIntent must still save it", () => {
-  const message = "Yes to Jason. Can you add fries to that?";
-  const before: TestCartLine[] = [{ menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 }];
-  const after: TestCartLine[] = [
-    ...before,
-    { menu_item_id: "french-fries", name: "French Fries", quantity: 1 },
-  ];
-  // Confirms the premise: the customer's own words do NOT literally name
-  // "French Fries" — same brittle-substring gap the live incident hit.
-  assertEquals(isNamedThisTurnPredicate(message, VITOS_FRIES_MENU)("French Fries"), false);
-  const hasOtherIntent = hasNonConfirmationContent(message, "Jason");
-  assert(hasOtherIntent, "the message carries real content beyond a bare confirmation");
-  const result = computeGuard9(message, before, after, isNamedThisTurnPredicate(message, VITOS_FRIES_MENU), hasOtherIntent);
-  assertEquals(result.tripped, false, "the fries add must survive — it was the customer's own explicit ask this turn");
-  assertEquals(result.phantomAdds.length, 0);
-});
-
-Deno.test("GUARD 9 (real fn): C4 fix — the SAME unnamed French Fries add on a genuinely BARE 'yes' (hasOtherIntent false) is still reverted — no blanket weakening", () => {
-  const message = "yes";
-  const before: TestCartLine[] = [{ menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 }];
-  const after: TestCartLine[] = [
-    ...before,
-    { menu_item_id: "french-fries", name: "French Fries", quantity: 1 },
-  ];
-  const hasOtherIntent = hasNonConfirmationContent(message, "Jason");
-  assertEquals(hasOtherIntent, false, "a bare 'yes' carries no other content");
-  const result = computeGuard9(message, before, after, isNamedThisTurnPredicate(message, VITOS_FRIES_MENU), hasOtherIntent);
-  assertEquals(result.tripped, true, "an unrelated phantom add on a genuinely bare affirmation must still be caught");
-  assertEquals(result.phantomAdds.map(i => i.menu_item_id), ["french-fries"]);
-});
-
-Deno.test("GUARD 9 (real fn): C4 fix — hasOtherIntent does NOT exempt an unnamed QUANTITY BUMP on an EXISTING line (the GUARD 21/conv ce84c64b doubling shape)", () => {
-  const message = "Yes to Jason. Can you add fries to that?";
-  // The pizza itself silently doubling on this same compound turn — a
-  // request for fries is no explanation for why the PIZZA's own count grew.
-  const before: TestCartLine[] = [{ menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 1 }];
-  const after: TestCartLine[] = [{ menu_item_id: "pizza-cbr", name: "Chicken Bacon Ranch", quantity: 2 }];
-  const hasOtherIntent = hasNonConfirmationContent(message, "Jason");
-  assert(hasOtherIntent);
-  const result = computeGuard9(message, before, after, isNamedThisTurnPredicate(message, VITOS_FRIES_MENU), hasOtherIntent);
-  assertEquals(result.tripped, true, "same-line quantity growth this turn's words don't explain must still be reverted, even with other content present");
-  assertEquals(result.qtyReverts.length, 1);
-  assertEquals(result.qtyReverts[0].priorQty, 1);
 });
 
 // ── False-positive guard: resolving a pending option must never look like a

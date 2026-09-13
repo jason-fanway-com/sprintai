@@ -1049,31 +1049,10 @@ export function applyCompiledAddItem(
   // name[]) is what a human/receipt actually sees and is stable across a
   // recompile as long as the menu's real options don't change, so identity
   // is now decided on that, never on internal ids that can churn under it.
-  //
-  // C1 fix (2026-09-12, docs/DEFECT-CLASSES.md, live money defect — Vito's
-  // pizza double-charge, two lines for the same menu_item_id+options under
-  // TWO DIFFERENT display names: "Cheese - Large (16\")" and "Large Cheese
-  // Pizza"): the `!!ci.ask_plan_selections` requirement below used to mean
-  // an existing line with NO ask_plan_selections at all (any line ever
-  // created by a path that predates this item's compile, or any future path
-  // that doesn't populate that compiled-engine-only field) was structurally
-  // INVISIBLE to this identity check — the compiled path would never
-  // recognize it as "the same order" no matter how identical its options,
-  // and would push a second, separately-named line instead of merging into
-  // it. `ask_plan_selections` presence was never actually load-bearing for
-  // identity (the comment above already established `options` is the real
-  // identity key) — it only stood in as a crude "is this line's compiled
-  // resolution actually complete" check, which `pending_options` (or its
-  // absence) answers directly for a line that has no selections snapshot at
-  // all, without excluding that line from being found in the first place.
-  const isExistingLineFullyResolved = (ci: CompiledCartLine): boolean =>
-    ci.ask_plan_selections
-      ? allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections)))
-      : !(ci.pending_options?.length);
   const fullyResolvedExistingIdx = continuationIdx < 0 && resolvedCount === 0
     ? cart.findIndex(ci =>
-        ci.menu_item_id === menuItemId &&
-        isExistingLineFullyResolved(ci) &&
+        ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
+        allSlotsResolved(askPlan, new Set(Object.keys(ci.ask_plan_selections))) &&
         sameResolvedOptions(ci.options, resolvedOptions))
     : -1;
   if (fullyResolvedExistingIdx >= 0) {
@@ -1106,13 +1085,8 @@ export function applyCompiledAddItem(
     // compare human-meaningful `options`, never the opaque, recompile-
     // fragile `ask_plan_selections` ids.
     const fullyResolved = allSlotsResolved(askPlan, new Set(Object.keys(newSelections)));
-    // C1 fix (2026-09-12) — see isExistingLineFullyResolved's own doc above:
-    // an existing line with no ask_plan_selections at all must still be
-    // findable here, not silently skipped past into a second, differently-
-    // named line for the identical real order.
     const identicalExisting = fullyResolved ? cart.findIndex(ci =>
-      ci.menu_item_id === menuItemId &&
-      isExistingLineFullyResolved(ci) &&
+      ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
       sameResolvedOptions(ci.options, resolvedOptions)
     ) : -1;
     if (identicalExisting >= 0) {
