@@ -46,7 +46,6 @@
 import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
-import { writeCartLine, writeSplitCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
 
 // REMOVED (2026-09-09 P0, third recurrence of the pepperoni-bleed defect):
 // isolatePhraseForItem used to re-derive "which phrase belongs to this item"
@@ -1072,64 +1071,32 @@ export function applyCompiledAddItem(
     };
   }
 
-  // (2026-09-13) writeCartLine (turn-reconciler.ts) is the only function in
-  // this codebase permitted to create or modify a cart line — see its
-  // header comment. This used to push a line directly here, shaped
-  // differently (name: askPlan.display_name, ask_plan_selections populated)
-  // than the legacy path's own push (name: menuItem.name, no
-  // ask_plan_selections) for the identical menu_item_id — that shape
-  // mismatch is exactly why a bare-"yes" accept could end up as two lines
-  // instead of one. Every branch below still decides WHICH line this call
-  // targets (continuation vs. merge-into-identical vs. brand-new) via a
-  // read-only search, same as before; only the actual mutation is now
-  // routed through the one shared writer.
   if (continuationIdx >= 0) {
-    writeCartLine(cart as unknown as ReconcilerCartLine[], {
-      menu_item_id: menuItemId, name: askPlan.display_name, price_cents: priceCents,
-      options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
-      pending_options: pendingGroupNames, ask_plan_selections: newSelections,
-      sourcePhraseIndex, continuationIndex: continuationIdx, source: "compiled",
-    });
+    const line = cart[continuationIdx];
+    line.ask_plan_selections = newSelections;
+    line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+    line.price_cents = priceCents;
+    line.pending_options = pendingGroupNames;
+    if (sourcePhraseIndex !== undefined) line.sourcePhraseIndex = sourcePhraseIndex;
   } else {
     // A genuine new add: merge into an existing FULLY-resolved line with
     // identical selections (real "another one, same way"), else push a
     // new line. Same identity fix as fullyResolvedExistingIdx above —
     // compare human-meaningful `options`, never the opaque, recompile-
-    // fragile `ask_plan_selections` ids. Identity is decided by
-    // findCartLineIndexByIdentity — turn-reconciler.ts's identityKey(),
-    // the one identity rule for every writer in this codebase.
+    // fragile `ask_plan_selections` ids.
     const fullyResolved = allSlotsResolved(askPlan, new Set(Object.keys(newSelections)));
-    const identicalExisting = fullyResolved
-      ? findCartLineIndexByIdentity(cart as unknown as ReconcilerCartLine[], menuItemId, resolvedOptions)
-      : -1;
+    const identicalExisting = fullyResolved ? cart.findIndex(ci =>
+      ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
+      sameResolvedOptions(ci.options, resolvedOptions)
+    ) : -1;
     if (identicalExisting >= 0) {
-      // This call's own text independently re-resolved a matching, fully-
-      // configured order ("also get a large pepperoni pizza") — that is
-      // itself the customer's explicit ask for another one, so growth is
-      // licensed. A bare re-confirmation with nothing new to resolve never
-      // reaches this branch (resolvedCount===0 with no continuation is
-      // fullyResolvedExistingIdx's no-op path above).
-      //
-      // PO 2026-09-13 (x15/$331.50 live incident): writeCartLine's merge
-      // path no longer accepts a "relative" explicitQuantity — resolve to
-      // an absolute target HERE instead. Safe to do against this line's
-      // CURRENT quantity (unlike the legacy path's bug): this call fires
-      // exactly once per genuine applyCompiledAddItem invocation (one real
-      // proposal), never re-triggered for the same intent, so there is
-      // nothing to restack.
-      writeCartLine(cart as unknown as ReconcilerCartLine[], {
-        menu_item_id: menuItemId, name: askPlan.display_name, price_cents: priceCents,
-        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
-        pending_options: pendingGroupNames, ask_plan_selections: newSelections,
-        sourcePhraseIndex, continuationIndex: identicalExisting,
-        explicitQuantity: { kind: "absolute", value: cart[identicalExisting].quantity + quantity }, source: "compiled",
-      });
+      cart[identicalExisting].quantity += quantity;
     } else {
-      writeCartLine(cart as unknown as ReconcilerCartLine[], {
+      cart.push({
         menu_item_id: menuItemId, name: askPlan.display_name, quantity, price_cents: priceCents,
         modifiers: [], options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
         pending_options: pendingGroupNames, ask_plan_selections: newSelections,
-        sourcePhraseIndex, source: "compiled",
+        sourcePhraseIndex,
       });
     }
   }
@@ -1299,34 +1266,19 @@ export function applyCompiledModifyItem(
     if (line.quantity > 1 && !ALL_UNITS_RE.test(customerMessage)) {
       // See ALL_UNITS_RE's doc above: split one unit off rather than
       // silently re-pricing every unit sharing this line.
-      const splitResolvedOptions = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
-      // Idempotency (PO 2026-09-13): a retry of this same modify_item call
-      // must not insert a second split-off line for the same resolved
-      // options — that would reintroduce a duplicate by a different door
-      // than the one writeCartLine's identity check already closed. If a
-      // split-off line for this identity already exists elsewhere in the
-      // cart, this retry just grows its quantity instead of splitting again.
-      const alreadySplitIdx = cart.findIndex((ci, i) =>
-        i !== idx && ci.menu_item_id === line.menu_item_id && sameResolvedOptions(ci.options, splitResolvedOptions));
-      if (alreadySplitIdx >= 0) {
-        line.quantity -= 1;
-        cart[alreadySplitIdx].quantity += 1;
-        splitOffLine = cart[alreadySplitIdx];
-      } else {
-        line.quantity -= 1;
-        splitOffLine = {
-          menu_item_id: line.menu_item_id,
-          name: line.name,
-          quantity: 1,
-          price_cents: priceCents,
-          modifiers: line.modifiers,
-          options: splitResolvedOptions,
-          pending_options: outcome.pendingGroupNames,
-          ask_plan_selections: selections,
-          sourcePhraseIndex: line.sourcePhraseIndex,
-        };
-        writeSplitCartLine(cart as unknown as ReconcilerCartLine[], idx, splitOffLine as unknown as ReconcilerCartLine);
-      }
+      line.quantity -= 1;
+      splitOffLine = {
+        menu_item_id: line.menu_item_id,
+        name: line.name,
+        quantity: 1,
+        price_cents: priceCents,
+        modifiers: line.modifiers,
+        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+        pending_options: outcome.pendingGroupNames,
+        ask_plan_selections: selections,
+        sourcePhraseIndex: line.sourcePhraseIndex,
+      };
+      cart.splice(idx + 1, 0, splitOffLine);
     } else {
       line.ask_plan_selections = selections;
       line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
