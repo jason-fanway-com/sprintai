@@ -60,6 +60,11 @@ import {
   detectUnitCompletionEvent,
   snapshotCartLines,
   identityKey as reconcilerIdentityKey,
+  parseExplicitQuantity,
+  writeCartLine,
+  writeBundleLine,
+  applyCartSnapshot,
+  findCartLineIndexByIdentity,
   type CartUnitProposal,
   type CartLineSnapshot,
   type ReconcilerCartLine,
@@ -1992,18 +1997,15 @@ export async function executeTool(
       // charge) between "plain" and "with extra cheese." Two lines whose
       // modifiers or unverified_requests differ must never merge, regardless
       // of matching menu_item_id + options.
-      const normalizedUnverified = unverifiedRequests.length > 0 ? [...unverifiedRequests].sort() : undefined;
-      const normalizedMods = inputMods.length > 0 ? [...inputMods].sort() : undefined;
-      const existing = resolvingPendingIdx >= 0 ? -1 : cart.findIndex(i => {
-        const ci = i as CartItem;
-        if (ci.menu_item_id !== menu_item_id) return false;
-        if (JSON.stringify(ci.options ?? undefined) !== JSON.stringify(normalizedOptions)) return false;
-        const ciUnverified = (ci.unverified_requests?.length ?? 0) > 0 ? [...ci.unverified_requests!].sort() : undefined;
-        if (JSON.stringify(ciUnverified) !== JSON.stringify(normalizedUnverified)) return false;
-        const ciMods = (ci.modifiers?.length ?? 0) > 0 ? [...ci.modifiers!].sort() : undefined;
-        if (JSON.stringify(ciMods) !== JSON.stringify(normalizedMods)) return false;
-        return true;
-      });
+      // (2026-09-13) This used to be a hand-rolled JSON.stringify identity
+      // check — a second identity notion living alongside turn-reconciler.ts's
+      // identityKey(). findCartLineIndexByIdentity is that same function
+      // (menu_item_id + options, with modifiers/unverified_requests folded in
+      // so the D1 2026-09-09 "plain vs topped" distinction above still holds)
+      // — one identity rule, used everywhere a cart line is found or written.
+      const existing = resolvingPendingIdx >= 0 ? -1 : findCartLineIndexByIdentity(
+        cart as unknown as ReconcilerCartLine[], menu_item_id, normalizedOptions, inputMods, unverifiedRequests,
+      );
 
       // MODIFIER-FOLLOWUP GUARD (2026-09-11, live money, NJB repro
       // conv-pickup-only-clarification, run 3e607524-d84a-460b-8136-
@@ -2030,6 +2032,8 @@ export async function executeTool(
       // unchanged. Does not attempt to recognize "another one"-style repeat
       // orders that also skip the item's name; those still create a new
       // line, same as before this fix.
+      const normalizedMods = inputMods.length > 0 ? [...inputMods].sort() : undefined;
+      const normalizedUnverified = unverifiedRequests.length > 0 ? [...unverifiedRequests].sort() : undefined;
       let unnamedModifierFollowupIdx = -1;
       if (
         resolvingPendingIdx < 0 &&
@@ -2067,14 +2071,20 @@ export async function executeTool(
         };
       }
 
+      // (2026-09-13) writeCartLine (turn-reconciler.ts) is the only function
+      // in this codebase permitted to create or modify a cart line — see its
+      // header comment. Quantity growth on an EXISTING line requires the
+      // customer's own words this turn to say so (explicitQuantity); a bare
+      // re-add of an already-complete line is a no-op, never additive — the
+      // additive `quantity +=` this branch used to do unconditionally is
+      // exactly the shape-mismatch/duplicate-writer defect class this whole
+      // architecture change closes.
+      const explicitQtyLegacy = parseExplicitQuantity(source_phrase ?? customerMessage ?? "");
       if (resolvingPendingIdx >= 0) {
         const target = cart[resolvingPendingIdx] as CartItem;
         // C1 fix: re-key stored options to current group names before merging
         const canonicalExisting = canonicalizeStoredOptions(target.options, itemGroups, target.option_group_ids, menuItem.prompt_for) ?? {};
         const mergedOptions = { ...canonicalExisting, ...inputOptions };
-        target.options = Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined;
-        target.option_group_ids = snapshotGroupIds(target.option_group_ids, itemGroups);
-        target.modifiers = inputMods;
         let mergedExtraCents = 0;
         for (const group of itemGroups) {
           for (const sel of (mergedOptions[group.name] ?? [])) {
@@ -2082,38 +2092,61 @@ export async function executeTool(
             if (choice) mergedExtraCents += choice.price_cents;
           }
         }
-        target.price_cents = menuItem.price_cents + mergedExtraCents + modPriceCents;
         // C1 fix: translate stored pending name to current name before checking inputOptions
         const remainingPending = (target.pending_options ?? []).filter(p => {
           const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, target.option_group_ids);
           const currentName = liveGroup?.name ?? p;
           return !(inputOptions[currentName]?.length);
         });
-        target.pending_options = remainingPending.length > 0 ? remainingPending : undefined;
         const existingUnverified = target.unverified_requests ?? [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
-        target.unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
-        if (phraseIndexLegacy !== null) target.sourcePhraseIndex = phraseIndexLegacy;
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name,
+          price_cents: menuItem.price_cents + mergedExtraCents + modPriceCents,
+          options: Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined,
+          modifiers: inputMods,
+          option_group_ids: snapshotGroupIds(target.option_group_ids, itemGroups),
+          pending_options: remainingPending.length > 0 ? remainingPending : undefined,
+          unverified_requests: mergedUnverified.length > 0 ? mergedUnverified : undefined,
+          sourcePhraseIndex: phraseIndexLegacy !== null ? phraseIndexLegacy : undefined,
+          continuationIndex: resolvingPendingIdx,
+          source: "legacy",
+        });
       } else if (existing >= 0) {
-        (cart[existing] as CartItem).quantity += (quantity as number);
-        (cart[existing] as CartItem).modifiers = inputMods;
-        (cart[existing] as CartItem).price_cents = menuItem.price_cents + extraCents + modPriceCents;
-        (cart[existing] as CartItem).option_group_ids = snapshotGroupIds((cart[existing] as CartItem).option_group_ids, itemGroups);
+        const target = cart[existing] as CartItem;
         // Merge pending_options — resolve any that now have selections
-        const existingPending = (cart[existing] as CartItem).pending_options || [];
-        const existingGroupIds8 = (cart[existing] as CartItem).option_group_ids;
+        const existingPending = target.pending_options || [];
+        const existingGroupIds8 = target.option_group_ids;
         // C1 fix: translate stored pending name to current name before checking inputOptions
         const mergedPending = [...new Set([...existingPending, ...pending])].filter(p => {
           const liveGroup = resolveOptionGroupByStoredKey(itemGroups, p, existingGroupIds8);
           const currentName = liveGroup?.name ?? p;
           return !(inputOptions[currentName] && inputOptions[currentName].length > 0);
         });
-        (cart[existing] as CartItem).pending_options = mergedPending.length > 0 ? mergedPending : undefined;
-        const existingUnverified = (cart[existing] as CartItem).unverified_requests || [];
+        const existingUnverified = target.unverified_requests || [];
         const mergedUnverified = [...new Set([...existingUnverified, ...unverifiedRequests])];
-        (cart[existing] as CartItem).unverified_requests = mergedUnverified.length > 0 ? mergedUnverified : undefined;
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name,
+          price_cents: menuItem.price_cents + extraCents + modPriceCents,
+          options: normalizedOptions,
+          modifiers: inputMods,
+          option_group_ids: snapshotGroupIds(target.option_group_ids, itemGroups),
+          pending_options: mergedPending.length > 0 ? mergedPending : undefined,
+          unverified_requests: mergedUnverified.length > 0 ? mergedUnverified : undefined,
+          explicitQuantity: explicitQtyLegacy,
+          source: "legacy",
+        });
       } else {
-        cart.push({ menu_item_id, name: menuItem.name, quantity: quantity as number, price_cents: menuItem.price_cents + extraCents + modPriceCents, modifiers: inputMods, options: normalizedOptions, option_group_ids: snapshotGroupIds(undefined, itemGroups), pending_options: pending.length > 0 ? pending : undefined, unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined, sourcePhraseIndex: phraseIndexLegacy ?? undefined });
+        writeCartLine(cart as unknown as ReconcilerCartLine[], {
+          menu_item_id, name: menuItem.name, quantity: quantity as number,
+          price_cents: menuItem.price_cents + extraCents + modPriceCents,
+          modifiers: inputMods, options: normalizedOptions,
+          option_group_ids: snapshotGroupIds(undefined, itemGroups),
+          pending_options: pending.length > 0 ? pending : undefined,
+          unverified_requests: unverifiedRequests.length > 0 ? unverifiedRequests : undefined,
+          sourcePhraseIndex: phraseIndexLegacy ?? undefined,
+          source: "legacy",
+        });
       }
       await saveCart(supabase, cartId, cart, "building");
       const total = cart.reduce((s, i) => s + (i as CartItem).price_cents * (i as CartItem).quantity, 0);
@@ -2635,15 +2668,9 @@ export async function executeTool(
         return { ok: false, result: { error: `Already have "${existingCompleted.name}" in cart. Ask the customer if they want to replace it or add another bundle.` } };
       }
 
-      const newBundle: BundleItem = {
-        type:        "bundle",
-        name:        bundle_item_name,
-        target:      bundle_size,
-        price_cents: bundle_price_cents,
-        selections:  [],
-        complete:    false,
-      };
-      cart.push(newBundle);
+      writeBundleLine(cart as unknown as ReconcilerCartLine[], {
+        name: bundle_item_name, target: bundle_size, price_cents: bundle_price_cents, source: "bundle",
+      });
       await saveCart(supabase, cartId, cart, "building");
       return { ok: true, result: { message: `Bundle started: ${bundle_item_name}. 0 of ${bundle_size} selected. Ask the customer what flavors they want.` }, newPhase: "building" };
     }
@@ -7467,8 +7494,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         `loop_lines=${loopFinalSnap.length} corrected_lines=${correctedLines.length}. ` +
         `changes=${JSON.stringify(changes)}`,
       );
-      cartItems.length = 0;
-      cartItems.push(...(correctedLines as unknown as AnyCartItem[]));
+      applyCartSnapshot(cartItems as unknown as ReconcilerCartLine[], correctedLines);
       await saveCart(supabase, cart.id, cartItems, (cart.phase as OrderPhase) || "building");
       cart.cart_json = cartItems;
       reply = cartItems.length > 0
@@ -8974,8 +9000,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const guard19Result = computeGuard19(userMessage, cartSnapshotBeforeTurn, guardCart, hasNamedSignal19 ? 1 : 0);
     if (guard19Result.tripped) {
       console.warn(`[chat-sms] GUARD 19 (quantity-only, zero items named) tripped (conv=${conversation.id}). Message "${userMessage}" named no menu item; reverted cart to pre-turn snapshot (${guardCart.length} lines -> ${guard19Result.revertedCart.length}).`);
-      guardCart.length = 0;
-      guardCart.push(...guard19Result.revertedCart);
+      applyCartSnapshot(guardCart as unknown as ReconcilerCartLine[], guard19Result.revertedCart as unknown as ReconcilerCartLine[]);
       await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
       reply = guardCart.length > 0
         ? "Sorry, which item did you want more of?"

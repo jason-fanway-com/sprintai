@@ -46,6 +46,7 @@
 import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
+import { writeCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
 
 // REMOVED (2026-09-09 P0, third recurrence of the pepperoni-bleed defect):
 // isolatePhraseForItem used to re-derive "which phrase belongs to this item"
@@ -1071,32 +1072,57 @@ export function applyCompiledAddItem(
     };
   }
 
+  // (2026-09-13) writeCartLine (turn-reconciler.ts) is the only function in
+  // this codebase permitted to create or modify a cart line — see its
+  // header comment. This used to push a line directly here, shaped
+  // differently (name: askPlan.display_name, ask_plan_selections populated)
+  // than the legacy path's own push (name: menuItem.name, no
+  // ask_plan_selections) for the identical menu_item_id — that shape
+  // mismatch is exactly why a bare-"yes" accept could end up as two lines
+  // instead of one. Every branch below still decides WHICH line this call
+  // targets (continuation vs. merge-into-identical vs. brand-new) via a
+  // read-only search, same as before; only the actual mutation is now
+  // routed through the one shared writer.
   if (continuationIdx >= 0) {
-    const line = cart[continuationIdx];
-    line.ask_plan_selections = newSelections;
-    line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
-    line.price_cents = priceCents;
-    line.pending_options = pendingGroupNames;
-    if (sourcePhraseIndex !== undefined) line.sourcePhraseIndex = sourcePhraseIndex;
+    writeCartLine(cart as unknown as ReconcilerCartLine[], {
+      menu_item_id: menuItemId, name: askPlan.display_name, price_cents: priceCents,
+      options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+      pending_options: pendingGroupNames, ask_plan_selections: newSelections,
+      sourcePhraseIndex, continuationIndex: continuationIdx, source: "compiled",
+    });
   } else {
     // A genuine new add: merge into an existing FULLY-resolved line with
     // identical selections (real "another one, same way"), else push a
     // new line. Same identity fix as fullyResolvedExistingIdx above —
     // compare human-meaningful `options`, never the opaque, recompile-
-    // fragile `ask_plan_selections` ids.
+    // fragile `ask_plan_selections` ids. Identity is decided by
+    // findCartLineIndexByIdentity — turn-reconciler.ts's identityKey(),
+    // the one identity rule for every writer in this codebase.
     const fullyResolved = allSlotsResolved(askPlan, new Set(Object.keys(newSelections)));
-    const identicalExisting = fullyResolved ? cart.findIndex(ci =>
-      ci.menu_item_id === menuItemId && !!ci.ask_plan_selections &&
-      sameResolvedOptions(ci.options, resolvedOptions)
-    ) : -1;
+    const identicalExisting = fullyResolved
+      ? findCartLineIndexByIdentity(cart as unknown as ReconcilerCartLine[], menuItemId, resolvedOptions)
+      : -1;
     if (identicalExisting >= 0) {
-      cart[identicalExisting].quantity += quantity;
+      // This call's own text independently re-resolved a matching, fully-
+      // configured order ("also get a large pepperoni pizza") — that is
+      // itself the customer's explicit ask for another one, so growth is
+      // licensed (relative +quantity), same as the additive assignment this
+      // replaced. A bare re-confirmation with nothing new to resolve never
+      // reaches this branch (resolvedCount===0 with no continuation is
+      // fullyResolvedExistingIdx's no-op path above).
+      writeCartLine(cart as unknown as ReconcilerCartLine[], {
+        menu_item_id: menuItemId, name: askPlan.display_name, price_cents: priceCents,
+        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+        pending_options: pendingGroupNames, ask_plan_selections: newSelections,
+        sourcePhraseIndex, continuationIndex: identicalExisting,
+        explicitQuantity: { kind: "relative", delta: quantity }, source: "compiled",
+      });
     } else {
-      cart.push({
+      writeCartLine(cart as unknown as ReconcilerCartLine[], {
         menu_item_id: menuItemId, name: askPlan.display_name, quantity, price_cents: priceCents,
         modifiers: [], options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
         pending_options: pendingGroupNames, ask_plan_selections: newSelections,
-        sourcePhraseIndex,
+        sourcePhraseIndex, source: "compiled",
       });
     }
   }
