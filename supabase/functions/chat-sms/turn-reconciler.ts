@@ -154,31 +154,13 @@ export function reconcileAddProposals(
   }
 
   for (const [key, group] of groups) {
-    // P0 fix (2026-09-13, live money — v413 bare-"yes" duplicate-pizza
-    // defect): a turn's proposals can resolve to a cart that already
-    // contains MORE THAN ONE array entry for this identity — e.g. one
-    // writer routed through the legacy push and another through the
-    // compiled ask-plan push for the same menu_item_id+options, each
-    // blind to the other's identity check. The old code below only ever
-    // found the FIRST matching index and adjusted its quantity, leaving
-    // any additional duplicate lines untouched in the array — so the
-    // corrected cart still had two lines, just with one now at qty 1
-    // instead of both, and the total-quantity math index.ts used to decide
-    // whether to apply this correction ($42 case: 1+1=2 before, 1+1=2
-    // after) never showed a change. Collapsing every matching line down to
-    // ONE array entry FIRST — before any quantity/idempotency decision —
-    // is what makes "two lines, same identity" impossible to produce,
-    // regardless of which upstream writer(s) created the extras.
-    const matchIndices: number[] = [];
-    cart.forEach((l, idx) => { if (identityKey(l.menu_item_id, l.options) === key) matchIndices.push(idx); });
-    if (matchIndices.length === 0) {
+    const lineIdx = cart.findIndex(l => identityKey(l.menu_item_id, l.options) === key);
+    if (lineIdx < 0) {
       // The line this group refers to no longer exists in loopFinalCart —
       // e.g. a later remove_item this same turn deleted it. Nothing to
       // reconcile; the removal wins.
       continue;
     }
-    const lineIdx = matchIndices[0];
-    for (let i = matchIndices.length - 1; i >= 1; i--) cart.splice(matchIndices[i], 1);
 
     // Explicit multiplicity: check each proposal's own source phrase first
     // (scoped, so "two cokes" can't bleed onto a different item proposed in

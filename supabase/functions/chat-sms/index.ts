@@ -6237,24 +6237,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       }
 
       const localCartItems = [...cart.cart_json];
-      // P0 fix (2026-09-13, live money — bare-"yes" duplicate-pizza defect
-      // root cause): this call used to omit compiledEngineEnabled entirely,
-      // so a compiled (ask_plan) item routed through the LEGACY push
-      // instead of applyCompiledAddItem — creating a line with no
-      // ask_plan_selections and name=menuItem.name. Any LATER add_item call
-      // for the same item that correctly passes compiledEngineEnabled=true
-      // (the main tool loop, other pre-LLM shortcuts) routes through
-      // applyCompiledAddItem, whose own identity check requires
-      // ask_plan_selections on the existing line to recognize a match —
-      // it never will here, so it pushes a SECOND line, same menu_item_id,
-      // different name (askPlan.display_name). Passing the real flag (same
-      // pattern as every other executeTool call site below) keeps this
-      // guard's write on the same path as every other writer for this item.
       const addResult7c = await executeTool(
         "add_item", { menu_item_id: resolved7c.id, quantity: 1 },
         localCartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
-        undefined, undefined,
-        shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
       );
       if (!addResult7c.ok) break; // never swallow a real failure here — fall through to the normal loop
 
@@ -6788,29 +6773,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const modResult = resolveModifierMention(userMessage, groupChoices);
         const addOptions = modResult?.action === "add" ? { [modResult.groupName]: [modResult.choiceName] } : undefined;
         console.log(`[chat-sms] C2b-regular pre-LLM regular-offer accept firing (conv=${conversation.id}, item="${baseMenuItem.name}", modifier=${modResult ? `${modResult.action}:${modResult.choiceName || "(none)"}` : "none"})`);
-        // P0 fix (2026-09-13, live money — bare-"yes" duplicate-pizza
-        // defect ROOT CAUSE): this call used to omit compiledEngineEnabled,
-        // routing a compiled (ask_plan) regular item through the LEGACY
-        // push (name=menuItem.name, no ask_plan_selections) instead of
-        // applyCompiledAddItem. This block never returns — it falls
-        // through to the LLM tool loop with the same "yes" message still
-        // pending, and the model (per its own system-prompt instruction to
-        // confirm the regular item) frequently issues its OWN add_item call
-        // for the identical item. That call correctly passes
-        // compiledEngineEnabled=true and so routes through
-        // applyCompiledAddItem, whose identity check requires
-        // ask_plan_selections on the existing line to recognize a match —
-        // it never does here, so it pushes a SECOND line: same
-        // menu_item_id, same (empty) options, name=askPlan.display_name
-        // instead of menuItem.name. Passing the real flag (same pattern as
-        // every other executeTool add_item call site) keeps this shortcut's
-        // write on the same path as the loop's own, so the existing
-        // identity checks (both this file's and applyCompiledAddItem's) can
-        // actually recognize the two calls as the same item.
         const regAddResult = await executeTool(
           "add_item", { menu_item_id: baseMenuItem.id, quantity: 1, options: addOptions },
           cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, null,
-          shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
         );
         if (regAddResult.ok) {
           const { data: reloadedReg } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
@@ -7437,34 +7402,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const { cart: correctedLines, changes } = reconcileAddProposals(
       preTurnSnap, loopFinalSnap, reconcilerProposals, userMessage,
     );
-    // P0 fix (2026-09-13, live money — v413 bare-"yes" duplicate-pizza
-    // defect): this used to gate on `correctedTotal < loopTotal` (summed
-    // quantity across all lines). That silently discarded the reconciler's
-    // own corrected cart whenever the loop's cart held the SAME identity
-    // as two separate array entries (one unit each) instead of one entry
-    // at quantity two — the sum is identical before and after the
-    // dedup-only correction (1+1=2 either way), so the gate never tripped
-    // and the still-duplicated cart (already persisted mid-loop by
-    // whichever tool call wrote it) shipped to checkout untouched.
-    //
-    // Compare structurally instead: same line count AND same
-    // menu_item_id/quantity at every position means the reconciler agrees
-    // with the loop's own cart byte-for-byte — nothing to replace, and
-    // (importantly) no reason to overwrite the model's own contextual
-    // reply with the generic recap below. This deliberately does NOT use
-    // `changes` directly — an ordinary single grounded "added" event with
-    // no prior duplicate/over-count records action "added" even when the
-    // loop's cart was already exactly right, and re-triggering the recap
-    // reply on every normal add would be a new, unwanted behavior change.
-    const changed = correctedLines.length !== loopFinalSnap.length ||
-      correctedLines.some((l, i) =>
-        l.menu_item_id !== loopFinalSnap[i]?.menu_item_id ||
-        (Number(l.quantity) || 1) !== (Number(loopFinalSnap[i]?.quantity) || 1),
-      );
-    if (changed) {
+    const loopTotal = loopFinalSnap.reduce((s, l) => s + (Number(l.quantity) || 1), 0);
+    const correctedTotal = correctedLines.reduce((s, l) => s + (Number(l.quantity) || 1), 0);
+    if (correctedTotal < loopTotal) {
       console.warn(
         `[chat-sms] RECONCILER correction (conv=${conversation.id}). ` +
-        `loop_lines=${loopFinalSnap.length} corrected_lines=${correctedLines.length}. ` +
+        `loop_total=${loopTotal} corrected_total=${correctedTotal}. ` +
         `changes=${JSON.stringify(changes)}`,
       );
       cartItems.length = 0;
