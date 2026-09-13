@@ -5643,7 +5643,78 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       await supabase.from("order_carts").update({ phase: "building", stripe_checkout_session_id: null }).eq("id", cart.id);
       cart.phase = "building" as OrderPhase;
       checkoutWantsChangeFired = true;
-      // Fall through to the LLM loop below so it can process the change request
+
+      // Case 9 fix (2026-09-13, checkpoint 2 stress test): once "Payment
+      // link sent!" is in this conversation's history, the LLM has
+      // repeatedly failed to call add_item on a checkout-phase "add X" turn
+      // — it just re-sends the stale payment-link reply instead of acting,
+      // silently dropping the add (empirically confirmed: 1/6 stress-test
+      // runs on the LLM-only path did exactly this). For the narrow,
+      // unambiguous case — exactly one named item, no quantity language,
+      // item not already on the cart, item has no required option groups to
+      // prompt for — add it deterministically and skip the LLM this turn.
+      // Anything with quantity, multiple items, or required choices still
+      // falls through to the LLM loop, since those need judgment this
+      // shortcut can't safely automate.
+      const hasQuantitySignalC9 = /\b\d+\b|\b(two|three|four|five|six|seven|eight|nine|ten|another|double|triple|extra|more)\b/i.test(userMessage);
+      if (!hasQuantitySignalC9) {
+        const businessDateC9 = getBusinessDate(shop.timezone);
+        const { menu: menuC9 } = await buildEffectiveMenu(supabase, shop.id, businessDateC9);
+        const menuNamesC9 = buildMenuItemNames(menuC9);
+        const namedC9 = extractCustomerReferencedItems([{ role: "user", content: userMessage }], menuNamesC9);
+        // Fallback for a bare generic noun shared by several menu items
+        // ("fries" matching Crab Fries / Sweet Potato Fries / French Fries /
+        // etc.) — extractCustomerReferencedItems deliberately won't alias a
+        // word to any of them (see buildMenuItemNames: a word only becomes
+        // an alias when it belongs to exactly ONE item). Restaurant menus
+        // commonly name their plain/default variant as "[neutral qualifier]
+        // + noun" (French Fries, American Cheese, Regular Coffee) while every
+        // other variant adds a REAL descriptor (Crab, Sweet Potato, Iced).
+        // If dropping a small set of neutral origin/style qualifiers from a
+        // candidate's name leaves exactly the bare noun the customer said,
+        // and that's true for exactly one candidate, that's the plain/
+        // default item a customer means when they omit the descriptor other
+        // variants require — not a guess among genuinely different dishes.
+        let resolvedNameC9: string | null = null;
+        if (namedC9.size === 1) {
+          resolvedNameC9 = [...namedC9][0];
+        } else if (namedC9.size === 0) {
+          const NEUTRAL_QUALIFIERS_C9 = new Set(["french", "american", "regular", "original", "classic", "plain", "house", "home"]);
+          const messageWordsC9 = new Set(userMessage.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
+          for (const w of messageWordsC9) {
+            const bareMatchesC9 = menuC9.filter(m => {
+              const nameWords = m.name.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).filter(x => !NEUTRAL_QUALIFIERS_C9.has(x));
+              return nameWords.length === 1 && nameWords[0] === w;
+            });
+            if (bareMatchesC9.length === 1) { resolvedNameC9 = bareMatchesC9[0].name; break; }
+          }
+        }
+        if (resolvedNameC9) {
+          const addedC9 = resolvedNameC9;
+          const cartItemsC9 = (cart.cart_json ?? []) as AnyCartItem[];
+          const alreadyC9 = cartItemsC9.some(ci => (ci as CartItem).name?.toLowerCase() === addedC9.toLowerCase());
+          const menuItemC9 = menuC9.find(m => m.name === addedC9);
+          const hasRequiredOptionsC9 = menuItemC9?.option_groups?.some(g => g.required) ?? false;
+          if (!alreadyC9 && menuItemC9 && !hasRequiredOptionsC9) {
+            const addResC9 = await executeTool(
+              "add_item", { menu_item_id: menuItemC9.id, quantity: 1 },
+              cartItemsC9, menuC9, cart.id, supabase, shop.name, cart.test_mode,
+              undefined, null,
+              shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
+            );
+            if (addResC9.ok) {
+              const recapC9 = renderItemizedRecap(cartItemsC9, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
+              const replyC9 = `${addedC9} added! Here's your updated order:\n\n${recapC9}\n\nReply YES when you're ready for a new payment link.`;
+              console.log(`[chat-sms] checkout wantsChange deterministic add (conv=${conversation.id}): added "${addedC9}"`);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC9);
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC9); return emptyTwiml(); }
+              return jsonResponse({ reply: replyC9, cart: cartItemsC9, phase: "building", session_id: sessionId });
+            }
+          }
+        }
+      }
+      // Fall through to the LLM loop for anything the shortcut above didn't handle
     } else {
       // Default: remind about payment but offer options
       // If this is a repeated status check (same message as last bot message),
