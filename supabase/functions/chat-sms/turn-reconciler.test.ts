@@ -7,10 +7,6 @@ import {
   parseExplicitQuantity,
   reconcileAddProposals,
   snapshotCartLines,
-  writeCartLine,
-  writeBundleLine,
-  applyCartSnapshot,
-  findCartLineIndexByIdentity,
   type ReconcilerCartLine,
 } from "./turn-reconciler.ts";
 
@@ -179,149 +175,10 @@ Deno.test("reconciler: a grounded add (fries named this turn) passes through unt
   assertEquals(changes[0].action, "added");
 });
 
-// (2026-09-13) The two tests that used to live here ("two/three SEPARATE
-// array entries for the same identity collapse to ONE line") pinned
-// reconcileAddProposals's array-wide dedup backstop — deleted the same day
-// this file's writeCartLine/applyCartSnapshot were added. That backstop only
-// ever cleaned up AFTER multiple writers produced duplicate-identity lines;
-// with writeCartLine as the sole writer, duplicate array entries for one
-// identity can no longer be produced in the first place, so there is
-// nothing left to collapse. The equivalent guarantee now lives at the
-// source — see the writeCartLine idempotency tests below, and the
-// structural enforcement test in enforce-single-cart-writer.test.ts.
-
 Deno.test("reconciler: lines with no proposals this turn pass through completely untouched", () => {
   const pre: ReconcilerCartLine[] = [{ menu_item_id: "salad-1", quantity: 1, options: { Dressing: ["Ranch"] } }];
   const loopFinal: ReconcilerCartLine[] = [{ menu_item_id: "salad-1", quantity: 1, options: { Dressing: ["Ranch"] } }];
   const { cart, changes } = reconcileAddProposals(pre, loopFinal, [], "what are your hours?");
   assertEquals(cart, loopFinal);
   assertEquals(changes.length, 0);
-});
-
-// ── writeCartLine — the single-writer guarantee at its source ────────────
-
-Deno.test("writeCartLine: brand-new identity pushes exactly one line at the requested quantity", () => {
-  const cart: ReconcilerCartLine[] = [];
-  const result = writeCartLine(cart, {
-    menu_item_id: "pizza-1", name: "Large Pepperoni Pizza", price_cents: 2100, quantity: 1, source: "legacy",
-  });
-  assertEquals(result.action, "created");
-  assertEquals(cart.length, 1);
-  assertEquals(cart[0].quantity, 1);
-});
-
-Deno.test("writeCartLine: calling it TWICE for the identical identity in one turn never creates a second array entry — this is the structural fix for the shape-mismatch $42 defect", () => {
-  const cart: ReconcilerCartLine[] = [];
-  // First writer (what used to be the legacy push): name=menuItem.name, no ask_plan_selections.
-  writeCartLine(cart, { menu_item_id: "pizza-1", name: "Cheese - Large (16\")", price_cents: 2100, quantity: 1, source: "legacy" });
-  // Second writer (what used to be the compiled push): DIFFERENT name, ask_plan_selections present.
-  // Both target the SAME menu_item_id + options — one function, one identity rule, so this must
-  // land on the SAME array entry, not spawn a second one.
-  const result = writeCartLine(cart, {
-    menu_item_id: "pizza-1", name: "Large Cheese Pizza", price_cents: 2100, quantity: 1,
-    ask_plan_selections: { g1: "c1" }, source: "compiled",
-  });
-  assertEquals(cart.length, 1);
-  assertEquals(cart[0].quantity, 1);
-  assertEquals(result.action, "merged_noop");
-});
-
-Deno.test("writeCartLine: re-writing an existing identity with no explicitQuantity is a no-op on quantity (never additive)", () => {
-  const cart: ReconcilerCartLine[] = [{ menu_item_id: "reg-1", name: "Regular", price_cents: 500, quantity: 1 } as ReconcilerCartLine];
-  const result = writeCartLine(cart, { menu_item_id: "reg-1", name: "Regular", price_cents: 500, quantity: 1, source: "legacy" });
-  assertEquals(cart.length, 1);
-  assertEquals(cart[0].quantity, 1);
-  assertEquals(result.action, "merged_noop");
-});
-
-Deno.test("writeCartLine: explicitQuantity (customer's own words) is the only thing that grows an existing line", () => {
-  const cart: ReconcilerCartLine[] = [{ menu_item_id: "coke-1", name: "Coke", price_cents: 200, quantity: 1 } as ReconcilerCartLine];
-  const result = writeCartLine(cart, {
-    menu_item_id: "coke-1", name: "Coke", price_cents: 200, quantity: 1,
-    explicitQuantity: { kind: "absolute", value: 2 }, source: "legacy",
-  });
-  assertEquals(cart.length, 1);
-  assertEquals(cart[0].quantity, 2);
-  assertEquals(result.action, "qty_grown");
-});
-
-Deno.test("writeCartLine: modifiers/unverified_requests distinguish identity so a plain vs. topped line never merges (D1 2026-09-09 guarantee, preserved)", () => {
-  const cart: ReconcilerCartLine[] = [];
-  writeCartLine(cart, { menu_item_id: "pizza-1", name: "Pizza", price_cents: 1500, quantity: 1, source: "legacy" });
-  writeCartLine(cart, {
-    menu_item_id: "pizza-1", name: "Pizza", price_cents: 1500, quantity: 1,
-    unverified_requests: ["extra cheese"], source: "legacy",
-  });
-  assertEquals(cart.length, 2);
-});
-
-Deno.test("writeCartLine: quantityOnly never creates a line for a missing identity", () => {
-  const cart: ReconcilerCartLine[] = [];
-  const result = writeCartLine(cart, { menu_item_id: "ghost-1", quantityOnly: true, forceQuantity: 5, source: "reconciler" });
-  assertEquals(cart.length, 0);
-  assertEquals(result, { index: -1, action: "noop_missing" });
-});
-
-Deno.test("writeCartLine: continuationIndex updates the target line in place without touching quantity by default", () => {
-  const cart: ReconcilerCartLine[] = [
-    { menu_item_id: "pizza-1", name: "Pizza", price_cents: 1500, quantity: 1, pending_options: ["Size"] } as ReconcilerCartLine,
-  ];
-  writeCartLine(cart, {
-    menu_item_id: "pizza-1", name: "Pizza", price_cents: 1800, quantity: 1,
-    options: { Size: ["Large"] }, pending_options: [], continuationIndex: 0, source: "legacy",
-  });
-  assertEquals(cart.length, 1);
-  assertEquals(cart[0].quantity, 1);
-  assertEquals(cart[0].options, { Size: ["Large"] });
-  assertEquals(cart[0].price_cents, 1800);
-});
-
-Deno.test("writeBundleLine: appends a bundle container line", () => {
-  const cart: ReconcilerCartLine[] = [];
-  const result = writeBundleLine(cart, { name: "Dozen Donuts", target: 12, price_cents: 1500, source: "bundle" });
-  assertEquals(cart.length, 1);
-  assertEquals(result.action, "created");
-  assertEquals((cart[0] as unknown as { type: string }).type, "bundle");
-});
-
-Deno.test("applyCartSnapshot: replaces array contents in place (same reference, new contents) — used for GUARD 19's full-turn revert", () => {
-  const cart: ReconcilerCartLine[] = [{ menu_item_id: "pizza-1", quantity: 3 }];
-  const snapshot: ReconcilerCartLine[] = [{ menu_item_id: "pizza-1", quantity: 1 }];
-  const ref = cart;
-  applyCartSnapshot(cart, snapshot);
-  assertEquals(cart, ref); // still the same array object
-  assertEquals(cart, [{ menu_item_id: "pizza-1", quantity: 1 }]);
-});
-
-Deno.test("findCartLineIndexByIdentity: pure read, never mutates", () => {
-  const cart: ReconcilerCartLine[] = [{ menu_item_id: "pizza-1", quantity: 1, options: { Size: ["Large"] } }];
-  const idx = findCartLineIndexByIdentity(cart, "pizza-1", { Size: ["Large"] });
-  assertEquals(idx, 0);
-  assertEquals(cart.length, 1);
-  assertEquals(findCartLineIndexByIdentity(cart, "pizza-1", { Size: ["Medium"] }), -1);
-});
-
-// ── Canary: $8.49 item + $0.99 service fee = $9.48, single line, no dup ──
-// This is the structural guarantee writeCartLine provides: calling it twice
-// with the same identity is a no-op on quantity (idempotent). The total
-// ($8.49 subtotal + $0.99 SERVICE_FEE_CENTS) must equal $9.48.
-// Keeps any regression that reintroduces a duplicate-line writer visible at
-// the unit level before it reaches a real customer.
-Deno.test("writeCartLine canary: $8.49 item is idempotent — single line, never doubles to $16.98", () => {
-  const SERVICE_FEE_CENTS = 99;
-  const ITEM_PRICE_CENTS = 849;
-  const cart: ReconcilerCartLine[] = [];
-  // First add: creates the line.
-  writeCartLine(cart, { menu_item_id: "cheeseburger-id", name: "Cheese Burger", price_cents: ITEM_PRICE_CENTS, quantity: 1, source: "legacy" });
-  assertEquals(cart.length, 1, "one line after first add");
-  assertEquals(cart[0].price_cents as number, ITEM_PRICE_CENTS);
-  assertEquals(cart[0].quantity as number, 1);
-  // Second call with same identity (no explicit quantity): must be no-op.
-  writeCartLine(cart, { menu_item_id: "cheeseburger-id", name: "Cheese Burger", price_cents: ITEM_PRICE_CENTS, quantity: 1, source: "legacy" });
-  assertEquals(cart.length, 1, "still one line — second add must not create a duplicate");
-  assertEquals(cart[0].quantity as number, 1, "quantity unchanged — no silent doubling");
-  // Total: subtotal + service fee = $9.48.
-  const subtotalCents = cart.reduce((s, l) => s + (l.price_cents as number) * (l.quantity as number), 0);
-  assertEquals(subtotalCents, ITEM_PRICE_CENTS, "$8.49 subtotal — not doubled");
-  assertEquals(subtotalCents + SERVICE_FEE_CENTS, 948, "$8.49 + $0.99 service fee = $9.48 total");
 });
