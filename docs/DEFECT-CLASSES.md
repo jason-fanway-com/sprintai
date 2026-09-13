@@ -100,3 +100,40 @@ that never answer the question.
 **Countermeasure:** Proof, critical-pass and the money checks are the numbers.
 Before reacting to a metric move, confirm the instrument changed nothing. Noise
 on this suite is ±20 points; a 10-point move is not signal.
+
+---
+
+## C4 — Confirmation word anywhere licensed an irreversible action
+
+**Diagnosed:** 2026-09-12, from the three-accept-call doubling P0 and the
+"You already know my name." Vito's double-charge.
+**Shape:** the model sees a confirmation-shaped word anywhere in the turn and
+independently decides to add/re-add an item — once per model path that "noticed"
+the signal. Each individual call is valid in isolation; the AGGREGATE is wrong
+(three valid "accept" calls → three pizzas). No per-call validator can catch it.
+
+**Instances found:**
+
+| # | Trigger phrase | Effect |
+|---|---|---|
+| 1 | "yes" (C2b-regular offer confirm) | model AND shortcut each proposed the same item → qty 2 |
+| 2 | "yes to Jason, can you add fries" | three model-side accept calls → qty 3 instead of 1 |
+| 3 | "You already know my name." | unrelated reply re-triggered add_item on existing pizza → qty doubled |
+| 4 | "pickup" | add_item re-fired on pending-option item → qty grew while option still open |
+
+**Structural fix (2026-09-12):** `turn-reconciler.ts` — a pure function
+`reconcileAddProposals(preTurnCart, loopFinalCart, proposals[], customerText)`
+that owns the aggregate add/merge/no-op/drop decision for a whole turn. Replaces
+GUARD 9, GUARD 13, GUARD 20, and GUARD 21, which were four narrower patches for
+the same aggregation gap. See turn-reconciler.ts header for design.
+
+**Closed:** 2026-09-12. Guards 9/13/20/21 retired; call sites removed from
+`index.ts`; tombstones left for archaeological purposes.
+
+**Detection:**
+
+```bash
+# look for per-call add guards that re-implement what the reconciler now owns
+grep -rn "computeGuard\(9\|13\|20\|21\)" supabase/functions/chat-sms/index.ts
+# should return nothing; any hit means a guard was re-introduced without retiring the reconciler
+```
