@@ -46,7 +46,7 @@
 import { significantStems } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
-import { writeCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
+import { writeCartLine, writeSplitCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
 
 // REMOVED (2026-09-09 P0, third recurrence of the pepperoni-bleed defect):
 // isolatePhraseForItem used to re-derive "which phrase belongs to this item"
@@ -1293,18 +1293,13 @@ export function applyCompiledModifyItem(
       // See ALL_UNITS_RE's doc above: split one unit off rather than
       // silently re-pricing every unit sharing this line.
       line.quantity -= 1;
-      splitOffLine = {
-        menu_item_id: line.menu_item_id,
-        name: line.name,
-        quantity: 1,
-        price_cents: priceCents,
-        modifiers: line.modifiers,
-        options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
-        pending_options: outcome.pendingGroupNames,
-        ask_plan_selections: selections,
-        sourcePhraseIndex: line.sourcePhraseIndex,
-      };
-      cart.splice(idx + 1, 0, splitOffLine);
+      const splitResult = writeSplitCartLine(cart as unknown as ReconcilerCartLine[], idx, {
+        menu_item_id: line.menu_item_id, name: line.name, price_cents: priceCents, quantity: 1,
+        modifiers: line.modifiers, options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+        pending_options: outcome.pendingGroupNames, ask_plan_selections: selections,
+        sourcePhraseIndex: line.sourcePhraseIndex, source: "ask_plan_split",
+      });
+      splitOffLine = cart[splitResult.index] as unknown as CompiledCartLine;
     } else {
       line.ask_plan_selections = selections;
       line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;

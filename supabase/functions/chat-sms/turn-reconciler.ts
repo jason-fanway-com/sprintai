@@ -274,10 +274,15 @@ export function writeCartLine(cart: ReconcilerCartLine[], input: WriteCartLineIn
     return { index: idx, action: finalQty !== preQty ? "qty_grown" : "merged_noop" };
   }
 
+  cart.push(buildNewLine(input));
+  return { index: cart.length - 1, action: "created" };
+}
+
+function buildNewLine(input: WriteCartLineInput): ReconcilerCartLine {
   let quantity = input.quantity ?? 1;
   if (input.explicitQuantity?.kind === "absolute") quantity = input.explicitQuantity.value;
   else if (input.explicitQuantity?.kind === "relative") quantity = quantity + input.explicitQuantity.delta;
-  cart.push({
+  return {
     menu_item_id: input.menu_item_id,
     name: input.name,
     price_cents: input.price_cents,
@@ -289,8 +294,52 @@ export function writeCartLine(cart: ReconcilerCartLine[], input: WriteCartLineIn
     unverified_requests: input.unverified_requests,
     ask_plan_selections: input.ask_plan_selections,
     sourcePhraseIndex: input.sourcePhraseIndex,
-  } as unknown as ReconcilerCartLine);
-  return { index: cart.length - 1, action: "created" };
+  } as unknown as ReconcilerCartLine;
+}
+
+/**
+ * Removes exactly one cart line by index. Part of the single-writer set —
+ * remove_item / clear_cart / cancel_bundle / a GUARD rollback must never
+ * splice a cart array directly (see enforce-single-cart-writer.test.ts);
+ * this is the one place that does it.
+ */
+export function removeCartLine(cart: ReconcilerCartLine[], index: number): boolean {
+  if (index < 0 || index >= cart.length) return false;
+  cart.splice(index, 1);
+  return true;
+}
+
+/**
+ * Empties a cart array in place (clear_cart). Mutates in place — same
+ * live-reference reason as applyCartSnapshot: a caller holding a reference
+ * to this exact array (e.g. index.ts's `guardCart`, which IS
+ * `cart.cart_json`) sees the clear without reassignment.
+ */
+export function clearCart(cart: ReconcilerCartLine[]): void {
+  cart.length = 0;
+}
+
+/**
+ * D1 quantity-split create (ask-plan-engine.ts's applyCompiledModifyItem):
+ * splitting `quantity: N` into one modified unit plus a leftover line is
+ * still a CREATE, so it gets the same identity/idempotency contract as
+ * writeCartLine's own create path — a retry or duplicate call for the same
+ * resolved identity merges into the line already split off instead of
+ * splitting a second one. The only difference from writeCartLine is where
+ * the brand-new line lands: immediately after `afterIndex` (next to the
+ * line it was split from), not appended past every later line.
+ */
+export function writeSplitCartLine(
+  cart: ReconcilerCartLine[],
+  afterIndex: number,
+  input: WriteCartLineInput,
+): WriteCartLineResult {
+  const idx = findCartLineIndexByIdentity(cart, input.menu_item_id, input.options, input.modifiers, input.unverified_requests);
+  if (idx >= 0) {
+    return writeCartLine(cart, { ...input, continuationIndex: idx });
+  }
+  cart.splice(afterIndex + 1, 0, buildNewLine(input));
+  return { index: afterIndex + 1, action: "created" };
 }
 
 export interface WriteBundleLineInput {
@@ -442,7 +491,7 @@ export function reconcileAddProposals(
         // Nothing in this turn's own text (or an authorized offer/shortcut)
         // actually asked for this — a phantom add. Drop it rather than let
         // an unauthorized proposal silently become a charge.
-        cart.splice(lineIdx, 1);
+        removeCartLine(cart, lineIdx);
         changes.push({ menu_item_id: key.split("::")[0], action: "dropped_unauthorized" });
         continue;
       }

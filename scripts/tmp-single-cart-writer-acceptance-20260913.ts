@@ -212,12 +212,12 @@ for (const c of BUILDING_CASES) {
     updated_at: now,
   }, { onConflict: "tenant_id,customer_phone" });
   await send(sessionId, "Testmode");
-  await send(sessionId, "pickup");
-  // Let the bot offer the regular — greet without naming an item,
-  // so the system prompt fires the regular-item offer.
-  const greet = await send(sessionId, "Hi, I'd like to order");
-  console.log(`  BOT (greet): "${(greet.reply as string)?.slice(0, 200)}"`);
-  // Accept it with just "yes".
+  // "pickup" triggers the regular-offer phrasing; accepting "yes" immediately
+  // after is the case under test — no intermediate turn, because a third turn
+  // resets the offer context and makes namedSignalRec=false.
+  const greet = await send(sessionId, "pickup");
+  console.log(`  BOT (greet/offer): "${(greet.reply as string)?.slice(0, 200)}"`);
+  // Accept the regular offer with just "yes".
   const final8b = await send(sessionId, "yes");
   const lines8b = cartLines(final8b.cart);
   const pass8b = lines8b.length === 1 && lines8b[0].quantity === 1;
