@@ -5597,7 +5597,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (cart.phase === "checkout") {
     const upper = userMessage.toUpperCase().trim();
     const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
-    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
+    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|ADD|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
 
     // P0 fix (2026-09-12, live trust incident, conv d79c1d98): "show me the
     // order" was structurally unanswerable once a payment link existed —
@@ -6809,8 +6809,75 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
+      // P0 fix (2026-09-12, turn-reconciler acceptance matrix, C4 sweep):
+      // same shape as the CART_SUMMARY_MENTION_RE compound-turn check just
+      // above — impliesOrderConfirmation matches "yes" anywhere in the
+      // message with no length/shape limit, so "Yes to Jason. Can you add
+      // fries to that?" / "yep, and two cokes" / "yep but drop the
+      // pepperoni" all read as a clean name-confirm, and this shortcut fired
+      // submit_order (an irreversible payment-link send) before the LLM ever
+      // saw the trailing item request. Detect any of: a menu item named
+      // this turn (exact or fuzzy/topping-level, same signal set the turn
+      // reconciler above uses), an explicit quantity word, or a removal verb
+      // ("drop"/"remove"/"without"/"hold the") — any of which means this
+      // turn carries more intent than a bare name confirmation, so name
+      // resolution and the auto-submit must be skipped and the whole turn
+      // handed to the LLM/ordering-loop instead, where the reconciler and
+      // the existing per-line modify handlers can apply it correctly.
+      const menuNamesC2bName = buildMenuItemNames(effectiveMenu);
+      const namedThisTurnC2bName = extractCustomerReferencedItems(
+        [{ role: "user", content: trimmed }],
+        menuNamesC2bName,
+      );
+      const hasMixedIntentC2bName =
+        namedThisTurnC2bName.size > 0 ||
+        hasGuard19NamedSignal(trimmed, effectiveMenu, namedThisTurnC2bName.size) ||
+        statesQuantity(trimmed) ||
+        /\b(?:drop|remove|without|hold the|no more|minus)\b/i.test(trimmed);
+
       let resolvedName: string | null = null;
-      if (impliesOrderConfirmation(trimmed)) {
+      if (hasMixedIntentC2bName) {
+        // Compound "confirm + remove" turn (e.g. "yep but drop the pepperoni"):
+        // matchOptionRemovalPhrase is anchored to the start of the message, so
+        // it misses a removal clause that follows a confirmation word. Split on
+        // clause boundaries, try the removal half on its own, and if it maps
+        // to exactly one applied option in the cart, apply it deterministically
+        // and re-ask the name — same one-pass pattern as the standalone
+        // option-removal handler above, same safety contract.
+        const hasRemovalVerbC2bName = /\b(?:drop|remove|without|hold the|no more|minus)\b/i.test(trimmed);
+        if (hasRemovalVerbC2bName) {
+          const clausesC2bName = trimmed.split(/\b(?:but|and|also|plus)\b|[,.;]/);
+          for (const clause of clausesC2bName) {
+            const clauseNorm = clause.trim().toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+            const optPhraseC2bName = matchOptionRemovalPhrase(clauseNorm);
+            if (optPhraseC2bName) {
+              const optMatchesC2bName = findCartLinesWithOption(optPhraseC2bName, cartItems as unknown as OptionRemovalCartLine[]);
+              if (optMatchesC2bName.length === 1) {
+                const targetC2b = optMatchesC2bName[0];
+                const targetLineC2b = cartItems.find(ci => (ci as CartItem).menu_item_id === targetC2b.menu_item_id) as CartItem | undefined;
+                const removeArgsC2b: { menu_item_id: string; options?: Record<string, string[]>; modifiers?: string[] } = targetC2b.group_name
+                  ? { menu_item_id: targetC2b.menu_item_id, options: { [targetC2b.group_name]: (targetLineC2b?.options?.[targetC2b.group_name] ?? []).filter(v => v.toLowerCase() !== targetC2b.matched_value.toLowerCase()) } }
+                  : { menu_item_id: targetC2b.menu_item_id, modifiers: (targetLineC2b?.modifiers ?? []).filter(v => v.toLowerCase() !== targetC2b.matched_value.toLowerCase()) };
+                const removeResultC2b = await executeTool(
+                  "modify_item", removeArgsC2b, cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode,
+                  undefined, undefined,
+                  shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null, userMessage, undefined,
+                );
+                if (removeResultC2b.ok) {
+                  console.log(`[chat-sms] C2b-name compound removal (conv=${conversation.id}): removed "${targetC2b.matched_value}" from "${targetC2b.name}", re-asking name.`);
+                  const replyC2b = `Removed ${targetC2b.matched_value} from the ${targetC2b.name}. Putting this in for ${customerContext.name}, right?`;
+                  await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+                  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
+                  if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+                  return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
+                }
+              }
+              break;
+            }
+          }
+        }
+        // Fall through to the LLM as normal — see comment above.
+      } else if (impliesOrderConfirmation(trimmed)) {
         resolvedName = customerContext.name;
       } else {
         const explicitCorrection = trimmed.match(/^(?:no,?\s*)?(?:it'?s|i'?m|my name is)\s+([A-Z][a-z]+)/i);
@@ -7177,9 +7244,27 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       [{ role: "user", content: userMessage }],
       menuNamesRec,
     );
+    // Same broader signal set GUARD 21 (one of this reconciler's four
+    // predecessors) used, not just the narrow base-name substring match:
+    // deterministicComposedThisTurn is true whenever the compiled
+    // pizza-topping composer (above, this same request) actually resolved
+    // one of this turn's phrases into a real menu item + topping choice —
+    // e.g. "large pepperoni pizza" composes onto the "Large Cheese Pizza"
+    // base item, whose OWN catalog name never contains the word
+    // "pepperoni", so the plain substring check below always misses it.
+    // hasGuard19NamedSignal adds guard19's own fuzzy/word-level matching.
+    // Omitting both here (as this block originally did) meant almost any
+    // topping-described pizza order — the single most common phrasing at a
+    // pizza shop — got dropped as "unauthorized" on the very turn that
+    // ordered it, not just on the confirmation-word turns this reconciler
+    // was built to police.
+    const namedSignalRec = deterministicComposedThisTurn ||
+      hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurnRec.size);
+    console.log(`[chat-sms] DIAGNOSTIC namedSignalRec=${namedSignalRec} deterministicComposedThisTurn=${deterministicComposedThisTurn} hasGuard19=${hasGuard19NamedSignal(userMessage, effectiveMenu, namedThisTurnRec.size)} userMessage=${JSON.stringify(userMessage)} loopProposals=${JSON.stringify(loopProposals)} preTurnSnap=${JSON.stringify(cartSnapshotBeforeTurn)} loopFinalCart=${JSON.stringify(cartItems)}`);
     const reconcilerProposals: CartUnitProposal[] = loopProposals.map(raw => ({
       ...raw,
       grounded: (() => {
+        if (namedSignalRec) return true;
         const itemName = effectiveMenu.find(m => m.id === raw.menu_item_id)?.name ?? "";
         const itemLower = itemName.toLowerCase();
         for (const n of namedThisTurnRec) {
