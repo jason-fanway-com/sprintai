@@ -76,6 +76,36 @@ export function computeGuard9<T extends Guard9CartLine>(
   cartSnapshotBeforeTurn: T[],
   guardCart:              T[],
   isItemNamedThisTurn:    (itemName: string) => boolean,
+  // C4 (docs/DEFECT-CLASSES.md, 2026-09-12, live money defect, conv
+  // 08782185): this guard used to fire off impliesOrderConfirmation ALONE —
+  // "yes" anywhere in the message, with no view of anything else the same
+  // message said. "Yes to Jason. Can you add fries to that?" IS a bare
+  // affirmation by that test, so a French Fries add the ordering loop had
+  // just correctly resolved from the SAME message's own explicit request got
+  // read as unconsented growth and silently reverted — the fries were never
+  // added, and the customer was never told. (isItemNamedThisTurn's own
+  // customer-words check can't rescue this: "fries" is deliberately never
+  // aliased to one specific dish when the menu has several fries items, so a
+  // genuinely fresh, genuinely explicit request can still fail that check.)
+  // hasOtherIntent (index.ts's own hasNonConfirmationContent, passed in
+  // rather than imported so this module's callers keep deciding what counts
+  // as "known name" filler) is the general fix: a message that carries real
+  // content beyond a bare confirmation is not the stale-offer-reactivated-
+  // by-an-unrelated-yes shape this guard exists to catch (the 2026-09-06
+  // "Luca" incident — a bare "Looks good" two turns after an unresolved
+  // upsell offer) — it is direct, in-the-moment evidence the customer asked
+  // for something, and the ordering loop's own resolution of it must stand.
+  //
+  // Deliberately NOT a blanket disable of this whole guard: it only exempts
+  // a BRAND-NEW line (see the phantom-add loop below) from reversion. An
+  // EXISTING line's quantity silently growing gets no such exemption — a
+  // request for something else is no explanation for why a DIFFERENT,
+  // already-in-the-cart line's count went up, and that shape (same item,
+  // qty 1 -> 2, no textual grounding) is exactly conv ce84c64b's own
+  // GUARD 21 incident (guard21-unconsented-growth-no-signal-20260912.ts).
+  // The two incidents must both stay caught even though only one of them
+  // shares this guard's own bare-affirmation trigger.
+  hasOtherIntent: boolean = false,
 ): Guard9Result<T> {
   if (!impliesOrderConfirmation(userMessage)) {
     return { tripped: false, phantomAdds: [], qtyReverts: [] };
@@ -119,6 +149,11 @@ export function computeGuard9<T extends Guard9CartLine>(
       qtyReverts.push({ item: line, priorQty: (line.quantity || 1) - take });
       delta -= take;
     }
+    // Brand-new-line growth: exempt when this message carries real content
+    // beyond a bare confirmation — see this function's own hasOtherIntent
+    // doc above. Any remaining growth here has NO matching before-fingerprint
+    // at all, i.e. it is a genuinely new line, never a same-line quantity bump.
+    if (hasOtherIntent) continue;
     for (const line of postLines) {
       if (delta <= 0) break;
       if (beforeByFingerprint.has(fingerprint(line))) continue;

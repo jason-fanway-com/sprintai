@@ -54,6 +54,8 @@ import { computeGuard13 } from "./guard13-unconsented-quantity-growth.ts";
 import { computeGuard19, statesQuantity } from "./guard19-quantity-only-no-item-named.ts";
 import { computeGuard21 } from "./guard21-unconsented-growth-no-signal-20260912.ts";
 import { resolveModifierMention, type ModifierChoiceOption } from "./regular-offer-modifier-20260912.ts";
+import { hasNonConfirmationContent } from "./confirmation-with-other-intent-20260912.ts";
+import { CHECKOUT_WANTS_CHANGE_RE, CHECKOUT_WANTS_RESTART_RE } from "./checkout-wants-change-20260912.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
 import { computeGuard20, regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
@@ -4107,6 +4109,33 @@ export function buildResetReply(effectiveOpen: boolean): string {
     : "Session reset. Text when the kitchen is open, or TESTMODE to test again.";
 }
 
+// C4 (docs/DEFECT-CLASSES.md, 2026-09-12, PO-flagged stale-link hazard,
+// conv 08782185): CHANGE and RESTART both null out our OWN
+// stripe_checkout_session_id pointer, but neither ever told Stripe the
+// session itself was no longer valid. A test session for the OLD total
+// (e.g. $21.99 without fries) stayed live and payable on Stripe's side even
+// after the cart changed to a different total — a customer holding the
+// stale link (an old text, a reopened tab) could still pay the WRONG
+// amount. Best-effort: Stripe rejects expiring a session that's already
+// completed/expired/invalid, which is fine — that just means there was
+// nothing left to invalidate. Never let a failure here block the
+// customer's actual turn; it only ever removes a stale payment option; the
+// blast radius is smaller than any surface it could break by throwing.
+async function expireStripeCheckoutSession(sessionId: string | null | undefined, testMode: boolean): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const stripeKey = testMode
+      ? (getTestModeStripeKey() ?? "")
+      : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
+    if (!stripeKey) return;
+    const stripe = new Stripe(stripeKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+    await stripe.checkout.sessions.expire(sessionId);
+    console.log(`[chat-sms] Expired stale checkout session ${sessionId} (cart changed).`);
+  } catch (e) {
+    console.warn(`[chat-sms] Could not expire checkout session ${sessionId}: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 async function saveMessage(
   supabase:       SupabaseClient,
   conversationId: string,
@@ -5544,8 +5573,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   }
   if (cart.phase === "checkout") {
     const upper = userMessage.toUpperCase().trim();
-    const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
-    const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
+    const wantsRestart = CHECKOUT_WANTS_RESTART_RE.test(upper);
+    // C4 (docs/DEFECT-CLASSES.md, 2026-09-12, conv 08782185): "Add fries" was
+    // refused here — only explicit correction language (CHANGE/WRONG/FIX/...)
+    // reopened the order; add/remove/swap language did not, so the customer
+    // was told to type CHANGE first. That's our internal state machine
+    // leaking into the conversation. Widened in checkout-wants-change-
+    // 20260912.ts to also recognize add/remove/swap-shaped requests directly
+    // — see that module for the full vocabulary and its own tests.
+    const wantsChange = CHECKOUT_WANTS_CHANGE_RE.test(upper);
 
     // P0 fix (2026-09-12, live trust incident, conv d79c1d98): "show me the
     // order" was structurally unanswerable once a payment link existed —
@@ -5575,6 +5611,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
 
     if (wantsRestart) {
+      // C4 stale-link fix (2026-09-12, PO-flagged): invalidate the real
+      // Stripe session, not just our own DB pointer — see
+      // expireStripeCheckoutSession's own header for why.
+      await expireStripeCheckoutSession(cart.stripe_checkout_session_id, cart.test_mode);
       // Clear cart and start fresh
       cart.cart_json = [];
       await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0, pending_disambiguation: null }).eq("id", cart.id);
@@ -5586,6 +5626,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
 
     if (wantsChange) {
+      // C4 stale-link fix (2026-09-12, PO-flagged, conv 08782185): a real
+      // test Stripe session existed for $21.99 while the cart was about to
+      // change (fries added) — nulling only our OWN pointer left that
+      // session live and payable for the OLD amount on Stripe's side.
+      // Expire it for real before reopening the order.
+      await expireStripeCheckoutSession(cart.stripe_checkout_session_id, cart.test_mode);
       // Go back to building phase so the LLM can handle modifications
       await supabase.from("order_carts").update({ phase: "building", stripe_checkout_session_id: null }).eq("id", cart.id);
       cart.phase = "building" as OrderPhase;
@@ -6670,7 +6716,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       : null;
     if (cartItems.length > 0 && !(cart as any).pickup_name) {
       const trimmed = userMessage.trim();
-      const looksLikeName = /^[A-Z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;
+      // C4 sweep (docs/DEFECT-CLASSES.md, 2026-09-12): a short compound like
+      // "Jason add fries" (3 words, no disallowed punctuation) satisfied the
+      // shape check below and would have been read as JUST a name, silently
+      // swallowing the add — same shape as the C2b-name/D1 instances of this
+      // class, just narrower. Reuses the same central add/remove/swap
+      // vocabulary (checkout-wants-change-20260912.ts) rather than a new
+      // one-off exclusion list.
+      const looksLikeName = /^[A-Z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3
+        && !CHECKOUT_WANTS_CHANGE_RE.test(trimmed.toUpperCase());
       const lastAssistant = [...history].reverse().find(h => h.role === "assistant");
       const askedForName = typeof lastAssistant?.content === "string" && isAskingForPickupName(lastAssistant.content);
       // D3 fix (2026-09-09): a customer can volunteer their pickup name a turn
@@ -6757,6 +6811,21 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
+      // C4 (docs/DEFECT-CLASSES.md, 2026-09-12, live incident conv 08782185):
+      // "Yes to Jason. Can you add fries to that?" is confirmation + a real
+      // mutation request. The CART_SUMMARY_MENTION_RE branch above only
+      // catches the READ sub-case; this is the GENERAL rule the PO asked to
+      // be implemented once, centrally — hasNonConfirmationContent strips
+      // confirmation/name-verification/filler and checks whether anything
+      // real survives. Name resolution itself is UNCHANGED (still runs the
+      // same way whether or not other content is present) — recording the
+      // confirmed name is a safe, reversible write, not the risky part. Only
+      // submit_order (the one irreversible action — it sends a real payment
+      // link) is gated on `!hasOtherIntent`, below. When other content is
+      // present, this turn instead falls through to the ordinary ordering
+      // loop, which is the one path that actually applies an add/remove/
+      // modify, backed by the full guard suite (GUARD 9/13/19/20/21/22).
+      const hasOtherIntent = hasNonConfirmationContent(trimmed, customerContext.name);
       let resolvedName: string | null = null;
       if (impliesOrderConfirmation(trimmed)) {
         resolvedName = customerContext.name;
@@ -6764,14 +6833,23 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const explicitCorrection = trimmed.match(/^(?:no,?\s*)?(?:it'?s|i'?m|my name is)\s+([A-Z][a-z]+)/i);
         if (explicitCorrection) {
           resolvedName = explicitCorrection[1];
-        } else {
+        } else if (!hasOtherIntent) {
           const stripped = trimmed.replace(/^(?:no|actually)[,.]?\s*/i, "").trim();
           if (/^[A-Z][A-Za-z .'-]{0,30}$/.test(stripped) && stripped.split(/\s+/).length <= 3 && stripped.length > 0) {
             resolvedName = stripped;
           }
         }
       }
-      if (resolvedName) {
+      if (resolvedName && hasOtherIntent) {
+        // Safe half of the confirmation: persist the name so it's known for
+        // the very next turn, but never submit on a turn that also carried
+        // an unresolved request — that would send a payment link before the
+        // customer's OTHER ask (the fries, the removal, whatever it was) is
+        // even known to have landed.
+        console.log(`[chat-sms] C2b-name held (conv=${conversation.id}): compound confirm+other-intent turn — recorded the name, falling through to the ordering loop instead of auto-submitting.`);
+        await supabase.from("order_carts").update({ pickup_name: resolvedName }).eq("id", cart.id);
+        (cart as any).pickup_name = resolvedName;
+      } else if (resolvedName) {
         const shopGeoC2bName = shop.latitude != null && shop.longitude != null && (shop.delivery_radius_mi ?? 0) > 0
           ? { lat: shop.latitude, lng: shop.longitude, radiusMi: Number(shop.delivery_radius_mi) }
           : null;
@@ -8576,7 +8654,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       return false;
     };
 
-    const guard9Result = computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, isNamedThisTurnG9);
+    // C4 sweep (docs/DEFECT-CLASSES.md, 2026-09-12): same hasNonConfirmationContent
+    // gate as C2b-name/D1 above, applied to GUARD 9's OWN trigger — see that
+    // function's own header comment for the full incident (French Fries
+    // silently reverted on "Yes to Jason. Can you add fries to that?").
+    const hasOtherIntentG9 = hasNonConfirmationContent(userMessage, customerContext?.name);
+    const guard9Result = computeGuard9(userMessage, cartSnapshotBeforeTurn, guardCart, isNamedThisTurnG9, hasOtherIntentG9);
 
     if (guard9Result.tripped) {
       const revertedDesc = [
@@ -8933,15 +9016,17 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // to create the real Stripe session. Stops the "what else?" / pickup-
   // delivery re-ask loop after a checkout signal. Reuses submit_order's own
   // C1 gate for safety (requires pickup_name + order_type). Runs between Guards 2c and 2b.
-  // P0 fix (2026-09-12, conv d79c1d98, point 3): same class as C2b-name's own
-  // fix above — impliesOrderConfirmation matches "yes" anywhere in the
-  // message with no shape constraint, so a compound "show me the order,
-  // yes..." would otherwise read as clean checkout intent here too. Never
-  // let a turn that ALSO asks to see the order trigger the one irreversible
-  // action in this flow.
+  // C4 (docs/DEFECT-CLASSES.md, 2026-09-12): impliesOrderConfirmation matches
+  // "yes" anywhere in the message with no shape constraint, so a compound
+  // turn ("show me the order, yes...", "yes, can you add fries too") would
+  // otherwise read as clean checkout intent here too. hasNonConfirmationContent
+  // is the ONE central rule for this (see C2b-name's own fix above and
+  // confirmation-with-other-intent-20260912.ts) — never let a turn that also
+  // carries an unresolved request trigger the one irreversible action in
+  // this flow.
   if (!checkoutUrl && guardCart.length > 0 && hasPickupName && orderTypePreLoop) {
     const hasIncompleteBundle = guardCart.find(i => (i as BundleItem).type === "bundle" && !(i as BundleItem).complete);
-    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage) && !CART_SUMMARY_MENTION_RE.test(userMessage.trim())) {
+    if (!hasIncompleteBundle && impliesOrderConfirmation(userMessage) && !hasNonConfirmationContent(userMessage, guardCartRow?.pickup_name as string | undefined)) {
       console.log(`[chat-sms] D1 checkout-completion-driver firing (conv=${conversation.id}, cart=${cart.id}, name="${guardCartRow?.pickup_name}", order_type=${orderTypePreLoop})`);
       const submitInput: Record<string, unknown> = { pickup_name: guardCartRow?.pickup_name };
       const submitResult = await executeTool("submit_order", submitInput, guardCart, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, shopGeo);

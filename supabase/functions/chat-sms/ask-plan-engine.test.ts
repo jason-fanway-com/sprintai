@@ -653,6 +653,34 @@ Deno.test("applyCompiledAddItem: D1 fix — the Bug-3 no-op guard still fires fo
   assertEquals(r2.cartChanged, false);
 });
 
+// C1 regression (2026-09-12, docs/DEFECT-CLASSES.md, live money defect —
+// Vito's pizza double-charge: two lines for the identical menu_item_id +
+// options ({"Toppings": ["Pepperoni (Whole pizza)"]}), $21 each, rendered
+// under TWO DIFFERENT display names — "Cheese - Large (16\")" and "Large
+// Cheese Pizza" — because the pre-existing line had no `ask_plan_selections`
+// field at all (any line created by a path that predates this item's
+// compile, or any future path that doesn't populate that field), and the
+// identity check used to hard-require that field's presence on the
+// EXISTING line before it could even be considered a candidate match.
+Deno.test("applyCompiledAddItem: C1 fix — an existing line added via a DIFFERENT code path (no ask_plan_selections field, legacy display name) still merges instead of spawning a second, differently-named line", () => {
+  const cart: CompiledCartLine[] = [{
+    // Simulates a line created by a path other than applyCompiledAddItem
+    // (e.g. a pre-compile legacy add_item call) — same menu_item_id, same
+    // human-meaningful options, but under the menu's raw/legacy name and
+    // with NO ask_plan_selections snapshot at all.
+    menu_item_id: "zios-large-cheese", name: "Cheese - Large (16\")",
+    quantity: 1, price_cents: 2199, modifiers: [],
+    options: { "Add Toppings": ["Pepperoni"] },
+  }];
+  const result = applyCompiledAddItem(
+    cart, ziosLargeCheeseMenuItem(), "zios-large-cheese", 1, "add pepperoni", null, undefined, ["Pepperoni"],
+  );
+  assertEquals(cart.length, 1, "must collapse into the ONE existing line, never spawn a second under the compiled engine's own display name");
+  assertEquals(cart[0].quantity, 2, "the genuine second unit must still be counted");
+  assertEquals(cart[0].name, "Cheese - Large (16\")", "must merge INTO the existing line (never overwritten/duplicated under askPlan.display_name)");
+  assert(result.cartChanged);
+});
+
 Deno.test("applyCompiledAddItem: D1 fix — a genuinely repeated identical order (no list, same item twice with the same topping) still stacks quantity when there's no consumed-set collision risk (single call, quantity=2)", () => {
   const cart: CompiledCartLine[] = [];
   const consumed = new Set<string>();
