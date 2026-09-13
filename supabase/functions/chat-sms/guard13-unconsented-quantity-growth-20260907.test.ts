@@ -100,35 +100,10 @@ Deno.test("computeGuard13: two pending lines, only one grows unconsented -> only
   assertEquals(reverts[0].item.name, "Buffalo Chicken Pizza");
 });
 
-// ── Wiring regression guard (mirrors GUARD 9's own precedent test) ─────────
-
-Deno.test("GUARD 13: exists in index.ts and warns on trip", () => {
-  assert(INDEX_SOURCE.includes("GUARD 13 (unconsented quantity growth on pending item)"), "GUARD 13 warn marker must exist");
-  assert(/Guard 13 \(2026-09-07, Jason: quantity-doubling/.test(INDEX_SOURCE));
-});
-
-function extractGuard13Block(source: string): string {
-  const start = source.indexOf("// ── Guard 13 (2026-09-07, Jason: quantity-doubling");
-  assert(start !== -1, "GUARD 13 section header comment must exist in index.ts");
-  const nextGuardMarker = "// ── Guard (menu link): send the live menu page";
-  const end = source.indexOf(nextGuardMarker, start);
-  assert(end !== -1, "the guard following GUARD 13 must exist in index.ts (marker text may have moved)");
-  return source.slice(start, end);
-}
-
-Deno.test("GUARD 13 wiring: index.ts's call site passes cartSnapshotBeforeTurn, not cartItems, as the before-cart", () => {
-  const block = extractGuard13Block(INDEX_SOURCE);
-  assert(
-    /computeGuard13\(\s*cartSnapshotBeforeTurn,\s*guardCart,/.test(block),
-    "GUARD 13 must call computeGuard13(cartSnapshotBeforeTurn, guardCart, ...) — got:\n" + block,
-  );
-  const codeOnly = block.split("\n").map(line => line.replace(/\/\/.*$/, "")).join("\n");
-  assertEquals(
-    /\bcartItems\b/.test(codeOnly),
-    false,
-    "GUARD 13's executable code must never reference `cartItems` — it is mutated in place and cannot answer 'what changed this turn'",
-  );
-});
+// ── Wiring regression guard removed 2026-09-13: GUARD 13's index.ts call
+// site was retired when turn-reconciler.ts (b7bd0404) took over the
+// aggregate-growth decision; computeGuard13 itself is kept and tested above
+// as a pure function, matching a shape the reconciler's own tests cover.
 
 // ── Full-family phrase coverage (2026-09-07, Jason: "test each of these
 // explicitly ... none may create a line or increase a quantity") ──────────
