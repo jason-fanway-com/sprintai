@@ -7582,8 +7582,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         reply = upsellOfferSentence
           ? `${factSentence} ${upsellOfferSentence}`
           : (warmthTail ? `${factSentence} ${warmthTail}` : factSentence);
-        console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)}`);
-        console.log(`[chat-sms] ITEM-C-DIAGNOSTIC (conv=${conversation.id}): FULL modelReplyThisTurn=${JSON.stringify(modelReplyThisTurn)} warmthTail=${JSON.stringify(warmthTail)} upsellOfferSentence=${JSON.stringify(upsellOfferSentence)}`);
+        console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)} upsellOfferSentence=${JSON.stringify(upsellOfferSentence)}`);
       }
     }
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
