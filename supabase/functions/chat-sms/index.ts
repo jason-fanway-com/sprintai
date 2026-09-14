@@ -8034,7 +8034,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           // site. One writer, same shape as renderNumberedPickList /
           // renderNameList / renderQuotedNameList from candidate-list.ts.
           const optionsText = renderOptionAlternatives(candidates.map(c => ({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })));
-          reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
+          reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`; // cart-fact:blessed — menuItem.name echoes the customer's own search term (a menu-item disambiguation query), not a claim about current cart contents
         }
         // deno-lint-ignore no-await-in-loop
         await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
