@@ -55,7 +55,7 @@ import { computeGuard19, statesQuantity } from "./guard19-quantity-only-no-item-
 import { resolveModifierMention, type ModifierChoiceOption } from "./regular-offer-modifier-20260912.ts";
 import { hasGuard19NamedSignal } from "./guard19-fuzzy-item-match.ts";
 import { composeDeterministicPizzaLines, buildComposedLinesNote, type ComposeMenuItem } from "./pizza-topping-compose.ts";
-import { regularItemAuthorizedThisTurn, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
+import { regularItemAuthorizedThisTurn, namesMatch, type RegularOfferContext } from "./guard20-regular-offer-confirmation.ts";
 import {
   reconcileAddProposals,
   detectUnitCompletionEvent,
@@ -1664,6 +1664,7 @@ export async function executeTool(
         menu_item_id: string; quantity?: number; modifiers?: string[]; options?: Record<string, string[]>; source_phrase?: string;
       };
       const menuItem = menuMap.get(menu_item_id);
+      console.log(`[chat-sms] TMPDIAG add_item CALL menu_item_id=${menu_item_id} found=${!!menuItem} quantity=${quantity} modifiers=${JSON.stringify(modifiers)} options=${JSON.stringify(addItemInputOptions)} source_phrase=${JSON.stringify(source_phrase)} compiledEngineEnabled=${compiledEngineEnabled} hasAskPlan=${!!menuItem?.ask_plan}`);
       if (!menuItem) {
         return { ok: false, result: { error: `Item ID "${menu_item_id}" not found in the available menu. Use an exact ID from the menu list.` } };
       }
@@ -1721,6 +1722,7 @@ export async function executeTool(
           modifierScopeText,
           phraseIndex ?? undefined,
         );
+        console.log(`[chat-sms] TMPDIAG add_item ENGINE-OUTCOME menu_item_id=${menu_item_id} ok=${engineOutcome.ok} cartChanged=${engineOutcome.cartChanged} customerMessage=${JSON.stringify(compiledMatchText ?? customerMessage ?? "")} result=${JSON.stringify(engineOutcome.result).slice(0, 300)}`);
         if (engineOutcome.cartChanged) await saveCart(supabase, cartId, cart, "building");
         // BLOCKED-SUGGESTION GUARD (2026-09-07, Jason: "double burger" decline
         // suggested Burger/Cheese Burger/Zio's Deluxe Burger/Mamma Mia Burger/
@@ -3001,10 +3003,23 @@ async function saveCart(
   }
 
   const subtotal = computeCartSubtotalCents(cart);
+  // TMPDIAG (item G, 2026-09-14): saveCart is the single writer, but every
+  // call site (~23) discards its own boolean return, so a swallowed DB error
+  // is invisible until the NEXT turn loads a cart that silently never
+  // changed. Log every call's inputs + outcome, with a caller line pulled
+  // from the stack, so a caught failure shows exactly which call site's
+  // write never landed rather than requiring per-site instrumentation.
+  const tmpdiagCaller = (new Error().stack ?? "").split("\n")[2]?.trim() ?? "?";
+  const tmpdiagCartSummary = cart.map(i => {
+    const ci = i as { menu_item_id?: string; name?: string; quantity?: number; options?: Record<string, string[]> };
+    return `${ci.name ?? ci.menu_item_id ?? "?"}x${ci.quantity ?? 1}${ci.options ? JSON.stringify(ci.options) : ""}`;
+  }).join(" | ");
+  console.log(`[chat-sms] TMPDIAG saveCart CALL cart=${cartId} phase=${phase}->${resolvedPhase} items=${cart.length} [${tmpdiagCartSummary}] caller=${tmpdiagCaller}`);
   const { error } = await supabase.from("order_carts")
     .update({ cart_json: cart, phase: resolvedPhase, subtotal_cents: subtotal, total_cents: subtotal }) // single-writer:blessed — saveCart is THE persister
     .eq("id", cartId);
   if (error) console.error(`[chat-sms] saveCart FAILED for cart=${cartId}: ${error.message}`);
+  console.log(`[chat-sms] TMPDIAG saveCart RESULT cart=${cartId} ok=${!error} error=${error ? JSON.stringify(error) : "null"}`);
   return !error;
 }
 
@@ -3647,6 +3662,21 @@ function isConfirmingPickupName(text: string, expectedName: string): boolean {
   if (!text || !expectedName) return false;
   const escaped = expectedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`putting this in for ${escaped}, right\\?`, "i").test(text);
+}
+
+// C2c-upsell narrow acceptance check (2026-09-14, item G follow-up). Scoped
+// to that ONE call site only — do not reuse elsewhere. impliesOrderConfirmation
+// (guard9) is a broad "sounds like checkout-ready" detector that deliberately
+// matches wrap-up phrases like "that's it"/"done"/"ready"/"all set"/"checkout"
+// — exactly the opposite of accepting an upsell offer. Using it to mean
+// "accepts the upsell" made "cheeseburger" -> "medium" -> "that's it" silently
+// add the offered French Fries: the customer meant "I'm finished," not "yes,
+// add that." This predicate matches ONLY a genuine bare affirmative to a
+// yes/no question, excluding all checkout/completion language.
+function impliesUpsellAcceptance(text: string): boolean {
+  if (!text) return false;
+  const norm = text.toLowerCase().trim();
+  return /^(?:yes|yeah|yep|yup|sure|ok|okay|please|yes please|sounds good|add it|do it)[.!]?$/i.test(norm);
 }
 
 // renderMissingOptionsPrompt and groupChoicesAlreadySaid now live in
@@ -5517,6 +5547,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     .eq("conversation_id", conversation.id)
     .not("phase", "in", "(confirmed,expired)")
     .order("created_at", { ascending: false }).limit(1).single();
+  console.log(`[chat-sms] TMPDIAG cart load conv=${conversation.id} msg=${JSON.stringify(userMessage)} found=${!!existingCart} id=${existingCart?.id} phase=${existingCart?.phase} test_mode=${existingCart?.test_mode} cart_len=${(existingCart?.cart_json as unknown[] | undefined)?.length} updated_at=${existingCart?.updated_at} conv_last_msg_at=${(conversation as ActiveConversationRow).last_message_at}`);
 
   let cart: OrderCart;
   // SYNCHRONOUS expired-link handling (lead directive 2026-06-22): we never
@@ -6900,14 +6931,16 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // extractOfferedItemName only reads the IMMEDIATELY PRECEDING assistant
   // message — an offer from further back is not live consent for a later
   // bare "yes" (the 2026-09-06 "Luca" incident shape). A decline ("no
-  // thanks") does not match impliesOrderConfirmation, so this block simply
-  // does nothing and the turn falls through to the LLM's own (unforced)
-  // voice, unchanged — no separate decline path to build or maintain.
+  // thanks") — or a checkout wrap-up phrase like "that's it"/"done"/"ready"
+  // (item G follow-up, 2026-09-14) — does not match impliesUpsellAcceptance,
+  // so this block simply does nothing and the turn falls through to the
+  // LLM's own (unforced) voice, unchanged — no separate decline path to
+  // build or maintain.
   {
     const lastAssistantUpsell = [...history].reverse().find(h => h.role === "assistant");
     const priorAssistantMessageUpsell = typeof lastAssistantUpsell?.content === "string" ? lastAssistantUpsell.content : null;
     const offeredUpsellName = extractOfferedItemName(priorAssistantMessageUpsell);
-    if (offeredUpsellName && impliesOrderConfirmation(userMessage)) {
+    if (offeredUpsellName && impliesUpsellAcceptance(userMessage)) {
       const upsellMenuItem = effectiveMenu.find(m => m.name.toLowerCase().trim() === offeredUpsellName.toLowerCase().trim());
       if (upsellMenuItem) {
         console.log(`[chat-sms] C2c-upsell pre-LLM upsell-offer accept firing (conv=${conversation.id}, item="${upsellMenuItem.name}")`);
@@ -7691,14 +7724,71 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (regularItem && itemLower === regularItem.name.toLowerCase()) {
           return regularItemAuthorizedThisTurn(userMessage, priorMsgRec, regularItem.name);
         }
+        // P0 fix (2026-09-14, item G — Vito's Cheese Burger/Temp canary,
+        // ~1-in-3 live failure, root cause confirmed via saveCart-level
+        // instrumentation: every write this turn succeeded, so nothing was
+        // silently lost — the reconciler itself dropped a genuine order).
+        // A compiled item's first add_item call sometimes only partially
+        // lands: the model names the item and asks its required-option
+        // question in the same breath instead of actually calling
+        // add_item with what little it has, so no pending cart line ever
+        // gets created. When the customer's very next reply directly
+        // answers that still-open question ("medium" for Temp), the
+        // resulting add_item call correctly produces a brand-new, FULLY
+        // resolved line — but nothing in THIS turn's own text names the
+        // item, so namedSignalRec/namedThisTurnRec both miss it and a live
+        // order was silently reverted to empty.
+        // Same two-factor shape as regularItemAuthorizedThisTurn above —
+        // freshness (the bot's own IMMEDIATELY PRECEDING reply already
+        // named this exact item; never a stale mention from earlier in the
+        // conversation) AND a this-turn signal (this turn's own text
+        // matches one of the item's real compiled choice values) — freshness
+        // alone would let any old name-drop license a later unrelated add.
+        if (itemName && priorMsgRec && namesMatch(priorMsgRec, itemName)) {
+          const askPlanChoices = (effectiveMenu.find(m => m.id === raw.menu_item_id)?.ask_plan?.steps ?? [])
+            .flatMap(s => s.choices);
+          if (askPlanChoices.length > 0 && matchChoiceInText(askPlanChoices, userMessage)) return true;
+        }
         return false;
       })(),
     }));
     const preTurnSnap = cartSnapshotBeforeTurn as unknown as ReconcilerCartLine[];
     const loopFinalSnap = cartItems as unknown as ReconcilerCartLine[];
-    const { cart: correctedLines, changes } = reconcileAddProposals(
+    const { cart: correctedLines, changes, diagnostics: reconcilerDiagnostics } = reconcileAddProposals(
       preTurnSnap, loopFinalSnap, reconcilerProposals, userMessage,
     );
+    // Item G instrumentation (2026-09-14): a dropped_unauthorized firing on a
+    // line that DID exist pre-turn is exactly the "whole order vanished"
+    // defect class (c23f0a4d's fix closed one instance of this; the canary
+    // still fails ~1-in-3 live, so this persists the full match context —
+    // not just the after-the-fact change record — for every firing so the
+    // real mechanism can be read back from error_log instead of re-caught
+    // live. Fire-and-forget is wrong here: logError is fail-open by its own
+    // contract (never throws), so awaiting it costs latency but guarantees
+    // the row lands before this request can return.
+    for (const diag of reconcilerDiagnostics) {
+      if (diag.action !== "dropped_unauthorized") continue;
+      await logError(supabase, {
+        conversationId: conversation.id as string,
+        shopId: shop.id,
+        tenantId: shop.tenant_id,
+        phase: "chat-sms",
+        stage: "guard_deny",
+        customerMessage: userMessage,
+        error: new Error(`turn-reconciler dropped_unauthorized: ${diag.menu_item_id}`),
+        metadata: {
+          item: "G",
+          key: diag.key,
+          menu_item_id: diag.menu_item_id,
+          anyGrounded: diag.anyGrounded,
+          group: diag.group,
+          preTurnLineByFullIdentity: diag.preTurnLineByFullIdentity,
+          preTurnLineByPendingFallback: diag.preTurnLineByPendingFallback,
+          preTurnCart: preTurnSnap,
+          loopFinalCart: loopFinalSnap,
+        },
+      });
+    }
     // P0 fix (2026-09-13, live money — v413 bare-"yes" duplicate-pizza
     // defect): this used to gate on `correctedTotal < loopTotal` (summed
     // quantity across all lines). That silently discarded the reconciler's

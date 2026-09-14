@@ -391,9 +391,27 @@ export interface ReconcileChange {
   qty?: number;
 }
 
+// (2026-09-14, item G instrumentation) One entry per proposal group this
+// turn, regardless of outcome — captures exactly why each group did or
+// didn't match a pre-turn line, so a live `dropped_unauthorized` firing can
+// be reconstructed after the fact without having to catch it live in a
+// debugger. This file stays pure (plain data out, still no I/O) — the
+// caller (index.ts) is responsible for persisting these via error-log.ts
+// when it sees an interesting action.
+export interface ReconcileDiagnostic {
+  menu_item_id: string;
+  key: string;
+  group: CartUnitProposal[];
+  anyGrounded: boolean;
+  preTurnLineByFullIdentity: ReconcilerCartLine | null;
+  preTurnLineByPendingFallback: ReconcilerCartLine | null;
+  action: ReconcileChange["action"] | "line_missing_in_loop_final";
+}
+
 export interface ReconcileOutcome {
   cart: ReconcilerCartLine[];
   changes: ReconcileChange[];
+  diagnostics: ReconcileDiagnostic[];
 }
 
 /**
@@ -420,8 +438,9 @@ export function reconcileAddProposals(
 ): ReconcileOutcome {
   const cart = loopFinalCart.map(l => ({ ...l }));
   const changes: ReconcileChange[] = [];
+  const diagnostics: ReconcileDiagnostic[] = [];
 
-  if (proposals.length === 0) return { cart, changes };
+  if (proposals.length === 0) return { cart, changes, diagnostics };
 
   const preIndex = new Map<string, ReconcilerCartLine>();
   for (const l of preTurnCart) preIndex.set(identityKey(l.menu_item_id, l.options), l);
@@ -477,6 +496,12 @@ export function reconcileAddProposals(
       // The line this group refers to no longer exists in loopFinalCart —
       // e.g. a later remove_item this same turn deleted it. Nothing to
       // reconcile; the removal wins.
+      diagnostics.push({
+        menu_item_id: key.split("::")[0], key, group, anyGrounded: group.some(p => p.grounded),
+        preTurnLineByFullIdentity: preIndex.get(key) ?? null,
+        preTurnLineByPendingFallback: prePendingByMenuItemId.get(key.split("::")[0]) ?? null,
+        action: "line_missing_in_loop_final",
+      });
       continue;
     }
 
@@ -511,7 +536,9 @@ export function reconcileAddProposals(
       explicit = parseExplicitQuantity(customerMessageText);
     }
 
-    const existingPre = preIndex.get(key) ?? prePendingByMenuItemId.get(cart[lineIdx].menu_item_id);
+    const preTurnLineByFullIdentity = preIndex.get(key) ?? null;
+    const preTurnLineByPendingFallback = prePendingByMenuItemId.get(cart[lineIdx].menu_item_id) ?? null;
+    const existingPre = preTurnLineByFullIdentity ?? preTurnLineByPendingFallback;
     if (existingPre) {
       // Idempotency rule (required architecture point 3): re-confirming
       // something already in the cart is a quantity NO-OP by default,
@@ -526,11 +553,16 @@ export function reconcileAddProposals(
         menu_item_id: cart[lineIdx].menu_item_id, options: cart[lineIdx].options,
         quantityOnly: true, forceQuantity: finalQty, source: "reconciler",
       });
+      const action = finalQty !== preQty ? "qty_set" : "noop_reconfirm";
       changes.push(
-        finalQty !== preQty
-          ? { menu_item_id: cart[lineIdx].menu_item_id, action: "qty_set", qty: finalQty }
-          : { menu_item_id: cart[lineIdx].menu_item_id, action: "noop_reconfirm", qty: preQty },
+        action === "qty_set"
+          ? { menu_item_id: cart[lineIdx].menu_item_id, action, qty: finalQty }
+          : { menu_item_id: cart[lineIdx].menu_item_id, action, qty: preQty },
       );
+      diagnostics.push({
+        menu_item_id: cart[lineIdx].menu_item_id, key, group, anyGrounded: group.some(p => p.grounded),
+        preTurnLineByFullIdentity, preTurnLineByPendingFallback, action,
+      });
     } else {
       // Genuinely new this turn. Multiple proposals for the identical
       // identity (three "accept" calls, or the model AND a deterministic
@@ -543,6 +575,11 @@ export function reconcileAddProposals(
         // an unauthorized proposal silently become a charge.
         removeCartLine(cart, lineIdx);
         changes.push({ menu_item_id: key.split("::")[0], action: "dropped_unauthorized" });
+        diagnostics.push({
+          menu_item_id: key.split("::")[0], key, group, anyGrounded,
+          preTurnLineByFullIdentity, preTurnLineByPendingFallback,
+          action: "dropped_unauthorized",
+        });
         continue;
       }
       let finalQty = 1;
@@ -553,10 +590,14 @@ export function reconcileAddProposals(
         quantityOnly: true, forceQuantity: finalQty, source: "reconciler",
       });
       changes.push({ menu_item_id: cart[lineIdx].menu_item_id, action: "added", qty: finalQty });
+      diagnostics.push({
+        menu_item_id: cart[lineIdx].menu_item_id, key, group, anyGrounded,
+        preTurnLineByFullIdentity, preTurnLineByPendingFallback, action: "added",
+      });
     }
   }
 
-  return { cart, changes };
+  return { cart, changes, diagnostics };
 }
 
 // ── Proposal-event detection (mechanical, no semantic "was this grounded"

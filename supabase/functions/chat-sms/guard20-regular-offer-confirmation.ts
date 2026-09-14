@@ -34,7 +34,11 @@ export function mentionsRegularInvocation(message: string): boolean {
   return REGULAR_INVOCATION_RE.test(message);
 }
 
-function namesMatch(a: string, b: string): boolean {
+// Exported (2026-09-14, item G) so index.ts's turn-reconciler grounding
+// check can reuse the exact same "does this text mention that item"
+// substring rule for a non-regular item's own prior-turn-offer freshness
+// check — one name-match primitive, not a second hand-rolled copy.
+export function namesMatch(a: string, b: string): boolean {
   const na = a.toLowerCase().trim();
   const nb = b.toLowerCase().trim();
   return na.length > 0 && nb.length > 0 && (na.includes(nb) || nb.includes(na));
