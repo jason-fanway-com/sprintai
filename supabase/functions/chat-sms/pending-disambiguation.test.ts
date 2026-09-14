@@ -14,6 +14,7 @@ import {
   isPendingDisambiguationDeclined,
   matchOrdinalPosition,
   renderDisambiguationReask,
+  renderOptionAlternatives,
   resolvePendingDisambiguation,
   stemWord,
   type PendingCandidate,
@@ -226,4 +227,29 @@ Deno.test("Backstop: a bare '1' or '2' reply to the Gyro numbered list resolves 
 // deterministically (that's the whole reason the backstop is needed at all).
 Deno.test("Backstop: a genuine real-world answer naming neither category/ordinal/price stays unresolved (why the backstop is needed)", () => {
   assertEquals(resolvePendingDisambiguation("Bleu Cheese, Beef", GYRO_CANDIDATES), null);
+});
+
+// ── renderOptionAlternatives (reply inversion, stage 2, 2026-09-13) ──────────
+// One writer for the "Gyro Salad — $14.99 or Gyro Sandwich — $10.99" clause
+// inside GUARD 7's "couple options" prompt. Closing the last inline
+// .map(candidateOptionText).join(" or ") at a reply= site (site #40 in the
+// classification pass). See reply-inversion-stage2-enforcement.test.ts.
+Deno.test("renderOptionAlternatives: Gyro candidates produce the same string as the old inline join", () => {
+  // This must be byte-for-byte identical to the old inline expression:
+  // candidates.map(c => candidateOptionText(c)).join(" or ")
+  const expected = `${candidateOptionText(GYRO_CANDIDATES[0])} or ${candidateOptionText(GYRO_CANDIDATES[1])}`;
+  assertEquals(renderOptionAlternatives(GYRO_CANDIDATES), expected);
+});
+
+Deno.test("renderOptionAlternatives: BLT candidates (no display_name) use category-word fallback", () => {
+  const result = renderOptionAlternatives(BLT_CANDIDATES);
+  assert(result.includes("Cold Sandwiches") || result.includes("Paninis") || result.includes("cold") || result.includes("panini"), `expected category word in "${result}"`);
+  assert(result.includes(" or "), `expected ' or ' separator in "${result}"`);
+});
+
+Deno.test("renderOptionAlternatives: single candidate produces no ' or ' separator", () => {
+  const single = [GYRO_CANDIDATES[0]];
+  const result = renderOptionAlternatives(single);
+  assertEquals(result.includes(" or "), false);
+  assertEquals(result, candidateOptionText(GYRO_CANDIDATES[0]));
 });

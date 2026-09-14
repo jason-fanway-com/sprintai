@@ -315,6 +315,20 @@ export function candidateOptionText(c: PendingCandidate): string {
   return `the ${c.name}${word ? ` ${word}` : ""} — $${(c.price_cents / 100).toFixed(2)}`;
 }
 
+/**
+ * `"Gyro Salad — $14.99 or Gyro Sandwich — $10.99"` — the alternatives clause
+ * inside GUARD 7's "We've got a couple options called X — [alternatives]. Which
+ * one?" prompt. One writer; call sites do not hand-join candidateOptionText calls.
+ *
+ * Reply inversion, stage 2 (2026-09-13): this function closes the last
+ * remaining inline `.map(candidateOptionText).join(" or ")` at a `reply =`
+ * site (site #40 in the classification pass). See the Stage 2 enforcement test
+ * (reply-inversion-stage2-enforcement.test.ts) for the structural proof.
+ */
+export function renderOptionAlternatives(candidates: PendingCandidate[]): string {
+  return candidates.map(c => candidateOptionText(c)).join(" or ");
+}
+
 function replyNumbers(count: number): string {
   const nums = Array.from({ length: count }, (_, i) => String(i + 1));
   if (nums.length <= 1) return nums[0] ?? "1";
