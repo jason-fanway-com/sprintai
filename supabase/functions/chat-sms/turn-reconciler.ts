@@ -405,6 +405,7 @@ export interface ReconcileDiagnostic {
   anyGrounded: boolean;
   preTurnLineByFullIdentity: ReconcilerCartLine | null;
   preTurnLineByPendingFallback: ReconcilerCartLine | null;
+  preTurnLineByAnyStateFallback: ReconcilerCartLine | null;
   action: ReconcileChange["action"] | "line_missing_in_loop_final";
 }
 
@@ -472,6 +473,24 @@ export function reconcileAddProposals(
     }
   }
 
+  // (2026-09-14, PO addendum — 3 live canary captures via the diagnostics
+  // above) The pending-only fallback above still missed cases where a
+  // pre-turn line existed under SOME other option state that wasn't
+  // "still pending" either — full match, empty options, anything. A
+  // `dropped_unauthorized` firing is only ever supposed to catch a line
+  // GENUINELY CREATED THIS TURN with zero prior existence; if any pre-turn
+  // line shares this menu_item_id at all, this is an update to an existing
+  // order, never a phantom add, regardless of what this turn's own text
+  // grounds. Asymmetry: keeping an unrequested line is visible and
+  // correctable; silently deleting a requested one is neither — when in
+  // doubt, keep. This subsumes prePendingByMenuItemId (every pending line
+  // is also "any state"); both fallbacks are kept so the diagnostics below
+  // can show exactly which one resolved a given firing.
+  const prePresentByMenuItemId = new Map<string, ReconcilerCartLine>();
+  for (const l of preTurnCart) {
+    if (!prePresentByMenuItemId.has(l.menu_item_id)) prePresentByMenuItemId.set(l.menu_item_id, l);
+  }
+
   const groups = new Map<string, CartUnitProposal[]>();
   for (const p of proposals) {
     const key = identityKey(p.menu_item_id, p.options);
@@ -500,6 +519,7 @@ export function reconcileAddProposals(
         menu_item_id: key.split("::")[0], key, group, anyGrounded: group.some(p => p.grounded),
         preTurnLineByFullIdentity: preIndex.get(key) ?? null,
         preTurnLineByPendingFallback: prePendingByMenuItemId.get(key.split("::")[0]) ?? null,
+        preTurnLineByAnyStateFallback: prePresentByMenuItemId.get(key.split("::")[0]) ?? null,
         action: "line_missing_in_loop_final",
       });
       continue;
@@ -538,7 +558,8 @@ export function reconcileAddProposals(
 
     const preTurnLineByFullIdentity = preIndex.get(key) ?? null;
     const preTurnLineByPendingFallback = prePendingByMenuItemId.get(cart[lineIdx].menu_item_id) ?? null;
-    const existingPre = preTurnLineByFullIdentity ?? preTurnLineByPendingFallback;
+    const preTurnLineByAnyStateFallback = prePresentByMenuItemId.get(cart[lineIdx].menu_item_id) ?? null;
+    const existingPre = preTurnLineByFullIdentity ?? preTurnLineByPendingFallback ?? preTurnLineByAnyStateFallback;
     if (existingPre) {
       // Idempotency rule (required architecture point 3): re-confirming
       // something already in the cart is a quantity NO-OP by default,
@@ -561,7 +582,7 @@ export function reconcileAddProposals(
       );
       diagnostics.push({
         menu_item_id: cart[lineIdx].menu_item_id, key, group, anyGrounded: group.some(p => p.grounded),
-        preTurnLineByFullIdentity, preTurnLineByPendingFallback, action,
+        preTurnLineByFullIdentity, preTurnLineByPendingFallback, preTurnLineByAnyStateFallback, action,
       });
     } else {
       // Genuinely new this turn. Multiple proposals for the identical
@@ -577,7 +598,7 @@ export function reconcileAddProposals(
         changes.push({ menu_item_id: key.split("::")[0], action: "dropped_unauthorized" });
         diagnostics.push({
           menu_item_id: key.split("::")[0], key, group, anyGrounded,
-          preTurnLineByFullIdentity, preTurnLineByPendingFallback,
+          preTurnLineByFullIdentity, preTurnLineByPendingFallback, preTurnLineByAnyStateFallback,
           action: "dropped_unauthorized",
         });
         continue;
@@ -592,7 +613,7 @@ export function reconcileAddProposals(
       changes.push({ menu_item_id: cart[lineIdx].menu_item_id, action: "added", qty: finalQty });
       diagnostics.push({
         menu_item_id: cart[lineIdx].menu_item_id, key, group, anyGrounded,
-        preTurnLineByFullIdentity, preTurnLineByPendingFallback, action: "added",
+        preTurnLineByFullIdentity, preTurnLineByPendingFallback, preTurnLineByAnyStateFallback, action: "added",
       });
     }
   }

@@ -190,6 +190,34 @@ Deno.test("reconciler: completing a pre-turn PENDING line's required option ('me
   assertEquals(changes[0].action, "noop_reconfirm");
 });
 
+Deno.test("reconciler: a pre-turn line that exists under a DIFFERENT (non-pending, already-resolved) option state is authorized, never dropped as a phantom", () => {
+  // PO addendum (2026-09-14, 3 live error_log captures): groundedness is
+  // judged only against THIS turn's own text, so any turn that doesn't
+  // re-name the item ("thats it") looks ungrounded even when the item has
+  // existed since an earlier turn. The pending-fallback above only covers
+  // the "still has an open required slot" shape; it misses a line that was
+  // already fully resolved pre-turn and then had its options changed
+  // earlier in the SAME turn (e.g. a topping added by modify_item), which
+  // shifts its identity key away from both preIndex's full-identity match
+  // and prePendingByMenuItemId (pending_options is empty on both sides).
+  // Any pre-turn line sharing menu_item_id, in any option state, is
+  // authorized — the asymmetry is that keeping an unrequested line is
+  // visible and correctable, silently deleting a requested one is not.
+  const pre: ReconcilerCartLine[] = [
+    { menu_item_id: "burger-1", quantity: 1, options: { Toppings: ["Lettuce"] }, pending_options: [] },
+  ];
+  const loopFinal: ReconcilerCartLine[] = [
+    { menu_item_id: "burger-1", quantity: 1, options: { Toppings: ["Lettuce", "Tomato"] }, pending_options: [] },
+  ];
+  const proposals = [
+    { menu_item_id: "burger-1", options: { Toppings: ["Lettuce", "Tomato"] }, source_phrase: "burger", grounded: false },
+  ];
+  const { cart, changes } = reconcileAddProposals(pre, loopFinal, proposals, "thats it");
+  assertEquals(cart.find(l => l.menu_item_id === "burger-1")?.quantity, 1);
+  assertEquals(cart.find(l => l.menu_item_id === "burger-1")?.options, { Toppings: ["Lettuce", "Tomato"] });
+  assertEquals(changes[0].action, "noop_reconfirm");
+});
+
 Deno.test("reconciler: a grounded add (fries named this turn) passes through untouched with a single proposal", () => {
   const pre: ReconcilerCartLine[] = [];
   const loopFinal: ReconcilerCartLine[] = [{ menu_item_id: "fries-1", quantity: 1 }];

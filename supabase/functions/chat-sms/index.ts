@@ -7784,6 +7784,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           group: diag.group,
           preTurnLineByFullIdentity: diag.preTurnLineByFullIdentity,
           preTurnLineByPendingFallback: diag.preTurnLineByPendingFallback,
+          preTurnLineByAnyStateFallback: diag.preTurnLineByAnyStateFallback,
           preTurnCart: preTurnSnap,
           loopFinalCart: loopFinalSnap,
         },
