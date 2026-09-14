@@ -6,6 +6,8 @@ import {
   firstParseableUpsellName,
   renderUpsellOfferSentence,
 } from "./upsell-offer-20260914.ts";
+import { applyCompiledAddItem, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
+import type { AskPlan } from "../_shared/compile-menu.ts";
 
 const cokeLookup = (name: string) =>
   name.toLowerCase() === "coke" ? { name: "Coke", price_cents: 299 } : null;
@@ -91,4 +93,51 @@ Deno.test("computeUpsellOffer: candidate name doesn't resolve to a real active m
 
 Deno.test("computeUpsellOffer: free-text-only upsell field (no parseable item) -> no offer, left to the model's own voice", () => {
   assertEquals(computeUpsellOffer("Substitute side for an upcharge", true, false, [], cokeLookup), null);
+});
+
+// Item C root-cause regression test (2026-09-14): the live bug was never a
+// flaw in computeUpsellOffer's own logic above — it's correct and was
+// already covered. The gap was that index.ts's separate-turn pending-answer
+// resolver (the compiled item's required option, e.g. Cheese Burger's Temp,
+// answered on the turn AFTER the add) never called computeUpsellOffer at
+// all. That's a wiring omission a pure unit test of either module in
+// isolation cannot see — but the CONTRACT between them can be pinned down
+// here: applyCompiledAddItem's real result for a two-call add-then-answer
+// sequence (the exact shape index.ts's resolver uses — see
+// ask-plan-engine.test.ts's "TWO SEPARATE calls" test) is a `next_question`
+// that goes from a real string to `null`. Any caller that resolves a
+// pending required option — this one included — must feed EXACTLY that
+// `next_question === null` transition into computeUpsellOffer's
+// `hasPendingRequiredQuestion` gate as `false`, or the offer stays
+// permanently unreachable for every required-option item answered on a
+// later turn, regardless of how correct the two modules are individually.
+Deno.test("wiring contract: a compiled item's required option resolved via a SEPARATE follow-up call (index.ts's pending-answer resolver shape) becomes upsell-eligible — the exact regression this fix closes", () => {
+  const TEMP_STEP = {
+    group_id: "grp-temp", slot_key: "temp", kind: "slot" as const, ask_mode: "ask" as const,
+    prompt_template: "temp.ask",
+    choices: [
+      { id: "c-welldone", display: "Well Done", price_delta_cents: 0 },
+      { id: "c-medium", display: "Medium", price_delta_cents: 0 },
+    ],
+  };
+  const askPlan: AskPlan = {
+    compiled_at: "2026-09-11T00:00:00Z", compiler_version: 1,
+    display_name: "Cheese Burger", base_price_cents: 849, steps: [TEMP_STEP],
+    recap_template: "{qty} {display_name}", ticket_template: "{name}",
+  };
+  const menuItem: CompiledMenuItem = { ask_plan: askPlan, bot_state: "orderable", option_groups: [{ id: "grp-temp", name: "Temp" }] };
+  const cheeseBurgerUpsellField = "French Fries +4.99; Coke +2.99";
+  const ffLookup = (name: string) => name.toLowerCase() === "french fries" ? { name: "French Fries", price_cents: 499 } : null;
+
+  const cart: CompiledCartLine[] = [];
+  applyCompiledAddItem(cart, menuItem, "cheeseburger-id", 1, "cheeseburger", null); // turn 1: adds, Temp still open
+  const stillOpen = computeUpsellOffer(cheeseBurgerUpsellField, true, cart[0].pending_options !== undefined, [], ffLookup);
+  assertEquals(stillOpen, null, "while Temp is still open, no offer yet — the required question always wins");
+
+  // Turn 2, a SEPARATE applyCompiledAddItem call — the customer's answer.
+  const answerResult = applyCompiledAddItem(cart, menuItem, "cheeseburger-id", 1, "medium", null);
+  const answerR = answerResult.result as { next_question: string | null };
+  const offer = computeUpsellOffer(cheeseBurgerUpsellField, true, answerR.next_question !== null, [], ffLookup);
+  assertEquals(offer, { name: "French Fries", priceCents: 499 }, "resolving the last required option on a later turn must make the item upsell-eligible immediately");
+  assertEquals(renderUpsellOfferSentence(offer!), "Want to add French Fries for $4.99?");
 });

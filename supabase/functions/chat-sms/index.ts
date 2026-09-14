@@ -6462,8 +6462,44 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const feeAlreadyDisclosed8 = !!cart.fee_disclosed_at;
         const footer8 = renderLedgerFooter(localCartItems8 as unknown as AnyCartItem[], "building", cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, !feeAlreadyDisclosed8);
         const r8 = outcome.result as { instruction?: string; next_question?: string | null };
+        // Item C root-cause fix (2026-09-14): this deterministic resolver
+        // returns straight to the customer and NEVER reaches the
+        // REPLY-INVERSION block's upsell wiring (~line 7608 below) — that
+        // code only runs when runOrderingLoop (the LLM/tool loop) mutates
+        // the cart, and resolving a pending required option on a SEPARATE
+        // turn from the add is handled entirely here instead, before the
+        // loop ever runs. Confirmed live (5/5 repro, "cheeseburger" then
+        // "medium" against Vito's): the Temp slot resolves correctly every
+        // time (pending_options clears, price stays correct) but the offer
+        // never fired even once, because this branch had no upsell logic at
+        // all — not an intermittent resolution failure, a structural gap.
+        // French Fries (no required option) never takes this path, which is
+        // why it read as "verified working" — the add and the resolution
+        // happen in the same turn, inside the loop, where the wiring exists.
+        // Same gating discipline as the loop's own event.action==="added"
+        // branch: an offer only fires once every required question on this
+        // add is actually closed (r8.next_question null).
+        let upsellOfferSentence8: string | null = null;
+        if (!r8.next_question) {
+          const { data: shopSettingsRow8 } = await supabase
+            .from("shop_settings").select("upsell_enabled").eq("shop_id", shop.id).maybeSingle();
+          const upsellEnabled8 = (shopSettingsRow8 as { upsell_enabled?: boolean } | null)?.upsell_enabled ?? true;
+          const upsellOffer8 = computeUpsellOffer(
+            menuItem8.upsell ?? null,
+            upsellEnabled8,
+            false,
+            history,
+            (name) => {
+              const found = effectiveMenu.find(mi => mi.name.toLowerCase().trim() === name.toLowerCase().trim());
+              return found ? { name: found.name, price_cents: found.price_cents } : null;
+            },
+          );
+          if (upsellOffer8) upsellOfferSentence8 = renderUpsellOfferSentence(upsellOffer8);
+        }
         const reply8 = r8.next_question
           ? `Got it — ${r8.next_question}${footer8 ? `\n\n${footer8}` : ""}`
+          : upsellOfferSentence8
+          ? `Got it! ${upsellOfferSentence8}${footer8 ? `\n\n${footer8}` : ""}`
           : `Got it!${footer8 ? `\n\n${footer8}` : ""} Anything else?`;
         if (!feeAlreadyDisclosed8) {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);

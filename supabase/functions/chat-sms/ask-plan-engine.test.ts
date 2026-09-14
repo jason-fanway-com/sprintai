@@ -1360,6 +1360,38 @@ Deno.test("applyCompiledAddItem: PO fix — a real answer on the FIRST call reso
   assertEquals(cart[0].price_cents, 849);
 });
 
+// Item C (2026-09-14, live diagnostic): index.ts's separate-turn
+// pending-answer resolver (the "Item 8" block, ~line 6442) calls
+// applyCompiledAddItem a SECOND time, as its OWN fresh call against the
+// cart line left open by the FIRST call — never as a continuation of the
+// same call. This is the exact two-call shape that must clear
+// pending_options for the upsell wiring (upsell-offer-20260914.ts's
+// computeUpsellOffer) to ever become eligible on a required-option item
+// answered on the very next turn. The tests above already cover a single
+// applyCompiledAddItem call answered correctly or incorrectly; this one is
+// the two-INDEPENDENT-calls shape specifically, which nothing here
+// exercised before this fix.
+Deno.test("applyCompiledAddItem: TWO SEPARATE calls (add, then a later independent call answering it) clear pending_options and resolve next_question to null — the shape index.ts's separate-turn pending-answer resolver actually uses", () => {
+  const cart: CompiledCartLine[] = [];
+  const addResult = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "cheeseburger", null);
+  const addR = addResult.result as { next_question?: string | null };
+  assertEquals(addR.next_question, "How would you like the Cheese Burger cooked?");
+  assertEquals(cart[0].pending_options, ["Temp"]);
+  assertEquals(cart[0].ask_plan_selections, {});
+
+  // A brand new, independent applyCompiledAddItem call — same shape as
+  // index.ts's Item-8 resolver, which re-derives continuationIdx from
+  // scratch against the cart on every turn rather than reusing any state
+  // from the first call.
+  const answerResult = applyCompiledAddItem(cart, cheeseBurgerMenuItem(), "cheeseburger-id", 1, "medium", null);
+  assertEquals(answerResult.cartChanged, true);
+  const answerR = answerResult.result as { next_question?: string | null };
+  assertEquals(answerR.next_question, null, "the required Temp slot must resolve, not stay open, on the customer's very next turn");
+  assertEquals(cart.length, 1, "the answer must fill the SAME line, never spawn a second one");
+  assertEquals(cart[0].pending_options, undefined);
+  assertEquals(cart[0].options?.["Temp"], ["Medium"]);
+});
+
 Deno.test("stripDeferredStepQuestion: strips the model's own short-question paraphrase AND any freelanced enumeration, leaves the order-type question intact (the canary's exact reported defect)", () => {
   const modelReply = "Got it - one Cheese Burger added. Are you ordering pickup or delivery today? "
     + "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare";
