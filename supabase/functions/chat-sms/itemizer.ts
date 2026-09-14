@@ -59,6 +59,46 @@ export function padReceiptLine(label: string, amount: string, width = 38): strin
 }
 
 /**
+ * Shared per-line formatting: item label (qty prefix, name, priced options/
+ * modifiers) and its own amount, split so callers can either column-align it
+ * (renderItemizedRecap, a multi-line receipt) or inline it into one sentence
+ * (renderItemizedLine, a single-item confirmation).
+ */
+function renderItemizedLineParts(
+  i: ItemizedCartLine,
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>,
+): { label: string; amount: string } {
+  const lineTotal = i.price_cents * (i.quantity || 1);
+  const qtyPrefix = (i.quantity || 1) > 1 ? `${i.quantity}x ` : "";
+  const optionPrices = i.menu_item_id ? priceIndexByMenuItemId?.get(i.menu_item_id) : undefined;
+  const annotate = (value: string): string => {
+    const p = optionPrices?.get(value.toLowerCase());
+    return p && p > 0 ? `${value} (+$${(p / 100).toFixed(2)})` : value;
+  };
+  const detail = (i.modifiers?.length ?? 0) > 0
+    ? i.modifiers!.map(annotate).join(", ")
+    : (i.options ? Object.entries(i.options).map(([k, v]) => `${k}: ${v.map(annotate).join(", ")}`).join("; ") : "");
+  return {
+    label: `${qtyPrefix}${i.name}${detail ? ` (${detail})` : ""}`,
+    amount: `$${(lineTotal / 100).toFixed(2)}`,
+  };
+}
+
+/**
+ * Single-item itemized line ("Large Cheese Pizza (Toppings: Pepperoni
+ * (+$4.50)) $21.00") for callers rendering one line inline in a sentence
+ * rather than a full multi-line receipt — e.g. action-confirmation.ts's
+ * single-item add confirmation, when the added item carries options.
+ */
+export function renderItemizedLine(
+  i: ItemizedCartLine,
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>,
+): string {
+  const { label, amount } = renderItemizedLineParts(i, priceIndexByMenuItemId);
+  return `${label} ${amount}`;
+}
+
+/**
  * Deterministic itemized recap — a full plain-text receipt (line items with
  * their own price, chosen options, subtotal, service fee, and total), not
  * just a count and a total. This is the structural defense against the
@@ -94,16 +134,8 @@ export function renderItemizedRecap(
     }
     const lineTotal = i.price_cents * (i.quantity || 1);
     subtotal += lineTotal;
-    const qtyPrefix = (i.quantity || 1) > 1 ? `${i.quantity}x ` : "";
-    const optionPrices = i.menu_item_id ? priceIndexByMenuItemId?.get(i.menu_item_id) : undefined;
-    const annotate = (value: string): string => {
-      const p = optionPrices?.get(value.toLowerCase());
-      return p && p > 0 ? `${value} (+$${(p / 100).toFixed(2)})` : value;
-    };
-    const detail = (i.modifiers?.length ?? 0) > 0
-      ? i.modifiers!.map(annotate).join(", ")
-      : (i.options ? Object.entries(i.options).map(([k, v]) => `${k}: ${v.map(annotate).join(", ")}`).join("; ") : "");
-    lines.push(padReceiptLine(`${qtyPrefix}${i.name}${detail ? ` (${detail})` : ""}`, `$${(lineTotal / 100).toFixed(2)}`));
+    const { label, amount } = renderItemizedLineParts(i, priceIndexByMenuItemId);
+    lines.push(padReceiptLine(label, amount));
   }
   const totalCents = subtotal + SERVICE_FEE_CENTS + (deliveryFeeCents ?? 0) + (driverTipCents ?? 0);
   lines.push(padReceiptLine("Subtotal", `$${(subtotal / 100).toFixed(2)}`));

@@ -7536,7 +7536,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           cartItems as unknown as MutationCartLine[],
         );
         const factSentence = event
-          ? renderActionConfirmation(event)
+          ? renderActionConfirmation(event, buildMenuPriceIndex(effectiveMenu))
           : `Got it! Here's where things stand:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}`;
         const knownItemNamesForWarmthFilter = [
           ...cartSnapshotBeforeTurn.map(l => (l as { name?: unknown }).name),

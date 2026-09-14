@@ -25,6 +25,7 @@
 // module must not invent a second one.
 
 import { identityKey } from "./turn-reconciler.ts";
+import { renderItemizedLine, type ItemizedCartLine } from "./itemizer.ts";
 
 export interface MutationCartLine {
   menu_item_id?: string;
@@ -51,6 +52,10 @@ export interface CartMutationEvent {
   // it can be isolated cleanly (e.g. "Pepperoni"). Falls back to itemName
   // when no clean single-value diff exists.
   detailName?: string;
+  // "added" / "option_added" only — the actual resulting cart line, so
+  // renderActionConfirmation can tell whether it carries options/modifiers
+  // worth itemizing (see that function's header).
+  line?: MutationCartLine;
 }
 
 function isRealLine(l: MutationCartLine): boolean {
@@ -118,6 +123,7 @@ export function detectCartMutation(
           action: "option_added",
           itemName: addedLine.name ?? "",
           detailName: newlyAdded.length === 1 ? newlyAdded[0] : (addedLine.name ?? undefined),
+          line: addedLine,
         };
       }
       if (newlyAdded.length === 0 && trulyRemoved.length > 0) {
@@ -145,7 +151,7 @@ export function detectCartMutation(
   // the rest of the add silently (2026-09-13 soft gap).
   if (addedKeys.length === 1 && removedKeys.length === 0) {
     const line = afterMap.get(addedKeys[0])!;
-    return { action: "added", itemName: line.name ?? "", qty: line.quantity ?? 1 };
+    return { action: "added", itemName: line.name ?? "", qty: line.quantity ?? 1, line };
   }
 
   if (removedKeys.length >= 1 && addedKeys.length === 0) {
@@ -164,14 +170,37 @@ export function detectCartMutation(
   return null;
 }
 
+function lineHasOptions(line: MutationCartLine): boolean {
+  return (line.modifiers?.length ?? 0) > 0 ||
+    Object.values(line.options ?? {}).some(v => v.length > 0);
+}
+
 /**
  * Renders the single deterministic fact sentence for a detected mutation.
  * This is the ONLY function in the codebase permitted to state, in prose,
  * that an item was added/removed/corrected/re-quantified this turn — same
  * "exactly one writer" discipline turn-reconciler.ts applies to the cart
  * array itself, applied here to the CLAIM about the cart array.
+ *
+ * Rendering-consistency fix (2026-09-14, PO live diagnosis): "added" /
+ * "option_added" used to always render bare ("Large Cheese Pizza added.")
+ * even when the line just added carries options/modifiers the customer just
+ * agreed to pay for (e.g. a $4.50 pepperoni upcharge) — the same fact showed
+ * up itemized elsewhere (the ambiguous-diff -> full recap fallback) and bare
+ * here, depending only on which path a given turn happened to take. A
+ * plain, option-free item (French Fries) still gets the terse form.
  */
-export function renderActionConfirmation(event: CartMutationEvent): string {
+export function renderActionConfirmation(
+  event: CartMutationEvent,
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>,
+): string {
+  if (event.action === "added" || event.action === "option_added") {
+    const line = event.line;
+    const priceCents = line ? (line as unknown as { price_cents?: unknown }).price_cents : undefined;
+    if (line && lineHasOptions(line) && typeof priceCents === "number") {
+      return renderItemizedLine(line as unknown as ItemizedCartLine, priceIndexByMenuItemId);
+    }
+  }
   switch (event.action) {
     case "added":
       return `${event.itemName} added.`;

@@ -16,7 +16,7 @@ Deno.test("detectCartMutation: brand-new line -> added", () => {
   const after: MutationCartLine[] = [
     { menu_item_id: "fries", name: "French Fries", quantity: 1, price_cents: 399 },
   ];
-  assertEquals(detectCartMutation(before, after), { action: "added", itemName: "French Fries", qty: 1 });
+  assertEquals(detectCartMutation(before, after), { action: "added", itemName: "French Fries", qty: 1, line: after[0] });
 });
 
 Deno.test("detectCartMutation: line disappears -> removed", () => {
@@ -71,6 +71,11 @@ Deno.test("detectCartMutation: v430 regression — topping swap on the same base
 // before/after option arrays differed at all, not whether anything was
 // actually removed. Rendering "Swapped to Pepperoni." here is a
 // CODE-authored false claim that cheese is gone.
+//
+// Rendering-consistency fix (2026-09-14): the resulting line now carries
+// options, so renderActionConfirmation itemizes it (name + full option list
+// + price) instead of the bare "Pepperoni added." — the customer sees the
+// pizza's current toppings and total, not just the word "added."
 Deno.test("detectCartMutation: FAILURE B — adding a second topping is NOT a swap (cheese stays)", () => {
   const before: MutationCartLine[] = [
     { menu_item_id: "large-pizza", name: "Large Pizza", quantity: 1, price_cents: 1699, options: { Toppings: ["Cheese"] } },
@@ -79,8 +84,8 @@ Deno.test("detectCartMutation: FAILURE B — adding a second topping is NOT a sw
     { menu_item_id: "large-pizza", name: "Large Pizza", quantity: 1, price_cents: 1699, options: { Toppings: ["Cheese", "Pepperoni"] } },
   ];
   const event = detectCartMutation(before, after);
-  assertEquals(event, { action: "option_added", itemName: "Large Pizza", detailName: "Pepperoni" });
-  assertEquals(renderActionConfirmation(event!), "Pepperoni added.");
+  assertEquals(event, { action: "option_added", itemName: "Large Pizza", detailName: "Pepperoni", line: after[0] });
+  assertEquals(renderActionConfirmation(event!), "Large Pizza (Toppings: Cheese, Pepperoni) $16.99");
 });
 
 Deno.test("detectCartMutation: FAILURE B — removing a topping alone is NOT a swap", () => {
@@ -157,6 +162,49 @@ Deno.test("detectCartMutation: two different items added in the same turn -> nul
 // ── renderActionConfirmation ─────────────────────────────────────────────────
 
 Deno.test("renderActionConfirmation: added names the item, not a bare count", () => {
+  assertEquals(
+    renderActionConfirmation({ action: "added", itemName: "French Fries", qty: 1 }),
+    "French Fries added.",
+  );
+});
+
+// Rendering-consistency fix (2026-09-14, PO live diagnosis): the same
+// "item added" event used to render bare ("Large Cheese Pizza added.") or
+// itemized ("Large Cheese Pizza (Toppings: Pepperoni (+$4.50)) $21.00")
+// depending only on which code path a given turn happened to take through —
+// never on anything about the item itself. A plain option-free add stays
+// terse; an add carrying options/modifiers is always itemized so the
+// customer sees the upcharge they just agreed to.
+Deno.test("renderActionConfirmation: added, item carries options -> itemized with price, not bare", () => {
+  const event = {
+    action: "added" as const,
+    itemName: "Large Cheese Pizza",
+    qty: 1,
+    line: {
+      menu_item_id: "large-pizza",
+      name: "Large Cheese Pizza",
+      quantity: 1,
+      price_cents: 2100,
+      options: { Toppings: ["Pepperoni"] },
+    },
+  };
+  assertEquals(
+    renderActionConfirmation(event, new Map([["large-pizza", new Map([["pepperoni", 450]])]])),
+    "Large Cheese Pizza (Toppings: Pepperoni (+$4.50)) $21.00",
+  );
+});
+
+Deno.test("renderActionConfirmation: added, plain item with no options -> stays terse", () => {
+  const event = {
+    action: "added" as const,
+    itemName: "French Fries",
+    qty: 1,
+    line: { menu_item_id: "fries", name: "French Fries", quantity: 1, price_cents: 399 },
+  };
+  assertEquals(renderActionConfirmation(event), "French Fries added.");
+});
+
+Deno.test("renderActionConfirmation: added, no line on the event (unknown shape) -> falls back to bare, never throws", () => {
   assertEquals(
     renderActionConfirmation({ action: "added", itemName: "French Fries", qty: 1 }),
     "French Fries added.",

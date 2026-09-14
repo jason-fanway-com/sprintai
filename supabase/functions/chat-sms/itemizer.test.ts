@@ -1,6 +1,6 @@
 // Item 2 (2026-09-09, module extraction): unit tests for itemizer.ts.
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, type ItemizedCartLine } from "./itemizer.ts";
+import { padReceiptLine, renderItemizedLine, renderItemizedRecap, renderLedgerFooter, type ItemizedCartLine } from "./itemizer.ts";
 
 Deno.test("padReceiptLine: pads to the fixed width, right-aligning the amount", () => {
   const line = padReceiptLine("Cheese Pizza", "$12.99", 20);
@@ -27,6 +27,23 @@ Deno.test("renderItemizedRecap: lists each line, subtotal, service fee, and tota
   assertStringIncludes(recap, "$19.00");
   assertStringIncludes(recap, "Service fee");
   assertStringIncludes(recap, "Total");
+});
+
+Deno.test("renderItemizedLine: single item with priced options, inline (name + options + price)", () => {
+  const line: ItemizedCartLine = {
+    menu_item_id: "large-pizza",
+    name: "Large Cheese Pizza",
+    price_cents: 2100,
+    quantity: 1,
+    options: { Toppings: ["Pepperoni"] },
+  };
+  const priceIndex = new Map([["large-pizza", new Map([["pepperoni", 450]])]]);
+  assertEquals(renderItemizedLine(line, priceIndex), "Large Cheese Pizza (Toppings: Pepperoni (+$4.50)) $21.00");
+});
+
+Deno.test("renderItemizedLine: plain item with no options, no price index needed", () => {
+  const line: ItemizedCartLine = { name: "French Fries", price_cents: 399, quantity: 1 };
+  assertEquals(renderItemizedLine(line), "French Fries $3.99");
 });
 
 Deno.test("renderItemizedRecap: an incomplete bundle renders with '(selecting flavors)' flag (P0 fix 2026-09-09)", () => {
