@@ -168,6 +168,28 @@ Deno.test("reconciler: ungrounded brand-new proposal is dropped, not silently ad
   assertEquals(changes[0].action, "dropped_unauthorized");
 });
 
+Deno.test("reconciler: completing a pre-turn PENDING line's required option ('medium' answering Temp) is a continuation, never an unauthorized drop", () => {
+  // 2026-09-14 live canary failure: "cheeseburger" (turn 1) leaves a
+  // pending line (Temp still open); "medium" (turn 2) completes it via
+  // add_item's own continuation path, so the proposal's options are now
+  // Temp:Medium — which never matches the pre-turn line's (empty) options
+  // by full identity — while "medium" alone names no menu item, so
+  // `grounded` is false. Before the fix this deleted the entire line.
+  const pre: ReconcilerCartLine[] = [
+    { menu_item_id: "burger-1", quantity: 1, pending_options: ["Temp"] },
+  ];
+  const loopFinal: ReconcilerCartLine[] = [
+    { menu_item_id: "burger-1", quantity: 1, options: { Temp: ["Medium"] }, pending_options: [] },
+  ];
+  const proposals = [
+    { menu_item_id: "burger-1", options: { Temp: ["Medium"] }, source_phrase: "cheeseburger medium", grounded: false },
+  ];
+  const { cart, changes } = reconcileAddProposals(pre, loopFinal, proposals, "medium");
+  assertEquals(cart.find(l => l.menu_item_id === "burger-1")?.quantity, 1);
+  assertEquals(cart.find(l => l.menu_item_id === "burger-1")?.options, { Temp: ["Medium"] });
+  assertEquals(changes[0].action, "noop_reconfirm");
+});
+
 Deno.test("reconciler: a grounded add (fries named this turn) passes through untouched with a single proposal", () => {
   const pre: ReconcilerCartLine[] = [];
   const loopFinal: ReconcilerCartLine[] = [{ menu_item_id: "fries-1", quantity: 1 }];

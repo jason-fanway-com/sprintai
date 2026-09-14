@@ -426,6 +426,33 @@ export function reconcileAddProposals(
   const preIndex = new Map<string, ReconcilerCartLine>();
   for (const l of preTurnCart) preIndex.set(identityKey(l.menu_item_id, l.options), l);
 
+  // (2026-09-14, cheeseburger/Temp live canary failure) A pre-turn line
+  // that still had a required slot open (pending_options non-empty) has an
+  // identity that is, by definition, about to change the instant that slot
+  // gets filled — "no options yet" -> "Temp: Medium" is not a new order,
+  // it's the SAME order finishing. `preIndex` above is keyed on the FULL
+  // identity (menu_item_id + options), so a proposal reporting the
+  // NOW-RESOLVED options for that same line can never match its own
+  // pre-turn entry there. Combined with a bare answer like "medium" naming
+  // no menu item at all (so `grounded` below is false for it), that
+  // mismatch used to fall through to the "genuinely new, unauthorized"
+  // branch and delete the entire line — the customer's whole order,
+  // vanished on the turn that only ever answered a question the bot itself
+  // asked. This mirrors applyCompiledAddItem's own continuationIdx
+  // concept (ask-plan-engine.ts) — matching an in-progress line by
+  // menu_item_id alone while it still has an open slot — which the
+  // reconciler has no visibility into on its own; this index gives it the
+  // same fact. Fallback only (checked when the full-identity lookup
+  // misses), and only for a line that was genuinely still pending before
+  // this turn, so a normal "same item, different real order" case is
+  // untouched.
+  const prePendingByMenuItemId = new Map<string, ReconcilerCartLine>();
+  for (const l of preTurnCart) {
+    if ((l.pending_options ?? []).length > 0 && !prePendingByMenuItemId.has(l.menu_item_id)) {
+      prePendingByMenuItemId.set(l.menu_item_id, l);
+    }
+  }
+
   const groups = new Map<string, CartUnitProposal[]>();
   for (const p of proposals) {
     const key = identityKey(p.menu_item_id, p.options);
@@ -484,7 +511,7 @@ export function reconcileAddProposals(
       explicit = parseExplicitQuantity(customerMessageText);
     }
 
-    const existingPre = preIndex.get(key);
+    const existingPre = preIndex.get(key) ?? prePendingByMenuItemId.get(cart[lineIdx].menu_item_id);
     if (existingPre) {
       // Idempotency rule (required architecture point 3): re-confirming
       // something already in the cart is a quantity NO-OP by default,
