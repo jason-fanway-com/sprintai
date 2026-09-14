@@ -65,6 +65,7 @@ function slugify(s: string): string {
  * missing-required-option gap).
  */
 const CATEGORY_ORDER_QUALIFIER: Record<string, string> = {
+  // Vito's / NJB categories
   "Pizza": "pizza",
   "Wings": "wings",
   "Angus Burgers & Specialty": "burger",
@@ -76,6 +77,23 @@ const CATEGORY_ORDER_QUALIFIER: Record<string, string> = {
   "Flatbreads": "flatbread",
   "Stromboli": "stromboli",
   "Appetizers": "appetizer",
+  // Zio's categories (confirmed from live menu 2026-09-14)
+  "Burgers": "burger",
+  "Chicken or Veal": "chicken or veal",
+  "Cold Subs": "cold sub",
+  "Hot Subs": "hot sub",
+  "Paninis": "panini",
+  "Calzones & Strombolis": "calzone",
+  "Baskets & Gyros": "gyro",
+  "Baked Dishes": "baked",
+  "Pasta": "pasta",
+  "Specialty Pasta": "specialty pasta",
+  "Seafood": "seafood",
+  "Soup": "soup",
+  "Desserts": "dessert",
+  "Drinks": "drink",
+  "Kids Corner": "kids",
+  "Side Orders": "side",
 };
 
 /**
