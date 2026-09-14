@@ -303,12 +303,17 @@ const READY_TO_CHECK_OUT_QUESTION = "Anything else, or ready to check out?";
  * when shouldRedirectNameAskToCheckoutGate returned true). Preserves any
  * item-confirmation/upsell content the model's reply carried by stripping out
  * just the premature name-ask/confirm sentence and appending the
- * ready-to-checkout question; falls back to a generic cart-count tally only
- * when nothing else survives (e.g. the model's entire reply WAS the
- * name-ask/confirm, with nothing else said).
+ * ready-to-checkout question; falls back to the itemized recap (Item D fix,
+ * 2026-09-14 — this used to fall back to a bare item-COUNT tally, "You've got
+ * N item(s) in your cart," the same hand-rolled-cart-fact shape reply-
+ * inversion already forbids elsewhere) only when nothing else survives (e.g.
+ * the model's entire reply WAS the name-ask/confirm, with nothing else said).
+ * `cartRecap` is the caller's already-rendered itemizer.ts recap — this
+ * module stays DB/menu-free per its header, so the recap is built where the
+ * menu/price data already lives and handed in as a string.
  */
-export function renderGuard23Redirect(replyText: string | null | undefined, cartLength: number): string {
+export function renderGuard23Redirect(replyText: string | null | undefined, cartRecap: string): string {
   const preserved = stripPrematureNameAskSentence(replyText ?? "");
   if (preserved) return `${preserved} ${READY_TO_CHECK_OUT_QUESTION}`;
-  return `You've got ${cartLength} item${cartLength === 1 ? "" : "s"} in your cart. ${READY_TO_CHECK_OUT_QUESTION}`;
+  return `Here's what you've got:\n\n${cartRecap}\n\n${READY_TO_CHECK_OUT_QUESTION}`;
 }

@@ -233,7 +233,7 @@ Deno.test("GUARD 23: gate does NOT fire on a reply that makes no name-ask", () =
 //    name-ask/confirm sentence. ──────────────────────────────────────────────
 
 Deno.test("renderGuard23Redirect: preserves item-confirmation content, strips only the name-ask sentence", () => {
-  const out = renderGuard23Redirect("Got it, swapped to pepperoni! Putting this in for Jason, right?", 1);
+  const out = renderGuard23Redirect("Got it, swapped to pepperoni! Putting this in for Jason, right?", "Pepperoni - Large (16\")          $16.50");
   assert(out.includes("swapped to pepperoni"), `expected item-confirmation to survive, got: ${out}`);
   assert(!/putting this in for jason/i.test(out), `expected name-ask sentence to be removed, got: ${out}`);
   assert(out.includes("Anything else, or ready to check out?"));
@@ -242,7 +242,7 @@ Deno.test("renderGuard23Redirect: preserves item-confirmation content, strips on
 Deno.test("renderGuard23Redirect: preserves item-confirmation AND an upsell offer riding in the same reply", () => {
   const out = renderGuard23Redirect(
     "Got it — Pepperoni - Large (16\") added! Want to add a Coke to that? What's your name for the order?",
-    1,
+    "Pepperoni - Large (16\")          $16.50",
   );
   assert(out.includes("Pepperoni - Large (16\") added"), `expected item name to survive, got: ${out}`);
   assert(/want to add a coke/i.test(out), `expected upsell offer to survive, got: ${out}`);
@@ -251,19 +251,19 @@ Deno.test("renderGuard23Redirect: preserves item-confirmation AND an upsell offe
 });
 
 Deno.test("renderGuard23Redirect: cold name-ask embedded mid-reply is also stripped, not just name-confirm", () => {
-  const out = renderGuard23Redirect("Awesome, added the Fries! What's your name for the order?", 1);
+  const out = renderGuard23Redirect("Awesome, added the Fries! What's your name for the order?", "French Fries          $3.50");
   assert(out.includes("Awesome, added the Fries"), `expected content before the name-ask to survive, got: ${out}`);
   assertFalse(/what'?s your name/i.test(out));
 });
 
-Deno.test("renderGuard23Redirect: falls back to the generic cart-count tally only when the WHOLE reply was the name-ask/confirm", () => {
+Deno.test("renderGuard23Redirect: falls back to the itemized recap, not a bare count, only when the WHOLE reply was the name-ask/confirm", () => {
   assertEquals(
-    renderGuard23Redirect("Putting this in for Jason, right?", 1),
-    "You've got 1 item in your cart. Anything else, or ready to check out?",
+    renderGuard23Redirect("Putting this in for Jason, right?", "Pepperoni - Large (16\")          $16.50\nSubtotal          $16.50"),
+    "Here's what you've got:\n\nPepperoni - Large (16\")          $16.50\nSubtotal          $16.50\n\nAnything else, or ready to check out?",
   );
   assertEquals(
-    renderGuard23Redirect("What's your name for the order?", 2),
-    "You've got 2 items in your cart. Anything else, or ready to check out?",
+    renderGuard23Redirect("What's your name for the order?", "French Fries          $3.50\nCoke          $2.00"),
+    "Here's what you've got:\n\nFrench Fries          $3.50\nCoke          $2.00\n\nAnything else, or ready to check out?",
   );
 });
 

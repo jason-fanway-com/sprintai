@@ -3291,8 +3291,14 @@ async function runOrderingLoop(
       const reply = textBlocks.map(b => b.text ?? "").join("").trim();
       if (reply) return { reply, checkoutUrl, finalPhase, declinedBlockedItems, compiledStepQuestions, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs, turnProposals };
       // Model produced neither tools nor text — degrade gracefully, never error at the customer.
+      // Item D fix (2026-09-14): this used to render a bare item COUNT
+      // ("You've got 1 item in your cart") instead of the itemized recap —
+      // this is the same "reply must come from renderItemizedRecap, never a
+      // hand-rolled cart fact" principle as the correctionApplied branch
+      // just above. Most commonly hit right after an upsell decline
+      // ("no thanks"), where the model has nothing left to say.
       const soft = cart.length > 0
-        ? `You've got ${cart.length} item${cart.length === 1 ? "" : "s"} in your cart. Anything else, or ready to check out?`
+        ? `Here's what you've got:\n\n${renderItemizedRecap(cart, deliveryFeeCents ?? undefined, undefined, buildMenuPriceIndex(menu))}\n\nAnything else, or ready to check out?`
         : "Sorry, I didn't quite catch that — what can I get started for you?";
       return { reply: soft, checkoutUrl, finalPhase, turnProposals };
     }
@@ -9566,7 +9572,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // ready-to-checkout question instead — the ONE question this reply
         // may carry, never combined with the name question in the same turn.
         console.warn(`[chat-sms] GUARD 23 (name-ask before checkout-intent confirmed) tripped (conv=${conversation.id}). Redirecting to the ready-to-checkout question, preserving any item-confirmation/upsell content.`);
-        reply = renderGuard23Redirect(reply, guardCart.length);
+        reply = renderGuard23Redirect(reply, renderItemizedRecap(guardCart, guardDeliveryFee, guardDriverTip, buildMenuPriceIndex(effectiveMenu)));
       } else if (!hasPickupName && isAskingForPickupName(reply)) {
         // FIX (2026-09-10, Jason — reported 2026-09-08 and twice more on
         // 2026-09-10): the itemized recap appended here landed in the SAME
