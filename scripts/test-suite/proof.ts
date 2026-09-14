@@ -92,6 +92,20 @@ console.log("");
 // either finished or died, so there was no way to tell "still running" from
 // "never started" from the DB alone. This makes the run visible immediately,
 // and the update at the bottom of this file flips it to a final status.
+// Enqueue guard: bail if a non-terminal run already exists for this shop (3rd occurrence prevention)
+const { data: existingRuns } = await supabase
+  .from("test_runs")
+  .select("id, status, created_at")
+  .eq("shop_id", SHOP_ID)
+  .in("status", ["running", "queued"])
+  .limit(1);
+if (existingRuns?.length) {
+  console.error(`\n  ABORTED: a non-terminal test_run already exists for this shop:`);
+  console.error(`    id=${existingRuns[0].id}  status=${existingRuns[0].status}  started=${existingRuns[0].created_at}`);
+  console.error(`  Kill or complete it first, then retry.\n`);
+  process.exit(1);
+}
+
 let testRunRowId: string | null = null;
 try {
   const { data: runRow, error: runRowErr } = await supabase

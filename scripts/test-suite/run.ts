@@ -219,7 +219,7 @@ for (let i = 0; i < casesToRun.length; i++) {
     const expectedItemCents = "expectedItemCents" in tc ? (tc as any).expectedItemCents : undefined;
     const expectsCheckout = "expects_checkout" in tc ? (tc as any).expects_checkout === true : false;
     const hoursMode = "hoursMode" in tc ? (tc as any).hoursMode : undefined;
-    const hasCart = (run.transcript ?? []).some((t: any) => (t.cart as any[]).length > 0);
+    const hasCart = (run.transcript ?? []).some((t: any) => ((t.cart as any[] | undefined) ?? []).length > 0);
     const appliedInvariants: string[] = [];
     const detReasons: string[] = [];
     let detPassed = true;
