@@ -2294,3 +2294,113 @@ production, not only in the codebase. `stripe-webhook` (v92), `parse-menu-pdf`
 (v114), and `chat-sms-mtest` (v39) are unrelated to this change and remain at
 the same stale versions noted in earlier entries — verify independently
 before assuming anything in those three moved.
+
+## `source_phrase` may never be trusted for quantity unless it is verbatim customer text — 2026-09-13
+
+Root cause of a live incident that charged $341.98 for one pizza (Large
+Cheese Pizza x16 + Coke x2, from "yep, and two cokes"): `reconcileAddProposals`
+parsed a bare number out of each proposal's `source_phrase` field to detect
+an explicit customer-stated quantity. `source_phrase` is supplied by the
+**model**, not copied verbatim from the customer, and is frequently just
+the resolved menu item's own name — Vito's pizza item is literally named
+`Cheese - Large (16")`. The "16" in the item's own name was read as a
+quantity of sixteen, which is why the bug always produced exactly 16 and
+why it could fire on a turn with no number in it at all (a bare "yes").
+Fixed (`820a9b37`): a `source_phrase` is only trusted for quantity parsing
+when it demonstrably appears in the customer's own message text for that
+turn; if it's the bot's own phrasing, it carries no count. If you touch
+quantity parsing in `turn-reconciler.ts` again, preserve this check —
+nothing else stops a menu item's own name/size from being misread as a
+customer-stated count. Three earlier same-day attempts at symptoms of this
+bug (a 15x relative-delta merge bug, an item-adjacent quantity-scoping
+fix) were real fixes for other bugs but did not touch this root cause;
+each was caught only by running a 5-run repro matrix, not a single smoke
+run — for money-correctness changes to the cart, run the multi-run matrix,
+not one pass.
+
+## Checkout insulation: name-ask requires prior explicit checkout intent — 2026-09-13
+
+`supabase/functions/chat-sms/checkout-intent-gate-20260913.ts` blocks any
+name-ask/name-confirm reply — whether forced by a guard or written by the
+model on its own initiative — unless the customer has already given
+**explicit checkout intent** for this cart, this conversation
+(`isExplicitCheckoutIntent`: an affirmative answer to "anything else, or
+ready to check out?", or an explicit phrase like "that's it" / "ready to
+check out" / "send me the link"). This closes the bug where the name-ask
+itself was functioning as the checkout trigger, skipping the upsell and
+the ready-to-check-out question. The fact that intent was established is
+persisted per-cart in `order_carts.checkout_intent_confirmed_at` (migration
+139) so later turns don't need to re-derive it. When a name-ask is blocked,
+`shouldRedirectNameAskToCheckoutGate` + `stripPrematureNameAskSentence`
+remove only the offending sentence from the reply and append the
+ready-to-check-out question — they do not replace the whole reply, which
+was the first version's bug (it silently deleted legitimate upsell text
+riding in the same reply). If you add a new code path that can emit a
+name-ask/name-confirm sentence, it must run through this gate or the old
+bug reappears from a new call site.
+
+## Reply inversion: cart facts are rendered from the write action, not from model prose — 2026-09-13
+
+`supabase/functions/chat-sms/action-confirmation.ts` is the pattern for any
+reply that follows a cart mutation: `detectCartMutation()` diffs the cart
+immediately before/after the write and classifies what actually happened;
+`renderActionConfirmation()` renders the one fact sentence for that
+classification. The model is never trusted to state what changed in the
+cart — it was caught narrating "I've got your items: [3]" against a cart
+that actually held 2, with the (code-rendered, so still correct) money
+total giving no signal anything was wrong. On a cart-mutating turn, the
+model's own reply text is passed through `extractQuestionsOnly()`, which
+keeps only its interrogative sentences and further strips any question
+that still smuggles in a cart fact (price, quantity, or a known item
+name) — a false claim can hide inside a question as easily as a
+statement. A turn that does **not** mutate the cart is not scrubbed.
+
+As of `ed312900` this covers `reply = loopResult.reply` plus 8 other
+hand-built fact-list sites (disambiguation joins, option-add confirms,
+item-not-found fallbacks, correction lists) via shared renderers in
+`candidate-list.ts` and `pending-disambiguation.ts`. It does **not** cover
+every fact-bearing reply site: `docs/specs/2026-09-13-reply-inversion.md`'s
+own acceptance bar (guard count below 32, `reply=` sites below 48, GUARDs
+1c/1d/1f/1g deleted as unreachable) was not met — by the implementing
+commit's own admission — because those guards are still load-bearing on
+the untouched "voice" (no-mutation) reply path, and the `reply=` site
+count went up (68→70) rather than down. Two more gaps are deliberate, not
+oversights: colloquial item references ("the pep pizza") aren't scrubbed
+(rejected as too risky to pattern-match), and menu items with names ≤5
+characters are excluded from the scrub (to avoid deleting harmless real
+questions like "a water with that?"). Treat GUARDs 1c/1d/1f/1g as still
+required on any code path this stage didn't touch.
+
+## Runtime error persistence: `error_log` table + `logError()` — 2026-09-13
+
+Supabase's own edge-function logs (`function_edge_logs`/`edge_logs`) age
+out after ~1 minute, so a runtime failure was previously undiagnosable
+shortly after it happened — there was no history to work from. Migration
+137 adds an `error_log` table (service-role only via RLS, 7-day retention
+via a `pg_cron` job named `error-log-retention`).
+`supabase/functions/_shared/error-log.ts`'s `logError(supabase, params)` is
+the single write path: it is **fail-open by contract** — a failure to
+persist the error row only `console.error`s and returns, it never throws
+or otherwise affects the caller's own error handling. Wired into two call
+sites in `chat-sms/index.ts` today: the tool-execution loop and the outer
+turn handler (guarded by an `__errorLogged` flag so a single failure isn't
+double-logged by both). To check for recent runtime errors:
+```sql
+select created_at, phase, stage, error_message, customer_message
+from error_log order by created_at desc limit 50;
+```
+Not yet wired into `chat-sms-mtest`, `stripe-webhook`, or `parse-menu-pdf`
+— those functions still have no error history past Supabase's 1-minute
+window.
+
+## Deploy without a `DEPLOY_SHA` stamp — `chat-sms` v432, 2026-09-13
+
+`chat-sms` v432 (deployed 2026-09-13 20:02:19 UTC, 14 seconds after `main`'s
+`ed312900` merge commit) carries **no `DEPLOY_SHA` stamp** — the downloaded
+artifact has zero matches for that string, meaning this deploy did not go
+through `scripts/deploy-function.sh`. The version-number-plus-timestamp
+match to `ed312900` is strong circumstantial evidence of what's live, used
+throughout today's journal entry, but it is not the SHA-proof the deploy
+script exists to provide (see "Deploy verification: `DEPLOY_SHA` stamp"
+above). Redeploy through `deploy-function.sh` before treating this as
+proof for anything higher-stakes than a journal entry.

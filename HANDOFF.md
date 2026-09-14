@@ -1190,6 +1190,59 @@ migration since.
 
 ---
 
+## Update — 2026-09-13 20:02 EDT: x16 pizza bug root-caused, checkout insulation + reply inversion shipped and live
+
+Follow-up to the entry above. `main` moved a lot further today
+(`2ac3ea1a`..`ed312900`); the two threads worth knowing about for anyone
+picking this up:
+
+- **A live $341.98 money bug (Large Cheese Pizza x16) was root-caused and
+  fixed.** `reconcileAddProposals` was reading a bare number out of
+  `source_phrase` — a model-supplied field, not verbatim customer text —
+  to detect an explicit quantity. Vito's pizza item is named
+  `Cheese - Large (16")`; the "16" in the item's own name was being read
+  as a customer-stated quantity. Fixed (`820a9b37`): `source_phrase` is
+  only trusted for quantity when it verifiably appears in the customer's
+  own message. Three earlier same-day attempts fixed *other*, related bugs
+  (a 15x relative-delta merge bug, an item-adjacent scoping fix) but not
+  this one; the survivor was proven by a 5-run repro matrix, not a single
+  smoke run. See RUNBOOK's "`source_phrase` may never be trusted for
+  quantity" entry. Not yet given a defect-class letter in
+  `docs/DEFECT-CLASSES.md`.
+- **Checkout insulation shipped**: the name-ask ("Putting this in for X?")
+  is no longer usable as an implicit checkout trigger — it's now gated
+  behind explicit, persisted customer checkout intent
+  (`checkout-intent-gate-20260913.ts`, migration 139). Four live defects
+  from the first merge (content loss, a false hallucination flag, ignored
+  explicit intent) were all fixed same-day.
+- **Reply inversion shipped, partially**: cart-mutation replies
+  (`action-confirmation.ts`) and 8 more fact-list sites now render their
+  factual claims from the actual write action, not model prose — closing
+  the class of bug where the bot narrates an item count that doesn't match
+  the cart. The spec's own acceptance bar (guard count <32, `reply=` sites
+  <48, GUARDs 1c/1d/1f/1g deleted) was **not** met, by the implementing
+  commit's own admission — those guards are still required on the
+  untouched no-mutation reply path. Don't remove GUARDs 1c/1d/1f/1g
+  expecting reply-inversion to have made them redundant; it hasn't, yet.
+- Migration 137 (`error_log`) ships a working error-persistence path around
+  Supabase's 1-minute log retention, wired into `chat-sms` only so far.
+
+**Confirmed live, not just committed**: `chat-sms` v432, deployed
+2026-09-13 20:02:19 UTC — 14 seconds after `main`'s final merge commit
+(`ed312900`) — and the deployed bundle contains the reply-inversion,
+checkout-insulation, and `source_phrase` symbols directly. **Caveat**: this
+deploy carries no `DEPLOY_SHA` stamp (it did not go through
+`scripts/deploy-function.sh`), so "live" here rests on a version/timestamp
+match, not the SHA-proof mechanism documented elsewhere in this file —
+redeploy through the script before treating it as ironclad.
+
+**Unchanged, still stale**: `chat-sms-mtest` v39 (2026-09-08) — today's
+GUARD 1d, reply-inversion, and checkout-insulation source changes are all
+committed to this function's files (kept byte-identical to `chat-sms`
+where shared) but none are deployed to it. `stripe-webhook` (v92) and
+`parse-menu-pdf` (v114) are untouched by today's commits and remain at the
+versions noted in earlier entries.
+
 ## Quickstart for development
 
 ```bash

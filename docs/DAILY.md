@@ -1827,3 +1827,185 @@ deployed bundle), not inferred from commit history:
   (`order_carts_delivery_offer_made`) — both confirmed **applied** to
   production via direct `select` against `customers` and `order_carts`;
   both new columns exist and are queryable live.
+
+## 2026-09-13
+
+### Headline: the x16/$341.98 pizza bug — root cause was the menu item's own name
+
+Early today (`832...` through `820a9b37`, 09:00–14:24) production produced
+"Large Cheese Pizza x16" from ordinary turns like "yep, and two cokes" or
+even a bare "yes" with no number in it — one live run hit $341.98 for a
+single pizza order. Four fix/revert cycles chased this before the real
+cause was found and confirmed by `820a9b37` (14:24): `reconcileAddProposals`
+parsed a bare number out of `source_phrase`, a field the **model** supplies
+and which is frequently just the resolved menu item's own name — and
+Vito's pizza item is literally named `Cheese - Large (16")`. The "16" in
+the item's own name was being read as a customer-stated quantity of
+sixteen, which is why the bug always produced exactly 16 and why it fired
+on turns containing no number at all. Fix: a `source_phrase` is now only
+trusted for quantity parsing when it actually appears verbatim in the
+customer's own message text, never when it's the bot's/model's own
+phrasing. This fix is in `HEAD` and confirmed live (see deploy status
+below). Two earlier attempts today (`1ee2b7bc` scoping quantity to the
+adjacent item token, and an initial "restore single-writer work" pass,
+`84ec6b66`) were real fixes for *other*, related bugs (a 15x quantity-merge
+bug and a relative-delta double-count) but did not fix this one. The
+`1ee2b7bc` attempt was caught by a 5-run repro matrix — it passed runs 1
+and 2 clean, then reproduced Large Cheese Pizza x16 + Coke x2 ($341.98) on
+run 3 — meaning the standard single-run smoke test used earlier in the day
+would have shipped it. This defect has not yet been given a class letter
+in `docs/DEFECT-CLASSES.md` (C1–C4 exist; this would be a candidate C5 but
+no one has written it up there).
+
+Separately, `820a9b37` and its neighbors reconfirmed that the single-cart-writer
+invariant (all cart mutation routed through `writeCartLine`/`reconcileAddProposals`,
+no direct array pushes) survived its own same-day revert-and-restore cycle:
+`grep` against `index.ts` at `HEAD` finds zero direct `cart.items` array
+mutations outside the reconciler, and `enforce-single-cart-writer.test.ts`
+is present and passing in the tree.
+
+### Checkout insulation — the name-ask stops being the checkout trigger (live)
+
+Per Jason (`docs/specs/2026-09-13-checkout-insulation.md`, after order #14):
+the bot's name-ask ("Putting this in for X?") was functioning as the de
+facto checkout trigger — it fired the moment an item landed, skipping the
+upsell and the "anything else, or ready to check out?" question. Fix
+(`3e11b51b`, new file `checkout-intent-gate-20260913.ts`): a name-ask/name-confirm
+reply — however it was produced, forced by a guard or written by the model
+on its own initiative — is now blocked unless the customer has already
+given **explicit checkout intent** for this cart this conversation
+(`isExplicitCheckoutIntent`: an affirmative answer to "ready to check out?"
+or an explicit phrase like "that's it" / "ready to check out" / "send me
+the link"). That fact is now persisted per-cart (migration 139,
+`checkout_intent_confirmed_at`) so a later turn can tell "intent was
+established two turns ago" from "intent was never established."
+
+The first merge of this (`f42c3d59`, 18:10) produced four live defects
+within minutes of deploy, all fixed same-day in `759e6905` (18:45):
+1. The original redirect replaced the **entire** reply with a flat "you've
+   got N items" tally, silently deleting legitimate upsell/confirmation
+   text riding in the same reply.
+2. Same root cause as #1 — any upsell prose was lost alongside the name-ask
+   sentence. Both fixed together: `stripPrematureNameAskSentence()` now
+   removes only the offending sentence and keeps the rest, falling back to
+   the flat tally only if nothing survives.
+3. Vito's reuses one base menu row across toppings, so a truthful "your
+   Pepperoni is in your cart" failed an exact-match check and was wrongly
+   flagged as a hallucination on an ordinary decline. Fixed in `cart.ts`
+   (`matchesStandaloneExtra`).
+4. The worst of the four: "yes im ready to check out" matched neither the
+   bare-affirmative path nor the whole-phrase path (it has both a leading
+   "yes" and trailing text), so the customer's explicit intent was ignored
+   and they got re-asked instead of checked out. Fixed with new
+   lead-in/suffix regexes, gated so "yeah, I'm not ready to check out"
+   (caught during verification) still correctly blocks.
+
+**Stale reference, not fixed today:** migration 138's SQL comment cites
+`docs/specs/2026-09-13-checkout-mode-insulation.md` — that file does not
+exist. The real spec is `docs/specs/2026-09-13-checkout-insulation.md`; the
+code and the real spec agree with each other, the migration comment is just
+wrong.
+
+### Reply inversion — cart facts now rendered from code, not model prose (live, spec bar not fully met)
+
+Triggering incident (per `action-confirmation.ts`'s header comment): the
+model narrated "I've got your items: [lists 3]" against a cart that
+actually held 2 — and the money footer was still arithmetically correct
+(it's code-rendered), so nothing caught the false item-count claim in the
+prose above it. Fix, in two stages:
+
+- **Stage 1** (`2d3b885b`, 19:33) — one site (`reply = loopResult.reply`)
+  now goes through a new `action-confirmation.ts`: `detectCartMutation()`
+  diffs the cart before/after a write and classifies what happened
+  (added/removed/qty changed/option added or removed/corrected);
+  `renderActionConfirmation()` renders the one permitted fact sentence
+  **from that classification**, never from the model's own words.
+- **Stage 2** (`f05f2723`, 20:02) — the same discipline extended to 8 more
+  hand-built fact-list sites (disambiguation joins, option-add confirms,
+  item-not-found fallbacks, correction lists) via new shared renderers
+  (`candidate-list.ts`, `pending-disambiguation.ts`).
+
+A cart-mutating turn's reply is also run through `extractQuestionsOnly()`,
+which keeps only the model's interrogative sentences and further scrubs
+any question that still smuggles in a cart fact (price-shaped text,
+quantity-shaped text, or a known item name) — a false claim can hide
+inside a question ("...large plain cheese pizza — confirm?") as easily as
+a statement. A turn that doesn't mutate the cart is not scrubbed at all.
+
+**Merged as "Melvin-verified" (`ed312900`) but the spec's own acceptance
+bar was explicitly not met, by the commit's own admission, not by omission:**
+`docs/specs/2026-09-13-reply-inversion.md` called for guard count to drop
+below 32 and `reply=` call sites below 48, with GUARDs 1c/1d/1f/1g deleted
+as unreachable once code renders the facts. `f05f2723`'s own message
+states plainly that both stages proved by test that those guards remain
+load-bearing on the untouched "voice" (no-mutation) path, and that the
+`reply=` site count went **up**, 68→70, with guard count flat. This is a
+disclosed shortfall in the commit message, not a hidden one, but the
+spec's stated exit criteria were not achieved. Two more gaps are
+disclosed in code comments, not just prose: colloquial item references
+("the pep pizza") are not scrubbed — evaluated and deliberately rejected as
+too risky to pattern-match — and menu items with names ≤5 characters are
+excluded from the fact-scrub to avoid deleting harmless real questions
+("a water with that?").
+
+### GUARD 1d — missed the present-progressive phantom-add ("adding") (live)
+
+Live P0 (conv `2ba731f7`, Vito's): the bot replied "Got it, adding a large
+plain cheese pizza..." and quoted a total for a cart that never actually
+changed — no `add_item` call happened. GUARD 1d's existing
+`claimsAddedWithoutMutation` check exists exactly to catch this, but its
+verb list only covered past tense ("added", "put", "threw", "tossed"),
+missing the present-progressive the model actually used. Fixed
+(`25f453b3`) by extending the verb list to "adding"/"i'm adding"/"i am
+adding"/"throwing"/"tossing" (and a gated "i'm putting"), applied
+identically to both `chat-sms/phantom-add-guard.ts` and its
+`chat-sms-mtest` duplicate — confirmed byte-identical in the current tree
+even though only the `chat-sms` copy is actually deployed (see below).
+
+### Runtime error persistence — edge-function logs live 1 minute, this survives (live)
+
+Supabase's own function logs age out after ~1 minute, so a runtime failure
+was previously undiagnosable shortly after it happened. Migration 137 adds
+an `error_log` table (service-role only, 7-day `pg_cron` retention) and
+`_shared/error-log.ts`'s `logError()` is a fail-open, best-effort write
+into it, wired into two call sites in `chat-sms/index.ts` (the tool loop
+and the outer turn handler). Confirmed live by direct query: the table
+exists, the `error-log-retention` cron job is scheduled, and both new
+`order_carts` columns from migrations 138/139 exist. The table currently
+has 0 rows — consistent with no runtime errors since deploy, not evidence
+the write path is broken (it hasn't been called yet).
+
+### Deploy status summary (edge functions touched this range)
+
+Checked directly against the live project (Management API + downloaded
+deployed bundle), not inferred from commit history:
+
+- **`chat-sms`**: v432, deployed 2026-09-13 20:02:19 UTC — 14 seconds after
+  the final merge commit (`ed312900`, 20:02:05 -0400/00:02:05 UTC) on
+  `main`. The deployed bundle contains `renderActionConfirmation`,
+  `detectCartMutation`, `extractQuestionsOnly` (reply inversion),
+  `isExplicitCheckoutIntent`, `shouldRedirectNameAskToCheckoutGate`
+  (checkout insulation), and the `source_phrase`-scoping fix — everything
+  through `ed312900` is live. **Caveat: this deploy carries no `DEPLOY_SHA`
+  stamp** (`grep` of the downloaded artifact for the string finds zero
+  matches), meaning it did not go through `scripts/deploy-function.sh`'s
+  stamping path — the version-number-plus-timestamp match above is strong
+  circumstantial evidence, not the SHA-proof the deploy script exists to
+  provide. Confirm via `deploy-function.sh` (or manually stamp and
+  redeploy) before relying on this as proof for anything higher-stakes.
+- **`chat-sms-mtest`**: v39, deployed 2026-09-08 22:48:17 UTC — stale,
+  predates all of today's changes to this function (GUARD 1d fix, reply
+  inversion, checkout insulation source changes are all committed, none
+  deployed to this function).
+- **`_shared`**: not a standalone deployable function — its changes
+  (`error-log.ts`, `outbound-guard.ts`) ship bundled inside `chat-sms`
+  (and, once redeployed, `chat-sms-mtest`); confirmed live only for
+  `chat-sms`.
+
+### Migrations touched this range
+
+- **137** (`error_log`) — confirmed **applied**: table exists, RLS policy
+  present, `error-log-retention` cron job scheduled.
+- **138** (`order_carts.name_confirm_pending_total_cents`) and **139**
+  (`order_carts.checkout_intent_confirmed_at`) — both confirmed **applied**:
+  both columns exist on `order_carts` in production.
