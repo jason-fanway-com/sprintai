@@ -106,17 +106,29 @@ const ALL_UNITS_RE =
 
 /**
  * True iff `text` contains a clause that both (a) uses a removal verb and
- * (b) names every significant stem of `choiceDisplay` — e.g. "remove the
- * extra cheese" against "Extra Cheese". Clause-scoped (split on
- * but/and/also/plus/punctuation) so "remove the pepperoni but keep the extra
- * cheese" doesn't also flag Extra Cheese, same discipline as isNegated's own
- * clause splitting. Falls back to isNegated (a bare "no extra cheese" spoken
- * about an item already in the cart reads as a removal request too).
+ * (b) names the choice — e.g. "remove the extra cheese" against "Extra
+ * Cheese". Matches on the choice's FIRST significant stem only (same
+ * convention as this file's sibling, option-removal-20260909.ts's own
+ * isRemovalRequested), not every stem the display contributes: a display
+ * like "Pepperoni (Whole pizza)" carries qualifier stems ("whole", "pizza")
+ * that describe WHICH already-applied choice this is, not words a customer
+ * would ever repeat back — requiring all of them made "drop the pepperoni"
+ * un-satisfiable and silently no-op'd the removal (P0, 2026-09-14, live
+ * money — v433 "yep but drop the pepperoni" charged $21.00 for a plain
+ * cheese pizza, should be $16.50; GUARD 1f used to catch the resulting false
+ * "pepperoni removed" reply, but retiring GUARD 1f in f19cf0ab left this
+ * mutation-level bug with no reply-side safety net at all). Clause-scoped
+ * (split on but/and/also/plus/punctuation) so "remove the pepperoni but keep
+ * the extra cheese" doesn't also flag Extra Cheese, same discipline as
+ * isNegated's own clause splitting. Falls back to isNegated (a bare "no
+ * extra cheese" spoken about an item already in the cart reads as a removal
+ * request too).
  */
 export function isRemovalRequested(text: string, choiceDisplay: string): boolean {
   if (!text) return false;
-  const nameStems = significantStems(choiceDisplay);
-  if (nameStems.size === 0) return false;
+  const nameStems = [...significantStems(choiceDisplay)];
+  if (nameStems.length === 0) return false;
+  const stem = nameStems[0];
 
   const clauses = text.toLowerCase().split(/\b(?:but|and|also|plus)\b|[,.;]/);
   for (const clause of clauses) {
@@ -125,7 +137,7 @@ export function isRemovalRequested(text: string, choiceDisplay: string): boolean
     );
     if (!hasRemovalVerb) continue;
     const clauseStems = significantStems(clause);
-    if ([...nameStems].every(s => clauseStems.has(s))) return true;
+    if (clauseStems.has(stem)) return true;
   }
 
   return isNegated(text, choiceDisplay);

@@ -7608,9 +7608,19 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // no prior duplicate/over-count records action "added" even when the
     // loop's cart was already exactly right, and re-triggering the recap
     // reply on every normal add would be a new, unwanted behavior change.
+    //
+    // P0 fix (2026-09-14, Item B): identity, not just menu_item_id, must
+    // agree at each position — comparing menu_item_id/quantity alone made
+    // an options-only correction (same item, same quantity, different
+    // toppings) invisible to this gate, so the reconciler's corrected cart
+    // was silently discarded and the reply never re-rendered from it. Reuse
+    // identityKey (the single-cart-writer's own identity primitive, see
+    // turn-reconciler.ts) on both sides rather than inventing a second
+    // comparison method.
     const changed = correctedLines.length !== loopFinalSnap.length ||
       correctedLines.some((l, i) =>
-        l.menu_item_id !== loopFinalSnap[i]?.menu_item_id ||
+        reconcilerIdentityKey(l.menu_item_id, l.options) !==
+          reconcilerIdentityKey(loopFinalSnap[i]?.menu_item_id ?? "", loopFinalSnap[i]?.options) ||
         (Number(l.quantity) || 1) !== (Number(loopFinalSnap[i]?.quantity) || 1),
       );
     if (changed) {

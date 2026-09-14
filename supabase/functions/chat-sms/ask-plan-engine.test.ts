@@ -1119,6 +1119,20 @@ Deno.test("isRemovalRequested: removal verb present but naming a DIFFERENT optio
   assertEquals(isRemovalRequested("remove the pepperoni", "Extra Cheese"), false);
 });
 
+// P0 fix (2026-09-14, live money — v433 "yep but drop the pepperoni" charged
+// $21.00, should be $16.50): a choice display with a qualifier suffix that
+// disambiguates it from a sibling choice (e.g. "Pepperoni (Whole pizza)" vs.
+// "Pepperoni (Half pizza)") used to require the customer to also say "whole"
+// and "pizza" — words nobody actually repeats back — so the removal never
+// matched and the topping silently stayed on the line at full price.
+Deno.test("isRemovalRequested: a qualifier-suffixed choice display ('Pepperoni (Whole pizza)') matches on the head noun alone — the customer never repeats 'whole'/'pizza'", () => {
+  assertEquals(isRemovalRequested("yep but drop the pepperoni", "Pepperoni (Whole pizza)"), true);
+});
+
+Deno.test("isRemovalRequested: qualifier-suffixed display still requires the head noun — an unrelated removal clause does not match", () => {
+  assertEquals(isRemovalRequested("drop the mushrooms", "Pepperoni (Whole pizza)"), false);
+});
+
 Deno.test("applyCompiledModifyItem: THE FIX — 'remove the extra cheese' actually mutates the cart line (options, ask_plan_selections, and price all update), not just the reply", () => {
   const cart: CompiledCartLine[] = [cartLineWithExtraCheese()];
   const result = applyCompiledModifyItem(
