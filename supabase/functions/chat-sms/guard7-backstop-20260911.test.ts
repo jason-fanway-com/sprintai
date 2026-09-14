@@ -52,8 +52,11 @@ const INDEX_SOURCE = Deno.readTextFileSync(new URL("./index.ts", import.meta.url
 
 // ── BUG 1: every render site reads display_name, none leaks the raw name ───
 
-Deno.test("BUG 1: GUARD 7's optionsText is built from candidateOptionText, not raw c.name", () => {
-  assert(/const optionsText = candidates\.map\(c => candidateOptionText\(/.test(INDEX_SOURCE), "GUARD 7's optionsText no longer calls candidateOptionText");
+Deno.test("BUG 1: GUARD 7's optionsText is built from renderOptionAlternatives (which uses candidateOptionText), not raw c.name", () => {
+  // Stage 1 fix: call candidateOptionText, not raw c.name + category word.
+  // Stage 2 refinement: wrap that call inside renderOptionAlternatives so there
+  // is exactly one writer for the " or "-joined candidate list at all sites.
+  assert(/const optionsText = renderOptionAlternatives\(candidates\.map\(/.test(INDEX_SOURCE), "GUARD 7's optionsText no longer routes through renderOptionAlternatives — one writer for the candidate list");
 });
 
 Deno.test("BUG 1: GUARD 7's persisted candidates carry display_name (ask_plan fallback convention)", () => {

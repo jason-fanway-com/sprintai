@@ -35,6 +35,7 @@ import {
   displayGroupName,
   isPendingDisambiguationDeclined,
   renderDisambiguationReask,
+  renderOptionAlternatives,
   resolveNamedCartRemoval,
   resolvePendingDisambiguation,
   significantStems,
@@ -109,6 +110,8 @@ import {
 } from "./cart.ts";
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
 import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, buildMenuPriceIndex } from "./itemizer.ts";
+import { detectCartMutation, renderActionConfirmation, extractQuestionsOnly, type MutationCartLine } from "./action-confirmation.ts";
+import { renderNumberedPickList, renderQuotedNameList, renderNameList } from "./candidate-list.ts";
 import { matchOptionRemovalPhrase, findCartLinesWithOption, type OptionRemovalCartLine } from "./option-removal-20260909.ts";
 import { groupChoicesAlreadySaid, renderMissingOptionsPrompt } from "./sequencer.ts";
 import {
@@ -216,7 +219,10 @@ interface OptionGroup {
   default_choice_id?: string | null;
 }
 
-interface EffectiveMenuItem {
+// Exported (2026-09-13, reply-inversion stage 2) — see claimsOffMenuItem's
+// export comment below; these three types are what a direct unit test needs
+// to construct valid inputs for it.
+export interface EffectiveMenuItem {
   id:            string;
   name:          string;
   description:   string | null;
@@ -3841,7 +3847,11 @@ const GENERIC_LAST_WORDS = new Set([
   "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
 ]);
 
-function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
+// Exported (2026-09-13, reply-inversion stage 2) so claimsOffMenuItem's
+// GUARD 1g necessity can be proven directly by a unit test, same as
+// claimsAddedWithoutMutation (GUARD 1d) already is — see
+// reply-inversion-guard1c-1g-necessity-20260913.test.ts.
+export function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
 
   // Pass 1: detect duplicate canonical names across different rows (same name,
@@ -3910,7 +3920,9 @@ function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   return names;
 }
 
-function claimsOffMenuItem(
+// Exported (2026-09-13, reply-inversion stage 2) — see buildMenuItemNames's
+// export comment just above; same reason.
+export function claimsOffMenuItem(
   reply: string,
   menuItemNames: Map<string, string>,
   guardCart: AnyCartItem[],
@@ -6533,7 +6545,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // states what's on the order (BUG 4: additional named choices must
         // never be applied silently, same "code decides what's true" rule
         // as never claiming one that wasn't applied).
-        const appliedNames = [resolvedChoice.name, ...additionalSelections.map(s => s.choice.name)].join(", ");
+        const appliedNames = renderNameList([resolvedChoice.name, ...additionalSelections.map(s => s.choice.name)]);
         const reply = !modResult.ok
           ? "Sorry, I had trouble setting that — mind trying again?"
           : nextQuestion
@@ -6621,7 +6633,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           option_phrase: optionRemovalPhrase,
         };
         await supabase.from("order_carts").update({ pending_disambiguation: pendingPayload }).eq("id", cart.id);
-        const listStr = optionMatches.map((m, i) => `${i + 1}) the ${m.name} — $${(m.price_cents / 100).toFixed(2)}`).join("  ");
+        const listStr = renderNumberedPickList(optionMatches, "the ");
         const reply = `Which one did you want to remove ${optionRemovalPhrase} from? ${listStr}. Reply with the number.`;
         console.log(`[chat-sms] Option removal ambiguous (conv=${conversation.id}): "${optionRemovalPhrase}" matched ${optionMatches.length} cart lines, asking.`);
         await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -6721,7 +6733,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
 
           if (matches.length === 0) {
             // Item named but not in cart — tell the customer plainly.
-            const cartNames = cartItems.map(i => `"${(i as CartItem).name}"`).join(", ");
+            const cartNames = renderQuotedNameList(cartItems.map(i => (i as CartItem).name));
             const reply = `I don't see "${capturedName}" in your cart — you currently have: ${cartNames}. Did you mean one of those?`;
             console.log(`[chat-sms] Named remove: "${capturedName}" not found in cart (conv=${conversation.id})`);
             await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -6729,7 +6741,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
           } else if (matches.length > 1) {
             // Ambiguous — multiple cart lines match the name, ask which one.
-            const listStr = matches.map((item, i) => `${i + 1}) ${(item as CartItem).name}`).join("  ");
+            const listStr = renderNumberedPickList(matches.map(item => ({ name: (item as CartItem).name })));
             const reply = `Which one did you want to remove? ${listStr}. Reply with the number.`;
             console.log(`[chat-sms] Named remove: "${capturedName}" matched ${matches.length} cart lines, asking (conv=${conversation.id})`);
             await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
@@ -7467,6 +7479,70 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       throw loopErr;
     }
     reply = loopResult.reply;
+    // ── REPLY INVERSION, stage 1 (2026-09-13, docs/specs/2026-09-13-reply-
+    // inversion.md) ────────────────────────────────────────────────────────
+    // THE RULE: any sentence asserting cart contents, quantities, prices, or
+    // totals is rendered by CODE from cart_json. The model may add warmth
+    // around it. It may not author it. This is the taproot site (classified
+    // #21 in the reply-inversion classification pass) — every downstream
+    // guard (1c/1d/1f/1g, GUARD 23, stripLlmMoneyLines, ...) exists to catch
+    // what letting `loopResult.reply` become `reply` unconstrained, here,
+    // used to let through. Fixing it at the source collapses the defect
+    // class instead of adding a 33rd guard to it.
+    //
+    // "Did this turn mutate the cart" is answered the same way GUARD 22
+    // (below, line ~9694) already answers it for its own purpose — a
+    // structural diff of the pre-turn snapshot against the cart array the
+    // tool loop just finished mutating in place. This is cart_json truth,
+    // never the model's claim about it.
+    //
+    // When mutated: the fact half of the reply (what happened to the cart)
+    // is rendered by renderActionConfirmation from an actual before/after
+    // diff (detectCartMutation) — never from the model's prose. When the
+    // diff is too ambiguous to name in one sentence (multiple unrelated
+    // lines touched at once), this falls back to the itemizer's full
+    // recap — still 100% code-rendered, never a guess.
+    //
+    // The model's own text for the turn is reduced to its INTERROGATIVE
+    // sentences only (extractQuestionsOnly) and appended after the fact
+    // sentence. Every live prompt instruction that must survive a mutated
+    // turn (EARLY ORDER TYPE GATE's "pickup or delivery?", a clarifying
+    // re-ask, an upsell offer) is phrased as a question. Filtering on "?"
+    // alone is NOT sufficient on its own, though — a false item/price claim
+    // can be fused into the same interrogative sentence as a genuine confirm
+    // question (2026-09-13 FAILURE A). extractQuestionsOnly additionally
+    // drops any kept sentence that names a known cart/menu item or contains
+    // anything price-shaped, so a lie cannot survive merely by being phrased
+    // as a question — see action-confirmation.ts's header on that function.
+    //
+    // When NOT mutated: `reply` is untouched, exactly `loopResult.reply` —
+    // this is VOICE (a question, clarification, or answer to something not
+    // cart-related), the model's to author, per the rule above. GUARD 1d/1f
+    // (phantom add/correction claims with NO mutation) still watch this
+    // path — see phantom-add-guard.ts and guard1f-correction-claim-
+    // 20260909.ts; this stage does not retire them (see those files' own
+    // headers for why one more stage is needed before that's safe).
+    {
+      const cartMutatedAtLoop = JSON.stringify(cartSnapshotBeforeTurn) !== JSON.stringify(cartItems);
+      if (cartMutatedAtLoop) {
+        const modelReplyThisTurn = reply;
+        const event = detectCartMutation(
+          cartSnapshotBeforeTurn as unknown as MutationCartLine[],
+          cartItems as unknown as MutationCartLine[],
+        );
+        const factSentence = event
+          ? renderActionConfirmation(event)
+          : `Got it! Here's where things stand:\n\n${renderItemizedRecap(cartItems, undefined, undefined, buildMenuPriceIndex(effectiveMenu))}`;
+        const knownItemNamesForWarmthFilter = [
+          ...cartSnapshotBeforeTurn.map(l => (l as { name?: unknown }).name),
+          ...cartItems.map(l => (l as { name?: unknown }).name),
+          ...effectiveMenu.map(mi => mi.name),
+        ].filter((n): n is string => typeof n === "string" && n.length > 0);
+        const warmthTail = extractQuestionsOnly(modelReplyThisTurn, knownItemNamesForWarmthFilter);
+        reply = warmthTail ? `${factSentence} ${warmthTail}` : factSentence;
+        console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)}`);
+      }
+    }
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
     toolCallCountThisTurn = loopResult.debugToolCallCount ?? 0;
     if (cart.test_mode && loopResult.debugAttemptMs) {
@@ -8117,7 +8193,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           // e.g. "Gyro Sandwich"/"Gyro Salad") and only falls back to the raw
           // shared `name` + a category word when no display_name was ever
           // written — never the raw name outright, the way this used to.
-          const optionsText = candidates.map(c => candidateOptionText({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })).join(" or ");
+          //
+          // Reply inversion, stage 2 (2026-09-13): renderOptionAlternatives
+          // owns the candidate-text joining — no inline map+join at this call
+          // site. One writer, same shape as renderNumberedPickList /
+          // renderNameList / renderQuotedNameList from candidate-list.ts.
+          const optionsText = renderOptionAlternatives(candidates.map(c => ({ menu_item_id: c.id, name: c.name, display_name: c.ask_plan?.display_name ?? c.name, category: c.category ?? null, price_cents: c.price_cents })));
           reply = `We've got a couple options called "${menuItem.name}" — ${optionsText}. Which one?`;
         }
         // deno-lint-ignore no-await-in-loop
@@ -8484,7 +8565,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         effectiveMenu.filter(m => m.category === category && m.bot_state === "orderable").map(m => m.name),
       );
       reply = orderableSiblings.length > 0
-        ? `${reply} Correction — those aren't actually available to order by text right now either. What IS available in that category: ${[...new Set(orderableSiblings)].join(", ")}.`
+        ? `${reply} Correction — those aren't actually available to order by text right now either. What IS available in that category: ${renderNameList([...new Set(orderableSiblings)])}.`
         : `${reply} Correction — none of those are actually available to order by text right now; the shop can help with that one directly.`;
     }
   }
@@ -8633,7 +8714,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       dedupedAsks1216.push(ask);
     }
     const cartSaved1216 = await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-    const asksText1216 = dedupedAsks1216.sort((a, b) => a.localeCompare(b)).join(", ");
+    const asksText1216 = renderNameList(dedupedAsks1216.sort((a, b) => a.localeCompare(b)));
     reply = `${reply} Just to be clear — I couldn't confirm "${asksText1216}" as an option here, so it isn't priced or on the order yet;${honestFlaggedClause(cartSaved1216)}`;
   }
 
@@ -8829,7 +8910,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       }
       console.warn(`[chat-sms] GUARD 17 (zero-option item false attribute-change claim) tripped (conv=${conversation.id}). Flagged: ${flagged17.map(f => f.item.name).join(", ")}`);
       const cartSaved17 = await saveCart(supabase, cart.id, guardCart, ((cart.phase as OrderPhase) || "building"));
-      const itemNames17 = [...new Set(flagged17.map(f => f.menuItemName))].join(", ");
+      const itemNames17 = renderNameList([...new Set(flagged17.map(f => f.menuItemName))]);
       reply = `${reply} Just to be clear — ${itemNames17} doesn't have that kind of option here, so nothing was actually changed;${honestFlaggedClause(cartSaved17)}`;
     }
   }
