@@ -108,6 +108,7 @@ import {
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
 import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, buildMenuPriceIndex } from "./itemizer.ts";
 import { detectCartMutation, renderActionConfirmation, extractQuestionsOnly, type MutationCartLine } from "./action-confirmation.ts";
+import { computeUpsellOffer, extractOfferedItemName, renderUpsellOfferSentence, type UpsellOffer } from "./upsell-offer-20260914.ts";
 import { renderNumberedPickList, renderQuotedNameList, renderNameList } from "./candidate-list.ts";
 import { matchOptionRemovalPhrase, findCartLinesWithOption, type OptionRemovalCartLine } from "./option-removal-20260909.ts";
 import { groupChoicesAlreadySaid, renderMissingOptionsPrompt } from "./sequencer.ts";
@@ -6870,6 +6871,59 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     }
   }
 
+  // ── C2c-upsell (2026-09-14, item C): pre-LLM upsell-offer accept ────────
+  // Same "never trust the LLM alone for a high-stakes cart add from a bare
+  // confirmation" discipline as C2b-regular directly above, for the same
+  // reason: the upsell offer sentence itself is CODE-rendered
+  // (upsell-offer-20260914.ts, wired at the action-confirmation site later
+  // in this function) specifically BECAUSE the model's own free-text upsell
+  // attempts get stripped by extractQuestionsOnly (see that module's
+  // header, and action-confirmation.ts's) — the same distrust of the
+  // model's prose means a later bare "yes" cannot be trusted to reliably
+  // resolve back into the right add_item call either. Worse: if the model
+  // DID try, turn-reconciler.ts's groundedness check would revert it as
+  // unconsented growth (a bare "yes" names no item in the customer's own
+  // words this turn) — the exact interaction hazard flagged when this item
+  // was scoped. Acting deterministically here sidesteps that hazard
+  // entirely: this add never becomes a loopProposal, so the reconciler
+  // never runs an opinion on it at all (loopProposals.length === 0 for this
+  // turn, since the model made no NEW add_item call for an item already
+  // sitting in the cart by the time it runs).
+  //
+  // Freshness discipline matches GUARD 20/C2b-regular exactly:
+  // extractOfferedItemName only reads the IMMEDIATELY PRECEDING assistant
+  // message — an offer from further back is not live consent for a later
+  // bare "yes" (the 2026-09-06 "Luca" incident shape). A decline ("no
+  // thanks") does not match impliesOrderConfirmation, so this block simply
+  // does nothing and the turn falls through to the LLM's own (unforced)
+  // voice, unchanged — no separate decline path to build or maintain.
+  {
+    const lastAssistantUpsell = [...history].reverse().find(h => h.role === "assistant");
+    const priorAssistantMessageUpsell = typeof lastAssistantUpsell?.content === "string" ? lastAssistantUpsell.content : null;
+    const offeredUpsellName = extractOfferedItemName(priorAssistantMessageUpsell);
+    if (offeredUpsellName && impliesOrderConfirmation(userMessage)) {
+      const upsellMenuItem = effectiveMenu.find(m => m.name.toLowerCase().trim() === offeredUpsellName.toLowerCase().trim());
+      if (upsellMenuItem) {
+        console.log(`[chat-sms] C2c-upsell pre-LLM upsell-offer accept firing (conv=${conversation.id}, item="${upsellMenuItem.name}")`);
+        const upsellAddResult = await executeTool(
+          "add_item", { menu_item_id: upsellMenuItem.id, quantity: 1 },
+          cartItems, effectiveMenu, cart.id, supabase, shop.name, cart.test_mode, shop.delivery_fee_cents, null,
+          shop.compiled_ordering_engine_enabled === true, userMessage, shop.phone_number_e164 ?? null,
+        );
+        if (upsellAddResult.ok) {
+          const { data: reloadedUpsell } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
+          if (reloadedUpsell) {
+            cart.cart_json = (reloadedUpsell.cart_json as AnyCartItem[]);
+            cart.phase = (reloadedUpsell.phase as OrderPhase) || cart.phase;
+            cartItems = [...cart.cart_json];
+          }
+        } else {
+          console.warn(`[chat-sms] C2c-upsell add_item failed: ${JSON.stringify(upsellAddResult.result).slice(0, 200)}. Falling through to LLM.`);
+        }
+      }
+    }
+  }
+
   // ── C2 (2026-08-29): Pre-LLM name→submit shortcut ──────────────────────
   // When the last assistant message asked for a pickup name and the customer's
   // next message is a short name, bypass the LLM entirely and call submit_order
@@ -7341,16 +7395,23 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // GATE (stream C2, docs/specs/2026-09-09-prompt-line-classification.md):
   // null = legacy buildSystemPrompt, byte-for-byte unchanged, zero risk.
   // Non-null = buildSystemPromptV2, sourced from shop_settings/shop_voice/
-  // shop_notes. No shop has prompt_version set today (migration 124), so
-  // this branch is currently a permanent no-op in production — see the
-  // handleChatSmsRequest RUNBOOK entry before ever setting it on a live shop.
+  // shop_notes. UPDATE (2026-09-14, item C): this comment used to say "no
+  // shop has prompt_version set today" (migration 124) — stale. Vito's,
+  // Zio's, and Not Just Bagels all carry prompt_version=1 as of this
+  // writing, so this IS the live production path for every shop that
+  // matters; see the handleChatSmsRequest RUNBOOK entry regardless.
   let basePrompt: string;
+  // Item C (2026-09-14): lifted out of the shopSettingsRow block below so the
+  // action-confirmation site (this turn's code-rendered upsell offer) can
+  // read it without re-querying shop_settings a second time.
+  let upsellEnabledForOffer = true;
   if (shop.prompt_version != null) {
     const [{ data: shopSettingsRow }, { data: shopVoiceRow }, { data: shopNotesRows }] = await Promise.all([
       supabase.from("shop_settings").select("hours_line, fulfilment_modes, delivery_radius_miles, quantity_words, upsell_enabled").eq("shop_id", shop.id).maybeSingle(),
       supabase.from("shop_voice").select("greeting, sign_off, persona").eq("shop_id", shop.id).maybeSingle(),
       supabase.from("shop_notes").select("text").eq("shop_id", shop.id).order("created_at", { ascending: true }),
     ]);
+    upsellEnabledForOffer = (shopSettingsRow as ShopSettingsRow | null)?.upsell_enabled ?? true;
     basePrompt = buildSystemPromptV2(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, shopSettingsRow as ShopSettingsRow | null, shopVoiceRow as ShopVoiceRow | null, (shopNotesRows ?? []) as ShopNoteRow[], conversationJustExpired);
   } else {
     basePrompt = buildSystemPrompt(shop, cart.phase, effectiveMenu, [...cart.cart_json], currentTime, isFirstMessage, cart.notes, priorLinkExpired, soldOutNames, cart.order_type, cart.delivery_address, cart.driver_tip_cents, cart.delivery_fee_cents, shop.delivery_enabled, cart.test_mode, deliveryGeoAvailable, customerContext, conversationJustExpired);
@@ -7477,8 +7538,52 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           ...effectiveMenu.map(mi => mi.name),
         ].filter((n): n is string => typeof n === "string" && n.length > 0);
         const warmthTail = extractQuestionsOnly(modelReplyThisTurn, knownItemNamesForWarmthFilter);
-        reply = warmthTail ? `${factSentence} ${warmthTail}` : factSentence;
+
+        // Item C (2026-09-14 burn-down): code-rendered upsell offer, wired
+        // to the exact same "added" event this block already computed.
+        // Root cause (confirmed live, see upsell-offer-20260914.ts header):
+        // the model DOES attempt this sentence every time, and warmthTail
+        // above ALWAYS strips it (it names a real item and a real price by
+        // construction — that's the whole point of an upsell). Rendering it
+        // from CODE instead, and — when it fires — using it AS this turn's
+        // sole question instead of whatever warmthTail salvaged, keeps the
+        // "confirmation + at most one question" shape intact rather than
+        // stacking the offer on top of a leftover "anything else?".
+        //
+        // hasPendingRequiredQuestion gates out the case where THIS SAME add
+        // also opened a required slot question (e.g. "How would you like
+        // that cooked?", Cheese Burger's Temp group) — that required
+        // question always wins over an optional upsell, and the item is not
+        // reconsidered for an offer on a later turn (deliberate scope
+        // limit: the "one qualifying add" rule is about the add event, not
+        // about retrying until a quiet turn shows up).
+        let upsellOfferSentence: string | null = null;
+        if (event && event.action === "added") {
+          const addedMenuItemForUpsell = effectiveMenu.find(mi => mi.name === event.itemName) ?? null;
+          const compiledPendingForAdded = (loopResult.compiledStepQuestions ?? [])
+            .some(sq => sq.menuItemId === addedMenuItemForUpsell?.id);
+          const legacyPendingForAdded = addedMenuItemForUpsell
+            ? cartItems.some(l => (l as CartItem).menu_item_id === addedMenuItemForUpsell.id &&
+                ((l as CartItem).pending_options?.length ?? 0) > 0)
+            : false;
+          const upsellOffer: UpsellOffer | null = computeUpsellOffer(
+            addedMenuItemForUpsell?.upsell ?? null,
+            upsellEnabledForOffer,
+            compiledPendingForAdded || legacyPendingForAdded,
+            history,
+            (name) => {
+              const found = effectiveMenu.find(mi => mi.name.toLowerCase().trim() === name.toLowerCase().trim());
+              return found ? { name: found.name, price_cents: found.price_cents } : null;
+            },
+          );
+          if (upsellOffer) upsellOfferSentence = renderUpsellOfferSentence(upsellOffer);
+        }
+
+        reply = upsellOfferSentence
+          ? `${factSentence} ${upsellOfferSentence}`
+          : (warmthTail ? `${factSentence} ${warmthTail}` : factSentence);
         console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)}`);
+        console.log(`[chat-sms] ITEM-C-DIAGNOSTIC (conv=${conversation.id}): FULL modelReplyThisTurn=${JSON.stringify(modelReplyThisTurn)} warmthTail=${JSON.stringify(warmthTail)} upsellOfferSentence=${JSON.stringify(upsellOfferSentence)}`);
       }
     }
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
