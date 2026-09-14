@@ -37,7 +37,12 @@ check "decline -> shows cart, not a count" "$r" "pizza" "you've got [0-9]+ item"
 r=$(say "actually add a side salad too" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("reply",""))')
 check "second intent honoured (salad named)" "$r" "salad" ""
 r=$(say "yeah im ready to check out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("reply",""))')
-check "explicit checkout intent accepted" "$r" "name" ""
+# The name step has TWO correct shapes: ask a new customer ("name for the
+# order?") or confirm a remembered one ("Putting this in for Jason, right?"
+# -- the returning-customer CRM path). Asserting the bare word "name"
+# false-failed the CRM path, which line 34 above already treats as the name
+# step. Both spellings are accepted; neither is optional.
+check "explicit checkout intent accepted" "$r" "name for the order|putting this in for" ""
 r=$(say "Yes" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("reply",""))')
 check "payment link issued" "$r" "payment link|pay here" ""
 CID=$(curl -s -m 30 "$U/rest/v1/conversations?session_id=eq.$SID&select=id&order=started_at.desc&limit=1" -H "apikey: $K" -H "Authorization: Bearer $K" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d[0]["id"] if d else "")')
