@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-09-04
+Last updated: 2026-09-13
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -546,6 +546,37 @@ the code. For a restaurant owner, this closes one of the more damaging
 failure modes a diner could hit: seeing a charge for food they didn't order.
 Trust in "the bot got my order right" is the whole product; a duplicate
 charge is the fastest way to lose it.
+
+### Added 2026-09-13 (later) — the bot was rushing to close, and two more trust bugs closed
+
+Jason, after a real paid order: "It always rushes to get your name, which is the
+trigger for checkout. That's unnatural. It should always try to upsell." The name
+question was structurally *the* thing that triggered checkout the instant an item
+landed — before the bot ever offered an upsell and before the customer said they
+were done. That cost revenue (upsell never had a natural moment to fire) and read
+as pushy, the opposite of the "feels like texting a friend" pitch. Fixed by
+enforcing the correct order in code: confirm the add and offer one upsell, then
+ask if the customer is ready to check out, and only then ask for their name. Four
+live defects turned up within minutes of the first deploy (including a real
+"yes, I'm ready to check out" being misread and re-asked) — all caught and closed
+same day via four rounds of independent verification before the fix was called
+done.
+
+Separately, the same root problem behind the duplicate-charge fix above — the
+model narrating cart contents in its own words instead of stating what the code
+actually did — still had one major gap: the reply text itself. A customer could
+be told "that's 3 items" against a 2-line cart, or told an item was swapped when
+it was only added, because the sentence describing the cart was authored by the
+model, not read from the write. The fix inverts that: the highest-traffic reply
+sites now render their factual claims (what was added, removed, or changed)
+directly from the actual cart write, and the model's own words are reduced to
+tone and follow-up questions only. This is the same trust principle as the
+duplicate-charge fix: a customer who is told the wrong thing about their own
+order stops believing the bot got the order right, and that belief is the whole
+product. Honest disclosure in the commit history: the fix covers the
+cart-mutation path, not yet the no-mutation "just talking" path, so the guards
+that catch a hallucinated claim on that second path are still required and
+staying in place.
 
 ---
 
