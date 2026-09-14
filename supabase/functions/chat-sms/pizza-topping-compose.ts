@@ -372,13 +372,11 @@ export function buildComposedLinesNote(composed: ComposedPizzaToken[]): string {
       ? `${c.quantity}x ${c.baseDisplayName} with ${c.toppingChoiceDisplay} (composed from the customer's own word "${c.token}")`
       : `${c.quantity}x ${c.baseDisplayName}, no toppings (composed from the customer's own word "${c.token}")`,
   );
-  // Deliberately avoids "in your/the cart" / "already" language — GUARD 1c
-  // (index.ts's claimsItemInCart) treats those phrases as cart-content claims
-  // and string-matches them against cart line bare names. Composed lines keep
-  // the topping in `options` (not in `name`), so "X with Pepperoni in your
-  // cart" fails the substring check → false "Sorry, I got mixed up" — live-
-  // confirmed regression 2026-09-08 (v303). The model MUST describe composed
-  // items as freshly-confirmed, using the EXACT display name below.
+  // Deliberately avoids "in your/the cart" / "already" language (historically
+  // GUARD 1c territory, retired 2026-09-13 — see reply-inversion spec item 4;
+  // the ITEM/CART-CLAIM SCOPE prompt rule now forbids the model from asserting
+  // cart contents at all). The model MUST describe composed items as
+  // freshly-confirmed, using the EXACT display name below.
   const exampleLine = composed[0].toppingChoiceDisplay
     ? `${composed[0].baseDisplayName} with ${composed[0].toppingChoiceDisplay}`
     : `${composed[0].baseDisplayName}`;

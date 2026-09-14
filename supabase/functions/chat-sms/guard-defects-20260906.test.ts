@@ -17,7 +17,8 @@
 //           greeting onto a reply that was about to carry a pending
 //           disambiguation question forward. Fixed by threading a
 //           `hasHistory` flag (`!isLifetimeFirstContact`) into
-//           honestFallbackReply from all 7 call sites.
+//           honestFallbackReply from all 7 call sites (6 after GUARD 1g's
+//           2026-09-13 retirement — see the DEFECT 2 test below).
 //
 // index.ts calls Deno.serve() at module scope, so it is never imported
 // directly by tests (importing it binds a real port and fails the test
@@ -165,10 +166,13 @@ Deno.test("DEFECT 2: honestFallbackReply's signature and empty-cart branch are h
   assert(INDEX_SOURCE.includes(MID_ORDER_FALLBACK), "mid-order fallback text must exist");
 });
 
-Deno.test("DEFECT 2: all 7 honestFallbackReply call sites pass a hasHistory argument tied to isLifetimeFirstContact", () => {
+Deno.test("DEFECT 2: all 6 honestFallbackReply call sites pass a hasHistory argument tied to isLifetimeFirstContact", () => {
+  // Was 7 call sites at DEFECT 2's fix (2026-09-06); GUARD 1g (menu-item
+  // hallucination), one of those 7 call sites, was retired 2026-09-13 —
+  // see docs/specs/2026-09-13-reply-inversion.md item 4 — leaving 6.
   const calls = (INDEX_SOURCE.match(/honestFallbackReply\([^)]*\)/g) ?? [])
     .filter(c => !c.startsWith("honestFallbackReply(cart:"));
-  assertEquals(calls.length, 7, `expected 7 call sites, found ${calls.length}: ${calls.join(" | ")}`);
+  assertEquals(calls.length, 6, `expected 6 call sites, found ${calls.length}: ${calls.join(" | ")}`);
   for (const call of calls) {
     assert(call.includes("isLifetimeFirstContact"), `call site missing hasHistory arg: ${call}`);
   }

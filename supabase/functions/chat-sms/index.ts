@@ -17,7 +17,6 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
 import { dayWindows } from "../_shared/hours.ts";
-import { claimsAddedWithoutMutation } from "./phantom-add-guard.ts";
 import { stripInventedActions } from "./invented-action-guard.ts";
 import {
   buildZeroOptionAttributeChangeHint,
@@ -87,7 +86,6 @@ interface RawUnitProposal {
 import { shouldRevertOrderType } from "./guard2b-order-type-revert.ts";
 import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 import { buildGroundedMoneyCents, findStrayDollarCents } from "./guard2c-currency-lint-20260909.ts";
-import { evaluateGuard1f } from "./guard1f-correction-claim-20260909.ts";
 import { CART_SUMMARY_RE, CART_SUMMARY_MENTION_RE } from "./cart-summary-intent-20260909.ts";
 import { isExplicitCheckoutIntent, shouldRedirectNameAskToCheckoutGate, renderGuard23Redirect } from "./checkout-intent-gate-20260913.ts";
 import { renderMoneyFooterLines } from "./money-footer-20260909.ts";
@@ -101,7 +99,6 @@ import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-questi
 import { countUnresolvedSegments, phraseCountShortfall } from "./unresolved-item-segment-guard.ts";
 import { decideShortfallRetry } from "./enumeration-shortfall-retry.ts";
 import {
-  claimsItemInCart,
   extractCustomerReferencedItems,
   filterNegatedItems,
   findMissingCartItems,
@@ -219,9 +216,6 @@ interface OptionGroup {
   default_choice_id?: string | null;
 }
 
-// Exported (2026-09-13, reply-inversion stage 2) — see claimsOffMenuItem's
-// export comment below; these three types are what a direct unit test needs
-// to construct valid inputs for it.
 export interface EffectiveMenuItem {
   id:            string;
   name:          string;
@@ -3847,10 +3841,6 @@ const GENERIC_LAST_WORDS = new Set([
   "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
 ]);
 
-// Exported (2026-09-13, reply-inversion stage 2) so claimsOffMenuItem's
-// GUARD 1g necessity can be proven directly by a unit test, same as
-// claimsAddedWithoutMutation (GUARD 1d) already is — see
-// reply-inversion-guard1c-1g-necessity-20260913.test.ts.
 export function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, string> {
   const names = new Map<string, string>();
 
@@ -3920,44 +3910,6 @@ export function buildMenuItemNames(menu: EffectiveMenuItem[]): Map<string, strin
   return names;
 }
 
-// Exported (2026-09-13, reply-inversion stage 2) — see buildMenuItemNames's
-// export comment just above; same reason.
-export function claimsOffMenuItem(
-  reply: string,
-  menuItemNames: Map<string, string>,
-  guardCart: AnyCartItem[],
-): string | null {
-  if (!reply || menuItemNames.size === 0) return null;
-  const lowerReply = reply.toLowerCase();
-  const cartItemNames = guardCart.map(i =>
-    (i as BundleItem).type === "bundle" ? (i as BundleItem).name.toLowerCase() : (i as CartItem).name.toLowerCase()
-  );
-  const STOP = new Set(["change","restart","pickup","delivery","your","order","cart","total",
-    "subtotal","service","fee","tip","driver","name","phone","number","address"]);
-
-  const claimPatterns = [
-    /(?:we\s+have|i\s+(?:can\s+)?(?:add|offer|recommend)|how\s+about|would\s+you\s+like|try\s+our|we\s+(?:carry|offer))\s+(?:a|an|some|the)?\s+([\w\s&'-]{3,40}?)(?:\s+for|\s+to|\s+at|\s*$|[.!?])/gi,
-    /added\s+(?:a|an|some|the)?\s+([\w\s&'-]{3,40}?)\s+to\s+(?:your\s+)?cart/gi,
-    /([\w\s&'-]{3,30}?)\s+(?:is|are)\s+\$\d/gi,
-  ];
-
-  for (const re of claimPatterns) {
-    re.lastIndex = 0;
-    for (let m = re.exec(reply); m !== null; m = re.exec(reply)) {
-      let claimed = m[1].toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (claimed.length < 3 || STOP.has(claimed)) continue;
-      if (cartItemNames.some(n => n.includes(claimed) || claimed.includes(n))) continue;
-      const menuMatch = [...menuItemNames.keys()].find(k =>
-        k.includes(claimed) || claimed.includes(k)
-      );
-      if (!menuMatch) {
-        console.warn(`[chat-sms] F1 claimsOffMenuItem: claimed "${claimed}" not found in menu`);
-        return claimed;
-      }
-    }
-  }
-  return null;
-}
 
 // Guard 1e helper: detects when the reply offers a format/size upgrade
 // (e.g. "upgrade to a flagel or wrap") for an item that does NOT list that
@@ -4006,24 +3958,9 @@ function offersUngroundedUpgrade(
   return { tripped: false };
 }
 
-// claimsItemInCart now lives in cart.ts (imported above).
-
-// Guard 1d helper `claimsAddedWithoutMutation` lives in ./phantom-add-guard.ts
-// (pure + unit-tested; see guard-phantom-add.test.ts). Imported at top of file.
-
 // claimsTotal and extractDollarCents now live in pricing.ts (imported above).
 
-
 // replyAcknowledgesCart now lives in cart.ts (imported above).
-
-// claimsCorrectedWithoutMutation's replacement (P0, 2026-09-09 live money
-// defect) now lives in guard1f-correction-claim-20260909.ts as evaluateGuard1f
-// (imported above). A live false-correction-claim incident ("Removed the
-// extra cheese..." / "Done - removed the extra cheese..." on a byte-identical
-// cart) showed the old single-predicate version was silenced by
-// replyAcknowledgesCart whenever the reply named a real cart item by word --
-// which an explicit, believable false claim always does. See that module's
-// header for the explicit/ambiguous split this replaced it with.
 
 // Guard 2 / Guard 9 helper `impliesOrderConfirmation` now lives in
 // guard9-unconsented-affirmation.ts (imported above) — kept with GUARD 9's
@@ -6581,8 +6518,8 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // option-removal-20260909.ts's header for the full incident) ──────────
     // "remove the extra cheese" / "take the extra cheese off" / "no more
     // pepperoni" must strip that SPECIFIC option from whichever cart line has
-    // it, deterministically, before the LLM/tool loop ever runs — GUARD 1f
-    // (deployed v316) only stopped the model from LYING about having done
+    // it, deterministically, before the LLM/tool loop ever runs — VOICE-SCRUB
+    // 1f (deployed v316 as Guard 1f) only stopped the model from LYING about having done
     // this; the cart itself never actually changed. Checked BEFORE
     // namedRemoveMatch below: "extra cheese" stem-overlaps "cheese" against a
     // cart line literally named "... Neapolitan Cheese Pizza" (the menu's own
@@ -6861,7 +6798,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // (regularItemAuthorizedThisTurn) -- but nothing in the codebase actually
   // PERFORMED the add: the system prompt's instruction to do so is advisory
   // only, and the model dropped both the item and the topping entirely,
-  // leaving the cart empty. GUARD 1f then correctly reported that true
+  // leaving the cart empty. VOICE-SCRUB 1f then correctly reported that true
   // (empty) state -- the failure was upstream of any guard, in never
   // resolving "yes + modifier" against the offer at all.
   //
@@ -7426,7 +7363,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   let checkoutUrl: string | undefined;
   let declinedBlockedItems: Array<{ category: string; name: string }> = [];
   // P0 fix (2026-09-09, money-footer double-render — Zio's live incident):
-  // when a deterministic guard below (PROOF-P2, GUARD 1f, GUARD 2c) already
+  // when a deterministic guard below (PROOF-P2, GUARD 2c) already
   // sets `reply` to a full renderItemizedRecap() receipt, Phase A's
   // stripLlmMoneyLines() must NEVER run on it again — that function is built
   // to scrub LLM-composed prose, and its regexes match across the newlines
@@ -7517,11 +7454,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     //
     // When NOT mutated: `reply` is untouched, exactly `loopResult.reply` —
     // this is VOICE (a question, clarification, or answer to something not
-    // cart-related), the model's to author, per the rule above. GUARD 1d/1f
-    // (phantom add/correction claims with NO mutation) still watch this
-    // path — see phantom-add-guard.ts and guard1f-correction-claim-
-    // 20260909.ts; this stage does not retire them (see those files' own
-    // headers for why one more stage is needed before that's safe).
+    // cart-related), the model's to author, per the rule above. The
+    // ITEM/CART-CLAIM SCOPE prompt rule (stage 3) removes the model's
+    // vocabulary for cart claims on this path — it cannot enumerate items,
+    // claim it added/removed something, or assert what is in the cart.
     {
       const cartMutatedAtLoop = JSON.stringify(cartSnapshotBeforeTurn) !== JSON.stringify(cartItems);
       if (cartMutatedAtLoop) {
@@ -7808,7 +7744,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // REMOVED — the regex reply-scrubber caused false positives on normal
   // phrasing ("Your total is $8.99", "I've got 2 items", etc.). Replaced by:
   //   a) Deterministic Ledger-status rendering below (money/status lines)
-  //   b) F1 guard (claimsOffMenuItem) for off-menu item claims
+  //   b) ITEM/CART-CLAIM SCOPE prompt rule (model vocabulary constraint, stage 3)
   //   c) Rewritten verifyHallucinationGuard in cart-ops.ts (Ledger-truth check)
 
   // ── Guard 1: suppress ungrounded totals when cart is empty ─────────────
@@ -7850,109 +7786,6 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         .replace(/\s+/g, " ")
         .trim();
       reply = kept.length >= 15 ? kept : "Let me get that started for you! What else can I get you?";
-    }
-  }
-
-  // ── Guard 1g (F1; 2026-08-29): Menu-item hallucination ──────────────────
-  // Detects when the reply claims/offers a menu item that doesn't exist on the
-  // shop's actual menu. Runs after portion/upgrade checks. Falls back to honest
-  // cart summary when tripped.
-  if (!portionCheck.tripped) {
-    const menuItemNames = buildMenuItemNames(effectiveMenu);
-    const offMenuItem = claimsOffMenuItem(reply, menuItemNames, guardCart);
-    if (offMenuItem) {
-      console.warn(`[chat-sms] GUARD 1g (menu-item hallucination) tripped (conv=${conversation.id}). Claimed "${offMenuItem}" not in menu. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-      reply = honestFallbackReply(guardCart, false, !isLifetimeFirstContact);
-    }
-  }
-
-  // ── Guard 1c: cart-content hallucination ────────────────────────────────
-  // If the model claims an item is in the cart but the authoritative cart row
-  // doesn't contain that item, suppress the claim. Reuses guardCartRow already
-  // fetched above — no second DB read.
-  if (!portionCheck.tripped) {
-    const hallucinatedItem = claimsItemInCart(reply, guardCart);
-    if (hallucinatedItem) {
-      console.warn(`[chat-sms] GUARD 1c (cart-content hallucination) tripped (conv=${conversation.id}). Claimed "${hallucinatedItem}" in cart but not present. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-      // CHANGE 3 (2026-09-05, Jason): the old fallback was a recital AND it did
-      // not survive the pipeline — stripLlmMoneyLines() deletes "I've got N
-      // items in your cart" (it exists to strip exactly that phrasing from the
-      // model), so what actually reached Jason was the bare fragment "What else
-      // can I add?" in answer to "why wouldn't you just tell me what's
-      // available?". Say something a person would say, own the mistake, and use
-      // no digits or the word "items" so the stripper leaves it alone.
-      const fallback = guardCart.length > 0
-        ? "Sorry, I got mixed up about your order there. What would you like to add or change?"
-        : "Nothing's in your order yet. What can I get started for you?";
-      reply = fallback;
-    }
-  }
-
-  // ── Guard 1d: narrated add without actual cart mutation ─────────────────
-  // If the model says "added X to your cart" but guardCart is identical to
-  // the true pre-turn snapshot, no tool was called — the add was imaginary.
-  //
-  // P0 fix (2026-09-12, live money defect on Vito's, conv ce84c64b): this
-  // used to compare against `cartItems`, NOT `cartSnapshotBeforeTurn`.
-  // `cartItems` is mutated IN PLACE by executeTool's push()/splice() calls
-  // during this same turn's tool loop (see cartSnapshotBeforeTurn's
-  // declaration comment and GUARD 9's above), so by the time this guard runs
-  // `cartItems` already reflects POST-turn state — identical to `guardCart`
-  // whether or not a real mutation happened. That made this guard structurally
-  // blind to genuine adds: it could only ever see "no diff" and would trip on
-  // reply *wording* alone (an ambiguous "want"/"one" phrase), overwriting a
-  // correct "added your pepperoni pizza" reply with "Your cart is empty" —
-  // which then made the customer re-order the same item, doubling the charge.
-  // GUARD 9 already carried this exact wiring-bug warning in its own comment;
-  // 1d/1f were never migrated. `cartSnapshotBeforeTurn` (frozen via
-  // JSON.parse(JSON.stringify(...)) before any tool call this turn) is the
-  // only correct "before" reference here.
-  if (!portionCheck.tripped && !claimsItemInCart(reply, guardCart)) {
-    if (claimsAddedWithoutMutation(reply, cartSnapshotBeforeTurn, guardCart)) {
-      console.warn(`[chat-sms] GUARD 1d (phantom-add) tripped (conv=${conversation.id}). Reply claimed add but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-      reply = "Sorry, I didn't actually add that — let me try again. What would you like?";
-    }
-  }
-
-  // ── Guard 1f: narrated correction without cart mutation ────────────────
-  // If the model says "fixed it, 1x" / "removed that" / "updated to just one"
-  // but the cart didn't change, replace the reply with the real cart state.
-  // Decision core (explicit vs. ambiguous split, and why) lives in
-  // guard1f-correction-claim-20260909.ts. Same P0 fix as GUARD 1d directly
-  // above: compare against `cartSnapshotBeforeTurn`, not `cartItems`.
-  const guard1f = evaluateGuard1f(reply, cartSnapshotBeforeTurn, guardCart);
-  if (!portionCheck.tripped && guard1f.tripped) {
-    console.warn(`[chat-sms] GUARD 1f (narrated-correction-no-mutation, ${guard1f.reason}) tripped (conv=${conversation.id}). Reply claimed correction but cart unchanged. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
-    if (guardCart.length === 0) {
-      // P0 fix (2026-09-12, live incident, conv f60d3611): the flat "Your
-      // cart is empty. What would you like to order?" is a TRUE statement
-      // that reads as though we ignored the customer even when they clearly
-      // named something this turn — because we did (this guard trips
-      // precisely when nothing the model claimed happened actually did).
-      // Never answer a specific request with a generic prompt: if this
-      // turn's own message named a real menu item, or confirmed a fresh
-      // regular-item offer, say so explicitly and re-ask for that one
-      // missing piece instead of a blank slate.
-      const menuItemNames1f = buildMenuItemNames(effectiveMenu);
-      const named1f = extractCustomerReferencedItems([{ role: "user", content: userMessage }], menuItemNames1f);
-      const lastAssistant1f = [...history].reverse().find(h => h.role === "assistant");
-      const priorAssistantMessage1f = typeof lastAssistant1f?.content === "string" ? lastAssistant1f.content : null;
-      if (named1f.size > 0) {
-        reply = `Sorry, that didn't go through — could you say "${[...named1f].join('", "')}" again?`;
-      } else if (regularItem && regularItemAuthorizedThisTurn(userMessage, priorAssistantMessage1f, regularItem.name)) {
-        reply = `Sorry, that didn't go through — want me to add your usual, the ${regularItem.name}?`;
-      } else {
-        reply = "Your cart is empty. What would you like to order?";
-      }
-    } else {
-      // P0 fix (2026-09-09, item 2 — itemized recap): this is exactly the
-      // reply the live incident showed the customer (BLOCKED.txt 2026-09-09,
-      // guard1f-correction-claim-20260909.test.ts) — a bare name list with no
-      // options/upcharges shown, so the $4 Extra Cheese GUARD 1f just proved
-      // was NEVER removed was also never visible in the "corrected" recap
-      // either. Route through itemizer.ts like every other cart-facing reply.
-      reply = `Your cart:\n\n${renderItemizedRecap(guardCart)}\n\nWhat else can I add?`;
-      moneyFooterAlreadyRendered = true;
     }
   }
 
@@ -8683,7 +8516,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // clause is gated on saveCart's own success (honestFlaggedClause) instead
   // of being asserted unconditionally.
   // P0 fix (2026-09-09, live money — false-claim-INVERSE, same Zio's
-  // transcript as GUARD 1f/12/16 above): GUARD 12/16 each flag "the
+  // transcript as VOICE-SCRUB 1f/GUARD 12/16 above): GUARD 12/16 each flag "the
   // customer named X but THIS one touched line doesn't have it selected,"
   // then this render asserts one blanket claim for the whole cart — "X
   // isn't priced or on the order yet." That claim is true only if X really
@@ -8697,7 +8530,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // ask_plan_selections for a compiled line — see CartItem's own doc
   // comment — so this is real cart state, not a re-guess) before it's
   // allowed into the disclaimer — same "render from real state, don't let
-  // an assertion drift from it" discipline as GUARD 1f.
+  // an assertion drift from it" discipline as VOICE-SCRUB 1f.
   const cartWidePricedNames1216 = new Set<string>();
   for (const raw of guardCart) {
     const ci = raw as CartItem;

@@ -53,7 +53,7 @@
  *
  * cart.ts (item 2) is NOT used here: every function it exports is a
  * hallucination GUARD — it verifies an LLM's free-text reply against
- * already-known cart state (claimsItemInCart, findMissingCartItems,
+ * already-known cart state (findMissingCartItems,
  * replyAcknowledgesCart, isClosingReply, ...). The walk never produces an
  * LLM reply to check, so none of those functions have anything to operate
  * on. The module that actually turns ask_plan steps + customer text into a

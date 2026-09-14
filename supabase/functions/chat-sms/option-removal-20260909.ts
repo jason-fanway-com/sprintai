@@ -141,7 +141,8 @@ export function matchOptionRemovalPhrase(normalizedMessage: string): string | nu
  * (every significant stem of the phrase must appear in the option value's
  * stems), plus a bidirectional plain-substring check for the common exact
  * case ("extra cheese" / "Extra Cheese"). Deliberately stricter than the
- * whole-item resolver's 3-stem-overlap heuristic (cart.ts's claimsItemInCart)
+ * whole-item resolver's 3-stem-overlap heuristic (formerly cart.ts's
+ * claimsItemInCart, retired 2026-09-13 with GUARD 1c)
  * -- option names are short and specific, so requiring full containment
  * avoids a generic word ("cheese" alone) accidentally matching "Extra
  * Cheese" when the customer actually named something else entirely.
