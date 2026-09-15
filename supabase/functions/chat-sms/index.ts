@@ -122,6 +122,7 @@ import {
 import { isAskingForPickupName, impliesUpsellAcceptance, impliesUpsellDecline } from "./dialogue-signals.ts";
 import { runTurnEngineTurn } from "./turn-engine-runner.ts";
 import type { DialogueState, TurnEngineCartLine, TurnEngineMenuItem } from "./turn-engine.ts";
+import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,93 @@ const COMPLIANCE_DISCLOSURE = "Msg & data rates may apply. Reply HELP for help o
 // stays untouched and does not call this.
 export function appendComplianceDisclosureIfFirstContact(reply: string, isLifetimeFirstContact: boolean): string {
   return isLifetimeFirstContact ? `${reply}\n\n${COMPLIANCE_DISCLOSURE}` : reply;
+}
+
+// ── Turn Engine checkout wiring (Phase 3c, docs/specs/2026-09-14-turn-
+// engine-oversight.md §4 Phase 3) ──────────────────────────────────────────
+//
+// turn-engine-runner.ts's own header (see its Scope note 1) flags the exact
+// gap this closes: dialogue_state.phase can walk all the way to "link_sent"
+// on the engine path, but nothing on that path ever called Stripe — a cart
+// that got there rendered with no payment link. This function is called
+// from the turn-engine routing branch below, right after runTurnEngineTurn
+// returns, and is the ONLY place on that path a checkout session gets
+// created — createCheckoutSession itself (checkout-session.ts) is the one
+// shared Stripe-call site, used by this function AND by the legacy
+// submit_order case (executeTool, unchanged).
+//
+// Exported (same rationale as appendComplianceDisclosureIfFirstContact
+// above) so it's unit-testable in isolation, with every dependency injected
+// — no Deno.env / new Stripe(...) buried inside checkout-session.ts, so
+// those two calls live here instead, at the one real call site, mirroring
+// the exact three-line test/live hard-gate the legacy submit_order case has
+// always had (search "HARD-GATE: test mode MUST use test Stripe" in
+// executeTool) rather than duplicating that gate's logic a second time.
+export interface EngineCheckoutDeps {
+  supabase:           SupabaseClient;
+  // Defaults to the identical hard-gate submit_order has always used:
+  // test carts get the test-mode key or nothing (fail closed), never a live
+  // key. Injected so tests can supply a fake key without touching real env
+  // vars or the real getTestModeStripeKey() lookup.
+  resolveStripeKey:   (testMode: boolean) => string;
+  createStripeClient: (secretKey: string) => Stripe;
+}
+
+export async function appendEngineCheckoutLinkIfReady(
+  params: {
+    cartId:     string;
+    shopName:   string;
+    testMode:   boolean;
+    priorPhase: DialogueState["phase"];
+    nextPhase:  DialogueState["phase"];
+    cartLines:  TurnEngineCartLine[];
+    reply:      string;
+    isSms:      boolean;
+  },
+  deps: EngineCheckoutDeps,
+): Promise<string> {
+  // Only the turn that FIRST reaches link_sent ever creates a session — a
+  // cart already sitting in link_sent (e.g. the customer's next message,
+  // still resolved against the same closed dialogue) never fires this
+  // again. The DB check just below is the second, belt-and-suspenders half
+  // of the same idempotency contract (mirrors checkoutAlreadyExists() below
+  // in this file, the legacy path's own defensive re-check).
+  if (params.priorPhase === "link_sent" || params.nextPhase !== "link_sent") return params.reply;
+
+  const { data: freshCart } = await deps.supabase.from("order_carts")
+    .select("order_type, delivery_fee_cents, driver_tip_cents, notes, stripe_checkout_session_id")
+    .eq("id", params.cartId).single();
+  const freshCartRow = freshCart as {
+    order_type?: string | null; delivery_fee_cents?: number | null; driver_tip_cents?: number | null;
+    notes?: string | null; stripe_checkout_session_id?: string | null;
+  } | null;
+
+  if (freshCartRow?.stripe_checkout_session_id) return params.reply;
+
+  const stripeKey = deps.resolveStripeKey(params.testMode);
+  if (!stripeKey) {
+    console.error(`[chat-sms] Engine checkout: payment system not configured for cart ${params.cartId}`);
+    return params.reply;
+  }
+  const stripe = deps.createStripeClient(stripeKey);
+
+  const sessionInput = buildEngineCheckoutSessionInput({
+    cartId:            params.cartId,
+    shopName:          params.shopName,
+    testMode:          params.testMode,
+    cartLines:         params.cartLines,
+    notes:             freshCartRow?.notes,
+    orderType:         (freshCartRow?.order_type as "pickup" | "delivery" | null) ?? "pickup",
+    deliveryFeeCents:  freshCartRow?.delivery_fee_cents,
+    tipCents:          freshCartRow?.driver_tip_cents,
+  });
+
+  const result = await createCheckoutSession(sessionInput, { supabase: deps.supabase, stripe });
+  if (!result.ok) {
+    console.error(`[chat-sms] Engine checkout session creation failed for cart ${params.cartId}: ${result.error}`);
+    return params.reply;
+  }
+  return appendCheckoutLink(params.reply, result.checkoutUrl, params.isSms);
 }
 const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
@@ -2570,30 +2658,22 @@ export async function executeTool(
         return { ok: false, result: { error: "Payment system not configured. Please call the shop directly." } };
       }
       const stripe = new Stripe(stripeKey, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
-      const lineItems = cart.map(item => {
+      // Plain-shape line items (CheckoutLineItemInput, checkout-session.ts) —
+      // createCheckoutSession below converts these to Stripe's price_data
+      // shape identically to how this case built it inline before this
+      // extraction; the resulting Stripe API call is byte-for-byte the same.
+      const lineItems: CheckoutLineItemInput[] = cart.map(item => {
         if ((item as BundleItem).type === "bundle") {
           const b = item as BundleItem;
           const detail = b.selections.map(s => `${s.quantity}x ${s.flavor}`).join(", ");
-          return {
-            price_data: {
-              currency:     "usd",
-              unit_amount:  b.price_cents,
-              product_data: { name: b.name, description: detail || undefined },
-            },
-            quantity: 1,
-          };
+          return { name: b.name, quantity: 1, unitAmountCents: b.price_cents, description: detail || undefined };
         }
         const r = item as CartItem;
         return {
-          price_data: {
-            currency:     "usd",
-            unit_amount:  r.price_cents,
-            product_data: {
-              name:        r.name,
-              description: r.modifiers?.length > 0 ? r.modifiers.join(", ") : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(', ')}`).join('; ') : undefined),
-            },
-          },
-          quantity: r.quantity || 1,
+          name:            r.name,
+          quantity:        r.quantity || 1,
+          unitAmountCents: r.price_cents,
+          description:     r.modifiers?.length > 0 ? r.modifiers.join(", ") : (r.options ? Object.entries(r.options).map(([k, v]) => `${k}: ${v.join(', ')}`).join('; ') : undefined),
         };
       });
 
@@ -2645,97 +2725,38 @@ export async function executeTool(
         }
       }
 
-      // Add notes as a $0 line item so the shop sees them on the receipt
-      if (orderNotes) {
-        lineItems.push({
-          price_data: {
-            currency:     "usd",
-            unit_amount:  0,
-            product_data: { name: `Prep Notes: ${orderNotes}`, description: undefined },
-          },
-          quantity: 1,
-        });
-      }
-
-      // Delivery fee line item (if delivery)
-      if (orderType === "delivery" && deliveryFeeCents > 0) {
-        lineItems.push({
-          price_data: {
-            currency:     "usd",
-            unit_amount:  deliveryFeeCents,
-            product_data: { name: "Delivery fee", description: undefined },
-          },
-          quantity: 1,
-        });
-      }
-
-      // Driver tip line item (if > 0)
-      if (driverTipCents > 0) {
-        lineItems.push({
-          price_data: {
-            currency:     "usd",
-            unit_amount:  driverTipCents,
-            product_data: { name: "Driver tip", description: undefined },
-          },
-          quantity: 1,
-        });
-      }
-
-      // Add Sprint service fee as a visible line item
-      lineItems.push({
-        price_data: {
-          currency:     "usd",
-          unit_amount:  SERVICE_FEE_CENTS,
-          product_data: {
-            name: "Service fee",
-            description: "SprintAI platform service fee",
-          },
+      // Stripe session + pay_link + persistence: the one shared call site
+      // (checkout-session.ts's createCheckoutSession) — notes/delivery-fee/
+      // tip/service-fee line items, the total_cents bookkeeping, the session
+      // create call, and the short-link mint all live there now, identical
+      // to what this case built inline before this extraction. See this
+      // case's own gates above (empty cart, incomplete bundle, pending
+      // options, pickup_name, order_type, delivery address) — none of those
+      // moved; createCheckoutSession's own empty-lineItems check is
+      // defensive-only here since the empty-cart gate above already made it
+      // unreachable from this case.
+      const sessionResult = await createCheckoutSession(
+        {
+          cartId,
+          shopName,
+          testMode,
+          lineItems,
+          subtotalCents:    subtotal,
+          serviceFeeCents:  SERVICE_FEE_CENTS,
+          deliveryFeeCents,
+          tipCents:         driverTipCents,
+          orderType:        orderType as "pickup" | "delivery",
+          notes:            orderNotes || undefined,
         },
-        quantity: 1,
-      });
-
-      const totalCents = subtotal + SERVICE_FEE_CENTS + deliveryFeeCents + driverTipCents;
-      await supabase.from("order_carts").update({
-        subtotal_cents: subtotal,
-        service_fee_cents: SERVICE_FEE_CENTS,
-        total_cents: totalCents,
-        delivery_fee_cents: deliveryFeeCents,
-        driver_tip_cents: driverTipCents,
-      }).eq("id", cartId);
-
-      const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "https://your-project.supabase.co";
-      const session = await stripe.checkout.sessions.create({
-        mode:                 "payment",
-        payment_method_types: ["card"],
-        line_items:           lineItems,
-        metadata:             { order_cart_id: cartId, notes: orderNotes },
-        custom_text:          { submit: { message: `Your order from ${shopName}${orderNotes ? ` -- ${orderNotes}` : ""}` } },
-        success_url:          testMode
-          ? `https://getsprintai.com/order-success-test?cart=${cartId}`
-          : `https://getsprintai.com/order-success?cart=${cartId}`,
-        cancel_url:           `https://getsprintai.com/order-cancel?cart=${cartId}`,
-      });
-
-      await supabase.from("order_carts").update({
-        stripe_checkout_session_id: session.id,
-        phase: "checkout",
-      }).eq("id", cartId);
-
-      // Short branded link: pay.getsprintai.com/o/<code> → 302 → Supabase → 302 → Stripe
-      // Stripe URL is the fallback path when DNS/DB/provisioning chain fails.
-      const shortCode = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-      supabase.from("pay_links").insert({
-        cart_id:    cartId,
-        short_code: shortCode,
-        stripe_url: session.url!,
-      }).then(({ error }) => {
-        if (error) console.error("[chat-sms] Failed to insert pay_link:", error);
-      });
-      const shortUrl = `https://pay.getsprintai.com/o/${shortCode}`;
+        { supabase, stripe },
+      );
+      if (!sessionResult.ok) {
+        return { ok: false, result: { error: sessionResult.error } };
+      }
       return {
         ok:          true,
-        result:      { checkout_url: shortUrl, message: "Payment link created. Tell the customer there's one last step: they need to tap the payment link to pay and confirm their order. Do NOT say the order is confirmed or ready. Do NOT say thank you or goodbye yet. Payment is still pending." },
-        checkoutUrl: shortUrl,
+        result:      { checkout_url: sessionResult.checkoutUrl, message: "Payment link created. Tell the customer there's one last step: they need to tap the payment link to pay and confirm their order. Do NOT say the order is confirmed or ready. Do NOT say thank you or goodbye yet. Payment is still pending." },
+        checkoutUrl: sessionResult.checkoutUrl,
         newPhase:    "checkout",
       };
     }
@@ -6106,7 +6127,29 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // on a customer's first-ever message on this path too — see
     // appendComplianceDisclosureIfFirstContact above, mirrors the legacy
     // path's append at isLifetimeFirstContact below (search COMPLIANCE_DISCLOSURE).
-    const turnEngineOutgoingReply = appendComplianceDisclosureIfFirstContact(turnResult.reply, isLifetimeFirstContact);
+    let turnEngineOutgoingReply = appendComplianceDisclosureIfFirstContact(turnResult.reply, isLifetimeFirstContact);
+    // Stripe checkout, Phase 3c — see appendEngineCheckoutLinkIfReady's own
+    // header above. cart.dialogue_state here is still the PRE-turn value
+    // (runTurnEngineTurn never mutates its input in place; the post-turn
+    // state is turnResult.dialogueState), which is exactly the priorPhase
+    // this needs to detect "did THIS turn newly reach link_sent".
+    turnEngineOutgoingReply = await appendEngineCheckoutLinkIfReady(
+      {
+        cartId:     cart.id,
+        shopName:   shop.name,
+        testMode:   cart.test_mode,
+        priorPhase: cart.dialogue_state?.phase ?? "ordering",
+        nextPhase:  turnResult.dialogueState.phase,
+        cartLines:  turnResult.cart,
+        reply:      turnEngineOutgoingReply,
+        isSms,
+      },
+      {
+        supabase,
+        resolveStripeKey:   (tm) => tm ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? ""),
+        createStripeClient: (key) => new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() }),
+      },
+    );
     if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnEngineOutgoingReply); return emptyTwiml(); }
     return jsonResponse({ reply: turnEngineOutgoingReply, cart: turnResult.cart, phase: cart.phase, session_id: sessionId });
   }
