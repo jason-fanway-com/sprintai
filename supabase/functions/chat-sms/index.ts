@@ -3633,6 +3633,34 @@ function isAskingForPickupName(text: string): boolean {
 }
 
 /**
+ * Item C2 fix (2026-09-14): the driver-tip ask (index.ts's DRIVER TIP prompt
+ * rule) is a standing instruction the model is free to act on almost any
+ * turn once a delivery address is known — including the SAME turn
+ * REPLY-INVERSION (~line 7599) just code-rendered an item-add fact. Two
+ * "asks" landing in one reply is exactly the prompt-rule-vs-code-render race
+ * this burn-down exists to close: confirmed live (see
+ * scripts/conversation-quality-test.sh's "offers a FOOD upsell, not a tip"
+ * check, ~44% failure before this fix) that the tip question sometimes
+ * displaces or rides alongside the code-rendered upsell offer on an item-add
+ * turn. Fix is structural, not a reword: on any turn where code has already
+ * claimed the reply with a mutation fact, the model's own tip-ask sentence
+ * is dropped from what survives into `warmthTail` — never appended, no
+ * matter how the model phrased it. The tip is still asked, just never on an
+ * item-add turn — the model's standing prompt rule fires it on the next
+ * quiet turn instead, same as it already does for every other "ask once"
+ * rule that isn't in play this particular turn. Requires BOTH "tip" and
+ * "driver" in the same sentence (the prompt's own required phrasing always
+ * includes both) so this can't misfire on an unrelated sentence that merely
+ * mentions a tip or a driver on its own.
+ */
+function stripDriverTipAsk(text: string): string {
+  if (!text) return text;
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const kept = sentences.filter(s => !(/\btip\b/i.test(s) && /\bdriver\b/i.test(s)));
+  return kept.join(" ").trim();
+}
+
+/**
  * Returning-customer delivery memory (docs/specs/2026-09-12-returning-
  * customer-delivery-memory.md, step 6). Was the bot's own immediately-
  * preceding message the delivery/pickup-again offer from the
@@ -3677,6 +3705,18 @@ function impliesUpsellAcceptance(text: string): boolean {
   if (!text) return false;
   const norm = text.toLowerCase().trim();
   return /^(?:yes|yeah|yep|yup|sure|ok|okay|please|yes please|sounds good|add it|do it)[.!]?$/i.test(norm);
+}
+
+// C2c-upsell narrow decline check (2026-09-14, item C2). Symmetric with
+// impliesUpsellAcceptance above and scoped the same way: a bare negative
+// answer to our own yes/no upsell offer only, never a broader message. A
+// message that also names a new item ("no thanks, but add a salad") does
+// NOT match this — it falls through to the LLM, same as it always has, so
+// the new item still gets heard.
+function impliesUpsellDecline(text: string): boolean {
+  if (!text) return false;
+  const norm = text.toLowerCase().trim();
+  return /^(?:no|nope|nah|no thanks|no thank you|not now|not today|not this time|i'?m good|im good|we'?re good|skip|pass)[.!]?$/i.test(norm);
 }
 
 // renderMissingOptionsPrompt and groupChoicesAlreadySaid now live in
@@ -6972,10 +7012,47 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // so this block simply does nothing and the turn falls through to the
   // LLM's own (unforced) voice, unchanged — no separate decline path to
   // build or maintain.
+  // C2 fix (2026-09-14, item C2 delivery-flow burn-down): the decline half of
+  // the SAME offer this module's accept branch (directly below) already
+  // handles. Root cause (confirmed live, "no thanks" -> "All good - confirm?"
+  // with no cart shown, ~22% of runs): the comment that used to sit here said
+  // "a decline ... does not match impliesUpsellAcceptance, so this block
+  // simply does nothing ... no separate decline path to build or maintain."
+  // That was the bug. With no cart mutation this turn, REPLY-INVERSION's
+  // fact-rendering (index.ts ~7599) never engages either — the whole turn is
+  // handed to the LLM's raw, unforced prose, which the downstream money-
+  // footer guard (~9741) only ever appends the SHORT Subtotal/Fee/Total
+  // footer to (by design, for ordinary quiet turns), never the itemized
+  // recap. A customer who just said "no thanks" to an offer never sees their
+  // cart again. Fixed the same way the accept half already is: deterministic,
+  // pre-LLM, code-rendered — bypass the model's prose for this one turn
+  // entirely rather than trying to filter what it might say.
+  //
+  // SCOPE WIDENED past extractOfferedItemName (2026-09-14, live repro):
+  // this shop's own menu_items.upsell field is free-text only ("suggest
+  // wings, garlic knots, or drinks" — no parseable Name+Price shape), so
+  // computeUpsellOffer/renderUpsellOfferSentence's canonical offer sentence
+  // NEVER fires here — extractOfferedItemName's narrow match on that exact
+  // phrase stayed null every time, so a decline-gate keyed on it alone never
+  // triggered and the live failure persisted unchanged. The actual customer
+  // behavior this needs to catch is broader than "declined our own
+  // code-rendered offer": it's "gave a bare decline to whatever the bot's
+  // immediately-preceding message asked" (a model-authored food-upsell
+  // attempt, a tip ask, any optional yes/no offer). Widened to: was the
+  // prior assistant message a genuine question (ends in "?"), AND is it NOT
+  // the pickup-name ask (that one has its own dedicated flow just below,
+  // and a bare "no" there means something else — a correction, not a
+  // decline). impliesUpsellDecline stays narrow (bare negatives only), so
+  // this still can't misfire on a message that also names a new item or
+  // carries checkout language.
+  let upsellDeclineDeterministicReply: string | undefined;
   {
     const lastAssistantUpsell = [...history].reverse().find(h => h.role === "assistant");
     const priorAssistantMessageUpsell = typeof lastAssistantUpsell?.content === "string" ? lastAssistantUpsell.content : null;
     const offeredUpsellName = extractOfferedItemName(priorAssistantMessageUpsell);
+    const priorWasOpenQuestion = !!priorAssistantMessageUpsell &&
+      /\?\s*$/.test(priorAssistantMessageUpsell.trim()) &&
+      !isAskingForPickupName(priorAssistantMessageUpsell);
     if (offeredUpsellName && impliesUpsellAcceptance(userMessage)) {
       const upsellMenuItem = effectiveMenu.find(m => m.name.toLowerCase().trim() === offeredUpsellName.toLowerCase().trim());
       if (upsellMenuItem) {
@@ -6996,6 +7073,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           console.warn(`[chat-sms] C2c-upsell add_item failed: ${JSON.stringify(upsellAddResult.result).slice(0, 200)}. Falling through to LLM.`);
         }
       }
+    } else if (priorWasOpenQuestion && impliesUpsellDecline(userMessage) && cartItems.length > 0) {
+      console.log(`[chat-sms] C2c-upsell pre-LLM decline firing (conv=${conversation.id}, priorQuestion=${JSON.stringify(priorAssistantMessageUpsell).slice(0, 120)})`);
+      upsellDeclineDeterministicReply = `No problem!\n\n${renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, buildMenuPriceIndex(effectiveMenu))}\n\nAnything else, or ready to check out?`;
     }
   }
 
@@ -7294,7 +7374,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // branch above, which returns before this point is ever reached).
   // `cartItems.length > 0` alone is the real, sufficient gate: nothing to
   // summarize on an empty cart regardless of phase.
-  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cartItems.length > 0 && CART_SUMMARY_RE.test(userMessage.trim())) {
+  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && !upsellDeclineDeterministicReply && cartItems.length > 0 && CART_SUMMARY_RE.test(userMessage.trim())) {
     const recap = renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined);
     const summaryReply = `Here's your order so far:\n\n${recap}`;
     console.log(`[chat-sms] cart-summary shortcut fired (conv=${conversation.id})`);
@@ -7333,7 +7413,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // residual case intentionally still falls through to the hint/GUARD-17
   // fallback below. The two paths cover disjoint scenarios (exactly-one vs.
   // 2+ zero-option cart items) and never both fire for the same turn.
-  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && cart.phase === "building" && cartItems.length > 0) {
+  if (!correctionApplied && !nameSubmitCheckoutUrl && !deliveryOfferDeterministicReply && !upsellDeclineDeterministicReply && cart.phase === "building" && cartItems.length > 0) {
     const zeroOptionMenu: ZeroOptionMenuItemFull[] = effectiveMenu.map(mi => ({
       id: mi.id, ask_plan: mi.ask_plan, category: mi.category, price_cents: mi.price_cents,
     }));
@@ -7529,6 +7609,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // message IS the reply — never hand this turn to the LLM, which has no
     // way to know why the confirmed offer didn't apply.
     reply = deliveryOfferDeterministicReply;
+  } else if (upsellDeclineDeterministicReply) {
+    // Item C2 fix (2026-09-14): a bare decline of our own code-rendered
+    // upsell offer IS the reply — code-rendered itemized recap, never the
+    // LLM's unforced prose (see the block above that computes this).
+    reply = upsellDeclineDeterministicReply;
+    moneyFooterAlreadyRendered = true;
   } else {
     let loopResult: Awaited<ReturnType<typeof runOrderingLoop>>;
     try {
@@ -7612,7 +7698,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           ...cartItems.map(l => (l as { name?: unknown }).name),
           ...effectiveMenu.map(mi => mi.name),
         ].filter((n): n is string => typeof n === "string" && n.length > 0);
-        const warmthTail = extractQuestionsOnly(modelReplyThisTurn, knownItemNamesForWarmthFilter);
+        const warmthTail = stripDriverTipAsk(extractQuestionsOnly(modelReplyThisTurn, knownItemNamesForWarmthFilter));
 
         // Item C (2026-09-14 burn-down): code-rendered upsell offer, wired
         // to the exact same "added" event this block already computed.
