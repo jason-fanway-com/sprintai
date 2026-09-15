@@ -154,8 +154,20 @@ function toCompiledMenuItem(item: TurnEngineMenuItem, askPlan: AskPlan): Compile
   return { ask_plan: askPlan, bot_state: item.bot_state, option_groups: item.option_groups };
 }
 
+// Stale-line_key fix (2026-09-15, docs/specs/2026-09-14-turn-engine-
+// oversight.md Phase 1.5): a line's real identity is its own stable
+// `line_key` when it has one (minted once by decide(), see below — never
+// recomputed as the line's options later change); identityKey() is only a
+// fallback for a line that predates the field. Every place in this module
+// that used to match a stored key against `identityKey(...)` directly goes
+// through this function now, so a key captured before an option group is
+// answered still finds its line afterward.
+function effectiveLineKey(line: TurnEngineCartLine) {
+  return line.line_key ?? identityKey(line.menu_item_id, line.options);
+}
+
 function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
-  return cart.findIndex(l => isRealCartLine(l) && identityKey(l.menu_item_id, l.options) === lineKey);
+  return cart.findIndex(l => isRealCartLine(l) && effectiveLineKey(l) === lineKey);
 }
 
 // ─── STEP 2: ANSWER ─────────────────────────────────────────────────────────
@@ -390,7 +402,21 @@ function applyRemoveChoiceIds(
   line.price_cents = priceCents;
 }
 
-export function decide(proposal: Proposal, cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]): DecideResult {
+export function decide(
+  proposal: Proposal,
+  cart: TurnEngineCartLine[],
+  menu: TurnEngineMenuItem[],
+  // Injected (same DI pattern as propose.ts's ProposeDeps clock/transport) —
+  // never `crypto.randomUUID()` called directly in this file, so this
+  // module's determinism (every existing assertion here is an exact value,
+  // not a `typeof x === "string"` check) survives the new minting behavior.
+  // Production wiring (Phase 3, not yet built) passes `() => crypto.
+  // randomUUID()`; tests pass a counter and assert the exact minted keys.
+  // Omitted entirely (existing call sites, pre this fix) means no line ever
+  // gets a stable line_key — identical to this function's behavior before
+  // stable keys existed.
+  newLineKey?: () => string,
+): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
   const declines: Decline[] = [];
@@ -412,13 +438,29 @@ export function decide(proposal: Proposal, cart: TurnEngineCartLine[], menu: Tur
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, add.choices ?? []);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+    const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
     if (!result.ok) {
       const errMsg = (result.result as { error?: string } | undefined)?.error;
       declines.push({ reason: errMsg ?? `Couldn't add ${menuItem.name}.` });
       continue;
     }
-    if (result.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+    if (result.cartChanged) {
+      qualifyingAddMenuItemId = add.menu_item_id;
+      // A genuinely NEW line is the only case that pushes onto nextCart —
+      // applyCompiledAddItem's continuation branch (filling a still-open
+      // slot on an existing line) and its merge-into-identical-existing
+      // branch (a repeat order growing quantity) both route through
+      // writeCartLine's `continuationIndex` path, which mutates an existing
+      // index in place and never changes the array's length (see
+      // turn-reconciler.ts's writeCartLine: only the no-match branch
+      // `cart.push(...)`s). Minting a stable key only when the length
+      // actually grew by exactly one is what keeps a quantity bump from
+      // ever getting its own new identity.
+      if (newLineKey && nextCart.length === lengthBeforeAdd + 1) {
+        nextCart[nextCart.length - 1].line_key = newLineKey();
+      }
+    }
   }
 
   for (const rm of proposal.removes ?? []) {
@@ -507,7 +549,7 @@ export function ask(
     const resolvedGroupIds = new Set(Object.keys(line.ask_plan_selections ?? {}));
     const openSlotStep = menuItem.ask_plan.steps.find(s => s.kind === "slot" && !resolvedGroupIds.has(s.group_id));
     if (openSlotStep) {
-      return carry({ kind: "slot", line_key: identityKey(line.menu_item_id, line.options), group_id: openSlotStep.group_id }, "ordering");
+      return carry({ kind: "slot", line_key: effectiveLineKey(line), group_id: openSlotStep.group_id }, "ordering");
     }
   }
 
@@ -610,7 +652,7 @@ export function render(
       case "slot": {
         for (const line of cartAfter) {
           if (!isRealCartLine(line)) continue;
-          if (identityKey(line.menu_item_id, line.options) !== state.open.line_key) continue;
+          if (effectiveLineKey(line) !== state.open.line_key) continue;
           const menuItem = menuById.get(line.menu_item_id);
           const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
           if (menuItem?.ask_plan && step) question = renderStepQuestion(step, menuItem.ask_plan.display_name);

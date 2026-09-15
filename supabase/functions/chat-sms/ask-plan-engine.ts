@@ -762,6 +762,14 @@ export interface CompiledCartLine {
   // establish it. Absent for a line that predates this field, or one added
   // when identity couldn't be confidently established this turn.
   sourcePhraseIndex?: number;
+  // Turn Engine (2026-09-15, stale line_key fix — docs/specs/2026-09-14-
+  // turn-engine-oversight.md, Phase 1.5): a stable, opaque identifier for
+  // this specific line, minted once at creation and never recomputed —
+  // unlike identityKey(menu_item_id, options), it survives a later option
+  // group being resolved on the same line. Purely additive: nothing in
+  // this file reads or writes it; it stays inert on the live legacy path.
+  // Optional/undefined for any line that predates this field.
+  line_key?: string;
 }
 
 export interface CompiledMenuItem {

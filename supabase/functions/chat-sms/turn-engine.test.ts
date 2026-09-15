@@ -380,3 +380,148 @@ Deno.test("render: never produces an empty reply, even with nothing open and an 
   const reply = render([], [], state, [], VITOS_MENU);
   assert(reply.length > 0, "RENDER must never return an empty string");
 });
+
+// ── stale line_key fix (2026-09-15, docs/specs/2026-09-14-turn-engine-
+// oversight.md Phase 1.5) ────────────────────────────────────────────────
+//
+// Real, live Zio's row (id 62f14b74-1b24-41f7-8b09-eed293d95910, "Pasta with
+// Garlic & Oil"), read from ~/po-scratch/item2g.json 2026-09-15 — the exact
+// fixture the PO's verification test (turn-engine-stale-line-key.test.ts)
+// and stale-line-key-findings-20260915.md confirmed the bug against. Two
+// required slot groups: GROUP_A auto-resolves silently (its one and only
+// choice), GROUP_B is a real customer-facing question ("choose the pasta").
+
+const PASTA_ITEM_ID = "62f14b74-1b24-41f7-8b09-eed293d95910";
+const PASTA_GROUP_A = "a2d9f051-68c2-4068-a51e-3ab9939edf89"; // auto_single, one choice
+const PASTA_GROUP_B = "da31c0b7-8976-4994-8e34-4eaba2688b16"; // ask, 6 choices
+const PASTA_PENNE_CHOICE_ID = "7fafecb7-8458-454e-a3d9-45c63e8192c6";
+
+const PASTA_MENU: TurnEngineMenuItem[] = [
+  {
+    id: PASTA_ITEM_ID,
+    name: "Pasta with Garlic & Oil",
+    category: "Pasta",
+    price_cents: 1499,
+    bot_state: "orderable",
+    option_groups: [
+      { id: PASTA_GROUP_A, name: "Prep", default_choice_id: null },
+      { id: PASTA_GROUP_B, name: "Type", default_choice_id: null },
+    ],
+    ask_plan: {
+      compiled_at: "2026-09-10T20:42:39.658Z",
+      compiler_version: 1,
+      display_name: "Pasta With Garlic & Oil",
+      base_price_cents: 1499,
+      recap_template: "{qty} {display_name}{, with {modifiers}}",
+      ticket_template: "{name}{\n  + {choice.display} x{qty}}",
+      steps: [
+        {
+          kind: "slot", ask_mode: "auto_single", group_id: PASTA_GROUP_A, slot_key: null, prompt_template: "type.auto_single",
+          choices: [{ id: "db69c17d-8274-42fa-a438-773287635d59", display: "Pasta", price_delta_cents: 0 }],
+        },
+        {
+          kind: "slot", ask_mode: "ask", group_id: PASTA_GROUP_B, slot_key: null, prompt_template: "choose_pasta.ask",
+          choices: [
+            { id: "17961b5a-ba64-4d47-804f-66db9674cff8", display: "Fettuccine", price_delta_cents: 0 },
+            { id: "4fd2d286-66fe-4534-a6de-9490392f0f25", display: "Rigatoni", price_delta_cents: 0 },
+            { id: PASTA_PENNE_CHOICE_ID, display: "Penne", price_delta_cents: 0 },
+            { id: "bad9c7cc-7094-412d-8eaf-9aa889be890e", display: "Spaghetti", price_delta_cents: 0 },
+            { id: "f14496ef-10fd-41a1-ae85-20edcc914d13", display: "Angel Hair", price_delta_cents: 0 },
+            { id: "f54e4265-f330-40dc-bddb-e5e0a6b73022", display: "Linguine", price_delta_cents: 0 },
+          ],
+        },
+      ],
+    },
+  },
+];
+
+Deno.test("decide: a modify carrying the line_key ASK stored BEFORE a second option group was answered still applies — the stale-identityKey bug this fix closes", () => {
+  let counter = 0;
+  const newLineKey = () => `k${++counter}`;
+
+  // Turn 1: add the item. GROUP_A (auto_single) resolves silently; GROUP_B
+  // is left open. This is the one and only genuinely-new-line add in this
+  // test, so it's the only call that mints a stable key.
+  const proposalAdd: Proposal = { intent: "order", adds: [{ menu_item_id: PASTA_ITEM_ID, quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const d1 = decide(proposalAdd, [], PASTA_MENU, newLineKey);
+  assertEquals(d1.declines, []);
+  assertEquals(d1.cart.length, 1);
+  assertEquals(d1.cart[0].line_key, "k1");
+  assertEquals(d1.cart[0].options, { Prep: ["Pasta"] }); // GROUP_A auto-resolved; GROUP_B still open
+  const cart = d1.cart;
+
+  // ASK opens GROUP_B, storing the line's STABLE key — never a derived one.
+  const shopContext: AskShopContext = {
+    deliveryEnabled: false, upsellEnabled: false, orderTypeKnown: true, orderTypeIsDelivery: false,
+    deliveryAddressKnown: true, driverTipKnown: true, pickupNameKnown: true,
+  };
+  const events: AskTurnEvents = { ...NO_TURN_EVENTS, qualifyingAddMenuItemId: d1.qualifyingAddMenuItemId };
+  const state = ask(cart, INITIAL_STATE, events, shopContext, PASTA_MENU);
+  assertEquals(state.open, { kind: "slot", line_key: "k1", group_id: PASTA_GROUP_B });
+  const askStoredKey = (state.open as { line_key: string }).line_key;
+
+  // ANSWER resolves GROUP_B — the line's DERIVED identity (menu_item_id +
+  // options) changes, but its stable line_key does not: applyCompiledModifyItem
+  // (called by answer()) never reads or writes this field.
+  const answerResult = answer(state, cart, "Penne", PASTA_MENU);
+  assertEquals(answerResult, { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true });
+  assertEquals(cart[0].options, { Prep: ["Pasta"], Type: ["Penne"] });
+  assertEquals(cart[0].line_key, "k1", "line_key must survive the option mutation unchanged");
+
+  // A modify proposal carrying the ASK-stored key — captured BEFORE GROUP_B
+  // was answered, so it is stale by the OLD derived-identityKey rule — must
+  // still find and mutate this line. Before this fix: declines with "That
+  // item wasn't in your order." and the cart is left unchanged.
+  const proposalModify: Proposal = { intent: "order", adds: [], removes: [], modifies: [{ line_key: askStoredKey, quantity: 3 }] };
+  const d2 = decide(proposalModify, cart, PASTA_MENU, newLineKey);
+  assertEquals(d2.declines, [], "a modify keyed by the ASK-stored line_key must not decline — the item IS in the cart");
+  assertEquals(d2.cart[0].quantity, 3, "the modify must actually apply, not silently no-op");
+  assertEquals(counter, 1, "the modify must never mint a new key — only the original add did");
+});
+
+Deno.test("decide: a modify still targets a KEYLESS line via the derived-identity fallback — a pre-migration DB row must not break", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+  // No `line_key` field at all — simulates a cart line loaded from a DB row
+  // that predates this fix. The only valid key for it is still the derived
+  // identityKey string.
+  const derivedKey = `${CHEESE_BURGER_ID}::Temp=Medium`;
+  const proposal: Proposal = { intent: "order", adds: [], removes: [], modifies: [{ line_key: derivedKey, quantity: 5 }] };
+  const result = decide(proposal, cart, VITOS_MENU);
+  assertEquals(result.declines, []);
+  assertEquals(result.cart[0].quantity, 5);
+});
+
+Deno.test("decide: mints a stable line_key only for a genuinely NEW line, never for a quantity-bump merge into an existing identical line", () => {
+  let counter = 0;
+  const newLineKey = () => `k${++counter}`;
+
+  const proposal1: Proposal = {
+    intent: "order",
+    adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
+    removes: [], modifies: [],
+  };
+  const d1 = decide(proposal1, [], VITOS_MENU, newLineKey);
+  assertEquals(d1.cart.length, 1);
+  assertEquals(d1.cart[0].line_key, "k1");
+
+  // Same fully-resolved identity, ordered again — merges into the SAME
+  // line, growing quantity. Must NOT mint a second key.
+  const proposal2: Proposal = {
+    intent: "order",
+    adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 2, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
+    removes: [], modifies: [],
+  };
+  const d2 = decide(proposal2, d1.cart, VITOS_MENU, newLineKey);
+  assertEquals(d2.cart.length, 1);
+  assertEquals(d2.cart[0].quantity, 3);
+  assertEquals(d2.cart[0].line_key, "k1", "a quantity-bump merge into an existing line must never mint a new key");
+  assertEquals(counter, 1, "newLineKey must be called exactly once — only for the genuinely new line");
+});
+
+Deno.test("decide: omitting newLineKey entirely (pre-fix call sites) never sets line_key — identical to this function's behavior before stable keys existed", () => {
+  const proposal: Proposal = { intent: "order", adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], VITOS_MENU); // no 4th arg
+  assertEquals(result.cart[0].line_key, undefined);
+});
