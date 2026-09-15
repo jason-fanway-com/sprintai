@@ -63,13 +63,27 @@ export function stemWord(word: string): string {
 
 const STOPWORDS = new Set(["the", "and", "for", "with", "one", "a", "an", "of", "by"]);
 
-export function significantStems(text: string): Set<string> {
+// PO fix (2026-09-15, 00-BJ, collision-scoped — measured broader first in
+// 00-BI and correctly rejected: making every numeric token significant
+// GLOBALLY broke 8 pre-existing tests, because the same 3-char floor is
+// load-bearing elsewhere on purpose — "Medium 12\""/"Large 18\"" must stay
+// matchable by the bare word "medium"/"large" alone (see
+// ask-plan-engine.test.ts's own comment citing Jason's live repro). This
+// param exists ONLY so ask-plan-engine.ts's matchChoiceInText/
+// matchChoiceByStems can opt a single group's stem computation into numeric
+// significance, and ONLY once that group's own choices would otherwise be
+// indistinguishable ("10 Pieces"/"20 Pieces" -> {"piece"}/{"piece"}) — see
+// groupNeedsNumericStems there for the collision check. Every other caller
+// (categoryWordMatches below, option-removal-20260909.ts, reactive-
+// modifier-match.ts's isNegated, index.ts, sequencer.ts, pizza-topping-
+// compose.ts) omits this param and gets today's behavior, unchanged.
+export function significantStems(text: string, numericTokensSignificant = false): Set<string> {
   return new Set(
     text
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
-      .filter(w => w.length >= 3 && !STOPWORDS.has(w))
+      .filter(w => w.length > 0 && !STOPWORDS.has(w) && (w.length >= 3 || (numericTokensSignificant && /^\d+$/.test(w))))
       .map(stemWord),
   );
 }

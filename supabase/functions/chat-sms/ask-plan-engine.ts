@@ -210,8 +210,42 @@ export function matchChoiceInText(choices: EngineChoice[], text: string): Engine
   if (exactHits.length === 1) return exactHits[0];
   if (exactHits.length > 1) return null; // two choices sharing a display name — genuinely ambiguous, never guess
 
-  const textStems = significantStems(text);
-  return matchChoiceByStems(choices, textStems);
+  // PO fix (2026-09-15, 00-BJ): numeric tokens become significant stems
+  // ONLY for a group whose own choices would otherwise be indistinguishable
+  // once digits are dropped ("10 Pieces"/"20 Pieces" -> {"piece"}/{"piece"}).
+  // Detected per-call from THIS group's own choice set (groupNeedsNumericStems
+  // below), never globally — a group like "Medium 12\""/"Large 18\"" never
+  // collides on non-numeric stems (their own words already distinguish them),
+  // so the collision never arises and numbers stay dropped there, exactly as
+  // before. Single decision point, reused for both the choices' own stems and
+  // the customer text's stems in the same call, so they're always computed
+  // the same way.
+  const numericSignificant = groupNeedsNumericStems(choices);
+  const textStems = significantStems(text, numericSignificant);
+  return matchChoiceByStems(choices, textStems, numericSignificant);
+}
+
+/** Sorted, comparable key for a stem set — equal stems in any order produce the same key. */
+function stemSetKey(stems: Set<string>): string {
+  return [...stems].sort().join(" ");
+}
+
+/**
+ * Does this group need numeric tokens to be significant? True iff two or
+ * more of its OWN choices produce the identical stem set under the default
+ * (non-numeric) stemmer — i.e. the group cannot be told apart without
+ * digits. Computed fresh per call (choice lists are small, always <20) so
+ * this never depends on caching or on the compiler having pre-flagged
+ * anything.
+ */
+function groupNeedsNumericStems(choices: EngineChoice[]): boolean {
+  const seen = new Set<string>();
+  for (const choice of choices) {
+    const key = stemSetKey(significantStems(choice.display));
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
 }
 
 /**
@@ -222,12 +256,12 @@ export function matchChoiceInText(choices: EngineChoice[], text: string): Engine
  * stems minus whatever this same call already resolved via the item's own
  * name or an unrelated slot — without re-deriving a synthetic text string.
  */
-function matchChoiceByStems(choices: EngineChoice[], availableStems: Set<string>): EngineChoice | null {
+function matchChoiceByStems(choices: EngineChoice[], availableStems: Set<string>, numericSignificant = false): EngineChoice | null {
   if (availableStems.size === 0) return null;
 
   const hits: EngineChoice[] = [];
   for (const choice of choices) {
-    const choiceStems = significantStems(choice.display);
+    const choiceStems = significantStems(choice.display, numericSignificant);
     if (choiceStems.size === 0) continue;
     // Every stem the choice display contributes must appear among the
     // available stems (so "large" matches a choice displayed "Large" or
