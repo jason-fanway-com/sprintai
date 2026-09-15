@@ -108,11 +108,26 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
   Verified 2026-09-10 by reading `index.ts`'s import list and every module in it.
   Do not infer from a module's existence, its tests, or the nine-item plan that it
   is running.
-  **The turn engine is the live example of this trap.** `turn-engine.ts` and
-  `propose.ts` exist, are tested, and are NOT in the live path - nothing imports
-  them until the turn-engine spec's Phase 3 adds the routing branch and the
-  per-shop `turn_engine_enabled` flag. `dialogue-signals.ts` IS live (index.ts
-  imports it). Check the import path and the flag, per module, every time.
+  **The turn engine's Phase 3 has landed, so the trap has moved from "is it
+  imported" to "is the flag on".** `index.ts` now carries ONE routing branch that
+  sends the ordering turn to `turn-engine-runner.ts` when the shop's
+  `shops.turn_engine_enabled` is true; on that path the legacy `runOrderingLoop`,
+  the turn-reconciler and every guard are BYPASSED, not modified. So the modules
+  below ARE wired - and a shop whose flag is false still runs the old engine in
+  full. Never reason about behaviour from the import list alone now; read the
+  shop's flag too. `dialogue-signals.ts` is live on both paths.
+- **The engine's own modules:** `turn-engine.ts` (ANSWER/DECIDE/ASK/RENDER, pure),
+  `propose.ts` (the single model call, an NLU returning a structured proposal),
+  `resolve-item.ts` (deterministic longest-match over the compiled lexicon;
+  returns resolved / ambiguous / unresolved and NEVER breaks a tie),
+  `turn-engine-runner.ts` (the I/O adapter: loads cart + `dialogue_state`, runs
+  the steps, persists, and is the engine path's single cart writer - its
+  `persistTurn` carries the `single-writer:blessed` marker, `saveCart` is the
+  legacy counterpart).
+- **`checkout-session.ts`** - the ONE place a Stripe checkout session is created.
+  Both the legacy `submit_order` case and the engine's `link_sent` transition call
+  it. If you ever find a second `checkout.sessions.create` in `chat-sms/`, that is
+  a defect.
 - **`compile-menu`** — reads the menu tables and writes `ask_plan` (the ordered questions
   for an item), `bot_state` (orderable / blocked / display_only / stale), the lexicon
   (what customers call things), and derived rows.
