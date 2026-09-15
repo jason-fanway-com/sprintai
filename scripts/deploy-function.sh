@@ -64,6 +64,7 @@ DECLARED_COLUMNS=(
   "order_carts:test_mode"
   "order_carts:order_type"
   "order_carts:delivery_address"
+  "order_carts:dialogue_state"
   "customers:last_order_type"
   "customers:last_delivery_address"
   "customers:name"
