@@ -865,7 +865,7 @@ export function render(
           if (effectiveLineKey(line) !== state.open.line_key) continue;
           const menuItem = menuById.get(line.menu_item_id);
           const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
-          if (menuItem?.ask_plan && step) question = renderStepQuestion(step, menuItem.ask_plan.display_name, true);
+          if (menuItem?.ask_plan && step) question = renderStepQuestion(step, menuItem.ask_plan.display_name);
           break;
         }
         break;

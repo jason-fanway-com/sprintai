@@ -3,10 +3,26 @@
 // choice (Bacon/Ham/Sausage/Pork Roll) and bread choice (Bagel/Bread/Roll)
 // — rendered as the IDENTICAL string, because both option groups carry the
 // generic placeholder slot_key "choice" (not in TEMPLATE_QUESTIONS, so both
-// fall to the same name-only fallback question) and turn-engine.ts's RENDER
-// `case "slot"` called renderStepQuestion() without its existing `enumerate`
-// argument, so it always defaulted to `false`. Fixture below is the REAL
-// compiled ask_plan for NJB's live "Meat Only Breakfast Sandwich" row (id
+// fall to the same name-only fallback question). Commit 784cc701 "fixed"
+// this by making turn-engine.ts's RENDER `case "slot"` pass `enumerate:
+// true` to renderStepQuestion() — but that directly reverted 7044d7f8
+// (2026-09-11), which deliberately made slot questions NON-enumerating by
+// DEFAULT after measuring a live quality regression (70% -> 40%) on Vito's
+// when enumeration was the default. 784cc701 was reverted (2026-09-15,
+// same-day) for that reason. The REAL collision fix lives one layer
+// upstream, at compile time (compile-menu/index.ts's derivedGroups no
+// longer discards the clause label captured for a description slot like
+// "choice of meat (...)" — see njb-slot-key-label-20260915.test.ts) so the
+// two groups get distinct slot_keys ("meat" vs "choice") and thus distinct
+// prompt_templates, without ever touching the default `enumerate` value
+// here. renderStepQuestion's `enumerate` parameter stays opt-in, passed
+// `true` ONLY for the two deterministic cases documented on its own
+// declaration (no-match / customer asked for options) — anyone tempted to
+// flip its default (or pass `true` from RENDER's slot case) to solve a
+// "two questions render identically" bug should fix the upstream slot_key
+// instead; this file pins the current, correct, non-enumerating default so
+// that mistake fails loudly here first. Fixture below is the REAL compiled
+// ask_plan for NJB's live "Meat Only Breakfast Sandwich" row (id
 // f2268e5e-a829-4b20-8963-02f49b1ce773), read directly from the DB
 // 2026-09-15 — not guessed.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -80,15 +96,12 @@ function renderSlotQuestion(groupId: string): string {
   return reply.split("\n\n")[0];
 }
 
-Deno.test("RENDER slot: NJB Meat Only Breakfast Sandwich's meat-choice and bread-choice questions must be DISTINCT, not the same generic string", () => {
+Deno.test("RENDER slot: default (non-enumerating) rendering is unaffected by 784cc701's revert — a fixture with two groups sharing slot_key \"choice\" still renders the SAME short question for both (this is exactly the bug; the fix is the upstream slot_key, not `enumerate`, see njb-slot-key-label-20260915.test.ts)", () => {
   const meatQuestion = renderSlotQuestion(NJB_MEAT_GROUP_ID);
   const breadQuestion = renderSlotQuestion(NJB_BREAD_GROUP_ID);
-  assert(
-    meatQuestion !== breadQuestion,
-    `meat-choice and bread-choice slot questions rendered identically — a customer cannot tell these are two different questions: both are ${JSON.stringify(meatQuestion)}`,
-  );
-  assertEquals(meatQuestion, "What choice would you like for the Meat Only Breakfast Sandwich? Bacon (no extra charge), Ham (no extra charge), Sausage (no extra charge), or Pork Roll (no extra charge).");
-  assertEquals(breadQuestion, "What choice would you like for the Meat Only Breakfast Sandwich? Bagel (no extra charge), Bread (no extra charge), or Roll (no extra charge).");
+  assertEquals(meatQuestion, "What choice would you like for the Meat Only Breakfast Sandwich?");
+  assertEquals(breadQuestion, "What choice would you like for the Meat Only Breakfast Sandwich?");
+  assertEquals(meatQuestion, breadQuestion);
 });
 
 // ── Vito's-shaped: real live Cheese Burger Temp question (same fixture as
@@ -141,7 +154,7 @@ const VITOS_CART_LINE: TurnEngineCartLine = {
   line_key: `${VITOS_CHEESE_BURGER_ID}::`,
 };
 
-Deno.test("RENDER slot: Vito's real Cheese Burger Temp question now reads as the templated sentence PLUS its choices enumerated (before/after for PO judgment)", () => {
+Deno.test("RENDER slot: Vito's real Cheese Burger Temp question stays the SHORT templated sentence (784cc701's enumerated wording is reverted — 7044d7f8 measured the enumerated default at 40% vs 70% short-form on Vito's live traffic)", () => {
   const state: DialogueState = {
     phase: "ordering",
     open: { kind: "slot", line_key: VITOS_CART_LINE.line_key!, group_id: VITOS_TEMP_GROUP_ID },
@@ -151,8 +164,8 @@ Deno.test("RENDER slot: Vito's real Cheese Burger Temp question now reads as the
   const cart = [VITOS_CART_LINE];
   const reply = render(cart, cart, state, [], VITOS_MENU);
   const question = reply.split("\n\n")[0];
-  const BEFORE = "How would you like the Cheese Burger cooked?"; // pre-fix RENDER output (unenumerated default)
-  const AFTER = "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare.";
-  assertEquals(question, AFTER, `post-fix RENDER must produce the enumerated question; before-fix was: ${JSON.stringify(BEFORE)}`);
-  assert(question !== BEFORE, "the fix must actually change the live-shop wording, not no-op");
+  const SHORT = "How would you like the Cheese Burger cooked?"; // 7044d7f8's measured-good default
+  const ENUMERATED = "How would you like the Cheese Burger cooked? Well Done, Medium, Rare, Medium Well, or Medium Rare."; // 784cc701's reverted wording
+  assertEquals(question, SHORT, `RENDER must produce the short, non-enumerated question by default; 784cc701's reverted wording was: ${JSON.stringify(ENUMERATED)}`);
+  assert(question !== ENUMERATED, "the revert must actually restore the live-shop wording, not no-op");
 });
