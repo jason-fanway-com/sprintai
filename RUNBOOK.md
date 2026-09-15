@@ -2404,3 +2404,95 @@ throughout today's journal entry, but it is not the SHA-proof the deploy
 script exists to provide (see "Deploy verification: `DEPLOY_SHA` stamp"
 above). Redeploy through `deploy-function.sh` before treating this as
 proof for anything higher-stakes than a journal entry.
+
+## Correction: GUARDs 1c/1d/1f/1g are deleted, not "still required" — 2026-09-14
+
+The "Reply inversion" entry above (2026-09-13) says to treat GUARDs
+1c/1d/1f/1g as still required on any code path reply-inversion didn't
+touch. That is now stale. `c996df0b` (07:55, 2026-09-14) added an
+explicit ITEM/CART-CLAIM SCOPE rule to both system-prompt blocks —
+forbidding the model from enumerating cart contents or narrating a
+mutation in prose on **any** branch, including the previously-
+unconstrained no-mutation "voice" path — and `f19cf0ab` (same timestamp)
+then deleted all four guards (`phantom-add-guard.ts`,
+`guard1f-correction-claim-20260909.ts`, the GUARD-1c/1g logic in
+`cart.ts`/`index.ts`, and their test files; ~1,131 lines) on the
+reasoning that they have nothing left to catch. **This is a bet on the
+prompt rule holding, not a proof equivalent to what the guards provided**
+— there is no code-level detector left for the model simply ignoring the
+new prompt rule. `e1821f88` (08:00) adds a static scan of every `reply=`
+site for hand-interpolated cart fields, which catches a *new*
+hand-authored cart-claim bug at test time, but does not catch the model's
+own prose violating the rule at runtime. If a phantom-add or narrated-
+correction defect reappears, there is currently no guard watching for it
+— check `error_log` and run a live canary rather than assuming a guard
+would have caught it.
+
+## `dropped_unauthorized` may only apply to a cart line with zero prior existence — 2026-09-14
+
+Standing rule (PO directive, item G): `turn-reconciler.ts`'s
+`reconcileAddProposals` may only classify a cart-growth proposal as
+`dropped_unauthorized` (silently deleted, not just left pending) when no
+pre-turn line shares its `menu_item_id`, in **any** option state. Three
+live incidents this range and the day before (`c23f0a4d`, `49dfb1db`,
+`d36d298f`) were all the same failure shape: a required-slot answer on a
+later turn ("medium" answering Cheese Burger's Temp) reports the
+NOW-RESOLVED options, which can never match the pre-turn line's identity
+key (menu_item_id + options) — full-identity matching alone treats a
+slot-completing turn as a brand-new, unauthorized item and deletes the
+customer's entire order rather than merely failing to add to it. The fix
+is now three fallback lookups in sequence: full identity match, then a
+pending-line-by-menu_item_id match, then (broadest) any pre-turn line at
+all sharing that menu_item_id. If you touch `reconcileAddProposals`'s
+`preIndex`/`prePendingByMenuItemId`/`prePresentByMenuItemId` logic, keep
+all three — each closes a distinct repro that the others didn't.
+
+## `source_phrase` grounding must span multiple turns, not just the current + immediately-prior one — 2026-09-14
+
+Extension to the "`source_phrase` may never be trusted for quantity"
+entry above — a related but distinct gap in the same field.
+`turn-reconciler.ts`'s groundedness check (does this proposal's
+`source_phrase` actually trace back to something the customer said)
+used to look only at the current turn's text plus, at most, the single
+immediately-preceding assistant reply. When the model defers the real
+`add_item` call by more than one turn (e.g. it answers "Medium noted" in
+prose without calling `add_item`, then actually calls it two turns
+later), the resulting `source_phrase` ("cheeseburger medium") stitches
+together customer words from **different** turns — no single-turn check
+can ever see that, and the order gets dropped as `dropped_unauthorized`
+even though the customer said everything in it. Confirmed live via
+`error_log` on two conversations with `source_phrase="cheeseburger
+medium", grounded=false`. Fixed (`0a66af6f`) with
+`sourcePhraseGroundedInWindow`: every real word (≥3 chars) of
+`source_phrase` must appear somewhere in the customer's own last few
+turns — this widens WHERE a word may have been said, never WHETHER it
+was said, so a hallucinated phrase with no real customer word behind it
+still fails every token.
+
+## Reply inversion now has a backstop for turns that never mutated the cart — 2026-09-14
+
+The reply-inversion entry above (2026-09-13) only ever ran its
+enforcement (`extractQuestionsOnly` / the cart-fact scrub) on a turn the
+tool loop actually mutated the cart on. A turn with zero mutation left
+`reply` as the model's raw, unscrubbed text — live transcripts showed
+"Got it - a Cheese Burger added." and "I've got your cheeseburger!" both
+reaching the customer on turns where `cart_json` never changed.
+`action-confirmation.ts`'s `stripFalseMutationClaims` (`0a66af6f`) is a
+code-level backstop for exactly this unmutated path: it scrubs any
+sentence claiming a mutation happened (add/noted/got it + a known item or
+option-choice mention) while leaving genuine voice content (answering a
+menu question, a real clarification) untouched. Between this and the
+GUARD 1c/1d/1f/1g retirement above, this is now the only code-level check
+left on the no-mutation reply path — if it has a gap, nothing else in the
+guard stack covers it.
+
+## Deploy stamped correctly again — `chat-sms` v444, 2026-09-14
+
+Unlike v432 (above), `chat-sms` v444 (updated 2026-09-15 01:27:05 UTC —
+20 seconds after the `0a66af6f` commit) **does** carry a proper
+`DEPLOY_SHA` stamp, confirmed by downloading the artifact and reading
+`// DEPLOY_SHA: 0a66af6f334062f825447100143a087dc4a016c5` at the top of
+its `index.ts`. It went through `scripts/deploy-function.sh` as intended.
+Everything through `0a66af6f` (the last code commit of the day; the five
+commits after it on `main` are docs-only) is live. `chat-sms-mtest`
+remains at v39 (2026-09-08) — none of today's fixes are deployed there.

@@ -578,6 +578,54 @@ cart-mutation path, not yet the no-mutation "just talking" path, so the guards
 that catch a hallucinated claim on that second path are still required and
 staying in place.
 
+### Added 2026-09-14 — the upsell was never actually reaching customers; six more trust bugs closed; guards from above are now retired, not "staying in place"
+
+Two corrections/additions to the entry above, plus a day of closing the
+specific defects that entry's own trust argument depends on:
+
+- **The upsell ask named on 2026-09-13 ("it should always try to upsell")
+  was not actually happening in most real conversations.** Root cause,
+  confirmed live: the model does attempt an upsell sentence after an add,
+  but the same reply-inversion filter that stops it from lying about the
+  cart was — correctly, for money-safety — also stripping the upsell
+  sentence itself, because a real offer necessarily names an item and a
+  price. Fixed by having code generate the offer sentence directly from
+  the menu's own upsell field and the live price, the same discipline
+  already used for the cart-fact sentence. A second pass found the offer
+  was structurally missing 100% of the time for any item with a required
+  option (size, temp) answered on a separate turn from the add — not a
+  flaky case, every one of those items. Both are fixed and live. This is
+  a real, if unquantified, revenue-recovery fix: an upsell that never
+  fires is upsell revenue that never happens, on top of reading as
+  ignoring the customer's own follow-up choices.
+- **Correction to the "staying in place" line above**: those guards were
+  deleted today, not kept. The reasoning changed — instead of continuing
+  to catch the model narrating false cart claims after the fact, the
+  model is now explicitly told in the prompt that it may never narrate
+  cart contents or a mutation in prose at all, on any turn. That is a bet
+  that the instruction holds, not a guarantee equivalent to the guard it
+  replaced; if a customer is ever told the wrong thing about their cart
+  again, there is currently no code-level check left to catch it before
+  it ships. Watched for, not yet observed.
+- Six more live defects closed today, all in the same trust family as
+  2026-09-13's: an unsatisfiable "remove this topping" request that
+  silently no-op'd; a driver-tip question crowding out the food upsell
+  on delivery orders; a decline to an offer sometimes showing no cart at
+  all instead of the order-so-far; and — most serious — a cart-wipe bug
+  where answering the bot's own follow-up question (e.g. "medium" to
+  "how would you like that cooked") could delete the customer's entire
+  order rather than complete it, confirmed via a live repro and closed
+  across three widening passes. Full technical detail in
+  `docs/DAILY.md`'s 2026-09-14 entry.
+
+Separately, today's docs work proposes (but has not yet built or shipped)
+a change to how this codebase gets built going forward: an autonomous
+coding agent doing the implementation work, directed and verified by a
+human-in-the-loop reviewing role rather than writing code directly. No
+customer-facing behavior changed from this; noted here because it is a
+process change to how fixes like the ones above get made, not a code
+change.
+
 ---
 
 ## What's next (near-term roadmap)

@@ -1243,6 +1243,89 @@ where shared) but none are deployed to it. `stripe-webhook` (v92) and
 `parse-menu-pdf` (v114) are untouched by today's commits and remain at the
 versions noted in earlier entries.
 
+## Update — 2026-09-14 22:23 EDT: lettered-defect burn-down (B, C, C2, D, G, H) shipped and live; GUARDs 1c/1d/1f/1g now actually retired; Turn Engine Phase 1 drafted but uncommitted
+
+Correction to the note directly above: as of 2026-09-13, GUARDs 1c/1d/1f/1g
+were still required because the reply-inversion prompt rule alone didn't
+reliably stop the model from narrating cart claims. Today's `c996df0b`
+(07:55) adds an explicit ITEM/CART-CLAIM SCOPE rule to both system-prompt
+blocks — the model may never enumerate cart contents or narrate a
+mutation in prose at all — and `f19cf0ab` (07:55) then deletes GUARDs
+1c/1d/1f/1g on the reasoning that they have nothing left to catch
+(~1,131 lines removed, including `phantom-add-guard.ts` and
+`guard1f-correction-claim-20260909.ts` in full). **This is a bet on the
+prompt rule holding, not a proof** — `e1821f88` (08:00) adds a static
+source scan of every `reply=` site as a partial backstop against a *new*
+hand-authored cart claim, but nothing catches the model simply ignoring
+the new prompt rule the way it used to ignore the old one. Watch
+`error_log` and live canaries for a phantom-add/correction-claim reply
+reappearing with no guard left to catch it.
+
+Six more live defects fixed today, each cited against its own repro in
+the commit message (not just a unit test) — full detail in
+`docs/DAILY.md`'s 2026-09-14 entry:
+
+- **Item B** (`b1d709f2`) — "drop the pepperoni" was unsatisfiable
+  (required matching every word of the option's display name) and its
+  correction was invisible to the reconciler's apply-gate (identity keyed
+  on item+quantity only, not options).
+- **Item C** (`0c4c5837`, `72cd4676`) — the upsell offer is now
+  code-rendered (`upsell-offer-20260914.ts`), not left to model prose that
+  `extractQuestionsOnly` strips on sight; a second pass fixed the case
+  where the offer was structurally missing for any item whose required
+  option resolves on a later turn than the add.
+- **Item C2** (`577ded72`, `7342fc3a`) — a driver-tip prompt rule racing
+  the same-turn upsell-offer render, and a bare decline landing on a turn
+  with no open question on record (~22% of delivery-flow runs before the
+  fix).
+- **Item D** (`1accaa05`) — the last two bare-cart-count fallbacks now
+  render the itemized recap instead.
+- **Item G** (`49dfb1db`, `d36d298f`) and an earlier, unlettered sibling
+  (`c23f0a4d`, 13:21) — a cart-wipe: a required-slot answer on a later
+  turn ("medium") could fail to ground against its own line and get
+  deleted outright as "unauthorized," not overcharged, the whole order
+  gone. Fixed by widening what counts as a pre-existing line across three
+  passes; the PO's rule going forward is that `dropped_unauthorized` may
+  only ever apply to a line with zero prior existence in any form.
+- **Item H** (`0a66af6f`) — a `source_phrase` stitched from customer words
+  across *different* turns (model defers the real `add_item` call by more
+  than one turn) couldn't ground against any single-turn check; and the
+  reply-inversion enforcement above only ran on turns that actually
+  mutated the cart, leaving the unmutated path free to narrate a phantom
+  add in prose. Both fixed.
+
+**Confirmed live, not just committed**: `chat-sms` **v444**, updated
+2026-09-15 01:27:05 UTC — the downloaded deployed artifact's entrypoint
+carries `// DEPLOY_SHA: 0a66af6f...`, the item H commit, matching the last
+code change of the day (everything after it, `624f9660`..`HEAD`, is
+docs-only). Unlike 2026-09-13's v432, this deploy has a proper
+`DEPLOY_SHA` stamp — it went through `scripts/deploy-function.sh`.
+`chat-sms-mtest` remains stale at v39 (2026-09-08), now six days further
+behind.
+
+**Not committed, not deployed, not wired in**: the working tree (not
+`HEAD`) has an untracked `turn-engine.ts` (665 lines) and
+`dialogue-signals.ts` implementing "Turn Engine Phase 1" — a code-owned
+ANSWER/DECIDE/ASK/RENDER dialogue-state module proposed in today's
+`docs/specs/2026-09-14-turn-engine-oversight.md` as the actual fix for the
+structural cause behind the whole lettered-defect list (dialogue state
+reverse-engineered from model prose by 26 separate guards). Its own header
+says it is deliberately "New Files Only" this phase — not wired into
+`index.ts` pending explicit go-ahead. The only live edit in the working
+tree is `dialogue-signals.ts` itself being extracted out of `index.ts`
+(three predicates moved, no behavior change, `deno check` clean) — whoever
+picks this up next should commit that extraction and the new module
+together, or decide not to and revert the uncommitted `index.ts`/
+`ask-plan-engine.ts` edits.
+
+Also today: three docs-only commits (`624f9660`, `f63c31ea`, `851f196a`)
+establish a new operating structure — an autonomous coding agent ("the
+crew," on a separate machine) dispatched and verified by a human-in-the-
+loop PO role — and two (`82e5616e`, `6728198e`) correct stale facts in
+`docs/PO-BRIEF.md`: the deployed model is `deepseek/deepseek-v4-flash`,
+not `-v4-pro`; the OpenRouter account backing both prod and the test
+harness auto-tops-up (not a balance risk to throttle for).
+
 ## Quickstart for development
 
 ```bash

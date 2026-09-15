@@ -2009,3 +2009,196 @@ deployed bundle), not inferred from commit history:
 - **138** (`order_carts.name_confirm_pending_total_cents`) and **139**
   (`order_carts.checkout_intent_confirmed_at`) — both confirmed **applied**:
   both columns exist on `order_carts` in production.
+
+## 2026-09-14
+
+### Headline: a full burn-down of the lettered defect list (B, C, C2, D, G, H), plus a reconciler bug the list didn't have a letter for
+
+Today worked through the specific defects named in yesterday's/this
+session's review (`ARCHITECTURE-REVIEW-BRIEF.md`), one commit-verified fix
+at a time, each with its own live repro before and after. In order:
+
+- **Item B** (`b1d709f2`) — "drop the pepperoni" never worked. Cause 1:
+  `isRemovalRequested` required the customer's text to contain *every*
+  significant word of the option's display name ("Pepperoni (Whole
+  pizza)" needed "whole" and "pizza" too) — unsatisfiable, so removal
+  silently no-op'd. Cause 2: the reconciler's apply-gate compared only
+  `menu_item_id` + quantity, so an options-only correction (same item,
+  same count, different toppings) was invisible and got discarded. Both
+  fixed; retiring GUARD 1f earlier today (`f19cf0ab`) had removed the old
+  "I couldn't do that" message that used to at least make cause 1 visible.
+- **Item C** (`0c4c5837`, `72cd4676`) — the upsell offer ("Want a Coke with
+  that?") is now rendered from code (`upsell-offer-20260914.ts`) instead of
+  trusted from model prose, which `extractQuestionsOnly` was stripping on
+  sight (correctly — a real offer names a price, which that filter treats
+  as a money-safety violation). First pass only wired the same-turn add
+  path; `72cd4676` found the offer was structurally missing whenever an
+  item's required option (e.g. Cheese Burger's Temp) resolved on a *later*
+  turn than the add itself — not flaky, 100% of the time for any item with
+  a required slot.
+- **Item C2** (`577ded72`, `7342fc3a`) — two delivery-flow races between a
+  standing prompt rule (the driver-tip ask) and the same-turn code-rendered
+  add fact: the tip question could displace the food-upsell offer, and a
+  bare "no thanks" to an offer could land on a turn with no open question
+  on record, falling through to raw model prose with no cart shown (~22%
+  of runs before the second pass).
+- **Item D** (`1accaa05`) — two remaining sites that could hand back a bare
+  "You've got 3 items in your cart" instead of the itemized recap (the
+  post-upsell-decline degrade path, and GUARD 23's stripped-reply
+  fallback) now both render the same itemized recap as checkout.
+- **Item G** (`49dfb1db`, `d36d298f`) — a cart-wipe: answering a required
+  slot on a later turn ("medium") could fail to ground against the item
+  it belonged to and get deleted as an "unauthorized" new line — the
+  customer's whole order, gone. Fixed in two widening passes (pending-line
+  match, then any pre-turn line sharing the `menu_item_id` in any option
+  state) per the PO's rule that `dropped_unauthorized` may only ever apply
+  to a line with zero prior existence. Same commit also narrowed the
+  upsell-accept check: it had been reusing a broad "sounds like
+  checkout-ready" detector, so "that's it" (finishing the order) was
+  silently read as "yes, add the offered fries."
+- **Item H** (`0a66af6f`) — two more shapes of the same two failure
+  families: a `source_phrase` built by stitching customer words from
+  *different* turns (the model defers the real `add_item` call by more
+  than one turn) couldn't ground against any single-turn check and got
+  dropped; and on any turn the tool loop didn't mutate the cart, reply
+  inversion had no enforcement path at all, so raw model sentences like
+  "Got it — a Cheese Burger added" could still reach the customer with no
+  code check behind them. Fixed with a multi-turn grounding window and a
+  code-level scrub (`stripFalseMutationClaims`) for the unmutated path.
+- **Not on the lettered list**: `c23f0a4d` (13:21, earlier than any of the
+  above) — a live canary (cheeseburger → medium → "that's it") produced an
+  empty $0 cart. Root cause: the reconciler's pre-turn line index keys on
+  full identity (item + options); a line still waiting on a required slot
+  has partial options by definition, so the turn that fills the slot can
+  never match its own pre-turn entry and fell into the
+  "genuinely-new-and-unauthorized" branch — deleting the entire line, not
+  overcharging it. This is the same *family* of bug as item G, found and
+  fixed earlier in the day; G's later passes are further widenings of the
+  same fallback this commit introduced.
+- **Also**: `db6c32f6` (13:46) — an added line with options/modifiers now
+  always itemizes ("Large Cheese Pizza, extra cheese +$4.50") instead of
+  sometimes rendering bare, depending on which code path a turn happened
+  to take.
+
+Every fix above cites a live repro or canary run in its commit message,
+not just a passing unit test — several (item G, item C2) were caught only
+because a >1-run or DB-level check was used instead of a single smoke
+test, continuing yesterday's lesson from the x16 pizza bug.
+
+### Reply inversion, phase 2: prompt-level prevention, not just a post-hoc scrub
+
+Three commits (`f19cf0ab`, `c996df0b`, `e1821f88`, all 07:55–08:00) move
+reply inversion from "catch it after the model writes it" toward "the
+model was never told it's allowed to write it":
+
+- `c996df0b` adds an explicit ITEM/CART-CLAIM SCOPE rule to both
+  system-prompt blocks: the model may never enumerate more than one cart
+  item per sentence, assert cart contents, or narrate an add/remove/change
+  — that's code's job. The existing post-generation scrub
+  (`extractQuestionsOnly`) is untouched and stays as the backstop.
+- `f19cf0ab` retires GUARD 1c/1d/1f/1g (~1,131 lines deleted across
+  `phantom-add-guard.ts`, `guard1f-correction-claim-20260909.ts`, parts of
+  `cart.ts`, and their test files) on the reasoning that once the prompt
+  forbids the vocabulary these guards existed to catch, they have nothing
+  left to catch. This is a bet on the prompt rule holding, not a proof —
+  see the architecture-review brief's own caveat below.
+- `e1821f88` adds a static source scanner
+  (`reply-inversion-enforce-cart-fact-renderer.test.ts`) that greps every
+  `reply =`/`reply +=` site in `index.ts` (43 of them) for hand-interpolated
+  cart fields, so a *new* hand-authored cart claim fails CI rather than
+  waiting to be caught live. One legitimate exemption is marked
+  `cart-fact:blessed` (a disambiguation prompt that names a menu search
+  target, not a cart claim).
+
+**Caveat, in the architecture-review brief's own words, not mine**: reply
+inversion "is a lint, not the invariant" — it constrains what the model's
+*prose* is allowed to claim, but the underlying turn structure (dialogue
+state reverse-engineered from prose by 26 guards, cart state written from
+23 separate `saveCart` call sites) is unchanged. That diagnosis is what
+today's later docs commits (below) build on.
+
+### Test-suite own-bugs fixed (not product defects)
+
+- `96235a43` (07:08) — `run.ts` crashed on a pre-first-item turn where
+  `cart` is `undefined`; matched the guard `proof.ts` already had.
+- `e083c549` (07:10) — Zio's menu categories were missing from
+  `CATEGORY_ORDER_QUALIFIER`, producing false FAILs on that shop's
+  category-coverage cases (all 16 category names re-verified against the
+  live menu).
+- `9a9a6395` (17:50) — the quality-test harness was asserting only on cart
+  state, not the actual reply text, so a wrong-but-cart-correct reply
+  could pass; `e07e5ed5` (18:41) then fixed the new reply-text assertion
+  itself, which had only accepted one of two equally-correct ways to give
+  a name.
+
+### Oversight restructuring: a new operating model, documented but not yet acted on
+
+Five docs-only commits (21:30–22:23) describe a new way of running this
+project rather than a code change:
+
+- `624f9660` — a self-contained architecture-review brief for a fresh
+  reviewing thread, stating plainly that reply inversion is a lint and
+  naming two structural causes (dialogue state not owned by code; cart
+  state written from 23 sites) that the ten known defects trace back to.
+- `f63c31ea` — a "turn-engine oversight" spec proposing a code-owned
+  dialogue state machine (ANSWER/DECIDE/ASK/RENDER) as the real fix for
+  the root cause above, plus corrections to stale facts in `PO-BRIEF.md`.
+- `851f196a` — a playbook for running an autonomous coding agent ("the
+  crew," on a separate machine referred to as "the Air"/OpenClaw) under a
+  human-in-the-loop "product owner" role that writes specs and verifies,
+  never writes production code itself.
+- `82e5616e`, `6728198e` — two corrections to `PO-BRIEF.md`: the deployed
+  model is `deepseek/deepseek-v4-flash`, not `-v4-pro` as previously
+  documented (verified by matching the `CHAT_MODEL` secret's digest), and
+  the OpenRouter account backing both prod and the test harness auto-tops-up,
+  so balance is not something to flag or throttle for.
+
+**None of this changed any code that ships in `chat-sms`.** The one
+concrete artifact that *did* result — see below — is uncommitted.
+
+### Uncommitted at end of day: Turn Engine Phase 1 (pure module, not wired in)
+
+The working tree (not `HEAD`) contains a new, untracked
+`supabase/functions/chat-sms/turn-engine.ts` (665 lines) implementing the
+ANSWER/DECIDE/ASK/RENDER data structure proposed in `f63c31ea`'s spec, plus
+a new `dialogue-signals.ts` (also untracked) extracting three predicates
+(`isAskingForPickupName`, `impliesUpsellAcceptance`, `impliesUpsellDecline`)
+out of `index.ts` so both modules can share them. `turn-engine.ts`'s own
+header states it is "New Files Only" for this phase — deliberately not
+wired into `index.ts` pending the PO's explicit go-ahead for phase 3. The
+one live change is the extraction itself: `index.ts` (modified, uncommitted)
+now imports the three predicates from `dialogue-signals.ts` instead of
+defining them inline, a 44-line net reduction with no behavior change —
+confirmed by `deno check` passing clean on the current working tree. None
+of this is committed; it will not appear in `git log` until someone commits
+it, and it is not part of the deploy discussed below.
+
+Also present but untracked: five `scripts/tmp-*-20260914.ts` diagnostic/repro
+scripts (item C2, item F, item H canaries and acceptance checks) — throwaway,
+matching this repo's existing convention for same-day scratch repros.
+
+### Deploy status (edge functions touched this range)
+
+Checked directly against the live project (`supabase functions list` +
+downloaded deployed bundle), not inferred from commit history:
+
+- **`chat-sms`**: **v444**, updated 2026-09-15 01:27:05 UTC. The downloaded
+  bundle's entrypoint carries `// DEPLOY_SHA: 0a66af6f334062f825447100143a087dc4a016c5`
+  — the item H commit, the last code change of the day (all docs-only
+  commits after it need no deploy). Confirmed both item H functions
+  (`sourcePhraseGroundedInWindow`, `stripFalseMutationClaims`) are present
+  in the deployed `turn-reconciler.ts`/`action-confirmation.ts`. Unlike
+  some previous days, this deploy carries a proper `DEPLOY_SHA` stamp —
+  it went through `scripts/deploy-function.sh`, not a bare
+  `supabase functions deploy`. Everything through `0a66af6f` is live;
+  nothing from today's uncommitted `turn-engine.ts` work is deployed or
+  could be (it isn't wired into `index.ts` yet, and isn't committed).
+- **`chat-sms-mtest`**: v39, deployed 2026-09-08 22:48:17 UTC — still
+  stale, now nine days behind `chat-sms`. None of today's fixes (or any
+  fix since 2026-09-08) are deployed to this function.
+- **`_shared`**: not independently deployed; its changes ship bundled
+  inside `chat-sms` only, per prior days' notes.
+
+### Migrations touched this range
+
+None. No new migration files in this commit range.
