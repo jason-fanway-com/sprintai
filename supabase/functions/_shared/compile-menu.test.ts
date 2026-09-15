@@ -369,6 +369,67 @@ Deno.test("lexicon: modifier choices are NOT lexiconized (rule 5/step 4 explicit
   assert(!terms.some(t => t.term === "pepperoni"));
 });
 
+// ---- Lexicon surface-form variants (space-collapsed + plural) -----------------
+
+Deno.test("lexicon surface forms: a space-collapsed item term is emitted and kept when it resolves uniquely (real Vito's cheeseburger gap, 2026-09-14)", () => {
+  // Real bug: Vito's had "cheese burger" ($8.49) and "bacon cheeseburger"
+  // ($10.99) but no term for the bare word "cheeseburger" a customer
+  // actually types — it fell through to the only term containing that
+  // substring, the dearer item, on 11/17 live calls.
+  const cheeseBurger = item({ display_name: "Cheese Burger", category: "Burgers" });
+  const baconCheeseburger = item({ display_name: "Bacon Cheeseburger", category: "Burgers" });
+  const { items: compiled } = compileMenu([cheeseBurger, baconCheeseburger], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const cheeseburgerTerm = byId.get(cheeseBurger.id)!.lexicon_terms.find(t => t.term === "cheeseburger");
+  assert(cheeseburgerTerm, "bare 'cheeseburger' must resolve to the Cheese Burger item");
+  assertEquals(cheeseburgerTerm!.target_type, "item");
+  assertEquals(cheeseburgerTerm!.target_id, cheeseBurger.id);
+  assertEquals(cheeseburgerTerm!.provenance, "derived");
+  assert(!byId.get(baconCheeseburger.id)!.lexicon_terms.some(t => t.term === "cheeseburger"),
+    "the dearer item must not also claim the bare term");
+});
+
+Deno.test("lexicon surface forms: a variant that would resolve to two different items is dropped for both, no tiebreak", () => {
+  // "Meatball" pluralizes to "meatballs"; "Meat Balls" space-collapses to
+  // the identical string "meatballs" — two independently-derived candidates
+  // landing on the same term, same shape as the real Zio's collisions.
+  const meatball = item({ display_name: "Meatball", category: "Appetizers" });
+  const meatBalls = item({ display_name: "Meat Balls", category: "Appetizers" });
+  const { items: compiled } = compileMenu([meatball, meatBalls], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(meatball.id)!.lexicon_terms.some(t => t.term === "meatballs"),
+    "ambiguous plural must not be written for Meatball");
+  assert(!byId.get(meatBalls.id)!.lexicon_terms.some(t => t.term === "meatballs"),
+    "ambiguous space-collapsed form must not be written for Meat Balls");
+  // Each item's own stated (rule 1) term is untouched — only the ambiguous
+  // derived variant is dropped.
+  assert(byId.get(meatball.id)!.lexicon_terms.some(t => t.term === "meatball"));
+  assert(byId.get(meatBalls.id)!.lexicon_terms.some(t => t.term === "meat balls"));
+});
+
+Deno.test("lexicon surface forms: an already-plural source term is not pluralized (Zio's 'meatballses'/'sausages'/'spinaches' naive-pluralization junk)", () => {
+  const fries = item({ display_name: "Curly Fries", category: "Sides" });
+  const terms = compileMenu([fries], [], "t", false).items[0].lexicon_terms.map(t => t.term);
+  assert(!terms.includes("curly frieses"), "an already-plural term must never be pluralized");
+  assert(!terms.includes("curly friess"));
+});
+
+Deno.test("lexicon surface forms: output is byte-identical across two separate compileMenu runs on the same input", () => {
+  const items = [
+    item({ display_name: "Cheese Burger", category: "Burgers" }),
+    item({ display_name: "Bacon Cheeseburger", category: "Burgers" }),
+    item({ display_name: "Meatball", category: "Appetizers" }),
+    item({ display_name: "Meat Balls", category: "Appetizers" }),
+    item({ display_name: "Curly Fries", category: "Sides" }),
+  ];
+  const r1 = compileMenu(items, [], "2026-09-07T00:00:00Z", false);
+  const r2 = compileMenu(items, [], "2026-09-08T00:00:00Z", false);
+  const strip = (r: typeof r1) => r.items.map(i => ({ item_id: i.item_id, lexicon_terms: i.lexicon_terms }));
+  assertEquals(strip(r1), strip(r2));
+});
+
 // ---- Overrides: empty = identity, present = last-write-wins -------------------
 
 Deno.test("overrides: empty set is the identity case", () => {
