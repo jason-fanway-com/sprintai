@@ -357,9 +357,16 @@ export function answer(
       // only opens a slot question when no unit on the line has it resolved
       // yet), never a "differentiate one of several already-resolved units"
       // correction, so the split-one-unit-off heuristic must never fire here.
+      // requireTextualSupportForSlots: true (00-BH Part B) — this is the
+      // free-text answer call site the fix is scoped to. modelAssertedChoiceTexts
+      // is already `[]` here today, so this flag is a no-op in practice; it
+      // makes the intent explicit rather than incidental. See ask-plan-
+      // engine.ts's resolveAskPlan doc for why this alone does not close the
+      // confirmed wings bug — that lives in decide()'s add/modify paths below
+      // (:609/:657), explicitly out of scope for this fix.
       const result = applyCompiledModifyItem(
         cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, undefined, trimmed, [],
-        undefined, undefined, undefined, true,
+        undefined, undefined, undefined, true, true,
       );
       if (!result.cartChanged) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };

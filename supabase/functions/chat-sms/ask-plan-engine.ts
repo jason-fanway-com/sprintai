@@ -607,6 +607,20 @@ export function resolveAskPlan(
   //   non-empty string -> exactly this call's own phrase; the only text a
   //     modifier can reactively match against.
   modifierScopeText?: string,
+  // PO fix (2026-09-15, 00-BH, narrowed from 00-BG's rejected broader gate):
+  // true ONLY at turn-engine.ts's answer() "slot" call — the free-text
+  // fallback path where a customer's own message is the ONLY input
+  // (modelAssertedChoiceTexts is `[]` there today, by construction, so this
+  // flag is currently a no-op at that call site; it exists so the intent is
+  // explicit in code rather than incidental to an empty array literal, and
+  // so a future change to that call site can't silently reopen the trust
+  // boundary without deciding to). Default false preserves today's
+  // behavior everywhere else, including decide()'s structured add/modify
+  // paths (turn-engine.ts:609/:657) — 00-BH confirmed empirically that the
+  // CONFIRMED live wings bug (00-BE/00-BF) flows through those two call
+  // sites, not this one; narrowing here does not close that bug. See
+  // 00-BH's report for the full trace.
+  requireTextualSupportForSlots = false,
 ): EngineResult {
   const resolved: ResolvedSlot[] = [];
   let nextStep: CompiledStep | null = null;
@@ -725,7 +739,7 @@ export function resolveAskPlan(
     // only: a model-asserted choice (matchAssertedChoice, exact-name
     // validated) is unaffected — the model-trust boundary itself is a
     // separate, harder question, not solved here (see 00-BG/00-BH).
-    const assertedChoice = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+    const assertedChoice = requireTextualSupportForSlots ? null : matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
     const deterministicChoice = matchChoiceInText(step.choices, customerText);
     const matched = assertedChoice ?? (deterministicChoice && !isNegated(customerText, deterministicChoice.display) ? deterministicChoice : null);
     if (matched) {
@@ -881,9 +895,11 @@ function resolveAndPriceSelections(
   // — see its doc); a brand new line's very first open question is never
   // enumerated by this signal, only a genuine repeat is.
   isContinuation = false,
+  // PO fix (00-BH) — see resolveAskPlan's own doc on this same-named param.
+  requireTextualSupportForSlots = false,
 ): ResolveAndPriceOutcome {
   const alreadyResolvedGroupIds = new Set(Object.keys(priorSelections));
-  const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText);
+  const engineResult = resolveAskPlan(askPlan, customerText, alreadyResolvedGroupIds, defaultChoiceIdByGroup, consumedModifierChoiceIds, modelAssertedChoiceTexts, modifierScopeText, requireTextualSupportForSlots);
 
   // P0 fix (2026-09-10): a single step can now push MULTIPLE resolved
   // entries sharing one group_id (a modifier step resolving more than one
@@ -1287,6 +1303,11 @@ export function applyCompiledModifyItem(
   // Defaults to false (every other, pre-existing call site: unchanged
   // behavior) — set true ONLY by turn-engine.ts's slot-answer call.
   suppressUnitSplit = false,
+  // PO fix (00-BH) — see resolveAskPlan's own doc on this same-named param.
+  // Defaults to false (decide()'s modify path at turn-engine.ts:657: unchanged
+  // behavior) — set true ONLY by turn-engine.ts's answer() slot-answer call,
+  // same convention as suppressUnitSplit immediately above.
+  requireTextualSupportForSlots = false,
 ): CompiledModifyItemResult {
   const idx = cart.findIndex(ci => ci.menu_item_id === menuItemId);
   if (idx < 0) return { ok: false, cartChanged: false, result: { error: "Item not in cart." } };
@@ -1313,6 +1334,7 @@ export function applyCompiledModifyItem(
     // modify_item, by definition, always targets an EXISTING line — see
     // isContinuation's doc on resolveAndPriceSelections.
     true,
+    requireTextualSupportForSlots,
   );
 
   const explicitlyClearedGroupIds = new Set(
