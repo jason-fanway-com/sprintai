@@ -120,6 +120,8 @@ import {
   parseBareTipDollars,
 } from "./intent-router.ts";
 import { isAskingForPickupName, impliesUpsellAcceptance, impliesUpsellDecline } from "./dialogue-signals.ts";
+import { runTurnEngineTurn } from "./turn-engine-runner.ts";
+import type { DialogueState, TurnEngineCartLine, TurnEngineMenuItem } from "./turn-engine.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -344,6 +346,11 @@ interface Shop {
   // shop_voice/shop_notes instead of the shared hardcoded template. See the
   // gate at the buildSystemPrompt(...) call site.
   prompt_version?: number | null;
+  // Turn Engine (docs/specs/2026-09-14-turn-engine-oversight.md §4 Phase 3,
+  // migration 141). Gates the routing branch below. NOT NULL DEFAULT false
+  // for every shop — this field being undefined/false means the legacy
+  // path (unchanged, below) runs exactly as it always has.
+  turn_engine_enabled?: boolean;
 }
 
 // Instruction-layer rows (migration 124) — read-only inputs to
@@ -398,6 +405,12 @@ interface OrderCart {
   // deterministically before the LLM ever runs. Null once resolved, reset,
   // or expired.
   pending_disambiguation:     PendingDisambiguation | null;
+  // Turn Engine (docs/specs/2026-09-14-turn-engine-oversight.md §3a,
+  // migration 141). Code-owned dialogue state, read/written only by
+  // turn-engine-runner.ts on the routing branch below. NULL means "fresh
+  // conversation" (the runner treats that as the initial state) — never
+  // read or written by the legacy path.
+  dialogue_state:             DialogueState | null;
 }
 
 interface ContentBlock {
@@ -6046,6 +6059,44 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   const deliveryGeoAvailable = shop.delivery_enabled === true
     ? (shop.latitude != null && shop.longitude != null && Number(shop.delivery_radius_mi) > 0)
     : false;
+
+  // ── Turn Engine routing (docs/specs/2026-09-14-turn-engine-oversight.md
+  // §4 Phase 3) ──────────────────────────────────────────────────────────
+  // The ONE branch that sends this turn to the code-owned engine
+  // (turn-engine-runner.ts) instead of everything below. On this path,
+  // runOrderingLoop, the turn-reconciler, and every guard from this point on
+  // are bypassed — not modified, not deleted, just skipped. Off for every
+  // shop today (shops.turn_engine_enabled defaults false, migration 141);
+  // this branch does not run in production until the PO flips a shop's flag.
+  if (shop.turn_engine_enabled) {
+    const turnResult = await runTurnEngineTurn(
+      {
+        conversationId: conversation.id as string,
+        shopId:         shop.id,
+        tenantId:       shop.tenant_id,
+        cartId:         cart.id,
+        message:        userMessage,
+        history:        history as Array<{ role: "user" | "assistant"; content: string }>,
+        menu:           effectiveMenu as unknown as TurnEngineMenuItem[],
+        cart:           (cart.cart_json ?? []) as unknown as TurnEngineCartLine[],
+        dialogueState:  cart.dialogue_state,
+        shopContext: {
+          deliveryEnabled:      shop.delivery_enabled === true,
+          orderType:            (cart.order_type as "pickup" | "delivery" | null) ?? null,
+          deliveryAddressKnown: cart.delivery_address != null,
+          driverTipCents:       cart.driver_tip_cents,
+          pickupName:           (cart as { pickup_name?: string | null }).pickup_name ?? null,
+          deliveryFeeCents:     cart.delivery_fee_cents,
+        },
+      },
+      {
+        supabase,
+        apiKey: Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "",
+      },
+    );
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnResult.reply); return emptyTwiml(); }
+    return jsonResponse({ reply: turnResult.reply, cart: turnResult.cart, phase: cart.phase, session_id: sessionId });
+  }
 
   // ── Pending disambiguation resolution (BLOCKER 1) ───────────────────────
   // GUARD 7 (below) asks a clarifying question when two active menu items
