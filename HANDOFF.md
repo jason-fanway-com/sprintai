@@ -1326,6 +1326,53 @@ loop PO role — and two (`82e5616e`, `6728198e`) correct stale facts in
 not `-v4-pro`; the OpenRouter account backing both prod and the test
 harness auto-tops-up (not a balance risk to throttle for).
 
+## Update — 2026-09-15: Turn Engine Phase 1 is now committed, Phase 2 (`propose.ts`) shipped and bounced/fixed twice, item-E instrumentation deployed live
+
+Correction to the entry directly above: "Not committed, not deployed, not
+wired in" described `turn-engine.ts`/`dialogue-signals.ts` as an
+**uncommitted** working-tree addition. That's stale — `cf6858f0` committed
+Turn Engine Phase 1 ten minutes after that entry's own sync point
+(`a983c250`, 22:34 EDT). Since then, six more commits landed on `main`
+(full detail, real numbers, and caveats in RUNBOOK.md's "Turn Engine
+Phase 1 committed, Phase 2 ships..." entry and `docs/DAILY.md`'s
+2026-09-15 entry — this section is the summary):
+
+- **Phase 1** (`cf6858f0`) — code-owned ANSWER/DECIDE/ASK/RENDER dialogue
+  state, committed. Still **zero imports in `index.ts`**.
+- **Phase 2** (`42850782`) — `propose.ts`, the PROPOSE-step model adapter,
+  shipped. Also a pure module, also zero imports in `index.ts`.
+- **Phase 2 PO bounce + fix** (`22bb5733`) — the first version derived its
+  item-name lexicon at runtime and produced wrong-item resolutions in live
+  testing (a plain "cheeseburger" resolving to the $10.99 Bacon
+  Cheeseburger instead of the $8.49 Cheese Burger, 8/17 calls). Fixed by
+  injecting the already-compiled, human-reviewed `lexicon` DB table
+  instead of deriving one at runtime. Live re-acceptance after the fix:
+  9/20 correct — the wrong-item defect is closed, but there is a real
+  lexicon **data** gap (missing one-word terms) still open. Don't report
+  this as fully solved.
+- **Cart-widening fix** (`0ee960b9`) and **stable `line_key` fix**
+  (`f686df46`) — two further propose.ts/turn-engine.ts fixes, both pure
+  modules, both closing real defects found in live testing (in-cart
+  modifies had no valid group/choice ids to use; multi-option-group items
+  could get incorrectly declined on modify because their `line_key` went
+  stale mid-turn).
+- **Item-E instrumentation** (`3a5723a9`) — the one change in this batch
+  that touches `index.ts` (18 lines, logging a model-API-fallback exit to
+  `error_log`'s `tool_loop` stage). **This one is live**: verified
+  directly against the Supabase project (`rvdqfxtrskxekfkqnegx`) —
+  `chat-sms` is now **v445**, updated 2026-09-15 04:19:13 UTC, downloaded
+  artifact stamped `// DEPLOY_SHA: 3a5723a979e7fd956ebeaa18d43434035528f62c`
+  (the item-E commit). Everything else in this batch postdates that
+  deploy and is not live.
+
+**What Phase 3 still requires**: per `docs/PO-BRIEF.md`'s note on this
+exact situation (the "resolver.ts trap," current instance), Phase 3 needs
+an explicit PO go-ahead, a routing branch in `index.ts`, and a per-shop
+`turn_engine_enabled` flag before either `turn-engine.ts` or `propose.ts`
+affects a single live conversation. Until that branch exists, "committed
+and tested" does not mean "in the live path" — check the import and the
+flag, per module, every time, same as `resolver.ts` before it.
+
 ## Quickstart for development
 
 ```bash

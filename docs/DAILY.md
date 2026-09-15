@@ -2202,3 +2202,117 @@ downloaded deployed bundle), not inferred from commit history:
 ### Migrations touched this range
 
 None. No new migration files in this commit range.
+
+## 2026-09-15
+
+### Headline: Turn Engine Phase 1 committed, Phase 2 (`propose.ts`) ships, gets bounced by the PO over lexicon correctness, and picks up two more live-tested fixes — one change in the whole range reaches production
+
+Continuation of the previous entry's late-night session (commits run
+22:45 EDT 09-14 through 02:43 EDT 09-15) rather than a fresh day's work;
+grouped here as one entry since the session never really broke.
+
+- **Turn Engine Phase 1 committed** (`cf6858f0`, 22:45 EDT) — corrects the
+  previous entry's "Uncommitted at end of day: Turn Engine Phase 1" note:
+  `turn-engine.ts` and `dialogue-signals.ts` were committed ten minutes
+  after that entry's own docs-sync point (`a983c250`, 22:34 EDT), not left
+  in the working tree. No behavior change; `index.ts` still has zero real
+  imports of `turn-engine.ts`.
+- **Turn Engine Phase 2: `propose.ts`** (`42850782`, 23:00 EDT) — the
+  PROPOSE step (§3b step 3), the one place left that calls the model.
+  NLU only: menu index, cart (with `line_keys`), the open question, and
+  the last six turns in; a structured `Proposal` out (the type is
+  imported from `turn-engine.ts`, not redeclared). One forced tool call
+  (`submit_proposal`), no tool loop, one retry max. Every terminal
+  failure writes an `error_log` row (`stage: propose_call`) with both
+  attempts' raw bodies — required an additive migration
+  (`140_error_log_propose_call_stage.sql`) widening `error_log.stage`'s
+  CHECK constraint, applied directly via the Management API. Fully
+  dependency-injected; `propose.test.ts` (17/17) runs under zero Deno
+  permissions. Live acceptance at ship time: 20/20 OpenRouter calls
+  schema-valid across a six-phrasing matrix — schema-valid only, not yet
+  correctness-checked.
+- **`docs(PO-BRIEF)` — the resolver.ts trap, current instance** (`fc57624e`,
+  23:05 EDT) — the PO's own doc (not touched here; PO-BRIEF.md is that
+  role's lane) flags that `turn-engine.ts`/`propose.ts` exist, are tested,
+  and are not in the live path until Phase 3 adds a routing branch and a
+  per-shop `turn_engine_enabled` flag — the same trap `resolver.ts` (item
+  3, deleted 2026-09-12) sat in for days.
+- **Phase 2 PO bounce, lexicon fix** (`22bb5733`, 23:10 EDT) — the live
+  acceptance run above only checked schema-validity, not correctness: a
+  follow-up PO run found 8 of 17 non-ambiguous calls resolved a plain
+  "cheeseburger" to Bacon Cheeseburger ($10.99) instead of Cheese Burger
+  ($8.49) — wrong item for money. Root cause: `buildLexicon` derived a
+  one-word alias per item at runtime, only when unique across the menu;
+  on Vito's real 221-item menu neither "burger" nor "cheeseburger" is
+  unique, so both items got an empty derived lexicon and the model fell
+  back to substring-matching the bare `name`. Fix, exactly as ruled:
+  `buildLexicon`/`GENERIC_LEXICON_WORDS`/`normalizeMenuName` **deleted**,
+  not improved. `propose.ts` now takes the compiled, human-reviewed
+  `lexicon` DB table as an injected input (`ProposeTurnInput.lexicon`),
+  same DI pattern as every other dependency. `propose.test.ts` 19/19.
+  **Live re-acceptance against the real table (303 rows): 9/20 correct**
+  — confirmed working exactly where the customer's wording matches an
+  actual lexicon term ("two cheese burgers" → the lexicon's own "cheese
+  burger" term, 3/3 correct), still wrong for bare one-word "cheeseburger"
+  because only the two-word "cheese burger" term exists in the real
+  table. The commit message calls this "a real lexicon data gap, not a
+  code defect" — worth repeating here rather than letting "PO bounce
+  fixed" read as "resolution problem solved." It isn't, yet.
+- **Cart-widening fix** (`0ee960b9`, 02:05 EDT) — `choices` came back
+  empty on 20/20 live propose calls for in-cart modifies: `MenuIndexEntry`
+  carried no group/choice id vocabulary at all, so a `modify`/
+  `remove_choices` on an item already in the cart had nothing valid to
+  reference (fresh adds are unaffected — ASK/ANSWER recover the slot next
+  turn at zero model cost). `buildCartIndex()` now widens each cart line
+  with its real `group_id`/`choice_id` vocabulary from that line's own
+  `ask_plan`/`option_groups`. Live 5-run test: 5/5 carried a real compiled
+  `choice_id`, never invented or a display-name string — the vocabulary
+  defect is closed. Known model flakiness left as-is per the PO's stop
+  conditions: 3/5 runs expressed the change via `choices`, 2/5 via
+  `remove_choices` only (still real ids, just a different strategy).
+- **Stable `line_key` fix** (`f686df46`, 02:43 EDT) — `line_key` was
+  derived from mutable content, so a multi-option-group line's key went
+  stale the moment its second group was answered; a modify carrying the
+  stale key was DECLINED for an item plainly in the cart. Exposure was
+  multi-group items only (27 of Vito's orderable items) — that's exactly
+  why Phase 1's 22 tests were green over a real defect: every fixture
+  used a single-group item. Fixed with a stable, opaque `line_key` minted
+  once per line via an injected `newLineKey?: () => string`, resolved
+  everywhere through one `effectiveLineKey()` helper that falls back to
+  the old derived identity for any pre-existing keyless line. Prospective
+  only, no migration needed.
+
+### Deploy status — one change in this whole range is live
+
+Checked directly against the live project (`supabase functions list` +
+downloaded bundle, project ref `rvdqfxtrskxekfkqnegx`), not inferred:
+
+- **`chat-sms`: v445**, updated 2026-09-15 04:19:13 UTC. Downloaded
+  artifact's `index.ts` carries
+  `// DEPLOY_SHA: 3a5723a979e7fd956ebeaa18d43434035528f62c` — the item-E
+  instrumentation commit, deployed 33 seconds after it landed. Item-E
+  (`3a5723a9`) is the only commit in this whole range that touches
+  `index.ts` (18 lines, no new guard/retry/reply site); it's the only one
+  live. Everything else — Phase 1, Phase 2, the lexicon fix, cart-widening,
+  stable `line_key` — is a pure-module addition that never touches
+  `index.ts`, and postdates this deploy where it doesn't. The deployed
+  bundle's `index.ts` still shows zero real imports of `turn-engine.ts` or
+  `propose.ts` (the three grep hits are comments), confirming Phase 1 +
+  Phase 2 remain unwired in production, not just in the working tree.
+- **`chat-sms-mtest`**: unchanged, still v39 (2026-09-08).
+
+### Also present, untracked (scratch, not part of any commit)
+
+`scripts/tmp-cart-widening-live-20260915.ts`,
+`scripts/tmp-cartwiden-live-20260915.ts`,
+`scripts/tmp-propose-instrument-proof-20260915.ts`, and
+`supabase/functions/chat-sms/turn-engine-stale-line-key.test.ts` — same
+same-session-scratch convention as the `tmp-*-20260914.ts` files noted in
+the previous entry.
+
+### Migrations touched this range
+
+One: `140_error_log_propose_call_stage.sql` (`42850782`) — additive-only,
+widens `error_log.stage`'s CHECK constraint to also allow `propose_call`.
+Applied directly via the Management API (same pattern as migration 133),
+verified against `pg_constraint`.
