@@ -62,6 +62,7 @@ import {
   snapshotCartLines,
   identityKey as reconcilerIdentityKey,
   parseExplicitQuantity,
+  sourcePhraseGroundedInWindow,
   writeCartLine,
   writeBundleLine,
   applyCartSnapshot,
@@ -107,7 +108,7 @@ import {
 } from "./cart.ts";
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
 import { padReceiptLine, renderItemizedRecap, renderLedgerFooter, buildMenuPriceIndex } from "./itemizer.ts";
-import { detectCartMutation, renderActionConfirmation, extractQuestionsOnly, type MutationCartLine } from "./action-confirmation.ts";
+import { detectCartMutation, renderActionConfirmation, extractQuestionsOnly, stripFalseMutationClaims, type MutationCartLine } from "./action-confirmation.ts";
 import { computeUpsellOffer, extractOfferedItemName, renderUpsellOfferSentence, type UpsellOffer } from "./upsell-offer-20260914.ts";
 import { renderNumberedPickList, renderQuotedNameList, renderNameList } from "./candidate-list.ts";
 import { matchOptionRemovalPhrase, findCartLinesWithOption, type OptionRemovalCartLine } from "./option-removal-20260909.ts";
@@ -7766,6 +7767,31 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           ? `${factSentence} ${upsellOfferSentence}`
           : (warmthTail ? `${factSentence} ${warmthTail}` : `${factSentence} Anything else?`);
         console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)} upsellOfferSentence=${JSON.stringify(upsellOfferSentence)}`);
+      } else {
+        // ── REPLY INVERSION, stage 1b (2026-09-14, item H fix) ─────────────
+        // Escape closed: the mutated branch above renders its fact sentence
+        // from cart_json (never the model's words); this branch used to
+        // leave `reply` as `loopResult.reply` completely unconstrained
+        // whenever the loop made no cart mutation, trusting the ITEM/
+        // CART-CLAIM SCOPE prompt rule alone. Live canary transcripts proved
+        // that rule gets ignored: "Got it - a Cheese Burger added." and
+        // "I've got your cheeseburger!" both reached the customer on turns
+        // where cart_json never changed. stripFalseMutationClaims is the
+        // code-level backstop — see its header in action-confirmation.ts for
+        // why it only strips MUTATION CLAIMS, not every item/price mention,
+        // so an unmutated turn can still legitimately talk about the menu.
+        const knownItemNamesForClaimFilter = effectiveMenu.map(mi => mi.name);
+        const knownChoiceValuesForClaimFilter = effectiveMenu
+          .flatMap(mi => mi.ask_plan?.steps ?? [])
+          .flatMap(s => s.choices)
+          .map(c => c.display);
+        const { reply: scrubbedReply, stripped } = stripFalseMutationClaims(
+          reply, knownItemNamesForClaimFilter, knownChoiceValuesForClaimFilter,
+        );
+        if (stripped) {
+          console.warn(`[chat-sms] REPLY-INVERSION false-mutation-claim scrub (conv=${conversation.id}). modelReply=${JSON.stringify(reply).slice(0, 200)} -> reply=${JSON.stringify(scrubbedReply).slice(0, 200)}`);
+          reply = scrubbedReply;
+        }
       }
     }
     declinedBlockedItems = loopResult.declinedBlockedItems ?? [];
@@ -7892,6 +7918,29 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           const askPlanChoices = (effectiveMenu.find(m => m.id === raw.menu_item_id)?.ask_plan?.steps ?? [])
             .flatMap(s => s.choices);
           if (askPlanChoices.length > 0 && matchChoiceInText(askPlanChoices, userMessage)) return true;
+        }
+        // P0 fix (2026-09-14, item H — Vito's Cheese Burger/Temp canary,
+        // ~1-in-5 live failure surviving item G: confirmed via error_log on
+        // b4c80c78/1eeab0c0, source_phrase="cheeseburger medium").
+        // Everything above is scoped to THIS turn's own text plus, at most,
+        // the single immediately-preceding assistant reply. When the model
+        // defers the real add_item call by more than one turn — it answers
+        // "Medium temp noted" in prose without ever calling add_item, then
+        // actually calls it a turn or two later — the resulting
+        // source_phrase ("cheeseburger medium") stitches together words the
+        // customer said across turns that are further back than any check
+        // above can see, so every one of them misses and a genuine order is
+        // dropped as unauthorized. Token-wise, over a small recent window of
+        // the customer's OWN messages (never the model's), not just the
+        // current one: see sourcePhraseGroundedInWindow's own header for why
+        // this can't be exploited into "authorize anything" the way GUARD
+        // 9/13/20/21 were built to prevent.
+        if (raw.source_phrase) {
+          const recentCustomerMessages = [
+            ...history.filter(h => h.role === "user").slice(-3).map(h => h.content),
+            userMessage,
+          ];
+          if (sourcePhraseGroundedInWindow(raw.source_phrase, recentCustomerMessages)) return true;
         }
         return false;
       })(),

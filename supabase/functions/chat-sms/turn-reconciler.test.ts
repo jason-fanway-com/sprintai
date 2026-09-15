@@ -7,6 +7,7 @@ import {
   parseExplicitQuantity,
   reconcileAddProposals,
   snapshotCartLines,
+  sourcePhraseGroundedInWindow,
   writeCartLine,
   writeBundleLine,
   applyCartSnapshot,
@@ -409,4 +410,42 @@ Deno.test("writeCartLine canary: $8.49 item is idempotent — single line, never
   const subtotalCents = cart.reduce((s, l) => s + (l.price_cents as number) * (l.quantity as number), 0);
   assertEquals(subtotalCents, ITEM_PRICE_CENTS, "$8.49 subtotal — not doubled");
   assertEquals(subtotalCents + SERVICE_FEE_CENTS, 948, "$8.49 + $0.99 service fee = $9.48 total");
+});
+
+// ── sourcePhraseGroundedInWindow (item G/H, cross-turn phrase synthesis) ──
+// Pins the exact live canary shape: "cheeseburger" on turn N, "medium" on
+// turn N+1, synthesized by the model into source_phrase "cheeseburger
+// medium" on a LATER turn whose own text is neither word.
+Deno.test("sourcePhraseGroundedInWindow: real exact live repro — 'cheeseburger medium' traces across two prior customer turns", () => {
+  assertEquals(
+    sourcePhraseGroundedInWindow("cheeseburger medium", ["cheeseburger", "medium", "thats it"]),
+    true,
+  );
+});
+
+Deno.test("sourcePhraseGroundedInWindow: a hallucinated phrase with no real customer word behind it still fails — not loosened into 'authorize anything'", () => {
+  assertEquals(
+    sourcePhraseGroundedInWindow("large pepperoni pizza", ["cheeseburger", "medium", "thats it"]),
+    false,
+  );
+});
+
+Deno.test("sourcePhraseGroundedInWindow: partial overlap (only one of two words said) still fails — every token must be real", () => {
+  assertEquals(
+    sourcePhraseGroundedInWindow("cheeseburger large", ["cheeseburger", "medium", "thats it"]),
+    false,
+  );
+});
+
+Deno.test("sourcePhraseGroundedInWindow: empty source_phrase never authorizes", () => {
+  assertEquals(sourcePhraseGroundedInWindow("", ["cheeseburger", "medium"]), false);
+});
+
+Deno.test("sourcePhraseGroundedInWindow: single contiguous-turn phrase still matches (no regression on the common case)", () => {
+  assertEquals(sourcePhraseGroundedInWindow("large pepperoni pizza", ["i want a large pepperoni pizza"]), true);
+});
+
+Deno.test("sourcePhraseGroundedInWindow: short filler words (<3 chars) are not required to match, so 'a'/'is' can't be gamed either way", () => {
+  // "medium" is real; the short word "a" isn't checked — but the real word still is.
+  assertEquals(sourcePhraseGroundedInWindow("a medium", ["medium"]), true);
 });

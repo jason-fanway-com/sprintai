@@ -6,6 +6,7 @@ import {
   detectCartMutation,
   renderActionConfirmation,
   extractQuestionsOnly,
+  stripFalseMutationClaims,
   type MutationCartLine,
 } from "./action-confirmation.ts";
 
@@ -342,4 +343,58 @@ Deno.test("extractQuestionsOnly: round 2 regression check — real item-name lie
   const modelReply =
     "Added the fries. So that's your large cheese pepperoni pizza, french fries, and a large plain cheese pizza — confirm?";
   assertEquals(extractQuestionsOnly(modelReply, KNOWN_ITEM_NAMES_WITH_SHORT_WORDS), "");
+});
+
+// ── stripFalseMutationClaims (item H — reply-inversion ESCAPE on unmutated turns) ──
+// Pins the two exact live canary transcripts (b4c80c78/1eeab0c0 conversation
+// families) where the model claimed a mutation happened on a turn cart_json
+// never actually changed on.
+
+Deno.test("stripFalseMutationClaims: real exact live repro — 'Got it - a Cheese Burger added.' on an unmutated turn is stripped", () => {
+  const reply = "Got it - a Cheese Burger added. Are you ordering pickup or delivery today?";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], ["Medium"]);
+  assertEquals(stripped, true);
+  assertEquals(/cheese burger/i.test(out), false);
+  assertEquals(/added/i.test(out), false);
+  assertEquals(/pickup or delivery/i.test(out), true); // genuine question survives
+});
+
+Deno.test("stripFalseMutationClaims: real exact live repro — 'I've got your cheeseburger!' (no space, loose match) is stripped", () => {
+  const reply = "I've got your cheeseburger! Pickup or delivery?";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], []);
+  assertEquals(stripped, true);
+  assertEquals(/cheeseburger/i.test(out), false);
+});
+
+Deno.test("stripFalseMutationClaims: 'Medium temp noted.' (option-choice-value claim, no menu item name) is stripped", () => {
+  const reply = "Medium temp noted. Pickup or delivery today?";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], ["Medium"]);
+  assertEquals(stripped, true);
+  assertEquals(/medium/i.test(out), false);
+  assertEquals(/pickup or delivery/i.test(out), true);
+});
+
+Deno.test("stripFalseMutationClaims: a genuine voice reply with no mutation claim passes through untouched", () => {
+  const reply = "We're open until 10pm tonight. Anything else I can help with?";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], ["Medium"]);
+  assertEquals(stripped, false);
+  assertEquals(out, reply);
+});
+
+Deno.test("stripFalseMutationClaims: an unmutated turn can still answer a question naming a real item, as long as it doesn't claim an add", () => {
+  const reply = "A Cheese Burger is $8.49 with fries. Want me to add one?";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], []);
+  // "Cheese Burger is $8.49" is price-shaped/names a known item but contains
+  // no mutation-claim verb (added/noted/got it/...) — it's informational,
+  // not a false success claim, so it must survive.
+  assertEquals(stripped, false);
+  assertEquals(out, reply);
+});
+
+Deno.test("stripFalseMutationClaims: stripping everything falls back to a safe neutral question, never an empty reply", () => {
+  const reply = "Got it - a Cheese Burger added.";
+  const { reply: out, stripped } = stripFalseMutationClaims(reply, ["Cheese Burger"], []);
+  assertEquals(stripped, true);
+  assertEquals(out.length > 0, true);
+  assertEquals(/\?/.test(out), true);
 });

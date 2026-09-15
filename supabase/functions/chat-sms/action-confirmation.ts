@@ -299,3 +299,77 @@ export function extractQuestionsOnly(modelReply: string, knownItemNames: string[
     .filter(s => !sentenceAssertsCartFact(s, knownItemNames));
   return questions.join(" ").replace(/\s+/g, " ").trim();
 }
+
+// Round 3 (2026-09-14, item H — reply-inversion ESCAPE, Vito's Cheese
+// Burger/Temp canary, ~1-in-5 live failure surviving item G): every check
+// above (renderActionConfirmation, extractQuestionsOnly/
+// sentenceAssertsCartFact) only ever runs on a turn the tool loop actually
+// mutated the cart on — index.ts's own `cartMutatedAtLoop` gate leaves
+// `reply` as the model's raw, unconstrained text on any turn that did NOT
+// mutate the cart, trusting a prompt instruction (ITEM/CART-CLAIM SCOPE)
+// alone to keep the model from claiming success it didn't earn. Live
+// transcripts prove the model doesn't reliably obey that instruction —
+// "Got it - a Cheese Burger added." and "I've got your cheeseburger!" both
+// reached the customer on turns where add_item never actually wrote a line
+// (subtotal_cents stayed 0 for the rest of both conversations). This is the
+// code-level backstop for that path: the same discipline extractQuestionsOnly
+// already applies to the MUTATED path's leftover warmth, extended to catch a
+// MUTATION CLAIM specifically (not just any item/price mention) — an
+// unmutated turn is still allowed to talk about items ("what's in a Cheese
+// Burger?"), it just can't claim one was just added.
+//
+// Loose (whitespace-stripped) item-name matching is deliberate: the false
+// claim used the customer's own casual "cheeseburger" (no space) against the
+// catalog's "Cheese Burger" (with space) — a plain substring check via
+// sentenceAssertsCartFact's un-normalized item list missed it.
+const MUTATION_CLAIM_RE =
+  /\b(?:added|noted|got\s+(?:it|that|your)|i(?:'ve| have)\s+(?:added|got)|on\s+your\s+order|added\s+(?:it\s+)?to\s+your\s+(?:cart|order))\b/i;
+
+function normalizeCompact(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sentenceClaimsMutation(
+  sentence: string,
+  knownItemNames: string[],
+  knownChoiceValues: string[],
+): boolean {
+  if (!MUTATION_CLAIM_RE.test(sentence)) return false;
+  if (sentenceAssertsCartFact(sentence, knownItemNames)) return true;
+  const compact = normalizeCompact(sentence);
+  for (const name of knownItemNames) {
+    const compactName = normalizeCompact(name);
+    if (compactName.length >= 4 && compact.includes(compactName)) return true;
+  }
+  for (const value of knownChoiceValues) {
+    const trimmed = (value ?? "").trim();
+    if (trimmed.length < 3) continue;
+    if (new RegExp(`\\b${escapeRegex(trimmed)}\\b`, "i").test(sentence)) return true;
+  }
+  return false;
+}
+
+/**
+ * Backstop for the UNMUTATED path (see header above): strips any sentence
+ * that claims a cart mutation just happened, when the tool loop's own
+ * before/after diff says it did not. Never meaningful to call on a turn that
+ * DID mutate — that path's fact sentence is already code-rendered by
+ * renderActionConfirmation, and this function has no notion of what a real
+ * mutation looks like, only what a FALSE claim of one looks like.
+ */
+export function stripFalseMutationClaims(
+  modelReply: string,
+  knownItemNames: string[],
+  knownChoiceValues: string[],
+): { reply: string; stripped: boolean } {
+  const sentences = (modelReply ?? "").split(/(?<=[.!?\n])\s+/).filter(s => s.trim().length > 0);
+  const kept = sentences.filter(s => !sentenceClaimsMutation(s, knownItemNames, knownChoiceValues));
+  if (kept.length === sentences.length) return { reply: modelReply, stripped: false };
+  let reply = kept.join(" ").replace(/\s+/g, " ").trim();
+  if (!/\?/.test(reply)) reply = reply ? `${reply} What would you like to order?` : "What would you like to order?";
+  return { reply, stripped: true };
+}

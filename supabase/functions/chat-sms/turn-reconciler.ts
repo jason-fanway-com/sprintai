@@ -66,6 +66,37 @@ export type ExplicitQuantity =
   | { kind: "relative"; delta: number }
   | null;
 
+// (2026-09-14, item G/H fix — cheeseburger/medium cross-turn synthesis live
+// canary failure) A proposal's source_phrase is sometimes assembled by the
+// model from words the customer said on DIFFERENT turns ("cheeseburger" on
+// turn N, "medium" on turn N+1, combined into "cheeseburger medium" when the
+// add finally lands on turn N+2 or later). The caller's own groundedness
+// checks (index.ts's `grounded` closure) are single-turn scoped — this
+// turn's own message, plus at most the immediately preceding assistant
+// reply for freshness — so they never see far enough back to authorize a
+// phrase like that; requiring it as one CONTIGUOUS SUBSTRING of any single
+// message misses it entirely, because the customer never said those words
+// together in one message. Token-wise, scoped to a small recent window
+// instead: every real word (>= 3 chars, so "a"/"is"/"it" can't trivially
+// match) in source_phrase must appear somewhere in the customer's own words
+// across the last few turns. This only widens WHERE the words may have been
+// said — never WHETHER they were said. A hallucinated phrase with no real
+// customer word behind it (the exact defect class GUARD 9/13/20/21 existed
+// to catch) still fails every token, because it isn't drawn from the
+// window's vocabulary at all.
+export function sourcePhraseGroundedInWindow(
+  sourcePhrase: string,
+  recentCustomerMessages: string[],
+): boolean {
+  const tokens = (sourcePhrase.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter(t => t.length >= 3);
+  if (tokens.length === 0) return false;
+  const windowTokens = new Set(
+    recentCustomerMessages.join(" ").toLowerCase().match(/[a-z0-9]+/g) ?? [],
+  );
+  return tokens.every(t => windowTokens.has(t));
+}
+
 const NUMBER_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
 };
