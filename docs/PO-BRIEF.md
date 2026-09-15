@@ -3,7 +3,7 @@
 **This file contains only things that change rarely.** No counts, no versions, no status —
 those go stale and lie. Query live state instead (§5).
 
-Last rule change: 2026-09-10.
+Last rule change: 2026-09-14.
 
 ---
 
@@ -74,7 +74,7 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 
 | Shop | Role |
 |---|---|
-| **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, legacy ordering path, **the canary** |
+| **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, compiled engine (flag TRUE on all three shops as of 2026-09-14; verify in `shops`), **the canary** |
 | **Zio's Pizzeria** | Slice-imported menu, compiled engine, **web only — no phone by Jason's decision**. Proof that an imported menu can be made conversation-ready |
 | **Not Just Bagels** | Pre-prod, like every other shop. Twilio, 10DLC-approved. Intended as an early sale, but has NO live customers — do not treat it as production or gate work on it (Jason, 2026-09-12). Its menu is hand-corrected, so do not re-import it casually |
 
@@ -137,6 +137,8 @@ Two documents define where this is going. Read them before proposing structural 
 derived rows → readiness gate → Phase 0 acceptance → prompt rebuild → guard retirement →
 overrides trigger. Plus two side streams: instruction layers as data (C1/C2) and
 pre-composition (D1 derived rows, D2 learn-on-first-order).
+
+**2026-09-14 review (Fable): the root cause of the recurring defects is that code owns the cart but not the conversation state** (which question is open, which line is being built). The direction is a code-owned turn engine: code classifies the turn, the model is called once as an NLU returning ids-only proposals, code decides, asks and renders. Spec: `docs/specs/2026-09-14-turn-engine-oversight.md`. Legacy `runOrderingLoop` is unused by any real shop and is deleted in its Phase 4.
 
 **Three principles from those docs worth holding on to:**
 - *The model phrases; code decides.* The model may propose; code validates and mutates.
@@ -214,9 +216,7 @@ value, which Supabase never re-exposes as plaintext. So:
 - **Functions that compare a bearer by hand** (`google-places-lookup`, `onboarding-save`,
   `admin-chat`) — `SPRINTAI_INTERNAL_FUNCTION_SECRET` in `.secrets`. The legacy key returns
   `Unauthorized` here, and that is **not** a bug; it is the wrong key for that door
-- **`supabase functions list` / Management API** — unavailable, and deliberately so. A
-  `SUPABASE_ACCESS_TOKEN` is an account-wide PAT, a bigger exposure than the problem it
-  solves. Do not ask for one
+- **`supabase functions list` / Management API** — `SUPABASE_ACCESS_TOKEN` is in `.secrets` on the Air. Use it read-only to prove a deploy: `supabase functions download chat-sms` and grep the `DEPLOY_SHA:` stamp against HEAD. Never paste the token anywhere
 
 So you **can** prove a function deploy by invoking it — do that. Where you cannot, verify
 the behaviour a function causes (the DB row it writes, the reply through `public-tester`)
