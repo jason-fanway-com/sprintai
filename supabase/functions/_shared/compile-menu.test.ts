@@ -430,6 +430,128 @@ Deno.test("lexicon surface forms: output is byte-identical across two separate c
   assertEquals(strip(r1), strip(r2));
 });
 
+// ---- Lexicon surface-form variants: plural of the collapsed form + trailing
+// word-runs (docs/specs/2026-09-15-code-owned-resolution.md §3 work item 1) --
+
+Deno.test("lexicon surface forms: plural of the collapsed form is emitted and kept when it resolves uniquely (the single most likely customer phrasing)", () => {
+  const cheeseBurger = item({ display_name: "Cheese Burger", category: "Burgers" });
+  const baconCheeseburger = item({ display_name: "Bacon Cheeseburger", category: "Burgers" });
+  const { items: compiled } = compileMenu([cheeseBurger, baconCheeseburger], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const term = byId.get(cheeseBurger.id)!.lexicon_terms.find(t => t.term === "cheeseburgers");
+  assert(term, "'cheeseburgers' (plural of the collapsed form) must resolve to Cheese Burger");
+  assertEquals(term!.target_type, "item");
+  assertEquals(term!.target_id, cheeseBurger.id);
+  assertEquals(term!.provenance, "derived");
+  assert(!byId.get(baconCheeseburger.id)!.lexicon_terms.some(t => t.term === "cheeseburgers"),
+    "the dearer item must not also claim the bare plural");
+});
+
+Deno.test("lexicon surface forms: plural of the collapsed form is dropped for both claimants when it collides with another candidate, no tiebreak", () => {
+  // "Egg Roll" -> plural-of-collapsed "eggrolls"; "Egg Rolls" -> plain
+  // collapse "eggrolls" (the already-committed rule). Same candidate pool,
+  // same gate — two independently-derived candidates landing on one term.
+  const eggRoll = item({ display_name: "Egg Roll", category: "Appetizers" });
+  const eggRolls = item({ display_name: "Egg Rolls", category: "Appetizers" });
+  const { items: compiled } = compileMenu([eggRoll, eggRolls], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(eggRoll.id)!.lexicon_terms.some(t => t.term === "eggrolls"),
+    "ambiguous plural-of-collapsed must not be written for Egg Roll");
+  assert(!byId.get(eggRolls.id)!.lexicon_terms.some(t => t.term === "eggrolls"),
+    "ambiguous collapsed form must not be written for Egg Rolls");
+  // Each item's own stated (rule 1) term is untouched.
+  assert(byId.get(eggRoll.id)!.lexicon_terms.some(t => t.term === "egg roll"));
+  assert(byId.get(eggRolls.id)!.lexicon_terms.some(t => t.term === "egg rolls"));
+});
+
+Deno.test("lexicon surface forms: plural of the collapsed form is not proposed when the term already exists as another item's own stated name", () => {
+  const cheeseBurger = item({ display_name: "Cheese Burger", category: "Burgers" });
+  const cheeseburgersPlatter = item({ display_name: "Cheeseburgers", category: "Party Trays" });
+  const { items: compiled } = compileMenu([cheeseBurger, cheeseburgersPlatter], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(cheeseBurger.id)!.lexicon_terms.some(t => t.term === "cheeseburgers" && t.provenance === "derived"),
+    "must not derive a duplicate of another item's own stated term");
+  assert(byId.get(cheeseburgersPlatter.id)!.lexicon_terms.some(t => t.term === "cheeseburgers" && t.provenance === "stated"),
+    "the real stated item keeps its own primary term, untouched");
+});
+
+Deno.test("lexicon surface forms: every proper trailing word-run (head noun) is emitted and kept when unique", () => {
+  const wings = item({ display_name: "10 Pieces Wings Boneless", category: "Wings" });
+  const fries = item({ display_name: "French Fries", category: "Sides" });
+  const { items: compiled } = compileMenu([wings, fries], [], "t", false);
+  const wingsTerms = compiled.find(c => c.item_id === wings.id)!.lexicon_terms;
+  const wingsTermStrings = wingsTerms.map(t => t.term);
+
+  for (const run of ["pieces wings boneless", "wings boneless", "boneless"]) {
+    assert(wingsTermStrings.includes(run), `expected trailing run "${run}" to be kept`);
+    const t = wingsTerms.find(t => t.term === run)!;
+    assertEquals(t.target_type, "item");
+    assertEquals(t.target_id, wings.id);
+    assertEquals(t.provenance, "derived");
+  }
+  assertEquals(wingsTerms.filter(t => t.term === "10 pieces wings boneless").length, 1,
+    "the full stated term must appear once (as 'stated'), never re-derived as its own 'proper' trailing run");
+});
+
+Deno.test("lexicon surface forms: an ambiguous trailing word-run is dropped for every claimant, no tiebreak (real Vito's 'fries'/'burger' shape)", () => {
+  const frenchFries = item({ display_name: "French Fries", category: "Sides" });
+  const curlyFries = item({ display_name: "Curly Fries", category: "Sides" });
+  const { items: compiled } = compileMenu([frenchFries, curlyFries], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(frenchFries.id)!.lexicon_terms.some(t => t.term === "fries"));
+  assert(!byId.get(curlyFries.id)!.lexicon_terms.some(t => t.term === "fries"));
+  // Each item's own stated term is untouched — only the ambiguous head noun is dropped.
+  assert(byId.get(frenchFries.id)!.lexicon_terms.some(t => t.term === "french fries"));
+  assert(byId.get(curlyFries.id)!.lexicon_terms.some(t => t.term === "curly fries"));
+});
+
+Deno.test("lexicon surface forms: a trailing word-run is not proposed when the term already exists as another item's own stated primary name", () => {
+  const buffaloWings = item({ display_name: "Buffalo Chicken Wings", category: "Appetizers" });
+  const wings = item({ display_name: "Wings", category: "Party Trays" });
+  const { items: compiled } = compileMenu([buffaloWings, wings], [], "t", false);
+  const buffaloTerms = compiled.find(c => c.item_id === buffaloWings.id)!.lexicon_terms;
+
+  assert(!buffaloTerms.some(t => t.term === "wings" && t.provenance === "derived"),
+    "must not derive a duplicate of another item's real stated name");
+  assert(buffaloTerms.some(t => t.term === "chicken wings" && t.provenance === "derived"),
+    "a different, non-colliding trailing run is still kept");
+});
+
+Deno.test("lexicon surface forms: trailing word-runs are also derived off level-1 (collapse/plural) survivors, not just stated terms", () => {
+  // "Cheese Sandwich" -> stated -> plural-of-stated "cheese sandwiches" (the
+  // already-committed rule) -> this pass's own trailing-run should treat
+  // that derived plural as a source too, surfacing the head noun
+  // "sandwiches" -- not just "sandwich" off the singular stated term.
+  // (Category deliberately isn't "Sandwiches" — that would make the category
+  // noun itself claim "sandwich"/"sandwiches" first via rule 3, masking the
+  // exact thing this test wants to observe.)
+  const cheeseBurger = item({ display_name: "Cheese Sandwich", category: "Entrees" });
+  const fries = item({ display_name: "French Fries", category: "Sides" });
+  const { items: compiled } = compileMenu([cheeseBurger, fries], [], "t", false);
+  const cbTerms = compiled.find(c => c.item_id === cheeseBurger.id)!.lexicon_terms;
+
+  assert(cbTerms.some(t => t.term === "sandwich" && t.provenance === "derived"));
+  assert(cbTerms.some(t => t.term === "sandwiches" && t.provenance === "derived"));
+});
+
+Deno.test("lexicon surface forms (part 2): output is byte-identical across two separate compileMenu runs on the same input", () => {
+  const items = [
+    item({ display_name: "Cheese Burger", category: "Burgers" }),
+    item({ display_name: "Bacon Cheeseburger", category: "Burgers" }),
+    item({ display_name: "10 Pieces Wings Boneless", category: "Wings" }),
+    item({ display_name: "French Fries", category: "Sides" }),
+    item({ display_name: "Curly Fries", category: "Sides" }),
+  ];
+  const r1 = compileMenu(items, [], "2026-09-07T00:00:00Z", false);
+  const r2 = compileMenu(items, [], "2026-09-08T00:00:00Z", false);
+  const strip = (r: typeof r1) => r.items.map(i => ({ item_id: i.item_id, lexicon_terms: i.lexicon_terms }));
+  assertEquals(strip(r1), strip(r2));
+});
+
 // ---- Overrides: empty = identity, present = last-write-wins -------------------
 
 Deno.test("overrides: empty set is the identity case", () => {
