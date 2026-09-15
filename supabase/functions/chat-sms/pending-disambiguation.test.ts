@@ -253,3 +253,66 @@ Deno.test("renderOptionAlternatives: single candidate produces no ' or ' separat
   assertEquals(result.includes(" or "), false);
   assertEquals(result, candidateOptionText(GYRO_CANDIDATES[0]));
 });
+
+// ── LIVE MONEY BUG (2026-09-15, Vito's + Zio's): matchOrdinalPosition was ──
+// unanchored — a digit or ordinal/number word ANYWHERE in the message
+// matched, not just a genuine positional pick. Live repro: a 14-candidate
+// salad disambiguation open, customer says "10 pieces" (answering an
+// already-resolved quantity slot, unrelated to the disambiguation) — the
+// bare "10" matched and silently added candidate #10 to the cart. Modeled on
+// the real Zio's salad list shape from that repro.
+const SALAD_14_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "sal-1",  name: "Garden Salad",              category: "Salads", price_cents: 599  },
+  { menu_item_id: "sal-2",  name: "Greek Salad",                category: "Salads", price_cents: 799  },
+  { menu_item_id: "sal-3",  name: "Chef Salad",                 category: "Salads", price_cents: 899  },
+  { menu_item_id: "sal-4",  name: "Antipasto Salad",            category: "Salads", price_cents: 999  },
+  { menu_item_id: "sal-5",  name: "Tuna Salad Plate",           category: "Salads", price_cents: 899  },
+  { menu_item_id: "sal-6",  name: "Grilled Chicken Salad",      category: "Salads", price_cents: 999  },
+  { menu_item_id: "sal-7",  name: "Buffalo Chicken Salad",      category: "Salads", price_cents: 999  },
+  { menu_item_id: "sal-8",  name: "Caesar Salad",               category: "Salads", price_cents: 799  },
+  { menu_item_id: "sal-9",  name: "Chicken Caesar Salad",       category: "Salads", price_cents: 899  },
+  { menu_item_id: "sal-10", name: "Serves 2 Caesar Salad",      category: "Salads", price_cents: 899  },
+  { menu_item_id: "sal-11", name: "House Salad",                category: "Salads", price_cents: 599  },
+  { menu_item_id: "sal-12", name: "Spinach Salad",              category: "Salads", price_cents: 799  },
+  { menu_item_id: "sal-13", name: "Cobb Salad",                 category: "Salads", price_cents: 999  },
+  { menu_item_id: "sal-14", name: "Steak Salad",                category: "Salads", price_cents: 1199 },
+];
+
+Deno.test("LIVE MONEY BUG: 14-candidate disambiguation open, '10 pieces' must NOT select candidate #10", () => {
+  assertEquals(matchOrdinalPosition("10 pieces", SALAD_14_CANDIDATES.length), null);
+  assertEquals(resolvePendingDisambiguation("10 pieces", SALAD_14_CANDIDATES), null);
+});
+
+Deno.test("LIVE MONEY BUG: 14-candidate disambiguation open, 'two cheeseburgers and a large fries' must NOT select candidate #2", () => {
+  assertEquals(matchOrdinalPosition("two cheeseburgers and a large fries", SALAD_14_CANDIDATES.length), null);
+  assertEquals(resolvePendingDisambiguation("two cheeseburgers and a large fries", SALAD_14_CANDIDATES), null);
+});
+
+const POSITIONAL_MUST_RESOLVE: Array<[string, number]> = [
+  ["3", 2],
+  ["#3", 2],
+  ["number 3", 2],
+  ["3rd", 2],
+  ["the third one", 2],
+  ["second please", 1],
+  ["two", 1],
+];
+
+for (const [text, expectedIdx] of POSITIONAL_MUST_RESOLVE) {
+  Deno.test(`matchOrdinalPosition: "${text}" resolves to position ${expectedIdx}`, () => {
+    assertEquals(matchOrdinalPosition(text, SALAD_14_CANDIDATES.length), expectedIdx);
+  });
+}
+
+const POSITIONAL_MUST_NOT_RESOLVE: string[] = [
+  "10 pieces",
+  "two cheeseburgers and a large fries",
+  "i'll be there at 6",
+  "make it 2 of the first thing",
+];
+
+for (const text of POSITIONAL_MUST_NOT_RESOLVE) {
+  Deno.test(`matchOrdinalPosition: "${text}" must NOT resolve to any position`, () => {
+    assertEquals(matchOrdinalPosition(text, 14), null);
+  });
+}

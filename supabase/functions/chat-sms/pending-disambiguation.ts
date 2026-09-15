@@ -188,30 +188,52 @@ const ORDINAL_WORDS: Record<string, number> = { first: 0, second: 1, third: 2, f
 // price. "first"/"1"/"1st" already cover every real way to say position 1.
 const NUMBER_WORDS: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 };
 
+// A leading selection-framing token ("#3", "number 3", "option 3", "no. 3",
+// "the third one") and a trailing filler word ("second please", "the third
+// one") are the only wrapping a genuine positional pick wears. Anything else
+// surviving after this single strip means the message is talking about
+// something else that merely CONTAINS a number/ordinal word — never a
+// position pick.
+const LEADING_QUALIFIER = /^(?:#|number|option|no\.?|the)\s*/;
+const TRAILING_FILLER = /\s*(?:one|please|thanks|pls)$/;
+
 /**
  * "the first one" / "1st" / "number one" / a bare "1" — every reasonable way
  * a human names a position in the numbered list the re-ask offers. Returns a
  * 0-based index, or null if the message names no position.
  *
- * The digit pattern excludes any digit run adjacent to a decimal point so it
- * never mistakes the fractional half of a price ("the 12.95 one") for a
- * position — that string must resolve via price, not ordinal.
+ * LIVE MONEY BUG (2026-09-15, Vito's + Zio's): this used to match a digit or
+ * ordinal/number word ANYWHERE in the message — "10 pieces" (an already-
+ * resolved quantity, nothing to do with the open disambiguation) matched the
+ * bare digit and silently selected candidate #10; "two cheeseburgers and a
+ * large fries" would equally have matched `\btwo\b` and picked candidate #2.
+ * A positional pick must now match the WHOLE message (after stripping one
+ * leading qualifier and one trailing filler word) — a stray number embedded
+ * in an unrelated sentence no longer resolves anything.
  */
 export function matchOrdinalPosition(message: string, count: number): number | null {
-  const norm = message.trim().toLowerCase();
+  let norm = message.trim().toLowerCase();
   if (!norm) return null;
 
-  const digitMatch = norm.match(/(?<![.\d])(\d+)(?:st|nd|rd|th)?(?![.\da-z])/i);
+  norm = norm.replace(LEADING_QUALIFIER, "").replace(TRAILING_FILLER, "").trim();
+  if (!norm) return null;
+
+  const digitMatch = norm.match(/^(\d+)(?:st|nd|rd|th)?$/);
   if (digitMatch) {
     const idx = parseInt(digitMatch[1], 10) - 1;
-    if (idx >= 0 && idx < count) return idx;
+    return idx >= 0 && idx < count ? idx : null;
   }
-  for (const [word, idx] of Object.entries(ORDINAL_WORDS)) {
-    if (idx < count && new RegExp(`\\b${word}\\b`).test(norm)) return idx;
+
+  if (Object.prototype.hasOwnProperty.call(ORDINAL_WORDS, norm)) {
+    const idx = ORDINAL_WORDS[norm];
+    return idx < count ? idx : null;
   }
-  for (const [word, num] of Object.entries(NUMBER_WORDS)) {
-    if (num <= count && new RegExp(`\\b${word}\\b`).test(norm)) return num - 1;
+
+  if (Object.prototype.hasOwnProperty.call(NUMBER_WORDS, norm)) {
+    const num = NUMBER_WORDS[norm];
+    return num <= count ? num - 1 : null;
   }
+
   return null;
 }
 
