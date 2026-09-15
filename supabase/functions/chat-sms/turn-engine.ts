@@ -51,20 +51,36 @@
 //    engine's "thats it" bug (conversations 0e7b9fd7, 1eeab0c0) this whole
 //    engine was built to make structurally impossible.
 //
-//    closureOrAffirmationFallback() below closes this: every one of the
-//    five non-slot open kinds checks it — after that kind's own real answer
-//    shape has already had first crack at the message, so a genuine tip
-//    decline ("no thanks" while tip is open) still resolves as
-//    tip_resolved(0) exactly as before — and before ever returning
-//    UNRESOLVED. A match never touches the cart and never claims to answer
-//    the open question itself; it only prevents PROPOSE from running, and
-//    ASK's own priority recompute naturally re-asks the identical question
-//    next (nothing about cart/shop state changed this turn). `slot`,
-//    `disambiguation`, and `upsell` are deliberately NOT covered by this
-//    fallback — they already have their own closure-shaped resolution
-//    (isPendingDisambiguationDeclined, impliesUpsellDecline) with different,
-//    correct semantics (e.g. disambiguation-decline means "none of those
-//    candidates," not "I'm done ordering") that this fix must not disturb.
+//    closureOrAffirmationFallback() below closes this: every `state.open.kind`
+//    checks it — after that kind's own real answer shape has already had
+//    first crack at the message, so a genuine tip decline ("no thanks" while
+//    tip is open) still resolves as tip_resolved(0) exactly as before — and
+//    before ever returning UNRESOLVED. A match never touches the cart and
+//    never claims to answer the open question itself; it only prevents
+//    PROPOSE from running, and ASK's own priority recompute naturally
+//    re-asks the identical question next (nothing about cart/shop state
+//    changed this turn).
+//
+//    UPDATE (2026-09-15, second live money bug — "two cheeseburgers and a
+//    large fries" -> "medium" -> "thats it"): the first version of this fix
+//    covered only the five non-slot kinds, reasoning that `slot`,
+//    `disambiguation`, and `upsell` already had their own closure-shaped
+//    resolution. That reasoning held for `disambiguation` and `upsell`
+//    (isPendingDisambiguationDeclined, impliesUpsellDecline) but NOT for
+//    `slot` — a slot question has no decline concept at all, so a bare
+//    "thats it" while a Temp question was open fell all the way through to
+//    PROPOSE exactly like the original bug, and the model added a THIRD
+//    Cheese Burger line to a cart that already held two (a SEPARATE defect —
+//    ask-plan-engine.ts's applyCompiledModifyItem split a quantity-2 line in
+//    two the first time its required Temp slot was answered; see that
+//    file's `suppressUnitSplit` param doc and this file's "slot" ANSWER case
+//    below for that fix).
+//    The original dispatch's own wording — "regardless of which question is
+//    open" — always meant every kind, no exceptions; `slot` now checks this
+//    same fallback too (after applyCompiledModifyItem's own real resolution
+//    attempt misses), and `disambiguation`/`upsell` now call it explicitly
+//    as their own backstop too, instead of returning UNRESOLVED bare, for
+//    the same reason: a closed list must never quietly grow an exception.
 //
 // 3. The proposal contract (§3c) validates by CHOICE ID, but the only
 //    existing, tested mutation pipeline (ask-plan-engine.ts's
@@ -127,20 +143,31 @@ export interface DialogueState {
   open:
     | null
     | { kind: "slot"; line_key: string; group_id: string }
-    // `carriedAmbiguous`: OTHER item_spans this same customer message named
-    // that also came back ambiguous, each as its own candidate-id list, in
-    // the order the customer said them, still waiting behind the one ASK is
-    // asking about right now. One question per turn (§3b step 5) — this is
-    // how the rest survive to be asked on a LATER turn instead of silently
-    // dropped the instant a second ambiguous span shows up alongside the
-    // first. See decide()'s `carriedDisambiguationCandidateIds` and ask()'s
-    // priority-2 fallback below for where this is produced/consumed.
-    | { kind: "disambiguation"; candidates: string[]; carriedAmbiguous?: string[][] }
+    | { kind: "disambiguation"; candidates: string[] }
     | { kind: "upsell"; menu_item_id: string }
     | { kind: "order_type" } | { kind: "address" } | { kind: "tip" }
     | { kind: "name"; suggested?: string } | { kind: "confirm" };
   upsell_offered: boolean;
   asked_message_id: string | null;
+  // FIXED 2026-09-15 (turn-engine live bug — "two cheeseburgers and a large
+  // fries" -> "medium" -> "thats it"): OTHER item_spans a customer's message
+  // named that also came back ambiguous, each as its own candidate-id list,
+  // in the order the customer said them, still waiting to be asked about.
+  // This USED to live nested inside `open`'s `disambiguation` variant
+  // (`carriedAmbiguous`) — which only ever survived a turn where
+  // disambiguation ITSELF won ASK's priority that turn. The real transcript
+  // above never resolves that way: "cheeseburgers" resolves outright (not
+  // ambiguous) while "fries" ties ambiguous, but the still-open required
+  // Temp slot (priority 1) always outranks disambiguation (priority 2), so
+  // the fries candidates never once got a turn to be `open` — and with
+  // nowhere else to live, decide()'s own ambiguous-span output for that turn
+  // was simply discarded the instant `open` became `slot` instead. Moving
+  // this queue to the top level, independent of whatever `open.kind` wins
+  // priority THIS turn, is what makes a carried span survive regardless of
+  // what blocks it — see ask()'s `pendingAmbiguous` computation below, which
+  // is now the ONE place items are enqueued (decide()'s fresh output) and
+  // dequeued (priority 2), never re-derived, never dropped on the floor.
+  pendingAmbiguous?: string[][];
 }
 
 // ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
@@ -265,17 +292,28 @@ const TIP_AMOUNT_RE = /^\$?\s*\d+(?:\.\d{1,2})?\s*$/;
 const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
 
 // See this file's header note 2: the fallback that closes the "thats it
-// while order_type is open" money bug. Called ONLY from the five non-slot
-// `state.open.kind` cases below, and ONLY after that kind's own real answer
-// shape already missed the message — so it never overrides a genuine
-// resolution (a real tip decline, a real confirm "no", etc.), it only
-// catches what's left. Reuses the exact detectors already live elsewhere in
-// this file, never a new phrase list: isExplicitCheckoutIntent and
-// BARE_CLOSURE_RE already power the `state.open === null` branch above;
-// impliesUpsellAcceptance/impliesUpsellDecline already power the `upsell`
-// case below. A match never mutates the cart (cartChanged is always false)
-// and never claims to answer the open question — the caller's own ASK
-// recompute naturally re-asks it, since nothing about the cart or shop
+// while order_type is open" money bug. FIXED 2026-09-15 (turn-engine live
+// bug, "two cheeseburgers and a large fries" -> "medium" -> "thats it"): a
+// bare closure/affirmation phrase must never reach PROPOSE regardless of
+// WHICH kind of question is open — this is now called from EVERY
+// `state.open.kind` case below (slot, disambiguation, upsell included), and
+// ONLY after that kind's own real answer shape already missed the message —
+// so it never overrides a genuine resolution (a real tip decline, a real
+// Temp answer, a real disambiguation pick, etc.), it only catches what's
+// left. `slot`/`disambiguation`/`upsell` each still get first crack via
+// their own real resolvers (applyCompiledModifyItem, resolvePending
+// Disambiguation, impliesUpsellAcceptance/Decline) — this is the backstop
+// AFTER those miss, never a replacement for them, and it never disturbs
+// disambiguation's own correct decline semantics (isPendingDisambiguation
+// Declined, checked first, still means "none of those candidates"; this
+// fallback only fires when NEITHER a pick NOR a decline matched). Reuses the
+// exact detectors already live elsewhere in this file, never a new phrase
+// list: isExplicitCheckoutIntent and BARE_CLOSURE_RE already power the
+// `state.open === null` branch above; impliesUpsellAcceptance/
+// impliesUpsellDecline already power the `upsell` case's own first-pass
+// checks. A match never mutates the cart (cartChanged is always false) and
+// never claims to answer the open question — the caller's own ASK recompute
+// naturally re-asks it (or moves on), since nothing about the cart or shop
 // state moved this turn.
 function closureOrAffirmationFallback(trimmed: string): AnswerResult | null {
   if (isExplicitCheckoutIntent(trimmed, null, false)) {
@@ -314,10 +352,16 @@ export function answer(
       const line = cart[idx];
       const menuItem = menuById.get(line.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
+      // suppressUnitSplit: true — see ask-plan-engine.ts's own doc on that
+      // param. This call is always a required slot's FIRST-EVER answer (ASK
+      // only opens a slot question when no unit on the line has it resolved
+      // yet), never a "differentiate one of several already-resolved units"
+      // correction, so the split-one-unit-off heuristic must never fire here.
       const result = applyCompiledModifyItem(
         cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, undefined, trimmed, [],
+        undefined, undefined, undefined, true,
       );
-      if (!result.cartChanged) return UNRESOLVED;
+      if (!result.cartChanged) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
     }
 
@@ -331,7 +375,7 @@ export function answer(
         return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
       }
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
-      if (!resolved) return UNRESOLVED;
+      if (!resolved) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, []);
@@ -381,7 +425,7 @@ export function answer(
         return { resolved: true, outcome: { kind: "upsell_accepted" }, cartChanged: result.cartChanged };
       }
       if (impliesUpsellDecline(trimmed)) return { resolved: true, outcome: { kind: "upsell_declined" }, cartChanged: false };
-      return UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
   }
 }
@@ -422,8 +466,8 @@ export interface DecideResult {
   // The ambiguous spans NOT chosen for `disambiguationCandidateIds` above,
   // in message order, each still carrying every one of its own tying
   // candidates unranked. Empty when at most one add this turn was
-  // ambiguous. See DialogueState's `carriedAmbiguous` and ask()'s
-  // priority-2 fallback for how this queue gets asked on a later turn.
+  // ambiguous. See DialogueState's `pendingAmbiguous` and ask()'s priority 2
+  // for how this queue gets asked on a later turn.
   carriedDisambiguationCandidateIds: string[][];
 }
 
@@ -651,12 +695,11 @@ export interface AskTurnEvents {
   // True when priorState.open was a `disambiguation` question AND this
   // turn's ANSWER settled it (resolved a candidate OR the customer declined
   // it) -- i.e. the caller's ANSWER call returned `resolved: true` while
-  // that was the open question. This is ASK's signal to promote the NEXT
-  // carried ambiguous span (priorState.open.carriedAmbiguous) onto `open`,
-  // rather than re-checking it every turn regardless of whether the prior
-  // disambiguation is actually done. False on the PROPOSE/decide() branch
-  // (a fresh disambiguationCandidateIds from THIS turn's decide() already
-  // takes priority below and needs no help from this flag).
+  // that was the open question. No longer consumed by ask() itself (see its
+  // `pendingAmbiguous` computation, which carries a span forward regardless
+  // of this flag) — kept on the contract because callers (turn-engine-
+  // runner.ts) already produce it and other consumers may still find it
+  // useful for logging/observability.
   disambiguationSettledThisTurn: boolean;
   // True when this turn's ANSWER resolved to `checkout_intent`, or a
   // PROPOSE-produced Proposal carried `intent: "checkout"`. Once true (or
@@ -676,8 +719,32 @@ export function ask(
   menu: TurnEngineMenuItem[],
 ): DialogueState {
   const menuById = new Map(menu.map(m => [m.id, m]));
-  const carry = (open: DialogueState["open"], phase: DialogueState["phase"], upsellOffered = priorState.upsell_offered): DialogueState =>
-    ({ phase, open, upsell_offered: upsellOffered, asked_message_id: null });
+
+  // See DialogueState.pendingAmbiguous's doc for why this lives at the top
+  // of ask(), computed unconditionally, rather than only being produced by
+  // whichever priority branch happens to return `disambiguation` this turn:
+  // this turn's own fresh ambiguous span(s) from decide() (the one that
+  // WOULD be asked, plus any others that tied in the same proposal) are
+  // appended after anything already queued from an earlier turn that lost
+  // priority to something else — most commonly an open required slot, which
+  // always outranks disambiguation below. Every `carry(...)` call defaults
+  // to handing this exact queue straight back on the returned state, so a
+  // span that doesn't win priority THIS turn is never silently dropped —
+  // only priority 2 below (popping the front) ever shrinks it.
+  const pendingAmbiguous: string[][] = [
+    ...(priorState.pendingAmbiguous ?? []),
+    ...(turnEvents.disambiguationCandidateIds && turnEvents.disambiguationCandidateIds.length > 0
+      ? [turnEvents.disambiguationCandidateIds, ...(turnEvents.carriedDisambiguationCandidateIds ?? [])]
+      : []),
+  ];
+
+  const carry = (
+    open: DialogueState["open"],
+    phase: DialogueState["phase"],
+    upsellOffered = priorState.upsell_offered,
+    pending: string[][] = pendingAmbiguous,
+  ): DialogueState =>
+    ({ phase, open, upsell_offered: upsellOffered, asked_message_id: null, pendingAmbiguous: pending });
 
   // 1. unresolved required slot on any line.
   for (const line of cart) {
@@ -691,28 +758,14 @@ export function ask(
     }
   }
 
-  // 2. disambiguation -- this turn's own fresh ambiguous span(s) (from
-  // decide(), via PROPOSE) take priority; any OTHER ambiguous span found in
-  // the same proposal is carried onto the new open question so it isn't
-  // dropped the moment this one resolves.
-  if (turnEvents.disambiguationCandidateIds && turnEvents.disambiguationCandidateIds.length > 0) {
-    return carry(
-      { kind: "disambiguation", candidates: turnEvents.disambiguationCandidateIds, carriedAmbiguous: turnEvents.carriedDisambiguationCandidateIds ?? [] },
-      "ordering",
-    );
-  }
-
-  // 2b. a PRIOR turn's disambiguation just got settled (resolved or
-  // declined) this turn, and it was carrying one or more OTHER ambiguous
-  // spans from that same original message -- promote the next one now,
-  // same "one question per turn" contract, never silently dropped.
-  if (
-    priorState.open?.kind === "disambiguation" &&
-    turnEvents.disambiguationSettledThisTurn &&
-    priorState.open.carriedAmbiguous && priorState.open.carriedAmbiguous.length > 0
-  ) {
-    const [next, ...rest] = priorState.open.carriedAmbiguous;
-    return carry({ kind: "disambiguation", candidates: next, carriedAmbiguous: rest }, "ordering");
+  // 2. disambiguation -- the oldest span still waiting, whether it's fresh
+  // from THIS turn's decide() or carried over from an earlier turn that lost
+  // priority to a required slot. One question per turn (§3b step 5): only
+  // the front of the queue is ever asked; the rest ride along on `pending`
+  // via `carry`'s default, to be asked on a later turn instead of dropped.
+  if (pendingAmbiguous.length > 0) {
+    const [next, ...rest] = pendingAmbiguous;
+    return carry({ kind: "disambiguation", candidates: next }, "ordering", priorState.upsell_offered, rest);
   }
 
   // 3. order_type (only if delivery is enabled and unset).

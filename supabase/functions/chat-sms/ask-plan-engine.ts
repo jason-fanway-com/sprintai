@@ -1256,6 +1256,24 @@ export function applyCompiledModifyItem(
   // scoping applied here so a modify_item call is exposed to the identical
   // multi-item bleed risk as add_item, closes symmetrically.
   modifierScopeText?: string,
+  // Turn-engine live bug fix (2026-09-15, "two cheeseburgers and a large
+  // fries" -> "medium" -> "thats it"): ALL_UNITS_RE's split-one-unit-off
+  // logic below exists for a customer DIFFERENTIATING one unit of an
+  // ALREADY-FULLY-RESOLVED multi-quantity line ("extra cheese on one of two
+  // pizzas") — every unit already has a real, resolved value for the group
+  // being changed, so "which one" is a genuine question. turn-engine.ts's
+  // ANSWER step's "slot" case calls this function to resolve a REQUIRED
+  // SLOT'S FIRST-EVER ANSWER (ASK only opens a slot question when no unit on
+  // that line has it resolved yet, see turn-engine.ts's ask() priority 1) —
+  // there is no "one of them" to differentiate; the whole line has been
+  // waiting on this one answer. Without this flag, "medium" answering a
+  // still-pending Temp slot on a quantity-2 Cheese Burger line split it into
+  // a quantity-1 resolved line and a quantity-1 STILL-pending line, which
+  // then re-asked the identical Temp question forever and left the cart
+  // holding two separate Cheese Burger lines instead of one at quantity 2.
+  // Defaults to false (every other, pre-existing call site: unchanged
+  // behavior) — set true ONLY by turn-engine.ts's slot-answer call.
+  suppressUnitSplit = false,
 ): CompiledModifyItemResult {
   const idx = cart.findIndex(ci => ci.menu_item_id === menuItemId);
   if (idx < 0) return { ok: false, cartChanged: false, result: { error: "Item not in cart." } };
@@ -1324,7 +1342,7 @@ export function applyCompiledModifyItem(
     const { resolvedOptions, priceCents } = removed
       ? priceSelections(askPlan, itemGroups, selections)
       : { resolvedOptions: outcome.resolvedOptions, priceCents: outcome.priceCents };
-    if (line.quantity > 1 && !ALL_UNITS_RE.test(customerMessage)) {
+    if (line.quantity > 1 && !ALL_UNITS_RE.test(customerMessage) && !suppressUnitSplit) {
       // See ALL_UNITS_RE's doc above: split one unit off rather than
       // silently re-pricing every unit sharing this line.
       const splitResolvedOptions = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;

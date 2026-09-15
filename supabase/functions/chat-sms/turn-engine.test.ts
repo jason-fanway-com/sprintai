@@ -894,3 +894,122 @@ for (const phrase of ["that's all", "im done", "no thanks", "yes"]) {
     assert(result.reply.includes("Pickup or delivery today?"), `must re-ask order type for "${phrase}": ${result.reply}`);
   });
 }
+
+// ── Acceptance test 2 (2026-09-15, deploy 2a852f9b live bug): the FULL
+// closure matrix — every `state.open.kind` crossed with every closure/
+// affirmation phrase, not just order_type. The original 00-AA fix
+// (0ffd5373) only wired closureOrAffirmationFallback into the five
+// non-slot kinds, reasoning that slot/disambiguation/upsell already had
+// their own closure-shaped resolution — true for disambiguation and
+// upsell, false for slot (a slot question has no decline concept at all).
+// "thats it" while a Temp slot was open reached PROPOSE exactly like the
+// original bug and let the model add a THIRD Cheese Burger line. The
+// dispatch's own wording — "regardless of which question is open" — is a
+// closed list with NO exceptions, so this covers all six kinds x all five
+// phrases (30 combinations): PROPOSE must never be called and the cart must
+// never change, for every single one.
+
+const CLOSURE_MATRIX_PHRASES = ["thats it", "that's all", "im done", "no thanks", "yes"];
+
+const CLOSURE_MATRIX_FRIES_ID = "closure-matrix-fries";
+const CLOSURE_MATRIX_MENU: TurnEngineMenuItem[] = [
+  ...VITOS_MENU,
+  {
+    id: CLOSURE_MATRIX_FRIES_ID, name: "French Fries", price_cents: 499, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "French Fries", base_price_cents: 499, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+function closureMatrixResolvedBurgerCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+}
+
+function closureMatrixPendingSlotCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: undefined, ask_plan_selections: {}, line_key: "closure-matrix-slot-line" },
+  ];
+}
+
+interface ClosureMatrixFixture { kind: string; openState: DialogueState; cart: TurnEngineCartLine[] }
+
+const CLOSURE_MATRIX_FIXTURES: ClosureMatrixFixture[] = [
+  {
+    kind: "slot",
+    openState: { phase: "ordering", open: { kind: "slot", line_key: "closure-matrix-slot-line", group_id: TEMP_GROUP_ID }, upsell_offered: false, asked_message_id: null },
+    cart: closureMatrixPendingSlotCart(),
+  },
+  {
+    kind: "disambiguation",
+    openState: { phase: "ordering", open: { kind: "disambiguation", candidates: [CHEESE_BURGER_ID, CLOSURE_MATRIX_FRIES_ID] }, upsell_offered: false, asked_message_id: null },
+    cart: [],
+  },
+  {
+    kind: "upsell",
+    openState: { phase: "ordering", open: { kind: "upsell", menu_item_id: CLOSURE_MATRIX_FRIES_ID }, upsell_offered: true, asked_message_id: null },
+    cart: closureMatrixResolvedBurgerCart(),
+  },
+  {
+    kind: "order_type",
+    openState: { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null },
+    cart: closureMatrixResolvedBurgerCart(),
+  },
+  {
+    kind: "name",
+    openState: { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null },
+    cart: closureMatrixResolvedBurgerCart(),
+  },
+  {
+    kind: "confirm",
+    openState: { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null },
+    cart: closureMatrixResolvedBurgerCart(),
+  },
+];
+
+for (const fixture of CLOSURE_MATRIX_FIXTURES) {
+  for (const phrase of CLOSURE_MATRIX_PHRASES) {
+    Deno.test(`closure matrix: "${phrase}" while ${fixture.kind} is open never reaches PROPOSE and never mutates the cart`, async () => {
+      const { supabase } = makeMinimalFakeSupabase();
+      let proposeCalls = 0;
+      const deps: RunTurnDeps = {
+        supabase,
+        apiKey: "test-key",
+        proposeTurnFn: () => {
+          proposeCalls++;
+          return Promise.reject(new Error(`PROPOSE must never be called for "${phrase}" while ${fixture.kind} is open`));
+        },
+      };
+      const cartBefore = JSON.parse(JSON.stringify(fixture.cart));
+      const input: RunTurnInput = {
+        conversationId: "conv-1",
+        shopId: "shop-1",
+        tenantId: "tenant-1",
+        cartId: "cart-1",
+        message: phrase,
+        history: [],
+        menu: CLOSURE_MATRIX_MENU,
+        cart: JSON.parse(JSON.stringify(fixture.cart)),
+        dialogueState: fixture.openState,
+        shopContext: { deliveryEnabled: true, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+      };
+
+      const result = await runTurnEngineTurn(input, deps);
+
+      assertEquals(proposeCalls, 0, `PROPOSE must never be called for "${phrase}" while ${fixture.kind} is open`);
+      // "yes" while `upsell` is open is the one cell in this matrix that is
+      // NOT a closure — impliesUpsellAcceptance's own real, correct
+      // resolution (same standing as "no thanks" genuinely resolving a
+      // `tip` question to $0, or a real Temp answer resolving a `slot`) —
+      // so the cart is SUPPOSED to grow by the offered item here. Every
+      // other cell, including "no thanks" for this same `upsell` kind (a
+      // genuine decline, not a closure fallback catch either, but still
+      // cart-inert), must leave the cart completely untouched.
+      if (fixture.kind === "upsell" && phrase === "yes") {
+        assertEquals(result.cart.length, cartBefore.length + 1, `"yes" must accept the upsell and add the offered item, not silently no-op`);
+      } else {
+        assertEquals(result.cart, cartBefore, `the cart must never change for "${phrase}" while ${fixture.kind} is open`);
+      }
+    });
+  }
+}

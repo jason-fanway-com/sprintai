@@ -485,6 +485,138 @@ Deno.test("runTurnEngineTurn: an empty cart persists subtotal_cents = 0 explicit
   assertEquals(typeof state.orderCartsUpdates[0].total_cents, "number");
 });
 
+// ── Acceptance test 1 (2026-09-15 live bug, deploy 2a852f9b, Vito's test
+// store): the exact three-turn transcript that broke four different ways —
+// line split (two Cheese Burger lines instead of one at quantity 2), the
+// Temp slot question repeating forever, "thats it" reaching PROPOSE while a
+// slot question was open and mutating the cart, and the ambiguous "fries"
+// span silently dropped instead of surfacing. Asserted after EVERY turn, not
+// just at the end, because each of the four defects shows up at a different
+// point in the sequence. ─────────────────────────────────────────────────
+
+const ACC1_CHEESE_BURGER_ID = "acc1-cheese-burger";
+const ACC1_TEMP_GROUP_ID = "acc1-temp-group";
+const ACC1_MEDIUM_CHOICE_ID = "acc1-temp-medium";
+const ACC1_FRIES_A_ID = "acc1-fries-a";
+const ACC1_FRIES_B_ID = "acc1-fries-b";
+
+const ACC1_MENU: TurnEngineMenuItem[] = [
+  {
+    id: ACC1_CHEESE_BURGER_ID, name: "Cheese Burger", category: "Burgers", price_cents: 849,
+    bot_state: "orderable",
+    option_groups: [{ id: ACC1_TEMP_GROUP_ID, name: "Temp", default_choice_id: null }],
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Cheese Burger", base_price_cents: 849,
+      recap_template: "", ticket_template: "",
+      steps: [{
+        kind: "slot", ask_mode: "ask", group_id: ACC1_TEMP_GROUP_ID, slot_key: null, prompt_template: "temp.ask",
+        choices: [
+          { id: "acc1-temp-well", display: "Well Done", price_delta_cents: 0 },
+          { id: ACC1_MEDIUM_CHOICE_ID, display: "Medium", price_delta_cents: 0 },
+          { id: "acc1-temp-rare", display: "Rare", price_delta_cents: 0 },
+        ],
+      }],
+    },
+  },
+  {
+    id: ACC1_FRIES_A_ID, name: "French Fries", category: "Sides", price_cents: 499, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "French Fries", base_price_cents: 499, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: ACC1_FRIES_B_ID, name: "Cajun Fries", category: "Sides", price_cents: 549, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Cajun Fries", base_price_cents: 549, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+// Both fries items tie on the bare term "fries" — the real Vito's shape
+// (multiple fries-family sides) that makes "large fries" genuinely
+// ambiguous, exactly like problem 4's live transcript.
+const ACC1_LEXICON = [
+  { term: "cheeseburger", target_id: ACC1_CHEESE_BURGER_ID },
+  { term: "cheeseburgers", target_id: ACC1_CHEESE_BURGER_ID },
+  { term: "fries", target_id: ACC1_FRIES_A_ID },
+  { term: "fries", target_id: ACC1_FRIES_B_ID },
+];
+
+Deno.test("ACCEPTANCE 1: 'two cheeseburgers and a large fries' -> 'medium' -> 'thats it' — one line at qty 2, Temp asked once, fries surfaces, cart untouched by the closing 'thats it'", async () => {
+  let proposeCalls = 0;
+  const { supabase, state } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `acc1-line-${++n}`; })(),
+    // Real, live-probed model output for this exact phrase against this
+    // exact menu shape (OpenRouter deepseek/deepseek-v4-flash, 2026-09-15,
+    // 8/8 identical runs): ONE add for the burger at the correctly-stated
+    // quantity 2, ONE add for the (ambiguous) fries at quantity 1. Turn 1 is
+    // the only turn PROPOSE may ever be called on in this whole transcript.
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalls++;
+      if (proposeCalls > 1) return Promise.reject(new Error(`PROPOSE must be called exactly once across this transcript — this is call ${proposeCalls}`));
+      return Promise.resolve({
+        ok: true, attempts: 1,
+        proposal: {
+          intent: "order",
+          adds: [
+            { item_span: "cheeseburgers", quantity: 2, choices: [] },
+            { item_span: "large fries", quantity: 1, choices: [] },
+          ],
+          removes: [], modifies: [],
+        },
+      });
+    },
+  };
+
+  const shopContext = {
+    deliveryEnabled: false, orderType: "pickup" as const, deliveryAddressKnown: false,
+    driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null,
+  };
+
+  // ── Turn 1: "two cheeseburgers and a large fries" ───────────────────────
+  const r1 = await runTurnEngineTurn(
+    { conversationId: "c1", shopId: "s1", tenantId: "t1", cartId: "cart1", message: "two cheeseburgers and a large fries",
+      history: [], menu: ACC1_MENU, cart: [], dialogueState: null, shopContext },
+    deps,
+  );
+  assertEquals(r1.cart.length, 1, `turn 1 must produce ONE Cheese Burger line, not a split — got: ${JSON.stringify(r1.cart)}`);
+  assertEquals(r1.cart[0].menu_item_id, ACC1_CHEESE_BURGER_ID);
+  assertEquals(r1.cart[0].quantity, 2);
+  assertEquals(state.orderCartsUpdates[0].subtotal_cents, 1698, "turn 1 subtotal must be exactly 2 x $8.49, never more");
+  assert(r1.dialogueState.open?.kind === "slot", `turn 1 must open the Temp slot question, got: ${JSON.stringify(r1.dialogueState.open)}`);
+  const tempAskCount1 = (r1.reply.match(/cooked/gi) ?? []).length;
+
+  // ── Turn 2: "medium" ─────────────────────────────────────────────────────
+  const r2 = await runTurnEngineTurn(
+    { conversationId: "c1", shopId: "s1", tenantId: "t1", cartId: "cart1", message: "medium",
+      history: [], menu: ACC1_MENU, cart: r1.cart, dialogueState: r1.dialogueState, shopContext },
+    deps,
+  );
+  assertEquals(r2.cart.length, 1, `turn 2 must still be ONE Cheese Burger line — the split-one-unit-off bug creates a second here: ${JSON.stringify(r2.cart)}`);
+  assertEquals(r2.cart[0].quantity, 2, "turn 2 must resolve Temp for BOTH units on the one line, never split one off");
+  assertEquals(r2.cart[0].options, { Temp: ["Medium"] });
+  assertEquals(state.orderCartsUpdates[1].subtotal_cents, 1698, "turn 2 subtotal must never exceed turn 1's — no phantom growth");
+  const tempAskCount2 = (r2.reply.match(/cooked/gi) ?? []).length;
+  assertEquals(tempAskCount1 + tempAskCount2, 1, "the Temp slot question must be asked AT MOST ONCE across the whole transcript, never repeated");
+  assert(r2.dialogueState.open?.kind === "disambiguation", `turn 2 must surface the carried fries ambiguity instead of dropping it, got: ${JSON.stringify(r2.dialogueState.open)}`);
+  assertEquals(
+    [...(r2.dialogueState.open as { candidates: string[] }).candidates].sort(),
+    [ACC1_FRIES_A_ID, ACC1_FRIES_B_ID].sort(),
+    "turn 2's disambiguation question must be about the fries candidates",
+  );
+
+  // ── Turn 3: "thats it" ───────────────────────────────────────────────────
+  const r3 = await runTurnEngineTurn(
+    { conversationId: "c1", shopId: "s1", tenantId: "t1", cartId: "cart1", message: "thats it",
+      history: [], menu: ACC1_MENU, cart: r2.cart, dialogueState: r2.dialogueState, shopContext },
+    deps,
+  );
+  assertEquals(proposeCalls, 1, "PROPOSE must never be called again once the fries disambiguation question is open — 'thats it' is an unambiguous closure");
+  assertEquals(r3.cart.length, 1, `the closing 'thats it' must never add a phantom third line: ${JSON.stringify(r3.cart)}`);
+  assertEquals(r3.cart[0].quantity, 2, "'thats it' must never change quantity");
+  assertEquals(r3.cart, r2.cart, "the cart must be byte-identical before and after the closing 'thats it' turn");
+  assertEquals(state.orderCartsUpdates[2].subtotal_cents, 1698, "turn 3 subtotal must never exceed turn 1's — no phantom growth from the closure turn");
+});
+
 // ── Return value is always the reply string ───────────────────────────────
 
 Deno.test("runTurnEngineTurn: always returns a non-empty reply string, even on an empty cart with nothing open", async () => {
