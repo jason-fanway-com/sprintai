@@ -179,7 +179,7 @@ async function persistTurn(
   reply: string,
 ): Promise<void> {
   await supabase.from("order_carts").update({
-    cart_json: cart,
+    cart_json: cart, // single-writer:blessed — persistTurn is THE engine-path persister; saveCart (index.ts) is its legacy-path counterpart
     dialogue_state: dialogueState,
     phase: cart.length > 0 ? "building" : "greeting",
     ...sideEffects,

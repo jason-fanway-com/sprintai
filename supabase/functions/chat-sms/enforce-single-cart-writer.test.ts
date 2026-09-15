@@ -23,7 +23,7 @@
 //
 // See supabase/functions/chat-sms/turn-reconciler.ts header for why.
 
-import { assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const DIR = new URL(".", import.meta.url).pathname;
 
@@ -136,5 +136,38 @@ Deno.test("enforce-single-cart-writer: no direct cart.push outside writeCartLine
   assert(
     violations.length === 0,
     `${violations.length} direct cart push(es) found outside writeCartLine — see stderr above`,
+  );
+});
+
+// The engine path's persistTurn (turn-engine-runner.ts) carries a
+// single-writer:blessed marker and is therefore invisible to the scan above.
+// A marker that exempts a file without anything else watching that file is a
+// hole: a second cart_json write could land there later, unmarked or not,
+// and nothing above would ever flag it. This assertion watches
+// turn-engine-runner.ts on its own, independent of the marker, so it fails
+// the moment a second cart_json-writing line appears — blessed or not.
+const ENGINE_WRITER_FILE = "turn-engine-runner.ts";
+const CART_JSON_WRITE = /\bcart_json:\s*\S/;
+
+Deno.test("enforce-single-cart-writer: turn-engine-runner.ts has exactly one cart_json write", async () => {
+  const filePath = `${DIR}${ENGINE_WRITER_FILE}`;
+  const source = await Deno.readTextFile(filePath);
+  const lines = source.split("\n");
+
+  const writeLines = lines
+    .map((line, i) => ({ line, i }))
+    .filter(({ line }) => CART_JSON_WRITE.test(line));
+
+  if (writeLines.length !== 1) {
+    console.error(
+      `\n[enforce-single-cart-writer] ${ENGINE_WRITER_FILE} cart_json write count is ${writeLines.length}, expected exactly 1:\n` +
+        writeLines.map(({ line, i }) => `  ${ENGINE_WRITER_FILE}:${i + 1}: ${line.trim()}`).join("\n") + "\n",
+    );
+  }
+
+  assertEquals(
+    writeLines.length,
+    1,
+    `expected exactly 1 cart_json write in ${ENGINE_WRITER_FILE}, found ${writeLines.length} — see stderr above`,
   );
 });
