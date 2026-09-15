@@ -235,6 +235,7 @@ export async function appendEngineCheckoutLinkIfReady(
   }
   return appendCheckoutLink(params.reply, result.checkoutUrl, params.isSms);
 }
+
 const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
 
