@@ -219,6 +219,63 @@ Deno.test("runTurnEngineTurn: an open slot question resolves via ANSWER against 
   assertEquals(state.orderCartsUpdates[0].cart_json, result.cart);
 });
 
+// ── ANSWER has structural priority over PROPOSE/DECIDE/the lexicon ───────
+//
+// compile-menu.ts (2026-09-15 PO dispatch, choice-collision extension)
+// stops suppressing a derived item head noun that collides only with a
+// rule 6 CHOICE term — e.g. "penne" now exists both as Zio's "Choose
+// Pasta" slot's own stated choice term AND as a derived item term on some
+// other pasta dish. The justification for not splitting that fix by
+// ask_mode rests entirely on THIS test: with a real, rendered "Choose
+// Pasta"-shaped question open (ask_mode "ask", modeled on Zio's actual
+// Fettuccine/Rigatoni/Penne/Spaghetti/Angel Hair/Linguine group), answer()
+// resolves "penne" directly against the open slot's own compiled choices
+// (applyCompiledModifyItem, called with the raw customer text) BEFORE
+// PROPOSE/DECIDE — and therefore the lexicon — are ever reached. If this
+// assertion (proposeCalls === 0) ever fails, PROPOSE has become reachable
+// while a choice question is open, the priority argument is wrong, and the
+// compile-menu.ts fix must be redesigned to split by ask_mode.
+Deno.test("runTurnEngineTurn: 'penne' against an open 'Choose Pasta' ask_mode:'ask' slot resolves via ANSWER (existing line mutated, not a new line added), PROPOSE is never called", async () => {
+  const askPlanWithPastaSlot = {
+    compiled_at: "", compiler_version: 1, display_name: "Baked Ziti", base_price_cents: 1295,
+    recap_template: "", ticket_template: "",
+    steps: [{
+      group_id: "group-pasta", slot_key: "pasta", kind: "slot" as const, ask_mode: "ask" as const,
+      prompt_template: "Choose Pasta",
+      choices: [
+        { id: "choice-fettuccine", display: "Fettuccine", price_delta_cents: 0 },
+        { id: "choice-rigatoni", display: "Rigatoni", price_delta_cents: 0 },
+        { id: "choice-penne", display: "Penne", price_delta_cents: 0 },
+        { id: "choice-spaghetti", display: "Spaghetti", price_delta_cents: 0 },
+        { id: "choice-angel-hair", display: "Angel Hair", price_delta_cents: 0 },
+        { id: "choice-linguine", display: "Linguine", price_delta_cents: 0 },
+      ],
+    }],
+  };
+  const menuWithPastaSlot: TurnEngineMenuItem[] = [
+    { id: "item-baked-ziti", name: "Baked Ziti", category: "Entrees", price_cents: 1295, bot_state: "orderable", ask_plan: askPlanWithPastaSlot, option_groups: [{ id: "group-pasta", name: "Pasta" }] },
+  ];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-baked-ziti", name: "Baked Ziti", quantity: 1, price_cents: 1295, modifiers: [], line_key: "line-1" },
+  ];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-pasta" }, upsell_offered: false, asked_message_id: null };
+
+  const { supabase, state } = makeFakeSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: () => { proposeCalls++; return Promise.reject(new Error("must not be called — PROPOSE must never be reachable while a choice question is open")); } };
+  const input = baseInput({ message: "penne", menu: menuWithPastaSlot, cart, dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0, "THE priority assertion: PROPOSE must never be called while the Choose Pasta question is open");
+  assertEquals(result.cart.length, 1, "the existing Baked Ziti line must be mutated, not a second line added");
+  assertEquals(result.cart[0].menu_item_id, "item-baked-ziti");
+  assertEquals(result.cart[0].ask_plan_selections, { "group-pasta": "choice-penne" }, "ANSWER resolved Penne onto the existing line's slot");
+  assertEquals(result.dialogueState.open, null, "the pasta question is resolved, nothing else is open");
+  assertEquals(state.orderCartsUpdates.length, 1);
+  assertEquals(state.orderCartsUpdates[0].cart_json, result.cart);
+});
+
 // ── PROPOSE runs when ANSWER cannot resolve, DECIDE resolves the item ────
 
 Deno.test("runTurnEngineTurn: ANSWER cannot resolve a fresh order message, PROPOSE runs, DECIDE resolves item_span via resolve-item.ts", async () => {

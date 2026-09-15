@@ -524,29 +524,41 @@ function dedupeLexicon(terms: LexiconTerm[]): LexiconTerm[] {
 //
 // Collision handling (2026-09-15 PO dispatch, superseding the same-day
 // drop-on-collision rule this comment used to describe): a candidate that
-// collides with an EXISTING rule 1/2/6 item/choice term is still excluded
-// outright — a derived guess never shadows real, stated data for the same
-// (or a more specific) target. But a candidate that collides with ONE OR
-// MORE OTHER DERIVED candidates (this same pass, proposed by a different
-// item) — OR with a rule 3 category term — is no longer dropped for every
-// claimant. It is KEPT, once per claimant, so resolve-item.ts's
-// ambiguous-match path (two-or-more targets tie at the longest match → ASK
-// naming the candidates) has data to route on. Real Vito's incident:
-// dropping `burger` (7 items) and `fries` (10 items) entirely left
-// resolveItem with nothing to return but `unresolved` for those words,
-// which DECIDE turns into a flat "didn't catch that" dead end — even
-// though the ambiguous-routing ASK was already implemented and correct,
-// just unreachable with an empty lexicon. Real Zio's incident (same PO
-// dispatch): category "Pizza" carries stated rule-3 terms "pizza"/"pizzas",
-// and that alone silently withheld the item-level term "pizza" for every
-// pizza item menu-wide — but resolve-item.ts never reads category-type
-// rows, so "pizza" typed at a pizzeria hit the same dead end. A category
-// term is coarser than an item term, never a genuine claimant for the same
-// customer word, so it must not block a derived item candidate the way a
-// real item/choice term does; the category row and the new item row(s)
-// coexist. Jason's standing direction: when the bot is unsure, it asks,
-// naming the candidates — it never silently drops or guesses. No tiebreak,
-// no ranking: every claimant keeps its own row.
+// collides with an EXISTING rule 1/2 item term is still excluded outright —
+// a derived guess never shadows a real, stated item name for the same (or a
+// more specific) target. But a candidate that collides with ONE OR MORE
+// OTHER DERIVED candidates (this same pass, proposed by a different item) —
+// OR with a rule 3 category term — OR with a rule 6 choice term — is no
+// longer dropped for every claimant. It is KEPT, once per claimant, so
+// resolve-item.ts's ambiguous-match path (two-or-more targets tie at the
+// longest match → ASK naming the candidates) has data to route on. Real
+// Vito's incident: dropping `burger` (7 items) and `fries` (10 items)
+// entirely left resolveItem with nothing to return but `unresolved` for
+// those words, which DECIDE turns into a flat "didn't catch that" dead end
+// — even though the ambiguous-routing ASK was already implemented and
+// correct, just unreachable with an empty lexicon. Real Zio's incident
+// (same PO dispatch): category "Pizza" carries stated rule-3 terms
+// "pizza"/"pizzas", and that alone silently withheld the item-level term
+// "pizza" for every pizza item menu-wide — but resolve-item.ts never reads
+// category-type rows, so "pizza" typed at a pizzeria hit the same dead end.
+// A category term is coarser than an item term, never a genuine claimant
+// for the same customer word, so it must not block a derived item
+// candidate the way a real item term does; the category row and the new
+// item row(s) coexist. Extended 2026-09-15 (choice-collision dispatch, same
+// day): Zio's/NJB/Vito's each have dozens of head nouns suppressed this
+// same way by a rule 6 choice term ("pasta", "bagel", "rye"/"wheat"/
+// "white") — resolve-item.ts also never reads choice-type rows for item
+// resolution, and turn-engine-runner.ts's ANSWER step (the `slot` case)
+// resolves an open choice question directly against the raw customer text
+// BEFORE PROPOSE/DECIDE ever consult the lexicon, so a choice term keeping
+// its normal priority is structurally guaranteed regardless of whether the
+// derived item candidate also exists — the lexicon is only reachable once
+// ANSWER has already failed to resolve the turn. So a rule 6 choice term,
+// like a rule 3 category term, must not block a derived item candidate;
+// the choice row and the new item row(s) coexist too. Jason's standing
+// direction: when the bot is unsure, it asks, naming the candidates — it
+// never silently drops or guesses. No tiebreak, no ranking: every claimant
+// keeps its own row.
 //
 // Two levels, one candidate pool per level, same uniqueness rule throughout:
 //   level 1 — collapse, plural-of-stated, plural-of-collapsed, computed
@@ -582,9 +594,10 @@ interface SurfaceFormCandidate {
 
 // One candidate pool, one exclusion gate (never a uniqueness gate): propose
 // every (term, itemId) pair `generate` produces off `source`, skip anything
-// already in `excluded` (a real stated rule 1/2/6 item/choice term — the
-// caller's `existing` set deliberately omits rule 3 category terms, which
-// must not block a derived item candidate), then emit one row
+// already in `excluded` (a real stated rule 1/2 item term — the caller's
+// `existing` set deliberately omits rule 3 category terms and rule 6
+// choice terms, neither of which may block a derived item candidate), then
+// emit one row
 // per DISTINCT (term, itemId) pair that survives — regardless of how many
 // other item ids also claim the same term. A term claimed by N items yields
 // N rows, not zero and not one. Order of `source`/`out` doesn't affect which
@@ -641,17 +654,23 @@ function trailingWordRuns(term: string): string[] {
 }
 
 function deriveLexiconSurfaceForms(compiledItems: CompiledItem[]): LexiconTerm[] {
-  // The shop's lexicon as it exists before this pass (every rule 1/2/6 item/
-  // choice term). A candidate matching one of these already "exists as a
+  // The shop's lexicon as it exists before this pass, restricted to rule 1/2
+  // ITEM terms only. A candidate matching one of these already "exists as a
   // term" (own item) or would create a cross-target ambiguity against a
-  // real item/choice target — either way, don't add it. Rule 3 category
-  // terms are deliberately NOT in this set (2026-09-15 PO dispatch): a
-  // category term is coarser than an item term, never a genuine claimant
-  // for the same customer word, so it must not block a derived item
-  // candidate the way a real item/choice term does — see the collision-
-  // handling comment above for the live Zio's 'pizza' incident this fixed.
+  // real item target — either way, don't add it. Rule 3 category terms and
+  // rule 6 choice terms are deliberately NOT in this set (2026-09-15 PO
+  // dispatch, category first then choice same day): both are coarser/
+  // structurally-prioritized targets, never a genuine claimant for the same
+  // customer word the way another item's own name is, so neither may block
+  // a derived item candidate — see the collision-handling comment above for
+  // the live Zio's 'pizza' incident and the choice-collision extension.
   const existing = new Set<string>();
-  for (const c of compiledItems) for (const t of c.lexicon_terms) existing.add(t.term);
+  for (const c of compiledItems) {
+    for (const t of c.lexicon_terms) {
+      if (t.target_type !== "item") continue;
+      existing.add(t.term);
+    }
+  }
 
   const statedItemTerms: SurfaceFormCandidate[] = [];
   for (const c of compiledItems) {

@@ -636,22 +636,72 @@ Deno.test("lexicon surface forms: a trailing word-run colliding with another ite
     "an item-type collision must remain excluded, unchanged by the category fix");
 });
 
-Deno.test("lexicon surface forms: a trailing word-run colliding with a CHOICE term (rule 6) is still suppressed (category fix must not widen choice collisions)", () => {
+// ---- Choice-vs-item surface-form collisions (2026-09-15 PO dispatch,
+// extending the category fix above to rule 6 choice terms — Zio's 44,
+// NJB 16, Vito's 39 suppressed head nouns) --------------------------------
+
+Deno.test("lexicon surface forms: a trailing word-run colliding ONLY with an auto_single-mode CHOICE term is now written as an item term, one row per claimant (real Zio's/Vito's shape, e.g. 'bagel'/'rye')", () => {
+  // group() defaults to a single choice with no default_choice_id set, which
+  // deriveAskMode resolves to ask_mode "auto_single" — a slot the runner
+  // fills automatically, never rendered as a question. This is the shape of
+  // most of the 44/16/39 suppressed terms found in the live shops.
   const familyMeal = item({
     display_name: "Family Meal",
     category: "Combos",
     groups: [group({ slot_key: "extra", choices: [choice({ name: "Pizza" })] })],
   });
+  assertEquals(familyMeal.groups[0].choices.length, 1, "sanity: single choice -> auto_single ask_mode");
   const tomatoPizza = item({ display_name: "Large Tomato Pizza", category: "Sides" }); // category noun != "pizza"
   const { items: compiled } = compileMenu([familyMeal, tomatoPizza], [], "t", false);
   const familyMealTerms = compiled.find(c => c.item_id === familyMeal.id)!.lexicon_terms;
+  const tomatoPizzaTerms = compiled.find(c => c.item_id === tomatoPizza.id)!.lexicon_terms;
 
   assert(familyMealTerms.some(t => t.term === "pizza" && t.target_type === "choice" && t.provenance === "stated"),
-    "the choice's own stated term must exist");
+    "the choice's own stated term must still exist, untouched");
 
-  const pizzaTerms = compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "pizza"));
-  assert(!pizzaTerms.some(t => t.target_type === "item" && t.provenance === "derived"),
-    "a choice-type collision must remain excluded, unchanged by the category fix");
+  const derivedPizzaOnTomato = tomatoPizzaTerms.find(t => t.term === "pizza" && t.target_type === "item");
+  assert(derivedPizzaOnTomato, "a choice-type collision must no longer block a derived item candidate");
+  assertEquals(derivedPizzaOnTomato!.provenance, "derived");
+  assertEquals(derivedPizzaOnTomato!.target_id, tomatoPizza.id);
+});
+
+Deno.test("lexicon surface forms: a trailing word-run colliding with an ask_mode:'ask' CHOICE term is now written as an item term, one row per claimant (real Zio's 'Choose Pasta' shape)", () => {
+  // Modeled on Zio's actual rendered "Choose Pasta" question: six choices,
+  // no default_choice_id -> deriveAskMode resolves to ask_mode "ask", a
+  // real question customers see. This is the one REAL rendered-question
+  // collision found live (the other 43+16+39 are all auto_single).
+  const choosePasta = item({
+    display_name: "Baked Ziti",
+    category: "Entrees",
+    groups: [group({
+      slot_key: "pasta",
+      choices: [
+        choice({ name: "Fettuccine" }),
+        choice({ name: "Rigatoni" }),
+        choice({ name: "Penne" }),
+        choice({ name: "Spaghetti" }),
+        choice({ name: "Angel Hair" }),
+        choice({ name: "Linguine" }),
+      ],
+    })],
+  });
+  assert(!choosePasta.groups[0].default_choice_id, "sanity: no default -> ask_mode 'ask'");
+  const chickenPenne = item({ display_name: "Chicken Penne", category: "Entrees" });
+  const { items: compiled } = compileMenu([choosePasta, chickenPenne], [], "t", false);
+  const askPlanStep = compiled.find(c => c.item_id === choosePasta.id)!.ask_plan.steps
+    .find(s => s.slot_key === "pasta")!;
+  assertEquals(askPlanStep.ask_mode, "ask", "sanity: this is the real rendered-question shape");
+
+  const choosePastaTerms = compiled.find(c => c.item_id === choosePasta.id)!.lexicon_terms;
+  const chickenPenneTerms = compiled.find(c => c.item_id === chickenPenne.id)!.lexicon_terms;
+
+  assert(choosePastaTerms.some(t => t.term === "penne" && t.target_type === "choice" && t.provenance === "stated"),
+    "the choice's own stated term must still exist, untouched");
+
+  const derivedPenneOnEntree = chickenPenneTerms.find(t => t.term === "penne" && t.target_type === "item");
+  assert(derivedPenneOnEntree, "an ask_mode:'ask' choice collision must no longer block a derived item candidate");
+  assertEquals(derivedPenneOnEntree!.provenance, "derived");
+  assertEquals(derivedPenneOnEntree!.target_id, chickenPenne.id);
 });
 
 // ---- Overrides: empty = identity, present = last-write-wins -------------------
