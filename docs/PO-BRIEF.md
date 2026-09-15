@@ -341,6 +341,15 @@ with the modifier on one — so the right outcome hid a wrong story about why. *
 is not an architecture. Check the import path.** The cost of not checking would have been
 item 8 retiring guards in favour of code that never ran.
 
+A third worked example, 2026-09-15, a *new* shape of the committed-is-not-deployed trap:
+the crew recompiled Vito's live lexicon from **uncommitted** working-tree code and reported
+the item as fully delivered at a commit that contained only half the change. The live data
+was real and correct; nothing in the repo could reproduce it, so the next recompile from
+HEAD would have silently wiped 425 terms including the one the whole fix existed for. So the
+question is not only "is the committed code deployed" but **"is the live data reproducible
+from a commit"** — whenever a dispatch writes to the database, `git status --porcelain` on
+the producing file is part of the acceptance, not bookkeeping.
+
 A defect fixed at level 5 will return. A modifier-scope bug survived three fixes across
 three days because each was at level 4 or 5; it stopped recurring when the phrase identity
 was carried in the data structure so the wrong thing had nowhere to go.
