@@ -159,6 +159,15 @@ pre-composition (D1 derived rows, D2 learn-on-first-order).
   `modelAssertedChoiceTexts` contract (`ask-plan-engine.ts` — free-text modifier scanning
   was deliberately removed), and every price string (the itemizer).
 - *Live behaviour must be traceable to a quote or a human.* No invented shop policy.
+- *Anticipate real user behaviour in the data.* (Jason, 2026-09-15.) The compiler's job is
+  to generate the surface forms a person will actually type, **before** they type them -
+  not to react after a miss. Worked example: Vito's lexicon had `cheese burger` and
+  `bacon cheeseburger` but no single-word `cheeseburger`, so the only term containing that
+  token pointed at the $10.99 item and a plain "cheeseburger" resolved to the dearer row.
+  The compiler now emits space-collapsed and plural variants, each kept only when it
+  resolves uniquely. Measured across all three real shops: 1,006 space-collapsed variants,
+  zero collisions. When a phrasing problem appears, ask what data would have prevented it
+  - a runtime matcher is the wrong layer.
 - *Materialised rows over runtime synthesis.* If a combination is predictable, make it a
   menu row rather than composing it in conversation. This is why "pepperoni pizza" is now
   a derived row instead of a runtime composition — the runtime version broke four times.
