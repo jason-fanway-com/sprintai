@@ -83,14 +83,26 @@ function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "l
     ...overrides,
   };
 
+  // Real PostgREST caps an unbounded select at 1000 rows by default, silently
+  // — the exact defect loadItemLexicon's paging fix exists to close. Mirror
+  // that here: a chain that never calls .range() (the old, unpaged code
+  // path) gets the first 1000 rows; a chain that does call .range(from, to)
+  // (the fixed, paged code path) gets exactly the slice it asked for.
+  const POSTGREST_DEFAULT_ROW_CAP = 1000;
+
   function builder(table: string) {
     // deno-lint-ignore no-explicit-any
     const b: any = {
       select() { return b; },
       eq() { return b; },
+      order() { return b; },
       maybeSingle() {
         if (table === "shop_settings") return Promise.resolve({ data: state.shopSettings, error: null });
         return Promise.resolve({ data: null, error: null });
+      },
+      range(from: number, to: number) {
+        const all = table === "lexicon" ? state.lexicon : [];
+        return Promise.resolve({ data: all.slice(from, to + 1), error: null });
       },
       update(row: Record<string, unknown>) {
         if (table === "order_carts") state.orderCartsUpdates.push(row);
@@ -101,10 +113,11 @@ function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "l
         if (table === "error_log") state.errorLogInserted.push(row);
         return Promise.resolve({ error: null });
       },
-      // Thenable, for the one call site (loadItemLexicon) that awaits the
-      // builder directly rather than terminating with .maybeSingle().
+      // Thenable, for a chain that awaits the builder directly rather than
+      // terminating with .maybeSingle()/.range() — mirrors PostgREST's own
+      // silent default-cap behavior when no explicit Range header is sent.
       then(resolve: (v: { data: unknown; error: null }) => void, reject?: (e: unknown) => void) {
-        const data = table === "lexicon" ? state.lexicon : null;
+        const data = table === "lexicon" ? state.lexicon.slice(0, POSTGREST_DEFAULT_ROW_CAP) : null;
         return Promise.resolve({ data, error: null }).then(resolve, reject);
       },
     };
@@ -216,6 +229,36 @@ Deno.test("runTurnEngineTurn: ANSWER cannot resolve a fresh order message, PROPO
   assertEquals(state.orderCartsUpdates[0].cart_json, result.cart);
   assertEquals((state.orderCartsUpdates[0].dialogue_state as DialogueState), result.dialogueState);
   assertEquals(state.messagesInserted.length, 1);
+});
+
+// ── loadItemLexicon must page past PostgREST's silent 1000-row cap ───────
+// Reproduces the live incident directly: Vito's has 1298 active item
+// lexicon rows. Against the fake's PostgREST-shaped cap (see makeFakeSupabase
+// above), the unpaged loader gets only the first 1000 (a truncated fake
+// PROPOSE input.lexicon.length === 1000); the paged loader pages via
+// .range() until a short page and gets the full 1298.
+
+Deno.test("runTurnEngineTurn: loadItemLexicon pages past PostgREST's 1000-row cap and hands PROPOSE all 1298 lexicon rows", async () => {
+  const fullLexicon = Array.from({ length: 1298 }, (_, i) => ({ term: `term-${i}`, target_id: `target-${i}` }));
+  const { supabase } = makeFakeSupabase({ lexicon: fullLexicon });
+  let seenLexiconLength = -1;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      seenLexiconLength = input.lexicon.length;
+      return Promise.resolve({
+        ok: true,
+        attempts: 1,
+        proposal: { intent: "other", adds: [], removes: [], modifies: [] },
+      });
+    },
+  };
+  const input = baseInput({ message: "two cheeseburgers", cart: [] });
+
+  await runTurnEngineTurn(input, deps);
+
+  assertEquals(seenLexiconLength, 1298, "the loader must return every active row, not PostgREST's silently-capped first 1000");
 });
 
 Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and routes to ASK's disambiguation question", async () => {

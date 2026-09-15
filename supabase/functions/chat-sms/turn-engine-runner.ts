@@ -138,11 +138,32 @@ async function loadUpsellEnabled(supabase: SupabaseClient, shopId: string): Prom
   return (data as { upsell_enabled?: boolean } | null)?.upsell_enabled ?? true;
 }
 
+// PostgREST silently caps an unbounded select at 1000 rows — no error, no
+// truncation flag, just fewer rows than the table actually has (same failure
+// shape index.ts's own fetchAllRows exists to close for option_choices, see
+// its header comment). Vito's crossed this exact cliff live on its own item
+// lexicon (1298 active terms, turn_engine_enabled flip 2026-09-15): the
+// silently-dropped 298 rows included "cheeseburger", so PROPOSE/DECIDE never
+// had a chance to resolve it, no matter how correct resolve-item.ts is.
+// Page with .range() until a page comes back short of the page size — never
+// a bigger fixed cap, which just moves the same cliff to the next shop.
+const ITEM_LEXICON_PAGE_SIZE = 1000;
+
 async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconTerm[]> {
-  const { data } = await supabase
-    .from("lexicon").select("term, target_id")
-    .eq("shop_id", shopId).eq("target_type", "item").eq("active", true);
-  return (data ?? []) as LexiconTerm[];
+  const rows: LexiconTerm[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("lexicon").select("term, target_id")
+      .eq("shop_id", shopId).eq("target_type", "item").eq("active", true)
+      .order("id", { ascending: true })
+      .range(from, from + ITEM_LEXICON_PAGE_SIZE - 1);
+    if (error || !data || data.length === 0) break;
+    rows.push(...(data as LexiconTerm[]));
+    if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
+    from += ITEM_LEXICON_PAGE_SIZE;
+  }
+  return rows;
 }
 
 function buildAskShopContext(shopContext: RunTurnShopContext, upsellEnabled: boolean): AskShopContext {
