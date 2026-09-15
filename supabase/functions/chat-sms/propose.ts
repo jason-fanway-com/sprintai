@@ -2,12 +2,17 @@
 // step 3, §3c, §4 Phase 2).
 //
 // PROPOSE: the one place left that calls the model. The model is an NLU,
-// not an agent — it returns a structured Proposal (ids only, no free-text
-// item names, no source_phrase, no `modifiers: string[]`), never acts
-// directly, and has no reply authority (`answer_text` is permitted only
-// when `intent === "question"`). One model call. No tool loop, no second
-// round-trip inside a call — exactly one retry of the whole call if the
-// first attempt fails, for any reason.
+// not an agent — it returns a structured Proposal (group_id/choice_id/
+// line_key are always real ids, never free text; no `modifiers: string[]`),
+// never acts directly, and has no reply authority (`answer_text` is
+// permitted only when `intent === "question"`). The one deliberate
+// exception is an add's item_span (docs/specs/2026-09-15-code-owned-
+// resolution.md §4): the customer's own verbatim words naming the item,
+// never a model-chosen id — resolve-item.ts (turn-engine.ts's DECIDE) is
+// the one place that turns a span into a real menu_item_id, not the model
+// and not a re-derivation from prose after the fact. One model call. No
+// tool loop, no second round-trip inside a call — exactly one retry of the
+// whole call if the first attempt fails, for any reason.
 //
 // Every failure — a non-200 response, a timeout, a response body that
 // isn't valid JSON, or a body that IS valid JSON but violates the Proposal
@@ -210,7 +215,8 @@ function buildCartIndex(cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]):
 const SYSTEM_PROMPT_PREAMBLE = `You are the ordering NLU for a restaurant's SMS/chat bot. You do not talk to the customer — you translate their message into a structured Proposal that code will validate and apply. You have no reply authority: never write anything the customer will see, except answer_text, and only when intent is "question".
 
 Rules:
-- Use ONLY menu_item_id, group_id, choice_id values that appear in the menu index or cart below. Never invent an id. Never use a free-text item name in place of an id.
+- For adds, report item_span: the VERBATIM substring of the customer's own message naming the item — nothing normalized, nothing invented, nothing paraphrased. Code resolves it to a real item deterministically; you never choose or state a menu_item_id for an add.
+- Use ONLY group_id, choice_id, and (for removes/modifies) line_key values that appear in the menu index or cart below. Never invent an id. Never use a free-text item name in place of a group_id, choice_id, or line_key.
 - quantity is always an integer count the customer actually stated or clearly implied (e.g. "two cheeseburgers" -> 2). Never infer a quantity from price or guesswork.
 - removes and modifies reference an existing cart line by its line_key, never by item name.
 - remove_choices on a modify is a list of choice_id values to drop from that line's existing selections — only when the customer is removing a specific option, not swapping the whole group.
@@ -229,7 +235,7 @@ function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], c
 
 const PROPOSAL_TOOL = {
   name: PROPOSAL_TOOL_NAME,
-  description: "Report the customer's intent and any cart changes as a structured proposal. Ids only — never free text.",
+  description: "Report the customer's intent and any cart changes as a structured proposal. Every id (group_id, choice_id, line_key) must be a real id from the menu index or cart — never free text. The one exception is an add's item_span, which is deliberately the customer's own verbatim words, never an id.",
   input_schema: {
     type: "object",
     properties: {
@@ -239,7 +245,7 @@ const PROPOSAL_TOOL = {
         items: {
           type: "object",
           properties: {
-            menu_item_id: { type: "string" },
+            item_span: { type: "string" },
             quantity: { type: "integer", minimum: 1 },
             choices: {
               type: "array",
@@ -250,7 +256,7 @@ const PROPOSAL_TOOL = {
               },
             },
           },
-          required: ["menu_item_id", "quantity", "choices"],
+          required: ["item_span", "quantity", "choices"],
         },
       },
       removes: {
@@ -313,7 +319,7 @@ function validateProposalShape(v: unknown): v is Proposal {
   for (const a of p.adds) {
     if (!a || typeof a !== "object") return false;
     const add = a as Record<string, unknown>;
-    if (!isNonEmptyString(add.menu_item_id)) return false;
+    if (!isNonEmptyString(add.item_span)) return false;
     if (typeof add.quantity !== "number" || !Number.isInteger(add.quantity) || add.quantity < 1) return false;
     if (!validateChoices(add.choices)) return false;
   }

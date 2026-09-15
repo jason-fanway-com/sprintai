@@ -23,6 +23,7 @@ import {
   type AskTurnEvents,
   type AskShopContext,
 } from "./turn-engine.ts";
+import type { LexiconTerm } from "./resolve-item.ts";
 
 // ── Fixture: Vito's real, live Cheese Burger row (id 442f650d-dc96-4a95-9762-
 // f6b571a4dd8c) and its real "Temp" option group (id cb066502-4a62-4d6e-a65a-
@@ -69,6 +70,15 @@ const VITOS_MENU: TurnEngineMenuItem[] = [
   },
 ];
 
+// Code-owned item resolution (docs/specs/2026-09-15-code-owned-resolution.md
+// §4): every decide() call below now resolves an add's item_span through a
+// lexicon rather than trusting a model-chosen menu_item_id — this is the
+// same shape the real `lexicon` table (target_type = 'item') carries.
+const VITOS_LEXICON: LexiconTerm[] = [
+  { term: "cheeseburger", target_id: CHEESE_BURGER_ID },
+  { term: "cheese burger", target_id: CHEESE_BURGER_ID },
+];
+
 const INITIAL_STATE: DialogueState = { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null };
 
 // Vito's real delivery config (delivery_radius_mi = 5 -> delivery enabled).
@@ -106,11 +116,11 @@ for (const conversationId of ["0e7b9fd7-396c-40ab-b5f3-c5c321401f82", "1eeab0c0-
 
     const proposal1: Proposal = {
       intent: "order",
-      adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [] }],
+      adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }],
       removes: [],
       modifies: [],
     };
-    const d1 = decide(proposal1, cart, VITOS_MENU);
+    const d1 = decide(proposal1, cart, VITOS_MENU, VITOS_LEXICON);
     assertEquals(d1.declines, []);
     assertEquals(d1.qualifyingAddMenuItemId, CHEESE_BURGER_ID);
     assertEquals(d1.cart.length, 1);
@@ -169,7 +179,7 @@ for (const conversationId of ["0e7b9fd7-396c-40ab-b5f3-c5c321401f82", "1eeab0c0-
     // checkout intent, carrying no adds/removes/modifies.
     const proposal3: Proposal = { intent: "checkout", adds: [], removes: [], modifies: [] };
     const cartBefore3 = cart.map(l => ({ ...l }));
-    const d3 = decide(proposal3, cart, VITOS_MENU);
+    const d3 = decide(proposal3, cart, VITOS_MENU, VITOS_LEXICON);
     assertEquals(d3.declines, []);
     assertEquals(d3.cart, cart); // nothing to add/remove/modify -> cart unchanged in content
 
@@ -226,32 +236,67 @@ Deno.test("decide: two adds with identical identity collapse to ONE line at MAX 
   const proposal: Proposal = {
     intent: "order",
     adds: [
-      { menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] },
-      { menu_item_id: CHEESE_BURGER_ID, quantity: 3, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] },
+      { item_span: "cheeseburger", quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] },
+      { item_span: "cheeseburger", quantity: 3, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] },
     ],
     removes: [],
     modifies: [],
   };
-  const result = decide(proposal, [], VITOS_MENU);
+  const result = decide(proposal, [], VITOS_MENU, VITOS_LEXICON);
   assertEquals(result.cart.length, 1);
   assertEquals(result.cart[0].quantity, 3);
 });
 
-Deno.test("decide: unknown menu_item_id is declined, never silently added", () => {
-  const proposal: Proposal = { intent: "order", adds: [{ menu_item_id: "not-a-real-id", quantity: 1, choices: [] }], removes: [], modifies: [] };
-  const result = decide(proposal, [], VITOS_MENU);
+Deno.test("decide: a resolved item_span whose lexicon target isn't on the menu is declined, never silently added — the existing menu-validation path still runs after resolution", () => {
+  // A lexicon/menu mismatch (a stale or misconfigured lexicon row) must be
+  // caught by the SAME "That item isn't on the menu." path decide() has
+  // always had — resolve-item.ts only decides WHICH id to look up, it never
+  // replaces the existing legality checks.
+  const staleLexicon: LexiconTerm[] = [...VITOS_LEXICON, { term: "flying spaghetti monster", target_id: "not-a-real-id" }];
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "flying spaghetti monster", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], VITOS_MENU, staleLexicon);
   assertEquals(result.cart.length, 0);
   assertEquals(result.declines.length, 1);
+});
+
+Deno.test("decide: an item_span matching nothing in the lexicon is unresolved — no line added, a decline explains it, never silently guessed", () => {
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "xyzzy plugh nothing like that here", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], VITOS_MENU, VITOS_LEXICON);
+  assertEquals(result.cart.length, 0);
+  assertEquals(result.disambiguationCandidateIds, null);
+  assertEquals(result.declines.length, 1);
+});
+
+Deno.test("decide: an item_span tying between two different items is ambiguous — no line added, both candidates carried for ASK, never guessed", () => {
+  const menuWithTwoBurgers: TurnEngineMenuItem[] = [
+    VITOS_MENU[0],
+    {
+      id: "turkey-burger-1", name: "Turkey Burger", price_cents: 799, bot_state: "orderable",
+      ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Turkey Burger", base_price_cents: 799, recap_template: "", ticket_template: "", steps: [] },
+    },
+  ];
+  // Both items legitimately carry the bare term "burger" — the real-menu
+  // shape the spec's own evidence table describes ("burger" (7 items) ->
+  // ambiguous -> ask). No tiebreak may resolve this; both candidates survive.
+  const ambiguousLexicon: LexiconTerm[] = [
+    { term: "burger", target_id: CHEESE_BURGER_ID },
+    { term: "burger", target_id: "turkey-burger-1" },
+  ];
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "i'll have a burger", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], menuWithTwoBurgers, ambiguousLexicon);
+  assertEquals(result.cart.length, 0);
+  assertEquals(result.declines, []);
+  assertEquals([...(result.disambiguationCandidateIds ?? [])].sort(), [CHEESE_BURGER_ID, "turkey-burger-1"].sort());
 });
 
 Deno.test("decide: an illegal choice_id for the named group is dropped, not asserted — the add still applies with what's left", () => {
   const proposal: Proposal = {
     intent: "order",
-    adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: "not-a-real-choice-id" }] }],
+    adds: [{ item_span: "cheeseburger", quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: "not-a-real-choice-id" }] }],
     removes: [],
     modifies: [],
   };
-  const result = decide(proposal, [], VITOS_MENU);
+  const result = decide(proposal, [], VITOS_MENU, VITOS_LEXICON);
   assertEquals(result.cart.length, 1);
   assertEquals(result.cart[0].options, undefined); // bogus choice never resolved -> Temp still pending
   assertEquals(result.cart[0].pending_options, ["Temp"]);
@@ -259,8 +304,8 @@ Deno.test("decide: an illegal choice_id for the named group is dropped, not asse
 });
 
 Deno.test("decide: quantity is used verbatim from the proposal — nothing here parses a number out of prose", () => {
-  const proposal: Proposal = { intent: "order", adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 16, choices: [] }], removes: [], modifies: [] };
-  const result = decide(proposal, [], VITOS_MENU);
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 16, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], VITOS_MENU, VITOS_LEXICON);
   // The exact $336/x16 defect class this design makes structurally
   // impossible (§3d row 1): a real explicit quantity of 16 is honored
   // exactly as given, because nothing downstream re-derives it from text.
@@ -273,7 +318,7 @@ Deno.test("decide: removes a line by line_key", () => {
   ];
   const lineKey = `${CHEESE_BURGER_ID}::Temp=Medium`;
   const proposal: Proposal = { intent: "order", adds: [], removes: [{ line_key: lineKey }], modifies: [] };
-  const result = decide(proposal, cart, VITOS_MENU);
+  const result = decide(proposal, cart, VITOS_MENU, VITOS_LEXICON);
   assertEquals(result.cart.length, 0);
 });
 
@@ -435,6 +480,11 @@ const PASTA_MENU: TurnEngineMenuItem[] = [
   },
 ];
 
+const PASTA_LEXICON: LexiconTerm[] = [
+  { term: "pasta with garlic and oil", target_id: PASTA_ITEM_ID },
+  { term: "pasta", target_id: PASTA_ITEM_ID },
+];
+
 Deno.test("decide: a modify carrying the line_key ASK stored BEFORE a second option group was answered still applies — the stale-identityKey bug this fix closes", () => {
   let counter = 0;
   const newLineKey = () => `k${++counter}`;
@@ -442,8 +492,8 @@ Deno.test("decide: a modify carrying the line_key ASK stored BEFORE a second opt
   // Turn 1: add the item. GROUP_A (auto_single) resolves silently; GROUP_B
   // is left open. This is the one and only genuinely-new-line add in this
   // test, so it's the only call that mints a stable key.
-  const proposalAdd: Proposal = { intent: "order", adds: [{ menu_item_id: PASTA_ITEM_ID, quantity: 1, choices: [] }], removes: [], modifies: [] };
-  const d1 = decide(proposalAdd, [], PASTA_MENU, newLineKey);
+  const proposalAdd: Proposal = { intent: "order", adds: [{ item_span: "pasta with garlic and oil", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const d1 = decide(proposalAdd, [], PASTA_MENU, PASTA_LEXICON, newLineKey);
   assertEquals(d1.declines, []);
   assertEquals(d1.cart.length, 1);
   assertEquals(d1.cart[0].line_key, "k1");
@@ -473,7 +523,7 @@ Deno.test("decide: a modify carrying the line_key ASK stored BEFORE a second opt
   // still find and mutate this line. Before this fix: declines with "That
   // item wasn't in your order." and the cart is left unchanged.
   const proposalModify: Proposal = { intent: "order", adds: [], removes: [], modifies: [{ line_key: askStoredKey, quantity: 3 }] };
-  const d2 = decide(proposalModify, cart, PASTA_MENU, newLineKey);
+  const d2 = decide(proposalModify, cart, PASTA_MENU, PASTA_LEXICON, newLineKey);
   assertEquals(d2.declines, [], "a modify keyed by the ASK-stored line_key must not decline — the item IS in the cart");
   assertEquals(d2.cart[0].quantity, 3, "the modify must actually apply, not silently no-op");
   assertEquals(counter, 1, "the modify must never mint a new key — only the original add did");
@@ -488,7 +538,7 @@ Deno.test("decide: a modify still targets a KEYLESS line via the derived-identit
   // identityKey string.
   const derivedKey = `${CHEESE_BURGER_ID}::Temp=Medium`;
   const proposal: Proposal = { intent: "order", adds: [], removes: [], modifies: [{ line_key: derivedKey, quantity: 5 }] };
-  const result = decide(proposal, cart, VITOS_MENU);
+  const result = decide(proposal, cart, VITOS_MENU, VITOS_LEXICON);
   assertEquals(result.declines, []);
   assertEquals(result.cart[0].quantity, 5);
 });
@@ -499,10 +549,10 @@ Deno.test("decide: mints a stable line_key only for a genuinely NEW line, never 
 
   const proposal1: Proposal = {
     intent: "order",
-    adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
+    adds: [{ item_span: "cheeseburger", quantity: 1, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
     removes: [], modifies: [],
   };
-  const d1 = decide(proposal1, [], VITOS_MENU, newLineKey);
+  const d1 = decide(proposal1, [], VITOS_MENU, VITOS_LEXICON, newLineKey);
   assertEquals(d1.cart.length, 1);
   assertEquals(d1.cart[0].line_key, "k1");
 
@@ -510,10 +560,10 @@ Deno.test("decide: mints a stable line_key only for a genuinely NEW line, never 
   // line, growing quantity. Must NOT mint a second key.
   const proposal2: Proposal = {
     intent: "order",
-    adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 2, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
+    adds: [{ item_span: "cheeseburger", quantity: 2, choices: [{ group_id: TEMP_GROUP_ID, choice_id: MEDIUM_CHOICE_ID }] }],
     removes: [], modifies: [],
   };
-  const d2 = decide(proposal2, d1.cart, VITOS_MENU, newLineKey);
+  const d2 = decide(proposal2, d1.cart, VITOS_MENU, VITOS_LEXICON, newLineKey);
   assertEquals(d2.cart.length, 1);
   assertEquals(d2.cart[0].quantity, 3);
   assertEquals(d2.cart[0].line_key, "k1", "a quantity-bump merge into an existing line must never mint a new key");
@@ -521,7 +571,82 @@ Deno.test("decide: mints a stable line_key only for a genuinely NEW line, never 
 });
 
 Deno.test("decide: omitting newLineKey entirely (pre-fix call sites) never sets line_key — identical to this function's behavior before stable keys existed", () => {
-  const proposal: Proposal = { intent: "order", adds: [{ menu_item_id: CHEESE_BURGER_ID, quantity: 1, choices: [] }], removes: [], modifies: [] };
-  const result = decide(proposal, [], VITOS_MENU); // no 4th arg
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, [], VITOS_MENU, VITOS_LEXICON); // no 5th arg
   assertEquals(result.cart[0].line_key, undefined);
+});
+
+// ── DECIDE: an item resolved through the lexicon into an item with TWO real
+// option groups (Zio's live "Boneless Wings" — Choose Sauce + Quantity, id
+// cb53dc5b-5abe-4110-a814-3beacec644e8, see
+// turn-engine-stale-line-key.test.ts for the same real fixture) — Cheese
+// Burger has exactly one option group and already hid a defect once before
+// under different code, so this module's own DECIDE-level coverage of
+// resolve-item.ts must not lean on it as the only multi-group fixture. ────
+
+const WINGS_ID = "cb53dc5b-5abe-4110-a814-3beacec644e8";
+const WINGS_FLAVOR_GROUP_ID = "b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d";
+const WINGS_QTY_GROUP_ID = "8774670c-7f71-4ee9-b9b4-a80552309321";
+const WINGS_BBQ_CHOICE_ID = "88b27a65-d800-4d2a-a63b-42946330c76a";
+const WINGS_TEN_PIECES_ID = "16f6eb99-3d95-4fd7-aef5-94180a6099bd";
+
+const WINGS_MENU: TurnEngineMenuItem[] = [
+  {
+    id: WINGS_ID,
+    name: "Boneless Wings",
+    category: "Wings",
+    price_cents: 1000,
+    bot_state: "orderable",
+    option_groups: [
+      { id: WINGS_FLAVOR_GROUP_ID, name: "Choose Sauce", default_choice_id: null },
+      { id: WINGS_QTY_GROUP_ID, name: "Quantity", default_choice_id: null },
+    ],
+    ask_plan: {
+      compiled_at: "2026-09-10T20:42:39.658Z",
+      compiler_version: 1,
+      display_name: "Boneless Wings",
+      base_price_cents: 1000,
+      recap_template: "{qty} {display_name}{, with {modifiers}}",
+      ticket_template: "{name}{\n  + {choice.display} x{qty}}",
+      steps: [
+        {
+          kind: "slot", ask_mode: "ask", group_id: WINGS_FLAVOR_GROUP_ID, slot_key: "flavor", prompt_template: "flavor.ask",
+          choices: [
+            { id: "62a4d4ca-d0aa-4f36-a99c-ad5d7c580f70", display: "Mild Sauce", price_delta_cents: 0 },
+            { id: WINGS_BBQ_CHOICE_ID, display: "BBQ Sauce", price_delta_cents: 0 },
+          ],
+        },
+        {
+          kind: "slot", ask_mode: "ask", group_id: WINGS_QTY_GROUP_ID, slot_key: null, prompt_template: "quantity.ask",
+          choices: [
+            { id: WINGS_TEN_PIECES_ID, display: "10 Pieces", price_delta_cents: 0 },
+            { id: "dc16bc2d-72c0-42c1-b031-c792048b3fba", display: "20 Pieces", price_delta_cents: 800 },
+          ],
+        },
+      ],
+    },
+  },
+];
+
+const WINGS_LEXICON: LexiconTerm[] = [{ term: "boneless wings", target_id: WINGS_ID }];
+
+Deno.test("decide: an item_span resolved through the lexicon into an item with TWO real option groups applies both groups' choices, not just the first", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{
+      item_span: "boneless wings",
+      quantity: 1,
+      choices: [
+        { group_id: WINGS_FLAVOR_GROUP_ID, choice_id: WINGS_BBQ_CHOICE_ID },
+        { group_id: WINGS_QTY_GROUP_ID, choice_id: WINGS_TEN_PIECES_ID },
+      ],
+    }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], WINGS_MENU, WINGS_LEXICON);
+  assertEquals(result.declines, []);
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, WINGS_ID);
+  assertEquals(result.cart[0].options, { "Choose Sauce": ["BBQ Sauce"], Quantity: ["10 Pieces"] });
+  assertEquals(result.cart[0].pending_options, undefined);
 });

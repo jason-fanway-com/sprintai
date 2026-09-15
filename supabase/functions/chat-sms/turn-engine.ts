@@ -98,6 +98,7 @@ import {
   impliesUpsellDecline,
   looksLikeCustomerName,
 } from "./dialogue-signals.ts";
+import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
 
 // ─── §3a: the state record — EXACT shape from the spec ─────────────────────
 
@@ -118,7 +119,15 @@ export interface DialogueState {
 
 export interface Proposal {
   intent: "order" | "checkout" | "cancel" | "question" | "other";
-  adds:     Array<{ menu_item_id: string; quantity: number; choices: Array<{ group_id: string; choice_id: string }> }>;
+  // item_span (docs/specs/2026-09-15-code-owned-resolution.md §4): the
+  // VERBATIM substring of the customer's own message naming the item —
+  // nothing normalized, nothing invented. DECIDE below resolves it to a
+  // real menu_item_id via resolve-item.ts's deterministic longest-match,
+  // exactly once, before anything touches the cart. This replaces the old
+  // model-chosen `menu_item_id` field — see this file's header and
+  // resolve-item.ts's own header for why item identity is no longer a
+  // model output.
+  adds:     Array<{ item_span: string; quantity: number; choices: Array<{ group_id: string; choice_id: string }> }>;
   removes:  Array<{ line_key: string }>;
   modifies: Array<{ line_key: string; quantity?: number; choices?: Array<{ group_id: string; choice_id: string }>;
                     remove_choices?: string[] }>;
@@ -348,9 +357,22 @@ export interface DecideResult {
   // question per turn" contract; a multi-add turn only ever gets one upsell
   // shot regardless, so which one is somewhat arbitrary but never absent.
   qualifyingAddMenuItemId: string | null;
+  // Set by resolve-item.ts when an add's item_span ties across two or more
+  // DIFFERENT menu items at the longest matched length -- the exact shape
+  // ASK's existing `disambiguation` open-question kind already consumes
+  // (AskTurnEvents.disambiguationCandidateIds). Null when no add this turn
+  // was ambiguous. Same last-one-wins convention as qualifyingAddMenuItemId
+  // above when more than one add in the same proposal is ambiguous.
+  disambiguationCandidateIds: string[] | null;
 }
 
-function addIdentityKey(add: Proposal["adds"][number]) {
+interface ResolvedAdd {
+  menu_item_id: string;
+  quantity: number;
+  choices: Array<{ group_id: string; choice_id: string }>;
+}
+
+function addIdentityKey(add: ResolvedAdd) {
   const choiceKey = (add.choices ?? []).map(c => `${c.group_id}=${c.choice_id}`).sort().join(";");
   return `${add.menu_item_id}::${choiceKey}`;
 }
@@ -406,6 +428,13 @@ export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
   menu: TurnEngineMenuItem[],
+  // The shop's compiled item-level lexicon (the `lexicon` table, target_type
+  // = 'item', active = true) -- the same shape propose.ts's own LexiconTerm
+  // already carries. Every add's item_span is resolved against this,
+  // exactly once, before anything below ever touches the cart. See
+  // resolve-item.ts's header for why this can never fall back to the model
+  // or break a tie.
+  lexicon: LexiconTerm[],
   // Injected (same DI pattern as propose.ts's ProposeDeps clock/transport) —
   // never `crypto.randomUUID()` called directly in this file, so this
   // module's determinism (every existing assertion here is an exact value,
@@ -421,12 +450,33 @@ export function decide(
   const menuById = new Map(menu.map(m => [m.id, m]));
   const declines: Decline[] = [];
   let qualifyingAddMenuItemId: string | null = null;
+  let disambiguationCandidateIds: string[] | null = null;
+
+  // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
+  // "item_span is an input to a deterministic, total function that runs
+  // before anything reaches the cart"). A span that doesn't resolve to
+  // exactly one item adds NO line -- ambiguous sets disambiguationCandidateIds
+  // for ASK to pick up (the existing `disambiguation` open-question kind
+  // already renders the actual question from these candidate ids); unresolved
+  // surfaces a decline so the customer knows nothing was added. Never a
+  // tiebreak, never a fallback to the model, never re-inspected afterward.
+  const resolvedAdds: ResolvedAdd[] = [];
+  for (const add of proposal.adds ?? []) {
+    const resolution = resolveItem(add.item_span, lexicon);
+    if (resolution.kind === "resolved") {
+      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices });
+    } else if (resolution.kind === "ambiguous") {
+      disambiguationCandidateIds = resolution.candidates;
+    } else {
+      declines.push({ reason: "Sorry, I didn't catch what item that was — mind saying it again?" });
+    }
+  }
 
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
   // them ever reaches the mutation pipeline.
-  const addGroups = new Map<string, Proposal["adds"][number]>();
-  for (const add of proposal.adds ?? []) {
+  const addGroups = new Map<string, ResolvedAdd>();
+  for (const add of resolvedAdds) {
     const key = addIdentityKey(add);
     const existing = addGroups.get(key);
     if (!existing || add.quantity > existing.quantity) addGroups.set(key, add);
@@ -491,7 +541,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, qualifyingAddMenuItemId };
+  return { cart: nextCart, declines, qualifyingAddMenuItemId, disambiguationCandidateIds };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────

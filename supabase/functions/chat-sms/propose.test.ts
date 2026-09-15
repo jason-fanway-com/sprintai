@@ -145,7 +145,7 @@ function toolUseResponse(input: Record<string, unknown>): Response {
 
 const VALID_ORDER_INPUT = {
   intent: "order",
-  adds: [{ menu_item_id: "item-cheeseburger", quantity: 1, choices: [] }],
+  adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }],
   removes: [],
   modifies: [],
 };
@@ -173,7 +173,7 @@ Deno.test("proposeTurn: schema-valid tool_use on the first attempt succeeds, one
   assert(result.ok);
   if (result.ok) {
     assertEquals(result.proposal.intent, "order");
-    assertEquals(result.proposal.adds[0].menu_item_id, "item-cheeseburger");
+    assertEquals(result.proposal.adds[0].item_span, "cheeseburger");
     assertEquals(result.attempts, 1);
   }
   assertEquals(inserted.length, 0);
@@ -300,7 +300,7 @@ Deno.test("proposeTurn: quantity is not an integer — schema_violation, never s
     fetchImpl: (() =>
       Promise.resolve(toolUseResponse({
         intent: "order",
-        adds: [{ menu_item_id: "item-cheeseburger", quantity: 1.5, choices: [] }],
+        adds: [{ item_span: "cheeseburger", quantity: 1.5, choices: [] }],
         removes: [],
         modifies: [],
       }))) as typeof fetch,
@@ -331,7 +331,7 @@ Deno.test("proposeTurn: answer_text set under a non-question intent — schema_v
     fetchImpl: (() =>
       Promise.resolve(toolUseResponse({
         intent: "order",
-        adds: [{ menu_item_id: "item-cheeseburger", quantity: 1, choices: [] }],
+        adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }],
         removes: [],
         modifies: [],
         answer_text: "Sure, adding that now!",
