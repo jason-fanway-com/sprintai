@@ -365,6 +365,20 @@ question is not only "is the committed code deployed" but **"is the live data re
 from a commit"** — whenever a dispatch writes to the database, `git status --porcelain` on
 the producing file is part of the acceptance, not bookkeeping.
 
+A fourth worked example, 2026-09-15 — **"built but not working" has three shapes, and all
+three pass their unit tests.** Vito's turn engine was switched on and failed 3/3 orders: every
+item came back "Sorry, I didn't catch what item that was." `loadItemLexicon()` paged nothing,
+so PostgREST returned its unbounded-select cap of 1000 rows against Vito's 1298 active item
+terms, and `cheeseburger`, `bacon cheeseburger` and `coke` were among the 298 dropped —
+silently, no error. `resolve-item.ts` was correct: proved by running it against a hand-built
+two-row lexicon (resolved) and against the truncated live rows (unresolved). **Isolate with a
+synthetic fixture before blaming either side** — the first diagnosis, from reading a missing
+field on a type, was wrong and was reported to Jason before it was checked. The three shapes
+now seen are: a module nothing imports (`resolver.ts`), a feature complete but switched off (a
+flag never set), and data quietly cut short. Any query feeding a decision path needs an
+explicit page loop plus a count assertion that fails loudly — never a bigger round-number
+limit, which only moves the cliff to the next shop.
+
 A defect fixed at level 5 will return. A modifier-scope bug survived three fixes across
 three days because each was at level 4 or 5; it stopped recurring when the phrase identity
 was carried in the data structure so the wrong thing had nowhere to go.
