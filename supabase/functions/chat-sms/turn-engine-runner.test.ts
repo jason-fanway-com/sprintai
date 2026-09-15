@@ -18,6 +18,7 @@ import {
 } from "./turn-engine-runner.ts";
 import type { ProposeResult } from "./propose.ts";
 import type { DialogueState, TurnEngineCartLine, TurnEngineMenuItem } from "./turn-engine.ts";
+import { appendComplianceDisclosureIfFirstContact } from "./index.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -294,4 +295,23 @@ Deno.test("runTurnEngineTurn: always returns a non-empty reply string, even on a
   const result = await runTurnEngineTurn(input, deps);
 
   assert(typeof result.reply === "string" && result.reply.length > 0);
+});
+
+// ── 10DLC compliance disclosure on the engine path ────────────────────────
+// turn-engine-runner.ts itself has no notion of isLifetimeFirstContact (it's
+// computed in index.ts, above the turn-engine routing branch, and passed
+// nowhere into RunTurnInput) so the disclosure can't be asserted through
+// runTurnEngineTurn directly. This exercises the actual append index.ts
+// performs on the engine path's outgoing reply — same seam a real regression
+// (e.g. someone reverting the append at the routing branch, or dropping the
+// isLifetimeFirstContact argument) would break.
+
+Deno.test("appendComplianceDisclosureIfFirstContact: appends the disclosure on a customer's first-ever message", () => {
+  const reply = appendComplianceDisclosureIfFirstContact("Here's your total: $12.99", true);
+  assertEquals(reply, "Here's your total: $12.99\n\nMsg & data rates may apply. Reply HELP for help or STOP to unsubscribe.");
+});
+
+Deno.test("appendComplianceDisclosureIfFirstContact: leaves a returning customer's reply untouched", () => {
+  const reply = appendComplianceDisclosureIfFirstContact("Here's your total: $12.99", false);
+  assertEquals(reply, "Here's your total: $12.99");
 });

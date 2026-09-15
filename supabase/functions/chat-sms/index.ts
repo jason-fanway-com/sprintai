@@ -139,6 +139,14 @@ const CORS_HEADERS = {
 const COMPLIANCE_STOP = "You've been unsubscribed and will receive no further messages from this restaurant. Reply START to opt back in.";
 /** Appended verbatim to the first outbound reply of a conversation, last. */
 const COMPLIANCE_DISCLOSURE = "Msg & data rates may apply. Reply HELP for help or STOP to unsubscribe.";
+// Turn-engine path's append of COMPLIANCE_DISCLOSURE (turn-engine-runner.ts
+// has no visibility into isLifetimeFirstContact, computed in this file).
+// Exported so the append itself — not just the constant — is regression-
+// tested; the legacy path's own append near isLifetimeFirstContact below
+// stays untouched and does not call this.
+export function appendComplianceDisclosureIfFirstContact(reply: string, isLifetimeFirstContact: boolean): string {
+  return isLifetimeFirstContact ? `${reply}\n\n${COMPLIANCE_DISCLOSURE}` : reply;
+}
 const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
 
@@ -6094,8 +6102,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         apiKey: Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "",
       },
     );
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnResult.reply); return emptyTwiml(); }
-    return jsonResponse({ reply: turnResult.reply, cart: turnResult.cart, phase: cart.phase, session_id: sessionId });
+    // 10DLC compliance disclosure (brand BJ8MUGY, campaign C8RNN6Y) must ride
+    // on a customer's first-ever message on this path too — see
+    // appendComplianceDisclosureIfFirstContact above, mirrors the legacy
+    // path's append at isLifetimeFirstContact below (search COMPLIANCE_DISCLOSURE).
+    const turnEngineOutgoingReply = appendComplianceDisclosureIfFirstContact(turnResult.reply, isLifetimeFirstContact);
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnEngineOutgoingReply); return emptyTwiml(); }
+    return jsonResponse({ reply: turnEngineOutgoingReply, cart: turnResult.cart, phase: cart.phase, session_id: sessionId });
   }
 
   // ── Pending disambiguation resolution (BLOCKER 1) ───────────────────────
