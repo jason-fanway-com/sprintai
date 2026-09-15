@@ -587,6 +587,73 @@ Deno.test("lexicon surface forms (part 2): output is byte-identical across two s
   assertEquals(strip(r1), strip(r2));
 });
 
+// ---- Category-vs-item surface-form collisions (2026-09-15 PO dispatch,
+// live Zio's 'pizza' incident) -------------------------------------------
+
+Deno.test("lexicon surface forms: a trailing word-run colliding ONLY with a category term is written as an item term, one row per claimant (real Zio's 'pizza' shape)", () => {
+  // Zio's live incident 2026-09-15: category "Pizza" carries stated rule-3
+  // terms "pizza"/"pizzas". Every pizza item's own stated term ("Large
+  // Tomato Pizza", "Large Pepperoni Pizza") is multi-word, so this pass's
+  // trailing-word-run derivation proposes the bare head noun "pizza" for
+  // each of them -- but the OLD exclusion set treated the category's own
+  // "pizza" term as blocking, same as a real item/choice term, so "pizza"
+  // was silently withheld menu-wide. resolve-item.ts never reads
+  // target_type='category' rows, so a customer typing "pizza" at a
+  // pizzeria got zero candidates -- a dead end for the single most likely
+  // word at that shop. Per PO ruling: a category term must not block a
+  // derived item term the way a real item/choice term does; the two
+  // coexist, and multiple item claimants keep one row each so resolveItem's
+  // ambiguous-match ASK path has data to route on, exactly like the
+  // item-vs-item collision case (see the "fries"/"burger" tests above).
+  const tomatoPizza = item({ display_name: "Large Tomato Pizza", category: "Pizza" });
+  const pepperoniPizza = item({ display_name: "Large Pepperoni Pizza", category: "Pizza" });
+  const { items: compiled, categoryLexicon } = compileMenu([tomatoPizza, pepperoniPizza], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(categoryLexicon.some(t => t.term === "pizza" && t.target_type === "category"),
+    "the category's own stated term must still exist, untouched");
+
+  const pizzaTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "pizza").map(t => t.target_id)),
+  );
+  assertEquals(pizzaTargets, new Set([tomatoPizza.id, pepperoniPizza.id]),
+    "'pizza' must now be written once per item claimant, alongside the untouched category row");
+  assertEquals(byId.get(tomatoPizza.id)!.lexicon_terms.filter(t => t.term === "pizza").length, 1);
+  assertEquals(byId.get(pepperoniPizza.id)!.lexicon_terms.filter(t => t.term === "pizza").length, 1);
+  for (const t of compiled.flatMap(c => c.lexicon_terms.filter(x => x.term === "pizza"))) {
+    assertEquals(t.target_type, "item");
+    assertEquals(t.provenance, "derived");
+  }
+});
+
+Deno.test("lexicon surface forms: a trailing word-run colliding with another item's own stated primary name is still suppressed (category fix must not widen item collisions)", () => {
+  const frenchFries = item({ display_name: "French Fries", category: "Sides" });
+  const friesItem = item({ display_name: "Fries", category: "Party Trays" });
+  const { items: compiled } = compileMenu([frenchFries, friesItem], [], "t", false);
+  const frenchFriesTerms = compiled.find(c => c.item_id === frenchFries.id)!.lexicon_terms;
+
+  assert(!frenchFriesTerms.some(t => t.term === "fries" && t.provenance === "derived"),
+    "an item-type collision must remain excluded, unchanged by the category fix");
+});
+
+Deno.test("lexicon surface forms: a trailing word-run colliding with a CHOICE term (rule 6) is still suppressed (category fix must not widen choice collisions)", () => {
+  const familyMeal = item({
+    display_name: "Family Meal",
+    category: "Combos",
+    groups: [group({ slot_key: "extra", choices: [choice({ name: "Pizza" })] })],
+  });
+  const tomatoPizza = item({ display_name: "Large Tomato Pizza", category: "Sides" }); // category noun != "pizza"
+  const { items: compiled } = compileMenu([familyMeal, tomatoPizza], [], "t", false);
+  const familyMealTerms = compiled.find(c => c.item_id === familyMeal.id)!.lexicon_terms;
+
+  assert(familyMealTerms.some(t => t.term === "pizza" && t.target_type === "choice" && t.provenance === "stated"),
+    "the choice's own stated term must exist");
+
+  const pizzaTerms = compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "pizza"));
+  assert(!pizzaTerms.some(t => t.target_type === "item" && t.provenance === "derived"),
+    "a choice-type collision must remain excluded, unchanged by the category fix");
+});
+
 // ---- Overrides: empty = identity, present = last-write-wins -------------------
 
 Deno.test("overrides: empty set is the identity case", () => {
