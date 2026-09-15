@@ -716,7 +716,18 @@ export function resolveAskPlan(
       // matching customer text / asking, same as a plain "ask" step.
     }
 
-    const matched = matchAssertedChoice(step.choices, modelAssertedChoiceTexts) ?? matchChoiceInText(step.choices, customerText);
+    // PO fix (2026-09-15, 00-BG Part 2, committed standalone in 00-BH Part
+    // A): matchChoiceInText's stem-subset match has no negation awareness,
+    // e.g. "not well done, actually give me a large fries too" stem-matches
+    // "Well Done" with nothing to say otherwise. Reuses reactive-modifier-
+    // match.ts's isNegated exactly as the modifier branch above already
+    // does — not a second detector. Scoped to the deterministic fallback
+    // only: a model-asserted choice (matchAssertedChoice, exact-name
+    // validated) is unaffected — the model-trust boundary itself is a
+    // separate, harder question, not solved here (see 00-BG/00-BH).
+    const assertedChoice = matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+    const deterministicChoice = matchChoiceInText(step.choices, customerText);
+    const matched = assertedChoice ?? (deterministicChoice && !isNegated(customerText, deterministicChoice.display) ? deterministicChoice : null);
     if (matched) {
       resolved.push({ group_id: step.group_id, slot_key: step.slot_key, choice: matched });
       totalDeltaCents += matched.price_delta_cents;
