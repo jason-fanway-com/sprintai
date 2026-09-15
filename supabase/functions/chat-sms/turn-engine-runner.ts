@@ -51,6 +51,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3
 import { buildMenuPriceIndex, type MenuItemForPricing } from "./itemizer.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
+import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
 import {
   answer,
   decide,
@@ -149,7 +150,26 @@ async function loadUpsellEnabled(supabase: SupabaseClient, shopId: string): Prom
 // a bigger fixed cap, which just moves the same cliff to the next shop.
 const ITEM_LEXICON_PAGE_SIZE = 1000;
 
-async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconTerm[]> {
+// "lexicon_load" is a real error_log.stage value (migration 142), added
+// because none of the five values error-log.ts's ErrorLogStage union
+// already allows ('tool_loop', 'render', 'outbound_send', 'guard_deny',
+// 'propose_call') honestly describes a lexicon-load failure — same
+// reasoning migration 140 used to add 'propose_call'. error-log.ts itself
+// is out of this dispatch's scope (only this file and its test file may
+// change), so ErrorLogStage hasn't been widened to include it yet; this
+// cast is the documented seam until it is.
+const LEXICON_LOAD_STAGE = "lexicon_load" as unknown as ErrorLogStage;
+
+interface LexiconLoadResult {
+  // false means the fetch did NOT complete trustworthily — `rows` is an
+  // arbitrary partial list (however many pages loaded before the error),
+  // never a stand-in for "the whole lexicon". Callers must not treat it
+  // as one, same discipline as propose.ts's ProposeResult.ok.
+  ok: boolean;
+  rows: LexiconTerm[];
+}
+
+async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconLoadResult> {
   const rows: LexiconTerm[] = [];
   let from = 0;
   for (;;) {
@@ -158,12 +178,50 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
       .eq("shop_id", shopId).eq("target_type", "item").eq("active", true)
       .order("id", { ascending: true })
       .range(from, from + ITEM_LEXICON_PAGE_SIZE - 1);
-    if (error || !data || data.length === 0) break;
+    if (error) {
+      // A real PostgREST error on this page is NOT the same thing as a
+      // short/empty page — that's a normal, expected finish. This is a
+      // failed fetch: `rows` holds whatever pages loaded before it, an
+      // arbitrary partial list, not a complete lexicon. Must not be
+      // silently treated as done (the exact failure class b2440886 closed
+      // one level down, just moved up to this loop).
+      await logError(supabase, {
+        shopId,
+        phase: "chat-sms",
+        stage: LEXICON_LOAD_STAGE,
+        error,
+        metadata: { offset: from, rows_loaded_before_error: rows.length },
+      });
+      return { ok: false, rows };
+    }
+    if (!data || data.length === 0) break;
     rows.push(...(data as LexiconTerm[]));
     if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
     from += ITEM_LEXICON_PAGE_SIZE;
   }
-  return rows;
+
+  // Pagination finishing with no error (ending on a short/empty page) does
+  // not by itself prove `rows` holds every active row — an independent
+  // count-only query against the exact same three filters is the only way
+  // to catch a paginated fetch that "completed" but still disagrees with
+  // the table (stale read, concurrent write, off-by-one in the paging
+  // bounds, etc.). This never blocks the turn — it's an observability
+  // guard, not a second failure path — it only logs the disagreement.
+  const { count, error: countError } = await supabase
+    .from("lexicon")
+    .select("id", { count: "exact", head: true })
+    .eq("shop_id", shopId).eq("target_type", "item").eq("active", true);
+  if (!countError && count != null && count !== rows.length) {
+    await logError(supabase, {
+      shopId,
+      phase: "chat-sms",
+      stage: LEXICON_LOAD_STAGE,
+      error: new Error(`lexicon count mismatch: expected ${count}, loaded ${rows.length}`),
+      metadata: { expected_count: count, loaded_count: rows.length },
+    });
+  }
+
+  return { ok: true, rows };
 }
 
 function buildAskShopContext(shopContext: RunTurnShopContext, upsellEnabled: boolean): AskShopContext {
@@ -276,7 +334,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   } else {
     // ── STEP 3: PROPOSE (only reached when ANSWER cannot resolve this
     // message deterministically — no model call otherwise) ────────────────
-    const lexicon = await loadItemLexicon(deps.supabase, input.shopId);
+    const lexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
+    if (!lexiconResult.ok) {
+      // Same terminal-failure shape as a PROPOSE failure below: nothing
+      // changed this turn, only the fallback reply is written to messages.
+      // loadItemLexicon has already persisted its own error_log row.
+      await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
+      return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState };
+    }
+    const lexicon = lexiconResult.rows;
     const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
     const proposeResult: ProposeResult = await proposeFn(
       {

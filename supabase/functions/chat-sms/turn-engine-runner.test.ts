@@ -73,14 +73,27 @@ interface FakeState {
   lexicon: Array<{ term: string; target_id: string }>;
 }
 
-function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "lexicon">> = {}) {
+interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon">> {
+  // Makes the .range() call starting at this offset resolve as a PostgREST
+  // error (data: null, error) instead of a page of rows — reproduces a real
+  // fetch failure on page N>0, distinct from a clean short/empty-page finish.
+  lexiconPageErrorAtOffset?: number;
+  // Overrides what the count-only query (.select(..., {count:"exact",
+  // head:true})) reports, independent of state.lexicon.length — reproduces
+  // the count query disagreeing with what pagination actually loaded even
+  // though pagination itself completed with no error.
+  lexiconCountOverride?: number;
+}
+
+function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
+  const { lexiconPageErrorAtOffset, lexiconCountOverride, ...stateOverrides } = overrides;
   const state: FakeState = {
     orderCartsUpdates: [],
     messagesInserted: [],
     errorLogInserted: [],
     shopSettings: null,
     lexicon: LEXICON,
-    ...overrides,
+    ...stateOverrides,
   };
 
   // Real PostgREST caps an unbounded select at 1000 rows by default, silently
@@ -93,7 +106,10 @@ function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "l
   function builder(table: string) {
     // deno-lint-ignore no-explicit-any
     const b: any = {
-      select() { return b; },
+      select(_cols: unknown, opts?: { count?: string; head?: boolean }) {
+        if (opts?.count === "exact") b.__isCount = true;
+        return b;
+      },
       eq() { return b; },
       order() { return b; },
       maybeSingle() {
@@ -101,6 +117,9 @@ function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "l
         return Promise.resolve({ data: null, error: null });
       },
       range(from: number, to: number) {
+        if (table === "lexicon" && lexiconPageErrorAtOffset === from) {
+          return Promise.resolve({ data: null, error: { message: "connection reset" } });
+        }
         const all = table === "lexicon" ? state.lexicon : [];
         return Promise.resolve({ data: all.slice(from, to + 1), error: null });
       },
@@ -115,8 +134,14 @@ function makeFakeSupabase(overrides: Partial<Pick<FakeState, "shopSettings" | "l
       },
       // Thenable, for a chain that awaits the builder directly rather than
       // terminating with .maybeSingle()/.range() — mirrors PostgREST's own
-      // silent default-cap behavior when no explicit Range header is sent.
-      then(resolve: (v: { data: unknown; error: null }) => void, reject?: (e: unknown) => void) {
+      // silent default-cap behavior when no explicit Range header is sent,
+      // and also serves the count-only query (.select(..., {count:"exact",
+      // head:true})), which never calls .range() either.
+      then(resolve: (v: { data: unknown; error: null; count?: number }) => void, reject?: (e: unknown) => void) {
+        if (table === "lexicon" && b.__isCount) {
+          const count = lexiconCountOverride ?? state.lexicon.length;
+          return Promise.resolve({ data: null, error: null, count }).then(resolve, reject);
+        }
         const data = table === "lexicon" ? state.lexicon.slice(0, POSTGREST_DEFAULT_ROW_CAP) : null;
         return Promise.resolve({ data, error: null }).then(resolve, reject);
       },
@@ -259,6 +284,79 @@ Deno.test("runTurnEngineTurn: loadItemLexicon pages past PostgREST's 1000-row ca
   await runTurnEngineTurn(input, deps);
 
   assertEquals(seenLexiconLength, 1298, "the loader must return every active row, not PostgREST's silently-capped first 1000");
+});
+
+// ── loadItemLexicon: a real error on page 2 must NOT be treated as a clean
+// finish ────────────────────────────────────────────────────────────────
+// A short/empty page (no error) is a normal, expected finish. A real
+// PostgREST error on some page N is a different thing entirely: the fetch
+// FAILED, and whatever rows were accumulated so far are an incomplete,
+// arbitrary partial list — not a complete lexicon. b2440886's loop treats
+// both the same way (`if (error || !data || data.length === 0) break;`),
+// so a page-2 error silently hands back page 1's 1000 rows as if that were
+// the whole lexicon — the same silent-truncation failure class one level up.
+
+Deno.test("runTurnEngineTurn: a PostgREST error on page 2 of loadItemLexicon is NOT silently treated as a clean finish", async () => {
+  const fullLexicon = Array.from({ length: 1298 }, (_, i) => ({ term: `term-${i}`, target_id: `target-${i}` }));
+  const { supabase, state } = makeFakeSupabase({ lexicon: fullLexicon, lexiconPageErrorAtOffset: 1000 });
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalls++;
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+  const priorCart: TurnEngineCartLine[] = [];
+  const priorState: DialogueState = { ...INITIAL_DIALOGUE_STATE };
+  const input = baseInput({ message: "two cheeseburgers", cart: priorCart, dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0, "a failed lexicon load must not silently hand PROPOSE a partial list as if it were complete");
+  assertEquals(result.reply, FALLBACK_REPLY);
+  assertEquals(result.cart, priorCart);
+  assertEquals(result.dialogueState, priorState);
+  assertEquals(state.errorLogInserted.length, 1, "the page-2 error must be persisted, not swallowed");
+  assertEquals(state.errorLogInserted[0].stage, "lexicon_load");
+  assertEquals(state.errorLogInserted[0].shop_id, "shop-1");
+  assertEquals((state.errorLogInserted[0].metadata as { offset: number }).offset, 1000, "must name the page offset where the error occurred");
+});
+
+// ── loadItemLexicon: a clean-finishing paginated fetch can still disagree
+// with the table's true row count ─────────────────────────────────────────
+// Pagination can "complete" with no error (ends on a short/empty page) and
+// still not match reality — e.g. a stale read, a race with concurrent
+// writes, or a bug in the paging bounds. b2440886 has no guard for this at
+// all. An independent count-only query against the same three filters is
+// the only way to catch it.
+
+Deno.test("runTurnEngineTurn: a clean paginated finish that disagrees with an independent count query writes both numbers to error_log", async () => {
+  // Exactly one full page (1000 rows) — pagination requests a second page
+  // (data.length === PAGE_SIZE keeps the loop going), that second page comes
+  // back empty, and the loop finishes with NO error at all. The count query
+  // independently reports 1298, simulating the same true count as the live
+  // incident (Vito's 1298 active lexicon rows) despite pagination itself
+  // having completed cleanly.
+  const exactlyOnePage = Array.from({ length: 1000 }, (_, i) => ({ term: `term-${i}`, target_id: `target-${i}` }));
+  const { supabase, state } = makeFakeSupabase({ lexicon: exactlyOnePage, lexiconCountOverride: 1298 });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> =>
+      Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } }),
+  };
+  const input = baseInput({ message: "two cheeseburgers", cart: [] });
+
+  await runTurnEngineTurn(input, deps);
+
+  assertEquals(state.errorLogInserted.length, 1, "a count/loaded mismatch after a clean paginated finish must be logged");
+  assertEquals(state.errorLogInserted[0].stage, "lexicon_load");
+  assertEquals(state.errorLogInserted[0].shop_id, "shop-1");
+  const metadata = state.errorLogInserted[0].metadata as { expected_count: number; loaded_count: number };
+  assertEquals(metadata.expected_count, 1298);
+  assertEquals(metadata.loaded_count, 1000);
 });
 
 Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and routes to ASK's disambiguation question", async () => {
