@@ -3,7 +3,7 @@
 **This file contains only things that change rarely.** No counts, no versions, no status —
 those go stale and lie. Query live state instead (§5).
 
-Last rule change: 2026-09-14.
+Last rule change: 2026-09-15.
 
 ---
 
@@ -74,7 +74,7 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 
 | Shop | Role |
 |---|---|
-| **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, compiled engine (flag TRUE on all three shops as of 2026-09-14; verify in `shops`), **the canary** |
+| **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, **the canary**. Which ordering engine it runs is a per-shop flag — read `shops.turn_engine_enabled` (§5), never this table |
 | **Zio's Pizzeria** | Slice-imported menu, compiled engine, **web only — no phone by Jason's decision**. Proof that an imported menu can be made conversation-ready |
 | **Not Just Bagels** | Pre-prod, like every other shop. Twilio, 10DLC-approved. Intended as an early sale, but has NO live customers — do not treat it as production or gate work on it (Jason, 2026-09-12). Its menu is hand-corrected, so do not re-import it casually |
 
@@ -378,6 +378,31 @@ now seen are: a module nothing imports (`resolver.ts`), a feature complete but s
 flag never set), and data quietly cut short. Any query feeding a decision path needs an
 explicit page loop plus a count assertion that fails loudly — never a bigger round-number
 limit, which only moves the cliff to the next shop.
+
+A fifth worked example, 2026-09-15 — **a gate only tests what it exercises, and the two
+ways that bites are the shape of the run and the assertions that are missing from it.**
+
+The single-turn matrix sent ONE message per conversation and reported the turn engine green
+on every phrasing. A three-turn order then failed four independent ways on the live path:
+one item split into two lines, its slot question re-asked forever, a bare "thats it"
+reaching PROPOSE and adding a third burger, and a named item silently dropped. None of the
+four can occur on turn one, so a gate that stops there certifies a bot that cannot finish an
+order. **Drive every acceptance conversation to its terminal state** — a payment link, or a
+deliberate refusal — never to the first reply.
+
+Its replacement was then written with the same blind spot in a different place: the
+docstring promised "every item the customer named is either in the cart or explicitly asked
+about" and **no code implemented it**, while the money check was one-sided (`subtotal > exp`
+only). A run that drops the fries and ends at 1698 against a 3198 ceiling scores PASS — the
+new gate was blind to the very defect it was built for. It also read
+`stripe_checkout_session_id` out of the DB and then decided "reached payment" from a
+substring of model prose. Three PO harnesses had bugs in one day (a wrong `cart_json` shape,
+the single-turn flaw, this one). So: **falsify your instrument before you trust its verdict
+— point it at a known-bad case and require it to go RED.** A gate that has never failed on
+purpose is a rumour, and an assertion that exists only in a docstring is level 5 in
+disguise. Related, and already learned the expensive way: a test that reads source code as
+text is a lint rule, not a test — four "inversion" enforcement tests were green for weeks
+while the bot billed the wrong amount.
 
 A defect fixed at level 5 will return. A modifier-scope bug survived three fixes across
 three days because each was at level 4 or 5; it stopped recurring when the phrase identity
