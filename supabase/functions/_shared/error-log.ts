@@ -17,7 +17,7 @@ function truncate(s: string | null | undefined): string | null {
   return s.length > MAX_FIELD_LEN ? s.slice(0, MAX_FIELD_LEN) : s;
 }
 
-export type ErrorLogStage = "tool_loop" | "render" | "outbound_send" | "guard_deny";
+export type ErrorLogStage = "tool_loop" | "render" | "outbound_send" | "guard_deny" | "propose_call";
 
 export interface LogErrorParams {
   conversationId?: string | null;
