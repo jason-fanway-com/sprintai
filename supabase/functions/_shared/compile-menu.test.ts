@@ -390,21 +390,32 @@ Deno.test("lexicon surface forms: a space-collapsed item term is emitted and kep
     "the dearer item must not also claim the bare term");
 });
 
-Deno.test("lexicon surface forms: a variant that would resolve to two different items is dropped for both, no tiebreak", () => {
+Deno.test("lexicon surface forms: a variant that would resolve to two different items is KEPT for every claimant, one row each, no tiebreak", () => {
   // "Meatball" pluralizes to "meatballs"; "Meat Balls" space-collapses to
   // the identical string "meatballs" — two independently-derived candidates
   // landing on the same term, same shape as the real Zio's collisions.
+  // Per PO ruling 2026-09-15: dropping was the wrong half of the design —
+  // the invariant is "never silently pick one item for the customer", and
+  // keeping every claimant so the resolver can ask is what protects that.
   const meatball = item({ display_name: "Meatball", category: "Appetizers" });
   const meatBalls = item({ display_name: "Meat Balls", category: "Appetizers" });
   const { items: compiled } = compileMenu([meatball, meatBalls], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
 
-  assert(!byId.get(meatball.id)!.lexicon_terms.some(t => t.term === "meatballs"),
-    "ambiguous plural must not be written for Meatball");
-  assert(!byId.get(meatBalls.id)!.lexicon_terms.some(t => t.term === "meatballs"),
-    "ambiguous space-collapsed form must not be written for Meat Balls");
-  // Each item's own stated (rule 1) term is untouched — only the ambiguous
-  // derived variant is dropped.
+  const meatballsTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "meatballs").map(t => t.target_id)),
+  );
+  assertEquals(meatballsTargets, new Set([meatball.id, meatBalls.id]),
+    "'meatballs' must carry exactly one row per claimant — both ids, no more, no fewer");
+  assertEquals(byId.get(meatball.id)!.lexicon_terms.filter(t => t.term === "meatballs").length, 1,
+    "Meatball claims 'meatballs' exactly once");
+  assertEquals(byId.get(meatBalls.id)!.lexicon_terms.filter(t => t.term === "meatballs").length, 1,
+    "Meat Balls claims 'meatballs' exactly once");
+  for (const t of compiled.flatMap(c => c.lexicon_terms.filter(x => x.term === "meatballs"))) {
+    assertEquals(t.target_type, "item");
+    assertEquals(t.provenance, "derived");
+  }
+  // Each item's own stated (rule 1) term is untouched.
   assert(byId.get(meatball.id)!.lexicon_terms.some(t => t.term === "meatball"));
   assert(byId.get(meatBalls.id)!.lexicon_terms.some(t => t.term === "meat balls"));
 });
@@ -448,19 +459,27 @@ Deno.test("lexicon surface forms: plural of the collapsed form is emitted and ke
     "the dearer item must not also claim the bare plural");
 });
 
-Deno.test("lexicon surface forms: plural of the collapsed form is dropped for both claimants when it collides with another candidate, no tiebreak", () => {
+Deno.test("lexicon surface forms: plural of the collapsed form is KEPT for both claimants when it collides with another candidate, no tiebreak", () => {
   // "Egg Roll" -> plural-of-collapsed "eggrolls"; "Egg Rolls" -> plain
   // collapse "eggrolls" (the already-committed rule). Same candidate pool,
   // same gate — two independently-derived candidates landing on one term.
+  // Per PO ruling 2026-09-15: keep every claimant, no tiebreak.
   const eggRoll = item({ display_name: "Egg Roll", category: "Appetizers" });
   const eggRolls = item({ display_name: "Egg Rolls", category: "Appetizers" });
   const { items: compiled } = compileMenu([eggRoll, eggRolls], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
 
-  assert(!byId.get(eggRoll.id)!.lexicon_terms.some(t => t.term === "eggrolls"),
-    "ambiguous plural-of-collapsed must not be written for Egg Roll");
-  assert(!byId.get(eggRolls.id)!.lexicon_terms.some(t => t.term === "eggrolls"),
-    "ambiguous collapsed form must not be written for Egg Rolls");
+  const eggrollsTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "eggrolls").map(t => t.target_id)),
+  );
+  assertEquals(eggrollsTargets, new Set([eggRoll.id, eggRolls.id]),
+    "'eggrolls' must carry exactly one row per claimant — both ids, no more, no fewer");
+  assertEquals(byId.get(eggRoll.id)!.lexicon_terms.filter(t => t.term === "eggrolls").length, 1);
+  assertEquals(byId.get(eggRolls.id)!.lexicon_terms.filter(t => t.term === "eggrolls").length, 1);
+  for (const t of compiled.flatMap(c => c.lexicon_terms.filter(x => x.term === "eggrolls"))) {
+    assertEquals(t.target_type, "item");
+    assertEquals(t.provenance, "derived");
+  }
   // Each item's own stated (rule 1) term is untouched.
   assert(byId.get(eggRoll.id)!.lexicon_terms.some(t => t.term === "egg roll"));
   assert(byId.get(eggRolls.id)!.lexicon_terms.some(t => t.term === "egg rolls"));
@@ -496,15 +515,31 @@ Deno.test("lexicon surface forms: every proper trailing word-run (head noun) is 
     "the full stated term must appear once (as 'stated'), never re-derived as its own 'proper' trailing run");
 });
 
-Deno.test("lexicon surface forms: an ambiguous trailing word-run is dropped for every claimant, no tiebreak (real Vito's 'fries'/'burger' shape)", () => {
+Deno.test("lexicon surface forms: an ambiguous trailing word-run is KEPT for every claimant, one row each, no tiebreak (real Vito's 'fries'/'burger' shape)", () => {
+  // 2026-09-15 live incident: with the old drop-on-collision rule, "fries"
+  // and "burger" were entirely absent from Vito's lexicon, so a customer
+  // saying "a burger well done plus an order of fries" hit two dead-end
+  // declines with an empty cart instead of a disambiguating question. Per
+  // PO ruling: the invariant was never "drop the term" — it was "never
+  // silently pick one item for the customer". Keeping every claimant lets
+  // the resolver route to the ASK-and-name-the-candidates path instead.
   const frenchFries = item({ display_name: "French Fries", category: "Sides" });
   const curlyFries = item({ display_name: "Curly Fries", category: "Sides" });
   const { items: compiled } = compileMenu([frenchFries, curlyFries], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
 
-  assert(!byId.get(frenchFries.id)!.lexicon_terms.some(t => t.term === "fries"));
-  assert(!byId.get(curlyFries.id)!.lexicon_terms.some(t => t.term === "fries"));
-  // Each item's own stated term is untouched — only the ambiguous head noun is dropped.
+  const friesTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "fries").map(t => t.target_id)),
+  );
+  assertEquals(friesTargets, new Set([frenchFries.id, curlyFries.id]),
+    "'fries' must carry exactly one row per claimant — both ids, no more, no fewer");
+  assertEquals(byId.get(frenchFries.id)!.lexicon_terms.filter(t => t.term === "fries").length, 1);
+  assertEquals(byId.get(curlyFries.id)!.lexicon_terms.filter(t => t.term === "fries").length, 1);
+  for (const t of compiled.flatMap(c => c.lexicon_terms.filter(x => x.term === "fries"))) {
+    assertEquals(t.target_type, "item");
+    assertEquals(t.provenance, "derived");
+  }
+  // Each item's own stated term is untouched.
   assert(byId.get(frenchFries.id)!.lexicon_terms.some(t => t.term === "french fries"));
   assert(byId.get(curlyFries.id)!.lexicon_terms.some(t => t.term === "curly fries"));
 });
