@@ -330,6 +330,8 @@ embedded runner that cannot authenticate.
 - **PII stays out of `qa_ro`** — conversations, messages, customer phone, pickup name, address
 - **Never re-import Not Just Bagels' menu** without Jason watching
 
+- **Ambiguity is narrowed, never listed (Jason, 2026-09-15).** When a term matches many items, ask like a human: "What kind?" then "What size?", resolving each answer against the remaining candidates. Enumerate the options only when the customer asks what they are. Spec: `docs/specs/2026-09-15-narrowing-questions.md`
+
 ## 8. Durability ranking — settled through evidence
 
 When choosing a fix, prefer in this order:
