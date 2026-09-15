@@ -296,6 +296,20 @@ embedded runner that cannot authenticate.
   fields like the shop name. A relevance search cannot report "no match", so any no-write
   safety branch behind one is dead code. Write only the fields the owner was editing; a
   bad match must not be able to reach neighbouring columns
+- **When the bot is unsure, it asks — it never assumes.** Jason, 2026-09-15: *"People hate
+  when AI assumes and would much rather answer a reasonable clarifying question."* This is
+  product direction, not a resolver detail, and it governs every ambiguity the bot meets —
+  item identity, which size, which option, whether that was a new line or a change to an
+  existing one. A guess that happens to be cheap is still a guess: `fries` matches 10 Vito's
+  items, and the model silently picking one is the same defect class as the $2.50
+  cheeseburger overcharge, just luckier. So when something resolves to more than one
+  candidate, or to none, the turn becomes one clarifying question naming the candidates.
+  **Never** add a tiebreak, a popularity or relevance score, a cheapest-wins rule, a
+  "most likely" heuristic, or a fall back to the model to suppress the question — those are
+  all ways of spending the customer's money on a guess. The cost of an extra question is one
+  SMS; the cost of a wrong assumption is a wrong order and a refund. Same shape as the
+  owner-stated-fact rule above: resolve, or report that you cannot — never rank
+
 - **Do not raise key rotation** until he says dev is complete
 - **Do not extract Slice's client API key** from their JS bundle without written authorization
 - **PII stays out of `qa_ro`** — conversations, messages, customer phone, pickup name, address
