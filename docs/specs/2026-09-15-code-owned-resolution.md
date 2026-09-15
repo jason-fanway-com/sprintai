@@ -33,6 +33,13 @@ $8.49, `bacon cheeseburger` -> $10.99, `burger` -> ambiguous (7 items) -> ask.
 
 ## 2. The trade, stated up front
 
+Jason, 2026-09-15, confirming this directly: *"I want it to ask for clarification. People
+hate when AI assumes and would much rather answer a reasonable clarifying question."* This
+is settled product direction, now a standing constraint in `PO-BRIEF.md` section 7. It is
+not a reluctant trade-off to be engineered away later — asking is the product behaviour we
+want, and the question is a feature.
+
+
 The resolver turns silent guesses into clarifying questions. `fries` matches 10 Vito`s
 items and `burger` matches 7, so both become **one question**, where today the model picks
 one and says nothing. That is the intended behaviour, not a regression — a silent guess on
