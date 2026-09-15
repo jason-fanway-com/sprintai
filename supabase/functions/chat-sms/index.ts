@@ -7038,20 +7038,35 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // behavior this needs to catch is broader than "declined our own
   // code-rendered offer": it's "gave a bare decline to whatever the bot's
   // immediately-preceding message asked" (a model-authored food-upsell
-  // attempt, a tip ask, any optional yes/no offer). Widened to: was the
-  // prior assistant message a genuine question (ends in "?"), AND is it NOT
-  // the pickup-name ask (that one has its own dedicated flow just below,
-  // and a bare "no" there means something else — a correction, not a
-  // decline). impliesUpsellDecline stays narrow (bare negatives only), so
-  // this still can't misfire on a message that also names a new item or
-  // carries checkout language.
+  // attempt, a tip ask, any optional yes/no offer).
+  //
+  // WIDENED AGAIN past "prior message ends in '?'" (2026-09-14, live
+  // verification loop): a gate requiring a literal trailing question mark
+  // still left the exact reported failure reachable — an item-add turn
+  // where REPLY-INVERSION rendered only a fact + money footer (no upsell
+  // fired that turn: already offered, no upsell configured, or the item's
+  // modifier landed via a separate tool call so `event.action` wasn't
+  // "added") ends in a dollar amount, not "?". A customer's bare "no
+  // thanks" right after that had nothing to decline against under the
+  // question-mark gate, so it fell through to the LLM's raw prose — which,
+  // live, sometimes answered with a bare non-cart confirmation ("Sure, no
+  // worries! What would you like instead?"), reproducing the exact ~22%
+  // defect this fix exists to close. A bare decline word is unambiguous
+  // regardless of whether the bot's last message happened to end in a
+  // question mark — a customer only ever says "no thanks" in response to
+  // some prior offer, real or implicit. Gate is now just: was there a
+  // prior assistant message at all, and is it NOT the pickup-name ask
+  // (that one has its own dedicated flow just below, and a bare "no"
+  // there means something else — a correction, not a decline).
+  // impliesUpsellDecline stays narrow (bare negatives only), so this still
+  // can't misfire on a message that also names a new item or carries
+  // checkout language.
   let upsellDeclineDeterministicReply: string | undefined;
   {
     const lastAssistantUpsell = [...history].reverse().find(h => h.role === "assistant");
     const priorAssistantMessageUpsell = typeof lastAssistantUpsell?.content === "string" ? lastAssistantUpsell.content : null;
     const offeredUpsellName = extractOfferedItemName(priorAssistantMessageUpsell);
-    const priorWasOpenQuestion = !!priorAssistantMessageUpsell &&
-      /\?\s*$/.test(priorAssistantMessageUpsell.trim()) &&
+    const priorMessageEligibleForDecline = !!priorAssistantMessageUpsell &&
       !isAskingForPickupName(priorAssistantMessageUpsell);
     if (offeredUpsellName && impliesUpsellAcceptance(userMessage)) {
       const upsellMenuItem = effectiveMenu.find(m => m.name.toLowerCase().trim() === offeredUpsellName.toLowerCase().trim());
@@ -7073,7 +7088,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           console.warn(`[chat-sms] C2c-upsell add_item failed: ${JSON.stringify(upsellAddResult.result).slice(0, 200)}. Falling through to LLM.`);
         }
       }
-    } else if (priorWasOpenQuestion && impliesUpsellDecline(userMessage) && cartItems.length > 0) {
+    } else if (priorMessageEligibleForDecline && impliesUpsellDecline(userMessage) && cartItems.length > 0) {
       console.log(`[chat-sms] C2c-upsell pre-LLM decline firing (conv=${conversation.id}, priorQuestion=${JSON.stringify(priorAssistantMessageUpsell).slice(0, 120)})`);
       upsellDeclineDeterministicReply = `No problem!\n\n${renderItemizedRecap(cartItems, cart.delivery_fee_cents ?? undefined, cart.driver_tip_cents ?? undefined, buildMenuPriceIndex(effectiveMenu))}\n\nAnything else, or ready to check out?`;
     }
@@ -7740,9 +7755,16 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           if (upsellOffer) upsellOfferSentence = renderUpsellOfferSentence(upsellOffer);
         }
 
+        // C2 fix (2026-09-14): when stripDriverTipAsk consumed the only question
+        // in warmthTail AND no code-rendered offer claimed the slot, the reply
+        // was a bare fact with no trailing "?". The next "no thanks" then saw
+        // priorWasOpenQuestion=false and fell through to the LLM, which produced
+        // "All good - confirm?" or similar instead of the itemized cart. Supply a
+        // neutral question so every item-add reply ends with "?", which is both
+        // correct UX (always invite more items) and necessary for the decline path.
         reply = upsellOfferSentence
           ? `${factSentence} ${upsellOfferSentence}`
-          : (warmthTail ? `${factSentence} ${warmthTail}` : factSentence);
+          : (warmthTail ? `${factSentence} ${warmthTail}` : `${factSentence} Anything else?`);
         console.log(`[chat-sms] REPLY-INVERSION (conv=${conversation.id}): event=${JSON.stringify(event)} modelReply=${JSON.stringify(modelReplyThisTurn).slice(0, 200)} -> reply=${JSON.stringify(reply).slice(0, 200)} upsellOfferSentence=${JSON.stringify(upsellOfferSentence)}`);
       }
     }
