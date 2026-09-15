@@ -8256,6 +8256,35 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (missing.length > 0) {
           const mode = replyIsClosing ? "v2-closing" : "v3-multi-item";
           console.warn(`[chat-sms] GUARD 4 ${mode} (under-populated cart) tripped (conv=${conversation.id}). Missing: ${missing.join(', ')}. Reply was: ${JSON.stringify(reply).slice(0, 200)}`);
+          // (2026-09-14, item F instrumentation) This firing IS the "secondary
+          // intent silently dropped" defect class — GUARD 4 already detects a
+          // customer-referenced, real menu item that never landed as a cart
+          // line, but until now the only record was this console.warn, which
+          // Supabase discards after ~1 minute (migration 137's own rationale).
+          // Persist every firing so a live drop can be read back afterward
+          // instead of only being catchable by watching logs in realtime.
+          await logError(supabase, {
+            conversationId: conversation.id as string,
+            shopId: shop.id,
+            tenantId: shop.tenant_id,
+            phase: "chat-sms",
+            stage: "guard_deny",
+            customerMessage: userMessage,
+            error: new Error(`GUARD 4 ${mode} under-populated cart: ${missing.join(", ")}`),
+            metadata: {
+              item: "F",
+              mode,
+              referenced: [...referenced],
+              missing,
+              toolCallCountThisTurn,
+              loopProposals,
+              replyIsClosing,
+              multiItemInCurrentMsg,
+              cartSnapshotBeforeTurn,
+              guardCart,
+              reply,
+            },
+          });
           // CUSTOMER-FACING SUGGESTION REMOVED (2026-09-06, Jason, P0 incident):
           // this used to append "Did you also want X, Y, and Z, or good to
           // go?" built from fuzzy name-matches against the ENTIRE menu. It is
