@@ -85,8 +85,8 @@ const rawRows: RawMenuItemRow[] = items.map(i => ({
 const normalized = normalizeMenuItems(rawRows);
 const normalizedById = new Map(normalized.map(n => [n.id, n]));
 
-function derivedGroupSlotKey(slot: { label?: string }): string {
-  return slot.label ?? "choice"; // mirror of the FIXED compile-menu/index.ts line
+function derivedGroupSlotKey(slot: { label?: string; anchor?: "choice_of" | "served_with" }): string {
+  return slot.label ?? slot.anchor ?? "choice"; // mirror of the FIXED compile-menu/index.ts line
 }
 
 const survivors: { id: string; name: string; keys: string[] }[] = [];

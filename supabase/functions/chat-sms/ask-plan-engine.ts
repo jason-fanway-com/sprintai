@@ -304,6 +304,8 @@ const TEMPLATE_QUESTIONS: Record<string, string> = {
   flavor:    "Which flavor for the {display_name}?",
   protein:   "Which protein for the {display_name}?",
   bagel:     "Which bagel?",
+  served_with: "Which side with the {display_name}?",
+  choice_of:   "Which would you like with the {display_name}?",
 };
 
 /** `{choices}` renders <=6 as "a, b, or c"; more truncates to 5 + "or something else". */

@@ -25,9 +25,11 @@ import { renderStepQuestion } from "./ask-plan-engine.ts";
 
 const INDEX_SOURCE = Deno.readTextFileSync(new URL("../compile-menu/index.ts", import.meta.url));
 
-// Mirror of compile-menu/index.ts's derivedGroups slot_key formula.
-function derivedGroupSlotKey(slot: { label?: string }): string {
-  return slot.label ?? "choice";
+// Mirror of compile-menu/index.ts's derivedGroups slot_key formula (updated
+// 2026-09-15 for the anchor-fallback follow-on — label still wins first;
+// see njb-slot-key-anchor-20260915.test.ts for that dispatch's own coverage).
+function derivedGroupSlotKey(slot: { label?: string; anchor?: "choice_of" | "served_with" }): string {
+  return slot.label ?? slot.anchor ?? "choice";
 }
 
 function njbRow(overrides: Partial<RawMenuItemRow> = {}): RawMenuItemRow {
@@ -89,7 +91,7 @@ Deno.test("compiler: NJB's real 'Meat Only Breakfast Sandwich' description produ
   assertEquals(descriptionSlots[1].label, undefined);
 });
 
-Deno.test("compiler: the meat slot's compiled slot_key is 'meat' (its captured label), not the generic 'choice' literal — and the bread slot keeps 'choice' (no label was captured for it)", () => {
+Deno.test("compiler: the meat slot's compiled slot_key is 'meat' (its captured label), not the generic 'choice' literal — and the bread slot falls to its captured anchor 'choice_of' (no label was captured for it)", () => {
   const item = buildDerivedCompileItem(njbRow());
   const askPlan = buildAskPlan(item, "2026-09-15T00:00:00.000Z");
   const meatStep = askPlan.steps.find(s => s.group_id === `derived:${item.id}:0`);
@@ -97,7 +99,7 @@ Deno.test("compiler: the meat slot's compiled slot_key is 'meat' (its captured l
   assert(meatStep, "meat step must exist");
   assert(breadStep, "bread step must exist");
   assertEquals(meatStep!.slot_key, "meat");
-  assertEquals(breadStep!.slot_key, "choice");
+  assertEquals(breadStep!.slot_key, "choice_of");
 });
 
 Deno.test("compiler + render: the meat-choice and bread-choice slot questions are DISTINCT — a customer can tell these are two different questions", () => {
@@ -113,12 +115,12 @@ Deno.test("compiler + render: the meat-choice and bread-choice slot questions ar
     `meat-choice and bread-choice slot questions rendered identically — a customer cannot tell these are two different questions: both are ${JSON.stringify(meatQuestion)}`,
   );
   assertEquals(meatQuestion, "What meat would you like for the Meat Only Breakfast Sandwich?");
-  assertEquals(breadQuestion, "What choice would you like for the Meat Only Breakfast Sandwich?");
+  assertEquals(breadQuestion, "Which would you like with the Meat Only Breakfast Sandwich?");
 });
 
-Deno.test("regression: compile-menu/index.ts's derivedGroups uses the clause's captured label as slot_key, not a hardcoded 'choice' literal", () => {
+Deno.test("regression: compile-menu/index.ts's derivedGroups uses the clause's captured label as slot_key, falling back to anchor before the hardcoded 'choice' literal", () => {
   assert(
-    INDEX_SOURCE.includes('slot_key: slot.label ?? "choice"'),
-    "derivedGroups must read slot.label instead of hardcoding the 'choice' literal",
+    INDEX_SOURCE.includes('slot_key: slot.label ?? slot.anchor ?? "choice"'),
+    "derivedGroups must read slot.label (then slot.anchor) instead of hardcoding the 'choice' literal",
   );
 });
