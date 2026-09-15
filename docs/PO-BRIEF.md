@@ -118,9 +118,9 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
   secret (verified 2026-09-14 by matching the secret digest; the code default in
   `index.ts` agrees). Jason's deliberate choice of DeepSeek, 2026-09-04.
   **Prod and the test harness share one OpenRouter key** - verified by digest, same day.
-  So every canary and matrix run spends the same credits the live path depends on, and an
-  exhausted balance surfaces as the `Sorry, I ran into a problem` fallback, which looks
-  exactly like a code defect. Check the account balance before diagnosing that text.
+  So harness load lands on the same account as the live path. The account **tops up
+  automatically** (Jason, 2026-09-14) - do not raise the balance as a risk and do not
+  throttle test runs to protect it.
 
 **Two ideas do most of the work:**
 - **Slots vs modifiers.** A *slot* must be answered (size, bread, temp); a *modifier* is
