@@ -3067,7 +3067,7 @@ async function runOrderingLoop(
   // See executeTool's matching param doc — threaded straight through to
   // every add_item tool call this loop dispatches.
   composedPhraseTexts?: string[],
-): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }>; turnProposals?: RawUnitProposal[] }> {
+): Promise<{ reply: string; checkoutUrl?: string; finalPhase?: OrderPhase; declinedBlockedItems?: Array<{ category: string; name: string }>; compiledStepQuestions?: Array<{ menuItemId: string; groupName: string; nextQuestion: string; choiceDisplays: string[]; displayName: string }>; debugAttemptMs?: number[]; debugToolCallCount?: number; debugToolMs?: Array<{ name: string; ms: number }>; turnProposals?: RawUnitProposal[]; debugFailureReason?: string }> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY") ?? Deno.env.get("ANTHROPIC_API_KEY") ?? "";
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
   // PERF DIAGNOSTIC (2026-09-09, Zio's 4-pizza latency): per-round-trip
@@ -3076,6 +3076,7 @@ async function runOrderingLoop(
   const debugAttemptMs: number[] = [];
   let toolCallCountForDebug = 0;
   const debugToolMs: Array<{ name: string; ms: number }> = [];
+  let debugFailureReason: string | undefined;
 
   // Turn-reconciler wiring (2026-09-12, replaces GUARD 9/13/20/21 — see
   // turn-reconciler.ts header): every add_item-shaped tool call this turn
@@ -3231,6 +3232,7 @@ async function runOrderingLoop(
       const errText = await res.text();
       console.error("[chat-sms] Chat API error:", res.status, errText);
       debugAttemptMs.push(debugFetchMs);
+      debugFailureReason = `chat_api_non_200: status=${res.status} body=${errText.slice(0, 300)}`;
       break;
     }
 
@@ -3481,7 +3483,7 @@ async function runOrderingLoop(
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs, turnProposals };
+  return { reply: "Sorry, I ran into a problem. Please call us directly to place your order.", checkoutUrl, finalPhase, debugAttemptMs, debugToolCallCount: toolCallCountForDebug, debugToolMs, turnProposals, debugFailureReason: debugFailureReason ?? "loop_exhausted_no_final_reply" };
 }
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
@@ -7620,6 +7622,18 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         (loopErr as { __errorLogged?: boolean }).__errorLogged = true;
       }
       throw loopErr;
+    }
+    if (loopResult.debugFailureReason) {
+      await logError(supabase, {
+        conversationId: conversation.id as string,
+        shopId: shop.id,
+        tenantId: shop.tenant_id,
+        phase: "chat-sms",
+        stage: "tool_loop",
+        customerMessage: userMessage,
+        error: new Error(loopResult.debugFailureReason),
+        metadata: { item: "E", isSms, debugFailureReason: loopResult.debugFailureReason },
+      });
     }
     reply = loopResult.reply;
     // ── REPLY INVERSION, stage 1 (2026-09-13, docs/specs/2026-09-13-reply-
