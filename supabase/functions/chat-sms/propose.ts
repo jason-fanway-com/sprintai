@@ -153,6 +153,12 @@ function buildMenuIndex(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[]): Men
   }));
 }
 
+interface CartIndexGroup {
+  group_id: string;
+  group_name: string;
+  choices: Array<{ choice_id: string; display: string }>;
+}
+
 interface CartIndexEntry {
   line_key: string;
   menu_item_id: string;
@@ -160,19 +166,45 @@ interface CartIndexEntry {
   quantity: number;
   price_cents: number;
   options?: Record<string, string[]>;
+  groups?: CartIndexGroup[];
 }
 
-function buildCartIndex(cart: TurnEngineCartLine[]): CartIndexEntry[] {
+// A cart line, unlike a fresh-add menu index entry, has no ASK-step recovery
+// for a bad `modifies`/`remove_choices` id — decide() just declines the
+// whole change (see turn-engine.ts's decide()). So cart lines widen their
+// index entry with their menu item's real group/choice vocabulary, sourced
+// from the same ask_plan.steps the cart-mutation path itself resolves
+// against (turn-engine.ts's resolveChoiceDisplays/applyRemoveChoiceIds).
+// Fresh-add menu index entries (buildMenuIndex above) are NOT widened —
+// choices:[] on a fresh add is recovered deterministically next turn by
+// ASK/ANSWER at zero model cost, so that path is untouched by design.
+function buildCartLineGroups(menuItem: TurnEngineMenuItem | undefined): CartIndexGroup[] | undefined {
+  if (!menuItem?.ask_plan) return undefined;
+  const groupNameById = new Map((menuItem.option_groups ?? []).map(g => [g.id, g.name]));
+  const groups = menuItem.ask_plan.steps.map(step => ({
+    group_id: step.group_id,
+    group_name: groupNameById.get(step.group_id) ?? step.group_id,
+    choices: step.choices.map(c => ({ choice_id: c.id, display: c.display })),
+  }));
+  return groups.length > 0 ? groups : undefined;
+}
+
+function buildCartIndex(cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]): CartIndexEntry[] {
+  const menuById = new Map(menu.map(item => [item.id, item]));
   return cart
     .filter(line => typeof line.menu_item_id === "string")
-    .map(line => ({
-      line_key: identityKey(line.menu_item_id, line.options),
-      menu_item_id: line.menu_item_id,
-      name: line.name,
-      quantity: line.quantity,
-      price_cents: line.price_cents,
-      options: line.options,
-    }));
+    .map(line => {
+      const groups = buildCartLineGroups(menuById.get(line.menu_item_id));
+      return {
+        line_key: identityKey(line.menu_item_id, line.options),
+        menu_item_id: line.menu_item_id,
+        name: line.name,
+        quantity: line.quantity,
+        price_cents: line.price_cents,
+        options: line.options,
+        ...(groups ? { groups } : {}),
+      };
+    });
 }
 
 const SYSTEM_PROMPT_PREAMBLE = `You are the ordering NLU for a restaurant's SMS/chat bot. You do not talk to the customer — you translate their message into a structured Proposal that code will validate and apply. You have no reply authority: never write anything the customer will see, except answer_text, and only when intent is "question".
@@ -190,7 +222,7 @@ function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], c
   return [
     SYSTEM_PROMPT_PREAMBLE,
     `Menu index:\n${JSON.stringify(buildMenuIndex(menu, lexicon))}`,
-    `Cart:\n${JSON.stringify(buildCartIndex(cart))}`,
+    `Cart:\n${JSON.stringify(buildCartIndex(cart, menu))}`,
     `Currently open question (what the customer is mid-answering, if anything):\n${JSON.stringify(open)}`,
   ].join("\n\n");
 }

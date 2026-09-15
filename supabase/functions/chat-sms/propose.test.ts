@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { proposeTurn, DEFAULT_MODEL, DEFAULT_CHAT_API, type ProposeTurnInput, type LexiconTerm } from "./propose.ts";
 import type { TurnEngineMenuItem, TurnEngineCartLine } from "./turn-engine.ts";
+import type { AskPlan } from "../_shared/compile-menu.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -41,6 +42,61 @@ const EMPTY_CART: TurnEngineCartLine[] = [];
 
 const CART_WITH_BURGER: TurnEngineCartLine[] = [
   { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [] },
+];
+
+// Fixture for the cart-widening fix (PO-authorized, 2026-09-15): a
+// modify/remove_choices on an item ALREADY in the cart has no ASK-step
+// recovery the way a fresh add does, and CartIndexEntry.options only ever
+// carried display names, not ids — so the model had no real choice_id
+// vocabulary to put in a `modifies` entry. This ask_plan is a cart line's
+// menu item's real compiled group/choice vocabulary (same shape
+// turn-engine.ts's decide()/resolveChoiceDisplays already reads via
+// ask_plan.steps), used to prove that vocabulary now reaches the prompt.
+const TEMP_ASK_PLAN: AskPlan = {
+  compiled_at: "2026-09-14T00:00:00Z",
+  compiler_version: 1,
+  display_name: "Cheese Burger",
+  base_price_cents: 849,
+  steps: [
+    {
+      group_id: "group-temp",
+      slot_key: "temperature",
+      kind: "slot",
+      ask_mode: "ask",
+      prompt_template: "How would you like that cooked?",
+      choices: [
+        { id: "choice-medium", display: "Medium", price_delta_cents: 0 },
+        { id: "choice-well-done", display: "Well Done", price_delta_cents: 0 },
+      ],
+    },
+  ],
+  recap_template: "{name}",
+  ticket_template: "{name}",
+};
+
+const MENU_WITH_ASK_PLAN_ITEM: TurnEngineMenuItem[] = [
+  ...MENU,
+  {
+    id: "item-cheeseburger-cart",
+    name: "Cheese Burger",
+    category: "Burgers",
+    price_cents: 849,
+    bot_state: "orderable",
+    ask_plan: TEMP_ASK_PLAN,
+    option_groups: [{ id: "group-temp", name: "Temperature" }],
+  },
+];
+
+const CART_WITH_ASK_PLAN_ITEM: TurnEngineCartLine[] = [
+  {
+    menu_item_id: "item-cheeseburger-cart",
+    name: "Cheese Burger",
+    quantity: 1,
+    price_cents: 849,
+    modifiers: [],
+    options: { Temperature: ["Medium"] },
+    ask_plan_selections: { "group-temp": "choice-medium" },
+  },
 ];
 
 function baseInput(overrides: Partial<ProposeTurnInput> = {}): ProposeTurnInput {
@@ -445,6 +501,76 @@ Deno.test("proposeTurn: system prompt's cart index carries line_key computed the
   const cartIndex = JSON.parse(cartJson);
   assertEquals(cartIndex[0].line_key, "item-cheeseburger::");
   assertEquals(cartIndex[0].menu_item_id, "item-cheeseburger");
+});
+
+Deno.test("proposeTurn: a cart line's menu item group_id/choice_id vocabulary reaches the system prompt (cart-widening fix)", async () => {
+  const { supabase } = makeFakeSupabase();
+  // deno-lint-ignore no-explicit-any
+  let capturedBody: any = null;
+  await proposeTurn(
+    baseInput({ menu: MENU_WITH_ASK_PLAN_ITEM, cart: CART_WITH_ASK_PLAN_ITEM, message: "actually make that well done" }),
+    {
+      supabase,
+      apiKey: "test-key",
+      now: fixedClock(),
+      fetchImpl: ((_url: string, init?: RequestInit) => {
+        capturedBody = JSON.parse(init!.body as string);
+        return Promise.resolve(toolUseResponse({
+          intent: "order",
+          adds: [],
+          removes: [],
+          modifies: [{ line_key: "item-cheeseburger-cart::", choices: [{ group_id: "group-temp", choice_id: "choice-well-done" }] }],
+        }));
+      }) as typeof fetch,
+    },
+  );
+  const system: string = capturedBody.system;
+  const cartJson = system.match(/Cart:\n(\[.*?\])\n\n/s)![1];
+  const cartIndex = JSON.parse(cartJson);
+  const line = cartIndex.find((l: { menu_item_id: string }) => l.menu_item_id === "item-cheeseburger-cart");
+  assertExists(line.groups);
+  assertEquals(line.groups, [
+    {
+      group_id: "group-temp",
+      group_name: "Temperature",
+      choices: [
+        { choice_id: "choice-medium", display: "Medium" },
+        { choice_id: "choice-well-done", display: "Well Done" },
+      ],
+    },
+  ]);
+});
+
+Deno.test("proposeTurn: a menu item's index entry is byte-unchanged (still exactly six fields) even when that item is NOT in the cart, whether or not it has an ask_plan", async () => {
+  const { supabase } = makeFakeSupabase();
+  // deno-lint-ignore no-explicit-any
+  let capturedBody: any = null;
+  await proposeTurn(baseInput({ menu: MENU_WITH_ASK_PLAN_ITEM, cart: EMPTY_CART }), {
+    supabase,
+    apiKey: "test-key",
+    now: fixedClock(),
+    fetchImpl: ((_url: string, init?: RequestInit) => {
+      capturedBody = JSON.parse(init!.body as string);
+      return Promise.resolve(toolUseResponse(VALID_ORDER_INPUT));
+    }) as typeof fetch,
+  });
+  const system: string = capturedBody.system;
+  const menuJson = system.match(/Menu index:\n(\[.*?\])\n\n/s)![1];
+  const menuIndex = JSON.parse(menuJson);
+  // The item carries an ask_plan/option_groups (like a real menu item would)
+  // but is not in the cart — its menu index entry must still be exactly the
+  // six pre-existing fields, no widening, no ask_plan/groups leaking in.
+  const item = menuIndex.find((m: { id: string }) => m.id === "item-cheeseburger-cart");
+  assertExists(item);
+  assertEquals(Object.keys(item).sort(), ["category", "id", "lexicon", "name", "orderable", "price_cents"]);
+  assertEquals(item, {
+    id: "item-cheeseburger-cart",
+    name: "Cheese Burger",
+    price_cents: 849,
+    category: "Burgers",
+    orderable: true,
+    lexicon: [],
+  });
 });
 
 Deno.test("proposeTurn: history is capped to the last six entries and the current message is appended last", async () => {
