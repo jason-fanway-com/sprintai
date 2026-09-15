@@ -335,6 +335,26 @@ function replyNumbers(count: number): string {
   return `${nums.slice(0, -1).join(", ")} or ${nums[nums.length - 1]}`;
 }
 
+// PO ruling (2026-09-15, turn-engine `ambiguous` vs `unresolved` split):
+// "ambiguous means ASK" is confident, correct product behavior, not a
+// failure — the engine understood the customer and found several real
+// matches; it isn't apologizing for missing them. renderDisambiguationReask
+// above (and its "Sorry, I didn't catch that" opener) is reserved for an
+// actual RE-ask, after a first answer attempt already failed to resolve the
+// pending disambiguation — it stays completely unchanged, and every one of
+// its existing callers (GUARD 7/7b's live re-ask flow in index.ts) keeps
+// using it exactly as before. This sibling function is for the FIRST time a
+// set of ambiguous candidates is offered within a turn (turn-engine.ts's
+// `ask()`/`render()` disambiguation path) — same numbered-list shape, a
+// question with no apology, so the reply actually reads like what it is.
+export function renderAmbiguousItemQuestion(candidates: PendingCandidate[]): string {
+  const list = candidates
+    .map((c, i) => `${i + 1}) ${candidateOptionText(c)}`)
+    .join("  ");
+  const nums = replyNumbers(candidates.length);
+  return `Which one would you like — ${list}? Reply ${nums}.`;
+}
+
 /**
  * The re-ask after a failed resolution attempt: an explicit numbered list,
  * never GUARD 7's original "X or Y" sentence, so an unresolved answer never

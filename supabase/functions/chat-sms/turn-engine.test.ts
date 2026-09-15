@@ -97,6 +97,7 @@ const SHOP_CONTEXT: AskShopContext = {
 const NO_TURN_EVENTS: AskTurnEvents = {
   qualifyingAddMenuItemId: null,
   disambiguationCandidateIds: null,
+  disambiguationSettledThisTurn: false,
   checkoutIntentThisTurn: false,
   confirmYes: false,
   confirmNo: false,
@@ -423,6 +424,137 @@ Deno.test("render: never produces an empty reply, even with nothing open and an 
   const state: DialogueState = { phase: "link_sent", open: null, upsell_offered: false, asked_message_id: null };
   const reply = render([], [], state, [], VITOS_MENU);
   assert(reply.length > 0, "RENDER must never return an empty string");
+});
+
+// ── Ambiguous-path ASK: confident copy + carried second span (2026-09-15,
+// docs/specs/2026-09-15-code-owned-resolution.md's "ambiguous means ASK"
+// ruling). Live repro: "lemme do a burger well done plus an order of
+// fries" produced "Sorry, I didn't catch that — 1) the Chicken Fingers (5)
+// with french fries appetizer — $10.95 2) the Bacon Cheese Fries appetizer
+// — $8.49 3) the Fren..." — the apology-shaped RE-ASK copy (meant for a
+// FAILED resolution attempt) leaking onto the very first, confident
+// clarifying question, AND the wrong span (fries, second in the message)
+// asked about instead of the first (burger), with the burger dropped
+// entirely. Two fixes, two test groups below. ──────────────────────────────
+
+function ambiguousMenuItem(id: string, name: string, priceCents: number, category: string): TurnEngineMenuItem {
+  return {
+    id, name, category, price_cents: priceCents, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: name, base_price_cents: priceCents, recap_template: "", ticket_template: "", steps: [] },
+  };
+}
+
+const AMBIGUOUS_BURGER_A_ID = "amb-burger-a";
+const AMBIGUOUS_BURGER_B_ID = "amb-burger-b";
+const AMBIGUOUS_FRIES_A_ID = "amb-fries-a";
+const AMBIGUOUS_FRIES_B_ID = "amb-fries-b";
+
+const AMBIGUOUS_MENU: TurnEngineMenuItem[] = [
+  ambiguousMenuItem(AMBIGUOUS_BURGER_A_ID, "Bacon Burger", 999, "Burgers"),
+  ambiguousMenuItem(AMBIGUOUS_BURGER_B_ID, "Turkey Burger", 799, "Burgers"),
+  ambiguousMenuItem(AMBIGUOUS_FRIES_A_ID, "Cheese Fries", 549, "Appetizers"),
+  ambiguousMenuItem(AMBIGUOUS_FRIES_B_ID, "Chili Fries", 599, "Appetizers"),
+];
+
+const AMBIGUOUS_LEXICON: LexiconTerm[] = [
+  { term: "burger", target_id: AMBIGUOUS_BURGER_A_ID },
+  { term: "burger", target_id: AMBIGUOUS_BURGER_B_ID },
+  { term: "fries", target_id: AMBIGUOUS_FRIES_A_ID },
+  { term: "fries", target_id: AMBIGUOUS_FRIES_B_ID },
+];
+
+Deno.test("render: a single ambiguous span asks a confident question — no apology, no \"didn't catch\" wording, names every candidate", () => {
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "burger", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const d = decide(proposal, [], AMBIGUOUS_MENU, AMBIGUOUS_LEXICON);
+  assertEquals(d.cart.length, 0);
+  assert(d.disambiguationCandidateIds, "burger must resolve ambiguous, not resolved/unresolved");
+
+  const events: AskTurnEvents = {
+    ...NO_TURN_EVENTS,
+    disambiguationCandidateIds: d.disambiguationCandidateIds,
+    carriedDisambiguationCandidateIds: d.carriedDisambiguationCandidateIds,
+  };
+  const state = ask([], INITIAL_STATE, events, SHOP_CONTEXT, AMBIGUOUS_MENU);
+  const reply = render([], [], state, d.declines, AMBIGUOUS_MENU);
+
+  assert(!/sorry/i.test(reply), `an ambiguous-item ASK must never apologize — the engine understood the customer: ${reply}`);
+  assert(!/didn'?t catch/i.test(reply), `must never use the re-ask's "didn't catch" wording on the FIRST ask: ${reply}`);
+  assert(/\?/.test(reply), `must read as an actual question: ${reply}`);
+  assert(reply.includes("Bacon Burger"), `must name every candidate: ${reply}`);
+  assert(reply.includes("Turkey Burger"), `must name every candidate: ${reply}`);
+});
+
+Deno.test("decide: a genuinely unresolvable item_span keeps the existing apology wording — ambiguous and unresolved must not collapse into shared copy", () => {
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "flying spaghetti monster sandwich", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const d = decide(proposal, [], AMBIGUOUS_MENU, AMBIGUOUS_LEXICON);
+  assertEquals(d.disambiguationCandidateIds, null);
+  assertEquals(d.declines.length, 1);
+  assert(/sorry, i didn'?t catch/i.test(d.declines[0].reason), `a genuinely unresolved span must keep its apology text exactly as-is: ${d.declines[0].reason}`);
+});
+
+Deno.test("RED->GREEN: two ambiguous spans in one message — ASK asks about the FIRST (message order); the second survives in dialogue_state and gets asked next turn, never dropped", () => {
+  // "lemme do a burger well done plus an order of fries" -- burger named
+  // FIRST, fries second. Both tie ambiguous in the lexicon.
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "burger", quantity: 1, choices: [] },
+      { item_span: "fries", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const d = decide(proposal, [], AMBIGUOUS_MENU, AMBIGUOUS_LEXICON);
+  assertEquals(d.cart.length, 0);
+  assertEquals(
+    [...(d.disambiguationCandidateIds ?? [])].sort(),
+    [AMBIGUOUS_BURGER_A_ID, AMBIGUOUS_BURGER_B_ID].sort(),
+    "the FIRST ambiguous span named in the message (burger) must be the one decide() surfaces for THIS turn's ASK",
+  );
+  assertEquals(d.carriedDisambiguationCandidateIds.length, 1, "the second ambiguous span (fries) must be carried forward, not dropped");
+  assertEquals(
+    [...d.carriedDisambiguationCandidateIds[0]].sort(),
+    [AMBIGUOUS_FRIES_A_ID, AMBIGUOUS_FRIES_B_ID].sort(),
+  );
+
+  // ── Turn 1: ASK must be about the burger, not the fries. ─────────────────
+  const events1: AskTurnEvents = {
+    ...NO_TURN_EVENTS,
+    disambiguationCandidateIds: d.disambiguationCandidateIds,
+    carriedDisambiguationCandidateIds: d.carriedDisambiguationCandidateIds,
+  };
+  let state = ask([], INITIAL_STATE, events1, SHOP_CONTEXT, AMBIGUOUS_MENU);
+  assert(state.open?.kind === "disambiguation", `turn 1 must open a disambiguation question, got: ${JSON.stringify(state.open)}`);
+  assertEquals(
+    [...(state.open as { candidates: string[] }).candidates].sort(),
+    [AMBIGUOUS_BURGER_A_ID, AMBIGUOUS_BURGER_B_ID].sort(),
+  );
+
+  const reply1 = render([], [], state, d.declines, AMBIGUOUS_MENU);
+  assert(reply1.includes("Bacon Burger") && reply1.includes("Turkey Burger"), `turn 1 must ask about the burger candidates: ${reply1}`);
+  assert(!reply1.includes("Cheese Fries") && !reply1.includes("Chili Fries"), `turn 1 must NOT ask about fries yet — one question per turn: ${reply1}`);
+
+  // ── Turn 2: the customer answers the burger question. The fries question
+  // must now surface — not silently dropped. ───────────────────────────────
+  const cart: TurnEngineCartLine[] = [];
+  const answerResult = answer(state, cart, "the first one", AMBIGUOUS_MENU);
+  assertEquals(answerResult.resolved, true);
+  assert(answerResult.resolved && answerResult.outcome.kind === "disambiguation_resolved");
+  assertEquals(cart.length, 1, "the resolved burger must be added to the cart");
+  assert([AMBIGUOUS_BURGER_A_ID, AMBIGUOUS_BURGER_B_ID].includes(cart[0].menu_item_id), "the added line must be one of the two burger candidates");
+
+  const events2: AskTurnEvents = { ...NO_TURN_EVENTS, disambiguationSettledThisTurn: true };
+  state = ask(cart, state, events2, SHOP_CONTEXT, AMBIGUOUS_MENU);
+  assert(
+    state.open?.kind === "disambiguation",
+    `turn 2 must now ask about the carried fries span instead of dropping it — got: ${JSON.stringify(state.open)}`,
+  );
+  assertEquals(
+    [...(state.open as { candidates: string[] }).candidates].sort(),
+    [AMBIGUOUS_FRIES_A_ID, AMBIGUOUS_FRIES_B_ID].sort(),
+  );
+
+  const reply2 = render([], cart, state, [], AMBIGUOUS_MENU);
+  assert(reply2.includes("Cheese Fries") && reply2.includes("Chili Fries"), `turn 2 must ask about the fries candidates: ${reply2}`);
 });
 
 // ── stale line_key fix (2026-09-15, docs/specs/2026-09-14-turn-engine-

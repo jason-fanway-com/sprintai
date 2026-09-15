@@ -302,6 +302,8 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   let turnEvents: AskTurnEvents = {
     qualifyingAddMenuItemId: null,
     disambiguationCandidateIds: null,
+    carriedDisambiguationCandidateIds: [],
+    disambiguationSettledThisTurn: false,
     checkoutIntentThisTurn: false,
     confirmYes: false,
     confirmNo: false,
@@ -311,8 +313,16 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
 
   // ── STEP 2: ANSWER ───────────────────────────────────────────────────────
   const answerResult = answer(priorState, workingCart, input.message, input.menu);
+  // priorState.open can ONLY be resolved through the "disambiguation" case
+  // of answer()'s own switch (turn-engine.ts) when it was already that kind
+  // -- so `resolved: true` here can only mean THAT disambiguation was just
+  // settled (a candidate resolved, or the customer declined it), never a
+  // coincidental resolution of something else. See turn-engine.ts's ask(),
+  // priority 2b, for what this unlocks.
+  const priorOpenWasDisambiguation = priorState.open?.kind === "disambiguation";
 
   if (answerResult.resolved) {
+    turnEvents = { ...turnEvents, disambiguationSettledThisTurn: priorOpenWasDisambiguation };
     const outcome = answerResult.outcome;
     switch (outcome.kind) {
       case "order_type_resolved":
@@ -407,6 +417,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       ...turnEvents,
       qualifyingAddMenuItemId: decideResult.qualifyingAddMenuItemId,
       disambiguationCandidateIds: decideResult.disambiguationCandidateIds,
+      carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
       checkoutIntentThisTurn: proposal.intent === "checkout",
     };
     if (proposal.intent === "question" && proposal.answer_text) {

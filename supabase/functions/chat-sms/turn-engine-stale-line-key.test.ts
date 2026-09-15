@@ -105,6 +105,7 @@ const SHOP_CONTEXT: AskShopContext = {
 const NO_TURN_EVENTS: AskTurnEvents = {
   qualifyingAddMenuItemId: null,
   disambiguationCandidateIds: null,
+  disambiguationSettledThisTurn: false,
   checkoutIntentThisTurn: false,
   confirmYes: false,
   confirmNo: false,

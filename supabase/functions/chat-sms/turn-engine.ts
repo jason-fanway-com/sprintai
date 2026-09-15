@@ -97,7 +97,7 @@ import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-rec
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
-  renderDisambiguationReask,
+  renderAmbiguousItemQuestion,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
 import { isExplicitCheckoutIntent } from "./checkout-intent-gate-20260913.ts";
@@ -127,7 +127,15 @@ export interface DialogueState {
   open:
     | null
     | { kind: "slot"; line_key: string; group_id: string }
-    | { kind: "disambiguation"; candidates: string[] }
+    // `carriedAmbiguous`: OTHER item_spans this same customer message named
+    // that also came back ambiguous, each as its own candidate-id list, in
+    // the order the customer said them, still waiting behind the one ASK is
+    // asking about right now. One question per turn (§3b step 5) — this is
+    // how the rest survive to be asked on a LATER turn instead of silently
+    // dropped the instant a second ambiguous span shows up alongside the
+    // first. See decide()'s `carriedDisambiguationCandidateIds` and ask()'s
+    // priority-2 fallback below for where this is produced/consumed.
+    | { kind: "disambiguation"; candidates: string[]; carriedAmbiguous?: string[][] }
     | { kind: "upsell"; menu_item_id: string }
     | { kind: "order_type" } | { kind: "address" } | { kind: "tip" }
     | { kind: "name"; suggested?: string } | { kind: "confirm" };
@@ -404,9 +412,19 @@ export interface DecideResult {
   // DIFFERENT menu items at the longest matched length -- the exact shape
   // ASK's existing `disambiguation` open-question kind already consumes
   // (AskTurnEvents.disambiguationCandidateIds). Null when no add this turn
-  // was ambiguous. Same last-one-wins convention as qualifyingAddMenuItemId
-  // above when more than one add in the same proposal is ambiguous.
+  // was ambiguous. When MORE than one add in the same proposal is ambiguous,
+  // this is the FIRST one in the customer's own message order (proposal.adds
+  // order) -- never last-one-wins, never any other tiebreak -- and every
+  // other ambiguous span's candidates are carried in
+  // `carriedDisambiguationCandidateIds`, same order, so ASK can ask about
+  // this one now and the rest on later turns instead of dropping them.
   disambiguationCandidateIds: string[] | null;
+  // The ambiguous spans NOT chosen for `disambiguationCandidateIds` above,
+  // in message order, each still carrying every one of its own tying
+  // candidates unranked. Empty when at most one add this turn was
+  // ambiguous. See DialogueState's `carriedAmbiguous` and ask()'s
+  // priority-2 fallback for how this queue gets asked on a later turn.
+  carriedDisambiguationCandidateIds: string[][];
 }
 
 interface ResolvedAdd {
@@ -494,6 +512,7 @@ export function decide(
   const declines: Decline[] = [];
   let qualifyingAddMenuItemId: string | null = null;
   let disambiguationCandidateIds: string[] | null = null;
+  let carriedDisambiguationCandidateIds: string[][] = [];
 
   // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
   // "item_span is an input to a deterministic, total function that runs
@@ -504,15 +523,26 @@ export function decide(
   // surfaces a decline so the customer knows nothing was added. Never a
   // tiebreak, never a fallback to the model, never re-inspected afterward.
   const resolvedAdds: ResolvedAdd[] = [];
+  // Every ambiguous span this turn, in the customer's own message order
+  // (proposal.adds order) -- never sorted, never reordered by candidate
+  // count or anything else. The FIRST one becomes this turn's ASK; the rest
+  // are carried forward below so a later turn can ask about them instead of
+  // the second (third, ...) span silently vanishing the moment more than one
+  // add ties in the same message.
+  const ambiguousSpans: string[][] = [];
   for (const add of proposal.adds ?? []) {
     const resolution = resolveItem(add.item_span, lexicon);
     if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices });
     } else if (resolution.kind === "ambiguous") {
-      disambiguationCandidateIds = resolution.candidates;
+      ambiguousSpans.push(resolution.candidates);
     } else {
       declines.push({ reason: "Sorry, I didn't catch what item that was — mind saying it again?" });
     }
+  }
+  if (ambiguousSpans.length > 0) {
+    disambiguationCandidateIds = ambiguousSpans[0];
+    carriedDisambiguationCandidateIds = ambiguousSpans.slice(1);
   }
 
   // Two adds in one proposal with identical identity collapse to ONE line at
@@ -584,7 +614,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, qualifyingAddMenuItemId, disambiguationCandidateIds };
+  return { cart: nextCart, declines, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -613,6 +643,21 @@ export interface AskShopContext {
 export interface AskTurnEvents {
   qualifyingAddMenuItemId: string | null;
   disambiguationCandidateIds: string[] | null;
+  // decide()'s own queue of OTHER ambiguous spans from this turn's proposal,
+  // beyond the one named by disambiguationCandidateIds above -- see
+  // DecideResult.carriedDisambiguationCandidateIds. Empty/omitted when at
+  // most one add this turn was ambiguous.
+  carriedDisambiguationCandidateIds?: string[][];
+  // True when priorState.open was a `disambiguation` question AND this
+  // turn's ANSWER settled it (resolved a candidate OR the customer declined
+  // it) -- i.e. the caller's ANSWER call returned `resolved: true` while
+  // that was the open question. This is ASK's signal to promote the NEXT
+  // carried ambiguous span (priorState.open.carriedAmbiguous) onto `open`,
+  // rather than re-checking it every turn regardless of whether the prior
+  // disambiguation is actually done. False on the PROPOSE/decide() branch
+  // (a fresh disambiguationCandidateIds from THIS turn's decide() already
+  // takes priority below and needs no help from this flag).
+  disambiguationSettledThisTurn: boolean;
   // True when this turn's ANSWER resolved to `checkout_intent`, or a
   // PROPOSE-produced Proposal carried `intent: "checkout"`. Once true (or
   // once `state.phase` has already moved past "ordering" — see
@@ -646,9 +691,28 @@ export function ask(
     }
   }
 
-  // 2. disambiguation.
+  // 2. disambiguation -- this turn's own fresh ambiguous span(s) (from
+  // decide(), via PROPOSE) take priority; any OTHER ambiguous span found in
+  // the same proposal is carried onto the new open question so it isn't
+  // dropped the moment this one resolves.
   if (turnEvents.disambiguationCandidateIds && turnEvents.disambiguationCandidateIds.length > 0) {
-    return carry({ kind: "disambiguation", candidates: turnEvents.disambiguationCandidateIds }, "ordering");
+    return carry(
+      { kind: "disambiguation", candidates: turnEvents.disambiguationCandidateIds, carriedAmbiguous: turnEvents.carriedDisambiguationCandidateIds ?? [] },
+      "ordering",
+    );
+  }
+
+  // 2b. a PRIOR turn's disambiguation just got settled (resolved or
+  // declined) this turn, and it was carrying one or more OTHER ambiguous
+  // spans from that same original message -- promote the next one now,
+  // same "one question per turn" contract, never silently dropped.
+  if (
+    priorState.open?.kind === "disambiguation" &&
+    turnEvents.disambiguationSettledThisTurn &&
+    priorState.open.carriedAmbiguous && priorState.open.carriedAmbiguous.length > 0
+  ) {
+    const [next, ...rest] = priorState.open.carriedAmbiguous;
+    return carry({ kind: "disambiguation", candidates: next, carriedAmbiguous: rest }, "ordering");
   }
 
   // 3. order_type (only if delivery is enabled and unset).
@@ -758,7 +822,7 @@ export function render(
           .map(id => menuById.get(id))
           .filter((m): m is TurnEngineMenuItem => !!m)
           .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
-        if (candidates.length > 0) question = renderDisambiguationReask(candidates);
+        if (candidates.length > 0) question = renderAmbiguousItemQuestion(candidates);
         break;
       }
       case "upsell": {
