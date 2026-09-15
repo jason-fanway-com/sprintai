@@ -44,10 +44,19 @@ const PROPOSAL_TOOL_NAME = "submit_proposal";
 
 // ─── Public input/output shapes ─────────────────────────────────────────
 
+export interface LexiconTerm {
+  term: string;
+  target_id: string;
+}
+
 export interface ProposeTurnInput {
   cart: TurnEngineCartLine[];
   open: DialogueState["open"];
   menu: TurnEngineMenuItem[];
+  // Compiled item-level lexicon terms (the `lexicon` table, target_type =
+  // 'item', active = true), injected by the caller — see the note by
+  // buildMenuIndex below for why this is not derived here.
+  lexicon: LexiconTerm[];
   // Last six turns of conversation history, oldest first — NOT including
   // the current customer message, which is `message` below.
   history: Array<{ role: "user" | "assistant"; content: string }>;
@@ -107,61 +116,40 @@ interface MenuIndexEntry {
   lexicon: string[];
 }
 
-// Words that describe a size, format, or whole course rather than a
-// specific dish — never a safe one-word alias (mirrors index.ts's own
-// GENERIC_LAST_WORDS reasoning for buildMenuItemNames, reimplemented here
-// rather than imported: propose.ts must never import from index.ts, which
-// boots Deno.serve at module scope and would defeat every unit test).
-const GENERIC_LEXICON_WORDS = new Set([
-  "large", "medium", "small", "regular", "mini", "jumbo", "giant", "personal",
-  "half", "whole", "single", "double", "triple", "side", "sides", "plain",
-  "pizza", "pizzas", "pie", "pies", "roll", "rolls", "wrap", "wraps", "sub",
-  "subs", "sandwich", "sandwiches", "salad", "salads", "soup", "soups",
-  "platter", "platters", "combo", "combos", "special", "specials", "dinner",
-  "lunch", "breakfast", "meal", "meals", "plate", "plates", "basket",
-  "pieces", "piece", "order", "orders", "cup", "bowl", "slice", "slices",
-]);
-
-function normalizeMenuName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-// One-word alias per item ("scampi" -> Shrimp Scampi) when that last word
-// is unique across the menu and not a generic size/format word. Same
-// discipline as index.ts's buildMenuItemNames — a word shared by 2+ items
-// identifies nothing and must never be offered as if it did.
-function buildLexicon(menu: TurnEngineMenuItem[]): Map<string, string[]> {
-  const wordItemCount = new Map<string, number>();
-  const normalized = menu.map(item => ({ item, norm: normalizeMenuName(item.name) }));
-  for (const { norm } of normalized) {
-    for (const w of new Set(norm.split(" "))) {
-      wordItemCount.set(w, (wordItemCount.get(w) ?? 0) + 1);
-    }
+// Turn Engine Phase 2 bounce (2026-09-14/15, PO): this used to derive a
+// one-word alias per item at runtime (last-word-if-unique-across-the-menu),
+// re-implementing index.ts's buildMenuItemNames heuristic. On Vito's real
+// 221-item menu that left 197 items — including both "Cheese Burger" and
+// "Bacon Cheeseburger" — with an EMPTY derived lexicon, because "burger"
+// isn't unique across the menu's several burger rows. The model then
+// matched on bare `name` substring alone, and "cheeseburger" as a token
+// happens to substring-match "Bacon Cheeseburger" — 8 of 17 non-ambiguous
+// live calls in the first acceptance run resolved a plain "cheeseburger"
+// order to the $10.99 item instead of the $8.49 one. Wrong item for money.
+//
+// The compile-menu.ts compiler already materializes a correct, reviewed
+// lexicon (the `lexicon` table: term -> target_id, provenance, active) —
+// 'cheese burger' -> Cheese Burger, 'bacon cheeseburger' -> Bacon
+// Cheeseburger, distinct and correct. Re-deriving a worse copy of it here
+// was the bug. This module takes that lexicon as an INJECTED INPUT
+// (ProposeTurnInput.lexicon) instead — propose.ts stays pure of I/O, same
+// as every other dependency; the caller (Phase 3 in production; the
+// acceptance script for now) is the one that reads the `lexicon` table,
+// filtered to active = true.
+function buildMenuIndex(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[]): MenuIndexEntry[] {
+  const termsByTargetId = new Map<string, string[]>();
+  for (const { term, target_id } of lexicon) {
+    const arr = termsByTargetId.get(target_id) ?? [];
+    arr.push(term);
+    termsByTargetId.set(target_id, arr);
   }
-  const lexicon = new Map<string, string[]>();
-  for (const { item, norm } of normalized) {
-    const parts = norm.split(" ").filter(w => w.length >= 3);
-    const words: string[] = [];
-    if (parts.length > 1) {
-      const last = parts[parts.length - 1];
-      if ((wordItemCount.get(last) ?? 0) === 1 && !GENERIC_LEXICON_WORDS.has(last)) {
-        words.push(last);
-      }
-    }
-    lexicon.set(item.id, words);
-  }
-  return lexicon;
-}
-
-function buildMenuIndex(menu: TurnEngineMenuItem[]): MenuIndexEntry[] {
-  const lexicon = buildLexicon(menu);
   return menu.map(item => ({
     id: item.id,
     name: item.name,
     price_cents: item.price_cents,
     category: item.category ?? null,
     orderable: item.bot_state !== "blocked" && item.bot_state !== "display_only",
-    lexicon: lexicon.get(item.id) ?? [],
+    lexicon: termsByTargetId.get(item.id) ?? [],
   }));
 }
 
@@ -198,10 +186,10 @@ Rules:
 - answer_text is allowed ONLY when intent is "question": a short, plain answer, no digits, no item names, at most two sentences. Every other intent must omit answer_text entirely.
 - Call submit_proposal exactly once. It is the only tool available.`;
 
-function buildSystemPrompt(menu: TurnEngineMenuItem[], cart: TurnEngineCartLine[], open: DialogueState["open"]): string {
+function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], cart: TurnEngineCartLine[], open: DialogueState["open"]): string {
   return [
     SYSTEM_PROMPT_PREAMBLE,
-    `Menu index:\n${JSON.stringify(buildMenuIndex(menu))}`,
+    `Menu index:\n${JSON.stringify(buildMenuIndex(menu, lexicon))}`,
     `Cart:\n${JSON.stringify(buildCartIndex(cart))}`,
     `Currently open question (what the customer is mid-answering, if anything):\n${JSON.stringify(open)}`,
   ].join("\n\n");
@@ -379,7 +367,7 @@ async function attemptOnce(
         model: deps.model,
         max_tokens: 1024,
         reasoning: { enabled: false },
-        system: buildSystemPrompt(input.menu, input.cart, input.open),
+        system: buildSystemPrompt(input.menu, input.lexicon, input.cart, input.open),
         messages,
         tools: [PROPOSAL_TOOL],
         tool_choice: { type: "tool", name: PROPOSAL_TOOL_NAME },

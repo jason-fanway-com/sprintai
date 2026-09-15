@@ -4,20 +4,37 @@
 // network, zero real Postgres writes. The 20 live model calls against
 // Vito's real menu happen only in ~/po-scratch/propose-mx.py, never here.
 import { assert, assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { proposeTurn, DEFAULT_MODEL, DEFAULT_CHAT_API, type ProposeTurnInput } from "./propose.ts";
+import { proposeTurn, DEFAULT_MODEL, DEFAULT_CHAT_API, type ProposeTurnInput, type LexiconTerm } from "./propose.ts";
 import type { TurnEngineMenuItem, TurnEngineCartLine } from "./turn-engine.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
+// Two genuinely close item names on purpose — the Phase 2 bounce (2026-09-15):
+// a runtime-derived one-word alias left both of these with an EMPTY lexicon
+// (neither "burger" nor "cheeseburger" is unique across the two), so the
+// model substring-matched bare "cheeseburger" onto Bacon Cheeseburger 8/17
+// times on the real live menu. The fix is an INJECTED lexicon (the
+// `lexicon` table's compiled, reviewed terms) — these fixtures exist to
+// prove the injected terms, not a runtime derivation, are what the menu
+// index now carries.
 const MENU: TurnEngineMenuItem[] = [
   { id: "item-cheeseburger", name: "Cheese Burger", category: "Burgers", price_cents: 849, bot_state: "orderable" },
+  { id: "item-bacon-cheeseburger", name: "Bacon Cheeseburger", category: "Burgers", price_cents: 1099, bot_state: "orderable" },
   { id: "item-fries", name: "French Fries", category: "Sides", price_cents: 399, bot_state: "orderable" },
   { id: "item-coke", name: "Coke", category: "Drinks", price_cents: 299, bot_state: "orderable" },
   { id: "item-blocked-shake", name: "Milkshake", category: "Drinks", price_cents: 499, bot_state: "blocked" },
-  // "cheese" alone must never become a lexicon alias — it's a substring of
-  // two item names, same non-unique-word guarantee index.ts's own
-  // buildMenuItemNames makes.
   { id: "item-grilled-cheese", name: "Grilled Cheese", category: "Sandwiches", price_cents: 599, bot_state: "orderable" },
+];
+
+// Mirrors the real, live `lexicon` table rows for Vito's (queried 2026-09-15):
+// 'cheese burger' -> Cheese Burger, 'bacon cheeseburger' -> Bacon
+// Cheeseburger — distinct terms, distinct targets, no shared bare word.
+const LEXICON: LexiconTerm[] = [
+  { term: "cheese burger", target_id: "item-cheeseburger" },
+  { term: "bacon cheeseburger", target_id: "item-bacon-cheeseburger" },
+  { term: "french fries", target_id: "item-fries" },
+  { term: "coke", target_id: "item-coke" },
+  { term: "grilled cheese", target_id: "item-grilled-cheese" },
 ];
 
 const EMPTY_CART: TurnEngineCartLine[] = [];
@@ -31,6 +48,7 @@ function baseInput(overrides: Partial<ProposeTurnInput> = {}): ProposeTurnInput 
     cart: EMPTY_CART,
     open: null,
     menu: MENU,
+    lexicon: LEXICON,
     history: [],
     message: "cheeseburger",
     ...overrides,
@@ -328,7 +346,7 @@ Deno.test("proposeTurn: request uses the configured model, chatApiUrl, and force
   assertEquals(capturedBody.tools[0].name, "submit_proposal");
 });
 
-Deno.test("proposeTurn: system prompt's menu index marks a blocked item not-orderable and never fabricates a shared-word lexicon alias", async () => {
+Deno.test("proposeTurn: system prompt's menu index marks a blocked item not-orderable", async () => {
   const { supabase } = makeFakeSupabase();
   // deno-lint-ignore no-explicit-any
   let capturedBody: any = null;
@@ -349,11 +367,64 @@ Deno.test("proposeTurn: system prompt's menu index marks a blocked item not-orde
   assertEquals(shake.orderable, false);
   const burger = menuIndex.find((m: { id: string }) => m.id === "item-cheeseburger");
   assertEquals(burger.orderable, true);
-  // "cheese" is shared by Cheese Burger and Grilled Cheese — must never be
-  // offered as a one-word alias for either.
-  const grilledCheese = menuIndex.find((m: { id: string }) => m.id === "item-grilled-cheese");
-  assert(!burger.lexicon.includes("cheese"));
-  assert(!grilledCheese.lexicon.includes("cheese"));
+});
+
+// Phase 2 bounce (2026-09-15): the lexicon is no longer derived at runtime
+// from item names — it is injected verbatim from the `lexicon` table
+// (ProposeTurnInput.lexicon), grouped by target_id. This is the test that
+// actually closes the wrong-item-for-money defect: two items with a shared
+// generic word ("cheeseburger"/"burger") must each carry ONLY their own
+// distinct, correct term(s), never each other's, and never a derived
+// shared-word fallback.
+Deno.test("proposeTurn: menu index's lexicon field is the injected terms grouped by target_id — not re-derived, never crossed between items", async () => {
+  const { supabase } = makeFakeSupabase();
+  // deno-lint-ignore no-explicit-any
+  let capturedBody: any = null;
+  await proposeTurn(baseInput(), {
+    supabase,
+    apiKey: "test-key",
+    now: fixedClock(),
+    fetchImpl: ((_url: string, init?: RequestInit) => {
+      capturedBody = JSON.parse(init!.body as string);
+      return Promise.resolve(toolUseResponse(VALID_ORDER_INPUT));
+    }) as typeof fetch,
+  });
+  const system: string = capturedBody.system;
+  const menuJson = system.match(/Menu index:\n(\[.*?\])\n\n/s)![1];
+  const menuIndex = JSON.parse(menuJson);
+  const burger = menuIndex.find((m: { id: string }) => m.id === "item-cheeseburger");
+  const baconBurger = menuIndex.find((m: { id: string }) => m.id === "item-bacon-cheeseburger");
+  assertEquals(burger.lexicon, ["cheese burger"]);
+  assertEquals(baconBurger.lexicon, ["bacon cheeseburger"]);
+  assert(!burger.lexicon.includes("bacon cheeseburger"));
+  assert(!baconBurger.lexicon.includes("cheese burger"));
+  // An item with no compiled lexicon term at all gets an empty array, never
+  // a fabricated fallback.
+  const shake = menuIndex.find((m: { id: string }) => m.id === "item-blocked-shake");
+  assertEquals(shake.lexicon, []);
+});
+
+Deno.test("proposeTurn: two terms injected for the same item both appear in its lexicon", async () => {
+  const { supabase } = makeFakeSupabase();
+  // deno-lint-ignore no-explicit-any
+  let capturedBody: any = null;
+  await proposeTurn(
+    baseInput({ lexicon: [...LEXICON, { term: "cheeseburger", target_id: "item-cheeseburger" }] }),
+    {
+      supabase,
+      apiKey: "test-key",
+      now: fixedClock(),
+      fetchImpl: ((_url: string, init?: RequestInit) => {
+        capturedBody = JSON.parse(init!.body as string);
+        return Promise.resolve(toolUseResponse(VALID_ORDER_INPUT));
+      }) as typeof fetch,
+    },
+  );
+  const system: string = capturedBody.system;
+  const menuJson = system.match(/Menu index:\n(\[.*?\])\n\n/s)![1];
+  const menuIndex = JSON.parse(menuJson);
+  const burger = menuIndex.find((m: { id: string }) => m.id === "item-cheeseburger");
+  assertEquals(burger.lexicon, ["cheese burger", "cheeseburger"]);
 });
 
 Deno.test("proposeTurn: system prompt's cart index carries line_key computed the same way DECIDE's removes/modifies expect", async () => {
