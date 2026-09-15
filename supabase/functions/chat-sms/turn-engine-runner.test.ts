@@ -422,6 +422,69 @@ function assertExists_rawBody(row: Record<string, unknown>) {
   assert(metadata.attempts[0].raw_body.includes("bad gateway"));
 }
 
+// ── persistTurn must write subtotal_cents/total_cents, reusing the SAME
+// itemizer/money code the reply footer and Stripe checkout already use
+// (pricing.ts's computeCartSubtotalCents + connect.ts's SERVICE_FEE_CENTS) —
+// never a second, parallel money calculation. Confirmed live: conversation
+// 5a631ccf had a correct cart and correct reply but subtotal_cents = 0 in
+// the row, because persistTurn never wrote either field.
+
+Deno.test("runTurnEngineTurn: persists subtotal_cents/total_cents computed from the cart lines' own price_cents*quantity, plus service fee, delivery fee, and tip", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true,
+      attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "cheese burger", quantity: 2, choices: [] }], removes: [], modifies: [] },
+    }),
+  };
+  const input = baseInput({
+    message: "two cheeseburgers",
+    cart: [],
+    shopContext: {
+      deliveryEnabled: true,
+      orderType: "delivery",
+      deliveryAddressKnown: true,
+      driverTipCents: 200,
+      pickupName: null,
+      deliveryFeeCents: 300,
+    },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].price_cents, 849);
+  assertEquals(result.cart[0].quantity, 2);
+  const expectedSubtotal = 849 * 2; // 1698 — sum of the cart lines' own price_cents * quantity
+  const expectedTotal = expectedSubtotal + 99 /* SERVICE_FEE_CENTS */ + 300 /* delivery */ + 200 /* tip */;
+  assertEquals(state.orderCartsUpdates.length, 1);
+  assertEquals(state.orderCartsUpdates[0].subtotal_cents, expectedSubtotal);
+  assertEquals(state.orderCartsUpdates[0].total_cents, expectedTotal);
+});
+
+Deno.test("runTurnEngineTurn: an empty cart persists subtotal_cents = 0 explicitly, not null, with total_cents numeric", async () => {
+  const deps = baseDeps({
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: { intent: "other", adds: [], removes: [], modifies: [] },
+    }),
+  });
+  const { supabase, state } = makeFakeSupabase();
+  const depsWithState: RunTurnDeps = { ...deps, supabase };
+  const input = baseInput({ message: "hello", cart: [] });
+
+  await runTurnEngineTurn(input, depsWithState);
+
+  assertEquals(state.orderCartsUpdates.length, 1);
+  assertEquals(state.orderCartsUpdates[0].subtotal_cents, 0);
+  assert(state.orderCartsUpdates[0].total_cents !== null && state.orderCartsUpdates[0].total_cents !== undefined);
+  assertEquals(typeof state.orderCartsUpdates[0].total_cents, "number");
+});
+
 // ── Return value is always the reply string ───────────────────────────────
 
 Deno.test("runTurnEngineTurn: always returns a non-empty reply string, even on an empty cart with nothing open", async () => {

@@ -49,6 +49,8 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { buildMenuPriceIndex, type MenuItemForPricing } from "./itemizer.ts";
+import { computeCartSubtotalCents } from "./pricing.ts";
+import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
@@ -256,11 +258,25 @@ async function persistTurn(
   dialogueState: DialogueState,
   sideEffects: CartSideEffects,
   reply: string,
+  deliveryFeeCents: number,
+  driverTipCents: number,
 ): Promise<void> {
+  // Same source of truth as the reply footer (RENDER's renderItemizedRecap/
+  // renderLedgerFooter, itemizer.ts) and the Stripe checkout total
+  // (createCheckoutSession, checkout-session.ts) — computeCartSubtotalCents
+  // is pricing.ts's own single tested source for this sum, never
+  // reimplemented here. Without this write, anything reading the DB row
+  // directly (acceptance canary, admin dashboard, Expo app, analytics) saw
+  // subtotal_cents = 0 even on a cart/reply that were themselves correct.
+  const subtotalCents = computeCartSubtotalCents(cart);
+  const totalCents = subtotalCents + SERVICE_FEE_CENTS + deliveryFeeCents + driverTipCents;
+
   await supabase.from("order_carts").update({
     cart_json: cart, // single-writer:blessed — persistTurn is THE engine-path persister; saveCart (index.ts) is its legacy-path counterpart
     dialogue_state: dialogueState,
     phase: cart.length > 0 ? "building" : "greeting",
+    subtotal_cents: subtotalCents,
+    total_cents: totalCents,
     ...sideEffects,
   }).eq("id", input.cartId);
 
@@ -403,9 +419,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   const nextState = ask(workingCart, priorState, turnEvents, shopContext, input.menu);
 
   // ── STEP 6: RENDER ─────────────────────────────────────────────────────────
+  // Same values feed persistTurn's total_cents below — one computation, not
+  // a second copy that could drift from what the reply footer shows.
+  const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+  const driverTipCents = sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? 0;
   const rendered = render(cartBefore, workingCart, nextState, declines, input.menu, {
-    deliveryFeeCents: input.shopContext.deliveryFeeCents ?? undefined,
-    driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? undefined,
+    deliveryFeeCents: deliveryFeeCents || undefined,
+    driverTipCents: driverTipCents || undefined,
     // TurnEngineMenuItem's option_groups/ask_plan shape is a superset of what
     // buildMenuPriceIndex needs (id-based compiled option groups vs. its
     // legacy name/choices shape) — only the ask_plan.steps branch is ever
@@ -415,7 +435,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 
   // ── STEP 7: PERSIST ────────────────────────────────────────────────────────
-  await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply);
+  await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply, deliveryFeeCents, driverTipCents);
 
   return { reply, cart: workingCart, dialogueState: nextState };
 }
