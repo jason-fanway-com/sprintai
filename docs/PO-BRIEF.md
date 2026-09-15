@@ -114,8 +114,13 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
 - **`admin-chat`** — the owner's conversational console: 86 an item, add a special,
   delivery controls.
 - **`public-tester`** — the Test Kitchen. Pinned to one shop via `app_config`.
-- **The model** is `deepseek/deepseek-v4-pro` via OpenRouter, set by the `CHAT_MODEL`
-  secret. Jason's deliberate choice, 2026-09-04.
+- **The model** is `deepseek/deepseek-v4-flash` via OpenRouter, set by the `CHAT_MODEL`
+  secret (verified 2026-09-14 by matching the secret digest; the code default in
+  `index.ts` agrees). Jason's deliberate choice of DeepSeek, 2026-09-04.
+  **Prod and the test harness share one OpenRouter key** - verified by digest, same day.
+  So every canary and matrix run spends the same credits the live path depends on, and an
+  exhausted balance surfaces as the `Sorry, I ran into a problem` fallback, which looks
+  exactly like a code defect. Check the account balance before diagnosing that text.
 
 **Two ideas do most of the work:**
 - **Slots vs modifiers.** A *slot* must be answered (size, bread, temp); a *modifier* is
