@@ -32,19 +32,39 @@
 //    call, not a literal reading of the spec text, and the PO should confirm
 //    the placement.
 //
-// 2. §3b's ANSWER step's "with no open question" checkout-intent/closure
-//    branch is written as its own case, separate from "if state.open !=
-//    null." Taken literally, a bare "thats it" while a NON-slot question
-//    (order_type/tip/address/name/confirm) is open and doesn't match that
-//    question's own expected words falls through to a model call (PROPOSE)
-//    rather than being read as checkout intent, even though
-//    isExplicitCheckoutIntent's own design principle is "an unambiguous
-//    customer-initiated phrase always authorizes, regardless of what the bot
-//    just asked." answer() below follows the literal spec text (checkout-
-//    intent/closure only fires when `state.open === null`) rather than
-//    guessing at a broader override, and this is called out as an open
-//    question in the phase report — Proposal.intent === "checkout" is the
-//    documented escape hatch once PROPOSE runs.
+// 2. FIXED (2026-09-15, live money bug — 10/20 canary failures, deploy
+//    8da2227c, conversations 796faad0/88c00382/597384ff/4ec32aed/8d50a158
+//    and five more). §3b's ANSWER step's "with no open question" checkout-
+//    intent/closure branch used to be written as its own case, separate
+//    from "if state.open != null." Taken literally, a bare "thats it" while
+//    a NON-slot question (order_type/tip/address/name/confirm) was open and
+//    didn't match that question's own expected words fell through to a
+//    model call (PROPOSE) rather than being read as checkout intent, even
+//    though isExplicitCheckoutIntent's own design principle is "an
+//    unambiguous customer-initiated phrase always authorizes, regardless of
+//    what the bot just asked." Concretely: cart holds a Cheese Burger
+//    (Temp: Medium), order_type is open ("Pickup or delivery today?"), the
+//    customer says "thats it" — meaning "I'm done ordering" — and the old
+//    code handed that free text to the model against an open cart with no
+//    other instruction, which read it as "one more of the same" and bumped
+//    quantity to 2 ($8.49 -> $16.98). Same defect family as the LEGACY
+//    engine's "thats it" bug (conversations 0e7b9fd7, 1eeab0c0) this whole
+//    engine was built to make structurally impossible.
+//
+//    closureOrAffirmationFallback() below closes this: every one of the
+//    five non-slot open kinds checks it — after that kind's own real answer
+//    shape has already had first crack at the message, so a genuine tip
+//    decline ("no thanks" while tip is open) still resolves as
+//    tip_resolved(0) exactly as before — and before ever returning
+//    UNRESOLVED. A match never touches the cart and never claims to answer
+//    the open question itself; it only prevents PROPOSE from running, and
+//    ASK's own priority recompute naturally re-asks the identical question
+//    next (nothing about cart/shop state changed this turn). `slot`,
+//    `disambiguation`, and `upsell` are deliberately NOT covered by this
+//    fallback — they already have their own closure-shaped resolution
+//    (isPendingDisambiguationDeclined, impliesUpsellDecline) with different,
+//    correct semantics (e.g. disambiguation-decline means "none of those
+//    candidates," not "I'm done ordering") that this fix must not disturb.
 //
 // 3. The proposal contract (§3c) validates by CHOICE ID, but the only
 //    existing, tested mutation pipeline (ask-plan-engine.ts's
@@ -236,6 +256,29 @@ const TIP_DECLINE_RE = /^(?:no tip|no thanks|no thank you|not now|skip|none|pass
 const TIP_AMOUNT_RE = /^\$?\s*\d+(?:\.\d{1,2})?\s*$/;
 const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
 
+// See this file's header note 2: the fallback that closes the "thats it
+// while order_type is open" money bug. Called ONLY from the five non-slot
+// `state.open.kind` cases below, and ONLY after that kind's own real answer
+// shape already missed the message — so it never overrides a genuine
+// resolution (a real tip decline, a real confirm "no", etc.), it only
+// catches what's left. Reuses the exact detectors already live elsewhere in
+// this file, never a new phrase list: isExplicitCheckoutIntent and
+// BARE_CLOSURE_RE already power the `state.open === null` branch above;
+// impliesUpsellAcceptance/impliesUpsellDecline already power the `upsell`
+// case below. A match never mutates the cart (cartChanged is always false)
+// and never claims to answer the open question — the caller's own ASK
+// recompute naturally re-asks it, since nothing about the cart or shop
+// state moved this turn.
+function closureOrAffirmationFallback(trimmed: string): AnswerResult | null {
+  if (isExplicitCheckoutIntent(trimmed, null, false)) {
+    return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
+  }
+  if (BARE_CLOSURE_RE.test(trimmed) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
+    return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
+  }
+  return null;
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -292,11 +335,11 @@ export function answer(
       const wantsDelivery = ORDER_TYPE_DELIVERY_RE.test(trimmed);
       if (wantsPickup && !wantsDelivery) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
       if (wantsDelivery && !wantsPickup) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "delivery" }, cartChanged: false };
-      return UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
     case "address": {
-      if (external.geocodedAddress === undefined) return UNRESOLVED;
+      if (external.geocodedAddress === undefined) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       if (external.geocodedAddress === null) return { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false };
       return {
         resolved: true,
@@ -308,18 +351,18 @@ export function answer(
     case "tip": {
       if (TIP_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: 0 }, cartChanged: false };
       if (TIP_AMOUNT_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: parseBareTipDollars(trimmed) * 100 }, cartChanged: false };
-      return UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
     case "name": {
-      if (!looksLikeCustomerName(trimmed)) return UNRESOLVED;
-      return { resolved: true, outcome: { kind: "name_resolved", name: trimmed }, cartChanged: false };
+      if (looksLikeCustomerName(trimmed)) return { resolved: true, outcome: { kind: "name_resolved", name: trimmed }, cartChanged: false };
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
     case "confirm": {
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
       if (CONFIRM_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
-      return UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
     case "upsell": {

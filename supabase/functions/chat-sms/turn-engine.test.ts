@@ -24,6 +24,7 @@ import {
   type AskShopContext,
 } from "./turn-engine.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
+import { runTurnEngineTurn, type RunTurnDeps, type RunTurnInput } from "./turn-engine-runner.ts";
 
 // ── Fixture: Vito's real, live Cheese Burger row (id 442f650d-dc96-4a95-9762-
 // f6b571a4dd8c) and its real "Temp" option group (id cb066502-4a62-4d6e-a65a-
@@ -169,29 +170,27 @@ for (const conversationId of ["0e7b9fd7-396c-40ab-b5f3-c5c321401f82", "1eeab0c0-
 
     // ── Turn 3: "thats it" ──────────────────────────────────────────────
     // state.open is order_type, and "thats it" names neither pickup nor
-    // delivery — per the spec's own literal step-2 text this is NOT the
-    // "no open question" checkout-intent/closure case (see this file's
-    // header note 2 in turn-engine.ts), so ANSWER defers to PROPOSE again.
-    const a3 = answer(state, cart, "thats it", VITOS_MENU);
-    assertEquals(a3, { resolved: false });
-
-    // Mocked PROPOSE output: the model correctly reads "thats it" as
-    // checkout intent, carrying no adds/removes/modifies.
-    const proposal3: Proposal = { intent: "checkout", adds: [], removes: [], modifies: [] };
+    // delivery — but per the FIX for the live money bug this dispatch
+    // closes (10/20 canary failures, deploy 8da2227c; see turn-engine.ts's
+    // header note 2 and closureOrAffirmationFallback), an explicit
+    // checkout/closure phrase is now recognized in ANSWER regardless of
+    // which non-slot question is open, BEFORE any model call — it must
+    // never again fall through to PROPOSE, and it must never mutate the
+    // cart either.
     const cartBefore3 = cart.map(l => ({ ...l }));
-    const d3 = decide(proposal3, cart, VITOS_MENU, VITOS_LEXICON);
-    assertEquals(d3.declines, []);
-    assertEquals(d3.cart, cart); // nothing to add/remove/modify -> cart unchanged in content
+    const a3 = answer(state, cart, "thats it", VITOS_MENU);
+    assertEquals(a3, { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false });
+    assertEquals(cart, cartBefore3, "a closure/checkout phrase must never mutate the cart");
 
     const events3: AskTurnEvents = { ...NO_TURN_EVENTS, checkoutIntentThisTurn: true };
-    state = ask(d3.cart, state, events3, SHOP_CONTEXT, VITOS_MENU);
+    state = ask(cart, state, events3, SHOP_CONTEXT, VITOS_MENU);
     // order_type is STILL unresolved (nothing this turn set it) — Vito's
     // hard prerequisite ladder means checkout intent alone cannot skip
     // past it. This is the correct, honest outcome: re-ask order_type,
     // never lose the cart, never claim a phantom re-add.
     assertEquals(state.open, { kind: "order_type" });
 
-    const reply3 = render(cartBefore3, d3.cart, state, d3.declines, VITOS_MENU, {});
+    const reply3 = render(cartBefore3, cart, state, [], VITOS_MENU, {});
     assert(reply3.includes("Pickup or delivery today?"), `turn 3 must re-ask the still-unanswered order type: ${reply3}`);
     assert(reply3.includes("Subtotal: $8.49"), `turn 3 must NEVER show an empty cart — this is the exact bug being closed: ${reply3}`);
     assert(!/what would you like to order/i.test(reply3), `turn 3 must never claim the order is empty: ${reply3}`);
@@ -650,3 +649,116 @@ Deno.test("decide: an item_span resolved through the lexicon into an item with T
   assertEquals(result.cart[0].options, { "Choose Sauce": ["BBQ Sauce"], Quantity: ["10 Pieces"] });
   assertEquals(result.cart[0].pending_options, undefined);
 });
+
+// ── Live money bug (10/20 canary failures, deploy 8da2227c): "thats it"
+// while order_type is open silently added a SECOND Cheese Burger ────────
+//
+// Root cause: ANSWER's "with no open question" checkout-intent/closure
+// branch (header note 2 above) only ever fired when state.open === null.
+// Here order_type was open, "thats it" doesn't name pickup or delivery, so
+// the turn fell through to PROPOSE — and the model, asked to interpret free
+// text against an open cart with no other instruction, read "thats it" as
+// "yes, one more of the same" and bumped quantity to 2 (cart total $8.49 ->
+// $16.98). Same defect family as the LEGACY engine's "thats it" bug
+// (conversations 0e7b9fd7, 1eeab0c0) this whole engine was built to make
+// structurally impossible. Fixed in ANSWER via closureOrAffirmationFallback
+// — every non-slot open kind (order_type/tip/address/name/confirm) now
+// checks it before ever returning UNRESOLVED, so a closure/affirmation
+// phrase can never reach PROPOSE regardless of which one is open.
+//
+// This minimal fake only needs to answer loadUpsellEnabled's shop_settings
+// read and persistTurn's order_carts/messages writes — the whole point of
+// this fixture is that PROPOSE (and therefore loadItemLexicon) must NEVER
+// run, so neither needs real behavior.
+function makeMinimalFakeSupabase() {
+  const state = {
+    orderCartsUpdates: [] as Array<Record<string, unknown>>,
+    messagesInserted: [] as Array<Record<string, unknown>>,
+  };
+  function builder(table: string) {
+    // deno-lint-ignore no-explicit-any
+    const b: any = {
+      select() { return b; },
+      eq() { return b; },
+      order() { return b; },
+      maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+      range() { return Promise.resolve({ data: [], error: null }); },
+      update(row: Record<string, unknown>) {
+        if (table === "order_carts") state.orderCartsUpdates.push(row);
+        return { eq: () => Promise.resolve({ error: null }) };
+      },
+      insert(row: Record<string, unknown>) {
+        if (table === "messages") state.messagesInserted.push(row);
+        return Promise.resolve({ error: null });
+      },
+      then(resolve: (v: { data: unknown; error: null; count?: number }) => void, reject?: (e: unknown) => void) {
+        return Promise.resolve({ data: [], error: null, count: 0 }).then(resolve, reject);
+      },
+    };
+    return b;
+  }
+  // deno-lint-ignore no-explicit-any
+  const supabase = { from: (table: string) => builder(table) } as any;
+  return { supabase, state };
+}
+
+const ORDER_TYPE_OPEN_STATE: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+
+function cheeseBurgerMediumCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+}
+
+async function runClosureFixture(message: string) {
+  const { supabase } = makeMinimalFakeSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => {
+      proposeCalls++;
+      return Promise.reject(new Error("PROPOSE must never be called for a bare closure/affirmation while a non-slot question is open"));
+    },
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-1",
+    shopId: "shop-1",
+    tenantId: "tenant-1",
+    cartId: "cart-1",
+    message,
+    history: [],
+    menu: VITOS_MENU,
+    cart: cheeseBurgerMediumCart(),
+    dialogueState: ORDER_TYPE_OPEN_STATE,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  };
+  const result = await runTurnEngineTurn(input, deps);
+  return { result, proposeCalls };
+}
+
+Deno.test('runTurnEngineTurn: "thats it" while order_type is open must NOT add a second Cheese Burger — the exact $8.49 -> $16.98 money bug (deploy 8da2227c, 10/20 canary failures)', async () => {
+  const { result, proposeCalls } = await runClosureFixture("thats it");
+
+  assertEquals(proposeCalls, 0, "PROPOSE must never be called for a bare closure while order_type is open");
+  assertEquals(result.cart.length, 1, "no second line — the cart must not grow");
+  assertEquals(result.cart[0].quantity, 1, "quantity must stay 1 — this is the exact defect: it silently became 2");
+  assertEquals(result.dialogueState.open, { kind: "order_type" }, "the SAME open question must be re-asked, never cleared or force-resolved");
+  assert(result.reply.includes("Pickup or delivery today?"), `must re-ask order type: ${result.reply}`);
+  assert(result.reply.includes("Subtotal: $8.49"), `subtotal must not double: ${result.reply}`);
+});
+
+// One clean phrasing passing is exactly how this bug class survived three
+// prior fixes — every phrase below must independently produce the same
+// safe outcome: cart unchanged, PROPOSE never called, order_type re-asked.
+for (const phrase of ["that's all", "im done", "no thanks", "yes"]) {
+  Deno.test(`runTurnEngineTurn: closure/affirmation matrix — "${phrase}" while order_type is open produces the same safe outcome as "thats it"`, async () => {
+    const { result, proposeCalls } = await runClosureFixture(phrase);
+
+    assertEquals(proposeCalls, 0, `PROPOSE must never be called for "${phrase}" while order_type is open`);
+    assertEquals(result.cart.length, 1, `no second line for "${phrase}"`);
+    assertEquals(result.cart[0].quantity, 1, `quantity must stay 1 for "${phrase}"`);
+    assertEquals(result.dialogueState.open, { kind: "order_type" }, `order_type must stay open for "${phrase}"`);
+    assert(result.reply.includes("Pickup or delivery today?"), `must re-ask order type for "${phrase}": ${result.reply}`);
+  });
+}
