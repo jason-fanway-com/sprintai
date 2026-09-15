@@ -795,7 +795,15 @@ interface ResolveAndPriceOutcome {
  * compiled ask_plan instead of hand-rolling a second copy of this loop that
  * could drift from the add path's.
  */
-function priceSelections(
+// Exported 2026-09-14 (Turn Engine Phase 1): turn-engine.ts's DECIDE step
+// needs this same selections -> {options, price} projection for its
+// id-based `remove_choices` handling (removing a specific choice id from a
+// multi-select modifier group has no existing id-based entry point —
+// applyCompiledModifyItem only supports clearing a WHOLE group via
+// explicitOptions, or text-based per-choice detection via
+// isRemovalRequested, neither of which fits an id list). Pure visibility
+// change only — no behavior change to this function or its existing callers.
+export function priceSelections(
   askPlan: AskPlan,
   itemGroups: NonNullable<CompiledMenuItem["option_groups"]>,
   selections: Record<string, string | string[]>,

@@ -405,8 +405,19 @@ Deno.test("Phase A wiring: a name-ask reply is left untouched, no recap or foote
 });
 
 Deno.test("wiring: isAskingForPickupName is shared between C2 (prior-turn check) and Phase A (this-turn check)", () => {
-  const occurrences = INDEX_SOURCE.split("function isAskingForPickupName(").length - 1;
-  assertEquals(occurrences, 1, "must be defined exactly once, as a single source of truth");
+  // Turn Engine Phase 1 (2026-09-14): the shared helper moved out of index.ts
+  // into dialogue-signals.ts (so turn-engine.ts can reuse it too) — index.ts
+  // no longer defines it locally, it imports it. "Single source of truth"
+  // now means "imported exactly once, defined nowhere in index.ts," not "a
+  // local function declaration."
+  const localDefs = INDEX_SOURCE.split("function isAskingForPickupName(").length - 1;
+  assertEquals(localDefs, 0, "must no longer be defined locally in index.ts — it lives in dialogue-signals.ts");
+  const importOccurrences = INDEX_SOURCE.split(/import\s*\{[^}]*isAskingForPickupName[^}]*\}\s*from\s*"\.\/dialogue-signals\.ts"/g).length - 1;
+  assertEquals(importOccurrences, 1, "must import the shared helper exactly once");
+  assert(
+    /import\s*\{[^}]*isAskingForPickupName[^}]*\}\s*from\s*"\.\/dialogue-signals\.ts"/.test(INDEX_SOURCE),
+    "must import isAskingForPickupName from dialogue-signals.ts, not redefine it",
+  );
   const c2Start = INDEX_SOURCE.indexOf("// ── C2 (2026-08-29): Pre-LLM name→submit shortcut");
   const c2End = INDEX_SOURCE.indexOf("\n  }\n", c2Start);
   assert(INDEX_SOURCE.slice(c2Start, c2End).includes("isAskingForPickupName(lastAssistant.content)"), "C2 must call the shared helper, not its own inline regex");

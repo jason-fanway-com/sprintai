@@ -119,6 +119,7 @@ import {
   isExplicitCartRestart,
   parseBareTipDollars,
 } from "./intent-router.ts";
+import { isAskingForPickupName, impliesUpsellAcceptance, impliesUpsellDecline } from "./dialogue-signals.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -3621,19 +3622,6 @@ function stripEmDashes(text: string): string {
 }
 
 /**
- * Does this text ask the customer for their pickup name? Shared by C2 (was
- * the customer's PRIOR message a name-ask, so this turn's short reply is
- * the name) and by the itemized-recap wiring below (is THIS turn's reply a
- * name-ask, regardless of whether GUARD 2 forced it or the model asked on
- * its own initiative). Extracted from C2's original inline check so both
- * call sites can never drift apart on what counts as a name-ask.
- */
-function isAskingForPickupName(text: string): boolean {
-  return /\bname\b/i.test(text)
-    && /pickup|pick up|under (?:what|which)|who(?:'s| is) (?:this|it) for|order for|(?:for|on) (?:the|this|your) order/i.test(text);
-}
-
-/**
  * Item C2 fix (2026-09-14): the driver-tip ask (index.ts's DRIVER TIP prompt
  * rule) is a standing instruction the model is free to act on almost any
  * turn once a delivery address is known — including the SAME turn
@@ -3693,32 +3681,10 @@ function isConfirmingPickupName(text: string, expectedName: string): boolean {
   return new RegExp(`putting this in for ${escaped}, right\\?`, "i").test(text);
 }
 
-// C2c-upsell narrow acceptance check (2026-09-14, item G follow-up). Scoped
-// to that ONE call site only — do not reuse elsewhere. impliesOrderConfirmation
-// (guard9) is a broad "sounds like checkout-ready" detector that deliberately
-// matches wrap-up phrases like "that's it"/"done"/"ready"/"all set"/"checkout"
-// — exactly the opposite of accepting an upsell offer. Using it to mean
-// "accepts the upsell" made "cheeseburger" -> "medium" -> "that's it" silently
-// add the offered French Fries: the customer meant "I'm finished," not "yes,
-// add that." This predicate matches ONLY a genuine bare affirmative to a
-// yes/no question, excluding all checkout/completion language.
-function impliesUpsellAcceptance(text: string): boolean {
-  if (!text) return false;
-  const norm = text.toLowerCase().trim();
-  return /^(?:yes|yeah|yep|yup|sure|ok|okay|please|yes please|sounds good|add it|do it)[.!]?$/i.test(norm);
-}
-
-// C2c-upsell narrow decline check (2026-09-14, item C2). Symmetric with
-// impliesUpsellAcceptance above and scoped the same way: a bare negative
-// answer to our own yes/no upsell offer only, never a broader message. A
-// message that also names a new item ("no thanks, but add a salad") does
-// NOT match this — it falls through to the LLM, same as it always has, so
-// the new item still gets heard.
-function impliesUpsellDecline(text: string): boolean {
-  if (!text) return false;
-  const norm = text.toLowerCase().trim();
-  return /^(?:no|nope|nah|no thanks|no thank you|not now|not today|not this time|i'?m good|im good|we'?re good|skip|pass)[.!]?$/i.test(norm);
-}
+// isAskingForPickupName / impliesUpsellAcceptance / impliesUpsellDecline now
+// live in dialogue-signals.ts (imported above) — extracted 2026-09-14 (Turn
+// Engine Phase 1) so turn-engine.ts's ANSWER step can reuse the identical
+// logic instead of a second copy. Pure move, no behavior change.
 
 // renderMissingOptionsPrompt and groupChoicesAlreadySaid now live in
 // sequencer.ts (imported above) — same importable-without-Deno.serve reason

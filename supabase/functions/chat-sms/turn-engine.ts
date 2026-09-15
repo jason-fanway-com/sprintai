@@ -1,0 +1,665 @@
+// Turn Engine, Phase 1 (docs/specs/2026-09-14-turn-engine-oversight.md, §3b).
+//
+// ROOT CAUSE this closes: code owned the cart, but nobody owned the
+// conversation. Every guard in index.ts (26 of them) reverse-engineers
+// dialogue state from the model's own prose — what was asked, what's still
+// in progress, what the customer just answered. This module is the
+// alternative: a code-owned dialogue record (DialogueState) plus four pure
+// functions covering the four code-owned steps of one turn — ANSWER, DECIDE,
+// ASK, RENDER. The model is called (a later phase, propose.ts) only when
+// ANSWER cannot resolve the message deterministically against the ONE open
+// question on record.
+//
+// This module is deliberately pure — plain data in, plain data out, no I/O,
+// no Supabase client, no LLM call, no environment access — same discipline as
+// turn-reconciler.ts and ask-plan-engine.ts. It is also New Files Only: it is
+// not wired into index.ts anywhere in this phase (that's Phase 3, and needs
+// the PO's explicit go-ahead). It reuses the existing, tested primitives
+// throughout — ask-plan-engine.ts, turn-reconciler.ts, pending-disambiguation.ts,
+// checkout-intent-gate-20260913.ts, intent-router.ts, action-confirmation.ts,
+// itemizer.ts, upsell-offer-20260914.ts, and the newly-extracted
+// dialogue-signals.ts — never a second copy of any of their logic.
+//
+// ── Spec gaps found while implementing this (flagged in the phase report,
+// repeated here so the code and the report agree) ──────────────────────────
+//
+// 1. ADDRESS and TIP are real `open` kinds (§3a) that ANSWER is specified to
+//    resolve (§3b step 2), but §3b step 5's own ASK priority list never
+//    mentions either one. ask() below inserts them in the only place that
+//    makes conversational sense — address right after order_type, tip right
+//    after address, both gated on the order actually being a delivery order
+//    — and documents the insertion at that call site. This is a judgment
+//    call, not a literal reading of the spec text, and the PO should confirm
+//    the placement.
+//
+// 2. §3b's ANSWER step's "with no open question" checkout-intent/closure
+//    branch is written as its own case, separate from "if state.open !=
+//    null." Taken literally, a bare "thats it" while a NON-slot question
+//    (order_type/tip/address/name/confirm) is open and doesn't match that
+//    question's own expected words falls through to a model call (PROPOSE)
+//    rather than being read as checkout intent, even though
+//    isExplicitCheckoutIntent's own design principle is "an unambiguous
+//    customer-initiated phrase always authorizes, regardless of what the bot
+//    just asked." answer() below follows the literal spec text (checkout-
+//    intent/closure only fires when `state.open === null`) rather than
+//    guessing at a broader override, and this is called out as an open
+//    question in the phase report — Proposal.intent === "checkout" is the
+//    documented escape hatch once PROPOSE runs.
+//
+// 3. The proposal contract (§3c) validates by CHOICE ID, but the only
+//    existing, tested mutation pipeline (ask-plan-engine.ts's
+//    applyCompiledAddItem / applyCompiledModifyItem) resolves selections
+//    from TEXT, via an "asserted display string" channel. decide() below
+//    translates each proposal choice id to its own real, compiled display
+//    string (an id that doesn't resolve to a real choice for its named group
+//    is simply dropped, never asserted) and feeds those strings through the
+//    existing asserted-choice channel — full reuse of the tested pricing/
+//    pending-question/dedup pipeline, at the cost of one extra translation
+//    step. See resolveChoiceDisplays() below.
+//
+// 4. applyCompiledModifyItem finds its target line by menu_item_id alone —
+//    it has no notion of "this specific identity, among several sharing a
+//    menu_item_id." decide() below declines a `modify` whose line_key names
+//    one of several same-item lines, rather than risk mutating the wrong
+//    one. Pre-existing limitation of the reused primitive, not a Phase 1
+//    regression — flagged for a later phase.
+
+import type { AskPlan } from "../_shared/compile-menu.ts";
+import {
+  applyCompiledAddItem,
+  applyCompiledModifyItem,
+  priceSelections,
+  renderStepQuestion,
+  type CompiledCartLine,
+  type CompiledMenuItem,
+} from "./ask-plan-engine.ts";
+import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-reconciler.ts";
+import {
+  resolvePendingDisambiguation,
+  isPendingDisambiguationDeclined,
+  renderDisambiguationReask,
+  type PendingCandidate,
+} from "./pending-disambiguation.ts";
+import { isExplicitCheckoutIntent } from "./checkout-intent-gate-20260913.ts";
+import { parseBareTipDollars } from "./intent-router.ts";
+import {
+  detectCartMutation,
+  renderActionConfirmation,
+  type MutationCartLine,
+} from "./action-confirmation.ts";
+import {
+  renderItemizedRecap,
+  renderLedgerFooter,
+  type ItemizedCartLine,
+} from "./itemizer.ts";
+import { firstParseableUpsellName, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
+import {
+  impliesUpsellAcceptance,
+  impliesUpsellDecline,
+  looksLikeCustomerName,
+} from "./dialogue-signals.ts";
+
+// ─── §3a: the state record — EXACT shape from the spec ─────────────────────
+
+export interface DialogueState {
+  phase: "ordering" | "order_type" | "address" | "tip" | "name" | "confirm" | "link_sent";
+  open:
+    | null
+    | { kind: "slot"; line_key: string; group_id: string }
+    | { kind: "disambiguation"; candidates: string[] }
+    | { kind: "upsell"; menu_item_id: string }
+    | { kind: "order_type" } | { kind: "address" } | { kind: "tip" }
+    | { kind: "name"; suggested?: string } | { kind: "confirm" };
+  upsell_offered: boolean;
+  asked_message_id: string | null;
+}
+
+// ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
+
+export interface Proposal {
+  intent: "order" | "checkout" | "cancel" | "question" | "other";
+  adds:     Array<{ menu_item_id: string; quantity: number; choices: Array<{ group_id: string; choice_id: string }> }>;
+  removes:  Array<{ line_key: string }>;
+  modifies: Array<{ line_key: string; quantity?: number; choices?: Array<{ group_id: string; choice_id: string }>;
+                    remove_choices?: string[] }>;
+  answer_text?: string;
+}
+
+// ─── Cart / menu shapes this module operates on ────────────────────────────
+
+// Reuses ask-plan-engine.ts's own cart-line shape directly — every function
+// below that touches the cart (ANSWER's slot/disambiguation/upsell
+// resolution, DECIDE) is really just a caller of applyCompiledAddItem /
+// applyCompiledModifyItem, so there is no reason to invent a second shape.
+export type TurnEngineCartLine = CompiledCartLine;
+
+export interface TurnEngineMenuItem {
+  id: string;
+  name: string;
+  category?: string | null;
+  price_cents: number;
+  bot_state?: string | null;
+  ask_plan?: AskPlan | null;
+  option_groups?: Array<{ id: string; name: string; default_choice_id?: string | null }>;
+  // menu_items.upsell (migration 050) — semicolon-separated "Name +Price"
+  // entries. See upsell-offer-20260914.ts's own header for the shape.
+  upsell?: string | null;
+}
+
+function isRealCartLine(line: TurnEngineCartLine): boolean {
+  return typeof line.menu_item_id === "string";
+}
+
+function toCompiledMenuItem(item: TurnEngineMenuItem, askPlan: AskPlan): CompiledMenuItem {
+  return { ask_plan: askPlan, bot_state: item.bot_state, option_groups: item.option_groups };
+}
+
+function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
+  return cart.findIndex(l => isRealCartLine(l) && identityKey(l.menu_item_id, l.options) === lineKey);
+}
+
+// ─── STEP 2: ANSWER ─────────────────────────────────────────────────────────
+//
+// (state, cart, message, menu) => AnswerResult. If state.open is non-null,
+// resolves the message deterministically against that ONE open question,
+// using the existing resolvers named in the spec. Mutates `cart` in place
+// exactly when it resolves an add/slot/upsell-accept (same convention as
+// applyCompiledAddItem/applyCompiledModifyItem, which this function calls
+// directly) — the caller never needs to separately apply an ANSWER outcome.
+// Returns `{ resolved: false }` when nothing here can settle it — the ONLY
+// case in which the caller may make a model call (PROPOSE, a later phase).
+
+export type AnswerOutcome =
+  | { kind: "slot_resolved" }
+  | { kind: "disambiguation_resolved"; menuItemId: string }
+  | { kind: "order_type_resolved"; orderType: "pickup" | "delivery" }
+  | { kind: "address_resolved"; address: string; withinZone: boolean }
+  | { kind: "address_declined" }
+  | { kind: "tip_resolved"; tipCents: number }
+  | { kind: "name_resolved"; name: string }
+  | { kind: "confirm_yes" }
+  | { kind: "confirm_no" }
+  | { kind: "upsell_accepted" }
+  | { kind: "upsell_declined" }
+  | { kind: "checkout_intent" }
+  | { kind: "closure" };
+
+export type AnswerResult =
+  | { resolved: false }
+  | { resolved: true; outcome: AnswerOutcome; cartChanged: boolean };
+
+const UNRESOLVED: AnswerResult = { resolved: false };
+
+// The address slot's resolution needs a geocode/zone-check result, which is
+// genuinely I/O (an external lookup) — the spec's own step-2 text names
+// "the existing set_delivery_address resolver (geocode, zone check)" as the
+// resolver for this case, which cannot run inside a pure module. The caller
+// (a later, I/O-capable phase) runs the geocode BEFORE calling answer() and
+// hands the result in here; this module only makes the deterministic
+// decision given that result. Undefined = the caller hasn't attempted a
+// geocode for this message yet (so this turn cannot resolve address at all,
+// same as any other unresolved case); null = it attempted one and the
+// address didn't resolve/was out of zone.
+export interface AnswerExternalInputs {
+  geocodedAddress?: { formatted: string; withinZone: boolean } | null;
+}
+
+const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
+const ORDER_TYPE_PICKUP_RE = /\bpick[\s-]?up\b/i;
+const ORDER_TYPE_DELIVERY_RE = /\bdeliver(?:y|ed)?\b/i;
+// Mirrors intent-router.ts's detectBareTipReply decline shape, narrowed to
+// this module's own already-open-tip-question context (that function's own
+// "did the prior assistant message offer a tip" half is redundant here —
+// state.open.kind === "tip" already establishes that fact).
+const TIP_DECLINE_RE = /^(?:no tip|no thanks|no thank you|not now|skip|none|pass|no)[.!]?$/i;
+const TIP_AMOUNT_RE = /^\$?\s*\d+(?:\.\d{1,2})?\s*$/;
+const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
+
+export function answer(
+  state: DialogueState,
+  cart: TurnEngineCartLine[],
+  message: string,
+  menu: TurnEngineMenuItem[],
+  external: AnswerExternalInputs = {},
+): AnswerResult {
+  const trimmed = (message ?? "").trim();
+  const menuById = new Map(menu.map(m => [m.id, m]));
+
+  if (state.open === null) {
+    if (isExplicitCheckoutIntent(trimmed, null, false)) {
+      return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
+    }
+    if (BARE_CLOSURE_RE.test(trimmed)) {
+      return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
+    }
+    return UNRESOLVED;
+  }
+
+  switch (state.open.kind) {
+    case "slot": {
+      const idx = findLineByKey(cart, state.open.line_key);
+      if (idx < 0) return UNRESOLVED;
+      const line = cart[idx];
+      const menuItem = menuById.get(line.menu_item_id);
+      if (!menuItem?.ask_plan) return UNRESOLVED;
+      const result = applyCompiledModifyItem(
+        cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, undefined, trimmed, [],
+      );
+      if (!result.cartChanged) return UNRESOLVED;
+      return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+    }
+
+    case "disambiguation": {
+      const candidates: PendingCandidate[] = state.open.candidates
+        .map(id => menuById.get(id))
+        .filter((m): m is TurnEngineMenuItem => !!m)
+        .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+      if (candidates.length === 0) return UNRESOLVED;
+      if (isPendingDisambiguationDeclined(trimmed, candidates)) {
+        return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
+      }
+      const resolved = resolvePendingDisambiguation(trimmed, candidates);
+      if (!resolved) return UNRESOLVED;
+      const menuItem = menuById.get(resolved.menu_item_id);
+      if (!menuItem?.ask_plan) return UNRESOLVED;
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, []);
+      return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
+    }
+
+    case "order_type": {
+      const wantsPickup = ORDER_TYPE_PICKUP_RE.test(trimmed);
+      const wantsDelivery = ORDER_TYPE_DELIVERY_RE.test(trimmed);
+      if (wantsPickup && !wantsDelivery) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
+      if (wantsDelivery && !wantsPickup) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "delivery" }, cartChanged: false };
+      return UNRESOLVED;
+    }
+
+    case "address": {
+      if (external.geocodedAddress === undefined) return UNRESOLVED;
+      if (external.geocodedAddress === null) return { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false };
+      return {
+        resolved: true,
+        outcome: { kind: "address_resolved", address: external.geocodedAddress.formatted, withinZone: external.geocodedAddress.withinZone },
+        cartChanged: false,
+      };
+    }
+
+    case "tip": {
+      if (TIP_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: 0 }, cartChanged: false };
+      if (TIP_AMOUNT_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: parseBareTipDollars(trimmed) * 100 }, cartChanged: false };
+      return UNRESOLVED;
+    }
+
+    case "name": {
+      if (!looksLikeCustomerName(trimmed)) return UNRESOLVED;
+      return { resolved: true, outcome: { kind: "name_resolved", name: trimmed }, cartChanged: false };
+    }
+
+    case "confirm": {
+      if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
+      if (CONFIRM_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
+      return UNRESOLVED;
+    }
+
+    case "upsell": {
+      if (impliesUpsellAcceptance(trimmed)) {
+        const menuItem = menuById.get(state.open.menu_item_id);
+        if (!menuItem?.ask_plan) return UNRESOLVED;
+        const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, []);
+        return { resolved: true, outcome: { kind: "upsell_accepted" }, cartChanged: result.cartChanged };
+      }
+      if (impliesUpsellDecline(trimmed)) return { resolved: true, outcome: { kind: "upsell_declined" }, cartChanged: false };
+      return UNRESOLVED;
+    }
+  }
+}
+
+// ─── STEP 4: DECIDE ─────────────────────────────────────────────────────────
+//
+// (proposal, cart, menu) => DecideResult. Validates every element of the
+// proposal against the menu and applies what's valid through the existing
+// mutation pipeline. Never mutates the input `cart` array — returns a new
+// one (same "plain data out" convention as turn-reconciler.ts's
+// reconcileAddProposals).
+
+export interface Decline {
+  reason: string;
+}
+
+export interface DecideResult {
+  cart: TurnEngineCartLine[];
+  declines: Decline[];
+  // The menu_item_id of a line that had a genuine "unit added" event this
+  // turn (brand-new line or a merge growth) — feeds ASK's upsell-eligibility
+  // check. Null if nothing qualifying happened. Last-one-wins when more than
+  // one add qualifies in the same proposal — matches ASK's "at most one
+  // question per turn" contract; a multi-add turn only ever gets one upsell
+  // shot regardless, so which one is somewhat arbitrary but never absent.
+  qualifyingAddMenuItemId: string | null;
+}
+
+function addIdentityKey(add: Proposal["adds"][number]) {
+  const choiceKey = (add.choices ?? []).map(c => `${c.group_id}=${c.choice_id}`).sort().join(";");
+  return `${add.menu_item_id}::${choiceKey}`;
+}
+
+// See this file's header note 3: translates a proposal's id-based choices
+// into the display strings applyCompiledAddItem/applyCompiledModifyItem's
+// existing asserted-choice channel expects, validating legality as a side
+// effect — a choice_id that isn't a real choice for its named group_id on
+// this item's compiled ask_plan simply never produces a display string, so
+// it can never be asserted. Returns how many were dropped so the caller can
+// surface a decline for transparency without blocking the choices that DID
+// resolve.
+function resolveChoiceDisplays(
+  askPlan: AskPlan,
+  choices: Array<{ group_id: string; choice_id: string }>,
+): { texts: string[]; droppedCount: number } {
+  const texts: string[] = [];
+  let droppedCount = 0;
+  for (const c of choices) {
+    const step = askPlan.steps.find(s => s.group_id === c.group_id);
+    const choice = step?.choices.find(ch => ch.id === c.choice_id);
+    if (choice) texts.push(choice.display);
+    else droppedCount++;
+  }
+  return { texts, droppedCount };
+}
+
+function applyRemoveChoiceIds(
+  line: TurnEngineCartLine,
+  askPlan: AskPlan,
+  itemGroups: NonNullable<TurnEngineMenuItem["option_groups"]>,
+  removeIds: string[],
+): void {
+  const selections: Record<string, string | string[]> = { ...(line.ask_plan_selections ?? {}) };
+  const removeSet = new Set(removeIds);
+  for (const step of askPlan.steps) {
+    if (step.kind !== "modifier") continue;
+    const sel = selections[step.group_id];
+    if (!sel) continue;
+    const ids = Array.isArray(sel) ? sel : [sel];
+    const remaining = ids.filter(id => !removeSet.has(id));
+    if (remaining.length === ids.length) continue;
+    if (remaining.length === 0) delete selections[step.group_id];
+    else selections[step.group_id] = remaining.length === 1 ? remaining[0] : remaining;
+  }
+  const { resolvedOptions, priceCents } = priceSelections(askPlan, itemGroups, selections);
+  line.ask_plan_selections = selections;
+  line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+  line.price_cents = priceCents;
+}
+
+export function decide(proposal: Proposal, cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]): DecideResult {
+  const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const declines: Decline[] = [];
+  let qualifyingAddMenuItemId: string | null = null;
+
+  // Two adds in one proposal with identical identity collapse to ONE line at
+  // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
+  // them ever reaches the mutation pipeline.
+  const addGroups = new Map<string, Proposal["adds"][number]>();
+  for (const add of proposal.adds ?? []) {
+    const key = addIdentityKey(add);
+    const existing = addGroups.get(key);
+    if (!existing || add.quantity > existing.quantity) addGroups.set(key, add);
+  }
+
+  for (const add of addGroups.values()) {
+    const menuItem = menuById.get(add.menu_item_id);
+    if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
+    if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
+    const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, add.choices ?? []);
+    if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+    const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
+    if (!result.ok) {
+      const errMsg = (result.result as { error?: string } | undefined)?.error;
+      declines.push({ reason: errMsg ?? `Couldn't add ${menuItem.name}.` });
+      continue;
+    }
+    if (result.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+  }
+
+  for (const rm of proposal.removes ?? []) {
+    const idx = findLineByKey(nextCart, rm.line_key);
+    if (idx < 0) { declines.push({ reason: "That item wasn't in your order." }); continue; }
+    removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
+  }
+
+  for (const mod of proposal.modifies ?? []) {
+    const idx = findLineByKey(nextCart, mod.line_key);
+    if (idx < 0) { declines.push({ reason: "That item wasn't in your order." }); continue; }
+    const line = nextCart[idx];
+    const menuItem = menuById.get(line.menu_item_id);
+    if (!menuItem?.ask_plan) { declines.push({ reason: "Couldn't update that item." }); continue; }
+    // See this file's header note 4: applyCompiledModifyItem targets a line
+    // by menu_item_id alone, so a line_key that isn't the ONLY line for this
+    // menu_item_id is unsafe to route through it.
+    const sameItemCount = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === line.menu_item_id).length;
+    if (sameItemCount > 1) { declines.push({ reason: `You have more than one ${menuItem.name} — please say which one.` }); continue; }
+
+    if (mod.remove_choices && mod.remove_choices.length > 0) {
+      applyRemoveChoiceIds(line, menuItem.ask_plan, menuItem.option_groups ?? [], mod.remove_choices);
+    }
+    if (mod.quantity !== undefined || (mod.choices && mod.choices.length > 0)) {
+      const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, mod.choices ?? []);
+      if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+      applyCompiledModifyItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, mod.quantity, "", texts);
+    }
+  }
+
+  return { cart: nextCart, declines, qualifyingAddMenuItemId };
+}
+
+// ─── STEP 5: ASK ────────────────────────────────────────────────────────────
+//
+// (cart, state, turnEvents, shopContext, menu) => DialogueState. Computes
+// the single next open question by fixed priority — never a prompt rule.
+// See this file's header notes 1 and 2 for the two places this deviates from
+// (or fills a gap in) the spec's own step-5 prose.
+
+export interface AskShopContext {
+  deliveryEnabled: boolean;
+  upsellEnabled: boolean;
+  // These four live on order_carts as their own columns today (§3a only
+  // folds pending_disambiguation / delivery_offer_made_at /
+  // checkout_intent_confirmed_at / per-line pending_options into
+  // dialogue_state — order_type, delivery_address, driver_tip_cents and
+  // pickup_name are NOT superseded, they stay their own columns), so ASK
+  // needs them handed in rather than reading them off `state` or `cart`.
+  orderTypeKnown: boolean;
+  orderTypeIsDelivery: boolean;
+  deliveryAddressKnown: boolean;
+  driverTipKnown: boolean;
+  pickupNameKnown: boolean;
+}
+
+export interface AskTurnEvents {
+  qualifyingAddMenuItemId: string | null;
+  disambiguationCandidateIds: string[] | null;
+  // True when this turn's ANSWER resolved to `checkout_intent`, or a
+  // PROPOSE-produced Proposal carried `intent: "checkout"`. Once true (or
+  // once `state.phase` has already moved past "ordering" — see
+  // `committedToClose` below), ASK stops offering "anything else?" and
+  // starts walking toward name/confirm/link.
+  checkoutIntentThisTurn: boolean;
+  confirmYes: boolean;
+  confirmNo: boolean;
+}
+
+export function ask(
+  cart: TurnEngineCartLine[],
+  priorState: DialogueState,
+  turnEvents: AskTurnEvents,
+  shopContext: AskShopContext,
+  menu: TurnEngineMenuItem[],
+): DialogueState {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const carry = (open: DialogueState["open"], phase: DialogueState["phase"], upsellOffered = priorState.upsell_offered): DialogueState =>
+    ({ phase, open, upsell_offered: upsellOffered, asked_message_id: null });
+
+  // 1. unresolved required slot on any line.
+  for (const line of cart) {
+    if (!isRealCartLine(line)) continue;
+    const menuItem = menuById.get(line.menu_item_id);
+    if (!menuItem?.ask_plan) continue;
+    const resolvedGroupIds = new Set(Object.keys(line.ask_plan_selections ?? {}));
+    const openSlotStep = menuItem.ask_plan.steps.find(s => s.kind === "slot" && !resolvedGroupIds.has(s.group_id));
+    if (openSlotStep) {
+      return carry({ kind: "slot", line_key: identityKey(line.menu_item_id, line.options), group_id: openSlotStep.group_id }, "ordering");
+    }
+  }
+
+  // 2. disambiguation.
+  if (turnEvents.disambiguationCandidateIds && turnEvents.disambiguationCandidateIds.length > 0) {
+    return carry({ kind: "disambiguation", candidates: turnEvents.disambiguationCandidateIds }, "ordering");
+  }
+
+  // 3. order_type (only if delivery is enabled and unset).
+  if (shopContext.deliveryEnabled && !shopContext.orderTypeKnown) {
+    return carry({ kind: "order_type" }, "order_type");
+  }
+
+  // 4. address — see header note 1: not in the spec's own step-5 list, but
+  // required by §3a/step-2. Only relevant once delivery is the chosen type.
+  if (shopContext.orderTypeIsDelivery && !shopContext.deliveryAddressKnown) {
+    return carry({ kind: "address" }, "address");
+  }
+
+  // 5. tip — see header note 1, same gap. Only relevant for delivery, and
+  // only once the address is known (matches the standing prompt rule this
+  // replaces: collect the address before anything else).
+  if (shopContext.orderTypeIsDelivery && !shopContext.driverTipKnown) {
+    return carry({ kind: "tip" }, "tip");
+  }
+
+  // 6. upsell (only if a qualifying add happened this turn and not yet offered).
+  if (turnEvents.qualifyingAddMenuItemId && !priorState.upsell_offered && shopContext.upsellEnabled) {
+    const addedItem = menuById.get(turnEvents.qualifyingAddMenuItemId);
+    const upsellName = addedItem?.upsell ? firstParseableUpsellName(addedItem.upsell) : null;
+    const upsellTarget = upsellName ? menu.find(m => m.name.toLowerCase() === upsellName.toLowerCase()) : undefined;
+    if (upsellTarget) {
+      return carry({ kind: "upsell", menu_item_id: upsellTarget.id }, "ordering", true);
+    }
+  }
+
+  // Has this conversation already committed to closing? `phase` itself is
+  // what carries that fact forward turn to turn (see header note on why this
+  // isn't a separate DialogueState field) — once ASK has moved past
+  // "ordering" toward name/confirm/link_sent, it never walks back to
+  // "anything else?".
+  const committedToClose =
+    turnEvents.checkoutIntentThisTurn ||
+    priorState.phase === "name" || priorState.phase === "confirm" || priorState.phase === "link_sent";
+
+  if (!committedToClose) {
+    return carry(null, "ordering");
+  }
+
+  // 7. name.
+  if (!shopContext.pickupNameKnown) {
+    return carry({ kind: "name" }, "name");
+  }
+
+  // 8. confirm / link.
+  if (turnEvents.confirmYes) return carry(null, "link_sent");
+  if (turnEvents.confirmNo) return carry(null, "ordering");
+  return carry({ kind: "confirm" }, "confirm");
+}
+
+// ─── STEP 6: RENDER ─────────────────────────────────────────────────────────
+//
+// (cartBefore, cartAfter, state, declines, menu, context) => string. The
+// ONLY function in this file that returns a reply string (see the Phase 1
+// gate's static test). facts + question + money footer, all code — never a
+// second reply-building function anywhere on this path.
+
+export interface RenderContext {
+  deliveryFeeCents?: number;
+  driverTipCents?: number;
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>;
+}
+
+export function render(
+  cartBefore: TurnEngineCartLine[],
+  cartAfter: TurnEngineCartLine[],
+  state: DialogueState,
+  declines: Decline[],
+  menu: TurnEngineMenuItem[],
+  context: RenderContext = {},
+): string {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const parts: string[] = [];
+
+  for (const d of declines) if (d.reason) parts.push(d.reason);
+
+  const mutationEvent = detectCartMutation(cartBefore as unknown as MutationCartLine[], cartAfter as unknown as MutationCartLine[]);
+  if (mutationEvent) {
+    parts.push(renderActionConfirmation(mutationEvent, context.priceIndexByMenuItemId));
+  } else if (JSON.stringify(cartBefore) !== JSON.stringify(cartAfter) && cartAfter.length > 0) {
+    // The diff touched more than one nameable line (detectCartMutation
+    // returned null for that reason, not because nothing changed) — fall
+    // back to the full itemized recap rather than say nothing changed.
+    parts.push(renderItemizedRecap(cartAfter as ItemizedCartLine[], context.deliveryFeeCents, context.driverTipCents, context.priceIndexByMenuItemId));
+  }
+
+  let question = "";
+  if (state.open) {
+    switch (state.open.kind) {
+      case "slot": {
+        for (const line of cartAfter) {
+          if (!isRealCartLine(line)) continue;
+          if (identityKey(line.menu_item_id, line.options) !== state.open.line_key) continue;
+          const menuItem = menuById.get(line.menu_item_id);
+          const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
+          if (menuItem?.ask_plan && step) question = renderStepQuestion(step, menuItem.ask_plan.display_name);
+          break;
+        }
+        break;
+      }
+      case "disambiguation": {
+        const candidates: PendingCandidate[] = state.open.candidates
+          .map(id => menuById.get(id))
+          .filter((m): m is TurnEngineMenuItem => !!m)
+          .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+        if (candidates.length > 0) question = renderDisambiguationReask(candidates);
+        break;
+      }
+      case "upsell": {
+        const menuItem = menuById.get(state.open.menu_item_id);
+        if (menuItem) question = renderUpsellOfferSentence({ name: menuItem.name, priceCents: menuItem.price_cents });
+        break;
+      }
+      case "order_type":
+        question = "Pickup or delivery today?";
+        break;
+      case "address":
+        question = "What's the delivery address?";
+        break;
+      case "tip":
+        question = "Want to add a tip for the driver?";
+        break;
+      case "name":
+        question = state.open.suggested ? `Putting this in for ${state.open.suggested}, right?` : "What's the name for the order?";
+        break;
+      case "confirm":
+        question = "All good — confirm?";
+        break;
+    }
+  } else if (state.phase !== "link_sent") {
+    question = "Anything else?";
+  }
+  if (question) parts.push(question);
+
+  if (cartAfter.length > 0) {
+    parts.push(renderLedgerFooter(cartAfter as ItemizedCartLine[], state.phase, context.deliveryFeeCents, context.driverTipCents));
+  }
+
+  // RENDER is unconditional (§3b step 6) — every turn that reaches it must
+  // produce a reply. This is the hard backstop for the one theoretical case
+  // where every part above is empty (link_sent, no cart, no declines).
+  if (parts.length === 0) parts.push("Anything else?");
+
+  return parts.filter(Boolean).join("\n\n").trim();
+}
