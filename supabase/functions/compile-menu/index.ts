@@ -441,7 +441,7 @@ Deno.serve(async (req: Request) => {
       id: `derived:${row.id}:${slotIdx}`,
       name: "Choice",
       kind: "slot",
-      slot_key: "choice",
+      slot_key: slot.label ?? "choice",
       min_select: 1,
       max_select: 1,
       kitchen_critical: false,
