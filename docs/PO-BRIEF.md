@@ -108,6 +108,11 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
   Verified 2026-09-10 by reading `index.ts`'s import list and every module in it.
   Do not infer from a module's existence, its tests, or the nine-item plan that it
   is running.
+  **The turn engine is the live example of this trap.** `turn-engine.ts` and
+  `propose.ts` exist, are tested, and are NOT in the live path - nothing imports
+  them until the turn-engine spec's Phase 3 adds the routing branch and the
+  per-shop `turn_engine_enabled` flag. `dialogue-signals.ts` IS live (index.ts
+  imports it). Check the import path and the flag, per module, every time.
 - **`compile-menu`** — reads the menu tables and writes `ask_plan` (the ordered questions
   for an item), `bot_state` (orderable / blocked / display_only / stale), the lexicon
   (what customers call things), and derived rows.
