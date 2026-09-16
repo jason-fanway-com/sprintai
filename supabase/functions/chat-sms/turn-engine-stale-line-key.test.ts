@@ -16,10 +16,20 @@
 // view of the cart — no longer matches the line's current identity.
 //
 // Fixture: Zio's Pizzeria's real, live "Boneless Wings" row (id
-// cb53dc5b-5abe-4110-a814-3beacec644e8), which has two REQUIRED slot
-// groups — "Choose Sauce" (id b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d) asked
-// first, then "Quantity" (id 8774670c-7f71-4ee9-b9b4-a80552309321) — read
-// directly from the DB 2026-09-15, not invented.
+// cb53dc5b-5abe-4110-a814-3beacec644e8), first slot group "Choose Sauce"
+// (id b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d), read directly from the DB
+// 2026-09-15, not invented.
+//
+// Second slot group (00-BK, 2026-09-15): the real "Quantity" group
+// (10|20 Pieces) is now in the numeric-stem collision set — a structured
+// {group_id, choice_id} assertion for it is deliberately never trusted by
+// decide()'s modify path anymore (that is the fix), so it can no longer
+// serve as this test's CONTROL case, whose whole point is that a structured
+// modify DOES succeed when it names the line correctly. Swapped for a
+// synthetic, non-colliding "Choose Bread" group (2 choices, distinct
+// non-numeric words) so the control still exercises the real contract this
+// test is for — line-key staleness, not choice-identity trust. Fixture ids
+// and names only; the assertions below are unchanged in shape.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   answer,
@@ -36,10 +46,11 @@ import type { LexiconTerm } from "./resolve-item.ts";
 
 const WINGS_ID = "cb53dc5b-5abe-4110-a814-3beacec644e8";
 const FLAVOR_GROUP_ID = "b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d"; // "Choose Sauce"
-const QTY_GROUP_ID = "8774670c-7f71-4ee9-b9b4-a80552309321"; // "Quantity"
 const MILD_SAUCE_ID = "62a4d4ca-d0aa-4f36-a99c-ad5d7c580f70";
 const BBQ_SAUCE_ID = "88b27a65-d800-4d2a-a63b-42946330c76a";
-const TEN_PIECES_ID = "16f6eb99-3d95-4fd7-aef5-94180a6099bd";
+// Synthetic, non-colliding second group (00-BK) — see the fixture note above.
+const BREAD_GROUP_ID = "grp-bread-00bk"; // "Choose Bread"
+const WHITE_BREAD_ID = "choice-white-bread-00bk";
 
 const WINGS_MENU: TurnEngineMenuItem[] = [
   {
@@ -50,7 +61,7 @@ const WINGS_MENU: TurnEngineMenuItem[] = [
     bot_state: "orderable",
     option_groups: [
       { id: FLAVOR_GROUP_ID, name: "Choose Sauce", default_choice_id: null },
-      { id: QTY_GROUP_ID, name: "Quantity", default_choice_id: null },
+      { id: BREAD_GROUP_ID, name: "Choose Bread", default_choice_id: null },
     ],
     ask_plan: {
       compiled_at: "2026-09-10T20:42:39.658Z",
@@ -77,12 +88,12 @@ const WINGS_MENU: TurnEngineMenuItem[] = [
         {
           kind: "slot",
           ask_mode: "ask",
-          group_id: QTY_GROUP_ID,
+          group_id: BREAD_GROUP_ID,
           slot_key: null,
-          prompt_template: "quantity.ask",
+          prompt_template: "bread.ask",
           choices: [
-            { id: TEN_PIECES_ID, display: "10 Pieces", price_delta_cents: 0 },
-            { id: "dc16bc2d-72c0-42c1-b031-c792048b3fba", display: "20 Pieces", price_delta_cents: 800 },
+            { id: WHITE_BREAD_ID, display: "White Bread", price_delta_cents: 0 },
+            { id: "choice-wheat-bread-00bk", display: "Wheat Bread", price_delta_cents: 0 },
           ],
         },
       ],
@@ -143,12 +154,12 @@ Deno.test("BUG: a modify proposal keyed by the pre-first-answer line_key fails t
   assertEquals(cart[0].options, { "Choose Sauce": ["Mild Sauce"] });
 
   state = ask(cart, state, NO_TURN_EVENTS, SHOP_CONTEXT, WINGS_MENU);
-  // Group B ("Quantity") is now the open question, and ASK recomputes the
-  // line_key fresh off the CURRENT cart -- this is the line's real,
+  // Group B ("Choose Bread") is now the open question, and ASK recomputes
+  // the line_key fresh off the CURRENT cart -- this is the line's real,
   // current identity, and it has changed from PRE_GROUP_A_KEY.
   const CURRENT_KEY = (state.open as { line_key: string }).line_key;
   assertEquals(state.open?.kind, "slot");
-  assertEquals((state.open as { group_id: string }).group_id, QTY_GROUP_ID);
+  assertEquals((state.open as { group_id: string }).group_id, BREAD_GROUP_ID);
   assert(CURRENT_KEY !== PRE_GROUP_A_KEY, `expected the line_key to change once group A was answered; got the same key twice: ${CURRENT_KEY}`);
 
   // ── The reproduction: a `modify` proposal naming the line by the NOW-
@@ -181,7 +192,7 @@ Deno.test("BUG: a modify proposal keyed by the pre-first-answer line_key fails t
     "expected the stale-key modify to leave the line's sauce unchanged (BBQ never applied)");
 
   // ── Control: a modify carrying the CURRENT (non-stale) key, resolving
-  // the group that's actually still pending (Quantity), must succeed --
+  // the group that's actually still pending (Choose Bread), must succeed --
   // proves the line IS still reachable by its real current identity, and
   // that decide()'s modify path works in general. This isolates the defect
   // to key staleness specifically, not a general decide()/modify problem. ─
@@ -189,10 +200,10 @@ Deno.test("BUG: a modify proposal keyed by the pre-first-answer line_key fails t
     intent: "order",
     adds: [],
     removes: [],
-    modifies: [{ line_key: CURRENT_KEY, choices: [{ group_id: QTY_GROUP_ID, choice_id: TEN_PIECES_ID }] }],
+    modifies: [{ line_key: CURRENT_KEY, choices: [{ group_id: BREAD_GROUP_ID, choice_id: WHITE_BREAD_ID }] }],
   };
   const dFresh = decide(freshModifyProposal, cart, WINGS_MENU, WINGS_LEXICON);
   assertEquals(dFresh.declines, []);
-  assertEquals(dFresh.cart[0].options, { "Choose Sauce": ["Mild Sauce"], Quantity: ["10 Pieces"] },
+  assertEquals(dFresh.cart[0].options, { "Choose Sauce": ["Mild Sauce"], "Choose Bread": ["White Bread"] },
     "control: the identical shape of modify, sent with the CURRENT key, must succeed");
 });

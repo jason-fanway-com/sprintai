@@ -717,9 +717,18 @@ Deno.test("decide: omitting newLineKey entirely (pre-fix call sites) never sets 
 
 const WINGS_ID = "cb53dc5b-5abe-4110-a814-3beacec644e8";
 const WINGS_FLAVOR_GROUP_ID = "b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d";
-const WINGS_QTY_GROUP_ID = "8774670c-7f71-4ee9-b9b4-a80552309321";
 const WINGS_BBQ_CHOICE_ID = "88b27a65-d800-4d2a-a63b-42946330c76a";
-const WINGS_TEN_PIECES_ID = "16f6eb99-3d95-4fd7-aef5-94180a6099bd";
+// Synthetic, non-colliding second group (00-BK, 2026-09-15): the real
+// "Quantity" group (10|20 Pieces) is now in the numeric-stem collision set —
+// a structured {group_id, choice_id} assertion for it is deliberately never
+// trusted by decide()'s add path anymore (that is the fix this test would
+// otherwise contradict). Swapped for a synthetic "Choose Bread" group (2
+// choices, distinct non-numeric words) so this test still exercises its
+// real contract — a structured proposal resolving BOTH of an item's groups
+// in one shot, not choice-identity trust. Fixture ids and names only; the
+// assertion shape is unchanged.
+const WINGS_BREAD_GROUP_ID = "grp-bread-00bk";
+const WINGS_WHITE_BREAD_ID = "choice-white-bread-00bk";
 
 const WINGS_MENU: TurnEngineMenuItem[] = [
   {
@@ -730,7 +739,7 @@ const WINGS_MENU: TurnEngineMenuItem[] = [
     bot_state: "orderable",
     option_groups: [
       { id: WINGS_FLAVOR_GROUP_ID, name: "Choose Sauce", default_choice_id: null },
-      { id: WINGS_QTY_GROUP_ID, name: "Quantity", default_choice_id: null },
+      { id: WINGS_BREAD_GROUP_ID, name: "Choose Bread", default_choice_id: null },
     ],
     ask_plan: {
       compiled_at: "2026-09-10T20:42:39.658Z",
@@ -748,10 +757,10 @@ const WINGS_MENU: TurnEngineMenuItem[] = [
           ],
         },
         {
-          kind: "slot", ask_mode: "ask", group_id: WINGS_QTY_GROUP_ID, slot_key: null, prompt_template: "quantity.ask",
+          kind: "slot", ask_mode: "ask", group_id: WINGS_BREAD_GROUP_ID, slot_key: null, prompt_template: "bread.ask",
           choices: [
-            { id: WINGS_TEN_PIECES_ID, display: "10 Pieces", price_delta_cents: 0 },
-            { id: "dc16bc2d-72c0-42c1-b031-c792048b3fba", display: "20 Pieces", price_delta_cents: 800 },
+            { id: WINGS_WHITE_BREAD_ID, display: "White Bread", price_delta_cents: 0 },
+            { id: "choice-wheat-bread-00bk", display: "Wheat Bread", price_delta_cents: 0 },
           ],
         },
       ],
@@ -769,7 +778,7 @@ Deno.test("decide: an item_span resolved through the lexicon into an item with T
       quantity: 1,
       choices: [
         { group_id: WINGS_FLAVOR_GROUP_ID, choice_id: WINGS_BBQ_CHOICE_ID },
-        { group_id: WINGS_QTY_GROUP_ID, choice_id: WINGS_TEN_PIECES_ID },
+        { group_id: WINGS_BREAD_GROUP_ID, choice_id: WINGS_WHITE_BREAD_ID },
       ],
     }],
     removes: [], modifies: [],
@@ -778,7 +787,7 @@ Deno.test("decide: an item_span resolved through the lexicon into an item with T
   assertEquals(result.declines, []);
   assertEquals(result.cart.length, 1);
   assertEquals(result.cart[0].menu_item_id, WINGS_ID);
-  assertEquals(result.cart[0].options, { "Choose Sauce": ["BBQ Sauce"], Quantity: ["10 Pieces"] });
+  assertEquals(result.cart[0].options, { "Choose Sauce": ["BBQ Sauce"], "Choose Bread": ["White Bread"] });
   assertEquals(result.cart[0].pending_options, undefined);
 });
 

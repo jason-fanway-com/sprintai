@@ -773,7 +773,20 @@ export function resolveAskPlan(
     // only: a model-asserted choice (matchAssertedChoice, exact-name
     // validated) is unaffected — the model-trust boundary itself is a
     // separate, harder question, not solved here (see 00-BG/00-BH).
-    const assertedChoice = requireTextualSupportForSlots ? null : matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
+    // PO fix (2026-09-15, 00-BK): a group in the collision set — the exact
+    // predicate 00-BJ's groupNeedsNumericStems already computes, reused
+    // here rather than duplicated — never trusts a model-asserted choice_id
+    // on its own, regardless of call site. decide()'s structured add/modify
+    // path (turn-engine.ts:609/:657) always calls in with customerText=""
+    // for this branch, so for a collision group matchChoiceInText("", ...)
+    // trivially returns null there — the model's assertion is rejected and
+    // the slot re-asks, closing the confirmed wings bug without decide()
+    // ever gaining a customer message it doesn't have today. A NON-collision
+    // group (Temp, Size, ...) is unaffected: matchAssertedChoice still runs
+    // unconditionally, so "medium cheeseburger" / "large pepperoni pizza"
+    // keep resolving in one shot exactly as before.
+    const isCollisionGroup = groupNeedsNumericStems(step.choices);
+    const assertedChoice = (requireTextualSupportForSlots || isCollisionGroup) ? null : matchAssertedChoice(step.choices, modelAssertedChoiceTexts);
     const deterministicChoice = matchChoiceInText(step.choices, customerText);
     const matched = assertedChoice ?? (deterministicChoice && !isNegated(customerText, deterministicChoice.display) ? deterministicChoice : null);
     if (matched) {

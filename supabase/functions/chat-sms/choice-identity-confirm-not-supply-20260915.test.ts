@@ -84,16 +84,24 @@ Deno.test("resolveAskPlan, flag ON (matches turn-engine.ts's answer() call): bar
   assertEquals(result.totalDeltaCents, 0, "no price delta — the $8.00 upcharge must never be applied");
 });
 
-Deno.test("resolveAskPlan, flag OFF (matches decide()'s add/modify path, default/unchanged): the SAME bare '2' input DOES still resolve via the model's assertion — intentional, matches turn-engine.ts:609/:657, and is why the confirmed live wings bug is NOT closed by this narrower fix", () => {
+// PO fix (00-BK, INVERTED from its original 00-BH assertion — see git blame
+// for the before): this test used to document that the flag-OFF path (which
+// is exactly decide()'s add/modify shape) still trusted the model's
+// assertion for Boneless Wings Quantity — the live money bug, left open on
+// purpose while 00-BH's narrower fix was scoped. 00-BK closed that specific
+// gap: Boneless Wings Quantity is in the collision set (groupNeedsNumericStems),
+// and a collision-set group never trusts a model assertion regardless of
+// requireTextualSupportForSlots. "Never weaken a gate to make something
+// pass" — this test is not deleted, it now pins the fix instead of the hole.
+Deno.test("resolveAskPlan, flag OFF but Boneless Wings Quantity is a COLLISION group (00-BK): bare '2' resolves NOTHING even though the model asserts '20 Pieces' — the confirmed live wings bug, closed", () => {
   const result = resolveAskPlan(
     BONELESS_WINGS_PLAN, "2", new Set(["b87b7548-9f75-4ce2-a89b-f0b60aeb4d2d"]), new Map(),
-    undefined, ["20 Pieces"],
-    // requireTextualSupportForSlots omitted -> defaults to false, today's
-    // unchanged behavior on the structured add/modify path.
+    undefined, ["20 Pieces"], // the exact live PROPOSE assertion captured in 00-BE
+    // requireTextualSupportForSlots omitted -> defaults to false, but the
+    // collision-group gate (00-BK) is independent of this flag.
   );
-  assertEquals(result.resolved.length, 1, "flag off (today's default everywhere except answer()'s slot call) still trusts the model's assertion — the confirmed bug's real path, left untouched by design in 00-BH");
-  assertEquals(result.resolved[0].choice.display, "20 Pieces");
-  assertEquals(result.totalDeltaCents, 800);
+  assertEquals(result.resolved, [], "a collision-set group never trusts a model assertion, flag or no flag — this is the fix, not the hole, as of 00-BK");
+  assertEquals(result.totalDeltaCents, 0, "no price delta — the $8.00 upcharge must never be applied");
 });
 
 Deno.test("resolveAskPlan, flag ON: bare '2' against Bone In Wings Quantity (8|14 Pieces) resolves NOTHING even when the model asserts '14 Pieces'", () => {
