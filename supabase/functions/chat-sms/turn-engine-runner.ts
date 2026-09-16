@@ -47,6 +47,21 @@
 //    address_declined — never reaching PROPOSE, never touching the cart.
 //    See loadShopGeo/geocodeAddress and the ANSWER step below.
 //
+//    EXTENDED (2026-09-16, dispatch 00-AP — address embedded in a sentence,
+//    or stated on a turn where a DIFFERENT question was open, never
+//    resolved). The fix above only ever geocoded the message when it was
+//    the entire address AND the open question was already "address" — a
+//    real customer routinely states the address inside a longer sentence
+//    ("delivery to X", "it's X please") and/or in the same breath as
+//    answering whatever else is open (a Temp slot, in the live report), so
+//    neither condition reliably held. extractAddressSpan finds the
+//    candidate number+street(+city/state/zip) substring deterministically;
+//    geocodeFn is the exact same resolver as above either way — this never
+//    added a second geocode mechanism, only a span to feed the existing one
+//    and a second call SITE (opportunistic, independent of what's open) that
+//    shares it. See extractAddressSpan and the ANSWER step's
+//    addressOpen/opportunisticAddress below.
+//
 // 3. intent === "question"'s answer_text (§3b step 3's "warmth" exception)
 //    is prepended verbatim ahead of RENDER's own output, rather than routed
 //    through index.ts's stripFalseMutationClaims/stripLlmMoneyLines — those
@@ -246,6 +261,50 @@ const defaultGeocodeAddress: GeocodeAddressFn = async (address, shopGeo, { fetch
   return { formatted: top.formatted_address ?? address, withinZone: true };
 };
 
+// ── Address span extraction (dispatch 00-AP) ────────────────────────────────
+// 00-AH wired defaultGeocodeAddress in but only ever called it with the
+// customer's ENTIRE trimmed message — fine when the message IS the address
+// verbatim, but a real customer embeds it in a sentence ("deliver to X",
+// "it's X please", a leading "yeah" or a trailing "thanks") far more often
+// than not, and a full sentence handed to Google's geocoder routinely comes
+// back without ROOFTOP/RANGE_INTERPOLATED precision (or partial_match=true),
+// which defaultGeocodeAddress correctly refuses to qualify — so the address
+// silently never resolved even though the customer typed it correctly, three
+// turns running (dispatch 00-AP report). This extracts the number+street(
+// +city/state/zip) substring deterministically (no LLM, no second geocode
+// resolver) so THAT substring — not the raw message — is what actually gets
+// geocoded; qualification is still decided entirely by geocodeAddressFn
+// itself, unchanged. Returns null when nothing address-shaped is present —
+// callers must keep treating that as "no candidate this turn", never as a
+// hallucinated match.
+const STREET_SUFFIX_ALTERNATION =
+  "(?:St(?:reet)?|Ave(?:nue)?|Rd|Road|Dr(?:ive)?|Ln|Lane|Blvd|Boulevard|Ct|Court|Pl(?:ace)?|Way|Ter(?:race)?|Cir(?:cle)?|Pkwy|Parkway|Hwy|Highway|Sq(?:uare)?|Trl|Trail|Loop)";
+const STREET_CORE_RE = new RegExp(
+  // \b after the suffix alternation is load-bearing: without it, a greedy
+  // backtrack of the {0,4} filler-word group can land the suffix match on a
+  // partial word instead — e.g. "...18106 please" matching "Pl" (from the
+  // "Pl(?:ace)?" alternative) as if "please" were "Place", extending the
+  // captured span into the next word entirely. Caught by the phrasing
+  // matrix's "X please" case, RED before this \b was added.
+  `\\d{1,6}\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,4}\\s+${STREET_SUFFIX_ALTERNATION}\\b\\.?`,
+  "i",
+);
+// A city/state/zip immediately trailing the street core — ", Allentown PA
+// 18106", " Allentown, PA 18106", etc. Optional: a bare street core with no
+// trailing city/state/zip is still a legitimate candidate to hand to
+// Google's own geocoder (which applies its own locality bias).
+const TRAILING_CITY_STATE_ZIP_RE =
+  /^[,\s]+([A-Za-z][A-Za-z .'-]*?)[,\s]+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\b/;
+
+export function extractAddressSpan(message: string): string | null {
+  const core = STREET_CORE_RE.exec(message);
+  if (!core) return null;
+  let end = core.index + core[0].length;
+  const tail = TRAILING_CITY_STATE_ZIP_RE.exec(message.slice(end));
+  if (tail) end += tail[0].length;
+  return message.slice(core.index, end).trim().replace(/[.,]+$/, "");
+}
+
 // PostgREST silently caps an unbounded select at 1000 rows — no error, no
 // truncation flag, just fewer rows than the table actually has (same failure
 // shape index.ts's own fetchAllRows exists to close for option_choices, see
@@ -421,15 +480,38 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // message before calling answer() — that's the only case answer() needs
   // an external input for (AnswerExternalInputs). Every other open kind
   // resolves purely off `message` and needs nothing here.
+  //
+  // Dispatch 00-AP: the address is frequently embedded in a sentence
+  // alongside an answer to whatever else IS open (a Temp slot, in the live
+  // report) rather than being its own turn — so a candidate span is looked
+  // for regardless of what's open, and geocoded opportunistically
+  // (`opportunisticAddress` below) whenever delivery is enabled and the
+  // address isn't already known. This never competes with or duplicates the
+  // "address is open" geocode call above — extractAddressSpan/geocodeFn are
+  // the exact same extraction+resolver pair either way, just fed into
+  // answer()'s own switch when address is the open question, and folded into
+  // sideEffects directly (bypassing answer(), which only ever resolves the
+  // ONE open question) when it isn't.
+  const addressOpen = priorState.open?.kind === "address";
+  const addressSpan = extractAddressSpan(input.message);
+  const shouldAttemptGeocode = addressOpen ||
+    (addressSpan != null && input.shopContext.deliveryEnabled && !input.shopContext.deliveryAddressKnown);
   let externalInputs: AnswerExternalInputs = {};
-  if (priorState.open?.kind === "address") {
+  let opportunisticAddress: { formatted: string; withinZone: boolean } | null = null;
+  if (shouldAttemptGeocode) {
     const shopGeo = await loadShopGeo(deps.supabase, input.shopId);
     const geocodeFn = deps.geocodeAddressFn ?? defaultGeocodeAddress;
-    const geocoded = await geocodeFn(input.message.trim(), shopGeo, {
+    // addressOpen with no extracted span (e.g. a name, "thats it") still
+    // geocodes the raw trimmed message — same as 00-AH's original behavior —
+    // so a non-address answer to an open address question still gets a real
+    // (failing) geocode attempt and resolves deterministically to
+    // address_declined rather than falling through to PROPOSE.
+    const geocoded = await geocodeFn(addressSpan ?? input.message.trim(), shopGeo, {
       fetchImpl: deps.fetchImpl ?? fetch,
       apiKey: deps.googleMapsApiKey ?? Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "",
     });
-    externalInputs = { geocodedAddress: geocoded };
+    if (addressOpen) externalInputs = { geocodedAddress: geocoded };
+    else opportunisticAddress = geocoded;
   }
   const answerResult = answer(priorState, workingCart, input.message, input.menu, externalInputs);
   // priorState.open can ONLY be resolved through the "disambiguation" case
@@ -545,6 +627,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     if (proposal.intent === "question" && proposal.answer_text) {
       answerText = proposal.answer_text;
     }
+  }
+
+  // Dispatch 00-AP: an opportunistic address found and geocoded above (open
+  // question was something else entirely — a Temp slot, order_type, etc.)
+  // lands as its own side effect, independent of whatever the primary ANSWER
+  // switch above resolved this same turn. Deliberately unconditional on
+  // answerResult.resolved — an add-item message that also happens to carry
+  // the address should not lose the address just because the item itself
+  // fell through to PROPOSE.
+  if (opportunisticAddress) {
+    sideEffects = { ...sideEffects, delivery_address: { formatted: opportunisticAddress.formatted } };
   }
 
   // ── STEP 5: ASK ───────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import {
   runTurnEngineTurn,
   FALLBACK_REPLY,
   INITIAL_DIALOGUE_STATE,
+  extractAddressSpan,
   type RunTurnInput,
   type RunTurnDeps,
   type RunTurnShopContext,
@@ -1206,4 +1207,225 @@ Deno.test("ACCEPTANCE 00-AH-3 RED->GREEN: a name answer while ADDRESS is open mu
   assertEquals(result.cart.length, 1, `a name answer must never add a second cart line: ${JSON.stringify(result.cart)}`);
   assertEquals(result.cart[0].quantity, 1, `a name answer must never bump quantity: ${JSON.stringify(result.cart)}`);
   assertEquals(result.dialogueState.open?.kind, "address", "the address question must still be open — 'Jason Flick' never resolved it");
+});
+
+// ── Dispatch 00-AP (2026-09-16, simulated-customer adversarial harness
+// finding): 00-AH's geocode wiring only ever fed defaultGeocodeAddress the
+// customer's ENTIRE trimmed message, and only attempted it while "address"
+// was the open question. A real customer routinely states the address
+// embedded in a sentence, and/or in the same breath as answering whatever
+// else is open (a Temp slot, live transcript below) — neither condition
+// reliably held, so the address question re-asked forever even though the
+// customer repeated the address correctly turn after turn. Fixed by
+// extractAddressSpan (finds the candidate substring deterministically) plus
+// an opportunistic geocode attempt independent of what's currently open.
+
+const AP_ADDRESS_TEXT = "5620 Cetronia Rd Allentown PA 18106";
+const AP_GEOCODED_FORMATTED = "5620 Cetronia Rd, Allentown, PA 18106";
+
+function makeApGeocodeFn(seen: string[]): NonNullable<RunTurnDeps["geocodeAddressFn"]> {
+  return (address) => {
+    seen.push(address);
+    return Promise.resolve(address === AP_ADDRESS_TEXT ? { formatted: AP_GEOCODED_FORMATTED, withinZone: true } : null);
+  };
+}
+
+Deno.test("00-AP ACCEPTANCE 1 RED->GREEN: the live 5-turn transcript — address embedded in the Temp-slot answer resolves on the turn it first appears, and is never asked again despite being repeated 3 more times", async () => {
+  const geocodeCalls: string[] = [];
+  const { supabase, state } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `ap1-line-${++n}`; })(),
+    geocodeAddressFn: makeApGeocodeFn(geocodeCalls),
+    proposeTurnFn: (proposeInput): Promise<ProposeResult> => {
+      proposeCalls++;
+      if (proposeInput.message.toLowerCase().includes("cheeseburger")) {
+        return Promise.resolve({
+          ok: true, attempts: 1,
+          proposal: { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] },
+        });
+      }
+      // Turns 4/5 ("Dude I literally just told you...", "Are you even
+      // reading...") carry no item and no explicit closure — ANSWER cannot
+      // resolve them deterministically against the "anything else?" state
+      // (open === null), so they fall to PROPOSE. Not orders, not checkout.
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+
+  let shopContext: RunTurnShopContext = {
+    deliveryEnabled: true, orderType: null, deliveryAddressKnown: false,
+    driverTipCents: 0, pickupName: "Jason", deliveryFeeCents: 300,
+  };
+  const replies: string[] = [];
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState | null = null;
+
+  async function turn(message: string) {
+    const r = await runTurnEngineTurn(
+      { conversationId: "ap1", shopId: "s-ap1", tenantId: "t1", cartId: "cart-ap1", message,
+        history: [], menu: ACC1_MENU, cart, dialogueState, shopContext },
+      deps,
+    );
+    replies.push(r.reply);
+    cart = r.cart;
+    dialogueState = r.dialogueState;
+    shopContext = advanceDeliveryShopContext(shopContext, state.orderCartsUpdates[state.orderCartsUpdates.length - 1]);
+    return r;
+  }
+
+  // Turn 1: "Yo can I get a cheeseburger delivered?" — item added, Temp asked.
+  await turn("Yo can I get a cheeseburger delivered?");
+  assertEquals(cart.length, 1, `turn 1 must add the Cheese Burger line: ${JSON.stringify(cart)}`);
+  assert(dialogueState!.open?.kind === "slot", `turn 1 must open the Temp slot question, got: ${JSON.stringify(dialogueState!.open)}`);
+  assertEquals(shopContext.deliveryAddressKnown, false, "address must not be known before it has ever been stated");
+
+  // Turn 2: "Medium. And yeah that's fine, delivery to 5620 Cetronia Rd
+  // Allentown PA 18106." — answers the OPEN Temp slot AND, in the same
+  // breath, states the address for the first time. THIS is the turn the
+  // address must resolve on.
+  await turn("Medium. And yeah that's fine, delivery to 5620 Cetronia Rd Allentown PA 18106.");
+  assertEquals(cart[0].options, { Temp: ["Medium"] }, "turn 2 must still resolve the open Temp slot");
+  assertEquals(
+    shopContext.deliveryAddressKnown, true,
+    "RED (pre-fix): the address is embedded in the Temp answer, not its own turn — geocodeAddressFn was never even called, so deliveryAddressKnown stays false forever. GREEN (post-fix): extractAddressSpan pulls the address out of the sentence and it resolves this same turn.",
+  );
+  assertEquals(geocodeCalls[geocodeCalls.length - 1], AP_ADDRESS_TEXT, "the geocode call must receive the extracted address span, not the whole sentence");
+  const openKindAfterTurn2: string | undefined = dialogueState!.open?.kind;
+  assert(openKindAfterTurn2 !== "address", "address must never become the open question — it was already resolved before ASK ran this turn");
+
+  // Turns 3-5: the customer repeats the exact same address three more times
+  // (answering order_type, then twice more with no open slot at all) — the
+  // address question must never fire again.
+  await turn("Delivery. I already said that. 5620 Cetronia Rd Allentown PA 18106.");
+  await turn("Dude I literally just told you. 5620 Cetronia Rd Allentown PA 18106. Can you just put the order through already?");
+  await turn("Are you even reading what I'm sending? 5620 Cetronia Rd Allentown PA 18106.");
+
+  const fullTranscript = replies.join("\n---\n");
+  const addressAskCount = (fullTranscript.match(/What's the delivery address\?/g) ?? []).length;
+  assertEquals(addressAskCount, 0, `the address question must NEVER be asked in this transcript — it resolved before ASK ever ran — got ${addressAskCount}:\n${fullTranscript}`);
+  assertEquals(shopContext.orderType, "delivery", "turn 3's 'Delivery' must still resolve order_type normally");
+});
+
+// ── Acceptance criteria 2: phrasing matrix — the bug that got through
+// before existed because only a bare-address-only shape was ever exercised.
+// Every one of these must extract to the identical canonical address and
+// resolve, with no open question at all (the hardest case: nothing already
+// points at "this message might be the address").
+
+const AP_PHRASING_MATRIX: Array<{ label: string; message: string }> = [
+  { label: "bare address alone", message: AP_ADDRESS_TEXT },
+  { label: "'deliver to X'", message: `deliver to ${AP_ADDRESS_TEXT}` },
+  { label: "'it's X'", message: `it's ${AP_ADDRESS_TEXT}` },
+  { label: "'X please'", message: `${AP_ADDRESS_TEXT} please` },
+  { label: "'yeah X thanks'", message: `yeah ${AP_ADDRESS_TEXT} thanks` },
+  { label: "address followed by another sentence", message: `${AP_ADDRESS_TEXT}. Can you rush it?` },
+  { label: "address preceded by an unrelated clause", message: `Sorry for the wait, ${AP_ADDRESS_TEXT}` },
+];
+
+for (const { label, message } of AP_PHRASING_MATRIX) {
+  Deno.test(`00-AP ACCEPTANCE 2: phrasing matrix — ${label} — resolves to the same address`, async () => {
+    const geocodeCalls: string[] = [];
+    const { supabase, state } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+    const deps: RunTurnDeps = {
+      supabase,
+      apiKey: "test-key",
+      geocodeAddressFn: makeApGeocodeFn(geocodeCalls),
+      proposeTurnFn: (): Promise<ProposeResult> =>
+        Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } }),
+    };
+    const input = baseInput({
+      message,
+      menu: ACC1_MENU,
+      cart: [],
+      dialogueState: null,
+      shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: 0, pickupName: "Jason", deliveryFeeCents: 300 },
+    });
+
+    await runTurnEngineTurn(input, deps);
+
+    assertEquals(geocodeCalls, [AP_ADDRESS_TEXT], `"${label}" must extract exactly the canonical address span, got: ${JSON.stringify(geocodeCalls)}`);
+    assertEquals(
+      state.orderCartsUpdates[0].delivery_address, { formatted: AP_GEOCODED_FORMATTED },
+      `"${label}" must resolve and persist the delivery address`,
+    );
+  });
+}
+
+// ── Acceptance criteria 3: a non-address message while the address
+// question is open must not resolve it and must not crash — "no match"
+// stays reachable (address_declined), the same guarantee 00-AH established.
+// Guards against over-eager extraction hallucinating an address out of
+// unrelated text.
+
+Deno.test("00-AP ACCEPTANCE 3: a non-address message while address is open resolves to address_declined, never crashes, never reaches PROPOSE", async () => {
+  const priorState: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: ACC1_CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "ap3-line-1", ask_plan_selections: { [ACC1_TEMP_GROUP_ID]: ACC1_MEDIUM_CHOICE_ID }, options: { Temp: ["Medium"] } },
+  ];
+  const geocodeCalls: string[] = [];
+  const { supabase } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    geocodeAddressFn: makeApGeocodeFn(geocodeCalls),
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalls++;
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] } });
+    },
+  };
+  const input = baseInput({
+    message: "I'm not sure, let me check with my roommate",
+    menu: ACC1_MENU,
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: 0, pickupName: null, deliveryFeeCents: 300 },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0, "a non-address message while address is open must resolve deterministically (declined), never reach PROPOSE");
+  assertEquals(geocodeCalls.length, 1, "address being open must still attempt a real geocode call even with no extracted span, same as 00-AH's original guarantee");
+  assertEquals(result.cart, cart, "the cart must be untouched");
+  assertEquals(result.dialogueState.open?.kind, "address", "address must still be open — nothing resolved it");
+});
+
+Deno.test("extractAddressSpan: returns null for ordinary conversational text with no address shape", () => {
+  assertEquals(extractAddressSpan("thanks so much, see you soon"), null);
+  assertEquals(extractAddressSpan("I'm not sure, let me check with my roommate"), null);
+  assertEquals(extractAddressSpan("table for 2 please"), null, "a bare digit with no street suffix must never match");
+});
+
+Deno.test("extractAddressSpan: a trailing word that merely starts with a suffix abbreviation ('please' vs 'Pl') must not be swallowed into the span", () => {
+  assertEquals(extractAddressSpan("5620 Cetronia Rd Allentown PA 18106 please"), "5620 Cetronia Rd Allentown PA 18106");
+});
+
+Deno.test("00-AP: a garbled-but-numeric message while a Temp slot (not address) is open must not attempt a geocode call at all — no wasted lookup, no accidental resolution", async () => {
+  const geocodeCalls: string[] = [];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "ap3b-line-1", group_id: ACC1_TEMP_GROUP_ID }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: ACC1_CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "ap3b-line-1" },
+  ];
+  const { supabase } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    geocodeAddressFn: makeApGeocodeFn(geocodeCalls),
+    proposeTurnFn: () => Promise.reject(new Error("must not be called — 'medium' resolves the open slot deterministically")),
+  };
+  const input = baseInput({
+    message: "medium, table for 2 please",
+    menu: ACC1_MENU,
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: 0, pickupName: null, deliveryFeeCents: 300 },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(geocodeCalls.length, 0, "no digit+street-suffix shape is present — extractAddressSpan must return null and no geocode call is made");
+  assertEquals(result.cart[0].options, { Temp: ["Medium"] }, "the Temp slot must still resolve normally");
 });
