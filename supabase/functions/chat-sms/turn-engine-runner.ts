@@ -426,7 +426,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   }
 
   // ── STEP 5: ASK ───────────────────────────────────────────────────────────
-  const shopContext = buildAskShopContext(input.shopContext, upsellEnabled);
+  // ASK must see what THIS turn's ANSWER just resolved, same as RENDER does a
+  // few lines below (deliveryFeeCents/driverTipCents) — otherwise ASK runs
+  // against the turn-START snapshot (input.shopContext) and re-fires a
+  // question ANSWER already resolved this same turn (order_type, driver tip,
+  // pickup name each go through this). sideEffects only ever carries fields
+  // this turn's ANSWER actually resolved (see CartSideEffects above and the
+  // switch that populates it), so this overlay can never mask a question
+  // that's still genuinely open.
+  const effectiveShopContext: RunTurnShopContext = {
+    ...input.shopContext,
+    orderType: sideEffects.order_type ?? input.shopContext.orderType,
+    driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents,
+    pickupName: sideEffects.pickup_name ?? input.shopContext.pickupName,
+  };
+  const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
   const nextState = ask(workingCart, priorState, turnEvents, shopContext, input.menu);
 
   // ── STEP 6: RENDER ─────────────────────────────────────────────────────────

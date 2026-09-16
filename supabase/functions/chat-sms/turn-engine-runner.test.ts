@@ -708,3 +708,232 @@ Deno.test("appendComplianceDisclosureIfFirstContact: leaves a returning customer
   const reply = appendComplianceDisclosureIfFirstContact("Here's your total: $12.99", false);
   assertEquals(reply, "Here's your total: $12.99");
 });
+
+// ── 00-BT: ASK must see what THIS turn's ANSWER resolved, not just the
+// turn-start shopContext snapshot (Vito's live bug, conversation
+// 7be9e651-1274-47f7-990e-f0d8218ac03e, 2026-09-16). ANSWER's sideEffects
+// (order_type, driver_tip_cents, pickup_name) are persisted by persistTurn
+// but were never merged into the shopContext ASK runs against — so ASK
+// re-fired the exact question that was just answered this same turn. Fixed
+// by overlaying sideEffects onto input.shopContext before buildAskShopContext,
+// same pattern RENDER already used for deliveryFeeCents/driverTipCents a few
+// lines below.
+//
+// NOTE ON SCOPE — the reported transcript also showed a delivery-ADDRESS
+// re-ask ("We'll deliver to 5620 Cetronia Rd... / What's the delivery
+// address?" repeating). That symptom cannot reproduce through this runner:
+// answer()'s "address" case only resolves given an external geocode result
+// (AnswerExternalInputs.geocodedAddress), which runTurnEngineTurn never
+// supplies — no call site threads it in, and CartSideEffects (above) has no
+// address field to merge in the first place (this file's own header note 2
+// already documents address collection as inert here). RENDER also never
+// emits confirmation prose like "We'll deliver to X" — it only ever emits
+// the fixed string "What's the delivery address?" — and that exact
+// confirmation string does not appear anywhere in this codebase. That half
+// of the report traces to a different code path (the legacy index.ts/LLM
+// pipeline, which is frozen for this dispatch), not to the shopContext-merge
+// defect fixed here. Flagged for the PO rather than improvised around.
+
+Deno.test("00-BT RED->GREEN: order_type open, 'Delivery' resolves it — ASK must not re-ask 'Pickup or delivery today?' in the same turn's reply", async () => {
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called — ANSWER resolves order_type deterministically")) });
+  const input = baseInput({
+    message: "Delivery",
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  const askCount = (result.reply.match(/Pickup or delivery today\?/g) ?? []).length;
+  assertEquals(askCount, 0, `order_type must not be re-asked once ANSWER resolved it this turn — reply: ${JSON.stringify(result.reply)}`);
+  // The ladder correctly advances to the NEXT open question (address, since
+  // this turn resolved to delivery) — this is not suppressed, only the
+  // just-answered order_type question is.
+  assert(result.reply.includes("What's the delivery address?"), `the address question must still open this same turn: ${JSON.stringify(result.reply)}`);
+});
+
+Deno.test("00-BT RED->GREEN: order_type open, 'Pickup' resolves it — ASK must not re-ask 'Pickup or delivery today?' in the same turn's reply", async () => {
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called — ANSWER resolves order_type deterministically")) });
+  const input = baseInput({
+    message: "Pickup",
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  const askCount = (result.reply.match(/Pickup or delivery today\?/g) ?? []).length;
+  assertEquals(askCount, 0, `order_type must not be re-asked once ANSWER resolved it this turn — reply: ${JSON.stringify(result.reply)}`);
+});
+
+Deno.test("00-BT RED->GREEN: a bare customer name resolves the open 'name' question — ASK must not re-ask it in the same turn's reply", async () => {
+  const priorState: DialogueState = { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called — ANSWER resolves name deterministically")) });
+  const input = baseInput({
+    message: "Joe",
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("What's the name for the order?"), `the name question must not be re-asked once ANSWER resolved it this turn — reply: ${JSON.stringify(result.reply)}`);
+  assert(!result.reply.includes("Putting this in for"), `the name question's suggested-name variant must not fire either — reply: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("All good — confirm?"), `the ladder must advance past the just-answered name question to confirm — reply: ${JSON.stringify(result.reply)}`);
+});
+
+Deno.test("00-BT: a driver tip amount resolves the open 'tip' question — ASK must not re-ask it in the same turn's reply (same mechanism, same fix)", async () => {
+  const priorState: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called — ANSWER resolves tip deterministically")) });
+  const input = baseInput({
+    message: "$5",
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: true, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: 300 },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("Want to add a tip for the driver?"), `the tip question must not be re-asked once ANSWER resolved it this turn — reply: ${JSON.stringify(result.reply)}`);
+});
+
+// ── 00-BT ACCEPTANCE 3: a full order driven end-to-end at the runner level,
+// each question counted across the whole transcript. Delivery-specific
+// (order type -> address -> item -> name -> confirm) cannot be driven
+// end-to-end through this runner today — see the scope note above (address
+// never resolves via ANSWER here, independent of this fix). This drives the
+// PICKUP path instead: order type -> item (same turn, matches the real
+// prompt's "both things must happen in one turn" rule) -> checkout intent ->
+// name -> confirm, threading each turn's persisted sideEffects into the next
+// turn's shopContext exactly as index.ts's real reload-from-DB would.
+
+Deno.test("00-BT ACCEPTANCE 3: full pickup order end-to-end — order type, name, and confirm are each asked EXACTLY ONCE", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `acc3-line-${++n}`; })(),
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalls++;
+      if (proposeCalls > 1) return Promise.reject(new Error(`PROPOSE must be called exactly once across this transcript — this is call ${proposeCalls}`));
+      return Promise.resolve({
+        ok: true, attempts: 1,
+        proposal: { intent: "order", adds: [{ item_span: "cheese burger", quantity: 1, choices: [] }], removes: [], modifies: [] },
+      });
+    },
+  };
+
+  let shopContext = { deliveryEnabled: true, orderType: null as "pickup" | "delivery" | null, deliveryAddressKnown: false, driverTipCents: null as number | null, pickupName: null as string | null, deliveryFeeCents: null as number | null };
+  const replies: string[] = [];
+
+  function advanceShopContext(update: Record<string, unknown>) {
+    shopContext = {
+      ...shopContext,
+      orderType: (update.order_type as "pickup" | "delivery" | undefined) ?? shopContext.orderType,
+      driverTipCents: (update.driver_tip_cents as number | undefined) ?? shopContext.driverTipCents,
+      pickupName: (update.pickup_name as string | undefined) ?? shopContext.pickupName,
+    };
+  }
+
+  // ── Turn 1: "cheese burger" — item added, order_type asked same turn ────
+  const r1 = await runTurnEngineTurn(
+    { conversationId: "acc3", shopId: "s1", tenantId: "t1", cartId: "cart-acc3", message: "cheese burger",
+      history: [], menu: MENU, cart: [], dialogueState: null, shopContext },
+    deps,
+  );
+  replies.push(r1.reply);
+  assertEquals(r1.cart.length, 1, "turn 1 must add the Cheese Burger line");
+  advanceShopContext(state.orderCartsUpdates[0]);
+
+  // ── Turn 2: "Pickup" — resolves order_type ───────────────────────────────
+  const r2 = await runTurnEngineTurn(
+    { conversationId: "acc3", shopId: "s1", tenantId: "t1", cartId: "cart-acc3", message: "Pickup",
+      history: [], menu: MENU, cart: r1.cart, dialogueState: r1.dialogueState, shopContext },
+    deps,
+  );
+  replies.push(r2.reply);
+  advanceShopContext(state.orderCartsUpdates[1]);
+  assertEquals(shopContext.orderType, "pickup", "order_type must be persisted from turn 2's ANSWER");
+
+  // ── Turn 3: "thats it" — explicit checkout intent, moves the ladder toward name ─
+  const r3 = await runTurnEngineTurn(
+    { conversationId: "acc3", shopId: "s1", tenantId: "t1", cartId: "cart-acc3", message: "thats it",
+      history: [], menu: MENU, cart: r2.cart, dialogueState: r2.dialogueState, shopContext },
+    deps,
+  );
+  replies.push(r3.reply);
+  advanceShopContext(state.orderCartsUpdates[2]);
+  assert(r3.reply.includes("What's the name for the order?"), `turn 3 must open the name question: ${JSON.stringify(r3.reply)}`);
+
+  // ── Turn 4: "Joe" — resolves name ────────────────────────────────────────
+  const r4 = await runTurnEngineTurn(
+    { conversationId: "acc3", shopId: "s1", tenantId: "t1", cartId: "cart-acc3", message: "Joe",
+      history: [], menu: MENU, cart: r3.cart, dialogueState: r3.dialogueState, shopContext },
+    deps,
+  );
+  replies.push(r4.reply);
+  advanceShopContext(state.orderCartsUpdates[3]);
+  assertEquals(shopContext.pickupName, "Joe", "pickup_name must be persisted from turn 4's ANSWER");
+  assert(r4.reply.includes("All good — confirm?"), `turn 4 must advance to confirm, not re-ask name: ${JSON.stringify(r4.reply)}`);
+
+  // ── Turn 5: "yes" — confirms, moves to link_sent ─────────────────────────
+  const r5 = await runTurnEngineTurn(
+    { conversationId: "acc3", shopId: "s1", tenantId: "t1", cartId: "cart-acc3", message: "yes",
+      history: [], menu: MENU, cart: r4.cart, dialogueState: r4.dialogueState, shopContext },
+    deps,
+  );
+  replies.push(r5.reply);
+  assertEquals(r5.dialogueState.phase, "link_sent");
+
+  const fullTranscript = replies.join("\n---\n");
+  const orderTypeAskCount = (fullTranscript.match(/Pickup or delivery today\?/g) ?? []).length;
+  const nameAskCount = (fullTranscript.match(/What's the name for the order\?/g) ?? []).length;
+  const confirmAskCount = (fullTranscript.match(/All good — confirm\?/g) ?? []).length;
+
+  assertEquals(orderTypeAskCount, 1, `"Pickup or delivery today?" must be asked exactly once across the transcript, got ${orderTypeAskCount}:\n${fullTranscript}`);
+  assertEquals(nameAskCount, 1, `"What's the name for the order?" must be asked exactly once across the transcript, got ${nameAskCount}:\n${fullTranscript}`);
+  assertEquals(confirmAskCount, 1, `"All good — confirm?" must be asked exactly once across the transcript, got ${confirmAskCount}:\n${fullTranscript}`);
+});
+
+// ── Delivery path, as far as this runner can currently go without the
+// address geocode wiring flagged in this file's header note 2 (out of this
+// fix's scope): order_type -> address must not double-fire either.
+
+Deno.test("00-BT: delivery order_type resolves and hands off to address in the same turn, neither question doubles", async () => {
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called")) });
+  const input = baseInput({
+    message: "delivery please",
+    cart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  const orderTypeAskCount = (result.reply.match(/Pickup or delivery today\?/g) ?? []).length;
+  const addressAskCount = (result.reply.match(/What's the delivery address\?/g) ?? []).length;
+  assertEquals(orderTypeAskCount, 0, `order_type must not re-ask once resolved: ${JSON.stringify(result.reply)}`);
+  assertEquals(addressAskCount, 1, `address must open exactly once: ${JSON.stringify(result.reply)}`);
+});
