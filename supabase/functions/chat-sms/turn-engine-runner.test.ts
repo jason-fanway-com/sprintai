@@ -179,7 +179,10 @@ Deno.test("runTurnEngineTurn: a bare closure with no open question resolves via 
   assert(result.reply.length > 0, "RENDER must always produce a non-empty reply");
   assertEquals(state.orderCartsUpdates.length, 1, "cart + dialogue_state must be persisted exactly once");
   assertEquals(state.orderCartsUpdates[0].cart_json, []);
-  assertEquals((state.orderCartsUpdates[0].dialogue_state as DialogueState).open, null);
+  // 00-AK: the cart is empty, so ASK opens "ordering" (what would you like
+  // to order?) rather than `null` (which renders "Anything else?" — wrong
+  // over an empty cart). Before that fix this asserted `open === null`.
+  assertEquals((state.orderCartsUpdates[0].dialogue_state as DialogueState).open, { kind: "ordering", askCount: 1 });
   assertEquals(state.messagesInserted.length, 1);
   assertEquals(state.messagesInserted[0].role, "assistant");
   assertEquals(state.messagesInserted[0].content, result.reply);
@@ -1052,7 +1055,12 @@ Deno.test("ACCEPTANCE 00-AH-1 RED->GREEN: delivery order end to end — order ty
   await turn("Time to order");
   await turn("Delivery");
   await turn(ADDRESS_TEXT);
-  assertEquals(dialogueState!.open, null, "address must resolve THIS turn — dialogue_state.open must move off the address slot");
+  // 00-AK: address resolves into a still-EMPTY cart (nothing ordered yet) —
+  // ASK's empty-cart branch opens "ordering" (asking what to order), never
+  // `null` (which would render "Anything else?" over nothing). Before that
+  // fix this assertion read `open === null`; that was the bug, not a
+  // property worth preserving.
+  assertEquals(dialogueState!.open, { kind: "ordering", askCount: 1 }, "address must resolve THIS turn — dialogue_state.open must move off the address slot onto the ordering question, since the cart is still empty");
   await turn("a cheeseburger");
   await turn("medium");
   await turn("thats it");

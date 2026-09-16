@@ -1022,3 +1022,138 @@ for (const fixture of CLOSURE_MATRIX_FIXTURES) {
     });
   }
 }
+
+// ── Dispatch 00-AK (live bug, conv 70c7c02a, 2026-09-16) — "Anything else?"
+// asked over an EMPTY cart is a dead end ────────────────────────────────────
+//
+// Defect 1: once every pre-order slot resolves (order_type, address, tip)
+// with NOTHING ever added to the cart, ASK's "not committed to close"
+// branch (turn-engine.ts ask(), priority 7) returned `open: null`
+// regardless of cart contents — RENDER's own fallback for that shape is
+// unconditionally "Anything else?" (`state.phase !== "link_sent"`), a
+// question that presupposes a first item already exists.
+//
+// Defect 2: because the cart never changes and the open state never changes
+// either, ANY reply — including a genuine protest like "I didn't order
+// anything yet" — falls through ANSWER unresolved, PROPOSE adds nothing,
+// and ASK re-derives the identical `open: null` again next turn: the exact
+// same "Anything else?" forever. The PO's own replay script never caught
+// this because it always answered "a cheeseburger" on the turn after the
+// address regardless of what the bot asked, walking straight past the dead
+// end; a real customer stops and argues instead, which is why this only
+// surfaced live.
+//
+// `(dialogueState.open as any)?.kind` is used below (rather than a typed
+// literal comparison) so these assertions compile identically before AND
+// after DialogueState's `open` union gains its new "ordering" member —
+// the RED run must fail on the ASSERTION, never on a TypeScript compile
+// error that would obscure which check actually failed.
+
+function neverProposeFn(label: string) {
+  return () => Promise.reject(new Error(`PROPOSE must never be called for a deterministic ${label} resolution`));
+}
+
+Deno.test("00-AK defect 1 (delivery): address resolves into an EMPTY cart -> ASK asks the ordering question, never the closure question", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    geocodeAddressFn: () => Promise.resolve({ formatted: "5620 Cetronia Rd, Allentown, PA 18106", withinZone: true }),
+    proposeTurnFn: neverProposeFn("address"),
+  };
+  const priorState: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null };
+  const input: RunTurnInput = {
+    conversationId: "conv-70c7c02a",
+    shopId: "shop-1",
+    tenantId: "tenant-1",
+    cartId: "cart-1",
+    message: "5620 cetronia rd allentown pa 18106",
+    history: [],
+    menu: VITOS_MENU,
+    cart: [],
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: 0, pickupName: null, deliveryFeeCents: 0 },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "cart must still be empty — nothing was ever ordered");
+  assert(!result.reply.includes("Anything else?"), `must not ask the closure question over an empty cart: ${JSON.stringify(result.reply)}`);
+  assert(/what would you like to order/i.test(result.reply), `must ask the ordering question instead: ${JSON.stringify(result.reply)}`);
+  const openKind = (result.dialogueState.open as { kind?: string } | null)?.kind;
+  assertEquals(openKind, "ordering", `dialogue_state.open must be the ordering question, not stuck on a closure/confirm slot (got ${JSON.stringify(result.dialogueState.open)})`);
+  assertEquals(result.dialogueState.phase, "ordering", "phase must not have walked toward checkout with an empty cart");
+});
+
+Deno.test("00-AK defect 1 (pickup): order type resolves to pickup into an EMPTY cart -> ASK asks the ordering question, never the closure question", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: neverProposeFn("order_type"),
+  };
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const input: RunTurnInput = {
+    conversationId: "conv-pickup-empty",
+    shopId: "shop-1",
+    tenantId: "tenant-1",
+    cartId: "cart-1",
+    message: "pickup",
+    history: [],
+    menu: VITOS_MENU,
+    cart: [],
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "cart must still be empty — nothing was ever ordered");
+  assert(!result.reply.includes("Anything else?"), `must not ask the closure question over an empty cart: ${JSON.stringify(result.reply)}`);
+  assert(/what would you like to order/i.test(result.reply), `must ask the ordering question instead: ${JSON.stringify(result.reply)}`);
+  const openKind = (result.dialogueState.open as { kind?: string } | null)?.kind;
+  assertEquals(openKind, "ordering", `dialogue_state.open must be the ordering question, not stuck on a closure/confirm slot (got ${JSON.stringify(result.dialogueState.open)})`);
+  assertEquals(result.dialogueState.phase, "ordering", "phase must not have walked toward checkout with an empty cart");
+});
+
+Deno.test("00-AK defect 2: three consecutive non-order replies to an empty cart never produce the identical question three times in a row", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () =>
+      Promise.resolve({ ok: true, proposal: { intent: "other", adds: [], removes: [], modifies: [] }, attempts: 1 }),
+  };
+  const shopContext = { deliveryEnabled: true, orderType: "delivery" as const, deliveryAddressKnown: true, driverTipCents: 0, pickupName: null, deliveryFeeCents: 0 };
+
+  // Start already parked at the dead end this fixes (empty cart, every
+  // pre-order slot resolved) — exactly where conv 70c7c02a got stuck after
+  // its address turn.
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState = { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null };
+
+  const replies: string[] = [];
+  for (const message of ["I didn't order anything yet", "I didn't order anything", "I said I haven't ordered"]) {
+    const turn = await runTurnEngineTurn({
+      conversationId: "conv-70c7c02a",
+      shopId: "shop-1",
+      tenantId: "tenant-1",
+      cartId: "cart-1",
+      message,
+      history: [],
+      menu: VITOS_MENU,
+      cart,
+      dialogueState,
+      shopContext,
+    }, deps);
+    cart = turn.cart;
+    dialogueState = turn.dialogueState;
+    replies.push(turn.reply);
+    assertEquals(cart.length, 0, `cart must stay empty for "${message}"`);
+  }
+
+  assert(
+    !(replies[0] === replies[1] && replies[1] === replies[2]),
+    `the same question must not repeat identically three times in a row on an empty cart: ${JSON.stringify(replies)}`,
+  );
+});

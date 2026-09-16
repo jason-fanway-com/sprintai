@@ -146,7 +146,18 @@ export interface DialogueState {
     | { kind: "disambiguation"; candidates: string[] }
     | { kind: "upsell"; menu_item_id: string }
     | { kind: "order_type" } | { kind: "address" } | { kind: "tip" }
-    | { kind: "name"; suggested?: string } | { kind: "confirm" };
+    | { kind: "name"; suggested?: string } | { kind: "confirm" }
+    // Dispatch 00-AK (live bug, conv 70c7c02a): every pre-order slot is
+    // resolved (order_type/address/tip) but the cart is still EMPTY —
+    // "Anything else?" presupposes a first item already exists, so ASK's
+    // priority-7 branch (see ask() below) opens this instead whenever the
+    // cart has no real line. `askCount` is the number of consecutive turns
+    // this exact question has been re-asked with the cart still empty —
+    // RENDER cycles three distinct phrasings off it (see render() below) so
+    // a real customer who protests instead of ordering never hears the
+    // identical sentence three times running, the exact live dead end this
+    // closes. Purely a cart-emptiness check, never a model call.
+    | { kind: "ordering"; askCount: number };
   upsell_offered: boolean;
   asked_message_id: string | null;
   // FIXED 2026-09-15 (turn-engine live bug — "two cheeseburgers and a large
@@ -439,6 +450,16 @@ export function answer(
         return { resolved: true, outcome: { kind: "upsell_accepted" }, cartChanged: result.cartChanged };
       }
       if (impliesUpsellDecline(trimmed)) return { resolved: true, outcome: { kind: "upsell_declined" }, cartChanged: false };
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+    }
+
+    // "ordering" (00-AK): identical treatment to `state.open === null` above
+    // — an empty cart has nothing to close, so this only catches an
+    // explicit checkout phrase or a bare closure/affirmation before ever
+    // reaching PROPOSE; naming an actual item is NOT this case's job (that
+    // free text falls through UNRESOLVED to PROPOSE exactly as it always
+    // has, regardless of which `open.kind` is on record).
+    case "ordering": {
       return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
   }
@@ -820,6 +841,18 @@ export function ask(
     priorState.phase === "name" || priorState.phase === "confirm" || priorState.phase === "link_sent";
 
   if (!committedToClose) {
+    // 00-AK: the cart is empty and nothing has committed this conversation
+    // to closing — "Anything else?" (the `open: null` shape below) wrongly
+    // presupposes a first item already exists. Ask the ordering question
+    // instead, purely off cart emptiness (never inferred by the model).
+    // `askCount` only increments when THIS exact question was already open
+    // last turn (still empty, still nothing resolved) — see render()'s
+    // "ordering" case for what that count drives.
+    const cartHasRealLines = cart.some(isRealCartLine);
+    if (!cartHasRealLines) {
+      const askCount = priorState.open?.kind === "ordering" ? priorState.open.askCount + 1 : 1;
+      return carry({ kind: "ordering", askCount }, "ordering");
+    }
     return carry(null, "ordering");
   }
 
@@ -912,6 +945,20 @@ export function render(
       case "confirm":
         question = "All good — confirm?";
         break;
+      case "ordering": {
+        // 00-AK: three distinct phrasings, cycled by askCount. Any three
+        // consecutive turns cover all three exactly once (period-3 cycle),
+        // so a real customer who protests instead of ordering never hears
+        // the identical question three times running — the dead end that
+        // made "Anything else?" unanswerable over an empty cart.
+        const ORDERING_QUESTIONS = [
+          "What would you like to order?",
+          "No rush — what can I get started for you?",
+          "Whenever you're ready, just let me know what you'd like.",
+        ];
+        question = ORDERING_QUESTIONS[(state.open.askCount - 1) % ORDERING_QUESTIONS.length];
+        break;
+      }
     }
   } else if (state.phase !== "link_sent") {
     question = "Anything else?";
