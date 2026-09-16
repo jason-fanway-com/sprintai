@@ -398,7 +398,14 @@ export function answer(
     }
 
     case "address": {
-      if (external.geocodedAddress === undefined) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      // Closure/checkout intent gets first crack, same as every other open
+      // kind below — a bare "thats it"/"no thanks" while address is open
+      // must resolve as closure, never as an address (declined or
+      // otherwise), regardless of what the caller's geocode attempt (if any)
+      // came back with for that same text.
+      const fallback = closureOrAffirmationFallback(trimmed);
+      if (fallback) return fallback;
+      if (external.geocodedAddress === undefined) return UNRESOLVED;
       if (external.geocodedAddress === null) return { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false };
       return {
         resolved: true,

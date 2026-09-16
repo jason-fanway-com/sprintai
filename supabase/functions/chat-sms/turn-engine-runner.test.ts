@@ -15,10 +15,11 @@ import {
   INITIAL_DIALOGUE_STATE,
   type RunTurnInput,
   type RunTurnDeps,
+  type RunTurnShopContext,
 } from "./turn-engine-runner.ts";
 import type { ProposeResult } from "./propose.ts";
 import type { DialogueState, TurnEngineCartLine, TurnEngineMenuItem } from "./turn-engine.ts";
-import { appendComplianceDisclosureIfFirstContact } from "./index.ts";
+import { appendComplianceDisclosureIfFirstContact, appendEngineCheckoutLinkIfReady, type EngineCheckoutDeps } from "./index.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -936,4 +937,265 @@ Deno.test("00-BT: delivery order_type resolves and hands off to address in the s
   const addressAskCount = (result.reply.match(/What's the delivery address\?/g) ?? []).length;
   assertEquals(orderTypeAskCount, 0, `order_type must not re-ask once resolved: ${JSON.stringify(result.reply)}`);
   assertEquals(addressAskCount, 1, `address must open exactly once: ${JSON.stringify(result.reply)}`);
+});
+
+// ── Dispatch 00-AH (2026-09-16, PO report — a delivery order can never
+// complete on the engine): ANSWER's "address" case (turn-engine.ts) only
+// ever resolves given an external geocode result (AnswerExternalInputs.
+// geocodedAddress), and this runner never supplied one — so the address
+// question re-asked forever, and free text answered while it was open (a
+// name, in the live report) fell through to PROPOSE with no guard, letting
+// the model mutate the cart. Fixed by wiring a real, injectable geocode call
+// (geocodeAddressFn) into the runner before ANSWER, and by making turn-
+// engine.ts's own "address" case check closure/checkout-intent BEFORE
+// consulting the geocode result (so "thats it"/decline phrases keep their
+// existing closure semantics regardless of what a geocode attempt on that
+// same text would have returned).
+
+function makeFakeStripeForCheckout() {
+  const createCalls: Array<Record<string, unknown>> = [];
+  // deno-lint-ignore no-explicit-any
+  const stripe: any = {
+    checkout: {
+      sessions: {
+        create(params: Record<string, unknown>) {
+          createCalls.push(params);
+          const id = `sess_${createCalls.length}`;
+          return Promise.resolve({ id, url: `https://checkout.stripe.com/${id}` });
+        },
+      },
+    },
+  };
+  return { stripe, createCalls };
+}
+
+function makeFakeCheckoutSupabase(initialCartRow: Record<string, unknown> = {}) {
+  const cartRow: Record<string, unknown> = { ...initialCartRow };
+  function builder(table: string) {
+    // deno-lint-ignore no-explicit-any
+    const b: any = {
+      select() { return b; },
+      eq() { return b; },
+      single() {
+        if (table === "order_carts") return Promise.resolve({ data: { ...cartRow }, error: null });
+        return Promise.resolve({ data: null, error: null });
+      },
+      update(row: Record<string, unknown>) {
+        if (table === "order_carts") Object.assign(cartRow, row);
+        return { eq: () => Promise.resolve({ error: null }) };
+      },
+      insert() { return Promise.resolve({ error: null }); },
+    };
+    return b;
+  }
+  // deno-lint-ignore no-explicit-any
+  return { from: (table: string) => builder(table) } as any;
+}
+
+function advanceDeliveryShopContext(shopContext: RunTurnShopContext, update: Record<string, unknown>): RunTurnShopContext {
+  return {
+    ...shopContext,
+    orderType: (update.order_type as "pickup" | "delivery" | undefined) ?? shopContext.orderType,
+    deliveryAddressKnown: update.delivery_address != null ? true : shopContext.deliveryAddressKnown,
+    driverTipCents: (update.driver_tip_cents as number | undefined) ?? shopContext.driverTipCents,
+    pickupName: (update.pickup_name as string | undefined) ?? shopContext.pickupName,
+  };
+}
+
+Deno.test("ACCEPTANCE 00-AH-1 RED->GREEN: delivery order end to end — order type, address, item, temp, close, name, confirm — address asked AT MOST once, cart never mutated by the name turn, ends at a real payment link", async () => {
+  const ADDRESS_TEXT = "5620 cetronia rd Allentown Pa 18106";
+  const GEOCODED_FORMATTED = "5620 Cetronia Rd, Allentown, PA 18106";
+
+  const { supabase, state } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `ah1-line-${++n}`; })(),
+    // Injectable, deterministic stand-in for the real Google Geocode call
+    // (defaultGeocodeAddress) — only the exact typed address qualifies,
+    // matching the live shop's real geocoder rejecting anything else.
+    geocodeAddressFn: (address) =>
+      Promise.resolve(address === ADDRESS_TEXT ? { formatted: GEOCODED_FORMATTED, withinZone: true } : null),
+    proposeTurnFn: (proposeInput): Promise<ProposeResult> => {
+      if (proposeInput.message.toLowerCase().includes("cheeseburger")) {
+        return Promise.resolve({
+          ok: true, attempts: 1,
+          proposal: { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] },
+        });
+      }
+      // "Time to order" — not an order, not checkout, not a slot answer.
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+
+  let shopContext: RunTurnShopContext = {
+    deliveryEnabled: true, orderType: null, deliveryAddressKnown: false,
+    driverTipCents: 0, pickupName: null, deliveryFeeCents: 300,
+  };
+  const replies: string[] = [];
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState | null = null;
+
+  async function turn(message: string) {
+    const r = await runTurnEngineTurn(
+      { conversationId: "ah1", shopId: "s-ah1", tenantId: "t1", cartId: "cart-ah1", message,
+        history: [], menu: ACC1_MENU, cart, dialogueState, shopContext },
+      deps,
+    );
+    replies.push(r.reply);
+    cart = r.cart;
+    dialogueState = r.dialogueState;
+    shopContext = advanceDeliveryShopContext(shopContext, state.orderCartsUpdates[state.orderCartsUpdates.length - 1]);
+    return r;
+  }
+
+  await turn("Time to order");
+  await turn("Delivery");
+  await turn(ADDRESS_TEXT);
+  assertEquals(dialogueState!.open, null, "address must resolve THIS turn — dialogue_state.open must move off the address slot");
+  await turn("a cheeseburger");
+  await turn("medium");
+  await turn("thats it");
+  await turn("Jason Flick");
+  await turn("yes");
+
+  const fullTranscript = replies.join("\n---\n");
+  const addressAskCount = (fullTranscript.match(/What's the delivery address\?/g) ?? []).length;
+  assertEquals(addressAskCount, 1, `the address question must be asked AT MOST once across the whole transcript, got ${addressAskCount}:\n${fullTranscript}`);
+
+  assertEquals(cart.length, 1, `the cart must hold exactly ONE Cheese Burger line after the name turn: ${JSON.stringify(cart)}`);
+  assertEquals(cart[0].menu_item_id, ACC1_CHEESE_BURGER_ID);
+  assertEquals(cart[0].quantity, 1, `quantity must still be 1 — never bumped by the "Jason Flick" name turn: ${JSON.stringify(cart)}`);
+
+  assertEquals(dialogueState!.phase, "link_sent", `the transcript must reach link_sent: ${JSON.stringify(dialogueState)}`);
+
+  const { stripe, createCalls } = makeFakeStripeForCheckout();
+  const checkoutSupabase = makeFakeCheckoutSupabase({ order_type: "delivery", delivery_fee_cents: 300, driver_tip_cents: 0, notes: null, stripe_checkout_session_id: null });
+  const checkoutDeps: EngineCheckoutDeps = { supabase: checkoutSupabase, resolveStripeKey: () => "sk_test_fake", createStripeClient: () => stripe };
+  const finalReply = await appendEngineCheckoutLinkIfReady(
+    { cartId: "cart-ah1", shopName: "Vito's", testMode: true, priorPhase: "confirm", nextPhase: "link_sent", cartLines: cart, reply: replies[replies.length - 1], isSms: false },
+    checkoutDeps,
+  );
+  assert(finalReply.includes("Pay here: https://pay.getsprintai.com/o/"), `the delivery transcript must end at a real payment link, got: ${finalReply}`);
+  assertEquals(createCalls.length, 1, "exactly one Stripe session must be created");
+});
+
+Deno.test("ACCEPTANCE 00-AH-2: pickup order end to end — order type, item, temp, close, name, confirm — each question asked exactly once, ends at a real payment link", async () => {
+  const { supabase, state } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `ah2-line-${++n}`; })(),
+    proposeTurnFn: (proposeInput): Promise<ProposeResult> => {
+      if (proposeInput.message.toLowerCase().includes("cheeseburger")) {
+        return Promise.resolve({
+          ok: true, attempts: 1,
+          proposal: { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] },
+        });
+      }
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+
+  let shopContext: RunTurnShopContext = {
+    deliveryEnabled: true, orderType: null, deliveryAddressKnown: false,
+    driverTipCents: 0, pickupName: null, deliveryFeeCents: null,
+  };
+  const replies: string[] = [];
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState | null = null;
+
+  async function turn(message: string) {
+    const r = await runTurnEngineTurn(
+      { conversationId: "ah2", shopId: "s-ah2", tenantId: "t1", cartId: "cart-ah2", message,
+        history: [], menu: ACC1_MENU, cart, dialogueState, shopContext },
+      deps,
+    );
+    replies.push(r.reply);
+    cart = r.cart;
+    dialogueState = r.dialogueState;
+    shopContext = advanceDeliveryShopContext(shopContext, state.orderCartsUpdates[state.orderCartsUpdates.length - 1]);
+    return r;
+  }
+
+  await turn("Time to order");
+  await turn("pickup");
+  await turn("a cheeseburger");
+  await turn("medium");
+  await turn("thats it");
+  await turn("Jason Flick");
+  await turn("yes");
+
+  const fullTranscript = replies.join("\n---\n");
+  const orderTypeAskCount = (fullTranscript.match(/Pickup or delivery today\?/g) ?? []).length;
+  const tempAskCount = (fullTranscript.match(/cooked/gi) ?? []).length;
+  const nameAskCount = (fullTranscript.match(/What's the name for the order\?/g) ?? []).length;
+  const confirmAskCount = (fullTranscript.match(/All good — confirm\?/g) ?? []).length;
+  assertEquals(orderTypeAskCount, 1, `order_type must be asked exactly once:\n${fullTranscript}`);
+  assertEquals(tempAskCount, 1, `Temp must be asked exactly once:\n${fullTranscript}`);
+  assertEquals(nameAskCount, 1, `name must be asked exactly once:\n${fullTranscript}`);
+  assertEquals(confirmAskCount, 1, `confirm must be asked exactly once:\n${fullTranscript}`);
+  assertEquals(dialogueState!.phase, "link_sent", `the pickup transcript must reach link_sent: ${JSON.stringify(dialogueState)}`);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].quantity, 1);
+
+  const { stripe, createCalls } = makeFakeStripeForCheckout();
+  const checkoutSupabase = makeFakeCheckoutSupabase({ order_type: "pickup", delivery_fee_cents: 0, driver_tip_cents: 0, notes: null, stripe_checkout_session_id: null });
+  const checkoutDeps: EngineCheckoutDeps = { supabase: checkoutSupabase, resolveStripeKey: () => "sk_test_fake", createStripeClient: () => stripe };
+  const finalReply = await appendEngineCheckoutLinkIfReady(
+    { cartId: "cart-ah2", shopName: "Vito's", testMode: true, priorPhase: "confirm", nextPhase: "link_sent", cartLines: cart, reply: replies[replies.length - 1], isSms: false },
+    checkoutDeps,
+  );
+  assert(finalReply.includes("Pay here: https://pay.getsprintai.com/o/"), `the pickup transcript must end at a real payment link, got: ${finalReply}`);
+  assertEquals(createCalls.length, 1, "exactly one Stripe session must be created");
+});
+
+Deno.test("ACCEPTANCE 00-AH-3 RED->GREEN: a name answer while ADDRESS is open must never create or grow a cart line", async () => {
+  const priorCart: TurnEngineCartLine[] = [
+    {
+      menu_item_id: ACC1_CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [],
+      line_key: "ah3-line-1", ask_plan_selections: { [ACC1_TEMP_GROUP_ID]: ACC1_MEDIUM_CHOICE_ID }, options: { Temp: ["Medium"] },
+    },
+  ];
+  const priorState: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null };
+
+  const { supabase } = makeFakeSupabase({ lexicon: ACC1_LEXICON });
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    // "Jason Flick" is not a real address — a real geocode attempt never
+    // qualifies it (ZERO_RESULTS / no ROOFTOP-precision match).
+    geocodeAddressFn: () => Promise.resolve(null),
+    // Reproduces the live-reported symptom exactly (dispatch 00-AH report,
+    // second replay): pre-fix, ANSWER never resolves "address" deterministically
+    // (no external input was ever supplied), so this falls through to PROPOSE,
+    // and the model — given an open "address" question and free text that
+    // isn't one — still proposed an add for the item already in the cart,
+    // bumping it ("Cheese Burger - now 2"). This fake is only reachable
+    // pre-fix; post-fix, ANSWER resolves address_declined and PROPOSE is
+    // never called at all.
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalls++;
+      return Promise.resolve({
+        ok: true, attempts: 1,
+        proposal: { intent: "order", adds: [{ item_span: "cheeseburger", quantity: 1, choices: [] }], removes: [], modifies: [] },
+      });
+    },
+  };
+
+  const input = baseInput({
+    message: "Jason Flick",
+    menu: ACC1_MENU,
+    cart: priorCart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: 0, pickupName: null, deliveryFeeCents: 300 },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0, "PROPOSE must never be called — a real geocode attempt resolves (or declines) the address deterministically");
+  assertEquals(result.cart.length, 1, `a name answer must never add a second cart line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].quantity, 1, `a name answer must never bump quantity: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.dialogueState.open?.kind, "address", "the address question must still be open — 'Jason Flick' never resolved it");
 });

@@ -27,15 +27,25 @@
 //    flagged for the PO, not improvised here with an ad hoc Stripe call
 //    that the money-path rules in AGENTS.md would rightly reject unreviewed.
 //
-// 2. Address collection is inert, for the reason turn-engine.ts's own header
-//    (note 1) already flags: ANSWER's "address" case needs a geocode/zone-
-//    check result handed in via AnswerExternalInputs, and nothing in this
-//    dispatch's committed dependencies performs that geocode. This module
-//    always calls answer() with no external inputs, so an "address" open
-//    question never resolves via ANSWER — and PROPOSE's own Proposal
-//    contract (§3c) has no address field either, so it can't resolve there
-//    either. Net effect: a delivery order can reach the address question
-//    but nothing yet answers it. Same disposition as note 1.
+// 2. FIXED (2026-09-16, dispatch 00-AH — address slot never resolves, three
+//    shops rolled back to the legacy engine pending this fix). Address
+//    collection used to be permanently inert: ANSWER's "address" case
+//    (turn-engine.ts) needs a geocode/zone-check result handed in via
+//    AnswerExternalInputs, and this module never attempted that geocode —
+//    so the address question re-asked forever, and free text answered while
+//    it was open (e.g. a customer's name) fell through to PROPOSE with no
+//    guard, letting the model mutate the cart in response to text that was
+//    never an order. Deliberately NOT fixed by having the model parse the
+//    address (propose.ts's Proposal contract §3c has no address field, and
+//    an LLM call is not a deterministic resolver) — geocodeAddress below
+//    sends the customer's raw message straight to Google's geocoder exactly
+//    as index.ts's own set_delivery_address tool does (same qualification
+//    rule: non-partial ROOFTOP/RANGE_INTERPOLATED, same haversine zone
+//    check), and its result is what answer() consumes. This also means a
+//    message that ISN'T an address (a name, "thats it", garbled text)
+//    geocodes to no qualified match and resolves deterministically to
+//    address_declined — never reaching PROPOSE, never touching the cart.
+//    See loadShopGeo/geocodeAddress and the ANSWER step below.
 //
 // 3. intent === "question"'s answer_text (§3b step 3's "warmth" exception)
 //    is prepended verbatim ahead of RENDER's own output, rather than routed
@@ -59,6 +69,7 @@ import {
   decide,
   ask,
   render,
+  type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
   type TurnEngineMenuItem,
@@ -121,6 +132,12 @@ export interface RunTurnDeps {
   // header for why the PROPOSE call and its error_log write live in exactly
   // one place.
   proposeTurnFn?: ProposeTurnFn;
+  // DI seam for tests — defaults to defaultGeocodeAddress (a real Google
+  // Maps Geocoding API call). See this file's header note 2.
+  geocodeAddressFn?: GeocodeAddressFn;
+  // Defaults to Deno.env.get("GOOGLE_MAPS_API_KEY") — same env var
+  // index.ts's own set_delivery_address tool reads.
+  googleMapsApiKey?: string;
 }
 
 export interface RunTurnResult {
@@ -133,6 +150,11 @@ interface CartSideEffects {
   order_type?: "pickup" | "delivery";
   driver_tip_cents?: number;
   pickup_name?: string;
+  // Dispatch 00-AH: the shape consumers elsewhere read off order_carts.
+  // delivery_address (e.g. delivery-memory-offer.ts's ".formatted" reads) —
+  // no street/city/state/zip breakdown, since geocodeAddress never parses
+  // those out of the raw text (see this file's header note 2).
+  delivery_address?: { formatted: string };
 }
 
 async function loadUpsellEnabled(supabase: SupabaseClient, shopId: string): Promise<boolean> {
@@ -140,6 +162,89 @@ async function loadUpsellEnabled(supabase: SupabaseClient, shopId: string): Prom
     .from("shop_settings").select("upsell_enabled").eq("shop_id", shopId).maybeSingle();
   return (data as { upsell_enabled?: boolean } | null)?.upsell_enabled ?? true;
 }
+
+// ── Address geocode (dispatch 00-AH) ────────────────────────────────────────
+// See this file's header note 2. shopGeo is read directly off `shops` here
+// (own query, same DI-free-read pattern as loadUpsellEnabled above) rather
+// than threaded through RunTurnShopContext, so wiring this up never requires
+// touching index.ts's call site.
+
+export interface ShopGeo { lat: number; lng: number; radiusMi: number }
+
+async function loadShopGeo(supabase: SupabaseClient, shopId: string): Promise<ShopGeo | null> {
+  const { data } = await supabase
+    .from("shops").select("latitude, longitude, delivery_radius_mi").eq("id", shopId).maybeSingle();
+  const row = data as { latitude?: number | null; longitude?: number | null; delivery_radius_mi?: number | null } | null;
+  if (!row || row.latitude == null || row.longitude == null || !row.delivery_radius_mi || row.delivery_radius_mi <= 0) {
+    return null;
+  }
+  return { lat: row.latitude, lng: row.longitude, radiusMi: row.delivery_radius_mi };
+}
+
+// Same formula as index.ts's own haversineMiles (set_delivery_address's zone
+// check) — duplicated rather than imported since index.ts's copy is a local,
+// unexported function and this module is New Files Only (see header).
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3958.8;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// The deterministic, non-LLM resolver turn-engine.ts's own header (note 1)
+// names as the intended mechanism for the "address" ANSWER case: send the
+// customer's raw text to Google's geocoder and let ITS qualification
+// decide, never a model guess at street/city/state/zip fields. Same
+// qualification rule as index.ts's set_delivery_address tool (non-partial
+// match, ROOFTOP/RANGE_INTERPOLATED precision, within the shop's own
+// haversine radius) — a message that isn't a real, in-zone address (a
+// customer's name, "thats it", garbled text) simply fails to qualify and
+// this returns null, which answer() reads as address_declined: resolved,
+// deterministic, and it never touches the cart.
+export type GeocodeAddressFn = (
+  address: string,
+  shopGeo: ShopGeo | null,
+  io: { fetchImpl: typeof fetch; apiKey: string },
+) => Promise<{ formatted: string; withinZone: boolean } | null>;
+
+const defaultGeocodeAddress: GeocodeAddressFn = async (address, shopGeo, { fetchImpl, apiKey }) => {
+  if (!shopGeo || !apiKey) return null;
+  type GeoResult = {
+    status: string;
+    results: Array<{
+      formatted_address?: string;
+      geometry: { location: { lat: number; lng: number }; location_type?: string };
+      partial_match?: boolean;
+    }>;
+  };
+  const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
+  let geoJson: GeoResult | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetchImpl(geoUrl, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (res.status >= 500) throw new Error(`geocode HTTP ${res.status}`);
+      geoJson = await res.json() as GeoResult;
+      break;
+    } catch (_err) {
+      if (attempt === 0) continue;
+      return null;
+    }
+  }
+  if (!geoJson) return null;
+  const top = geoJson.results[0];
+  const qualified = geoJson.status === "OK" && geoJson.results.length > 0 && top.partial_match !== true &&
+    (top.geometry.location_type === "ROOFTOP" || top.geometry.location_type === "RANGE_INTERPOLATED");
+  if (!qualified) return null;
+  const loc = top.geometry.location;
+  const distance = haversineMiles(shopGeo.lat, shopGeo.lng, loc.lat, loc.lng);
+  if (distance > shopGeo.radiusMi) return null;
+  return { formatted: top.formatted_address ?? address, withinZone: true };
+};
 
 // PostgREST silently caps an unbounded select at 1000 rows — no error, no
 // truncation flag, just fewer rows than the table actually has (same failure
@@ -312,7 +417,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   let answerText: string | undefined;
 
   // ── STEP 2: ANSWER ───────────────────────────────────────────────────────
-  const answerResult = answer(priorState, workingCart, input.message, input.menu);
+  // Dispatch 00-AH: when address is the open question, geocode THIS turn's
+  // message before calling answer() — that's the only case answer() needs
+  // an external input for (AnswerExternalInputs). Every other open kind
+  // resolves purely off `message` and needs nothing here.
+  let externalInputs: AnswerExternalInputs = {};
+  if (priorState.open?.kind === "address") {
+    const shopGeo = await loadShopGeo(deps.supabase, input.shopId);
+    const geocodeFn = deps.geocodeAddressFn ?? defaultGeocodeAddress;
+    const geocoded = await geocodeFn(input.message.trim(), shopGeo, {
+      fetchImpl: deps.fetchImpl ?? fetch,
+      apiKey: deps.googleMapsApiKey ?? Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "",
+    });
+    externalInputs = { geocodedAddress: geocoded };
+  }
+  const answerResult = answer(priorState, workingCart, input.message, input.menu, externalInputs);
   // priorState.open can ONLY be resolved through the "disambiguation" case
   // of answer()'s own switch (turn-engine.ts) when it was already that kind
   // -- so `resolved: true` here can only mean THAT disambiguation was just
@@ -334,6 +453,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       case "name_resolved":
         sideEffects = { ...sideEffects, pickup_name: outcome.name };
         break;
+      case "address_resolved":
+        sideEffects = { ...sideEffects, delivery_address: { formatted: outcome.address } };
+        break;
       case "checkout_intent":
         turnEvents = { ...turnEvents, checkoutIntentThisTurn: true };
         break;
@@ -351,9 +473,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
         }
         break;
-      // slot_resolved / address_resolved / address_declined / upsell_accepted /
-      // upsell_declined / closure: cart already mutated in place by answer()
-      // where relevant, nothing else to persist or feed into ASK.
+      // slot_resolved / address_declined / upsell_accepted / upsell_declined /
+      // closure: cart already mutated in place by answer() where relevant,
+      // nothing else to persist or feed into ASK.
       default:
         break;
     }
@@ -429,14 +551,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // ASK must see what THIS turn's ANSWER just resolved, same as RENDER does a
   // few lines below (deliveryFeeCents/driverTipCents) — otherwise ASK runs
   // against the turn-START snapshot (input.shopContext) and re-fires a
-  // question ANSWER already resolved this same turn (order_type, driver tip,
-  // pickup name each go through this). sideEffects only ever carries fields
-  // this turn's ANSWER actually resolved (see CartSideEffects above and the
-  // switch that populates it), so this overlay can never mask a question
-  // that's still genuinely open.
+  // question ANSWER already resolved this same turn (order_type, address,
+  // driver tip, pickup name each go through this). sideEffects only ever
+  // carries fields this turn's ANSWER actually resolved (see CartSideEffects
+  // above and the switch that populates it), so this overlay can never mask
+  // a question that's still genuinely open.
   const effectiveShopContext: RunTurnShopContext = {
     ...input.shopContext,
     orderType: sideEffects.order_type ?? input.shopContext.orderType,
+    deliveryAddressKnown: sideEffects.delivery_address != null ? true : input.shopContext.deliveryAddressKnown,
     driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents,
     pickupName: sideEffects.pickup_name ?? input.shopContext.pickupName,
   };
