@@ -809,8 +809,11 @@ export function ask(
   }
 
   // 4. address — see header note 1: not in the spec's own step-5 list, but
-  // required by §3a/step-2. Only relevant once delivery is the chosen type.
-  if (shopContext.orderTypeIsDelivery && !shopContext.deliveryAddressKnown) {
+  // required by §3a/step-2. Only relevant once delivery is the chosen type,
+  // and only reachable at all when the shop can deliver in the first place
+  // (00-AL: a shop with delivery disabled must never ask for an address,
+  // regardless of what orderTypeIsDelivery claims).
+  if (shopContext.deliveryEnabled && shopContext.orderTypeIsDelivery && !shopContext.deliveryAddressKnown) {
     return carry({ kind: "address" }, "address");
   }
 
@@ -840,20 +843,26 @@ export function ask(
     turnEvents.checkoutIntentThisTurn ||
     priorState.phase === "name" || priorState.phase === "confirm" || priorState.phase === "link_sent";
 
-  if (!committedToClose) {
-    // 00-AK: the cart is empty and nothing has committed this conversation
-    // to closing — "Anything else?" (the `open: null` shape below) wrongly
-    // presupposes a first item already exists. Ask the ordering question
-    // instead, purely off cart emptiness (never inferred by the model).
-    // `askCount` only increments when THIS exact question was already open
-    // last turn (still empty, still nothing resolved) — see render()'s
-    // "ordering" case for what that count drives.
+  // 00-AK/00-AL: the cart is empty — "Anything else?" (the `open: null`
+  // shape below) wrongly presupposes a first item already exists. Ask the
+  // ordering question instead, purely off cart emptiness (never inferred by
+  // the model). `askCount` only increments when THIS exact question was
+  // already open last turn (still empty, still nothing resolved) — see
+  // render()'s "ordering" case for what that count drives. Shared by both
+  // the not-yet-committed path below and confirmNo (step 8): declining final
+  // confirmation over an empty cart is the same dead end via a different
+  // code path, so it must consult the identical guard rather than a copy.
+  const closureOrOrdering = (): DialogueState => {
     const cartHasRealLines = cart.some(isRealCartLine);
     if (!cartHasRealLines) {
       const askCount = priorState.open?.kind === "ordering" ? priorState.open.askCount + 1 : 1;
       return carry({ kind: "ordering", askCount }, "ordering");
     }
     return carry(null, "ordering");
+  };
+
+  if (!committedToClose) {
+    return closureOrOrdering();
   }
 
   // 7. name.
@@ -863,7 +872,7 @@ export function ask(
 
   // 8. confirm / link.
   if (turnEvents.confirmYes) return carry(null, "link_sent");
-  if (turnEvents.confirmNo) return carry(null, "ordering");
+  if (turnEvents.confirmNo) return closureOrOrdering();
   return carry({ kind: "confirm" }, "confirm");
 }
 
