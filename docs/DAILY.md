@@ -2316,3 +2316,275 @@ One: `140_error_log_propose_call_stage.sql` (`42850782`) — additive-only,
 widens `error_log.stage`'s CHECK constraint to also allow `propose_call`.
 Applied directly via the Management API (same pattern as migration 133),
 verified against `pg_constraint`.
+
+### Continued, same day: item identity moves out of the model, Phase 3 wires the turn engine into `index.ts` behind a flag, and all three shops go live on it — a four-attempt money bug closes at 20:50
+
+Same session, not a new day: 32 more commits landed between `fdbcddeb`
+(04:12 EDT) and `0d259996` (20:50 EDT, current `HEAD`). By the end of it,
+the turn engine most of this file has so far described as "committed,
+tested, zero imports in `index.ts`" is deployed and gated **on** for
+Vito's, Zio's, and Not Just Bagels — confirmed below directly against the
+live project, not inferred from a commit message.
+
+**Lexicon surface forms, finished** (`7b88b233` 04:58, `6794f6ce` 05:08) —
+`compile-menu.ts` gained a second, generic surface-form pass:
+space-collapse, plural-of-stated, plural-of-collapsed, and trailing
+word-runs (head nouns), each gated by the same rule as before — a
+candidate is kept only if exactly one item claims it across the shop's
+whole lexicon, dropped for every claimant otherwise, no tiebreak. Both
+commits are additive and unit-tested (11 new tests combined); `6794f6ce`'s
+own message notes it's catching committed code up to a lexicon state that
+had already been recompiled live and uncommitted.
+
+**Item identity moves out of the model — the real architectural change
+today** (`5eb66a4d`, 05:21) — measured on Vito's, even with a correct
+lexicon, letting the model choose `menu_item_id` directly still billed the
+wrong item on 10 of 20 live calls (full numbers in
+`docs/specs/2026-09-15-code-owned-resolution.md`). New pure module
+`resolve-item.ts`: deterministic longest-match of the customer's verbatim
+`item_span` against the compiled lexicon, returning exactly `resolved`
+(one target), `ambiguous` (two or more tie — never broken by a heuristic,
+per Jason's direction that a clarifying question is the product, not a
+fallback), or `unresolved`. `propose.ts`'s `Proposal.adds` now carries
+`item_span` instead of a model-chosen id; `turn-engine.ts`'s DECIDE phase
+resolves every add through this function before it can touch the cart.
+
+**Phase 3 wiring — schema, routing branch, compliance, checkout**
+(`f1e1dc8e` 05:42 through `462f3c96` 06:46) — in order:
+- `f1e1dc8e` — migration 141, schema-only: `order_carts.dialogue_state`
+  (jsonb) and `shops.turn_engine_enabled` (boolean, default `false`). No
+  code reads or writes either column yet.
+- `13e9733d` — **the actual switch.** New `turn-engine-runner.ts` (334
+  lines) sequences ANSWER → PROPOSE → DECIDE → ASK → RENDER with every
+  dependency injected. `index.ts` gets one `if (shop.turn_engine_enabled)`
+  branch, verified directly in the diff, that calls it and returns early —
+  `runOrderingLoop`, the reconciler, and all ~26 legacy guards are
+  structurally skipped, not modified, whenever the flag is true. Dead in
+  production at this commit since 141 defaults every shop to `false`.
+- `d7f6c2fd` — the new branch had bypassed the 10DLC first-contact
+  disclosure check the legacy path uses; one shared helper closes it, no
+  duplicated compliance string.
+- `462f3c96` — new `checkout-session.ts` (247 lines) becomes the one
+  Stripe `checkout.sessions.create` call site in the whole function
+  (verified: exactly one occurrence, non-test, in `chat-sms/`); the
+  legacy `submit_order` case was refactored to call it too, not
+  duplicated. The turn-engine branch mints a session only on the turn
+  that newly reaches `link_sent`, re-checking the DB for an existing
+  `stripe_checkout_session_id` to guard against double-submit.
+
+**Two live incidents, found and fixed same day:**
+- `b2440886` (09:23) / `954a3093` (09:47) — `loadItemLexicon`'s
+  unbounded `.select()` was silently capped at 1000 rows by PostgREST.
+  First commit pages via `.range()`; review of that same commit found the
+  paging loop treated a real fetch error identically to a clean
+  short-page finish, so a mid-page failure would hand back a truncated
+  lexicon as if it were complete. Second commit makes a page error write
+  an `error_log` row (`stage: "lexicon_load"`, migration 142) and fail
+  the turn rather than proceed on partial data, and adds an independent
+  `count`-vs-`loaded` cross-check that logs (but does not block on) a
+  mismatch after a clean finish.
+- `930fc1cf` (10:07) — `persistTurn` wrote `cart_json`/`dialogue_state`
+  to `order_carts` but never `subtotal_cents`/`total_cents`, so an
+  engine-path row underreported its own money until checkout touched it.
+  Now computed from the same `pricing.ts` function the reply footer and
+  Stripe checkout use.
+
+**compile-menu: four blocking/collision defects, found by live audit
+across all three shops:**
+- `8da2227c` (10:30) — the surface-form gate used to drop a candidate
+  term entirely the moment two items claimed it. Now keeps one row per
+  claimant instead of dropping all of them — a straight reversal of the
+  prior day's "ambiguous is noise" design.
+- `a258f801` (14:38) / `fb412089` (14:56) — a derived item term
+  (`pizza`, `bagel`, `rye`) was being suppressed menu-wide whenever it
+  collided with a stated *category* or *choice* term, before the
+  collision-keeper above ever got a turn. Counts from the live audit
+  cited in the commit messages: category collisions cost Vito's nothing
+  (its categories never collided) but choice-term collisions suppressed
+  44 head nouns at Zio's, 16 at NJB, and 39 at Vito's — `bagel` was a
+  dead end at a bagel shop. Fixed by narrowing the exclusion set to real
+  item terms only; safe because ANSWER has structural priority over
+  PROPOSE, so an open slot question can never be hijacked by a lexicon
+  hit (a new `turn-engine-runner.test.ts` case proves this directly).
+- `5639013c` (16:53) / `4fe70435` (17:18) — NJB had 12 menu items whose
+  two required option groups both compiled to the placeholder
+  `slot_key: "choice"`, so both questions rendered identically and a
+  customer couldn't tell them apart. Fixed in two steps: use the
+  parser's captured clause `label` first (closed 1 of 12), then its
+  captured `anchor` (`choice_of` / `served_with`) as a second fallback
+  before the literal `"choice"` (closed the remaining 11). 0 of 12
+  survive.
+
+**turn-engine: closure coverage and a slot-answer bug that masqueraded as
+three separate defects** (`0ffd5373` 11:01, `2a852f9b` 11:20, `1d34a389`
+12:02) — `0ffd5373` added a closure/affirmation check ("thats it", "no
+thanks") ahead of PROPOSE for five of `answer()`'s six open-question
+kinds, explicitly leaving `slot`/`disambiguation`/`upsell` uncovered.
+`2a852f9b` fixed disambiguation's question text (it had been rendering
+as an apology, not a question) and a last-one-wins bug when a message
+named two ambiguous items at once, via a carry mechanism nested inside
+`open.disambiguation`. `1d34a389`, same day, replaced that nested carry
+with a top-level `pendingAmbiguous` queue once it was shown not to
+survive a turn where a required slot (which always outranks
+disambiguation) won the turn — and, in the same commit, found the real
+cause of a three-turn conversation repeating its own slot question and
+silently adding a phantom third item: a heuristic in
+`applyCompiledModifyItem` meant to split a multi-quantity line when a
+*later* slot differentiates one unit from another was also firing on a
+slot's very first answer, splitting a quantity-2 line into one resolved
+and one still-pending line of quantity 1 each — which is what made the
+question appear to repeat forever. A new `suppressUnitSplit` flag, on
+only for the slot-answer call site, closes it; closure coverage was then
+extended to all six kinds. A 138-line acceptance test reproduces the
+full "two cheeseburgers and a large fries" / "medium" / "thats it"
+transcript across three turns.
+
+**RENDER enumeration — tried, reverted, same day** (`784cc701` 16:27,
+`8ada849e` 16:51) — a one-line change made the slot RENDER case list out
+every choice in the question text, to fix two NJB slot questions that
+otherwise read identically. Reverted 24 minutes later: this had already
+been tried once before (2026-09-11) and reverted after measuring a live
+quality regression on Vito's; the revert commit says so explicitly and
+points at the real fix, which is the `slot_key` collision fixed above
+(`5639013c`/`4fe70435`) — **the rendering change from `784cc701` is fully
+undone, not partially kept**; only its test file survives, rewritten to
+pin the short-form question as the current, intended behavior.
+
+**pending-disambiguation: an ordinal match that wasn't anchored**
+(`2d725b2d`, 15:25) — `matchOrdinalPosition` searched for a digit or
+ordinal word anywhere in the customer's message, so `"10 pieces"` on a
+14-candidate disambiguation list silently added candidate #10 to the
+cart. Now requires the entire message (minus one optional leading
+qualifier and trailing filler word) to be exactly a bare number or
+ordinal. Live money bug, confirmed and closed.
+
+**The ask-plan-engine sequence — one bug hunt across four commits, three
+of which explicitly say they have not fixed it yet** (`61c2eeea` 18:49
+through `0d259996` 20:50) — the target: on Zio's Boneless Wings, a bare
+`"2"` answering the piece-count slot was, on 5 of 6 identical calls,
+resolved by the model's own asserted `choice_id` to **"20 Pieces"**,
+silently adding an unrequested $8.00. In order:
+- `61c2eeea` — a negated slot choice ("*not* well done") could still
+  stem-match; fixed by reusing the existing `isNegated` helper. Not the
+  wings bug; an adjacent defect found while tracking it.
+- `2ab6cf27` — adds a `requireTextualSupportForSlots` flag that skips the
+  model-trust path for slots, wired to the one free-text `answer()` call
+  site. The commit's own body states this does **not** close the wings
+  bug: that bug lives in `decide()`'s structured add path, which always
+  calls the resolver with an empty customer message and never reaches
+  this flag at all.
+- `83f18a27` — `significantStems()` drops tokens under 3 characters, so
+  digit-only choices like "10 Pieces" and "20 Pieces" both reduced to
+  the same stem set. Made numeric tokens significant, but only for the
+  narrow set of option groups where two or more choices are otherwise
+  indistinguishable by stem — measured at exactly 2 of 186 live groups,
+  both Zio's wings. Again explicit in the commit body: a bare `"2"`
+  still resolves to nothing before and after this fix, correctly — it
+  narrows how often the model is asked to guess, but doesn't touch
+  `decide()`'s unconditional trust once determinism gives up.
+- `0d259996` — closes it. Reuses the same 2-of-186 collision predicate
+  from `83f18a27` as an independent gate directly on
+  `matchAssertedChoice`: for a collision-set group, a model-asserted
+  choice is never trusted, full stop, regardless of call site or flag —
+  even on `decide()`'s structured path with no customer text at all.
+  Every other option group (Temp, Size, and the other 184) is untouched,
+  so one-shot adds like "medium cheeseburger" keep resolving without a
+  model round-trip becoming untrustworthy everywhere. The commit body
+  narrates three earlier, wrong-scoped attempts and why each failed
+  (gating the shared resolver broke 4 legitimate tests; the free-text
+  flag never reached the structured path; narrowing which calls counted
+  as "asserted" left the bare-digit case still trusting the guess).
+  Proven live on Zio's: a bare `"2"` now re-asks, no $8.00 appears.
+
+**Narrowing questions — Jason's direction, recorded as a spec, not yet
+implemented** (`6207ecea`, 19:36) — `docs/specs/2026-09-15-narrowing-questions.md`:
+an ambiguous item should be asked about by facet ("What kind?" then "What
+size?"), never a numbered list, with the full list rendered only if the
+customer explicitly asks for it. This is a docs-only commit — no code in
+`ask()`/`resolveItem` implements it yet; the numbered-list behavior it
+describes as "gone as a default" is still what the code does today.
+
+**Process notes worth keeping**: `05e77201` and `8858b4a2` (docs-only,
+`PO-BRIEF.md`) record that once Phase 3's routing branch landed, the
+open question stopped being "is the module imported" and became "is the
+flag on" — and that a paginated fetch that ends cleanly can still be
+silently short, the third shape of "built but not working" this project
+has hit this month. `7c75aa25` records a fifth standing lesson: a test
+gate only proves what it actually drives a conversation through — the
+single-turn matrix that called the engine "green" earlier today
+structurally could not reach any of the three-turn defects above, and
+its intended replacement, `convogate.py`, promises a dropped-item check
+in its own docstring that was never implemented, so a run that silently
+drops an item currently scores as a pass. `684f9b45` opens a new backlog
+item (`docs/SCALING-BACKLOG.md`) for an onboarding-hardening agent to
+anticipate this class of per-shop phrasing gap before a new shop goes
+live, rather than finding it live the way today did three times.
+
+### Deploy status and live flags — checked directly against the project tonight, not inferred
+
+- **`chat-sms`: v453**, updated 2026-09-16 00:59:13 UTC (2026-09-15
+  20:59 EDT). Downloaded the artifact directly (project ref
+  `rvdqfxtrskxekfkqnegx`): `index.ts` carries
+  `// DEPLOY_SHA: 0d259996da0d11ae1b8298002ffa0ffb79ca63c5` — the exact
+  current `HEAD`. Everything described above, including the wings-bug
+  close, is live.
+- **`compile-menu`: v42**, updated 2026-09-15 21:49:37 UTC (17:49 EDT).
+  Downloaded artifact's `index.ts` carries
+  `// DEPLOY_SHA: 4fe704356e088e35ef7eeb01a1ac7affa9ab1c10` — the exact
+  last commit that touches `compile-menu/index.ts` today. No gap: the
+  later `ask-plan-engine`/`turn-engine` commits don't touch this file.
+- **`shops.turn_engine_enabled` is `true` on all three real shops** —
+  queried live via PostgREST (anon key, read-only): Vito's Pizza, Zio's
+  Pizzeria, and Not Just Bagels. This is new since the 12:02 handoff in
+  this file's history, which had Zio's and NJB still on the legacy
+  engine; Not Just Bagels was switched on for the first time only after
+  `0d259996` shipped, per the crew's own 19:30 handoff
+  (`docs/PO-HANDOFF-2026-09-15-1930.md`).
+- Full `chat-sms`/`_shared` Deno suite run locally at this `HEAD`: **1414
+  passed, 0 failed, 7 ignored** — matches the count `0d259996`'s own
+  commit message cites.
+
+### Migrations touched in this continuation
+
+- `141_dialogue_state_turn_engine_flag.sql` — additive: `order_carts.dialogue_state`
+  (jsonb) and `shops.turn_engine_enabled` (boolean, default `false`).
+  **Confirmed applied**: both columns are live-queryable via PostgREST
+  against the production project.
+- `142_error_log_lexicon_load_stage.sql` — additive, widens
+  `error_log.stage`'s CHECK constraint to also allow `lexicon_load`,
+  same pattern as migration 140. **Not independently re-verified this
+  session** — I could not reach `pg_constraint` directly (no service-role
+  credential available in this environment) and no `lexicon_load` row
+  exists yet to confirm a live write succeeded. Code that depends on it
+  is live (`chat-sms` is deployed at `HEAD`), but the constraint itself
+  is unconfirmed rather than assumed.
+
+### Open and unresolved as of `HEAD` — per the crew's own 19:30 handoff, not independently re-run tonight
+
+- **Name / order-type retries — open, unexplained, on all three shops.**
+  `"pickup"` alone does not advance the order-type question but
+  `"pick up"` does; a bare first name does not advance but "First Last"
+  does — even though the regex and name-detector both test `true` for
+  the failing input when run directly against the source. Four hypotheses
+  were checked and rejected today, including one confabulated function
+  name. Friction only — no wrong charge, no cart mutation.
+- `service_fee_cents` reads `0` on an engine-path cart row before
+  checkout; `persistTurn` never writes that column (checkout does).
+  Not a money bug, but a pre-checkout row currently contradicts its own
+  `total_cents`.
+- One-shot adds that combine an attribute and an item in one phrase
+  ("medium cheeseburger") have never worked on the engine path: the
+  model folds the attribute into `item_span`, `choices` comes back
+  empty, and `decide()` passes an empty customer message so nothing can
+  resolve the slot. Pre-existing, not caused by anything today.
+- `"choice of cheese"` on NJB's Cheese Omelette Platter is silently
+  dropped — it becomes neither a slot nor a modifier.
+- `compile-menu` is not idempotent: three consecutive recompiles of
+  unchanged NJB data produced three different vanish/move counts.
+- `convogate.py`, the intended automated multi-turn gate, remains
+  unusable: a static review found its promised "dropped item" check was
+  never implemented and its subtotal check is one-sided. Do not gate on
+  it.
+- Zio's `pizza` ties 76 candidates — safe, but not a usable SMS question
+  (product-design gap, not a bug). `"mild"` resolved a different number
+  of slots across three identical Zio's runs — unexplained.

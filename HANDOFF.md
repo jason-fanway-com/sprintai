@@ -1373,6 +1373,54 @@ affects a single live conversation. Until that branch exists, "committed
 and tested" does not mean "in the live path" — check the import and the
 flag, per module, every time, same as `resolver.ts` before it.
 
+**Update, later the same day (2026-09-15) — Phase 3 landed and all three
+shops are on it.** The above is now history, not current state; kept for
+how the trap was reasoned about. What actually happened, in order:
+
+- Item identity moved out of the model first (`5eb66a4d`): a new pure
+  module, `resolve-item.ts`, does deterministic longest-match resolution
+  of the customer's verbatim text against the compiled lexicon, because
+  letting the model choose `menu_item_id` directly was still billing the
+  wrong item on 10 of 20 live Vito's calls even with a correct lexicon.
+- The routing branch landed (`13e9733d`, 06:09 EDT): one
+  `if (shop.turn_engine_enabled)` in `index.ts`, verified directly against
+  the diff, calling the new `turn-engine-runner.ts` pipeline and returning
+  early — bypassing `runOrderingLoop`, the reconciler, and all ~26 legacy
+  guards, not modifying them. Compliance disclosure (`d7f6c2fd`) and
+  Stripe checkout (`462f3c96`, one call site, the legacy path refactored
+  to share it rather than duplicating it) were wired into that branch the
+  same day.
+- Eleven more defects were found and closed the same day by live testing
+  across all three shops — collision-blocked lexicon terms, a slot-key
+  collision that made two different questions on the same NJB item read
+  identically, a PostgREST 1000-row silent cap on the lexicon fetch, an
+  unanchored ordinal match, a slot-answer bug that both repeated a
+  question and silently added a phantom line, and a money bug where a
+  bare `"2"` on Zio's wings silently added an $8.00 upcharge. Full detail,
+  commit-by-commit, in `docs/DAILY.md`'s 2026-09-15 entry.
+
+**Confirmed live tonight, not inferred**: `chat-sms` is **v453**,
+downloaded artifact stamped `// DEPLOY_SHA: 0d259996da0d11ae1b8298002ffa0ffb79ca63c5`
+— the exact current `HEAD`. `compile-menu` is **v42**, stamped
+`4fe704356e088e35ef7eeb01a1ac7affa9ab1c10` — the exact last commit that
+touches that function. `shops.turn_engine_enabled` is `true` on all three
+real shops (Vito's, Zio's, Not Just Bagels — queried live via PostgREST),
+Not Just Bagels for the first time only after the wings-bug fix shipped.
+
+**What is still open, per the crew's own 19:30 handoff
+(`docs/PO-HANDOFF-2026-09-15-1930.md`), not re-verified by me tonight**:
+an unexplained retry bug on the name and order-type questions (works on
+the second attempt, not the first, on all three shops — four hypotheses
+already ruled out); `service_fee_cents` reads 0 on a pre-checkout engine
+row; one-shot attribute+item adds ("medium cheeseburger") have never
+worked on the engine path; `compile-menu` is not idempotent across
+consecutive recompiles of unchanged data; and the intended automated
+multi-turn test gate, `convogate.py`, is unusable — a review found its
+own docstring promises a dropped-item check that was never implemented.
+Every defect closed today was found by a human hand-designing a scenario
+and running it three times; that does not scale, and closing that gap is
+the stated next milestone, not a new feature.
+
 ## Quickstart for development
 
 ```bash

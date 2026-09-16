@@ -2616,3 +2616,75 @@ shows zero real imports of `turn-engine.ts` or `propose.ts` (grep hits are
 comments only, same as the working tree) — confirming Phase 1 + Phase 2
 together remain pure modules, wired into nothing, awaiting Phase 3 and the
 PO go-ahead. `chat-sms-mtest` remains stale at v39 (2026-09-08).
+
+## `shops.turn_engine_enabled` — the switch that actually matters now — 2026-09-15
+
+As of tonight this is the single per-shop decision point for which
+ordering engine handles a request. Migration 141
+(`141_dialogue_state_turn_engine_flag.sql`) added the column, default
+`false`, no reads/writes anywhere. Commit `13e9733d` (06:09 EDT) added
+the one branch in `index.ts` that reads it: `if (shop.turn_engine_enabled)`
+calls `runTurnEngineTurn(...)` (the new code-owned ANSWER/PROPOSE/DECIDE/
+ASK/RENDER pipeline in `turn-engine-runner.ts`) and returns early —
+`runOrderingLoop`, the turn reconciler, and all ~26 legacy guards are
+structurally skipped, not modified, whenever the flag is true. When
+false, behavior is unchanged from every prior entry in this file.
+
+**"Is it deployed" is only half the question — always read the flag
+too**, same lesson as `compiled_ordering_engine_enabled` (§ above) and
+`resolver.ts` before it. Checked live tonight via PostgREST
+(`shops?select=id,name,turn_engine_enabled`, anon key, read-only): `true`
+on all three real shops — Vito's Pizza, Zio's Pizzeria, Not Just Bagels.
+Not Just Bagels was switched on for the first time only after `0d259996`
+shipped (per `docs/PO-HANDOFF-2026-09-15-1930.md`), closing the wings
+money bug that would otherwise have been live-exposed on its own
+option-group collision the moment it went on.
+
+**No script in this repo flips the flag.** Unlike
+`compiled_ordering_engine_enabled`, which has `scripts/set-compiled-engine.sh`
+as its auditable write path, `turn_engine_enabled` is currently flipped
+only via a PO-side scratch script (`~/po-scratch/turn-engine-flag.sh
+status|on <uuid>|off <uuid>` on the crew's machine, not committed here) or
+a raw REST call. That is the same unaudited-write gap `set-compiled-engine.sh`
+was built to close for the old flag on 2026-09-12 — it has not yet been
+closed for this one.
+
+## PostgREST silently caps an unbounded `.select()` at 1000 rows — 2026-09-15
+
+`loadItemLexicon` (`turn-engine-runner.ts`) fetched a shop's compiled
+lexicon with one unbounded query. On any shop whose lexicon exceeds 1000
+rows, PostgREST returns the first 1000 with no error and no truncation
+flag — the caller has no way to tell a complete result from a silently
+short one. Fixed (`b2440886`) by paging with `.range()` until a
+short page ends the loop, ordered by `id` for stable paging. A same-day
+follow-up (`954a3093`) closed two more gaps in that first fix: a real
+fetch error on page N>0 was being treated identically to a clean finish
+(now logged to `error_log` with `stage: "lexicon_load"`, migration 142,
+and the turn takes the same terminal-failure path as a PROPOSE failure
+rather than proceeding on a partial lexicon), and a clean finish is now
+cross-checked against an independent `count: "exact", head: true` query
+(mismatch logged, does not block the turn). **Any query in this codebase
+that feeds a decision path and does not explicitly page past 1000 rows
+should be treated as suspect** — this is the same class of defect as the
+`loadItemLexicon` page-error gap and the earlier `error_log` silent-drop
+pattern (§ above), just a third shape of it.
+
+## The wings money bug — a model-asserted choice is now untrusted for option groups the deterministic matcher can't tell apart — 2026-09-15
+
+On Zio's Boneless Wings, a bare `"2"` answering the piece-count question
+was resolved by the model's own asserted `choice_id` to "20 Pieces"
+(+$8.00) on 5 of 6 identical live calls, via `decide()`'s structured
+add/modify path — which always calls the resolver with an empty customer
+message, so there was no text to check the model's guess against at all.
+Closed (`0d259996`) not by distrusting the model everywhere (that broke
+4 legitimate tests and blocked ordinary one-shot adds like "medium
+cheeseburger") but by computing, once per option group, whether two or
+more of its choices are indistinguishable to the deterministic stem
+matcher (`groupNeedsNumericStems`, also used by the immediately prior
+commit `83f18a27`) — exactly 2 of 186 live groups across all three shops,
+both Zio's wings. Only for those groups is a model-asserted choice ever
+refused, unconditionally, regardless of call site. **The general
+principle, worth carrying into the next model-trust decision**: trust
+scope should be computed from what the deterministic path can and can't
+disambiguate, not from which call site or code path happened to produce
+the assertion.
