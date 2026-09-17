@@ -452,6 +452,9 @@ export function answer(
     case "confirm": {
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
       if (CONFIRM_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
+      // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
+      // the helper blocks "not yet"/"don't"/"wrong"/"change".
+      if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
       return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
@@ -581,6 +584,42 @@ function applyRemoveChoiceIds(
   line.ask_plan_selections = selections;
   line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
   line.price_cents = priceCents;
+}
+
+// 00-BE: the last gate before money, and it was rejecting the word "yes".
+//
+// Live, one 100-conversation run, repeated 8+ times per conversation:
+//   BOT:      All good - confirm?
+//   CUSTOMER: "Yes, confirm the order!"          -> All good - confirm?
+//   CUSTOMER: "Yes, I confirm the order!"        -> All good - confirm?
+//   CUSTOMER: "I already said yes! Confirm the order already!"
+//   CUSTOMER: "Just confirm the order for the last time! Why is this so hard?"
+//
+// The cart was right, the name was captured, the money was right. The order
+// could not be placed because the affirmative test is anchored to the WHOLE
+// message (/^(?:yes|yeah|...)[.!]?$/), so a bare "yes" passes and "yes,
+// confirm the order" does not -- and "confirm" is not in the checkout phrase
+// vocabulary at all, even though the bot's own question is "confirm?".
+//
+// Scoped deliberately to the `confirm` open state. That state only opens
+// AFTER the order is complete and has been read back to the customer, and it
+// asks a yes/no question, so an affirmative anywhere in the reply is
+// unambiguous here in a way it is not in general ordering chat. The global
+// checkout gate is untouched -- it guards a different problem (deciding
+// whether ambiguous mid-order chat means "take my money"), and widening it
+// would risk charging people early.
+//
+// Decline is still evaluated FIRST by the caller, so "no, change it" wins.
+const CONFIRM_AFFIRMATIVE_RE =
+  /\b(?:yes|yeah|yea|yep|yup|sure|ok|okay|correct|confirm|confirmed|confirming|place (?:it|the order)|go ahead|do it|send it)\b/i;
+const CONFIRM_NEGATION_RE =
+  /\b(?:not|don'?t|do not|never|wait|hold on|hold off|cancel|stop|isn'?t|wrong|mistake|change|remove|instead)\b/i;
+
+export function isConfirmAffirmative(message: string): boolean {
+  const m = (message ?? "").trim();
+  if (!m) return false;
+  if (CONFIRM_NEGATION_RE.test(m)) return false;
+  return CONFIRM_AFFIRMATIVE_RE.test(m);
 }
 
 // 00-BD: people confirm an order by repeating it, and that was being read as
