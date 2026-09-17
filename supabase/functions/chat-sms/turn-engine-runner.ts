@@ -474,6 +474,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   };
   let sideEffects: CartSideEffects = {};
   let answerText: string | undefined;
+  // 00-AU: set when a slot question was already open and this turn's ANSWER
+  // couldn't resolve it — a genuine repeat, or the customer asking what the
+  // options are (both land here: applyCompiledModifyItem's own resolver, and
+  // before that closureOrAffirmationFallback, already had first crack at the
+  // message and both missed — see the dispatch-00-AT comment below for why
+  // that's conclusive). Threaded into render() so the next question lists
+  // the real choices instead of re-asking the identical short one forever.
+  let enumerateSlotChoices = false;
 
   // ── STEP 2: ANSWER ───────────────────────────────────────────────────────
   // Dispatch 00-AH: when address is the open question, geocode THIS turn's
@@ -590,6 +598,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // from and silently drops it — the exact "item asked for and never
       // added, never even mentioned again" failure this dispatch closes.
       turnEvents = { ...turnEvents, disambiguationCandidateIds: priorState.open.candidates };
+    } else {
+      // 00-AU: the slot case of this same dispatch — see the flag's own doc
+      // above. No cart mutation happened above (this branch never mutates
+      // the cart), so ASK's priority-1 check below will reopen this exact
+      // same slot; enumerating it here is always the right slot's choices.
+      enumerateSlotChoices = true;
     }
   } else {
     // ── STEP 3: PROPOSE (only reached when ANSWER cannot resolve this
@@ -702,6 +716,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // legacy name/choices shape) — only the ask_plan.steps branch is ever
     // populated on a compiled item, which is exactly what this path prices.
     priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
+    enumerateSlotChoices,
   });
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 

@@ -887,7 +887,22 @@ export interface RenderContext {
   deliveryFeeCents?: number;
   driverTipCents?: number;
   priceIndexByMenuItemId?: Map<string, Map<string, number>>;
+  // 00-AU: set by the runner when a slot question was already open and this
+  // turn's ANSWER couldn't resolve it (a genuine repeat, or the customer
+  // asking what the options are) — list the real choices instead of
+  // re-asking the identical short question forever. See turn-engine-runner.ts's
+  // 00-AT dispatch for where this is decided; render() never decides it
+  // itself, only relays it (same "code decides" discipline renderStepQuestion's
+  // own `enumerate` param already follows on the legacy path).
+  enumerateSlotChoices?: boolean;
 }
+
+// 00-AU: fixed lead-in for the enumerated-repeat case only — Jason's own
+// wording (2026-09-17): "it should just say I'm gonna list the options for
+// you and then list the options." Deterministic, code-authored, identical
+// every run; never shown on a slot's first ask (renderStepQuestion's default
+// `enumerate: false` stays untouched for that case).
+const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you.";
 
 export function render(
   cartBefore: TurnEngineCartLine[],
@@ -921,7 +936,11 @@ export function render(
           if (effectiveLineKey(line) !== state.open.line_key) continue;
           const menuItem = menuById.get(line.menu_item_id);
           const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
-          if (menuItem?.ask_plan && step) question = renderStepQuestion(step, menuItem.ask_plan.display_name);
+          if (menuItem?.ask_plan && step) {
+            question = context.enumerateSlotChoices
+              ? `${ENUMERATE_SLOT_CHOICES_LEAD_IN} ${renderStepQuestion(step, menuItem.ask_plan.display_name, true)}`
+              : renderStepQuestion(step, menuItem.ask_plan.display_name);
+          }
           break;
         }
         break;

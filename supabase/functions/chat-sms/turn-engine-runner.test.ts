@@ -1429,3 +1429,93 @@ Deno.test("00-AP: a garbled-but-numeric message while a Temp slot (not address) 
   assertEquals(geocodeCalls.length, 0, "no digit+street-suffix shape is present — extractAddressSpan must return null and no geocode call is made");
   assertEquals(result.cart[0].options, { Temp: ["Medium"] }, "the Temp slot must still resolve normally");
 });
+
+// ── 00-AU: the turn engine can never list a slot's real choices ─────────
+//
+// Root cause: turn-engine.ts's render() call site (turn-engine.ts:924, at
+// the time this was written) called renderStepQuestion with only two
+// arguments, so `enumerate` defaulted to false — always. The turn engine
+// therefore never enumerated a slot's real choices, not on a genuine
+// repeat, not when the customer explicitly asked what the options were.
+// Live consequence (100-run sim against a61be121): a customer answering a
+// sauce question with "Just the regular buffalo sauce, please." was asked
+// the identical unanswerable question 11 times until they quit — the real
+// choices (Hot, BBQ, Mild, Sweet & Spicy) were never shown.
+//
+// The fix threads a flag from turn-engine-runner.ts's own 00-AT dispatch
+// (an open slot/disambiguation question whose ANSWER this turn resolved
+// nothing) into render(), which then enumerates the real choices behind a
+// fixed, code-authored lead-in — never a model rephrasing, never a
+// hardcoded choice list.
+
+const BUFFALO_SAUCE_CHOICES = [
+  { id: "choice-hot", display: "Hot", price_delta_cents: 0 },
+  { id: "choice-bbq", display: "BBQ", price_delta_cents: 0 },
+  { id: "choice-mild", display: "Mild", price_delta_cents: 0 },
+  { id: "choice-sweet-spicy", display: "Sweet & Spicy", price_delta_cents: 0 },
+];
+
+const askPlanWithSauceSlot = {
+  compiled_at: "", compiler_version: 1, display_name: "Large Buffalo Chicken Pizza", base_price_cents: 1899,
+  recap_template: "", ticket_template: "",
+  steps: [{
+    group_id: "group-sauce", slot_key: "sauce", kind: "slot" as const, ask_mode: "ask" as const,
+    prompt_template: "sauce.ask",
+    choices: BUFFALO_SAUCE_CHOICES,
+  }],
+};
+
+const menuWithSauceSlot: TurnEngineMenuItem[] = [
+  {
+    id: "item-buffalo-pizza", name: "Large Buffalo Chicken Pizza", category: "Pizza", price_cents: 1899,
+    bot_state: "orderable", ask_plan: askPlanWithSauceSlot, option_groups: [{ id: "group-sauce", name: "Sauce" }],
+  },
+];
+
+function buffaloSauceCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: "item-buffalo-pizza", name: "Large Buffalo Chicken Pizza", quantity: 1, price_cents: 1899, modifiers: [], line_key: "line-1" },
+  ];
+}
+
+Deno.test("00-AU RED->GREEN: sauce slot open, 'Just the regular buffalo sauce, please.' resolves nothing — the SECOND question must list all four real choices behind the lead-in, never re-ask the identical short question, and never reach PROPOSE", async () => {
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-sauce" }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: () => { proposeCalls++; return Promise.reject(new Error("must not be called")); } };
+  const input = baseInput({
+    message: "Just the regular buffalo sauce, please.",
+    menu: menuWithSauceSlot,
+    cart: buffaloSauceCart(),
+    dialogueState: priorState,
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0, "00-AT: an unresolvable answer to an open slot must never reach PROPOSE");
+  assert(result.reply.includes("Let me list the options for you."), `reply must announce it's about to list the options: ${result.reply}`);
+  for (const name of ["Hot", "BBQ", "Mild", "Sweet & Spicy"]) {
+    assert(result.reply.includes(name), `reply must include the real choice "${name}": ${result.reply}`);
+  }
+  assertEquals((result.dialogueState.open as { kind: string } | null)?.kind, "slot", "the sauce slot is still open — nothing was resolved by the customer's message");
+});
+
+Deno.test("00-AU: the FIRST ask for a slot is still short by default — no choice names, no lead-in", async () => {
+  const { supabase } = makeFakeSupabase();
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key" };
+  // priorState.open is null (nothing was open before this turn) — the cart
+  // already carries the pizza line with the sauce slot unresolved, so ASK's
+  // priority-1 opens it fresh THIS turn, for the first time.
+  const input = baseInput({ message: "thats it", menu: menuWithSauceSlot, cart: buffaloSauceCart(), dialogueState: null });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(
+    result.reply.startsWith("What sauce would you like for the Large Buffalo Chicken Pizza?"),
+    `first ask must be the short question, unmodified (a money footer may follow it): ${result.reply}`,
+  );
+  assert(!result.reply.includes("Let me list the options for you."), `first ask must not carry the enumerate lead-in: ${result.reply}`);
+  for (const name of ["Hot", "BBQ", "Mild", "Sweet & Spicy"]) {
+    assert(!result.reply.includes(name), `first ask must not include the choice name "${name}": ${result.reply}`);
+  }
+});
