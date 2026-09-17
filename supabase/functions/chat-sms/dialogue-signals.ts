@@ -121,6 +121,13 @@ const NAME_CARRIERS: RegExp[] = [
   /(?:^|\b)(?:my |the )?names?(?:'s)?\s+(?:is\s+)?(.+)$/i,
   /(?:^|\b)(?:it'?s|this is|i'?m|im)\s+(.+)$/i,
   /(?:^|\b)(?:put (?:it|me) )?under\s+(.+)$/i,
+  // 00-BL: "The name for the order is Alex." -- the top repeater in the
+  // 2026-09-17 run. The carriers above capture everything after "name", which
+  // is "for the order is Alex." and fails the shape test. A name at the very
+  // END of the sentence, right after "is", is the shape people actually use
+  // when they restate the question back at you. Last carrier deliberately:
+  // every more specific one gets first refusal.
+  /\bis\s+([A-Za-z][A-Za-z'\-]{1,29})\s*[.!?]?\s*$/i,
 ];
 
 /**
