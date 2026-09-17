@@ -116,6 +116,16 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
   below ARE wired - and a shop whose flag is false still runs the old engine in
   full. Never reason about behaviour from the import list alone now; read the
   shop's flag too. `dialogue-signals.ts` is live on both paths.
+  **And the two paths diverge SILENTLY, at the call site, not the import.**
+  2026-09-17: `renderStepQuestion` has always been able to list a slot's real
+  choices, and the legacy path decides when to. The turn engine called the same
+  function with one argument missing, so it could never list them - on any turn,
+  for any shop, for any reason. Every shop runs the turn engine, so every live
+  customer who mis-answered a slot question was re-asked the identical
+  unanswerable question until they quit. Nothing was unwired, nothing was
+  switched off, and no import list or grep for the module would have shown it.
+  When the legacy path has a capability, do not assume the turn engine reaches
+  it: read the turn engine's own call site and check what it passes.
 - **The engine's own modules:** `turn-engine.ts` (ANSWER/DECIDE/ASK/RENDER, pure),
   `propose.ts` (the single model call, an NLU returning a structured proposal),
   `resolve-item.ts` (deterministic longest-match over the compiled lexicon;
