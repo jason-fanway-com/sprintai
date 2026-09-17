@@ -460,6 +460,62 @@ async function persistTurn(
   });
 }
 
+// 00-BI: the closed vocabulary code will accept as an answer to each open
+// question. The model translates the customer's message into one of these; it
+// never invents one, and code decides what to DO about it. Only questions that
+// were observed looping are listed -- a question absent from here behaves
+// exactly as it does today.
+function answerVocabularyFor(
+  open: DialogueState["open"],
+  menu: TurnEngineMenuItem[],
+  cart: TurnEngineCartLine[],
+): { question: string; options: Array<{ id: string; describes: string }> } | null {
+  if (!open) return null;
+  switch (open.kind) {
+    case "ordering":
+      return {
+        question: "Anything else?",
+        options: [
+          { id: "closure", describes: "they are finished ordering and want nothing more" },
+          { id: "read_back", describes: "they are asking what is currently in their order, or asking you to confirm or repeat it back" },
+          { id: "confused", describes: "they are confused or upset about what happened to their order and are not asking for a new item" },
+        ],
+      };
+    case "confirm":
+      return {
+        question: "All good - confirm?",
+        options: [
+          { id: "confirm_yes", describes: "they agree and want to place the order" },
+          { id: "confirm_no", describes: "they do NOT agree, or want to change something first" },
+        ],
+      };
+    case "slot": {
+      const line = cart.find(l => typeof l.menu_item_id === "string" && effectiveLineKeyFor(l) === open.line_key);
+      const mi = line ? menu.find(m => m.id === line.menu_item_id) : undefined;
+      const step = mi?.ask_plan?.steps.find(s => s.group_id === open.group_id);
+      if (!step || step.choices.length === 0) return null;
+      return {
+        question: `Which ${step.slot_key ?? "option"} for the ${mi?.name ?? "item"}?`,
+        options: step.choices.map(c => ({ id: c.id, describes: `they chose "${c.display}"` })),
+      };
+    }
+    case "disambiguation": {
+      const opts = open.candidates
+        .map(id => menu.find(m => m.id === id))
+        .filter((m): m is TurnEngineMenuItem => !!m)
+        .map(m => ({ id: m.id, describes: `they meant "${m.name}"` }));
+      if (opts.length === 0) return null;
+      return { question: "Which one would you like?", options: opts };
+    }
+    default:
+      return null;
+  }
+}
+
+function effectiveLineKeyFor(line: TurnEngineCartLine): string {
+  return line.line_key ?? "";
+}
+
 export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
   const priorState = input.dialogueState ?? INITIAL_DIALOGUE_STATE;
   const cartBefore = input.cart.map(l => ({ ...l }));
@@ -471,6 +527,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   const upsellEnabled = await loadUpsellEnabled(deps.supabase, input.shopId);
 
   let declines: Decline[] = [];
+  // 00-BI: an answer the MODEL read out of the customer's message, once the
+  // deterministic detectors have all missed. Only ever one of the meanings
+  // code offered; see answerVocabularyFor.
+  let answerOutcomeFromModel: { kind: "closure" | "confirm_yes" | "confirm_no" } | null = null;
+  const answerVocab = answerVocabularyFor(priorState.open, input.menu, input.cart);
   // 00-BB: an address the customer clearly gave that we could not verify.
   let addressNotVerified: string | null = null;
   let turnEvents: AskTurnEvents = {
@@ -655,6 +716,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // it on, so the model interpreted each message with no idea whether the
         // order was pickup or delivery, whether a name was already given, or
         // what had already been settled. Published as STATE, not as history.
+        // 00-BI: the closed vocabulary for whatever question is open.
+        answerQuestion: answerVocab?.question,
+        answerOptions: answerVocab?.options,
         orderContext: {
           orderType: input.shopContext.orderType ?? null,
           pickupName: input.shopContext.pickupName ?? null,
@@ -688,6 +752,18 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
 
     // ── STEP 4: DECIDE ─────────────────────────────────────────────────────
     const proposal = proposeResult.proposal;
+    // 00-BI: ANSWER already ran and missed -- that is the only way execution
+    // reaches here. If the model could read the message as one of the meanings
+    // code offered, act on it now, before the proposal's cart changes are
+    // considered. Code still decides what each meaning DOES.
+    const interpreted = proposal.answer_to_open_question;
+    if (interpreted && priorState.open) {
+      if (priorState.open.kind === "ordering" && interpreted === "closure") {
+        answerOutcomeFromModel = { kind: "closure" };
+      } else if (priorState.open.kind === "confirm" && (interpreted === "confirm_yes" || interpreted === "confirm_no")) {
+        answerOutcomeFromModel = { kind: interpreted === "confirm_yes" ? "confirm_yes" : "confirm_no" };
+      }
+    }
     const decideResult = decide(
       proposal,
       workingCart,
@@ -707,6 +783,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     };
     if (proposal.intent === "question" && proposal.answer_text) {
       answerText = proposal.answer_text;
+    }
+    // 00-BI: apply the meaning the model read, through the SAME turnEvents the
+    // deterministic path uses -- so ASK and RENDER cannot tell the difference,
+    // and there is one code path for "the customer confirmed", not two.
+    if (answerOutcomeFromModel) {
+      if (answerOutcomeFromModel.kind === "confirm_yes") turnEvents = { ...turnEvents, confirmYes: true };
+      else if (answerOutcomeFromModel.kind === "confirm_no") turnEvents = { ...turnEvents, confirmNo: true };
+      else if (answerOutcomeFromModel.kind === "closure") turnEvents = { ...turnEvents, checkoutIntentThisTurn: true };
     }
   }
 

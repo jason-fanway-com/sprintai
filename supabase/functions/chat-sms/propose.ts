@@ -75,6 +75,13 @@ export interface ProposeTurnInput {
   message: string;
   // 00-AY: the non-food state of the order — see ProposeOrderContext.
   orderContext?: ProposeOrderContext;
+  // 00-BI: the CLOSED list of meanings code will accept for the currently open
+  // question, and the question itself. The model translates the customer's
+  // message into one of these ids or "none"; code rejects anything else. This
+  // rides along in the call that already happens every turn -- no extra
+  // latency, no extra spend. See ANSWER_FIELD below.
+  answerQuestion?: string;
+  answerOptions?: Array<{ id: string; describes: string }>;
 }
 
 export interface ProposeDeps {
@@ -277,6 +284,39 @@ function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], c
   ].join("\n\n");
 }
 
+// 00-BI (Jason, 2026-09-17: "I don't understand why the llm wouldn't always
+// interpret whatever the customer is saying into what the code understands").
+// He is right, and this is that. Every answer detector in the engine was a
+// hand-rolled regex anchored to the whole message; seven were loosened in one
+// day and the dominant loop still did not close, because real customers say
+// things no pattern anticipates ("whoa, what happened? i just wanted the large
+// veggie pizza w/ just half tomatoes, not extra").
+//
+// The model now translates the message into the small vocabulary code
+// understands, IN THE CALL THAT ALREADY HAPPENS -- it is the same proposal
+// call, one extra field. It can never invent a meaning: the enum is built from
+// ids code supplied, and code re-checks membership on the way back.
+//
+// This does not move any decision to the model. Which item, what it costs and
+// what goes in the cart stay exactly as deterministic as before. Only "what did
+// this person mean" is interpreted, which is the one thing the model is better
+// at than a regex.
+function buildProposalTool(answerOptions?: Array<{ id: string; describes: string }>) {
+  const tool = JSON.parse(JSON.stringify(PROPOSAL_TOOL)) as typeof PROPOSAL_TOOL & {
+    input_schema: { properties: Record<string, unknown> };
+  };
+  if (answerOptions && answerOptions.length > 0) {
+    tool.input_schema.properties.answer_to_open_question = {
+      type: "string",
+      enum: [...answerOptions.map(o => o.id), "none"],
+      description:
+        "What the customer's message MEANS as an answer to the question they were just asked. " +
+        "Pick the closest id, or \"none\" if it clearly matches none of them. A wrong guess is worse than \"none\".",
+    };
+  }
+  return tool;
+}
+
 const PROPOSAL_TOOL = {
   name: PROPOSAL_TOOL_NAME,
   description: "Report the customer's intent and any cart changes as a structured proposal. Every id (group_id, choice_id, line_key) must be a real id from the menu index or cart — never free text. The one exception is an add's item_span, which is deliberately the customer's own verbatim words, never an id.",
@@ -451,7 +491,7 @@ async function attemptOnce(
         reasoning: { enabled: false },
         system: buildSystemPrompt(input.menu, input.lexicon, input.cart, input.open, input.orderContext),
         messages,
-        tools: [PROPOSAL_TOOL],
+        tools: [buildProposalTool(input.answerOptions)],   // 00-BI
         tool_choice: { type: "tool", name: PROPOSAL_TOOL_NAME },
       }),
     });
@@ -480,6 +520,16 @@ async function attemptOnce(
   }
 
   const proposalInput = extractProposalInput(data);
+  // 00-BI: the safety property. An answer id the model was not offered is
+  // stripped, not trusted -- so this field can only ever carry a meaning code
+  // itself put on the table.
+  if (proposalInput && typeof proposalInput === "object") {
+    const pi = proposalInput as Record<string, unknown>;
+    const offered = new Set((input.answerOptions ?? []).map(o => o.id));
+    if (typeof pi.answer_to_open_question !== "string" || !offered.has(pi.answer_to_open_question)) {
+      delete pi.answer_to_open_question;
+    }
+  }
   if (!validateProposalShape(proposalInput)) {
     return { ok: false, reason: "schema_violation", detail: "response did not contain a schema-valid submit_proposal tool call", rawBody, ms };
   }

@@ -191,6 +191,12 @@ export interface DialogueState {
 
 export interface Proposal {
   intent: "order" | "checkout" | "cancel" | "question" | "other";
+  // 00-BI: what the customer's message MEANS as an answer to the question they
+  // were just asked, as one of the ids CODE supplied. Never a free-text
+  // meaning, never an id code did not offer -- propose.ts re-checks membership
+  // against the list it sent, so a hallucinated value is discarded and the
+  // engine behaves exactly as it did before this field existed.
+  answer_to_open_question?: string;
   // item_span (docs/specs/2026-09-15-code-owned-resolution.md §4): the
   // VERBATIM substring of the customer's own message naming the item —
   // nothing normalized, nothing invented. DECIDE below resolves it to a
@@ -334,6 +340,44 @@ const ORDER_TYPE_DELIVERY_RE = /\bdeliver(?:y|ed)?\b/i;
 const TIP_DECLINE_RE = /^(?:no tip|no thanks|no thank you|not now|skip|none|pass|no)[.!]?$/i;
 const TIP_AMOUNT_RE = /^\$?\s*\d+(?:\.\d{1,2})?\s*$/;
 const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
+// 00-BH: the same whole-message anchoring, in three more places -- two of them
+// on money. Found by auditing every /^..._RE = \/\^/ detector rather than
+// waiting for the sim to trip over them one at a time, which is how the name
+// question, the confirm gate and the closure check were each found separately.
+//
+// TIP: "No tip, thanks!" and "No, I don't want a tip" both failed the anchored
+// decline, and "leave $5" / "5 dollars" both failed the anchored amount, so a
+// customer answering the tip question at all could leave it unresolved and be
+// re-asked. An amount WINS over a decline word, so "no more than $5" tips $5
+// rather than declining. A bare number is still read as dollars exactly as
+// before -- the tip question is open, so a number here is unambiguous.
+const TIP_DECLINE_ANYWHERE_RE = /\b(?:no tip|without a tip|don'?t want (?:a )?tip|no thanks|no thank you|not (?:now|today)|skip (?:it|the tip)?|none|pass|zero|nothing)\b/i;
+const TIP_AMOUNT_ANYWHERE_RE = /(?:\$\s*(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:dollars?|bucks?)\b)/i;
+
+export function readTipReply(message: string): { kind: "amount"; cents: number } | { kind: "decline" } | null {
+  const m = (message ?? "").trim();
+  if (!m) return null;
+  const amt = TIP_AMOUNT_ANYWHERE_RE.exec(m);
+  if (amt) {
+    const raw = amt[1] ?? amt[2];
+    const cents = Math.round(parseFloat(raw) * 100);
+    if (Number.isFinite(cents) && cents >= 0) return { kind: "amount", cents };
+  }
+  if (TIP_AMOUNT_RE.test(m)) return { kind: "amount", cents: parseBareTipDollars(m) * 100 };
+  if (TIP_DECLINE_RE.test(m) || TIP_DECLINE_ANYWHERE_RE.test(m)) return { kind: "decline" };
+  return null;
+}
+
+// CONFIRM: declining just reopens ordering -- it never charges anyone -- so
+// reading it anywhere is the safe direction. "No, wait, change the size" and
+// "no, remove the onions" are both the customer refusing to confirm.
+const CONFIRM_DECLINE_ANYWHERE_RE = /\b(?:no|nope|nah|not yet|wait|hold on|hold up|change|remove|instead|actually|mistake|wrong|cancel)\b/i;
+
+export function impliesConfirmDecline(message: string): boolean {
+  const m = (message ?? "").trim();
+  if (!m) return false;
+  return CONFIRM_DECLINE_RE.test(m) || CONFIRM_DECLINE_ANYWHERE_RE.test(m);
+}
 
 // See this file's header note 2: the fallback that closes the "thats it
 // while order_type is open" money bug. FIXED 2026-09-15 (turn-engine live
@@ -459,8 +503,10 @@ export function answer(
     }
 
     case "tip": {
-      if (TIP_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: 0 }, cartChanged: false };
-      if (TIP_AMOUNT_RE.test(trimmed)) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: parseBareTipDollars(trimmed) * 100 }, cartChanged: false };
+      {
+        const tip = readTipReply(trimmed);   // 00-BH
+        if (tip) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tip.kind === "amount" ? tip.cents : 0 }, cartChanged: false };
+      }
       return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
@@ -479,7 +525,7 @@ export function answer(
 
     case "confirm": {
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
-      if (CONFIRM_DECLINE_RE.test(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
+      if (impliesConfirmDecline(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };   // 00-BH
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
       // the helper blocks "not yet"/"don't"/"wrong"/"change".
       if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
