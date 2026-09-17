@@ -440,6 +440,14 @@ async function persistTurn(
     dialogue_state: dialogueState,
     phase: cart.length > 0 ? "building" : "greeting",
     subtotal_cents: subtotalCents,
+    // 00-BA: the fee was being ADDED to total_cents (line above) and never
+    // written to its own column, so every reader of the row -- the acceptance
+    // canary, the admin dashboard, the Expo app, analytics, and every sim run
+    // -- saw a 99c fee recorded as 0 while the customer was correctly charged
+    // it. Exactly the same defect this block's own comment describes for
+    // subtotal_cents, one field over. 100 of 100 conversations failed the
+    // totals check on this alone.
+    service_fee_cents: SERVICE_FEE_CENTS,
     total_cents: totalCents,
     ...sideEffects,
   }).eq("id", input.cartId);
@@ -463,6 +471,8 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   const upsellEnabled = await loadUpsellEnabled(deps.supabase, input.shopId);
 
   let declines: Decline[] = [];
+  // 00-BB: an address the customer clearly gave that we could not verify.
+  let addressNotVerified: string | null = null;
   let turnEvents: AskTurnEvents = {
     qualifyingAddMenuItemId: null,
     disambiguationCandidateIds: null,
@@ -520,6 +530,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     });
     if (addressOpen) externalInputs = { geocodedAddress: geocoded };
     else opportunisticAddress = geocoded;
+    // 00-BB: a geocode that comes back with nothing is NOT the customer
+    // failing to answer, and must not be reported to them as if it were.
+    // Live in the 2026-09-17 run: a customer answered "123 Main St" -- a
+    // perfectly formed address -- and was asked "What's the delivery address?"
+    // four more times, then "I already said, it's 123 Main St." The address
+    // question was re-asked 14 times in one conversation. Same disease as the
+    // name loop: a lookup failure is indistinguishable from silence, and
+    // nothing caps the repeat.
+    //
+    // We deliberately do NOT accept an address we could not verify -- that
+    // decides where food gets driven. We only stop pretending they said
+    // nothing, and name what we could not verify so they can correct it.
+    if (addressOpen && addressSpan != null && !geocoded) {
+      addressNotVerified = addressSpan;
+    }
   }
   const answerResult = answer(priorState, workingCart, input.message, input.menu, externalInputs);
   // priorState.open can ONLY be resolved through the "disambiguation" case
@@ -719,7 +744,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // a second copy that could drift from what the reply footer shows.
   const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
   const driverTipCents = sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? 0;
-  const rendered = render(cartBefore, workingCart, nextState, declines, input.menu, {
+  // 00-BB: say what we could not verify, before the question is re-asked.
+  const declinesForRender: Decline[] = addressNotVerified
+    ? [...declines, { reason: `I couldn't find "${addressNotVerified}" — can you check it, or give me a nearby cross street?` }]
+    : declines;
+  const rendered = render(cartBefore, workingCart, nextState, declinesForRender, input.menu, {
     deliveryFeeCents: deliveryFeeCents || undefined,
     driverTipCents: driverTipCents || undefined,
     // TurnEngineMenuItem's option_groups/ask_plan shape is a superset of what
