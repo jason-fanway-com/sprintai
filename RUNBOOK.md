@@ -2688,3 +2688,55 @@ principle, worth carrying into the next model-trust decision**: trust
 scope should be computed from what the deterministic path can and can't
 disambiguate, not from which call site or code path happened to produce
 the assertion.
+
+## Exhaustive state-table sweep for `ask()` — a new verification technique, diagnostic only — 2026-09-16
+
+`ask-state-table.test.ts` enumerates the real cross-product of `ask()`'s
+inputs — cart contents × order type × 5 shop config booleans × prior
+`phase` × prior `open` × turn events — **188,160 states** — as a single
+`Deno.test` and asserts 8 structural invariants (e.g. "never opens the
+address question when delivery is disabled," "never returns the empty-cart
+closure question") on every one of them. It replaces adding one more
+example test per bug found by hand.
+
+**This does not gate anything by itself.** It is one test case that loops
+internally; a run either passes (no known invariant violated) or fails and
+prints which state broke which invariant, for a human to triage and decide
+whether it's a real defect or an invariant that was stated wrong. Treat a
+green run as "no known invariant is currently violated," not "ask() is
+correct" — it only checks the 8 properties someone thought to write down.
+First run (`d8d5f10a`) found two real, previously-undetected violations;
+both were fixed same day (`dfe5aa0a`).
+
+**Worth reusing for any other pure function with a small, enumerable input
+space and clear invariants** (RENDER and DECIDE are the next obvious
+candidates) — this caught defects three days of live-call testing across
+all three shops had not yet surfaced, because it exercises combinations a
+human test-designer doesn't think to type by hand.
+
+## Address resolution on the turn engine is code-owned, not model-owned — 2026-09-16
+
+Delivery could not complete at all on the turn-engine path until today
+(`3cf78e16`): `turn-engine-runner.ts` never fed a resolved address into
+`answer()`'s address case, so the question re-asked forever. Fixed with a
+deterministic (non-LLM) call to Google's Geocoding API, gated by the same
+qualification rule `index.ts`'s legacy `set_delivery_address` tool already
+used (a non-partial ROOFTOP/RANGE_INTERPOLATED match, inside the shop's own
+haversine delivery radius) — a non-address reply (a name, garbled text)
+simply fails to qualify and resolves to `address_declined`, never reaching
+PROPOSE. A same-day follow-up (`fa42a01f`) widened this: the first version
+only geocoded a customer's *entire* message and only while address was the
+open question, so an address stated mid-sentence or alongside the answer to
+a different open slot was missed. `extractAddressSpan` now pulls the
+candidate number+street(+city/state/zip) substring out of anywhere in the
+message, deterministically, and feeds that through the same geocoder — both
+when address is the open question and opportunistically on any turn where
+delivery is enabled and the address isn't yet known. Order type gets no
+equivalent opportunistic extraction by design: ASK's existing priority
+ladder already re-asks it the very next turn if it's missed, so nothing is
+silently dropped.
+
+**Operational note**: this path calls the real Google Geocoding API on
+every turn where the address isn't yet known and delivery is enabled — not
+just once. No caching or rate-limiting was added today; watch geocoding
+API spend if a shop generates unusually chatty pre-address conversations.

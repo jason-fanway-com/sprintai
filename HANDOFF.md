@@ -1421,6 +1421,40 @@ Every defect closed today was found by a human hand-designing a scenario
 and running it three times; that does not scale, and closing that gap is
 the stated next milestone, not a new feature.
 
+**Update, 2026-09-16 — an exhaustive state-space sweep replaces hand-designed
+scenarios for the `ask()` function, closes two invariant violations, plus two
+more real turn-engine defects fixed on top.** Eight commits, 07:20–13:38 EDT,
+all in `turn-engine.ts`/`turn-engine-runner.ts`. In order: ASK now sees this
+turn's own ANSWER-resolved slots (was re-asking order type/tip/name it had
+just been told); the address slot got a real deterministic (non-LLM)
+geocoder wired into ANSWER, closing a defect where delivery could never
+complete on the engine at all; ASK stops asking "Anything else?" over an
+empty cart via a new `ordering` open-question kind; a new test enumerates
+`ask()`'s actual input space (188,160 states, one `Deno.test`, diagnostic
+only — it doesn't gate, it surfaces) and found two invariant violations,
+both closed same day (a shop with delivery off could still be asked for an
+address; declining final confirmation over an empty cart bypassed the
+empty-cart guard via a second, undiscovered path); and the address geocoder
+was widened to extract an address span from anywhere in a message, not just
+when the whole message is the address, closing a case where a customer who
+stated the address correctly kept being re-asked forever.
+
+**Confirmed live, not inferred**: `chat-sms` is **v457**, downloaded
+artifact stamped `// DEPLOY_SHA: fa42a01f89c9d12cd8f70619953e4c3a0fe049ec` —
+exact current `HEAD`, deployed 13 minutes after the commit landed.
+`shops.turn_engine_enabled` is still `true` on all three real shops,
+re-queried live just now. Vito's canary re-run clean:
+`cheeseburger`/`medium`/`thats it` → one line, Temp: Medium,
+$8.49 + $0.99 = **$9.48**. Full `chat-sms`+`_shared` Deno suite: 1439
+passed, 0 failed, 7 ignored (up from 1414 on 2026-09-15). No migrations
+touched today.
+
+**Still open, not touched today**: the name/order-type retry mystery from
+yesterday's handoff (`"pickup"` alone doesn't advance but "pick up" does; a
+bare first name doesn't advance but "First Last" does — on all three
+shops, four hypotheses already ruled out) is unchanged; see `QUEUE.md`
+(untracked PO working file) for the live investigation state.
+
 ## Quickstart for development
 
 ```bash

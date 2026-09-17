@@ -2588,3 +2588,116 @@ live, rather than finding it live the way today did three times.
 - Zio's `pizza` ties 76 candidates — safe, but not a usable SMS question
   (product-design gap, not a bug). `"mild"` resolved a different number
   of slots across three identical Zio's runs — unexplained.
+
+## 2026-09-16
+
+### Headline: an exhaustive state-space sweep of `ask()` replaces one-bug-at-a-time hunting, closes two invariant violations it found, plus two more live turn-engine defects — one deploy, confirmed live on all three shops
+
+Eight commits, 07:20–13:38 EDT, all in `turn-engine.ts` / `turn-engine-runner.ts` and
+their tests. No migrations touched. Read directly against the diffs, not the commit
+messages alone.
+
+- **`7c5930bb` (07:20) — ASK now sees this turn's own resolved slots.**
+  `buildAskShopContext` was built from the turn-START snapshot of `shopContext`,
+  never merged with what ANSWER had just resolved this same turn (order type,
+  tip, pickup name) — so ASK re-fired the question that was just answered, one
+  extra round-trip on every delivery order. RENDER already merged these a few
+  lines below; ASK now does the same one-line fix. The commit is explicit that
+  a *different* reported bug (address re-asking on Vito's) does not reproduce
+  through this runner at all, because address had no geocode wiring yet at
+  this point in the day — flagged for the next commit, not fixed here.
+- **`3cf78e16` (07:51) — the address slot gets a real geocoder.** Before this,
+  `turn-engine-runner.ts` never passed a resolved address into `answer()`'s
+  address case, so once a shop was on the engine, delivery could never
+  actually complete: the address question re-asked forever, and any free
+  text typed while it was open (a name, garbled text) fell through
+  ungated into PROPOSE, which could let the model mutate the cart from text
+  that was never an order. Fixed with a real, deterministic (non-LLM) call to
+  Google's geocoder using the shop's existing qualification rule (rooftop or
+  range-interpolated match, within the shop's own delivery radius) — a
+  non-address message simply fails to qualify and resolves to
+  `address_declined`, never reaching PROPOSE. Read the diff and confirmed:
+  `index.ts` is untouched; the runner reads shop geo directly.
+- **`5ef1770d` (12:00) — ASK stops asking "Anything else?" over an empty
+  cart.** Once every pre-order slot (order type / address / tip) resolved
+  with the cart still empty, ASK returned an open-ended `null` question and
+  RENDER's fallback for that is unconditionally "Anything else?" — a dead
+  end, since the cart can't change and the identical question re-derives
+  forever. This is the exact live conversation named in the commit (`70c7c02a`).
+  Fix adds a new `ordering` open-question kind, chosen purely by checking
+  cart emptiness (no model call), and RENDER cycles three phrasings off a
+  counter so the same sentence doesn't repeat three times running.
+- **`d8d5f10a` (12:27) — an exhaustive state-table sweep of `ask()`, diagnostic
+  only.** New test file enumerates the real cross-product of `ask()`'s inputs
+  (cart × order type × 5 shop booleans × prior phase × prior open × turn
+  events = **188,160 states**) as a single `Deno.test` and asserts 8
+  structural invariants on all of them, replacing "add one more example test
+  per bug found by hand." Confirmed by reading the file: it is one test case
+  that loops internally, not 188,160 separate tests — it does not gate
+  anything by itself, it only surfaces violations for a human to triage. It
+  found two: `ask()` could open the address question when delivery is
+  disabled but a stale `orderTypeIsDelivery=true` is on record, and it could
+  reach the empty-cart "Anything else?" dead end via a second, undiscovered
+  path (declining final confirmation) that `5ef1770d`'s fix hadn't covered.
+- **`dfe5aa0a` (12:43) — closes both invariants the sweep found.** Address
+  branch now checks `deliveryEnabled` before `orderTypeIsDelivery`, matching
+  the order-type branch above it. The empty-cart guard from `5ef1770d` is
+  factored into one `closureOrOrdering()` helper called from both the
+  not-yet-committed-to-close path and the `confirmNo` (declined final
+  confirmation) path, which previously bypassed the guard entirely by going
+  straight to `carry(null, "ordering")`. Confirmed in the diff: both call
+  sites now route through the same function, not a copy.
+- **`4000efe5` / `6853b7d0` (22:38–22:43, dated the previous day in the log
+  but present at the top of today's range) — yesterday's PO handoff and
+  journal entry, not touched further today.**
+- **`fa42a01f` (13:38) — ANSWER extracts an address from anywhere in a
+  message, not just when it's the entire trimmed input.** `3cf78e16`'s
+  geocode wiring only ever geocoded the customer's *whole* message, and only
+  while "address" was already the open question. A real customer routinely
+  states the address embedded in a sentence ("deliver to 123 Main St") or in
+  the same breath as answering a different open question (a Temp slot, in
+  the cited live transcript) — so the address question re-asked forever even
+  when the customer had already stated it correctly. New
+  `extractAddressSpan` deterministically finds the candidate
+  number+street(+city/state/zip) substring (no LLM) and feeds it through the
+  same geocoder from `3cf78e16`; it runs both when address is the open
+  question and opportunistically on any turn where delivery is enabled and
+  the address isn't yet known. Order type gets no equivalent opportunistic
+  extraction — the commit argues ASK's existing priority ladder already
+  re-asks it next turn with nothing lost, and a new transcript test backs
+  that claim. `turn-engine.ts`, `index.ts` untouched.
+
+### Verified independently, not taken from the commit messages
+
+- **`chat-sms` is v457**, updated 2026-09-16 17:51:21 UTC (13:51 EDT), 13
+  minutes after `fa42a01f` landed. Downloaded the artifact directly
+  (project ref `rvdqfxtrskxekfkqnegx`): `index.ts` carries
+  `// DEPLOY_SHA: fa42a01f89c9d12cd8f70619953e4c3a0fe049ec` — exact current
+  `HEAD`. Everything above is live, not just committed.
+- **`shops.turn_engine_enabled` is still `true`** on Vito's Pizza, Zio's
+  Pizzeria, and Not Just Bagels — queried live via PostgREST just now, not
+  assumed carried-over from yesterday.
+- **Vito's canary, run live against the deployed function just now**:
+  `cheeseburger` → `medium` → `thats it` produced one cart line (Cheese
+  Burger, Temp: Medium, $8.49) and a stated total of Subtotal $8.49 +
+  Service fee $0.99 = **$9.48** on every turn. No regression from today's
+  changes. ("thats it" here re-asks pickup/delivery rather than closing,
+  because `order_type` isn't set yet — ASK's priority ladder puts that ahead
+  of closure by design, not a bug.)
+- **Full `chat-sms` + `_shared` Deno suite, run locally at this `HEAD`:
+  1439 passed, 0 failed, 7 ignored** (up from 1414 on 2026-09-15's `HEAD`;
+  the state-table sweep contributes exactly 1 to that count, per the point
+  above).
+- **No migrations touched** in this range — confirmed via `git diff --stat`
+  against the migrations directory.
+
+### Still open, unchanged since yesterday's handoff — not re-investigated today
+
+`QUEUE.md` (untracked, PO working file, last edited 2026-09-15 22:25) still
+carries the name/order-type retry mystery as the top open item: `"pickup"`
+alone doesn't advance the order-type question but `"pick up"` does, and a
+bare first name doesn't advance but "First Last" does — on all three shops —
+even though the regex and name-detector both test `true` for the failing
+input when run directly against the source. None of today's eight commits
+touch this. Four hypotheses were already rejected as of yesterday; nothing
+in today's range adds a fifth. Friction only, no wrong charge.
