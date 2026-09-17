@@ -75,6 +75,7 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { buildMenuPriceIndex, type MenuItemForPricing } from "./itemizer.ts";
 import { computeCartSubtotalCents } from "./pricing.ts";
+import { extractCustomerName } from "./dialogue-signals.ts";   // 00-BL
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
@@ -532,6 +533,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // code offered; see answerVocabularyFor.
   let answerOutcomeFromModel: { kind: "closure" | "confirm_yes" | "confirm_no" } | null = null;
   const answerVocab = answerVocabularyFor(priorState.open, input.menu, input.cart);
+  // 00-BL: the name question wants a VALUE, not a choice. It is now the top
+  // repeater: extractCustomerName handles "my name is Alex" and "it's Alex",
+  // but customers also write "under the name Alex" and "the name for the order
+  // is Alex" -- a seventh phrasing nobody predicted, which is the argument
+  // against predicting them.
+  const answerValueWanted = priorState.open?.kind === "name"
+    ? "The customer was asked for the name to put the order under. Report just that name."
+    : undefined;
   // 00-BB: an address the customer clearly gave that we could not verify.
   let addressNotVerified: string | null = null;
   let turnEvents: AskTurnEvents = {
@@ -736,6 +745,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // 00-BI: the closed vocabulary for whatever question is open.
         answerQuestion: answerVocab?.question,
         answerOptions: answerVocab?.options,
+        answerValueWanted,
         orderContext: {
           orderType: input.shopContext.orderType ?? null,
           pickupName: input.shopContext.pickupName ?? null,
@@ -773,6 +783,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // reaches here. If the model could read the message as one of the meanings
     // code offered, act on it now, before the proposal's cart changes are
     // considered. Code still decides what each meaning DOES.
+    // 00-BL: a name the model extracted. Code still decides whether it IS a
+    // name -- the same shape test the deterministic path uses -- so the model
+    // can hand back a sentence and it will be rejected, not stored.
+    if (priorState.open?.kind === "name" && typeof proposal.answer_value === "string") {
+      const validated = extractCustomerName(proposal.answer_value);
+      if (validated) sideEffects = { ...sideEffects, pickup_name: validated };
+    }
     const interpreted = proposal.answer_to_open_question;
     if (interpreted && priorState.open) {
       if (priorState.open.kind === "ordering" && interpreted === "closure") {

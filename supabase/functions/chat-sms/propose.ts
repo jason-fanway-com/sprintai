@@ -82,6 +82,10 @@ export interface ProposeTurnInput {
   // latency, no extra spend. See ANSWER_FIELD below.
   answerQuestion?: string;
   answerOptions?: Array<{ id: string; describes: string }>;
+  // 00-BL: some open questions want a VALUE, not a choice from a list -- the
+  // name question is the obvious one. The model extracts it, code validates
+  // its shape before anything is stored, exactly as with a choice id.
+  answerValueWanted?: string;
 }
 
 export interface ProposeDeps {
@@ -317,6 +321,17 @@ function buildProposalTool(answerOptions?: Array<{ id: string; describes: string
   return tool;
 }
 
+function addValueField(tool: ReturnType<typeof buildProposalTool>, wanted?: string) {
+  if (!wanted) return tool;
+  (tool.input_schema.properties as Record<string, unknown>).answer_value = {
+    type: "string",
+    description:
+      `${wanted} Extract it from the customer's message exactly as they gave it, nothing else. ` +
+      "Omit this field entirely if they did not give one.",
+  };
+  return tool;
+}
+
 const PROPOSAL_TOOL = {
   name: PROPOSAL_TOOL_NAME,
   description: "Report the customer's intent and any cart changes as a structured proposal. Every id (group_id, choice_id, line_key) must be a real id from the menu index or cart — never free text. The one exception is an add's item_span, which is deliberately the customer's own verbatim words, never an id.",
@@ -491,7 +506,7 @@ async function attemptOnce(
         reasoning: { enabled: false },
         system: buildSystemPrompt(input.menu, input.lexicon, input.cart, input.open, input.orderContext),
         messages,
-        tools: [buildProposalTool(input.answerOptions)],   // 00-BI
+        tools: [addValueField(buildProposalTool(input.answerOptions), input.answerValueWanted)],   // 00-BI/00-BL
         tool_choice: { type: "tool", name: PROPOSAL_TOOL_NAME },
       }),
     });

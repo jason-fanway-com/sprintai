@@ -197,6 +197,9 @@ export interface Proposal {
   // against the list it sent, so a hallucinated value is discarded and the
   // engine behaves exactly as it did before this field existed.
   answer_to_open_question?: string;
+  // 00-BL: a VALUE the model extracted for a question that wants one (the
+  // customer's name). Code validates the shape before it is ever stored.
+  answer_value?: string;
   // item_span (docs/specs/2026-09-15-code-owned-resolution.md §4): the
   // VERBATIM substring of the customer's own message naming the item —
   // nothing normalized, nothing invented. DECIDE below resolves it to a
