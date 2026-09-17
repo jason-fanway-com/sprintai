@@ -95,6 +95,7 @@ import type { AskPlan } from "../_shared/compile-menu.ts";
 import { applyCompiledAddItem, applyCompiledModifyItem, allSlotsResolved, enforceVerbatimStepQuestion, stripDeferredStepQuestion, renderStepQuestion, matchChoiceInText, type CompiledCartLine, type CompiledMenuItem } from "./ask-plan-engine.ts";
 import { matchReactiveExtras, type ReactiveCandidate } from "./reactive-modifier-match.ts";
 import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
+import { normalizeSlashShorthand } from "./slash-shorthand-normalize-20260916.ts";
 import { buildCompiledMatchText } from "./stated-attribute-carryforward.ts";
 import { findUnaddressedPendingLine, isRepeatedQuestion } from "./pending-question-followthrough.ts";
 import { countUnresolvedSegments, phraseCountShortfall } from "./unresolved-item-segment-guard.ts";
@@ -842,6 +843,39 @@ async function buildEffectiveMenu(
   return { menu: effectiveItems, soldOutNames };
 }
 
+// Bug fix (2026-09-17, slash-shorthand menu-name collision): a lightweight
+// sibling to buildEffectiveMenu() that returns just the shop's current
+// active-menu item names, with none of the option-group/sold-out/bot_state
+// assembly. Needed at the normalizeSlashShorthand() call site, which runs
+// before businessDate is computed (buildEffectiveMenu's full result isn't
+// available yet at that point in the request flow) -- see
+// slash-shorthand-normalize-20260916.ts for why this guard exists. Being
+// slightly over-inclusive here (e.g. an item currently sold out for today
+// but still active/on-menu) is harmless: worst case we skip normalizing a
+// phrase that happens to match, which is the safe, conservative outcome.
+async function fetchLiveMenuItemNames(supabase: SupabaseClient, shopId: string): Promise<string[]> {
+  const { data: menu } = await supabase
+    .from("menus")
+    .select("id")
+    .eq("shop_id", shopId)
+    .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!menu) return [];
+
+  const items = await fetchAllRows<{ name: string }>(() =>
+    supabase
+      .from("menu_items")
+      .select("name")
+      .eq("menu_id", menu.id)
+      .eq("active", true),
+  );
+
+  return items.map(i => i.name);
+}
+
 // ─── System prompt builder ────────────────────────────────────────────────────
 
 // A group whose max_select is >= the number of choices imposes no real limit —
@@ -1157,7 +1191,7 @@ RULES:
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 BOBO sandwiches", "3 everything bagels"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - QUANTITY REDUCTION (CRITICAL): When a customer wants to reduce the quantity of an item already in the cart (e.g. "actually just one", "make it 1", "only one please", "change it to 1", "reduce to 1", "I only want one"), you MUST call modify_item with the new quantity — NOT add_item. add_item ADDS to the existing quantity; it will make the cart LARGER, not smaller. modify_item SETS the quantity. For complete removal (customer says "remove it", "take it off", "cancel the X"), use remove_item instead. NEVER call add_item when the intent is to decrease or remove.
-- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
+- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "plain bagel with butter, everything bagel with cream cheese, and a coffee"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. SLASH SHORTHAND: a customer texting in a hurry may separate items or clauses with a slash instead of a comma (e.g. "cheeseburger / medium / thats it" means: add a Cheese Burger, set its temp to Medium, then close the order — it does NOT mean "cheeseburger or medium"). Treat "/" between order-relevant words or phrases exactly like a comma — a list of things stated together, never an either/or choice — unless the customer is plainly asking which one you carry. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
 - EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your first response MUST ask whether the customer wants pickup or delivery. CRITICAL EXCEPTION: if the customer's FIRST message already names recognizable menu item(s), you MUST call add_item for those items AND ask pickup/delivery IN THE SAME RESPONSE. Both things — item in cart + delivery question — must happen in one turn. Example: "Got it — one Special Stromboli added. Are you ordering pickup or delivery today?" Do NOT silently default to pickup when items were named; the customer must be asked. Only if the customer explicitly says "pickup" (or ignores the delivery question twice while continuing to order) may you default to pickup and proceed. If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything else. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead (the item stays in the cart — do NOT remove it). This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question.
 - DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way, answer with a clear YES and offer to take their address. Once they confirm delivery, call set_order_type("delivery"), then collect the address. Once the address is set and accepted, offer an optional driver tip. Do NOT ask for delivery address for pickup orders.
@@ -1607,7 +1641,7 @@ RULES:
 - ITEM AVAILABILITY: Every item in the AVAILABLE MENU is in stock and orderable unless it appears in the SOLD OUT TODAY list. NEVER tell a customer an item is "out of stock," "unavailable," or "we don't have that" unless it is in the SOLD OUT TODAY list. If a customer asks for an item and it is in the menu, it is available — add it.
 - QUANTITY PARSING: When a customer says a number followed by an item (e.g., "2 slices of pizza", "3 orders of fries"), add the item with that quantity in a single add_item call with quantity set to that number. Do NOT add the item multiple times.
 - QUANTITY REDUCTION (CRITICAL): When a customer wants to reduce the quantity of an item already in the cart (e.g. "actually just one", "make it 1", "only one please", "change it to 1", "reduce to 1", "I only want one"), you MUST call modify_item with the new quantity — NOT add_item. add_item ADDS to the existing quantity; it will make the cart LARGER, not smaller. modify_item SETS the quantity. For complete removal (customer says "remove it", "take it off", "cancel the X"), use remove_item instead. NEVER call add_item when the intent is to decrease or remove.
-- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "cheese pizza, an order of fries, and a soda"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
+- CRITICAL MULTI-ITEM RULE: Process the ENTIRE customer message in ONE turn. When a customer lists multiple items in a single message (e.g. "cheese pizza, an order of fries, and a soda"), use MULTIPLE add_item tool calls in the same turn to add ALL items at once. SLASH SHORTHAND: a customer texting in a hurry may separate items or clauses with a slash instead of a comma (e.g. "cheeseburger / medium / thats it" means: add a Cheese Burger, set its temp to Medium, then close the order — it does NOT mean "cheeseburger or medium"). Treat "/" between order-relevant words or phrases exactly like a comma — a list of things stated together, never an either/or choice — unless the customer is plainly asking which one you carry. Do NOT pick only the first item and ignore the rest. Do NOT reply with "I didn't catch that" or "can you repeat that" when items are clearly listed — ADD THEM ALL. If an item needs a modifier or option you don't have yet (e.g. bread choice), add what you can and ask about what you're missing. Never silently drop items. PARTIAL ACCEPTANCE: When a multi-item message contains some items that ARE on the menu and some that are NOT, add the valid items via add_item AND explicitly tell the customer which items aren't available with a brief, polite explanation. NEVER invent off-menu items — only suggest alternatives that are actually on the menu. NEVER reject the entire message just because one item isn't on the menu.
 - PICKUP NAME RULE (CRITICAL): When you ask for a pickup name and the customer's VERY NEXT message is a name ("Jason", "Mike", "Sarah"), call submit_order with that name IMMEDIATELY. Do NOT ask "is that your name?" Do NOT ask for confirmation. A single word or short name after asking for a pickup name is ALWAYS the pickup name. Just submit the order.
 - EARLY ORDER TYPE GATE (DELIVERY-AVAILABLE SHOPS — CRITICAL): When DELIVERY AVAILABLE is "Yes" and the cart is empty and no order type has been chosen yet, your first response MUST ask whether the customer wants pickup or delivery. CRITICAL EXCEPTION: if the customer's FIRST message already names recognizable menu item(s), you MUST call add_item for those items AND ask pickup/delivery IN THE SAME RESPONSE. Both things — item in cart + delivery question — must happen in one turn. Example: "Got it — one Special Stromboli added. Are you ordering pickup or delivery today?" Do NOT silently default to pickup when items were named; the customer must be asked. Only if the customer explicitly says "pickup" (or ignores the delivery question twice while continuing to order) may you default to pickup and proceed. If they say "delivery": call set_order_type("delivery") then IMMEDIATELY ask for the delivery address — collect the address BEFORE they order anything else. The system will check the zone automatically. If the set_delivery_address result says they're outside the delivery area, warmly offer pickup instead (the item stays in the cart — do NOT remove it). This ONLY applies when DELIVERY AVAILABLE is "Yes"; pickup-only shops never ask this question. RETURNING-CUSTOMER EXCEPTION: if ORDER TYPE says "RETURNING CUSTOMER OFFER", the embedded question in ORDER TYPE IS the pickup/delivery question — ask exactly that, not the generic "pickup or delivery?", and do NOT ask both. The customer's answer to that offer is their pickup/delivery selection.
 - DELIVERY FLOW: Only offer delivery when DELIVERY AVAILABLE is "Yes" above. If it is "No", never offer delivery — this shop is pickup only. Phrase any delivery decline as PERMANENT ("we're pickup only" / "we don't offer delivery") — never imply it's temporary; do NOT say "right now", "at the moment", or "currently". When delivery IS available and the customer asks about delivery in ANY way, answer with a clear YES and offer to take their address. Once they confirm delivery, call set_order_type("delivery"), then collect the address. Once the address is set and accepted, offer an optional driver tip. Do NOT ask for delivery address for pickup orders.
@@ -5398,6 +5432,27 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     customerPhone = `web:${sessionId}`;
     }
   }
+
+  // Bug fix (2026-09-16, slash-shorthand silent order loss): normalize
+  // BEFORE any downstream use -- the model call, phrase-split.ts, guard19,
+  // resolve-item.ts all see the same text a comma-delimited message would
+  // produce. See slash-shorthand-normalize-20260916.ts for the live-tested
+  // rationale (this is a model-reliability fix, not a swallowed tool call).
+  //
+  // Follow-up (2026-09-17): pass the shop's live menu item names so the
+  // normalizer can leave alone a slash that's actually part of a real menu
+  // item's name (e.g. Vito's "Cheesesteak / Chicken Cheesesteak") rather
+  // than shorthand for "and". See slash-shorthand-normalize-20260916.ts.
+  // Latency/scale fix (2026-09-17, live QA): the overwhelming majority of
+  // turns contain no slash at all, so fetchLiveMenuItemNames' two DB round
+  // trips were running on every single customer message, on every shop,
+  // forever -- pure tax. normalizeSlashShorthand already no-ops with no
+  // protected names when there's no spaced slash, so skip the fetch (and
+  // its latency) whenever the raw text can't possibly match.
+  const liveMenuItemNamesForNormalize = /\s\/\s/.test(userMessage)
+    ? await fetchLiveMenuItemNames(supabase, shop.id)
+    : [];
+  userMessage = normalizeSlashShorthand(userMessage, liveMenuItemNamesForNormalize);
 
   // ── Find or create conversation ───────────────────────────────────────────
   // Conversation-timeout fix (2026-09-09, revised to final spec same day):
