@@ -626,6 +626,29 @@ customer-facing behavior changed from this; noted here because it is a
 process change to how fixes like the ones above get made, not a code
 change.
 
+### Added 2026-09-17 — a common way of texting an order was silently emptying the cart, and the fix is written but not yet live
+
+A live measurement (n=8 each, same model, same session shape) found that when a
+customer texts an order the way people actually text — `cheeseburger / medium /
+thats it` — the bot silently dropped the entire order 70-90% of the time. The model
+reads a spaced `/` as "or" (pick one) rather than "and" (all of these) often enough
+that most customers using that shorthand were getting no order placed and no
+indication anything went wrong. That is a lost sale that looks, from the restaurant's
+side, like a customer who just changed their mind — the exact kind of silent failure
+this platform can least afford, since there's no waiter to notice the table never got
+food. The equivalent comma phrasing failed about a quarter of the time on the same
+model, which is itself a reminder that model-only interpretation of how customers
+order is not reliable enough on its own; the durable fix rewrites the ambiguous text
+before the model ever sees it, plus a guard so it never mangles a real menu item that
+happens to have a slash in its own name (one of Vito's items is literally named
+`Cheesesteak / Chicken Cheesesteak`).
+
+**This fix is written, tested, and merged — but as of this sync it has not been
+deployed.** The live bot on all three real shops is still running the version from
+before this fix, so the failure rate measured above is still the live failure rate
+for any customer who orders this way, until the next deploy closes that gap. Full
+detail in `HANDOFF.md` and `RUNBOOK.md`.
+
 ---
 
 ## What's next (near-term roadmap)

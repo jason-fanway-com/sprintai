@@ -1455,6 +1455,31 @@ bare first name doesn't advance but "First Last" does — on all three
 shops, four hypotheses already ruled out) is unchanged; see `QUEUE.md`
 (untracked PO working file) for the live investigation state.
 
+## Update — 2026-09-17: slash-shorthand cart-emptying bug fixed and merged, but NOT yet deployed
+
+**The bug**: a customer texting shorthand like `cheeseburger / medium / thats it` had
+the order silently dropped 70-90% of the time (live A/B, n=8 each, deepseek-v4-pro) —
+the model reads a whitespace-padded `/` as "or" rather than "and" often enough to empty
+the whole cart with no error shown. The equivalent comma phrasing failed ~25% of the
+time on the same model. A prompt-only fix did not move the rate; three commits
+(`fcbe726e`, `11018994`, `3f57618b`, merged as `79da3d38`, 2026-09-16 23:00 –
+2026-09-17 01:23 EDT) normalize the text itself upstream of the model call and both
+engines, with a guard so it never rewrites a slash that's part of a real live menu
+item's own name (Vito's has two items literally named `Cheesesteak / Chicken
+Cheesesteak`), and a perf follow-up so the guard's DB lookup only runs when the message
+actually contains a slash. Full technical detail in `RUNBOOK.md`.
+
+**Confirmed live, not inferred — and this is the important part**: the downloaded
+`chat-sms` artifact (project ref `rvdqfxtrskxekfkqnegx`) still carries
+`// DEPLOY_SHA: fa42a01f89c9d12cd8f70619953e4c3a0fe049ec`, three commits and a merge
+behind local `HEAD` (`79da3d38`). **This fix is committed but not deployed.** Live
+traffic on all three real shops is still exposed to the empty-cart failure rate
+measured above for any customer who types slash-shorthand, until the next deploy.
+
+Independently re-verified for this doc sync: full `chat-sms` + `_shared` Deno suite run
+locally at `HEAD` — 1446 passed, 0 failed, 7 ignored, matching the merge commit's own
+claim. No migrations touched in this range.
+
 ## Quickstart for development
 
 ```bash

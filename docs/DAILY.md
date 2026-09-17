@@ -2701,3 +2701,55 @@ even though the regex and name-detector both test `true` for the failing
 input when run directly against the source. None of today's eight commits
 touch this. Four hypotheses were already rejected as of yesterday; nothing
 in today's range adds a fifth. Friction only, no wrong charge.
+
+## 2026-09-16 (late) / 2026-09-17
+
+### Headline: a slash-shorthand cart-emptying bug is root-caused, fixed, and merged — but not yet deployed
+
+Three commits, 2026-09-16 23:00 – 2026-09-17 01:23 EDT, plus a merge (`79da3d38`), all
+in `supabase/functions/chat-sms/index.ts` and a new `slash-shorthand-normalize-20260916.ts`.
+
+- **`fcbe726e` (23:00) — root cause and fix.** A live A/B comparison (n=8 each,
+  deepseek-v4-pro, same session shape) measured a customer message shaped like
+  `item / attribute / thats it` producing a silently empty cart 70-90% of the time,
+  vs ~25% for the equivalent comma phrasing on the same model: the model reads a
+  whitespace-padded `/` as "or" (either/or) rather than "and" often enough to drop the
+  whole order, with nothing shown to the customer to indicate it happened. A
+  prompt-only instruction to treat `/` like `,` did not move the failure rate in the
+  same live comparison, so the fix normalizes the text itself — only a slash with
+  whitespace on both sides, never a tight `1/2` or `50/50` — upstream of both the
+  model call and every deterministic parser. Post-fix slash success rate matched the
+  comma baseline in the same live comparison. A "CRITICAL MULTI-ITEM RULE" prompt
+  clarification was also added to both system-prompt builders as low-cost
+  defense-in-depth; the deterministic normalizer is the load-bearing part.
+- **`11018994` (2026-09-17 00:24) — the normalizer must not rewrite a real menu item's
+  own name.** QA found Vito's live menu has two items literally named `Cheesesteak /
+  Chicken Cheesesteak`. The system prompt has the model recite menu names verbatim, so
+  a customer naming that item back was silently split into two items by the
+  normalizer before the model ever saw the message. Fixed by fetching the shop's live
+  menu item names (`fetchLiveMenuItemNames`) and skipping any spaced slash that falls
+  inside a name the customer's text matches (case-insensitive, whitespace-collapsed) —
+  every other slash still normalizes as before.
+- **`3f57618b` (01:22) — perf follow-up.** The menu-name-collision guard above was
+  running two DB round trips on every single customer turn, on every shop, regardless
+  of whether the message had a slash in it — a pure tax on the hottest path in the
+  app. `normalizeSlashShorthand` already no-ops with an empty protected-names list
+  when there's nothing to normalize, so the fetch is now gated behind the same cheap
+  regex test the normalizer itself needs to match.
+- **`79da3d38` (01:23) — merge.** Commit message states: full suite 1446/1446 green,
+  GUARD count (26) and reply/finalReply count (52) both unchanged, tree clean except
+  intended files, `deno check` clean.
+
+### Verified independently for this doc sync, not taken from the commit messages
+
+- **Full `chat-sms` + `_shared` Deno suite, run locally at `HEAD` (`79da3d38`): 1446
+  passed, 0 failed, 7 ignored** — matches the merge commit's own claim exactly.
+- **Not yet deployed.** Downloaded the `chat-sms` artifact directly (project ref
+  `rvdqfxtrskxekfkqnegx`): `index.ts` still carries
+  `// DEPLOY_SHA: fa42a01f89c9d12cd8f70619953e4c3a0fe049ec` — the 2026-09-16 13:38
+  state-table-sweep commit, three commits and a merge behind local `HEAD`. Live
+  traffic on all three real shops is still exposed to the empty-cart failure rate
+  measured above until the next deploy. Flagged in `HANDOFF.md` and `RUNBOOK.md`.
+- The normalizer's call site in `index.ts` runs before either ordering engine, so
+  once deployed this applies regardless of `shops.turn_engine_enabled` on a given
+  shop.
