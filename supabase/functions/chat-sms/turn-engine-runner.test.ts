@@ -1493,10 +1493,13 @@ Deno.test("00-AU RED->GREEN: sauce slot open, 'Just the regular buffalo sauce, p
   const result = await runTurnEngineTurn(input, deps);
 
   assertEquals(proposeCalls, 0, "00-AT: an unresolvable answer to an open slot must never reach PROPOSE");
-  assert(result.reply.includes("Let me list the options for you."), `reply must announce it's about to list the options: ${result.reply}`);
-  for (const name of ["Hot", "BBQ", "Mild", "Sweet & Spicy"]) {
-    assert(result.reply.includes(name), `reply must include the real choice "${name}": ${result.reply}`);
-  }
+  // Jason's wording, 2026-09-17: the question comes FIRST, then the lead-in,
+  // then the list. "Let me list the options for you. What sauce...?" was
+  // rejected -- "Nobody would talk like that."
+  assert(
+    result.reply.includes("What sauce would you like for the Large Buffalo Chicken Pizza? Let me list the options for you: Hot, BBQ, Mild, or Sweet & Spicy."),
+    `the question must come first, then the lead-in, then the list: ${result.reply}`,
+  );
   assertEquals((result.dialogueState.open as { kind: string } | null)?.kind, "slot", "the sauce slot is still open — nothing was resolved by the customer's message");
 });
 
@@ -1514,7 +1517,7 @@ Deno.test("00-AU: the FIRST ask for a slot is still short by default — no choi
     result.reply.startsWith("What sauce would you like for the Large Buffalo Chicken Pizza?"),
     `first ask must be the short question, unmodified (a money footer may follow it): ${result.reply}`,
   );
-  assert(!result.reply.includes("Let me list the options for you."), `first ask must not carry the enumerate lead-in: ${result.reply}`);
+  assert(!result.reply.includes("Let me list the options for you"), `first ask must not carry the enumerate lead-in: ${result.reply}`);
   for (const name of ["Hot", "BBQ", "Mild", "Sweet & Spicy"]) {
     assert(!result.reply.includes(name), `first ask must not include the choice name "${name}": ${result.reply}`);
   }

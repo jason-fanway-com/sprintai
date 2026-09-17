@@ -394,7 +394,7 @@ function formatDelta(cents: number): string {
 // Both cases are decided by the caller (resolveAndPriceSelections below),
 // never by the model — same "code decides, model relays" discipline as
 // before, just against a shorter default.
-export function renderStepQuestion(step: CompiledStep, displayName: string, enumerate = false): string {
+export function renderStepQuestion(step: CompiledStep, displayName: string, enumerate = false, leadIn?: string): string {
   const key = step.prompt_template.split(".")[0] || "";
   const template = TEMPLATE_QUESTIONS[key];
   const base = template
@@ -407,7 +407,27 @@ export function renderStepQuestion(step: CompiledStep, displayName: string, enum
   // row to omit prices from) show price deltas alongside each choice, same
   // as before this fix; every other known group lists bare choice names.
   const withPrices = !template || key === "size";
-  return `${base} ${renderChoiceList(step.choices, withPrices)}.`;
+  // 00-AU: an optional lead-in sits BETWEEN the question and the list, so the
+  // reply reads the way a person talks: "What sauce would you like for the
+  // Large Buffalo Chicken Pizza? Let me list the options for you: Hot, BBQ,
+  // Mild, Sweet & Spicy." Jason, 2026-09-17, on the first wording, which put
+  // the lead-in first: "Nobody would talk like that." Every caller that
+  // passes no leadIn (i.e. every legacy-path caller) gets byte-identical
+  // output to before.
+  const lead = leadIn ? `${leadIn} ` : "";
+  // 00-AU: on the lead-in path only (the turn engine's "you answered and I
+  // could not read it, here are the real options" moment), drop the price
+  // annotations when NOTHING in the group costs extra -- "Hot (no extra
+  // charge), BBQ (no extra charge), Mild (no extra charge), or Sweet & Spicy
+  // (no extra charge)" is noise, and Jason asked for bare names. Scoped
+  // deliberately to leadIn callers: the legacy path's all-zero rendering is
+  // pinned by ask-plan-engine.test.ts ("Mild (no extra charge) or Hot (no
+  // extra charge)") and is a separate, deliberate decision -- changing it is
+  // not this dispatch's call. A group where ANY choice carries a real delta
+  // still shows every price here, exactly as before.
+  const allFree = step.choices.every(c => c.price_delta_cents === 0);
+  const showPrices = withPrices && !(leadIn && allFree);
+  return `${base} ${lead}${renderChoiceList(step.choices, showPrices)}.`;
 }
 
 // PO fix (2026-09-11): deterministic detector for "the customer is asking

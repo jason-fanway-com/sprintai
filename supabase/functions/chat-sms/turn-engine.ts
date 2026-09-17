@@ -902,7 +902,7 @@ export interface RenderContext {
 // you and then list the options." Deterministic, code-authored, identical
 // every run; never shown on a slot's first ask (renderStepQuestion's default
 // `enumerate: false` stays untouched for that case).
-const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you.";
+const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you:";
 
 export function render(
   cartBefore: TurnEngineCartLine[],
@@ -938,7 +938,7 @@ export function render(
           const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
           if (menuItem?.ask_plan && step) {
             question = context.enumerateSlotChoices
-              ? `${ENUMERATE_SLOT_CHOICES_LEAD_IN} ${renderStepQuestion(step, menuItem.ask_plan.display_name, true)}`
+              ? renderStepQuestion(step, menuItem.ask_plan.display_name, true, ENUMERATE_SLOT_CHOICES_LEAD_IN)
               : renderStepQuestion(step, menuItem.ask_plan.display_name);
           }
           break;
