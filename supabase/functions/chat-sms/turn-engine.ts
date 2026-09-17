@@ -427,7 +427,12 @@ export function answer(
     if (isExplicitCheckoutIntent(trimmed, null, false)) {
       return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
     }
-    if (BARE_CLOSURE_RE.test(trimmed)) {
+    // 00-BK: this is the "Anything else?" state -- open === null -- and it had
+    // its OWN closure check, still bare-only, so loosening the shared
+    // closureOrAffirmationFallback never touched the single most common loop
+    // in the product. The same one-call-site-of-two mistake this engine keeps
+    // producing, committed here by the fix for it.
+    if (impliesClosure(trimmed)) {
       return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
     }
     return UNRESOLVED;
