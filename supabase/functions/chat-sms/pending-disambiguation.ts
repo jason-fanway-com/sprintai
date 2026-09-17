@@ -195,6 +195,38 @@ export function isPendingDisambiguationDeclined(
   return false;
 }
 
+// Dispatch 00-AT (conv 8b9636c9 live repro, and conv b65b60eb "Lobster
+// Bisque - Bowl" vs "Cup"): category is frequently the SAME across every
+// candidate a disambiguation ever offers (three Jack's Special sizes are
+// all "Pizza"; a soup's Bowl/Cup pair are both whatever category that soup
+// lives in) — categoryWordMatches can never tell them apart, so a customer
+// who answers by naming the size/variant word itself ("Medium", "the bowl")
+// fell through every existing tier and the question stayed open forever
+// while every OTHER message that turn got re-read as a fresh order (see
+// turn-engine-runner.ts's own header on this dispatch). Candidates' own
+// NAME (and display_name, when the compiler minted one) routinely DOES
+// carry the distinguishing word even when category doesn't — this tier
+// scores each candidate by how many of its own name/display_name stems the
+// message shares, and resolves only when exactly one candidate has a
+// strictly higher count than every other (a tie, or an all-zero score,
+// resolves nothing — same "never guess" discipline as every tier below).
+function nameWordMatches(candidates: PendingCandidate[], message: string): PendingCandidate | null {
+  const msgStems = significantStems(message);
+  if (msgStems.size === 0) return null;
+  const counts = candidates.map(c => {
+    const nameStems = new Set(significantStems(c.name));
+    if (c.display_name) for (const s of significantStems(c.display_name)) nameStems.add(s);
+    let count = 0;
+    for (const s of msgStems) if (nameStems.has(s)) count++;
+    return count;
+  });
+  const max = Math.max(...counts);
+  if (max === 0) return null;
+  const winners = counts.filter(c => c === max);
+  if (winners.length !== 1) return null;
+  return candidates[counts.indexOf(max)];
+}
+
 const ORDINAL_WORDS: Record<string, number> = { first: 0, second: 1, third: 2, fourth: 3, fifth: 4 };
 // Deliberately excludes "one": it is the single most common English filler
 // pronoun ("the salad ONE", "that ONE", "the 12.95 ONE") and would falsely
@@ -269,6 +301,9 @@ export function resolvePendingDisambiguation(
 ): PendingCandidate | null {
   const categoryHits = candidates.filter(c => categoryWordMatches(c.category, message));
   if (categoryHits.length === 1) return categoryHits[0];
+
+  const nameMatch = nameWordMatches(candidates, message);
+  if (nameMatch) return nameMatch;
 
   const posIdx = matchOrdinalPosition(message, candidates.length);
   if (posIdx !== null) return candidates[posIdx];

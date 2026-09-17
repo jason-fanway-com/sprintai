@@ -561,6 +561,36 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       default:
         break;
     }
+  } else if (priorState.open?.kind === "slot" || priorState.open?.kind === "disambiguation") {
+    // Dispatch 00-AT (conv 8b9636c9: "every message is re-read as a fresh
+    // order while a question is open"). ANSWER's own resolver for this
+    // exact open kind — and, after that, closureOrAffirmationFallback —
+    // already had first crack at this message and both missed. Falling
+    // through to PROPOSE from here is exactly the defect: PROPOSE's own
+    // prompt hands the model the full cart (already containing California
+    // Cheesesteak, fully resolved) alongside the customer's message, but
+    // nothing about the contract forces it to recognize "the customer is
+    // naming/restating the SAME order, not asking for more" — it re-added
+    // Cheesesteak (2 -> 4 -> 6 -> 12) on repeated turns while the item the
+    // open question was actually about (Jack's Special) never entered the
+    // cart, because the model kept re-surfacing it as ambiguous rather than
+    // the disambiguation resolver settling it once, deterministically, up
+    // front. `slot` and `disambiguation` are the two kinds a real answer
+    // shape always fully anticipates (a slot has a concrete choice list;
+    // a disambiguation names its own candidates) — a message that fails to
+    // read as either can only be noise or a protest, never legitimate new
+    // information PROPOSE needs to interpret. No cart mutation, no model
+    // call: the SAME question is re-asked next, exactly once.
+    if (priorState.open.kind === "disambiguation") {
+      // ASK's pendingAmbiguous queue only ever holds a disambiguation
+      // BEFORE it wins priority — once one is `open`, its candidates live
+      // on `open` itself and nowhere else (see turn-engine.ts's own doc on
+      // DialogueState.pendingAmbiguous), so a no-op turn has to hand them
+      // back explicitly or ASK has nothing left to recompute the question
+      // from and silently drops it — the exact "item asked for and never
+      // added, never even mentioned again" failure this dispatch closes.
+      turnEvents = { ...turnEvents, disambiguationCandidateIds: priorState.open.candidates };
+    }
   } else {
     // ── STEP 3: PROPOSE (only reached when ANSWER cannot resolve this
     // message deterministically — no model call otherwise) ────────────────
