@@ -298,6 +298,33 @@ export interface AnswerExternalInputs {
 }
 
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
+// 00-BG: the SAME defect as the name question and the confirm gate, a third
+// time. BARE_CLOSURE_RE is anchored to the whole message, so "nope" closes the
+// order and "Nope, that's it for now!" does not. Live, from one run, each
+// answered with "Anything else?" again:
+//   "Nope, that's it for now!"
+//   "No, that's all! Just the small Meat Lover, large Meat Lover, and side salad for pickup."
+//   "That's all I want! Just the wings for pickup."
+//   "I think I'm good! Just the Coke and onion rings."
+// That is the "same question asked 3+ times" property at 81%, and it is what
+// burns the turns a conversation needs to reach checkout.
+//
+// Reads closure ANYWHERE in the message, then requires that the customer is
+// not simultaneously asking for something. The add-marker guard is the same
+// one the restatement fix uses: "no, that's all BUT ALSO add a coke" must not
+// close the order.
+const CLOSURE_ANYWHERE_RE =
+  /\b(?:that'?s (?:it|all|everything)|thats (?:it|all|everything)|nothing (?:else|more)|no(?:thing)? more|i'?m (?:good|done|all set)|im (?:good|done)|we'?re good|all set|that(?: will|'?ll) be (?:it|all))\b/i;
+const CLOSURE_BLOCKED_BY_RE =
+  /\b(?:also|another|one more|1 more|add |plus |as well|too\b|actually|instead|change|wait|but )\b/i;
+
+export function impliesClosure(message: string): boolean {
+  const m = (message ?? "").trim();
+  if (!m) return false;
+  if (BARE_CLOSURE_RE.test(m)) return true;
+  if (CLOSURE_BLOCKED_BY_RE.test(m)) return false;
+  return CLOSURE_ANYWHERE_RE.test(m);
+}
 const ORDER_TYPE_PICKUP_RE = /\bpick[\s-]?up\b/i;
 const ORDER_TYPE_DELIVERY_RE = /\bdeliver(?:y|ed)?\b/i;
 // Mirrors intent-router.ts's detectBareTipReply decline shape, narrowed to
@@ -336,7 +363,7 @@ function closureOrAffirmationFallback(trimmed: string): AnswerResult | null {
   if (isExplicitCheckoutIntent(trimmed, null, false)) {
     return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
   }
-  if (BARE_CLOSURE_RE.test(trimmed) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
+  if (impliesClosure(trimmed) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
     return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
   }
   return null;
