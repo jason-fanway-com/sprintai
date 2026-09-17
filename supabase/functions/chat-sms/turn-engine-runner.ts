@@ -694,6 +694,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       input.menu,
       lexicon,
       deps.newLineKey ?? (() => crypto.randomUUID()),
+      input.message,   // 00-BD: to tell a restatement from a new order
     );
     workingCart.splice(0, workingCart.length, ...decideResult.cart);
     declines = decideResult.declines;

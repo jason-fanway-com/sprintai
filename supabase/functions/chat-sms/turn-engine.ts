@@ -583,6 +583,46 @@ function applyRemoveChoiceIds(
   line.price_cents = priceCents;
 }
 
+// 00-BD: people confirm an order by repeating it, and that was being read as
+// a second order. Live, all three from one run:
+//
+//   "Nope, that's it. Just to recap: 1x Gyro - Small pizza..."   -> "House - now 2."
+//   "I didn't order anything else! Just the 2 Italian wraps..."  -> "Italian Wrap - now 4."
+//   "I think there's a mistake. I just wanted a small White..."  -> "Small White Pizza - now 2."
+//
+// Two of those are the customer COMPLAINING ABOUT AN ERROR and being charged
+// more for it. Same family as the 06:15 fix, which only covers the case where
+// a menu-choice question is open; here the open question is "Anything else?",
+// so the model runs and sees item names.
+//
+// Deliberately conservative: this suppresses an add ONLY when the customer's
+// own words carry a restatement marker AND no addition marker, AND the add
+// duplicates a line already in the cart. A genuine "another one" or "also add
+// a coke" is untouched. Reads the CUSTOMER's text, never the model's prose.
+//
+// Failure direction is the reason this is safe to do: wrongly suppressing
+// under-adds, which the customer can now correct because removes and changes
+// work again; wrongly adding overcharges them, which they cannot undo after
+// paying.
+const RESTATEMENT_MARKERS = [
+  "to recap", "just to recap", "recap:", "that's it", "thats it", "that is it",
+  "i just wanted", "i only wanted", "i just want", "i only want",
+  "i didn't order", "i didnt order", "i already", "as i said", "like i said",
+  "just the", "only the", "my order is", "so that's", "so thats",
+  "nothing else", "no changes",
+];
+const ADDITION_MARKERS = [
+  "another", "one more", "1 more", "also", "add ", "extra", "plus ",
+  "as well", " too", "additional", "and a ", "and an ", "and some",
+];
+
+export function isRestatementOfExistingOrder(message: string | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  if (ADDITION_MARKERS.some(a => m.includes(a))) return false;
+  return RESTATEMENT_MARKERS.some(r => m.includes(r));
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -594,6 +634,9 @@ export function decide(
   // resolve-item.ts's header for why this can never fall back to the model
   // or break a tie.
   lexicon: LexiconTerm[],
+  // 00-BD: the customer's own message this turn. Used ONLY to tell a
+  // restatement from a new order -- see isRestatementOfExistingOrder below.
+  // Optional so every existing caller and test is unchanged.
   // Injected (same DI pattern as propose.ts's ProposeDeps clock/transport) —
   // never `crypto.randomUUID()` called directly in this file, so this
   // module's determinism (every existing assertion here is an exact value,
@@ -604,6 +647,7 @@ export function decide(
   // gets a stable line_key — identical to this function's behavior before
   // stable keys existed.
   newLineKey?: () => string,
+  customerMessage?: string,
 ): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
@@ -673,7 +717,22 @@ export function decide(
     if (!existing || add.quantity > existing.quantity) addGroups.set(key, add);
   }
 
+  // 00-BD: if the customer is restating an order they already placed, an add
+  // that duplicates a line already in the cart is not a new order. Checked
+  // against the cart as it stood BEFORE this turn's adds, so two genuinely
+  // distinct adds in one message still both land.
+  const restating = isRestatementOfExistingOrder(customerMessage);
+  const menuItemIdsAlreadyInCart = new Set(
+    cart.filter(isRealCartLine).map(l => l.menu_item_id),
+  );
+
   for (const add of addGroups.values()) {
+    if (restating && menuItemIdsAlreadyInCart.has(add.menu_item_id)) {
+      // Silent on purpose: the customer is confirming, not asking for
+      // anything. Telling them we skipped something would be confusing, and
+      // the money footer already shows them exactly what is in the cart.
+      continue;
+    }
     const menuItem = menuById.get(add.menu_item_id);
     if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
