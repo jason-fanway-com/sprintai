@@ -649,9 +649,26 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
         }
         break;
-      // slot_resolved / address_declined / upsell_accepted / upsell_declined /
-      // closure: cart already mutated in place by answer() where relevant,
-      // nothing else to persist or feed into ASK.
+      // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
+      // must advance exactly as an explicit checkout phrase does. It did not.
+      // "thats it" matched the explicit-checkout phrase and moved on to the
+      // name question; "nothing else" resolved as `closure`, which ASK treats
+      // as a no-op -- it resolved the turn and left "Anything else?" open, so
+      // the customer was asked it again. That is why loosening the closure
+      // detector barely moved the repeat number: more messages resolved, into
+      // an outcome that goes nowhere.
+      //
+      // Gated on a non-empty cart deliberately: closure over an EMPTY cart is
+      // 00-AK's dead end ("Anything else?" presupposing a first item), which
+      // must keep its own handling.
+      case "closure":
+        if (workingCart.some(l => typeof l.menu_item_id === "string")) {
+          turnEvents = { ...turnEvents, checkoutIntentThisTurn: true };
+        }
+        break;
+      // slot_resolved / address_declined / upsell_accepted / upsell_declined:
+      // cart already mutated in place by answer() where relevant, nothing else
+      // to persist or feed into ASK.
       default:
         break;
     }
