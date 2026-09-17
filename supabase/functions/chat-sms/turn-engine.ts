@@ -101,6 +101,7 @@
 //    regression — flagged for a later phase.
 
 import type { AskPlan } from "../_shared/compile-menu.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
 import {
   applyCompiledAddItem,
   applyCompiledModifyItem,
@@ -532,6 +533,9 @@ interface ResolvedAdd {
   menu_item_id: string;
   quantity: number;
   choices: Array<{ group_id: string; choice_id: string }>;
+  // 00-BF: the customer's own words for THIS add, kept so the modifier floor
+  // can scope its text to this item's phrase instead of the whole turn.
+  item_span?: string;
 }
 
 function addIdentityKey(add: ResolvedAdd) {
@@ -584,6 +588,49 @@ function applyRemoveChoiceIds(
   line.ask_plan_selections = selections;
   line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
   line.price_cents = priceCents;
+}
+
+// 00-BF: the modifier floor. "2 Regular Slices with sausage" loses the sausage
+// EVERY time -- reproduced 4 of 4 against the live build. The menu data is
+// correct (that item carries 16 toppings, "Sausage" spelled exactly), the
+// phrase splitter isolates the right phrase, and the resolver matches it
+// instantly WHEN TOLD. The model simply never asserts the choice, and code
+// deliberately will not read it from the customer's text -- so nothing catches
+// a word sitting in plain sight. That is the "item asked for but never added"
+// property, stuck near 28% all day and unmoved by every other fix.
+//
+// This is a FLOOR, not a return to free-text scanning. Every one of these must
+// hold before a choice is applied:
+//   1. the model asserted NOTHING for this add (we never override the model)
+//   2. the text is scoped by scopedModifierText -- the item's OWN phrase, with
+//      the item's own display name stripped as a contiguous unit. That helper
+//      exists because unscoped matching once applied and CHARGED a "Bacon"
+//      topping that was only three letters of another item's name; its header
+//      asks a future resolver to reuse it rather than re-derive it. This is
+//      that resolver.
+//   3. whole-word match against THIS item's own compiled choices only
+//   4. exactly one choice matches -- a tie resolves nothing, never a guess
+//   5. no negation anywhere in the scoped text
+//
+// A false positive here ADDS A PAID TOPPING, which the customer cannot undo
+// after paying. So every ambiguity resolves to doing nothing.
+const MODIFIER_NEGATION_RE = /\b(?:no|not|without|hold|skip|minus|except|omit|leave off|lose the)\b/i;
+
+export function recoverAssertedChoiceFromText(
+  scopedText: string,
+  choices: Array<{ id: string; display: string }>,
+): string | null {
+  const text = (scopedText ?? "").trim();
+  if (!text || choices.length === 0) return null;
+  if (MODIFIER_NEGATION_RE.test(text)) return null;
+  const hay = text.toLowerCase();
+  const hits = choices.filter(c => {
+    const d = (c.display ?? "").trim().toLowerCase();
+    if (d.length < 3) return false;
+    return new RegExp(`\\b${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i").test(hay);
+  });
+  if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
+  return hits[0].id;
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
@@ -721,7 +768,7 @@ export function decide(
   for (const add of proposal.adds ?? []) {
     const resolution = resolveItem(add.item_span, lexicon);
     if (resolution.kind === "resolved") {
-      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices });
+      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
       ambiguousSpans.push(resolution.candidates);
     } else {
@@ -775,7 +822,20 @@ export function decide(
     const menuItem = menuById.get(add.menu_item_id);
     if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
-    const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, add.choices ?? []);
+    // 00-BF: the modifier floor. Only when the model asserted NOTHING for this
+    // add -- we never override or second-guess a choice it did make.
+    let effectiveChoices = add.choices ?? [];
+    if (effectiveChoices.length === 0 && customerMessage) {
+      const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
+      const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
+      const scoped = scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
+      for (const step of menuItem.ask_plan.steps) {
+        if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
+        const recovered = recoverAssertedChoiceFromText(scoped, step.choices);
+        if (recovered) effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+      }
+    }
+    const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
