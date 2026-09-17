@@ -61,6 +61,98 @@ export function impliesUpsellDecline(text: string): boolean {
 // heuristic for its ANSWER step's `name` resolution, matching the more
 // permissive (C2b-name) shape. If the PO later decides to unify all three
 // call sites, this is the function to converge on, or replace.
+// 00-AV (2026-09-17): looksLikeCustomerName above answers "is this message
+// NOTHING BUT a name". That is the wrong question to ask a person. In a live
+// sim run a customer answered "It's Alex!" and "My name is Alex!" nine times
+// and was asked "What's the name for the order?" nine times, because neither
+// message IS a bare name. Nothing caps the repeat, so the only exit was the
+// customer leaving -- and that is what they did.
+//
+// This reads the name OUT of the message. Deterministic, no model call: a
+// small set of carrier phrases people actually use, then the same shape test
+// as above applied to what they carried.
+//
+// Bias, stated deliberately: a WRONG name is low harm and visible on the
+// receipt; an unanswerable question repeated forever loses the order. So this
+// leans toward extracting. The blocklists below exist to stop the specific
+// harm of stamping an order "Pickup" or "Yes", not to be exhaustive.
+
+const NOT_A_NAME = new Set([
+  "yes", "yeah", "yep", "yup", "no", "nope", "ok", "okay", "sure", "thanks",
+  "thank you", "please", "pickup", "pick up", "delivery", "deliver", "cash",
+  "card", "hi", "hello", "hey", "stop", "help", "done", "nothing", "none",
+  "that's it", "thats it", "no thanks", "it", "me", "mine", "us", "the name",
+  "not important", "for pickup", "for delivery", "same", "whatever",
+]);
+
+// A token that, appearing anywhere in the candidate, means it is not a name.
+const NOT_NAME_TOKENS = new Set([
+  "not", "no", "pickup", "delivery", "order", "pizza", "please", "just",
+  "the", "a", "an", "how", "what", "when", "where", "why", "can", "could",
+  "would", "should", "do", "does", "is", "are", "was", "were", "i", "we",
+  "you", "they", "my", "your", "finish", "complete", "finalize", "said",
+  "told", "name", "names", "thanks", "thank", "want", "need", "get",
+]);
+
+// "Alex! Can we finalize" -> "Alex". Cut at the first terminal punctuation,
+// then at the first conversational connector.
+function trimToName(raw: string): string {
+  let s = raw.trim().replace(/^["'`]+/, "");
+  const punct = s.search(/[.,!?;:]/);
+  if (punct >= 0) s = s.slice(0, punct);
+  s = s.replace(/\s+(?:can|please|lets|let's|and|that|thats|that's|i|we|you)\b.*$/i, "");
+  return s.trim();
+}
+
+function acceptName(candidate: string): string | null {
+  const s = trimToName(candidate);
+  if (!s) return null;
+  if (/\d/.test(s)) return null;
+  const lower = s.toLowerCase();
+  if (NOT_A_NAME.has(lower)) return null;
+  const tokens = lower.split(/\s+/);
+  if (tokens.length > 3) return null;
+  if (tokens.some(t => NOT_NAME_TOKENS.has(t))) return null;
+  if (!looksLikeCustomerName(s)) return null;
+  return s;
+}
+
+const NAME_CARRIERS: RegExp[] = [
+  /(?:^|\b)(?:my |the )?names?(?:'s)?\s+(?:is\s+)?(.+)$/i,
+  /(?:^|\b)(?:it'?s|this is|i'?m|im)\s+(.+)$/i,
+  /(?:^|\b)(?:put (?:it|me) )?under\s+(.+)$/i,
+];
+
+/**
+ * Read a customer's name out of whatever they actually typed, or null.
+ * Tries, in order: a carrier phrase ("my name is X", "it's X", "under X"),
+ * a leading name followed by punctuation ("Alex! That's the name!"), then
+ * the whole message as a bare name (the original behavior, preserved).
+ */
+export function extractCustomerName(text: string): string | null {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return null;
+
+  for (const re of NAME_CARRIERS) {
+    const m = trimmed.match(re);
+    if (m?.[1]) {
+      const got = acceptName(m[1]);
+      if (got) return got;
+    }
+  }
+
+  // "Alex! That's the name!" -- a name is only read off the front when it is
+  // immediately followed by punctuation, so "How much is it?" and "I want a
+  // pizza" cannot match on their first word.
+  const lead = trimmed.match(/^([A-Za-z][A-Za-z'\-]{1,29})[.,!?;:]/);
+  if (lead?.[1]) {
+    const got = acceptName(lead[1]);
+    if (got) return got;
+  }
+
+  return acceptName(trimmed);
+}
+
 export function looksLikeCustomerName(text: string): boolean {
   const trimmed = text.trim();
   return /^[A-Za-z][A-Za-z .'-]{0,30}$/.test(trimmed) && trimmed.split(/\s+/).length <= 3;

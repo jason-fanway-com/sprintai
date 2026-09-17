@@ -1522,3 +1522,38 @@ Deno.test("00-AU: the FIRST ask for a slot is still short by default — no choi
     assert(!result.reply.includes(name), `first ask must not include the choice name "${name}": ${result.reply}`);
   }
 });
+
+// ── 00-AV: the nine-times name loop, end to end ────────────────────────────
+//
+// 00-BT above proves a BARE name ("Joe") resolves. Live customers do not send
+// bare names. In a 100-conversation sim run against 1992f4ab a customer sent
+// "It's Alex!" and "My name is Alex!" nine times and was asked "What's the
+// name for the order?" nine times, then quit. This drives the real phrasings
+// through the whole turn and asserts the question is not re-asked.
+Deno.test("00-AV RED->GREEN: a name inside a sentence resolves the open 'name' question — the real phrasings from the live nine-times loop", async () => {
+  for (const message of [
+    "It's Alex! Can we finalize this order now?",
+    "My name is Alex! Can we please just complete the order now?",
+    "I already told you, the name is Alex! Let's finish this up!",
+    "Alex! That's the name! Can we finalize it now?",
+  ]) {
+    const priorState: DialogueState = { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null };
+    const cart: TurnEngineCartLine[] = [
+      { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+    ];
+    const deps = baseDeps({ proposeTurnFn: () => Promise.reject(new Error("must not be called — ANSWER resolves the name deterministically")) });
+    const input = baseInput({
+      message,
+      cart,
+      dialogueState: priorState,
+      shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+    });
+
+    const result = await runTurnEngineTurn(input, deps);
+
+    assert(
+      !result.reply.includes("What's the name for the order?"),
+      `the name question must not be re-asked after "${message}" — reply: ${JSON.stringify(result.reply)}`,
+    );
+  }
+});

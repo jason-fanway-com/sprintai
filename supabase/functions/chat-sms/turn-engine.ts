@@ -133,6 +133,7 @@ import {
   impliesUpsellAcceptance,
   impliesUpsellDecline,
   looksLikeCustomerName,
+  extractCustomerName,
 } from "./dialogue-signals.ts";
 import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
 
@@ -432,7 +433,15 @@ export function answer(
     }
 
     case "name": {
-      if (looksLikeCustomerName(trimmed)) return { resolved: true, outcome: { kind: "name_resolved", name: trimmed }, cartChanged: false };
+      // 00-AV: read the name OUT of the message rather than demanding the
+      // message be nothing but a name. "It's Alex!" and "My name is Alex!"
+      // both used to fall through to UNRESOLVED, and with nothing capping the
+      // repeat the customer was asked their own name nine times and left.
+      // Note this also stops "that's it" being accepted AS a name, which the
+      // bare shape test allowed -- it now falls through to closure below,
+      // where it belongs.
+      const extractedName = extractCustomerName(trimmed);
+      if (extractedName) return { resolved: true, outcome: { kind: "name_resolved", name: extractedName }, cartChanged: false };
       return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
