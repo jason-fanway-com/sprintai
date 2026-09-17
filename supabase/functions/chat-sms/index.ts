@@ -5443,7 +5443,15 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // normalizer can leave alone a slash that's actually part of a real menu
   // item's name (e.g. Vito's "Cheesesteak / Chicken Cheesesteak") rather
   // than shorthand for "and". See slash-shorthand-normalize-20260916.ts.
-  const liveMenuItemNamesForNormalize = await fetchLiveMenuItemNames(supabase, shop.id);
+  // Latency/scale fix (2026-09-17, live QA): the overwhelming majority of
+  // turns contain no slash at all, so fetchLiveMenuItemNames' two DB round
+  // trips were running on every single customer message, on every shop,
+  // forever -- pure tax. normalizeSlashShorthand already no-ops with no
+  // protected names when there's no spaced slash, so skip the fetch (and
+  // its latency) whenever the raw text can't possibly match.
+  const liveMenuItemNamesForNormalize = /\s\/\s/.test(userMessage)
+    ? await fetchLiveMenuItemNames(supabase, shop.id)
+    : [];
   userMessage = normalizeSlashShorthand(userMessage, liveMenuItemNamesForNormalize);
 
   // ── Find or create conversation ───────────────────────────────────────────
