@@ -37,3 +37,65 @@ Deno.test("normalizeSlashShorthand: one-sided whitespace is left alone (narrow, 
   assertEquals(normalizeSlashShorthand("w/ fries"), "w/ fries");
   assertEquals(normalizeSlashShorthand("fries /w gravy"), "fries /w gravy");
 });
+
+// Regression (2026-09-17, live QA report): Vito's real live menu (shop
+// vitos-pizza) has two menu_items both literally named
+// "Cheesesteak / Chicken Cheesesteak". The system prompt tells the model to
+// recite menu item names verbatim, so the bot itself says this name to the
+// customer -- if the customer names it back, the normalizer must not split
+// it into two items.
+Deno.test("normalizeSlashShorthand: does not split a live menu item name that itself contains a spaced slash", () => {
+  const liveMenuItemNames = ["Cheesesteak / Chicken Cheesesteak", "Coke", "Sprite"];
+
+  assertEquals(
+    normalizeSlashShorthand("Cheesesteak / Chicken Cheesesteak", liveMenuItemNames),
+    "Cheesesteak / Chicken Cheesesteak",
+  );
+  assertEquals(
+    normalizeSlashShorthand("I'll take the Cheesesteak / Chicken Cheesesteak please", liveMenuItemNames),
+    "I'll take the Cheesesteak / Chicken Cheesesteak please",
+  );
+  assertEquals(
+    normalizeSlashShorthand("yes, Cheesesteak / Chicken Cheesesteak", liveMenuItemNames),
+    "yes, Cheesesteak / Chicken Cheesesteak",
+  );
+  // Case-insensitive match.
+  assertEquals(
+    normalizeSlashShorthand("cheesesteak / chicken cheesesteak please", liveMenuItemNames),
+    "cheesesteak / chicken cheesesteak please",
+  );
+});
+
+// Synthetic equivalent of the ITEMK test-fixture shape (menu item name with
+// multiple spaced slashes): "Traditional Cheesesteak / Chicken / Vegetarian
+// (Small/Regular)". Every spaced slash inside the protected name must
+// survive, while an unrelated spaced slash elsewhere in the same message
+// still normalizes.
+Deno.test("normalizeSlashShorthand: does not split a multi-slash live menu item name (ITEMK-shape)", () => {
+  const liveMenuItemNames = ["Traditional Cheesesteak / Chicken / Vegetarian (Small/Regular)"];
+
+  assertEquals(
+    normalizeSlashShorthand("Traditional Cheesesteak / Chicken / Vegetarian (Small/Regular)", liveMenuItemNames),
+    "Traditional Cheesesteak / Chicken / Vegetarian (Small/Regular)",
+  );
+  assertEquals(
+    normalizeSlashShorthand(
+      "I'll get the Traditional Cheesesteak / Chicken / Vegetarian (Small/Regular) / thats it",
+      liveMenuItemNames,
+    ),
+    "I'll get the Traditional Cheesesteak / Chicken / Vegetarian (Small/Regular), thats it",
+  );
+});
+
+Deno.test("normalizeSlashShorthand: original bug phrasing still normalizes when it does not match a menu item name", () => {
+  const liveMenuItemNames = ["Cheesesteak / Chicken Cheesesteak"];
+
+  assertEquals(
+    normalizeSlashShorthand("cheeseburger / medium / thats it", liveMenuItemNames),
+    "cheeseburger, medium, thats it",
+  );
+  assertEquals(
+    normalizeSlashShorthand("coke / sprite / thats it", liveMenuItemNames),
+    "coke, sprite, thats it",
+  );
+});

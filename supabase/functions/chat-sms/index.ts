@@ -843,6 +843,39 @@ async function buildEffectiveMenu(
   return { menu: effectiveItems, soldOutNames };
 }
 
+// Bug fix (2026-09-17, slash-shorthand menu-name collision): a lightweight
+// sibling to buildEffectiveMenu() that returns just the shop's current
+// active-menu item names, with none of the option-group/sold-out/bot_state
+// assembly. Needed at the normalizeSlashShorthand() call site, which runs
+// before businessDate is computed (buildEffectiveMenu's full result isn't
+// available yet at that point in the request flow) -- see
+// slash-shorthand-normalize-20260916.ts for why this guard exists. Being
+// slightly over-inclusive here (e.g. an item currently sold out for today
+// but still active/on-menu) is harmless: worst case we skip normalizing a
+// phrase that happens to match, which is the safe, conservative outcome.
+async function fetchLiveMenuItemNames(supabase: SupabaseClient, shopId: string): Promise<string[]> {
+  const { data: menu } = await supabase
+    .from("menus")
+    .select("id")
+    .eq("shop_id", shopId)
+    .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!menu) return [];
+
+  const items = await fetchAllRows<{ name: string }>(() =>
+    supabase
+      .from("menu_items")
+      .select("name")
+      .eq("menu_id", menu.id)
+      .eq("active", true),
+  );
+
+  return items.map(i => i.name);
+}
+
 // ─── System prompt builder ────────────────────────────────────────────────────
 
 // A group whose max_select is >= the number of choices imposes no real limit —
@@ -5405,7 +5438,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // resolve-item.ts all see the same text a comma-delimited message would
   // produce. See slash-shorthand-normalize-20260916.ts for the live-tested
   // rationale (this is a model-reliability fix, not a swallowed tool call).
-  userMessage = normalizeSlashShorthand(userMessage);
+  //
+  // Follow-up (2026-09-17): pass the shop's live menu item names so the
+  // normalizer can leave alone a slash that's actually part of a real menu
+  // item's name (e.g. Vito's "Cheesesteak / Chicken Cheesesteak") rather
+  // than shorthand for "and". See slash-shorthand-normalize-20260916.ts.
+  const liveMenuItemNamesForNormalize = await fetchLiveMenuItemNames(supabase, shop.id);
+  userMessage = normalizeSlashShorthand(userMessage, liveMenuItemNamesForNormalize);
 
   // ── Find or create conversation ───────────────────────────────────────────
   // Conversation-timeout fix (2026-09-09, revised to final spec same day):
