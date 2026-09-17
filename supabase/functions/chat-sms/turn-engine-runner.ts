@@ -626,6 +626,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         lexicon,
         history: input.history,
         message: input.message,
+        // 00-AY: the engine has had all of this on every turn and never passed
+        // it on, so the model interpreted each message with no idea whether the
+        // order was pickup or delivery, whether a name was already given, or
+        // what had already been settled. Published as STATE, not as history.
+        orderContext: {
+          orderType: input.shopContext.orderType ?? null,
+          pickupName: input.shopContext.pickupName ?? null,
+          deliveryAddressKnown: input.shopContext.deliveryAddressKnown,
+          driverTipCents: input.shopContext.driverTipCents ?? null,
+          deliveryEnabled: input.shopContext.deliveryEnabled,
+        },
       },
       {
         supabase: deps.supabase,
@@ -716,7 +727,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // legacy name/choices shape) — only the ask_plan.steps branch is ever
     // populated on a compiled item, which is exactly what this path prices.
     priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
-    enumerateSlotChoices,
+    // 00-AZ: enumerate on ANY genuine repeat of a slot question, not only when
+    // this turn happened to route through the suppression branch above. The
+    // repeat counter now exists for every question kind, so the escalation no
+    // longer depends on which code path re-asked -- if the customer has been
+    // asked the same thing twice, show them the real choices.
+    enumerateSlotChoices: enumerateSlotChoices || (priorState.openRepeatCount ?? 0) >= 1,
   });
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 

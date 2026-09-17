@@ -161,6 +161,10 @@ export interface DialogueState {
     | { kind: "ordering"; askCount: number };
   upsell_offered: boolean;
   asked_message_id: string | null;
+  // 00-AZ: consecutive turns the CURRENT open question has been open. 0 for a
+  // question just opened, 1 the first time it is re-asked, and so on. Optional
+  // so states persisted before this field existed still load. See carry().
+  openRepeatCount?: number;
   // FIXED 2026-09-15 (turn-engine live bug — "two cheeseburgers and a large
   // fries" -> "medium" -> "thats it"): OTHER item_spans a customer's message
   // named that also came back ambiguous, each as its own candidate-id list,
@@ -489,6 +493,12 @@ export interface Decline {
 export interface DecideResult {
   cart: TurnEngineCartLine[];
   declines: Decline[];
+  // 00-AX: the customer's own words for every item that resolved to nothing
+  // this turn. Recorded so the system knows what was ASKED FOR and not
+  // delivered -- the single missing fact behind "that item wasn't in your
+  // order", the silently dropped second item, and a read-back that can only
+  // confirm what the system already believes.
+  unresolvedSpans: string[];
   // The menu_item_id of a line that had a genuine "unit added" event this
   // turn (brand-new line or a merge growth) — feeds ASK's upsell-eligibility
   // check. Null if nothing qualifying happened. Last-one-wins when more than
@@ -618,6 +628,13 @@ export function decide(
   // the second (third, ...) span silently vanishing the moment more than one
   // add ties in the same message.
   const ambiguousSpans: string[][] = [];
+  // 00-AX: spans the customer said that resolved to nothing. Previously these
+  // vanished at the point of failure, so nothing in the system ever knew an
+  // item had been ASKED FOR and not delivered -- which is why the bot could
+  // say "that item wasn't in your order" with complete confidence, and why a
+  // read-back of the order could only ever confirm what the system already
+  // believed rather than what the customer actually said.
+  const unresolvedSpans: string[] = [];
   for (const add of proposal.adds ?? []) {
     const resolution = resolveItem(add.item_span, lexicon);
     if (resolution.kind === "resolved") {
@@ -625,7 +642,20 @@ export function decide(
     } else if (resolution.kind === "ambiguous") {
       ambiguousSpans.push(resolution.candidates);
     } else {
-      declines.push({ reason: "Sorry, I didn't catch what item that was — mind saying it again?" });
+      // 00-AX: NAME the span. The customer's own words are right here in
+      // add.item_span and were being thrown away. An anonymous "what item
+      // that was" is why a customer who ordered two things restates BOTH --
+      // which re-adds the one that DID resolve (the "- now 2" inflation) and
+      // fails again on the one that didn't. Live: "2 bowls of the Soup of the
+      // Day and an Italian sandwich on wheat" -- soup added, sandwich never,
+      // and the customer was never told which half failed.
+      const span = (add.item_span ?? "").trim();
+      declines.push({
+        reason: span
+          ? `Sorry, I didn't catch "${span}" — mind saying it again?`
+          : "Sorry, I didn't catch what item that was — mind saying it again?",
+      });
+      unresolvedSpans.push(span);
     }
   }
   if (ambiguousSpans.length > 0) {
@@ -702,7 +732,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -782,13 +812,39 @@ export function ask(
       : []),
   ];
 
+  // 00-AZ: how many consecutive turns THIS question has been open. Before
+  // this, only `ordering` counted its own repeats -- eight of the nine open
+  // kinds could not tell they were repeating, so nothing could escalate,
+  // rephrase or hand off, and every parse miss became a loop whose only exit
+  // was the customer leaving. Live examples in one 100-conversation run: the
+  // name question asked 9x, the delivery address 14x, a sauce question 11x, a
+  // soup disambiguation 7x.
+  //
+  // Computed HERE because carry() is the single funnel every open question
+  // passes through, so one line covers all nine kinds rather than eight more
+  // special cases. Optional field: a persisted state written before this
+  // change simply starts at 0, so there is no migration.
+  const sameQuestionAsBefore = (open: DialogueState["open"]): boolean =>
+    JSON.stringify(open ?? null) === JSON.stringify(priorState.open ?? null);
+
   const carry = (
     open: DialogueState["open"],
     phase: DialogueState["phase"],
     upsellOffered = priorState.upsell_offered,
     pending: string[][] = pendingAmbiguous,
   ): DialogueState =>
-    ({ phase, open, upsell_offered: upsellOffered, asked_message_id: null, pendingAmbiguous: pending });
+    ({
+      phase,
+      open,
+      upsell_offered: upsellOffered,
+      asked_message_id: null,
+      pendingAmbiguous: pending,
+      openRepeatCount: open === null
+        ? 0
+        : sameQuestionAsBefore(open)
+        ? (priorState.openRepeatCount ?? 0) + 1
+        : 0,
+    });
 
   // 1. unresolved required slot on any line.
   for (const line of cart) {

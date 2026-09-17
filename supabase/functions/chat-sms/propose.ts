@@ -64,8 +64,17 @@ export interface ProposeTurnInput {
   lexicon: LexiconTerm[];
   // Last six turns of conversation history, oldest first — NOT including
   // the current customer message, which is `message` below.
+  //
+  // 00-AY: this stays SMALL deliberately. The engine's contract is that code
+  // owns conversation state and the model only translates one message; widening
+  // this window would let the model rebuild state from prose and re-propose
+  // things already in the cart — the exact defect fixed on 2026-09-17 06:15.
+  // What the model was missing is not history, it is published STATE:
+  // `orderContext` below.
   history: Array<{ role: "user" | "assistant"; content: string }>;
   message: string;
+  // 00-AY: the non-food state of the order — see ProposeOrderContext.
+  orderContext?: ProposeOrderContext;
 }
 
 export interface ProposeDeps {
@@ -194,14 +203,28 @@ function buildCartLineGroups(menuItem: TurnEngineMenuItem | undefined): CartInde
   return groups.length > 0 ? groups : undefined;
 }
 
-function buildCartIndex(cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]): CartIndexEntry[] {
+// 00-AW: exported ONLY so a test can assert the seam. This was private and
+// untested, called once to build a prompt string, so the value the model
+// actually receives was asserted nowhere -- while every remove/modify test
+// hand-wrote the key into the proposal AND onto the cart line, so both halves
+// passed in isolation and the contract between them was never checked.
+export function buildCartIndex(cart: TurnEngineCartLine[], menu: TurnEngineMenuItem[]): CartIndexEntry[] {
   const menuById = new Map(menu.map(item => [item.id, item]));
   return cart
     .filter(line => typeof line.menu_item_id === "string")
     .map(line => {
       const groups = buildCartLineGroups(menuById.get(line.menu_item_id));
       return {
-        line_key: identityKey(line.menu_item_id, line.options),
+        // 00-AW: MUST be the same value findLineByKey compares against
+        // (turn-engine.ts's effectiveLineKey), not a freshly derived one.
+        // This published `identityKey(...)` while the lookup used the line's
+        // real UUID, so every remove and every modify the model proposed
+        // failed to find its line -- the customer was told "That item wasn't
+        // in your order" about an item the bot had just listed, and a failed
+        // modify fell through and became an ADD (the "- now 3" inflation).
+        // Corrections were impossible on every shop from the day they were
+        // flipped to this engine.
+        line_key: line.line_key ?? identityKey(line.menu_item_id, line.options),
         menu_item_id: line.menu_item_id,
         name: line.name,
         quantity: line.quantity,
@@ -224,11 +247,32 @@ Rules:
 - answer_text is allowed ONLY when intent is "question": a short, plain answer, no digits, no item names, at most two sentences. Every other intent must omit answer_text entirely.
 - Call submit_proposal exactly once. It is the only tool available.`;
 
-function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], cart: TurnEngineCartLine[], open: DialogueState["open"]): string {
+// 00-AY: the cart is just FOOD. Jason, 2026-09-17: "there are other aspects of
+// the interaction that need to be tracked. Name, delivery/pickup, address,
+// maybe questions asked." The engine already receives all of that every turn
+// and the ASK logic already uses it -- it was simply never passed here, so the
+// model was asked to interpret a message with no idea whether this was pickup
+// or delivery, whether it already had a name, or what had already been asked.
+// Note this is published STATE, not conversation history: the model still sees
+// only the last few messages, deliberately. Handing back the transcript instead
+// would let the model reconstruct state from prose and would mask exactly the
+// cart-versus-chat divergence this engine exists to prevent.
+export interface ProposeOrderContext {
+  orderType?: string | null;
+  pickupName?: string | null;
+  deliveryAddressKnown?: boolean;
+  driverTipCents?: number | null;
+  deliveryEnabled?: boolean;
+  // Items the customer asked for that resolved to nothing on earlier turns.
+  unresolvedRequests?: string[];
+}
+
+function buildSystemPrompt(menu: TurnEngineMenuItem[], lexicon: LexiconTerm[], cart: TurnEngineCartLine[], open: DialogueState["open"], orderContext?: ProposeOrderContext): string {
   return [
     SYSTEM_PROMPT_PREAMBLE,
     `Menu index:\n${JSON.stringify(buildMenuIndex(menu, lexicon))}`,
     `Cart:\n${JSON.stringify(buildCartIndex(cart, menu))}`,
+    `Order so far (already settled — never ask again for anything non-null here):\n${JSON.stringify(orderContext ?? {})}`,
     `Currently open question (what the customer is mid-answering, if anything):\n${JSON.stringify(open)}`,
   ].join("\n\n");
 }
@@ -405,7 +449,7 @@ async function attemptOnce(
         model: deps.model,
         max_tokens: 1024,
         reasoning: { enabled: false },
-        system: buildSystemPrompt(input.menu, input.lexicon, input.cart, input.open),
+        system: buildSystemPrompt(input.menu, input.lexicon, input.cart, input.open, input.orderContext),
         messages,
         tools: [PROPOSAL_TOOL],
         tool_choice: { type: "tool", name: PROPOSAL_TOOL_NAME },
