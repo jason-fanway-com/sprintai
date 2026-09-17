@@ -47,7 +47,17 @@ const CAP_MESSAGE =
 // What still bounds spend: this daily cap, the 20-turn per-conversation cap
 // (a runaway single session), and the kill switch — one row, instant off,
 // which is the real abuse control.
-const RATE_LIMIT_GLOBAL_PER_DAY    = 1000;
+// Raised 2026-09-17 (Jason: "raise the test cap. do not stop"). The adversarial
+// sim suite is now the instrument of record for whether a shop can take an
+// order, and it burns one session per conversation: a 100-conversation run plus
+// its canaries is ~120, and a 500-run is ~520. 1000/day was exhausted at 13:46
+// today mid-run, at 1218 sessions, killing a run at 89 of 100 with a hard 429.
+//
+// What still bounds spend, unchanged: the 20-turn per-conversation cap (a
+// runaway single session), the measured cost of ~$0.01 per conversation, and
+// the kill switch -- one row, instant off, which is the real abuse control.
+// At this ceiling a full day of automated testing is bounded around $50.
+const RATE_LIMIT_GLOBAL_PER_DAY    = 5000;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
