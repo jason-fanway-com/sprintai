@@ -202,6 +202,48 @@ pre-composition (D1 derived rows, D2 learn-on-first-order).
 template. No free-prose per-shop prompt. Before this, all shops shared one prompt and
 Zio's pizza bot was told about Not Just Bagels' sandwich acronyms on every message.
 
+## 4c-bis. What 2026-09-17 taught about this engine
+
+**A metric computed on conversations that cannot succeed measures nothing.** For most of
+2026-09-17 the sim reported that fix after verified fix moved no numbers. The reason was a
+locked exit: the `confirm` gate's affirmative test is anchored to the WHOLE message, so a bare
+"yes" passed and "Yes, confirm the order!" did not -- and "confirm" was not in the checkout
+vocabulary at all, though the bot's own question is "confirm?". Customers arrived at checkout
+with the cart, the name and the money all correct and were turned away, eight-plus times each.
+Fixing that took conversations reaching a payment link from **0 in 500 to 55 in 100**, and
+pulled the repeated-question count down 28 points on its own, because conversations could
+finally END instead of looping to the turn cap.
+
+It was found by READING TRANSCRIPTS, not by reading metrics. The metrics could not show it.
+When numbers refuse to move after correct fixes, stop fixing and go read conversations.
+
+**The recurring defect in the rebuilt engine is a correct capability wired wrong at a
+boundary, not a missing capability.** Six instances in one day, each side individually correct
+and individually tested:
+- `renderStepQuestion` called with an argument missing, so choices could never be listed
+- the repeat counter implemented for one of nine open-question kinds
+- the cart index publishing `identityKey(...)` while the lookup compared the line's real UUID,
+  so EVERY remove and modify failed and a failed modify fell through and became an ADD
+- `shopContext` (name, order type, address, tip) assembled every turn, used locally, never
+  passed to the model
+- the service fee added into `total_cents` and never written to `service_fee_cents`
+- the affirmative gate above
+
+So the review question is not "does this work?" but **"where else should this apply, and does
+the other side of the boundary agree?"** And when code hands an identifier to the model, the
+test must SOURCE it the way production does: `buildCartIndex` was private and untested, and
+every remove test hand-wrote the key onto both the cart line and the proposal, so the seam
+between them was never checked.
+
+**A guard being unwired is not automatically a bug.** Four guards exist with full test files
+and no callers. One was wired and provably never fired -- the rebuilt engine already prevents
+its defect structurally, which is what the rebuild was FOR. Verify before wiring, and back out
+code that cannot fire.
+
+**Not every correct fix is worth keeping.** The modifier floor fixes a reproduced defect
+("2 Regular Slices with sausage" lost the sausage 4 of 4) and moved nothing beyond the noise.
+A fix that adds a path which can CHARGE a customer needs more than correctness to justify it.
+
 ## 4d. The critical path
 
 Cut by Jason 2026-09-06 to exactly two things, still current:
