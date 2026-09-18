@@ -383,6 +383,56 @@ export function extractPriceCentsFromMessage(message: string): number[] {
   return matches.map(m => Math.round(parseFloat(m.replace(/[^0-9.]/g, "")) * 100));
 }
 
+// PO dispatch (2026-09-18, amendment to the tier-1/2/3 fix above, live
+// 50-conversation measurement at build 6db8e123): real customers routinely
+// restate their WHOLE order later in the same message ("I'll go with the
+// Gyro hot sandwich for $10.99. So that's an Alfredo..., a Gyro sandwich,
+// and a medium Hawaiian pizza.") — the restatement's stray "medium"/"pizza"
+// words pulled the leading-ordinal/category-narrowing tiers toward an
+// unrelated candidate (a $19.99 pizza) instead of the actual answer,
+// charging the customer for an item they never asked for. The answer to a
+// disambiguation question lives in the ANSWER CLAUSE, not whatever comes
+// after it — so tiers 2/3 run there first, and only fall back to the whole
+// message if the clause itself names nothing.
+const SENTENCE_BOUNDARY_RE = /[.!?]\s|\n/;
+const RESTATEMENT_MARKERS = [
+  "so that's", "so that is", "just to confirm", "to confirm", "to recap",
+  "and also", "oh and",
+];
+
+function extractAnswerClause(message: string): { clause: string; truncated: boolean } {
+  const lower = message.toLowerCase();
+  let cutIdx = message.length;
+
+  const boundary = message.match(SENTENCE_BOUNDARY_RE);
+  if (boundary && boundary.index !== undefined && boundary.index < cutIdx) {
+    cutIdx = boundary.index;
+  }
+
+  for (const marker of RESTATEMENT_MARKERS) {
+    const idx = lower.indexOf(marker);
+    if (idx !== -1 && idx < cutIdx) cutIdx = idx;
+  }
+
+  return { clause: message.slice(0, cutIdx).trim(), truncated: cutIdx < message.length };
+}
+
+// The category+name-narrowing tier is terminal once it finds more than one
+// candidate sharing a category — "never guess further" applies whether the
+// narrowing lands on a unique winner or a tie (see the original 2026-09-15
+// comment this preserves). `terminal: true, candidate: null` means "stop,
+// ask again"; `terminal: false` means the text named no category at all, so
+// the caller is free to keep trying other tiers.
+function runCategoryNarrowingTier(
+  candidates: PendingCandidate[],
+  text:       string,
+): { terminal: boolean; candidate: PendingCandidate | null } {
+  const hits = candidates.filter(c => categoryWordMatches(c.category, text));
+  if (hits.length === 1) return { terminal: true, candidate: hits[0] };
+  if (hits.length > 1) return { terminal: true, candidate: nameWordMatches(hits, text) };
+  return { terminal: false, candidate: null };
+}
+
 /**
  * Deterministic resolution of an answer to a pending disambiguation, checked
  * in this order: exact rendered label, leading ordinal, category+name
@@ -398,6 +448,17 @@ export function extractPriceCentsFromMessage(message: string): number[] {
  * salad - $12.95.") instead of requiring a bare digit — see the tier-2
  * helper's own header for why a bare leading number alone ("10 pieces",
  * "two cheeseburgers...", "2 of those, please") still doesn't resolve.
+ *
+ * Amendment (2026-09-18): the leading-ordinal and category+name-narrowing
+ * tiers run against the ANSWER CLAUSE (the text up to the first sentence
+ * boundary or restatement marker) first, falling back to the whole message
+ * only when the clause names nothing — see extractAnswerClause's header.
+ * The exact-label tier above and the price tier below are unaffected: both
+ * must still match anywhere in the message ("$10.99" alone already names
+ * exactly one candidate, wherever it appears). In the whole-message
+ * fallback specifically, a restatement naming more than one distinct
+ * category ("sandwich" and "pizza" both present) is never narrowed to a
+ * single candidate — it re-asks instead.
  */
 export function resolvePendingDisambiguation(
   message:    string,
@@ -407,18 +468,25 @@ export function resolvePendingDisambiguation(
   const labelHits = candidates.filter(c => lowerMessage.includes(candidateNameForConfirm(c).toLowerCase()));
   if (labelHits.length === 1) return labelHits[0];
 
-  const leadIdx = matchLeadingOrdinal(message, candidates.length);
-  if (leadIdx !== null) return candidates[leadIdx];
+  const { clause, truncated } = extractAnswerClause(message);
 
-  const categoryHits = candidates.filter(c => categoryWordMatches(c.category, message));
-  if (categoryHits.length === 1) return categoryHits[0];
-  if (categoryHits.length > 1) {
-    // The category alone doesn't distinguish these candidates ("salad"
-    // matches both Grilled Chicken and Buffalo Grilled Chicken) — narrow
-    // using the rest of the name instead. Anything other than exactly one
-    // surviving candidate re-lists (ASK), even if a price is also present
-    // in the message: never fall back to popularity/price/first-listed.
-    return nameWordMatches(categoryHits, message);
+  const clauseOrdinalIdx = matchLeadingOrdinal(clause, candidates.length);
+  if (clauseOrdinalIdx !== null) return candidates[clauseOrdinalIdx];
+
+  const clauseCategory = runCategoryNarrowingTier(candidates, clause);
+  if (clauseCategory.terminal && clauseCategory.candidate) return clauseCategory.candidate;
+
+  if (truncated) {
+    const wholeOrdinalIdx = matchLeadingOrdinal(message, candidates.length);
+    if (wholeOrdinalIdx !== null) return candidates[wholeOrdinalIdx];
+
+    const wholeCategoryHits = candidates.filter(c => categoryWordMatches(c.category, message));
+    const distinctCategories = new Set(wholeCategoryHits.map(c => c.category));
+    if (distinctCategories.size > 1) return null;
+    if (wholeCategoryHits.length === 1) return wholeCategoryHits[0];
+    if (wholeCategoryHits.length > 1) return nameWordMatches(wholeCategoryHits, message);
+  } else if (clauseCategory.terminal) {
+    return null;
   }
 
   const nameMatch = nameWordMatches(candidates, message);

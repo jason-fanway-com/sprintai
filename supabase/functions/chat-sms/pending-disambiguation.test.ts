@@ -404,3 +404,42 @@ Deno.test("resolvePendingDisambiguation: 'the salad' is ambiguous between two di
   const twoSalads = [GRILLED_CHICKEN_CANDIDATES[0], GRILLED_CHICKEN_CANDIDATES[3]];
   assertEquals(resolvePendingDisambiguation("the salad", twoSalads), null);
 });
+
+// ── PO dispatch (2026-09-18, amendment): a restated whole order later in ───
+// the same message must not pull the leading-ordinal/category-narrowing
+// tiers toward an unrelated candidate. LIVE MONEY BUG: conversations
+// 2d3183e3-d7c8-4d62-9173-5aec4045a8b4, 41b2bc4f-4a9d-4576-993a-58cf6dc05962,
+// e26db9de-e471-4c1a-8159-feeeeeb6fef5 — a customer answering "the Gyro hot
+// sandwich for $10.99" and then restating their full order ("...a Gyro
+// sandwich, and a medium Hawaiian pizza") got charged $19.99 for a pizza
+// they never asked for, because the restatement's "medium"/"pizza" words
+// out-scored the hot sandwich candidate's own name stems. Reconstructed from
+// the real 8-candidate Vito's gyro list shape (one hot sandwich, four pizza
+// sizes, salad/wrap/plate).
+const GYRO_8_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "gyro-hot-sandwich", name: "Gyro (Beef or Chicken)", category: "Hot Sandwiches", price_cents: 1099 },
+  { menu_item_id: "gyro-pizza-sm",     name: "Gyro - Small (10\")",    category: "Pizza",          price_cents: 1499 },
+  { menu_item_id: "gyro-pizza-md",     name: "Gyro - Medium (14\")",   category: "Pizza",          price_cents: 1999 },
+  { menu_item_id: "gyro-pizza-lg",     name: "Gyro - Large (16\")",    category: "Pizza",          price_cents: 2299 },
+  { menu_item_id: "gyro-pizza-xl",     name: "Gyro - X-Large (18\")",  category: "Pizza",          price_cents: 2599 },
+  { menu_item_id: "gyro-salad",        name: "Gyro Salad",             category: "Salads",         price_cents: 1199 },
+  { menu_item_id: "gyro-wrap",         name: "Gyro Wrap",              category: "Wraps",          price_cents: 999  },
+  { menu_item_id: "gyro-plate",        name: "Gyro Plate",             category: "Platters",       price_cents: 1399 },
+];
+
+Deno.test("resolvePendingDisambiguation: 'the Gyro hot sandwich for $10.99' resolves to the hot sandwich", () => {
+  assertEquals(
+    resolvePendingDisambiguation("I'll go with the Gyro hot sandwich for $10.99.", GYRO_8_CANDIDATES)?.menu_item_id,
+    "gyro-hot-sandwich",
+  );
+});
+
+Deno.test("LIVE MONEY BUG: the same answer, with a full-order restatement appended, still resolves to the hot sandwich — not the $19.99 medium pizza", () => {
+  assertEquals(
+    resolvePendingDisambiguation(
+      "I'll go with the Gyro hot sandwich for $10.99. So that's an Alfredo with spaghetti, a Gyro sandwich, and a medium Hawaiian pizza.",
+      GYRO_8_CANDIDATES,
+    )?.menu_item_id,
+    "gyro-hot-sandwich",
+  );
+});
