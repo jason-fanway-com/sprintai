@@ -62,6 +62,29 @@ if [ ! -f "$ENTRYPOINT" ]; then
   exit 1
 fi
 
+# The stamp says "this bundle is commit HEAD". Step 4 copies the WORKING TREE,
+# so if any file the bundle actually ships is uncommitted, the stamp lies and
+# every sim result attributed to it is attributed to code nobody can check
+# out. 2026-09-18: a deploy went out while a crew member had
+# _shared/compile-menu.ts half-edited in the tree. The file list comes from
+# deno's own import graph, so an unrelated dirty file (docs, admin, another
+# function) does not block.
+BUNDLE_FILES=$(deno info --json "$ENTRYPOINT" 2>/dev/null | python3 -c '
+import json, sys, os
+root = os.getcwd() + "/"
+d = json.load(sys.stdin)
+for m in d["modules"]:
+    s = m["specifier"]
+    if s.startswith("file://" + root):
+        print(s[len("file://" + root):])
+')
+DIRTY_BUNDLE=$(echo "$BUNDLE_FILES" | xargs git status --porcelain -- 2>/dev/null | grep -v '^??' || true)
+if [ -n "$DIRTY_BUNDLE" ]; then
+  echo "FAIL: uncommitted changes in files that ship in the ${FUNCTION_NAME} bundle. The deploy would carry code that HEAD ${HEAD_SHA_SHORT} does not contain, under a stamp that says it does. Commit or stash them first, or deploy from a clean 'git worktree' of HEAD:" >&2
+  echo "$DIRTY_BUNDLE" >&2
+  exit 1
+fi
+
 echo "== 0/6 schema validation: declared columns must exist in live DB =="
 # Declared (table, column) pairs this function reads from. Add a new entry
 # whenever you add a migration that introduces a column the function depends on.
