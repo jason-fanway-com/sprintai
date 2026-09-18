@@ -726,6 +726,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // that's conclusive). Threaded into render() so the next question lists
   // the real choices instead of re-asking the identical short one forever.
   let enumerateSlotChoices = false;
+  // 2026-09-18 PO dispatch (named choice not on the list): the customer's
+  // raw text, set ONLY at the exact moment a slot answer genuinely fails to
+  // match any real choice THIS turn (never for a re-render driven purely by
+  // openRepeatCount with no fresh attempt) — see the call site below and
+  // RenderContext.unmatchedSlotChoiceText's own doc for why this is kept
+  // separate from enumerateSlotChoices rather than folded into it.
+  let unmatchedSlotChoiceText: string | undefined;
 
   // ── STEP 2: ANSWER ───────────────────────────────────────────────────────
   // Dispatch 00-AH: when address is the open question, geocode THIS turn's
@@ -982,6 +989,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // the cart), so ASK's priority-1 check below will reopen this exact
       // same slot; enumerating it here is always the right slot's choices.
       enumerateSlotChoices = true;
+      // 2026-09-18 PO dispatch (named choice not on the list): this exact
+      // branch is the ONLY place a slot answer is known to have genuinely
+      // failed to match THIS turn (see the flag's own doc) — the customer's
+      // raw text, trimmed, is what render() needs to name back to them.
+      unmatchedSlotChoiceText = input.message.trim() || undefined;
     }
   } else {
     // ── STEP 3: PROPOSE (only reached when ANSWER cannot resolve this
@@ -1165,6 +1177,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // longer depends on which code path re-asked -- if the customer has been
     // asked the same thing twice, show them the real choices.
     enumerateSlotChoices: enumerateSlotChoices || (priorState.openRepeatCount ?? 0) >= 1,
+    unmatchedSlotChoiceText,
   });
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 

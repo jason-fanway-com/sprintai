@@ -1677,3 +1677,103 @@ Deno.test("answer (address loop, rule 4): a failed geocode is NEVER address_reso
   const result = answer(ADDRESS_OPEN_STATE, [...ADDRESS_CART], "123 Main St", VITOS_MENU, { geocodedAddress: null });
   assertEquals(result, { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false });
 });
+
+// ============================================================
+// 2026-09-18 PO dispatch (named choice not on the list, real conv 0):
+// "creamy italian dressing" x5 on the House salad's dressing slot — the
+// customer named a choice that doesn't exist, the bot re-asked the bare
+// question, and the customer kept repeating the exact same unavailable
+// words. Fixed shape: name back what they said + list the real options,
+// every time, until they name something real.
+// ============================================================
+
+const HOUSE_SALAD_DRESSING_ID = "item-house-salad";
+const DRESSING_GROUP_ID = "group-dressing";
+const HOUSE_SALAD_MENU: TurnEngineMenuItem[] = [
+  {
+    id: HOUSE_SALAD_DRESSING_ID, name: "House", category: "Salads", price_cents: 899, bot_state: "orderable",
+    option_groups: [{ id: DRESSING_GROUP_ID, name: "Dressing", default_choice_id: null }],
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "House", base_price_cents: 899,
+      recap_template: "", ticket_template: "",
+      steps: [{
+        group_id: DRESSING_GROUP_ID, slot_key: "dressing", kind: "slot", ask_mode: "ask",
+        prompt_template: "dressing.ask",
+        choices: [
+          { id: "choice-ranch", display: "Ranch", price_delta_cents: 0 },
+          { id: "choice-balsamic", display: "Balsamic Vinaigrette", price_delta_cents: 0 },
+          { id: "choice-caesar", display: "Caesar", price_delta_cents: 0 },
+        ],
+      }],
+    },
+  },
+];
+const HOUSE_SALAD_CART: TurnEngineCartLine[] = [
+  { menu_item_id: HOUSE_SALAD_DRESSING_ID, name: "House", quantity: 1, price_cents: 899, modifiers: [], line_key: "line-1" },
+];
+const DRESSING_OPEN_STATE: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: DRESSING_GROUP_ID }, upsell_offered: false, asked_message_id: null };
+
+Deno.test("runTurnEngineTurn (named choice not on the list): 'creamy italian' names back the customer's exact words and lists the real choices, never re-reads as a generic re-ask", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — 00-AT: an unresolvable slot answer resolves deterministically")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "creamy italian", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: DRESSING_OPEN_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(
+    result.reply.includes('We don\'t have "creamy italian" for House. The options are: Ranch, Balsamic Vinaigrette, or Caesar.'),
+    `must name back the customer's own words and list the real choices: ${JSON.stringify(result.reply)}`,
+  );
+  assertEquals((result.dialogueState.open as { kind?: string } | null)?.kind, "slot", "the dressing slot is still open — nothing was resolved");
+});
+
+Deno.test("runTurnEngineTurn (named choice not on the list): a SECOND unmatched answer ('cream dressin') gets the SAME line shape, updated to their new words — never degrades to the plain bare question", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called")),
+  };
+  // openRepeatCount: 1 — this models the FIRST unmatched answer ("creamy
+  // italian") having already re-opened the slot once.
+  const priorState: DialogueState = { ...DRESSING_OPEN_STATE, openRepeatCount: 1 };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "cream dressin", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(
+    result.reply.includes('We don\'t have "cream dressin" for House. The options are: Ranch, Balsamic Vinaigrette, or Caesar.'),
+    `a second unmatched answer must get the same line, updated to the new words: ${JSON.stringify(result.reply)}`,
+  );
+  assert(!result.reply.includes("Let me list the options for you"), `must never fall back to the generic lead-in wording: ${JSON.stringify(result.reply)}`);
+});
+
+Deno.test("runTurnEngineTurn (named choice not on the list): 'jalapeno ranch' resolves cleanly — the correction message never blocks a real, matching choice", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a matching choice resolves deterministically")),
+  };
+  const priorState: DialogueState = { ...DRESSING_OPEN_STATE, openRepeatCount: 2 };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "jalapeno ranch", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("We don't have"), `a real matching choice must not be treated as unmatched: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.dialogueState.open, null, "the dressing slot must resolve — nothing left open, cart is non-empty so ASK falls to \"Anything else?\"");
+  assert(result.reply.includes("Anything else?"), `must ask what's next now that the slot resolved: ${JSON.stringify(result.reply)}`);
+});

@@ -1569,12 +1569,14 @@ Deno.test("00-AU RED->GREEN: sauce slot open, 'Just the regular buffalo sauce, p
   const result = await runTurnEngineTurn(input, deps);
 
   assertEquals(proposeCalls, 0, "00-AT: an unresolvable answer to an open slot must never reach PROPOSE");
-  // Jason's wording, 2026-09-17: the question comes FIRST, then the lead-in,
-  // then the list. "Let me list the options for you. What sauce...?" was
-  // rejected -- "Nobody would talk like that."
+  // 2026-09-18 PO dispatch (named choice not on the list) supersedes the
+  // 2026-09-17 "question first, then lead-in, then list" wording this test
+  // used to pin: a slot answer that fails to match now names back exactly
+  // what the customer said, instead of a generic "let me list the options"
+  // that never acknowledges their words were heard and rejected.
   assert(
-    result.reply.includes("What sauce would you like for the Large Buffalo Chicken Pizza? Let me list the options for you: Hot, BBQ, Mild, or Sweet & Spicy."),
-    `the question must come first, then the lead-in, then the list: ${result.reply}`,
+    result.reply.includes('We don\'t have "Just the regular buffalo sauce, please." for Large Buffalo Chicken Pizza. The options are: Hot, BBQ, Mild, or Sweet & Spicy.'),
+    `an unmatched slot answer must name back the customer's own words: ${result.reply}`,
   );
   assertEquals((result.dialogueState.open as { kind: string } | null)?.kind, "slot", "the sauce slot is still open — nothing was resolved by the customer's message");
 });

@@ -107,6 +107,7 @@ import {
   applyCompiledModifyItem,
   priceSelections,
   renderStepQuestion,
+  renderChoiceList,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -1450,6 +1451,19 @@ export interface RenderContext {
   // itself, only relays it (same "code decides" discipline renderStepQuestion's
   // own `enumerate` param already follows on the legacy path).
   enumerateSlotChoices?: boolean;
+  // 2026-09-18 PO dispatch (named choice not on the list, real conv 0:
+  // "creamy italian dressing" x5 on the House salad's dressing slot). The
+  // plain enumerate-lead-in above ("Let me list the options for you: ...")
+  // never acknowledges that the customer NAMED something specific and real —
+  // it reads as a generic re-ask, so a customer who typed an unavailable
+  // item's exact name kept repeating it verbatim, having no signal their
+  // words were heard and rejected rather than just not understood. Set by
+  // the runner to THIS turn's raw customer text whenever a slot answer
+  // genuinely failed to match any real choice (never for a repeat caused
+  // only by openRepeatCount with no fresh attempt this turn — see
+  // turn-engine-runner.ts's own comment at the call site). Takes priority
+  // over enumerateSlotChoices in render()'s "slot" case when both are set.
+  unmatchedSlotChoiceText?: string;
   // 2026-09-18 PO dispatch (confirm read-back): the real, already-settled
   // values render() needs to echo back before checkout — order type, the
   // formatted delivery address (delivery only), and the pickup/order name.
@@ -1508,9 +1522,19 @@ export function render(
           const menuItem = menuById.get(line.menu_item_id);
           const step = menuItem?.ask_plan?.steps.find(s => s.group_id === (state.open as { group_id: string }).group_id);
           if (menuItem?.ask_plan && step) {
-            question = context.enumerateSlotChoices
-              ? renderStepQuestion(step, menuItem.ask_plan.display_name, true, ENUMERATE_SLOT_CHOICES_LEAD_IN)
-              : renderStepQuestion(step, menuItem.ask_plan.display_name);
+            // 2026-09-18 PO dispatch (named choice not on the list): takes
+            // priority over the plain enumerate-lead-in — this turn's
+            // customer named something specific, so the reply says so by
+            // name instead of a generic "let me list the options" that
+            // never acknowledges what they actually typed.
+            if (context.unmatchedSlotChoiceText) {
+              const showPrices = step.choices.some(c => c.price_delta_cents !== 0);
+              question = `We don't have "${context.unmatchedSlotChoiceText}" for ${menuItem.ask_plan.display_name}. The options are: ${renderChoiceList(step.choices, showPrices)}.`;
+            } else {
+              question = context.enumerateSlotChoices
+                ? renderStepQuestion(step, menuItem.ask_plan.display_name, true, ENUMERATE_SLOT_CHOICES_LEAD_IN)
+                : renderStepQuestion(step, menuItem.ask_plan.display_name);
+            }
           }
           break;
         }
