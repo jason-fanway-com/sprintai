@@ -283,6 +283,100 @@ export function matchOrdinalPosition(message: string, count: number): number | n
   return null;
 }
 
+// PO dispatch (2026-09-18, live 50-conversation measurement, build aac8be0c):
+// the shared-name fix (00-BJ) correctly asks a narrowing question, but a
+// customer's natural-language ANSWER to that question was only understood
+// as a bare digit — "3 please, the Chicken Cheesesteak hot sandwich!" and
+// "I would like option 1) the Grilled Chicken salad - $12.95." both fell
+// through resolvePendingDisambiguation and the same question repeated until
+// the turn cap (conversations 40/16 of that run). A digit or ordinal word
+// wrapped in real sentence structure is a genuine position pick as long as
+// it's near the front of the message AND has selecting language attached —
+// a qualifier immediately before it, punctuation glued right after it, a
+// filler word right after it, or it's the whole message on its own. A bare
+// leading number with none of that ("10 pieces", "two cheeseburgers and a
+// large fries" — the exact LIVE MONEY BUG repros above this must keep
+// rejecting; "2 of those, please" — a quantity, not a position) stays
+// unresolved, same "never guess" discipline as every other tier.
+const LEADING_ORDINAL_ONE_WORD_QUALIFIERS = new Set(["option", "number", "no", "the"]);
+const LEADING_ORDINAL_TWO_WORD_QUALIFIERS: Array<[string, string]> = [
+  ["i'll", "take"],
+  ["i", "want"],
+  ["i'd", "like"],
+  ["go", "with"],
+];
+const LEADING_ORDINAL_FOLLOW_WORDS = new Set(["please", "thanks", "pls", "one"]);
+
+function splitLeadingWord(word: string): { core: string; punct: string; hadHash: boolean } {
+  const hadHash = word.startsWith("#");
+  const withoutHash = hadHash ? word.slice(1) : word;
+  const m = withoutHash.match(/^(.*?)([).,!.]*)$/);
+  return { core: m ? m[1] : withoutHash, punct: m ? m[2] : "", hadHash };
+}
+
+function leadingOrdinalTokenValue(coreLower: string, count: number): number | null {
+  const digitMatch = coreLower.match(/^(\d+)(?:st|nd|rd|th)?$/);
+  if (digitMatch) {
+    const idx = parseInt(digitMatch[1], 10) - 1;
+    return idx >= 0 && idx < count ? idx : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(ORDINAL_WORDS, coreLower)) {
+    const idx = ORDINAL_WORDS[coreLower];
+    return idx < count ? idx : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(NUMBER_WORDS, coreLower)) {
+    const num = NUMBER_WORDS[coreLower];
+    return num <= count ? num - 1 : null;
+  }
+  return null;
+}
+
+/**
+ * A digit/ordinal/number word near the front of the message, with genuine
+ * selecting language attached — a qualifier immediately before it ("option
+ * 1)", "number 3", "#3", "the first"), punctuation glued directly after it
+ * ("1)", "3."), a filler word right after it ("3 please", "the third one"),
+ * or the token standing alone as the whole message ("3", "1"). Scans only
+ * the first 6 words so a number buried deep in an unrelated sentence never
+ * matches — the same anchoring discipline matchOrdinalPosition's own
+ * 2026-09-15 live-money-bug fix relies on, just not requiring the position
+ * pick to be the ENTIRE message the way that function does.
+ */
+function matchLeadingOrdinal(message: string, count: number): number | null {
+  const words = message.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const scanLimit = Math.min(words.length, 6);
+
+  for (let i = 0; i < scanLimit; i++) {
+    const { core, punct, hadHash } = splitLeadingWord(words[i]);
+    const idx = leadingOrdinalTokenValue(core.toLowerCase(), count);
+    if (idx === null) continue;
+
+    let hasQualifier = hadHash;
+    if (!hasQualifier && i > 0) {
+      const prevCore = splitLeadingWord(words[i - 1]).core.toLowerCase();
+      if (LEADING_ORDINAL_ONE_WORD_QUALIFIERS.has(prevCore)) hasQualifier = true;
+      if (!hasQualifier && i > 1) {
+        const prev2Core = splitLeadingWord(words[i - 2]).core.toLowerCase();
+        for (const [a, b] of LEADING_ORDINAL_TWO_WORD_QUALIFIERS) {
+          if (prev2Core === a && prevCore === b) hasQualifier = true;
+        }
+      }
+    }
+    if (hasQualifier) return idx;
+
+    const gluedTerminator = punct === ")" || punct === ".";
+    if (gluedTerminator) return idx;
+
+    if (i === 0) {
+      const isLastWord = i === words.length - 1;
+      const nextCore = isLastWord ? null : splitLeadingWord(words[i + 1]).core.toLowerCase();
+      if (isLastWord || (nextCore !== null && LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore))) return idx;
+    }
+  }
+  return null;
+}
+
 /** Dollar amounts named in the message, as integer cents ("$12.95", "12.95"). */
 export function extractPriceCentsFromMessage(message: string): number[] {
   const matches = message.match(/\$?\s*\d+\.\d{2}\b/g) ?? [];
@@ -291,16 +385,41 @@ export function extractPriceCentsFromMessage(message: string): number[] {
 
 /**
  * Deterministic resolution of an answer to a pending disambiguation, checked
- * in the order the spec requires: category word, then ordinal/position,
- * then price. Returns the resolved candidate, or null if the message
- * resolves to none or more than one — callers must re-ask, never guess.
+ * in this order: exact rendered label, leading ordinal, category+name
+ * narrowing, then (unchanged) broad name match, whole-message ordinal, and
+ * price last. Every tier returns ONLY on a unique hit; zero or multiple
+ * matches fall through to the next tier (or, for the category+name
+ * narrowing tier specifically, straight to null — see below) so the caller
+ * re-asks instead of guessing.
+ *
+ * PO dispatch (2026-09-18): the first three tiers are what actually answer a
+ * natural-language reply to the numbered list ("3 please, the Chicken
+ * Cheesesteak hot sandwich!", "I would like option 1) the Grilled Chicken
+ * salad - $12.95.") instead of requiring a bare digit — see the tier-2
+ * helper's own header for why a bare leading number alone ("10 pieces",
+ * "two cheeseburgers...", "2 of those, please") still doesn't resolve.
  */
 export function resolvePendingDisambiguation(
   message:    string,
   candidates: PendingCandidate[],
 ): PendingCandidate | null {
+  const lowerMessage = message.toLowerCase();
+  const labelHits = candidates.filter(c => lowerMessage.includes(candidateNameForConfirm(c).toLowerCase()));
+  if (labelHits.length === 1) return labelHits[0];
+
+  const leadIdx = matchLeadingOrdinal(message, candidates.length);
+  if (leadIdx !== null) return candidates[leadIdx];
+
   const categoryHits = candidates.filter(c => categoryWordMatches(c.category, message));
   if (categoryHits.length === 1) return categoryHits[0];
+  if (categoryHits.length > 1) {
+    // The category alone doesn't distinguish these candidates ("salad"
+    // matches both Grilled Chicken and Buffalo Grilled Chicken) — narrow
+    // using the rest of the name instead. Anything other than exactly one
+    // surviving candidate re-lists (ASK), even if a price is also present
+    // in the message: never fall back to popularity/price/first-listed.
+    return nameWordMatches(categoryHits, message);
+  }
 
   const nameMatch = nameWordMatches(candidates, message);
   if (nameMatch) return nameMatch;

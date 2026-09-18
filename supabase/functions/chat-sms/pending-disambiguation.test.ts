@@ -316,3 +316,91 @@ for (const text of POSITIONAL_MUST_NOT_RESOLVE) {
     assertEquals(matchOrdinalPosition(text, 14), null);
   });
 }
+
+// ── PO dispatch (2026-09-18): natural-language answers to the numbered ─────
+// disambiguation question. Real candidate sets from the 50-conversation live
+// measurement at build aac8be0c, conversations 40 and 16 (reconstructed from
+// the run's manifest.json dialogue_state.candidates + the bot's own rendered
+// list, which is candidateOptionText's "the {name} {category word} — $price"
+// fallback shape — none of these rows have a display_name).
+const CHEESESTEAK_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "49bf7de5-95b7-48a5-827d-258f757554bc", name: "Chicken Cheesesteak",           category: "Homemade Paninis", price_cents: 1099 },
+  { menu_item_id: "68945bf7-7c21-4cd7-aa47-bfbbaf1757b0", name: "Chicken Cheesesteak",           category: "Stromboli Rolls",  price_cents: 999  },
+  { menu_item_id: "cf368253-8663-42fc-8ede-4c576a35664a", name: "Chicken Cheesesteak",           category: "Hot Sandwiches",   price_cents: 1199 },
+  { menu_item_id: "e423aae6-a03b-4899-9f98-9e917fc4f6bb", name: "California Chicken Cheesesteak", category: "Hot Sandwiches",   price_cents: 1299 },
+];
+
+const GRILLED_CHICKEN_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "7b13d6a1-ae24-47b9-838d-a369b02934da", name: "Grilled Chicken",           category: "Salads",          price_cents: 1295 },
+  { menu_item_id: "9208c088-bc5a-4611-bcc8-892f3b9c17b2", name: "Southwest Grilled Chicken",  category: "Wraps",           price_cents: 1099 },
+  { menu_item_id: "941ca847-5324-4772-b83c-86a87bde165f", name: "Grilled Chicken",            category: "Homemade Paninis", price_cents: 1099 },
+  { menu_item_id: "db249934-e93f-410e-83f4-388e072210cf", name: "Buffalo Grilled Chicken",     category: "Salads",          price_cents: 1295 },
+];
+
+Deno.test("resolvePendingDisambiguation: bare '3' still resolves (unchanged)", () => {
+  assertEquals(resolvePendingDisambiguation("3", CHEESESTEAK_CANDIDATES)?.menu_item_id, "cf368253-8663-42fc-8ede-4c576a35664a");
+});
+
+Deno.test("resolvePendingDisambiguation: '3 please, the Chicken Cheesesteak hot sandwich!' resolves to the hot sandwich, not the California one", () => {
+  assertEquals(
+    resolvePendingDisambiguation("3 please, the Chicken Cheesesteak hot sandwich!", CHEESESTEAK_CANDIDATES)?.menu_item_id,
+    "cf368253-8663-42fc-8ede-4c576a35664a",
+  );
+});
+
+Deno.test("resolvePendingDisambiguation: 'Number 3, please, the Chicken Cheesesteak hot sandwich!' resolves to the hot sandwich", () => {
+  assertEquals(
+    resolvePendingDisambiguation("Number 3, please, the Chicken Cheesesteak hot sandwich!", CHEESESTEAK_CANDIDATES)?.menu_item_id,
+    "cf368253-8663-42fc-8ede-4c576a35664a",
+  );
+});
+
+Deno.test("resolvePendingDisambiguation: 'I'd like the Chicken Cheesesteak hot sandwich, please.' resolves via the exact label, not the California one", () => {
+  assertEquals(
+    resolvePendingDisambiguation("I'd like the Chicken Cheesesteak hot sandwich, please.", CHEESESTEAK_CANDIDATES)?.menu_item_id,
+    "cf368253-8663-42fc-8ede-4c576a35664a",
+  );
+});
+
+Deno.test("resolvePendingDisambiguation: bare '1' still resolves (unchanged)", () => {
+  assertEquals(resolvePendingDisambiguation("1", GRILLED_CHICKEN_CANDIDATES)?.menu_item_id, "7b13d6a1-ae24-47b9-838d-a369b02934da");
+});
+
+Deno.test("resolvePendingDisambiguation: 'I would like option 1) the Grilled Chicken salad - $12.95.' resolves to the plain Grilled Chicken salad, not Buffalo", () => {
+  assertEquals(
+    resolvePendingDisambiguation("I would like option 1) the Grilled Chicken salad - $12.95.", GRILLED_CHICKEN_CANDIDATES)?.menu_item_id,
+    "7b13d6a1-ae24-47b9-838d-a369b02934da",
+  );
+});
+
+Deno.test("resolvePendingDisambiguation: 'Oh, I meant the grilled chicken salad! So that's 2 of the Grilled Chicken salads...' resolves to the plain Grilled Chicken salad", () => {
+  assertEquals(
+    resolvePendingDisambiguation(
+      "Oh, I meant the grilled chicken salad! So that's 2 of the Grilled Chicken salads with blackened salmon on one and black diamond steak on the other, and ranch dressing on both. Thanks!",
+      GRILLED_CHICKEN_CANDIDATES,
+    )?.menu_item_id,
+    "7b13d6a1-ae24-47b9-838d-a369b02934da",
+  );
+});
+
+// Negative case 1 (PO dispatch, 2026-09-18): a digit immediately followed by
+// "of" is a QUANTITY ("2 of those" = 2 units), not a position pick — must
+// not be misread as "position 2" even though it's the leading token.
+const THREE_ITEM_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "burger",  name: "Cheeseburger", category: "Burgers",  price_cents: 899 },
+  { menu_item_id: "chicken", name: "Chicken Sandwich", category: "Sandwiches", price_cents: 799 },
+  { menu_item_id: "fries",   name: "Loaded Fries", category: "Sides", price_cents: 599 },
+];
+
+Deno.test("resolvePendingDisambiguation: '2 of those, please' is a quantity, not a position — stays unresolved", () => {
+  assertEquals(resolvePendingDisambiguation("2 of those, please", THREE_ITEM_CANDIDATES), null);
+});
+
+// Negative case 2 (PO dispatch, 2026-09-18): "salad" alone narrows the
+// category to two different salads with no further distinguishing word —
+// category+name narrowing must return null (re-list), never guess between
+// them just because the customer said "the salad".
+Deno.test("resolvePendingDisambiguation: 'the salad' is ambiguous between two different salads — stays unresolved", () => {
+  const twoSalads = [GRILLED_CHICKEN_CANDIDATES[0], GRILLED_CHICKEN_CANDIDATES[3]];
+  assertEquals(resolvePendingDisambiguation("the salad", twoSalads), null);
+});
