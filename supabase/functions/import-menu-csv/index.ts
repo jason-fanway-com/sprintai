@@ -30,6 +30,8 @@ import type {
   ExistingItem,
 } from "../../../menu-pipeline/core/import-plan.ts";
 import { applyToUpdate, syncGroups, upsertItem } from "./apply.ts";
+import { detectSharedModifierSets } from "../_shared/modifier-set-detect.ts";
+import { syncModifierSets } from "./sync-modifier-sets.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -107,6 +109,7 @@ Deno.serve(async (req: Request) => {
 
   let inserted = 0, deactivated = 0;
   let skippedOwnerEditedGroups = 0, skippedOwnerEditedChoices = 0;
+  const itemIdByImportKey = new Map<string, string>();
 
   // -- Inserts -----------------------------------------------------------------
   for (const d of diff.toInsert) {
@@ -116,6 +119,7 @@ Deno.serve(async (req: Request) => {
       skippedOwnerEditedGroups += r.skippedGroups;
       skippedOwnerEditedChoices += r.skippedChoices;
       inserted++;
+      itemIdByImportKey.set(d.importKey, itemId);
     }
   }
 
@@ -126,6 +130,7 @@ Deno.serve(async (req: Request) => {
   const skippedOwnerEdited = updateResult.skippedOwnerEdited;
   skippedOwnerEditedGroups += updateResult.skippedOwnerEditedGroups;
   skippedOwnerEditedChoices += updateResult.skippedOwnerEditedChoices;
+  for (const u of diff.toUpdate) itemIdByImportKey.set(u.desired.importKey, u.id);
 
   // -- Deactivations (never hard-delete) ---------------------------------------
   if (diff.toDeactivate.length) {
@@ -133,11 +138,19 @@ Deno.serve(async (req: Request) => {
     deactivated = diff.toDeactivate.length;
   }
 
+  // -- Shared option lists (Phase 1, data layer only — see modifier-set-detect.ts
+  // and sync-modifier-sets.ts). Runs after every item's own option_groups/
+  // option_choices rows above are settled, so it always has real rows to
+  // link; never creates a new option_groups/option_choices row itself. ------
+  const modifierSetCandidates = detectSharedModifierSets(plan.items);
+  const modifierSets = await syncModifierSets(supabase, shop_id, menuId!, modifierSetCandidates, itemIdByImportKey);
+
   return jsonResponse({
     ok: true, menu_id: menuId, no_op: false,
     inserted, updated, deactivated, skipped_owner_edited: skippedOwnerEdited,
     skipped_owner_edited_option_groups: skippedOwnerEditedGroups,
     skipped_owner_edited_option_choices: skippedOwnerEditedChoices,
+    modifier_sets: modifierSets,
   });
 });
 
