@@ -643,11 +643,43 @@ before the model ever sees it, plus a guard so it never mangles a real menu item
 happens to have a slash in its own name (one of Vito's items is literally named
 `Cheesesteak / Chicken Cheesesteak`).
 
-**This fix is written, tested, and merged — but as of this sync it has not been
-deployed.** The live bot on all three real shops is still running the version from
-before this fix, so the failure rate measured above is still the live failure rate
-for any customer who orders this way, until the next deploy closes that gap. Full
-detail in `HANDOFF.md` and `RUNBOOK.md`.
+**Update, later the same day: this fix is now live.** Confirmed by downloading the
+running bot's own code — it carries the exact commit this fix landed in. All three
+real shops are on it.
+
+### Added 2026-09-17 (evening) — a fully-built, correctly-priced order was silently never submitted; a same-day fix took a simulated batch from 0-in-500 to 55-in-100 reaching a real payment link
+
+The most expensive kind of failure on this platform is not a wrong order — it's a
+right order that never gets placed. A customer would build a complete, correctly
+priced cart, reach the final "confirm?" step, type "Yes, confirm the order!" or "I
+already said yes!" — and the bot would just silently repeat the question, because
+its check for "did the customer say yes" only matched a message that was the single
+word "yes" and nothing else. Everything up to that point had worked; the sale was
+lost on the last step. A companion bug meant the closing question ("Anything else?")
+had its own separate, older copy of the "is the customer done?" check that the first
+fix didn't touch, so fixing one didn't fix the other. Both fixed the same day. Net
+effect, measured on a simulated batch of orders: 0 of 500 reaching a real Stripe
+payment link before, 55 of 100 after — the largest single-day jump on this metric so
+far, and the two fixes above account for most of it.
+
+**New capability, same day: the bot can now ask the AI to interpret an answer it
+doesn't recognize, instead of just re-asking.** When a customer answers a question
+in a way no hand-written pattern anticipated ("the cheaper one," "the first one"),
+the bot hands the AI the exact list of real choices already on screen and asks which
+one the customer meant. The AI can only pick from that list or say "none of these"
+— it cannot invent an item, change a price, or add anything to the cart on its own.
+This targets the single largest remaining reason a customer gets asked the same
+question repeatedly instead of moving toward checkout.
+
+**Not yet reaching any restaurant**: the CSV menu-import improvement built today
+(recognizing when the same option list — e.g. "choose your dressing" — repeats
+across several menu items, so an owner can eventually edit it once instead of
+separately on every item) is tested and merged, but neither the code nor the
+database change it needs has been deployed. Separately and more concerning: the
+CSV-import code actually running on the live site right now doesn't match anything
+in this repository's history and hasn't been updated in over a week — worth a human
+with deploy access confirming what's really live there before anything gets
+deployed on top of it blind. Full detail in `HANDOFF.md` and `RUNBOOK.md`.
 
 ---
 
