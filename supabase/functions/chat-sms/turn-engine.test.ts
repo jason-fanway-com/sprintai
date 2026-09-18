@@ -490,6 +490,139 @@ Deno.test("decide: two genuinely distinct adds with NO correction marker between
   assert(result.cart.some(l => l.menu_item_id === HOUSE_SALAD_ID));
 });
 
+// ============================================================
+// 2026-09-18 PO dispatch (add-on treated as a separate item, real money
+// bug, every run that day): "house salad w/ black diamond steak" applied
+// the $8.00 Black Diamond Steak add-on to House correctly AND ALSO added a
+// separate $12.49 "Steak" Quesadilla line. Same shape with "2 turkey
+// hoagies w/ black diamond steak" -> a bogus "2x Steak" $24.98 line.
+// Customers paid both. Fixtures below mirror the real menu shape: House
+// (Salads) and Turkey Hoagie (Sandwiches) both carry a "Protein Add-on"
+// modifier group with a "Black Diamond Steak" choice; Quesadillas' own
+// "Steak" item is a completely separate, real dish the same word also
+// names — exactly the lexicon collision the PO's own diagnosis describes.
+// ============================================================
+const ADDON_HOUSE_SALAD_ID = "item-addon-house-salad";
+const ADDON_TURKEY_HOAGIE_ID = "item-addon-turkey-hoagie";
+const ADDON_STEAK_QUESADILLA_ID = "item-addon-steak-quesadilla";
+const ADDON_CHICKEN_ID = "item-addon-chicken";
+const ADDON_PROTEIN_GROUP_ID = "group-addon-protein";
+const ADDON_HOAGIE_PROTEIN_GROUP_ID = "group-addon-hoagie-protein";
+
+function proteinAddOnStep(groupId: string) {
+  return {
+    group_id: groupId, slot_key: null, kind: "modifier" as const, ask_mode: "on_request" as const,
+    prompt_template: "protein_addon.on_request",
+    choices: [
+      { id: "choice-black-diamond-steak", display: "Black Diamond Steak", price_delta_cents: 800 },
+      { id: "choice-grilled-chicken", display: "Chicken", price_delta_cents: 300 },
+    ],
+  };
+}
+
+const ADDON_MENU: TurnEngineMenuItem[] = [
+  {
+    id: ADDON_HOUSE_SALAD_ID, name: "House", category: "Salads", price_cents: 899, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "House", base_price_cents: 899,
+      recap_template: "", ticket_template: "", steps: [proteinAddOnStep(ADDON_PROTEIN_GROUP_ID)],
+    },
+  },
+  {
+    id: ADDON_TURKEY_HOAGIE_ID, name: "Turkey Hoagie", category: "Sandwiches", price_cents: 1099, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Turkey Hoagie", base_price_cents: 1099,
+      recap_template: "", ticket_template: "", steps: [proteinAddOnStep(ADDON_HOAGIE_PROTEIN_GROUP_ID)],
+    },
+  },
+  {
+    id: ADDON_STEAK_QUESADILLA_ID, name: "Steak", category: "Quesadillas", price_cents: 1249, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Steak", base_price_cents: 1249, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: ADDON_CHICKEN_ID, name: "Chicken", category: "Entrees", price_cents: 999, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Chicken", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+const ADDON_LEXICON: LexiconTerm[] = [
+  { term: "house salad", target_id: ADDON_HOUSE_SALAD_ID },
+  { term: "house", target_id: ADDON_HOUSE_SALAD_ID },
+  { term: "turkey hoagie", target_id: ADDON_TURKEY_HOAGIE_ID },
+  { term: "turkey hoagies", target_id: ADDON_TURKEY_HOAGIE_ID },
+  { term: "steak", target_id: ADDON_STEAK_QUESADILLA_ID },
+  { term: "steak quesadilla", target_id: ADDON_STEAK_QUESADILLA_ID },
+  { term: "chicken", target_id: ADDON_CHICKEN_ID },
+];
+
+Deno.test("decide (add-on as item, real transcript 1): 'house salad w/ black diamond steak' -> ONE House line with the add-on applied, no separate Steak line", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "house salad", quantity: 1, choices: [] },
+      { item_span: "black diamond steak", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "house salad w/ black diamond steak");
+  assertEquals(result.cart.length, 1, `must be exactly one line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, ADDON_HOUSE_SALAD_ID);
+  assertEquals(result.cart[0].ask_plan_selections, { [ADDON_PROTEIN_GROUP_ID]: "choice-black-diamond-steak" }, "the add-on must be applied to the House line");
+  assert(!result.cart.some(l => l.menu_item_id === ADDON_STEAK_QUESADILLA_ID), "no separate Steak Quesadilla line");
+});
+
+Deno.test("decide (add-on as item, real transcript 2): '2 turkey hoagies w/ black diamond steak' -> ONE Turkey Hoagie line (qty 2) with the add-on, no separate Steak line", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "turkey hoagies", quantity: 2, choices: [] },
+      { item_span: "black diamond steak", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "2 turkey hoagies w/ black diamond steak");
+  assertEquals(result.cart.length, 1, `must be exactly one line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, ADDON_TURKEY_HOAGIE_ID);
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals(result.cart[0].ask_plan_selections, { [ADDON_HOAGIE_PROTEIN_GROUP_ID]: "choice-black-diamond-steak" }, "the add-on must be applied to the Turkey Hoagie line");
+  assert(!result.cart.some(l => l.menu_item_id === ADDON_STEAK_QUESADILLA_ID), "no separate Steak Quesadilla line");
+});
+
+Deno.test("decide (add-on as item, acceptance 3): 'a steak quesadilla and a house salad' -> TWO real lines, no add-on — nothing in the message has a group Steak's own span could be read as a choice of", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "a steak quesadilla", quantity: 1, choices: [] },
+      { item_span: "a house salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "a steak quesadilla and a house salad");
+  assertEquals(result.cart.length, 2, `both real, distinct items must land: ${JSON.stringify(result.cart)}`);
+  assert(result.cart.some(l => l.menu_item_id === ADDON_STEAK_QUESADILLA_ID), "Steak Quesadilla must still be its own line");
+  const houseLine = result.cart.find(l => l.menu_item_id === ADDON_HOUSE_SALAD_ID);
+  assert(houseLine, "House must still be its own line");
+  assert(
+    !houseLine!.ask_plan_selections || !(ADDON_PROTEIN_GROUP_ID in houseLine!.ask_plan_selections),
+    `no add-on — 'steak quesadilla' was never a modifier claim on House: ${JSON.stringify(houseLine!.ask_plan_selections)}`,
+  );
+});
+
+Deno.test("decide (add-on as item, acceptance 4): 'house salad with chicken' -> House + Chicken add-on applied, no separate Chicken item line", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "house salad", quantity: 1, choices: [] },
+      { item_span: "chicken", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "house salad with chicken");
+  assertEquals(result.cart.length, 1, `must be exactly one line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, ADDON_HOUSE_SALAD_ID);
+  assertEquals(result.cart[0].ask_plan_selections, { [ADDON_PROTEIN_GROUP_ID]: "choice-grilled-chicken" }, "the Chicken add-on must be applied to the House line");
+  assert(!result.cart.some(l => l.menu_item_id === ADDON_CHICKEN_ID), "no separate Chicken item line");
+});
+
 Deno.test("decide: removes a line by line_key", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },

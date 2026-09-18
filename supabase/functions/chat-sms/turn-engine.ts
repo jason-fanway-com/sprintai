@@ -108,6 +108,7 @@ import {
   priceSelections,
   renderStepQuestion,
   renderChoiceList,
+  matchChoiceInText,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -728,6 +729,53 @@ function dropAddsSupersededByCorrection(adds: ResolvedAdd[], customerMessage: st
   return superseded.size > 0 ? adds.filter((_, idx) => !superseded.has(idx)) : adds;
 }
 
+// 2026-09-18 PO dispatch (add-on treated as a separate item, real money
+// bug, every run that day): "house salad w/ black diamond steak" applied
+// the $8.00 Black Diamond Steak add-on to the House Salad correctly (the
+// 00-BF modifier floor below) AND ALSO added a separate $12.49 "Steak"
+// Quesadilla line — customers paid both. Root cause, per the PO's own
+// diagnosis: resolveItem correctly resolves "black diamond steak" to the
+// real Quesadillas "Steak" item (the lexicon is right — that dish is
+// really named that), but decide()'s per-add resolution loop had no way to
+// know the SAME words were ALSO a real modifier choice on House Salad,
+// another item named in the SAME message. The item path (resolveItem) and
+// the modifier path (recoverAssertedChoiceFromText) never compared notes —
+// each ran blind to what the other decided about the identical span.
+//
+// Rule (PO): a phrase that matches an option CHOICE of an item named in
+// the SAME message is a modifier, consumed there — it never reaches the
+// cart as its own item line. The choice only wins when some OTHER add in
+// THIS batch genuinely owns a modifier group with a matching choice — an
+// item with no such competing claim ("a steak quesadilla and a house
+// salad") is untouched, since nothing in that message has a group Steak
+// Quesadilla's own span could instead be read as a choice of. Dropping the
+// false item here doesn't need to separately attach the modifier anywhere:
+// the words stay in `customerMessage`, so the surviving item's own 00-BF
+// floor pass (unchanged, below) finds and applies the same match on its
+// own — this function's only job is to stop the SPURIOUS item line from
+// ever being created.
+function dropAddsThatAreReallyModifiersOfAnotherAdd(
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): ResolvedAdd[] {
+  if (adds.length < 2) return adds;
+  const isReallyAModifierOfAnother = (candidate: ResolvedAdd): boolean => {
+    const span = (candidate.item_span ?? "").trim();
+    if (!span) return false;
+    for (const other of adds) {
+      if (other === candidate) continue;
+      const otherMenuItem = menuById.get(other.menu_item_id);
+      if (!otherMenuItem?.ask_plan) continue;
+      for (const step of otherMenuItem.ask_plan.steps) {
+        if (step.kind !== "modifier") continue;
+        if (matchChoiceInText(step.choices, span)) return true;
+      }
+    }
+    return false;
+  };
+  return adds.filter(add => !isReallyAModifierOfAnother(add));
+}
+
 export interface Decline {
   reason: string;
 }
@@ -1061,7 +1109,13 @@ export function decide(
   // See dropAddsSupersededByCorrection's own header: "add a side salad...
   // Just the house salad" resolves BOTH real items — this drops the one the
   // customer's own words retracted, before either ever reaches grouping.
-  const survivingAdds = dropAddsSupersededByCorrection(resolvedAdds, customerMessage);
+  const correctedAdds = dropAddsSupersededByCorrection(resolvedAdds, customerMessage);
+  // See dropAddsThatAreReallyModifiersOfAnotherAdd's own header: "house
+  // salad w/ black diamond steak" resolves BOTH the House Salad and,
+  // independently, Quesadillas' own "Steak" item — this drops the one that
+  // is really a modifier choice of the OTHER item in the same message,
+  // before either ever reaches grouping.
+  const survivingAdds = dropAddsThatAreReallyModifiersOfAnotherAdd(correctedAdds, menuById);
 
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
