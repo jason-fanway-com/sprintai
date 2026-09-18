@@ -25,7 +25,7 @@ interface Shop {
   shop_context: string | null
   ai_instructions: string | null
   toast_client_id: string | null
-  toast_client_secret: string | null
+  has_toast_secret: boolean
   toast_location_guid: string | null
   latitude: number | null
   longitude: number | null
@@ -56,6 +56,11 @@ interface OrderCart {
 
 type Tab = 'menu' | 'orders' | 'settings' | 'chat' | 'qr'
 
+// Every `shops` column except toast_client_secret — its real value must
+// never reach the browser. has_toast_secret (generated column) tells the UI
+// whether one is configured without exposing what it is.
+const SHOP_SELECT_COLUMNS = 'id, tenant_id, name, slug, phone_number_e164, twilio_number_sid, open_hours, timezone, email_ticket_recipient, stripe_connect_account_id, is_paused, pause_message, created_at, updated_at, merchant_pin, shop_context, website_url, ai_instructions, toast_client_id, toast_location_guid, stripe_connected_account_id, stripe_platform_customer_id, connect_account_type, charges_enabled, payouts_enabled, connect_requirements_due, connect_status, onboarding_step, display_name, reply_from_e164, tax_rate_bps, cash_discount_mode, catering_mode, wing_flavors_included, wing_mix_extra, subscription_status, subscription_pm_set, stripe_subscription_id, optin_language, stop_help_wording, delivery_enabled, delivery_paused_until, delivery_pause_reason, delivery_fee_cents, protected, owner_name, onboarding_token, ein, is_test, about, menu_links, crawl_status, crawl_error, delivery_hours, google_place_id, formatted_address, google_rating, google_review_count, business_status, latitude, longitude, delivery_radius_mi, telnyx_number_id, telnyx_messaging_profile_id, campaign_assignment_status, campaign_assignment_checked_at, campaign_id, welcome_email_status, welcome_email_error, welcome_email_last_attempt_at, founding_promo, onboarding_complete, onboarding_complete_at, first_delivery_test_passed_at, first_delivery_test_recorded_by, owner_mobile, ticket_destination_type, ticket_destination_detail, compiled_ordering_engine_enabled, menu_extraction_incomplete, menu_extraction_note, customer_personalization_enabled, sms_provider, prompt_version, upsell_enabled, turn_engine_enabled, has_toast_secret'
+
 export default function ShopDetail() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
@@ -76,13 +81,14 @@ export default function ShopDetail() {
   const [addItemForm, setAddItemForm] = useState({ name: '', price_cents_str: '', description: '' })
   const [addItemCategory, setAddItemCategory] = useState('')
   const [chatDirty, setChatDirty] = useState(false)
+  const [toastSecretDraft, setToastSecretDraft] = useState('')
 
   const today = new Date().toISOString().split('T')[0]
 
   const { data: shop, isLoading } = useQuery<Shop>({
     queryKey: ['shop', id],
     queryFn: async () => {
-      const { data, error } = await supabase.from('shops').select('*').eq('id', id!).single()
+      const { data, error } = await supabase.from('shops').select(SHOP_SELECT_COLUMNS).eq('id', id!).single()
       if (error) throw error
       setShopForm(data)
       return data
@@ -168,22 +174,29 @@ export default function ShopDetail() {
 
   const saveShop = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from('shops').update({
+      const updates: Record<string, unknown> = {
         name: shopForm.name,
         email_ticket_recipient: shopForm.email_ticket_recipient,
         pause_message: shopForm.pause_message,
         timezone: shopForm.timezone,
         phone_number_e164: shopForm.phone_number_e164 ?? null,
         toast_client_id: shopForm.toast_client_id ?? null,
-        toast_client_secret: shopForm.toast_client_secret ?? null,
         toast_location_guid: shopForm.toast_location_guid ?? null,
         delivery_radius_mi: shopForm.delivery_radius_mi ?? null,
-      }).eq('id', id!)
+      }
+      // toastSecretDraft only ever holds a newly-typed value — the real
+      // stored secret is never loaded into the browser to round-trip here.
+      // Leaving it blank must not clear an existing secret.
+      if (toastSecretDraft.trim() !== '') {
+        updates.toast_client_secret = toastSecretDraft.trim()
+      }
+      const { error } = await supabase.from('shops').update(updates).eq('id', id!)
       if (error) throw error
     },
-    onSuccess: () => { 
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['shop', id] })
       setEditingShop(false)
+      setToastSecretDraft('')
       toast.success('Settings saved')
     },
     onError: (err) => toast.error((err as Error).message),
@@ -415,8 +428,10 @@ export default function ShopDetail() {
           shopForm={shopForm}
           onEditChange={setEditingShop}
           onFormChange={(field, value) => setShopForm(prev => ({ ...prev, [field]: value }))}
-          onFormReset={() => setShopForm(shop)}
+          onFormReset={() => { setShopForm(shop); setToastSecretDraft('') }}
           onSave={saveShop}
+          toastSecretDraft={toastSecretDraft}
+          onToastSecretDraftChange={setToastSecretDraft}
         />
       )}
 

@@ -10,7 +10,7 @@ interface Shop {
   phone_number_e164: string | null
   merchant_pin?: string | null
   toast_client_id?: string | null
-  toast_client_secret?: string | null
+  has_toast_secret?: boolean
   toast_location_guid?: string | null
   delivery_radius_mi?: number | null
 }
@@ -23,6 +23,8 @@ interface SettingsTabProps {
   onFormChange: (field: keyof Shop, value: any) => void
   onFormReset: () => void
   onSave: UseMutationResult<void, Error, void, unknown>
+  toastSecretDraft: string
+  onToastSecretDraftChange: (value: string) => void
 }
 
 export default function SettingsTab({
@@ -33,6 +35,8 @@ export default function SettingsTab({
   onFormChange,
   onFormReset,
   onSave,
+  toastSecretDraft,
+  onToastSecretDraftChange,
 }: SettingsTabProps) {
   return (
     <div className="space-y-6 max-w-lg">
@@ -133,7 +137,44 @@ export default function SettingsTab({
         <div className="space-y-4">
           {[
             { label: 'Toast Client ID', field: 'toast_client_id' as const, type: 'text' },
-            { label: 'Toast Client Secret', field: 'toast_client_secret' as const, type: 'password' },
+          ].map(({ label, field, type }) => (
+            <div key={field}>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+              {editingShop ? (
+                <input
+                  type={type}
+                  value={(shopForm[field] ?? '') as string}
+                  onChange={e => onFormChange(field, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+              ) : (
+                <p className="text-sm text-gray-700">
+                  {((shop[field] ?? '') as string) || <span className="text-gray-300">Not set</span>}
+                </p>
+              )}
+            </div>
+          ))}
+
+          {/* Write-only: the real secret never leaves the server. Editing
+              always starts blank; saving blank leaves the stored value untouched. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Toast Client Secret</label>
+            {editingShop ? (
+              <input
+                type="password"
+                value={toastSecretDraft}
+                onChange={e => onToastSecretDraftChange(e.target.value)}
+                placeholder={shop.has_toast_secret ? 'Leave blank to keep the current secret' : 'Not configured'}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            ) : (
+              <p className="text-sm text-gray-700">
+                {shop.has_toast_secret ? '•••••••• (configured)' : <span className="text-gray-300">Not set</span>}
+              </p>
+            )}
+          </div>
+
+          {[
             { label: 'Toast Location GUID', field: 'toast_location_guid' as const, type: 'text' },
           ].map(({ label, field, type }) => (
             <div key={field}>
@@ -147,9 +188,7 @@ export default function SettingsTab({
                 />
               ) : (
                 <p className="text-sm text-gray-700">
-                  {field === 'toast_client_secret' && shop[field]
-                    ? '••••••••'
-                    : ((shop[field] ?? '') as string) || <span className="text-gray-300">Not set</span>}
+                  {((shop[field] ?? '') as string) || <span className="text-gray-300">Not set</span>}
                 </p>
               )}
             </div>
