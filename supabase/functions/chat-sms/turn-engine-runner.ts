@@ -355,6 +355,17 @@ interface LexiconLoadResult {
 // duplicated here rather than imported.
 const LEXICON_ITEM_METADATA_BATCH_SIZE = 150;
 
+// lexicon.target_id is TEXT with no FK to menu_items.id (see comment above):
+// live data (Vito's) has non-UUID target_ids like "derived:<uuid>:0:0" mixed
+// in among real menu_items.id values. Sending even one non-UUID string into
+// `.in("id", batch)` against menu_items.id (a UUID column) fails the ENTIRE
+// batch with Postgres error 22P02 ("invalid input syntax for type uuid") —
+// not just the offending row — silently dropping category/size_label for
+// every other, valid target_id that happened to share its batch. Filtering
+// non-UUID-shaped ids out before the query keeps them (correctly) unmatched
+// without poisoning the real ids around them.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface LexiconItemMetadata {
   category: string | null;
   size_label: string | null;
@@ -372,8 +383,9 @@ async function loadLexiconItemMetadata(
   targetIds: string[],
 ): Promise<Map<string, LexiconItemMetadata>> {
   const metaByTargetId = new Map<string, LexiconItemMetadata>();
-  for (let i = 0; i < targetIds.length; i += LEXICON_ITEM_METADATA_BATCH_SIZE) {
-    const batch = targetIds.slice(i, i + LEXICON_ITEM_METADATA_BATCH_SIZE);
+  const uuidTargetIds = targetIds.filter((id) => UUID_RE.test(id));
+  for (let i = 0; i < uuidTargetIds.length; i += LEXICON_ITEM_METADATA_BATCH_SIZE) {
+    const batch = uuidTargetIds.slice(i, i + LEXICON_ITEM_METADATA_BATCH_SIZE);
     try {
       const { data, error } = await supabase
         .from("menu_items")

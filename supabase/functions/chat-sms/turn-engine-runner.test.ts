@@ -132,9 +132,18 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
       },
       // loadLexiconItemMetadata's batched `.in("id", batch)` lookup against
       // menu_items. Matches real PostgREST .in() semantics: rows whose
-      // `column` value is one of `values`, error: null.
+      // `column` value is one of `values`, error: null — EXCEPT that
+      // menu_items.id is a real UUID column, so a real Postgres rejects the
+      // ENTIRE `.in()` call with 22P02 ("invalid input syntax for type
+      // uuid") the moment even one value in `values` isn't UUID-shaped, not
+      // just the offending value. Reproduces that here so a test can prove
+      // the fix filters non-UUID target_ids out before this call is made.
       in(column: string, values: unknown[]) {
         if (table !== "menu_items") return Promise.resolve({ data: [], error: null });
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (values.some((v) => typeof v !== "string" || !UUID_RE.test(v))) {
+          return Promise.resolve({ data: null, error: { message: "invalid input syntax for type uuid", code: "22P02" } });
+        }
         const matches = state.menuItems.filter((row) => values.includes((row as Record<string, unknown>)[column]));
         return Promise.resolve({ data: matches, error: null });
       },
@@ -432,6 +441,47 @@ Deno.test("runTurnEngineTurn: a clean paginated finish that disagrees with an in
   const metadata = state.errorLogInserted[0].metadata as { expected_count: number; loaded_count: number };
   assertEquals(metadata.expected_count, 1298);
   assertEquals(metadata.loaded_count, 1000);
+});
+
+// ── loadLexiconItemMetadata: a non-UUID target_id sharing a batch with real
+// UUID target_ids must not poison the whole batch ────────────────────────
+// Live incident (Vito's, commit 5e3398eb): lexicon.target_id is TEXT with no
+// FK to menu_items.id, and live data has non-UUID target_ids (e.g.
+// "derived:<uuid>:0:0") mixed in with real menu_items.id UUIDs. A real
+// Postgres rejects `.in("id", batch)` for the ENTIRE batch with 22P02 the
+// moment one value isn't UUID-shaped — silently dropping category/size_label
+// for every other, valid id in that same batch, not just the bad one. The
+// fake's `.in()` above reproduces that all-or-nothing failure; this proves
+// the fix (filtering to UUID-shaped ids before the `.in()` call) keeps the
+// real id's metadata intact and writes no error_log row.
+
+Deno.test("runTurnEngineTurn: a non-UUID target_id in the same lexicon page as a real UUID target_id does not poison that id's category/size_label lookup", async () => {
+  const REAL_ITEM_ID = "11111111-1111-1111-1111-111111111111";
+  const mixedLexicon = [
+    { term: "cheeseburger", target_id: REAL_ITEM_ID },
+    { term: "beef", target_id: "derived:9369c1e7-38df-45da-985e-36d278d7a12c:0:0" },
+  ];
+  const { supabase, state } = makeFakeSupabase({
+    lexicon: mixedLexicon,
+    menuItems: [{ id: REAL_ITEM_ID, category: "Burgers", size_label: null }],
+  });
+  let seenLexicon: Array<{ term: string; target_id: string; category?: string | null; size_label?: string | null }> = [];
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      seenLexicon = input.lexicon;
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+  const input = baseInput({ message: "cheeseburger", cart: [] });
+
+  await runTurnEngineTurn(input, deps);
+
+  const realRow = seenLexicon.find((r) => r.target_id === REAL_ITEM_ID);
+  assert(realRow, "the real UUID target_id's lexicon row must still be handed to PROPOSE");
+  assertEquals(realRow!.category, "Burgers", "the non-UUID id sharing the batch must not poison the real id's category lookup");
+  assertEquals(state.errorLogInserted.length, 0, "filtering the non-UUID id out before .in() must avoid a 22P02 batch error entirely");
 });
 
 Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and routes to ASK's disambiguation question", async () => {
