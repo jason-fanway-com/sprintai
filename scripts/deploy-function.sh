@@ -37,6 +37,20 @@ if [ -z "$FUNCTION_NAME" ]; then
   exit 1
 fi
 
+# Refuse while a sim run is in flight. A deploy that lands mid-run splits one
+# result across two builds, and run_meta.json attributes all of it to the
+# first -- a comparison that looks valid and is not (2026-09-18). The lock is
+# written by ~/po-scratch/simcustomer.py and names the pid; a stale lock from
+# a dead process does not block.
+INFLIGHT="${SIM_INFLIGHT_PATH:-$HOME/po-scratch/simruns/INFLIGHT}"
+if [ -f "$INFLIGHT" ]; then
+  INFLIGHT_PID=$(sed -n 's/^pid=//p' "$INFLIGHT" | head -1)
+  if [ -n "$INFLIGHT_PID" ] && kill -0 "$INFLIGHT_PID" 2>/dev/null; then
+    echo "FAIL: a sim run is in flight (pid ${INFLIGHT_PID}, $(sed -n 's/^started=//p' "$INFLIGHT" | head -1)). Deploying now would split its result across two builds. Wait for it to finish, or stop it first." >&2
+    exit 2
+  fi
+fi
+
 PROJECT_REF="rvdqfxtrskxekfkqnegx"
 FUNC_DIR="supabase/functions/${FUNCTION_NAME}"
 ENTRYPOINT="${FUNC_DIR}/index.ts"
