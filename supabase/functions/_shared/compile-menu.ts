@@ -388,29 +388,72 @@ function computeBotState(
 // ============================================================
 // §6.2 lexicon generation — rules 1, 2, 3, 6 only (P0 scope, see header).
 // ============================================================
-// Rule 2 helper — the stripped/qualified alias this item's display name
-// would produce ("Pepperoni Stromboli" in category Stromboli -> "pepperoni"),
-// or null if there's nothing to strip. Shared between the menu-wide
-// collision pre-passes in compileMenu (primaryTermOwners, rule2TermOwners)
-// and the actual per-item emission below so "what Rule 2 computes" can never
-// drift between the two call sites.
-function rule2CandidateTerm(item: CompileItem): string | null {
+// Rule 2 helper — an item's BARE pre-qualification name ("Cheesesteak" for
+// "Cheesesteak Sandwich"), or null if display_name carries no qualification
+// to strip.
+//
+// 2026-09-18 PO dispatch: reads product_key's own "<category-slug>:
+// <base-slug>" second segment rather than guessing from display_name by
+// regex-stripping a trailing category noun. product_key's base segment is
+// computed by normalize.ts straight from the raw import name (stripped only
+// of a folded-size suffix) BEFORE either reason display_name can gain a
+// category-noun suffix ever runs — a folded/sized product states its
+// category noun unconditionally, regardless of any real collision (real
+// Vito's shape: "14\"/16\"/Personal Chicken Parmesan Stromboli" all carry
+// "Stromboli" even though nothing else in that category collided with
+// them), and a plain cross-category collision on the PRE-qualification name
+// triggers normalize.ts's own separate duplicate-name pass. Both leave the
+// exact same footprint on product_key's base segment: it stays the bare
+// dish name throughout, for every item genuinely descended from it,
+// regardless of which of the two mechanisms (or both) fired.
+//
+// A regex guess against display_name's suffix (the prior approach) both
+// false-positived on an item whose real name simply happens to end in a
+// word that is also a category noun ("Zio's Salad" in category "Salads"
+// looked "qualified" down to "Zio's" — which then collided with a genuine,
+// unrelated entree actually named "Zio's" — even though "Zio's Salad" was
+// never qualified from anything; that's just its name) and false-negatived
+// on sized items (a leading size word like "14\"" was never stripped, so
+// "14\" Chicken Parmesan Stromboli" never looked related to the unsized
+// "Chicken Parmesan Entree"/"Chicken Parmesan Sandwich" it actually is).
+// product_key's base segment has neither failure mode: it is exactly the
+// dish's own pre-qualification identity, independent of guesswork on the
+// qualified display_name text.
+function bareProductName(item: CompileItem): string | null {
+  if (!item.product_key) return null;
+  const colonIdx = item.product_key.indexOf(":");
+  const baseSlug = colonIdx === -1 ? item.product_key : item.product_key.slice(colonIdx + 1);
+  if (!baseSlug) return null;
+  const bare = normaliseTerm(baseSlug.replace(/-/g, " "));
+  if (!bare) return null;
   const displayName = (item.display_name ?? item.name).trim();
-  if (!displayName || !item.category) return null;
-  const noun = categoryNoun(item.category);
-  if (!noun) return null;
-  const suffixRe = new RegExp(`\\s+${noun}s?$`, "i");
-  if (!suffixRe.test(displayName)) return null;
-  const stripped = displayName.replace(suffixRe, "").trim();
-  if (!stripped || stripped.toLowerCase() === displayName.toLowerCase()) return null;
-  return normaliseTerm(stripped);
+  if (bare === normaliseTerm(displayName)) return null;
+  return bare;
 }
 
-function itemLexiconTerms(
-  item: CompileItem,
-  primaryTermOwners?: Map<string, string>,
-  rule2TermOwners?: Map<string, Set<string>>,
-): LexiconTerm[] {
+// Menu-wide map of bare product name -> the set of DISTINCT product_keys
+// among UNSIZED items that independently own it. "Unsized" (no size_label)
+// is the signal for "a standalone dish, not one row of a size-folded
+// family" — every required real collision (cheesesteak, buffalo chicken
+// cheesesteak, mussels fra diavolo, chicken parmesan's entree+sandwich) is
+// ≥2 standalone dishes across different categories genuinely sharing one
+// name. Computed once per menu (compileMenu) and consulted by
+// itemLexiconTerms below to gate a SIZED item's participation — see that
+// call site for why sized items need a higher bar than unsized ones.
+function unsizedFamilyCountsByBareName(items: CompileItem[]): Map<string, Set<string>> {
+  const counts = new Map<string, Set<string>>();
+  for (const i of items) {
+    if (i.size_label) continue;
+    const bare = bareProductName(i);
+    if (!bare) continue;
+    const families = counts.get(bare) ?? new Set<string>();
+    families.add(i.product_key!);
+    counts.set(bare, families);
+  }
+  return counts;
+}
+
+function itemLexiconTerms(item: CompileItem, unsizedFamilyCounts?: Map<string, Set<string>>): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
@@ -418,42 +461,46 @@ function itemLexiconTerms(
   // Rule 1: display_name itself.
   terms.push({ term: normaliseTerm(displayName), target_type: "item", target_id: item.id, provenance: "stated" });
 
-  // Rule 2: stripped/qualified item name as a second term — if the
-  // display_name was qualified with its trailing category noun ("Chicken
-  // Caesar Salad"), also index the unqualified form ("Chicken Caesar") so a
-  // customer who doesn't say the category word still resolves.
+  // Rule 2: an item's bare pre-qualification name as a second term — if
+  // display_name was qualified ("Cheesesteak Sandwich"), also index the
+  // bare form ("Cheesesteak") so a customer who doesn't say the qualifier
+  // still resolves.
   //
-  // Guard A: skip this alias when the stripped form is already another
-  // item's OWN primary name (e.g. "Zio's Salad" stripping to "Zio's" would
-  // otherwise collide with a real, distinct entree literally named "Zio's";
-  // "Shrimp Parmigiana Sub" stripping to "Shrimp Parmigiana" collides with
-  // the real Seafood entree of that name). A convenience alias must never
-  // shadow a genuine, differently-owned item — real data surfaced 4 such
-  // cases.
+  // 2026-09-18 PO dispatch: always emitted for an UNSIZED item, even when it
+  // collides with another item's bare name (real Vito's items literally
+  // named "Cheesesteak Sandwich" / "Cheesesteak Panini" / "Cheesesteak
+  // Roll" / "Cheesesteak Flatbread" all share the bare name "Cheesesteak").
+  // The old version of this rule dropped a shared bare name for every
+  // claimant instead of emitting it — which left the bare word "cheesesteak"
+  // free for an unrelated derived candidate ("Garlic Cheesesteak" ->
+  // trailing-run "cheesesteak") to claim uncontested, so a customer saying
+  // just "cheesesteak" got Garlic every time, never any of the four real
+  // Cheesesteak items. Emitting the term for every claimant instead makes
+  // resolveItem's own longest-match tie correctly ambiguous among the real
+  // candidates, so DECIDE narrows ("sandwich, panini, roll, or flatbread?")
+  // instead of either dropping the word or handing it to the wrong item.
+  // Same principle the 2026-09-15 dispatch already applied to derived
+  // candidates ("burger", "fries") — no tiebreak, no ranking, every
+  // claimant keeps its own row.
   //
-  // Guard B (2026-09-08, PO dispatch): skip this alias when TWO OR MORE
-  // DIFFERENT items independently strip to the SAME term via this same Rule
-  // 2 — e.g. Zio's "Pepperoni Stromboli" and "Pepperoni Calzone" both strip
-  // their category noun to "pepperoni", and nothing in the upsert
-  // (`onConflict: menu_id,term,target_type,target_id`) dedupes two DIFFERENT
-  // target_ids under the identical term — so `lexicon` ends up with two
-  // active `term='pepperoni', target_type='item'` rows pointing at two
-  // different products, a coin-flip for whichever reader picks one. Guard A
-  // alone doesn't catch this because neither alias collides with a Rule-1
-  // primary name — they only collide with EACH OTHER. Same principle as
-  // Guard A, applied symmetrically: an ambiguous alias must not be written
-  // for ANY of its claimants, not just skipped for the loser of an arbitrary
-  // order.
-  if (item.category) {
-    const strippedTerm = rule2CandidateTerm(item);
-    if (strippedTerm) {
-      const owner = primaryTermOwners?.get(strippedTerm);
-      const claimants = rule2TermOwners?.get(strippedTerm);
-      const ambiguousAcrossItems = !!claimants && claimants.size > 1;
-      if ((!owner || owner === item.id) && !ambiguousAcrossItems) {
-        terms.push({ term: strippedTerm, target_type: "item", target_id: item.id, provenance: "stated" });
-      }
-    }
+  // A SIZED item (one row of a size-folded family, e.g. "14\" Chicken
+  // Parmesan Stromboli") is held to a stricter bar: it only joins this
+  // alias when ≥2 OTHER, UNSIZED items already independently share the
+  // same bare name — i.e. only when it would be joining an ambiguity that
+  // already exists among real standalone dishes, never when it would be
+  // the SOLE cause of a standalone item losing its only unique term. Real
+  // Vito's shape this protects: "Bruschetta" (a standalone Appetizer) vs.
+  // "Bruschetta Pizza"'s 3 sizes — genuinely two different foods that just
+  // happen to share a name, with no second standalone dish to make "the
+  // ambiguity" a real, pre-existing thing the sizes could join. Contrast
+  // "Chicken Parmesan": the Entree and the Sandwich are BOTH standalone and
+  // already ambiguous with each other before the Stromboli's 3 sizes ever
+  // enter the picture, so the sizes are joining an ambiguity that already
+  // exists, not creating a new one.
+  const bareName = bareProductName(item);
+  if (bareName) {
+    const emit = !item.size_label || (unsizedFamilyCounts?.get(bareName)?.size ?? 0) >= 2;
+    if (emit) terms.push({ term: bareName, target_type: "item", target_id: item.id, provenance: "stated" });
   }
 
   // Rule 6: "X or Y" slot choices → their own names, as choice targets.
@@ -627,8 +674,20 @@ function gateSurfaceFormCandidates(
   return out;
 }
 
-// Level 1: collapse, plural-of-stated, plural-of-collapsed — all off the
-// term as stated, one gate.
+// A trailing standalone count ("chicken fingers 3") stripped back to the
+// dish name ("chicken fingers"). The source is a portion count the importer
+// carried as "Chicken Fingers (3)" — normaliseTerm's punctuation strip
+// removes the parens but leaves the digit as a bare trailing word, so
+// without this the compiler treats "3" as part of the dish's name and a
+// customer who says "chicken fingers" (no count) never matches (2026-09-18
+// PO dispatch).
+function stripTrailingCount(term: string): string[] {
+  const m = term.match(/^(.+)\s\d+$/);
+  return m ? [m[1]] : [];
+}
+
+// Level 1: collapse, plural-of-stated, plural-of-collapsed, strip-trailing-
+// count — all off the term as stated, one gate.
 function level1SurfaceForms(term: string): string[] {
   const forms: string[] = [];
   const collapsed = collapseSpaces(term);
@@ -639,6 +698,7 @@ function level1SurfaceForms(term: string): string[] {
   }
   const plural = pluralizeSurfaceForm(term);
   if (plural && plural !== term) forms.push(plural);
+  forms.push(...stripTrailingCount(term));
   return forms;
 }
 
@@ -664,6 +724,17 @@ function deriveLexiconSurfaceForms(compiledItems: CompiledItem[]): LexiconTerm[]
   // customer word the way another item's own name is, so neither may block
   // a derived item candidate — see the collision-handling comment above for
   // the live Zio's 'pizza' incident and the choice-collision extension.
+  //
+  // 2026-09-18 PO dispatch: since itemLexiconTerms now always emits an
+  // item's Rule-2 stripped/qualified bare name (never suppressed for
+  // collisions — see that function), every qualified item's bare name is
+  // already in `compiledItems`' own lexicon_terms by the time this runs, so
+  // it lands in `existing` for free. That's what keeps a derived candidate
+  // ("cheesesteak" off the trailing run of "garlic cheesesteak") from ever
+  // shadowing the real bare name of the items it was qualified away from
+  // ("Cheesesteak Sandwich"/"Panini"/"Roll") — the exclusion set here is
+  // stated terms PLUS every item's own unqualified bare name, and both are
+  // now the same set.
   const existing = new Set<string>();
   for (const c of compiledItems) {
     for (const t of c.lexicon_terms) {
@@ -767,8 +838,7 @@ export function compileItem(
   item: CompileItem,
   questions: PendingQuestion[],
   compiledAt: string,
-  primaryTermOwners?: Map<string, string>,
-  rule2TermOwners?: Map<string, Set<string>>,
+  unsizedFamilyCounts?: Map<string, Set<string>>,
 ): CompiledItem {
   const { bot_state, bot_state_reason } = computeBotState(item, questions);
   return {
@@ -776,7 +846,7 @@ export function compileItem(
     bot_state,
     bot_state_reason,
     ask_plan: buildAskPlan(item, compiledAt),
-    lexicon_terms: itemLexiconTerms(item, primaryTermOwners, rule2TermOwners),
+    lexicon_terms: itemLexiconTerms(item, unsizedFamilyCounts),
   };
 }
 
@@ -1404,33 +1474,12 @@ export function compileMenu(
   compiledAt: string,
   acknowledgedDisplayOnly: boolean,
 ): { items: CompiledItem[]; categoryLexicon: LexiconTerm[]; invariants: MenuInvariantResult[] } {
-  // Menu-wide map of each item's own Rule-1 (primary, unqualified) term to
-  // its id — lets itemLexiconTerms suppress a Rule-2 alias that would
-  // otherwise collide with a different item's real name (see itemLexiconTerms).
-  const primaryTermOwners = new Map<string, string>();
-  for (const i of items) {
-    const displayName = (i.display_name ?? i.name).trim();
-    if (displayName) primaryTermOwners.set(normaliseTerm(displayName), i.id);
-  }
-
-  // Menu-wide map of each Rule-2 stripped alias to every DISTINCT item id
-  // that would independently produce it (e.g. both "Pepperoni Stromboli" and
-  // "Pepperoni Calzone" strip to "pepperoni") — lets itemLexiconTerms drop an
-  // alias claimed by more than one item instead of silently writing two
-  // active rows under the same term (see itemLexiconTerms Guard B).
-  const rule2TermOwners = new Map<string, Set<string>>();
-  for (const i of items) {
-    const t = rule2CandidateTerm(i);
-    if (!t) continue;
-    if (!rule2TermOwners.has(t)) rule2TermOwners.set(t, new Set());
-    rule2TermOwners.get(t)!.add(i.id);
-  }
-
   // Every item gets the FULL candidate list — findBlockingQuestion (inside
   // compileItem) does the scope matching per item (by item id, category, or
   // one of the item's own group/choice ids), so there is no need to
   // pre-partition questions by item here.
-  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, primaryTermOwners, rule2TermOwners));
+  const unsizedFamilyCounts = unsizedFamilyCountsByBareName(items);
+  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, unsizedFamilyCounts));
   const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
 
   const categories = new Set(items.map(i => i.category).filter((c): c is string => !!c));

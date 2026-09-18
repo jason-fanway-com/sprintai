@@ -260,92 +260,128 @@ Deno.test("lexicon rule 1: display_name itself -> item term", () => {
   assert(terms.some(t => t.term === "gyro" && t.target_type === "item" && t.target_id === it.id));
 });
 
-Deno.test("lexicon rule 2: category-qualified display_name also indexes the unqualified form", () => {
-  const it = item({ display_name: "Chicken Caesar Salad", category: "Salads" });
+Deno.test("lexicon rule 2: product_key's bare base name is indexed alongside the qualified display_name", () => {
+  const it = item({ display_name: "Chicken Caesar Salad", category: "Salads", product_key: "salads:chicken-caesar" });
   const terms = compileItem(it, [], "t").lexicon_terms;
   assert(terms.some(t => t.term === "chicken caesar salad"));
   assert(terms.some(t => t.term === "chicken caesar"));
 });
 
-Deno.test("lexicon rule 2 guard: a stripped alias is dropped when it collides with a different item's own real name (real Zio's/NJB gap)", () => {
-  // Real gap found via item 9's invariant 4 report: "Zio's Salad" stripping
-  // "Salad" collides with a genuine, distinct entree literally named "Zio's";
-  // "Shrimp Parmigiana Sub" stripping "Sub" collides with the Seafood entree
-  // "Shrimp Parmigiana". Passing compileItem the owner map directly here
-  // (compileMenu's own wiring is covered by the end-to-end test below).
-  const entree = item({ display_name: "Zio's", category: "Chicken or Veal" });
-  const salad = item({ display_name: "Zio's Salad", category: "Salads" });
-  const owners = new Map([["zios", entree.id]]);
-  const entreeTerms = compileItem(entree, [], "t", owners).lexicon_terms;
-  const saladTerms = compileItem(salad, [], "t", owners).lexicon_terms;
-  assert(entreeTerms.some(t => t.term === "zios" && t.target_id === entree.id));
-  assert(!saladTerms.some(t => t.term === "zios"), "alias 'zios' must not be generated for a different item");
-  assert(saladTerms.some(t => t.term === "zios salad"), "the item's own rule-1 term must still be generated");
+Deno.test("lexicon rule 2: no alias when product_key is absent, or when its base already equals the full display_name (nothing to strip)", () => {
+  const noKey = item({ display_name: "Gyro", category: "Sandwiches", product_key: null });
+  const noKeyTerms = compileItem(noKey, [], "t").lexicon_terms;
+  assertEquals(noKeyTerms.length, 1, "only the Rule-1 term, no Rule-2 alias, when there is no product_key to read");
+
+  const unqualified = item({ display_name: "Gyro", category: "Sandwiches", product_key: "sandwiches:gyro" });
+  const terms = compileItem(unqualified, [], "t").lexicon_terms;
+  assertEquals(terms.filter(t => t.term === "gyro").length, 1, "must not double-emit when the base name already IS the full name");
 });
 
-Deno.test("lexicon rule 2 guard: an alias is still generated when nothing else owns the stripped term", () => {
-  const it = item({ display_name: "Chicken Caesar Salad", category: "Salads" });
-  const owners = new Map<string, string>(); // no collision registered
-  const terms = compileItem(it, [], "t", owners).lexicon_terms;
-  assert(terms.some(t => t.term === "chicken caesar"));
-});
-
-Deno.test("compileMenu end-to-end: the Zio's/Shrimp Parmigiana/Eggplant Parmigiana collisions resolve and both items keep a unique term", () => {
-  const entree = item({ display_name: "Zio's", category: "Chicken or Veal" });
-  const salad = item({ display_name: "Zio's Salad", category: "Salads" });
-  const panini = item({ display_name: "Zio's Panini", category: "Paninis" });
-  const seafood = item({ display_name: "Shrimp Parmigiana", category: "Seafood" });
-  const sub = item({ display_name: "Shrimp Parmigiana Sub", category: "Hot Subs" });
-  const { items: compiled } = compileMenu([entree, salad, panini, seafood, sub], [], "t", false);
+Deno.test("lexicon rule 2 (2026-09-18 PO dispatch, real Zio's/Shrimp Parmigiana fix): product_key is read instead of guessing from display_name, so an item whose real name simply happens to end in a category word no longer falsely collides with a genuinely different item", () => {
+  // OLD bug: a regex strip of display_name's trailing category noun treated
+  // "Zio's Salad" (category Salads) as if "Salad" were an added qualifier,
+  // producing a false alias "zios" that collided with the real, unrelated
+  // entree literally named "Zio's" — so BOTH lost the term (invariant 4
+  // regression) under the old guard, or both became falsely ambiguous
+  // without it. product_key's base segment carries the truth directly:
+  // "Zio's Salad" was never derived from "Zio's" at all — it's its own
+  // dish, base "zios-salad", not "zios".
+  const entree = item({ display_name: "Zio's", category: "Chicken or Veal", product_key: "chicken-or-veal:zios" });
+  const salad = item({ display_name: "Zio's Salad", category: "Salads", product_key: "salads:zios-salad" });
+  const seafood = item({ display_name: "Shrimp Parmigiana", category: "Seafood", product_key: "seafood:shrimp-parmigiana" });
+  const sub = item({ display_name: "Shrimp Parmigiana Sub", category: "Hot Subs", product_key: "hot-subs:shrimp-parmigiana-sub" });
+  const { items: compiled } = compileMenu([entree, salad, seafood, sub], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
 
-  const entreeHasUniqueZios = byId.get(entree.id)!.lexicon_terms.some(t => t.term === "zios");
-  const saladHasZios = byId.get(salad.id)!.lexicon_terms.some(t => t.term === "zios");
-  const paniniHasZios = byId.get(panini.id)!.lexicon_terms.some(t => t.term === "zios");
-  assert(entreeHasUniqueZios);
-  assert(!saladHasZios);
-  assert(!paniniHasZios);
+  assert(byId.get(entree.id)!.lexicon_terms.some(t => t.term === "zios"), "the entree uniquely owns its own real name");
+  assert(!byId.get(salad.id)!.lexicon_terms.some(t => t.term === "zios"), "the salad's base name is 'zios salad', not 'zios' — no false alias");
+  assert(!byId.get(seafood.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana sub"));
+  assert(!byId.get(sub.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana"), "the sub's base name is 'shrimp parmigiana sub', not 'shrimp parmigiana' — no false alias");
 
-  const seafoodHasUniqueTerm = byId.get(seafood.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana");
-  const subHasShrimpParmigiana = byId.get(sub.id)!.lexicon_terms.some(t => t.term === "shrimp parmigiana");
-  assert(seafoodHasUniqueTerm);
-  assert(!subHasShrimpParmigiana);
-
-  // Invariant 4 must now pass for both real-menu-shaped entrees (all 5 items
-  // orderable here since none has any option groups to block on).
-  const inv4 = compileMenu([entree, salad, panini, seafood, sub], [], "t", false).invariants.find(i => i.invariant === 4)!;
+  const inv4 = compileMenu([entree, salad, seafood, sub], [], "t", false).invariants.find(i => i.invariant === 4)!;
   assert(inv4.pass, `invariant 4 should pass, violations: ${inv4.violations.join(", ")}`);
 });
 
-Deno.test("lexicon rule 2 guard B: a stripped alias claimed by TWO different items (not a Rule-1 name) is dropped for both (real Zio's 'pepperoni' gap, 2026-09-08 P0)", () => {
-  // Real Zio's shape: "Pepperoni Stromboli" and "Pepperoni Calzone" each
-  // strip their own category noun to "pepperoni" independently — neither
-  // collides with another item's Rule-1 primary name (Guard A), so without
-  // Guard B both would write an active lexicon row for the identical term
-  // "pepperoni" pointing at two different target_ids, a coin-flip for any
-  // future reader of the table.
-  const stromboli = item({ display_name: "Pepperoni Stromboli", category: "Strombolis" });
-  const calzone = item({ display_name: "Pepperoni Calzone", category: "Calzones" });
-  const { items: compiled } = compileMenu([stromboli, calzone], [], "t", false);
+Deno.test("lexicon rule 2 (2026-09-18 PO dispatch): a bare base name shared by TWO different items across categories is KEPT for both, ambiguous, one row each, no tiebreak (real Vito's 'cheesesteak'/'italian'/'blt' shape)", () => {
+  // Real Vito's shape: "BLT Panini" and "BLT Sandwich" share product_key
+  // base "blt" across two categories — genuinely the same dish, not a
+  // regex coincidence. Per the 2026-09-18 PO ruling this is the same
+  // "never silently drop, let resolveItem ask" principle already applied
+  // to derived candidates ("burger", "fries") on 2026-09-15.
+  const panini = item({ display_name: "BLT Panini", category: "Homemade Paninis", product_key: "homemade-paninis:blt" });
+  const sandwich = item({ display_name: "BLT Sandwich", category: "Cold Sandwiches", product_key: "cold-sandwiches:blt" });
+  const { items: compiled } = compileMenu([panini, sandwich], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
 
-  assert(!byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni"),
-    "ambiguous alias must not be written for the Stromboli");
-  assert(!byId.get(calzone.id)!.lexicon_terms.some(t => t.term === "pepperoni"),
-    "ambiguous alias must not be written for the Calzone");
-  // Each item's own full name (Rule 1) must still be generated — only the
-  // ambiguous shared alias is dropped, not the item's real identity.
-  assert(byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni stromboli"));
-  assert(byId.get(calzone.id)!.lexicon_terms.some(t => t.term === "pepperoni calzone"));
+  const bltTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "blt").map(t => t.target_id)),
+  );
+  assertEquals(bltTargets, new Set([panini.id, sandwich.id]),
+    "'blt' must carry exactly one row per claimant — both ids, no more, no fewer");
+  assertEquals(byId.get(panini.id)!.lexicon_terms.filter(t => t.term === "blt").length, 1);
+  assertEquals(byId.get(sandwich.id)!.lexicon_terms.filter(t => t.term === "blt").length, 1);
+  // Each item's own full name (Rule 1) is still generated too.
+  assert(byId.get(panini.id)!.lexicon_terms.some(t => t.term === "blt panini"));
+  assert(byId.get(sandwich.id)!.lexicon_terms.some(t => t.term === "blt sandwich"));
 });
 
-Deno.test("lexicon rule 2 guard B: a stripped alias claimed by only ONE item is still generated", () => {
-  const stromboli = item({ display_name: "Pepperoni Stromboli", category: "Strombolis" });
-  const sausage = item({ display_name: "Sausage Stromboli", category: "Strombolis" });
+Deno.test("lexicon rule 2: a bare base name claimed by only ONE item is generated normally", () => {
+  const stromboli = item({ display_name: "Pepperoni Stromboli", category: "Strombolis", product_key: "strombolis:pepperoni" });
+  const sausage = item({ display_name: "Sausage Stromboli", category: "Strombolis", product_key: "strombolis:sausage" });
   const { items: compiled } = compileMenu([stromboli, sausage], [], "t", false);
   const byId = new Map(compiled.map(c => [c.item_id, c]));
   assert(byId.get(stromboli.id)!.lexicon_terms.some(t => t.term === "pepperoni"));
   assert(byId.get(sausage.id)!.lexicon_terms.some(t => t.term === "sausage"));
+});
+
+Deno.test("lexicon rule 2 vs. derived pass (2026-09-18 PO dispatch, real Vito's 'cheesesteak' bug): a shared bare base name is never shadowed by an unrelated item's derived trailing-run candidate", () => {
+  // Real bug: "Cheesesteak Sandwich"/"Panini"/"Roll" all share base
+  // "cheesesteak" and, under the OLD (display_name-regex) rule, had that
+  // alias dropped for all three — freeing the word "cheesesteak" for
+  // "Garlic Cheesesteak"'s own derived trailing-run candidate to claim
+  // uncontested. A customer saying just "cheesesteak" got Garlic, never any
+  // of the three real items. Garlic's own base is "garlic-cheesesteak" — a
+  // genuinely different dish, not qualified from "Cheesesteak" at all.
+  const sandwich = item({ display_name: "Cheesesteak Sandwich", category: "Hot Sandwiches", product_key: "hot-sandwiches:cheesesteak" });
+  const panini = item({ display_name: "Cheesesteak Panini", category: "Homemade Paninis", product_key: "homemade-paninis:cheesesteak" });
+  const roll = item({ display_name: "Cheesesteak Roll", category: "Stromboli Rolls", product_key: "stromboli-rolls:cheesesteak" });
+  const garlic = item({ display_name: "Garlic Cheesesteak", category: "Hot Sandwiches", product_key: "hot-sandwiches:garlic-cheesesteak" });
+  const { items: compiled } = compileMenu([sandwich, panini, roll, garlic], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const cheesesteakTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "cheesesteak").map(t => t.target_id)),
+  );
+  assertEquals(cheesesteakTargets, new Set([sandwich.id, panini.id, roll.id]),
+    "'cheesesteak' must resolve to the three real Cheesesteak items, and Garlic must never claim it");
+  assert(!byId.get(garlic.id)!.lexicon_terms.some(t => t.term === "cheesesteak"),
+    "Garlic Cheesesteak's own derived candidate must be excluded — the bare name already belongs to real items");
+  assert(byId.get(garlic.id)!.lexicon_terms.some(t => t.term === "garlic cheesesteak"));
+});
+
+Deno.test("lexicon rule 2 (2026-09-18 PO dispatch, real Vito's 'chicken parmesan' bug): a folded, size-varying sibling shares its base name with unsized siblings across OTHER categories, even though its own display_name carries a leading size word display_name-regex could never strip", () => {
+  // Real Vito's shape: "Chicken Parmesan Entree" and "Chicken Parmesan
+  // Sandwich" are unsized, so their display_name never carries a size
+  // prefix — but the Stromboli-category sibling is a folded, sized
+  // product, so ITS display_name is "14\" Chicken Parmesan Stromboli":
+  // BOTH a leading size word AND a trailing category noun, neither of
+  // which the old display_name-regex approach could strip back down to
+  // the shared dish name. product_key's base segment ("chicken-parmesan")
+  // is computed by normalize.ts from the raw import name before either
+  // qualification is ever applied, so all three items land on the exact
+  // same bare term regardless of which qualification(s) fired.
+  const entree = item({ display_name: "Chicken Parmesan Entree", category: "Entrees", product_key: "entrees:chicken-parmesan" });
+  const sandwich = item({ display_name: "Chicken Parmesan Sandwich", category: "Hot Sandwiches", product_key: "hot-sandwiches:chicken-parmesan" });
+  const stromboli14 = item({ display_name: "14\" Chicken Parmesan Stromboli", category: "Stromboli", size_label: "14\"", product_key: "stromboli:chicken-parmesan" });
+  const stromboli16 = item({ display_name: "16\" Chicken Parmesan Stromboli", category: "Stromboli", size_label: "16\"", product_key: "stromboli:chicken-parmesan" });
+  const stromboliPersonal = item({ display_name: "Personal Chicken Parmesan Stromboli", category: "Stromboli", size_label: "Personal", product_key: "stromboli:chicken-parmesan" });
+  const { items: compiled } = compileMenu([entree, sandwich, stromboli14, stromboli16, stromboliPersonal], [], "t", false);
+
+  const chickenParmTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "chicken parmesan").map(t => t.target_id)),
+  );
+  assertEquals(chickenParmTargets, new Set([entree.id, sandwich.id, stromboli14.id, stromboli16.id, stromboliPersonal.id]),
+    "'chicken parmesan' must be ambiguous across all 5 real items sharing the dish, not just the unsized two");
 });
 
 Deno.test("lexicon rule 3: category noun singular + plural -> category target", () => {
@@ -425,6 +461,47 @@ Deno.test("lexicon surface forms: an already-plural source term is not pluralize
   const terms = compileMenu([fries], [], "t", false).items[0].lexicon_terms.map(t => t.term);
   assert(!terms.includes("curly frieses"), "an already-plural term must never be pluralized");
   assert(!terms.includes("curly friess"));
+});
+
+// ---- Lexicon surface forms: trailing portion-count stripping (2026-09-18
+// PO dispatch, real Vito's "chicken fingers (3)" gap) ------------------------
+
+Deno.test("lexicon surface forms: a trailing portion count is stripped and the bare name resolves uniquely when only one item carries it", () => {
+  // Source import carries "Chicken Fingers (3)"; normaliseTerm's punctuation
+  // strip turns the parens into a bare trailing digit word ("chicken
+  // fingers 3"), which the compiler was otherwise treating as part of the
+  // dish's name — a customer who says "chicken fingers" with no count never
+  // matched anything.
+  const fingers = item({ display_name: "Chicken Fingers (3)", category: "Appetizers" });
+  const fries = item({ display_name: "French Fries", category: "Sides" });
+  const { items: compiled } = compileMenu([fingers, fries], [], "t", false);
+  const fingersTerms = compiled.find(c => c.item_id === fingers.id)!.lexicon_terms;
+
+  const bare = fingersTerms.find(t => t.term === "chicken fingers 3");
+  assert(bare, "sanity: the un-stripped stated term carries the count word");
+  const stripped = fingersTerms.find(t => t.term === "chicken fingers");
+  assert(stripped, "'chicken fingers' must resolve after stripping the trailing count");
+  assertEquals(stripped!.target_type, "item");
+  assertEquals(stripped!.target_id, fingers.id);
+  assertEquals(stripped!.provenance, "derived");
+});
+
+Deno.test("lexicon surface forms: a trailing portion count stripped from TWO different sizes of the same dish is KEPT for both, ambiguous, no tiebreak", () => {
+  const fingers3 = item({ display_name: "Chicken Fingers (3)", category: "Appetizers" });
+  const fingers5 = item({ display_name: "Chicken Fingers (5)", category: "Appetizers" });
+  const { items: compiled } = compileMenu([fingers3, fingers5], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const bareTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "chicken fingers").map(t => t.target_id)),
+  );
+  assertEquals(bareTargets, new Set([fingers3.id, fingers5.id]),
+    "'chicken fingers' must carry exactly one row per claimant — both ids, no more, no fewer");
+  assertEquals(byId.get(fingers3.id)!.lexicon_terms.filter(t => t.term === "chicken fingers").length, 1);
+  assertEquals(byId.get(fingers5.id)!.lexicon_terms.filter(t => t.term === "chicken fingers").length, 1);
+  // Each item's own stated (count-qualified) term is untouched.
+  assert(byId.get(fingers3.id)!.lexicon_terms.some(t => t.term === "chicken fingers 3"));
+  assert(byId.get(fingers5.id)!.lexicon_terms.some(t => t.term === "chicken fingers 5"));
 });
 
 Deno.test("lexicon surface forms: output is byte-identical across two separate compileMenu runs on the same input", () => {
