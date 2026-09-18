@@ -1620,3 +1620,273 @@ Deno.test("00-AV RED->GREEN: a name inside a sentence resolves the open 'name' q
     );
   }
 });
+
+// ── 2026-09-18 PO dispatch: "answer + new item in one message" ───────────
+// A resolved answer (slot/disambiguation/order_type/name/address/tip/confirm)
+// that carries a genuine second request must not silently drop it — see
+// extractRemainderAfterAnswer's own header in turn-engine-runner.ts for the
+// marker-based detection this exercises. All five messages below are the
+// real live transcripts from today's report, verbatim.
+
+function noSlotAskPlan(displayName: string, priceCents: number) {
+  return { compiled_at: "", compiler_version: 1, display_name: displayName, base_price_cents: priceCents, recap_template: "", ticket_template: "", steps: [] };
+}
+
+function noSlotMenuItem(id: string, name: string, category: string, priceCents: number): TurnEngineMenuItem {
+  return { id, name, category, price_cents: priceCents, bot_state: "orderable", ask_plan: noSlotAskPlan(name, priceCents) };
+}
+
+function breadSlotAskPlan(displayName: string, priceCents: number) {
+  return {
+    compiled_at: "", compiler_version: 1, display_name: displayName, base_price_cents: priceCents,
+    recap_template: "", ticket_template: "",
+    steps: [{
+      group_id: "group-bread", slot_key: "bread", kind: "slot" as const, ask_mode: "ask" as const,
+      prompt_template: "What bread?",
+      choices: [
+        { id: "choice-white", display: "White", price_delta_cents: 0 },
+        { id: "choice-wheat", display: "Wheat", price_delta_cents: 0 },
+        { id: "choice-rye", display: "Rye", price_delta_cents: 0 },
+      ],
+    }],
+  };
+}
+
+function addOnlyProposeFn(
+  captured: { calls: number; messages: string[] },
+  build: (message: string) => ProposeResult,
+): (input: { message: string }) => Promise<ProposeResult> {
+  return (input) => {
+    captured.calls++;
+    captured.messages.push(input.message);
+    return Promise.resolve(build(input.message));
+  };
+}
+
+Deno.test("00-remainder conv 47: 'wheat bread' answers the open slot; 'also, boneless wings' is a separate add the primary answer never sees", async () => {
+  const menu: TurnEngineMenuItem[] = [
+    { id: "item-garlic-cheesesteak", name: "Garlic Cheesesteak", category: "Hot Sandwiches", price_cents: 999, bot_state: "orderable", ask_plan: breadSlotAskPlan("Garlic Cheesesteak", 999) },
+    noSlotMenuItem("item-boneless-wings", "Boneless Wings", "Wings", 1299),
+  ];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-garlic-cheesesteak", name: "Garlic Cheesesteak", quantity: 1, price_cents: 999, modifiers: [], line_key: "line-1" },
+  ];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "boneless wings", target_id: "item-boneless-wings" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "boneless wings", quantity: 10, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const input = baseInput({
+    message: "Oh, wheat bread for the Garlic Cheesesteak, please! Also, can I get an order of 10 boneless wings?",
+    cart, menu, dialogueState: priorState,
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1, "the primary bread answer must resolve without a model call — only the remainder needs one");
+  assertEquals(captured.messages[0], "Also, can I get an order of 10 boneless wings?");
+  assertEquals(result.cart.length, 2);
+  assertEquals(result.cart[0].ask_plan_selections?.["group-bread"], "choice-wheat", "the bread slot must still be resolved by the primary answer");
+  const wings = result.cart.find(l => l.menu_item_id === "item-boneless-wings");
+  assert(wings, "the wings must reach the cart, not vanish silently");
+  assertEquals(wings!.quantity, 10);
+});
+
+Deno.test("00-remainder conv 7: 'I'll do pickup' answers order_type; 'also, a Coke' is added", async () => {
+  const menu: TurnEngineMenuItem[] = [noSlotMenuItem("item-coke", "Coke", "Drinks", 249)];
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "coke", target_id: "item-coke" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "Coke", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const input = baseInput({
+    message: "I'll do pickup. Also, can I get a Coke with that?",
+    cart: [], menu, dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1);
+  assertEquals(captured.messages[0], "Also, can I get a Coke with that?");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-coke");
+});
+
+Deno.test("00-remainder conv 14: 'I'll do pickup, please!' answers order_type; 'also, can I add a calzone' reaches DECIDE", async () => {
+  const menu: TurnEngineMenuItem[] = [noSlotMenuItem("item-calzone", "Calzone", "Stromboli", 1495)];
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "calzone", target_id: "item-calzone" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "a calzone", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const input = baseInput({
+    message: "I'll do pickup, please! Also, can I add a calzone? Just a 14-inch one.",
+    cart: [], menu, dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1);
+  assertEquals(captured.messages[0], "Also, can I add a calzone? Just a 14-inch one.");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-calzone");
+});
+
+Deno.test("00-remainder conv 52: 'white bread' answers the open slot; 'and also ... pasta w/ clam sauce' reaches DECIDE", async () => {
+  const menu: TurnEngineMenuItem[] = [
+    { id: "item-cheesesteak", name: "Cheesesteak", category: "Hot Sandwiches", price_cents: 999, bot_state: "orderable", ask_plan: breadSlotAskPlan("Cheesesteak", 999) },
+    noSlotMenuItem("item-pasta-clam-sauce", "Pasta With Clam Sauce", "Entrees", 1895),
+  ];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheesesteak", name: "Cheesesteak", quantity: 1, price_cents: 999, modifiers: [], line_key: "line-1" },
+  ];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "pasta with clam sauce", target_id: "item-pasta-clam-sauce" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "pasta with clam sauce", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const input = baseInput({ message: "white bread ... and also can i add a pasta w/ clam sauce", cart, menu, dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1);
+  assertEquals(captured.messages[0], "also can i add a pasta w/ clam sauce");
+  assertEquals(result.cart[0].ask_plan_selections?.["group-bread"], "choice-white");
+  assertEquals(result.cart.length, 2);
+});
+
+Deno.test("00-remainder conv 84: disambiguation resolves to Side Salad; 'and add chicken fingers' reaches DECIDE", async () => {
+  // Onion Rings (not another Salad) as the other candidate — the point of
+  // this test is the remainder mechanism, not pending-disambiguation.ts's
+  // own tier ordering, so the candidate pair is chosen to resolve
+  // unambiguously via the exact-label tier alone.
+  const menu: TurnEngineMenuItem[] = [
+    noSlotMenuItem("item-side-salad", "Side Salad", "Appetizers", 399),
+    noSlotMenuItem("item-onion-rings", "Onion Rings", "Sides", 499),
+    noSlotMenuItem("item-chicken-fingers", "Chicken Fingers", "Appetizers", 799),
+  ];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "disambiguation", candidates: ["item-side-salad", "item-onion-rings"] }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "chicken fingers", target_id: "item-chicken-fingers" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "chicken fingers", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const input = baseInput({ message: "Can I just stick with the side salad and add chicken fingers?", cart: [], menu, dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1);
+  assertEquals(captured.messages[0], "add chicken fingers?");
+  assert(result.cart.some(l => l.menu_item_id === "item-side-salad"), "the disambiguation must resolve to Side Salad");
+  assert(result.cart.some(l => l.menu_item_id === "item-chicken-fingers"), "chicken fingers must reach the cart, not vanish silently");
+});
+
+Deno.test("00-remainder: 'Wheat bread, please.' is only the answer plus filler — no remainder, no model call at all", async () => {
+  const menu: TurnEngineMenuItem[] = [
+    { id: "item-garlic-cheesesteak", name: "Garlic Cheesesteak", category: "Hot Sandwiches", price_cents: 999, bot_state: "orderable", ask_plan: breadSlotAskPlan("Garlic Cheesesteak", 999) },
+  ];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-garlic-cheesesteak", name: "Garlic Cheesesteak", quantity: 1, price_cents: 999, modifiers: [], line_key: "line-1" },
+  ];
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => { proposeCalls++; return Promise.reject(new Error("must not be called — no remainder in a bare slot answer")); },
+  };
+  const input = baseInput({ message: "Wheat bread, please.", cart, menu, dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(proposeCalls, 0);
+  assertEquals(result.cart[0].ask_plan_selections?.["group-bread"], "choice-wheat");
+});
+
+Deno.test("00-remainder acceptance: 'yes, and add a coke' while confirm is open — Coke added, confirm re-asked, never link_sent", async () => {
+  const menu: TurnEngineMenuItem[] = [noSlotMenuItem("item-coke", "Coke", "Drinks", 249)];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  const priorState: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+  const { supabase } = makeFakeSupabase({ lexicon: [...LEXICON, { term: "coke", target_id: "item-coke" }] });
+  const captured = { calls: 0, messages: [] as string[] };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
+    proposeTurnFn: addOnlyProposeFn(captured, () => ({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "a coke", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    })),
+  };
+  const fullMenu = [...menu, { id: "item-cheeseburger", name: "Cheese Burger", category: "Burgers", price_cents: 849, bot_state: "orderable", ask_plan: noSlotAskPlan("Cheese Burger", 849) }];
+  const input = baseInput({
+    message: "yes, and add a coke", cart, menu: fullMenu, dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(captured.calls, 1);
+  assertEquals(captured.messages[0], "add a coke");
+  assert(result.cart.some(l => l.menu_item_id === "item-coke"), "the Coke must be added");
+  assertEquals(result.dialogueState.phase, "confirm", "a new item after 'yes' must re-ask confirm, never finalize");
+  assertEquals(result.dialogueState.open, { kind: "confirm" }, "must land back on the confirm question, never link_sent, since the order just changed");
+});
+
+// ── conv 5 (14:35 run): "Alfredo - Chicken — now 2" — investigated, NOT this
+// mechanism. Real transcript (conversation 2d3183e3-d7c8-4d62-9173-
+// 5aec4045a8b4): the quantity bump happened on a turn where the OPEN
+// question was a `disambiguation` (which of 8 Gyro items), answered with
+// "I'll go with the Gyro hot sandwich for $10.99. So that's an Alfredo with
+// spaghetti, a Gyro sandwich, and a medium Hawaiian pizza. What's the total
+// now?" — pending-disambiguation.ts's own EXACT-LABEL tier matches a
+// candidate's exact display name ANYWHERE in the message, not just inside
+// the answer clause (unlike its category/ordinal tiers, scoped by design —
+// see 00-PO-0918-list-answer-scope.reply's own flagged residual bug). This
+// mechanism does not exist in this file at all today — it is entirely
+// inside pending-disambiguation.ts's resolvePendingDisambiguation, called
+// once per turn from turn-engine.ts's ANSWER case "disambiguation", which
+// this dispatch's new code never touches (it only runs AFTER a resolved
+// answer, using a DIFFERENT marker set aimed at finding a NEW request, not
+// at resolving an open one). Confirmed by inspection: this dispatch adds no
+// code path that calls applyCompiledAddItem for an item whose name merely
+// appears in a remainder string outside of a real, model-returned
+// `item_span` — the Alfredo bump traces to the disambiguation resolver
+// re-matching "Alfredo - Chicken" against its own candidate list on a LATER
+// turn (the follow-up disambiguation asked after the Gyro pick, which listed
+// "the Alfredo - Chicken entree" as one of its 10 options), not to a
+// remainder-extraction turn. That residual bug is real, already flagged as
+// a follow-up in an earlier reply today, and stays out of this dispatch's
+// scope — fixing it means touching pending-disambiguation.ts, not this file.

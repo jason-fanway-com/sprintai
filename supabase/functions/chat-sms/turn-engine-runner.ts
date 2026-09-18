@@ -92,6 +92,7 @@ import {
   type AskShopContext,
   type AskTurnEvents,
   type Decline,
+  type Proposal,
 } from "./turn-engine.ts";
 
 type ProposeTurnFn = typeof defaultProposeTurn;
@@ -606,6 +607,77 @@ function effectiveLineKeyFor(line: TurnEngineCartLine): string {
   return line.line_key ?? "";
 }
 
+// 2026-09-18 PO dispatch ("answer + new item in one message"): the largest
+// remaining reason an item never reaches the cart. ANSWER resolves the ONE
+// open question deterministically off the customer's own message (a slot
+// choice, a disambiguation pick, order_type, name, address, tip, confirm),
+// but a resolved answer short-circuits this whole turn -- PROPOSE only ever
+// runs from the `else` branch below, which a resolved answer never reaches.
+// Real transcripts today: "Oh, wheat bread for the Garlic Cheesesteak,
+// please! Also, can I get an order of 10 boneless wings?" -> bread set,
+// wings never mentioned again. "I'll do pickup. Also, can I get a Coke with
+// that?" -> pickup set, Coke gone.
+//
+// The fix is NOT to widen ANSWER itself (it must stay a closed, deterministic
+// resolver for exactly one question) -- it's to notice, AFTER a resolved
+// answer, that the customer said more than the answer, and run PROPOSE on
+// just the remainder. A sentence boundary ALONE is not the signal -- a
+// second sentence that's just closing chatter ("It's Alex! Can we finalize
+// this order now?") must not trigger a model call every time a name/slot
+// answer happens to end with an exclamation point (RED case, live test
+// fixture 00-AV). The real signal is one of a small set of phrases a
+// customer uses to append a fresh request onto the same message: "also",
+// "and a", "plus", "can I get", "can I add", "add", "oh and" -- every one of
+// today's real transcripts (see above) contains at least one. The remainder
+// starts AT the matched marker (kept, not stripped -- "add chicken fingers?"
+// reads naturally to PROPOSE) and runs to the end of the message. A message
+// that is nothing but the answer plus filler ("Wheat bread, please.",
+// "Thanks!", "Can we finalize this order now?") matches no marker and
+// returns null -- today's behavior, unchanged.
+const REMAINDER_MARKERS: RegExp[] = [
+  /\balso\b/i,
+  /\band a\b/i,
+  /\bplus\b/i,
+  /\bcan i get\b/i,
+  /\bcan i add\b/i,
+  /\badd\b/i,
+  /\boh and\b/i,
+];
+
+function extractRemainderAfterAnswer(message: string): string | null {
+  const trimmed = (message ?? "").trim();
+  if (!trimmed) return null;
+  let cutStart: number | null = null;
+
+  for (const marker of REMAINDER_MARKERS) {
+    const m = trimmed.match(marker);
+    if (m && m.index !== undefined && (cutStart === null || m.index < cutStart)) {
+      cutStart = m.index;
+    }
+  }
+
+  if (cutStart === null) return null;
+  const remainder = trimmed.slice(cutStart).trim();
+  return remainder.length > 0 ? remainder : null;
+}
+
+// The seven open-question kinds a real ANSWER shape fully anticipates (see
+// turn-engine.ts's own ANSWER switch) -- the only ones where a RESOLVED
+// outcome can safely be followed by a remainder-only PROPOSE call. Every
+// other outcome (checkout_intent, closure, address_declined, upsell_*) is
+// either already a closing/declining signal or already fully consumes the
+// message on its own; none of them named in this dispatch.
+const REMAINDER_ELIGIBLE_OUTCOME_KINDS = new Set([
+  "slot_resolved",
+  "disambiguation_resolved",
+  "order_type_resolved",
+  "name_resolved",
+  "address_resolved",
+  "tip_resolved",
+  "confirm_yes",
+  "confirm_no",
+]);
+
 export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
   const priorState = input.dialogueState ?? INITIAL_DIALOGUE_STATE;
   const cartBefore = input.cart.map(l => ({ ...l }));
@@ -772,6 +844,98 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // to persist or feed into ASK.
       default:
         break;
+    }
+
+    // 2026-09-18 PO dispatch: a resolved answer that was NOT the whole
+    // message. See extractRemainderAfterAnswer's own header for why this is
+    // scoped to exactly these seven outcome kinds and how the boundary is
+    // found. Runs a SECOND, remainder-only PROPOSE call -- `open: null`, no
+    // answerQuestion/answerOptions -- so the model has nothing to re-answer
+    // (00-AT's "never re-answer the slot that was just answered", satisfied
+    // structurally rather than by convention). Only `adds` from that
+    // proposal are ever applied (removes/modifies stripped before DECIDE
+    // sees it) -- a bonus item is additive, never a license to also mutate
+    // or remove the line the primary answer just resolved.
+    if (REMAINDER_ELIGIBLE_OUTCOME_KINDS.has(outcome.kind)) {
+      const remainderMessage = extractRemainderAfterAnswer(input.message);
+      if (remainderMessage) {
+        const lexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
+        if (lexiconResult.ok) {
+          const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
+          const remainderShopContext: RunTurnShopContext = {
+            ...input.shopContext,
+            orderType: sideEffects.order_type ?? input.shopContext.orderType,
+            deliveryAddressKnown: sideEffects.delivery_address != null ? true : input.shopContext.deliveryAddressKnown,
+            driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents,
+            pickupName: sideEffects.pickup_name ?? input.shopContext.pickupName,
+          };
+          const remainderResult: ProposeResult = await proposeFn(
+            {
+              cart: workingCart,
+              open: null,
+              menu: input.menu,
+              lexicon: lexiconResult.rows,
+              history: input.history,
+              message: remainderMessage,
+              orderContext: {
+                orderType: remainderShopContext.orderType ?? null,
+                pickupName: remainderShopContext.pickupName ?? null,
+                deliveryAddressKnown: remainderShopContext.deliveryAddressKnown,
+                driverTipCents: remainderShopContext.driverTipCents ?? null,
+                deliveryEnabled: remainderShopContext.deliveryEnabled,
+              },
+            },
+            {
+              supabase: deps.supabase,
+              apiKey: deps.apiKey,
+              fetchImpl: deps.fetchImpl,
+              now: deps.now,
+              model: deps.model,
+              chatApiUrl: deps.chatApiUrl,
+              timeoutMs: deps.timeoutMs,
+              conversationId: input.conversationId,
+              shopId: input.shopId,
+              tenantId: input.tenantId,
+            },
+          );
+          // A remainder PROPOSE failure is non-fatal: the primary answer
+          // already resolved and must not be discarded just because the
+          // bonus item couldn't be parsed. Fall through with only the
+          // primary answer applied -- same as remainderMessage being null.
+          if (remainderResult.ok && remainderResult.proposal.adds.length > 0) {
+            const sanitizedProposal: Proposal = { ...remainderResult.proposal, removes: [], modifies: [] };
+            const remainderDecide = decide(
+              sanitizedProposal,
+              workingCart,
+              input.menu,
+              lexiconResult.rows,
+              deps.newLineKey ?? (() => crypto.randomUUID()),
+              remainderMessage,
+            );
+            workingCart.splice(0, workingCart.length, ...remainderDecide.cart);
+            declines = [...declines, ...remainderDecide.declines];
+            turnEvents = {
+              ...turnEvents,
+              qualifyingAddMenuItemId: remainderDecide.qualifyingAddMenuItemId ?? turnEvents.qualifyingAddMenuItemId,
+              disambiguationCandidateIds: turnEvents.disambiguationCandidateIds ?? remainderDecide.disambiguationCandidateIds,
+              carriedDisambiguationCandidateIds: [
+                ...(turnEvents.carriedDisambiguationCandidateIds ?? []),
+                ...remainderDecide.carriedDisambiguationCandidateIds,
+              ],
+            };
+            // 00-BJ-adjacent: a "yes" is not final the instant it's also
+            // carrying a brand-new item -- the order just changed, so
+            // confirm must be asked again, never silently finalized this
+            // same turn. Ambiguous/unresolved remainder adds don't need
+            // this override: ASK's own priority order (disambiguation is
+            // priority 2, an unresolved required slot is priority 1) already
+            // outranks confirm/link (priority 8) regardless of confirmYes.
+            if (outcome.kind === "confirm_yes") {
+              turnEvents = { ...turnEvents, confirmYes: false };
+            }
+          }
+        }
+      }
     }
   } else if (priorState.open?.kind === "slot" || priorState.open?.kind === "disambiguation") {
     // Dispatch 00-AT (conv 8b9636c9: "every message is re-read as a fresh
