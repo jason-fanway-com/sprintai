@@ -538,9 +538,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // but customers also write "under the name Alex" and "the name for the order
   // is Alex" -- a seventh phrasing nobody predicted, which is the argument
   // against predicting them.
-  const answerValueWanted = priorState.open?.kind === "name"
-    ? "The customer was asked for the name to put the order under. Report just that name."
-    : undefined;
+  const answerValueWanted =
+    priorState.open?.kind === "name"
+      ? "The customer was asked for the name to put the order under. Report just that name."
+      : priorState.open?.kind === "address"
+      ? "The customer was asked for the delivery address. Report just the street address, as they gave it."
+      : undefined;
   // 00-BB: an address the customer clearly gave that we could not verify.
   let addressNotVerified: string | null = null;
   let turnEvents: AskTurnEvents = {
@@ -790,6 +793,19 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       const validated = extractCustomerName(proposal.answer_value);
       if (validated) sideEffects = { ...sideEffects, pickup_name: validated };
     }
+    // 00-BM: an address the model pulled out of the message. Code still
+    // geocodes it -- the model never decides where food goes, it only finds
+    // the words the deterministic span-extractor missed.
+    if (priorState.open?.kind === "address" && typeof proposal.answer_value === "string" && proposal.answer_value.trim()) {
+      const shopGeo = await loadShopGeo(deps.supabase, input.shopId);
+      const geocodeFn = deps.geocodeAddressFn ?? defaultGeocodeAddress;
+      const g = await geocodeFn(proposal.answer_value.trim(), shopGeo, {
+        fetchImpl: deps.fetchImpl ?? fetch,
+        apiKey: deps.googleMapsApiKey ?? Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "",
+      });
+      if (g) sideEffects = { ...sideEffects, delivery_address: { formatted: g.formatted } };
+      else addressNotVerified = proposal.answer_value.trim();
+    }
     const interpreted = proposal.answer_to_open_question;
     if (interpreted && priorState.open) {
       if (priorState.open.kind === "ordering" && interpreted === "closure") {
@@ -797,6 +813,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       } else if (priorState.open.kind === "confirm" && (interpreted === "confirm_yes" || interpreted === "confirm_no")) {
         answerOutcomeFromModel = { kind: interpreted === "confirm_yes" ? "confirm_yes" : "confirm_no" };
       }
+      // NOT disambiguation: 00-AT deliberately never consults the model while
+      // that question is open, so execution cannot reach here for it. Using
+      // the interpreter there needs an interpretation-ONLY call inside that
+      // suppression branch -- the model reads the message, its cart changes
+      // are discarded. Worth doing; not a two-line change.
     }
     const decideResult = decide(
       proposal,

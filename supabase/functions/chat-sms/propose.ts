@@ -323,12 +323,19 @@ function buildProposalTool(answerOptions?: Array<{ id: string; describes: string
 
 function addValueField(tool: ReturnType<typeof buildProposalTool>, wanted?: string) {
   if (!wanted) return tool;
+  // 00-BM: REQUIRED, not optional. As an optional field the model simply
+  // skipped it -- the name question kept looping and a regex had to catch it,
+  // which is the whole thing this was built to stop. An empty string is the
+  // "they did not give one" signal, so the model must always answer, and code
+  // still validates the shape before anything is stored.
   (tool.input_schema.properties as Record<string, unknown>).answer_value = {
     type: "string",
     description:
       `${wanted} Extract it from the customer's message exactly as they gave it, nothing else. ` +
-      "Omit this field entirely if they did not give one.",
+      "Return an empty string if they did not give one. Never guess.",
   };
+  const req = (tool.input_schema as { required?: string[] }).required;
+  (tool.input_schema as { required?: string[] }).required = [...(req ?? []), "answer_value"];
   return tool;
 }
 
