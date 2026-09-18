@@ -2784,3 +2784,61 @@ clean except intended files.
 behind local `HEAD` (`79da3d38`). Until the next deploy, live traffic on all three shops
 is still exposed to the empty-cart failure rate measured above for slash-shorthand
 messages. See `HANDOFF.md` for the committed-vs-deployed callout.
+
+## Confirm/closure detection was duplicated across two code paths — fix one, the other stays broken — 2026-09-17
+
+The "did the customer confirm?" check and the "did the customer say they're done?" check
+each existed in more than one place in `turn-engine.ts` / `turn-engine-runner.ts`: a
+general closure detector, and a separate inline check specific to the "Anything else?"
+question. Widening the general detector (`92adbb82`, 14:51) did not fix the "Anything
+else?" path — it had its own copy of the old, narrower regex and needed a second, separate
+fix (`10e2af28`, 16:42) to route it through the same shared function. Lesson for future
+work on this file: before declaring a detection bug fixed, grep for other call sites of
+the same concept (`BARE_CLOSURE_RE`, `isConfirmAffirmative`, etc.) — this class of bug has
+now recurred at least once.
+
+Net effect, confirmed against today's `docs/PO-BRIEF.md` sim numbers: a batch of simulated
+orders went from 0/500 to 55/100 reaching a real Stripe payment link. The confirm-check fix
+(`f2763eee` — "yes"/"confirm" anywhere in the message, not just an exact-match "yes") did
+most of that; the closure duplication fix closed more of the remainder.
+
+## `answer-interpreter.ts` — a second, narrowly-scoped LLM call for disambiguation only — 2026-09-17
+
+New module, wired in from `turn-engine-runner.ts` (`interpretAnswer`, called after the
+deterministic text matcher fails to resolve a "which one did you mean" question). Calls
+`deepseek/deepseek-v4-flash` via OpenRouter directly (separate from the main
+proposal-call model), 8-second timeout, tool-forced so the model can only return one id
+from a closed list handed to it in the prompt, or `"none"` — it cannot invent an answer
+outside that list. Never throws; a timeout or malformed response is treated the same as
+"none," which falls back to re-asking the question rather than guessing. **Scope: only
+disambiguation questions today.** Ordinary slot questions ("what size?") still have no
+model-assisted fallback — if that class of miss shows up in a future sim run, this is
+where it would need to be extended, not a new mechanism.
+
+## `import-menu-csv`'s deployed code doesn't match this repo's git history — investigate before next deploy — 2026-09-17
+
+Downloading the live `import-menu-csv` function (twice, different scratch dirs, to rule
+out a bad download) returns five files: `ordering.ts`, `import-plan.ts`, `csv.ts`,
+`validate.ts`, `types.ts` — no `index.ts` entrypoint, and `git log --follow` on every one
+of those five filenames returns nothing: they have never existed in this repository's
+history for `import-menu-csv`. `supabase functions list` shows its last update as
+2026-09-08, and today's `e4230d58` (modifier_sets P1a, adds `sync-modifier-sets.ts` and
+wires it into `index.ts`) is not present in what's live. Confirmed independently against
+the database itself, not just the function bundle: querying the REST API directly for
+`modifier_sets` and `option_groups.set_id` (the new table/column from migration 143)
+returns "table not found" / "column does not exist" — the schema genuinely isn't applied,
+this isn't migration-tracker drift of the kind documented in the 2026-09-10 entry above.
+
+**Before the next deploy of this function**, whoever has deploy access should confirm what
+built the currently-live version — this doesn't look like it came from a commit to
+`main` in this repo, and deploying over it without knowing why is a real risk, not just a
+staleness gap.
+
+## Deploy verification, reconfirmed — `chat-sms` v477 — 2026-09-17
+
+Downloaded artifact carries `// DEPLOY_SHA: 9e8b7594019af9489a0e2729adf1f8e222e963d1`,
+matching local `HEAD` exactly. All twelve `chat-sms` commits from today (06:15–21:32 EDT)
+are live. `public-tester`'s session-cap raise (`483b9f76`, 1000 → 5000) is also confirmed
+live by downloading that function directly. Local test suite at the same `HEAD`: 1500
+passed, 0 failed, 7 ignored (`deno test --allow-all` across `chat-sms`, `_shared`,
+`import-menu-csv`).

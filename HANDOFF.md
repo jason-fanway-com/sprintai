@@ -1480,6 +1480,42 @@ Independently re-verified for this doc sync: full `chat-sms` + `_shared` Deno su
 locally at `HEAD` — 1446 passed, 0 failed, 7 ignored, matching the merge commit's own
 claim. No migrations touched in this range.
 
+## Update — 2026-09-17 (evening): confirm-gate + closure fixes are LIVE (payment links 0/500 → 55/100); modifier-set work committed but not deployed, and prod's `import-menu-csv` doesn't match this repo's history
+
+**Yesterday's slash-shorthand fix is now deployed.** Confirmed by downloading the live
+`chat-sms` bundle: `index.ts` carries `// DEPLOY_SHA: 9e8b7594019af9489a0e2729adf1f8e222e963d1`
+— tonight's last commit. Everything in today's `chat-sms` work (12 commits, 06:15–21:32
+EDT) is live, not just committed. Full detail in `docs/DAILY.md` under `## 2026-09-17`.
+
+**Headline result**: per today's `docs/PO-BRIEF.md`, independently corroborated against
+the code, a simulated order batch went from 0/500 to 55/100 reaching a real payment link.
+The single biggest driver was a bug where the confirm check only matched a message that
+was *exactly* "yes" — "Yes, confirm the order!" matched neither yes nor no and the bot
+just sat there (`f2763eee`). A second driver: the "Anything else?" question had its own,
+separately-broken copy of the closure-detection check that an earlier widening never
+touched (`10e2af28`).
+
+**New**: a second, dedicated AI call (`answer-interpreter.ts`) now helps resolve
+disambiguation questions ("which one did you mean") when plain-text matching fails. It is
+handed a closed list of options and cannot return anything outside that list; on failure
+or timeout it falls back to asking again rather than guessing. It does not yet cover
+ordinary slot questions ("what size?").
+
+**NOT live**: `e4230d58` (modifier_sets P1a — shared option-list detection for CSV menu
+imports) is committed but not deployed, and the gap is unusual — the deployed
+`import-menu-csv` function's file layout (`ordering.ts`, `import-plan.ts`, `csv.ts`,
+`validate.ts`, `types.ts`, no `index.ts`) doesn't match this repo's git history for that
+function at all, and hasn't updated since 2026-09-08. Whoever has deploy access should
+check directly what's actually running there. The new migration
+(`143_modifier_sets_p1_schema.sql`) is also not applied to the production database —
+confirmed by querying the live REST API directly (not just the CLI's migration tracker,
+which is known to drift): `modifier_sets` and `option_groups.set_id` don't exist there.
+Joins an existing backlog of roughly 15 unapplied migrations going back to at least
+migration 124, not a new problem introduced today.
+
+**Not checked today**: per-shop `shops.turn_engine_enabled` — which real shops are
+actually exercising the fixes above. Needs DB access this environment didn't have.
+
 ## Quickstart for development
 
 ```bash

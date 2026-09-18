@@ -2753,3 +2753,128 @@ in `supabase/functions/chat-sms/index.ts` and a new `slash-shorthand-normalize-2
 - The normalizer's call site in `index.ts` runs before either ordering engine, so
   once deployed this applies regardless of `shops.turn_engine_enabled` on a given
   shop.
+
+## 2026-09-17
+
+### Headline: the biggest single-day jump in the SMS bot actually finishing an order — and it's live. A second piece of work (shared modifier-set detection) is real code but not deployed, and doesn't even match what's live today.
+
+Twelve commits between 06:15 and 21:32 EDT reworked how the ordering bot (`chat-sms`)
+understands what a customer meant, on top of yesterday's slash-shorthand fix. Verified by
+downloading the deployed function directly (project ref `rvdqfxtrskxekfkqnegx`): its
+`index.ts` carries `// DEPLOY_SHA: 9e8b7594019af9489a0e2729adf1f8e222e963d1` — that's
+tonight's last commit, so **everything below in the `chat-sms` section is live**, not just
+committed. Local test suite at the same commit: 1500 passed, 0 failed, 7 ignored.
+
+**Why this matters in plain terms**: per today's `docs/PO-BRIEF.md` (independently
+corroborated by reading the actual code, not just quoted), a simulated batch of orders
+went from **0 out of 500 reaching a real payment link to 55 out of 100** over the course of
+today's fixes. That's the confirm-gate fix below doing most of the work, with the closure
+fixes closing more of the gap.
+
+- **The bot said "yes" and nothing happened (`f2763eee`, 13:29).** The code that checks
+  whether a customer confirmed their order only matched a message that was *exactly*
+  "yes" — so "Yes, confirm the order!" was read as neither yes nor no, and the bot just
+  sat there. Fixed to look for "yes"/"confirm" anywhere in the message, while still
+  checking "no" first so a real decline can't be swallowed. This single fix is why the
+  payment-link number above moved as much as it did.
+
+- **"Anything else?" had its own, separately-broken copy of the same check
+  (`10e2af28`, 16:42).** Earlier in the day (`92adbb82`, 14:51) the bot's general closure
+  detector was widened. But the specific code path for the "Anything else?" question —
+  the single most common point in a conversation — had its own inline copy of the old,
+  narrower check, and the widening never touched it. Two separate fixes were needed for
+  what looked like one bug.
+
+- **Closing an order with items still in the cart didn't actually check out
+  (`9394a629`, 16:37).** A customer saying "that's it" over a non-empty cart was
+  correctly recognized as done, but a separate flag that tells the code to move to
+  checkout was never set — so the conversation ended without moving forward. Now gated on
+  the cart being non-empty.
+
+- **The model now gets a second, dedicated opinion when it can't tell which item the
+  customer meant (`1a680001`, `9e8b7594`, new file `answer-interpreter.ts`).** This is a
+  separate AI call (different model — `deepseek/deepseek-v4-flash`, 8-second timeout) that
+  is handed a closed list of the possible answers and can only return one of those or
+  "none" — it cannot invent an option. It runs only for "which one did you mean"
+  disambiguation questions, not yet for ordinary menu-choice questions ("what size?"),
+  after the existing plain-text matching already failed. On failure or timeout it returns
+  nothing and the bot falls back to asking again, so a bad AI call degrades to "ask again,"
+  not "add the wrong item."
+
+- **Customer's name and delivery address are now pulled from the same required field,
+  and the address is still checked before it's trusted (`43779ef5`, `6fcedfb9`,
+  `ee4ef624`).** The model extracts the name/address text, but that field started out
+  optional and the model was skipping it in practice; making it required fixed that. The
+  code still runs the address through a real lookup (geocoding) before accepting it — if
+  that lookup fails, the order is not silently accepted with a bad address, it's refused
+  and asked again. A separate small fix (`ee4ef624`) added a regex so "The name for the
+  order is Alex." is read as a name instead of confusing the bot.
+
+- **A customer's explicit modifier choice can no longer be silently dropped
+  (`ec2a89df`, 12:12).** If the model claims a customer picked zero options for an item
+  but the customer's own text names one, the code now recovers it — but only on an exact,
+  whole-word match to a real choice for that specific item, and never if the customer's
+  text contains a negation word. Correct and live, but per today's PO-BRIEF this fix alone
+  didn't move the simulation pass rate — it closes a real gap without being the main
+  driver.
+
+- **The service fee was being charged correctly but never recorded on its own
+  (`625d42b5`, 12:01).** The dollar amount was right; the total customers were charged
+  included the fee. But the fee's own database column was never written, so anything
+  reading that column (reports, receipts) saw $0. Also fixed in the same commit: a failed
+  address lookup used to fail silently and just re-ask the question with no explanation —
+  one real conversation asked for the address 14 times in a row. It now tells the customer
+  it couldn't find the address.
+
+- **Restating an order no longer duplicates it (`d01e26e4`, 13:03).** "Nope, that's it,
+  just the wraps" was being read as a new request to add wraps, doubling the line item.
+  Now suppressed only when the message has restatement language, no addition language,
+  and the item is already in the cart.
+
+- **`public-tester` daily session cap raised 1000 → 5000 (`483b9f76`, 13:55, deployed).**
+  Internal QA tooling only, not customer-facing. Confirmed the literal constant is live in
+  the deployed bundle. Context: a single 500-run simulation plus its usual canary checks
+  was already burning ~520 of the old 1000/day limit.
+
+### Committed today but NOT live: shared modifier-set detection (`e4230d58`, 20:37)
+
+This adds code (`_shared/modifier-set-detect.ts`, `import-menu-csv/sync-modifier-sets.ts`)
+that, when a CSV menu import sees many items sharing an identical options list (e.g. 20
+pizzas all offering the same toppings), writes one shared row instead of duplicating it,
+plus a new migration (`143_modifier_sets_p1_schema.sql`) adding two new tables and two new
+nullable columns to hold that link. Despite the commit message saying "data layer only,"
+it is wired into the live *code path* — `import-menu-csv/index.ts` calls it on every
+import unconditionally. What "data layer only" gets right: nothing in `compile-menu` or
+`chat-sms` reads the new columns yet, so no customer-facing behavior can change from this
+yet even once deployed.
+
+But none of that is live yet, and the gap is bigger than "one commit behind":
+
+- **The migration is not applied to the production database.** `supabase migration list
+  --linked` shows migration 143 blank on the remote — but `RUNBOOK.md` (2026-09-10 entry)
+  warns that reading is sometimes wrong, since migrations applied outside `db push` don't
+  register with that tracker. So this was checked the reliable way instead: querying the
+  live database's REST API directly. It returned "Could not find the table
+  'public.modifier_sets'" and "column option_groups.set_id does not exist" — the schema
+  really isn't there, not a tracker false alarm. It joins an existing backlog of roughly
+  fifteen earlier unapplied migrations (back to at least migration 124), so the backlog
+  itself isn't new today, but the new tables/columns this commit describes genuinely don't
+  exist in production yet.
+- **The deployed `import-menu-csv` function doesn't match this repository's history for
+  that function at all.** Downloading it directly (twice, to rule out a bad download)
+  shows five files — `ordering.ts`, `import-plan.ts`, `csv.ts`, `validate.ts`,
+  `types.ts` — none of which have ever existed in this repo's git history for
+  `import-menu-csv`, and no `index.ts` entrypoint at all. `supabase functions list` shows
+  its last update as 2026-09-08. I can't explain the mismatch from the git log alone —
+  it looks like whatever is running in production for this function came from somewhere
+  other than a commit to this repo, which is worth someone with deploy access checking
+  directly rather than assuming from here.
+
+### Not checked
+
+Which of the three real shops has `shops.turn_engine_enabled` on — this determines
+whether a given shop's customers are actually exercising the fixes above or are still on
+the older ordering path. This local environment doesn't have the database credentials to
+read that flag; someone with DB access should confirm it per shop before assuming the
+fixes above apply everywhere.
+
