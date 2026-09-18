@@ -333,7 +333,72 @@ const FRIES_MENU: TurnEngineMenuItem[] = [
 ];
 const FRIES_LEXICON: LexiconTerm[] = [{ term: "the slice cheesesteak", target_id: SLICE_CHEESESTEAK_ID }];
 
-Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped like an unresolved span, even though it would resolve cleanly", () => {
+// ── (a) token-based guard — 2026-09-18 two-regressions dispatch ────────────
+// Original guard was an exact substring test; reordered tokens ("medium
+// Hawaiian Pizza" for "a Hawaiian Pizza in medium size") always failed,
+// even though every word the model used was genuinely in the message (conv
+// 55c05b4c). Guard is now token-based: every span token must appear in the
+// message token set, order-free.
+const HAWAIIAN_PIZZA_ID = "item-hawaiian-pizza";
+const HAWAIIAN_MENU: TurnEngineMenuItem[] = [
+  {
+    id: HAWAIIAN_PIZZA_ID, name: "Hawaiian Pizza", category: "Pizza", price_cents: 1299,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Hawaiian Pizza", base_price_cents: 1299, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+const HAWAIIAN_LEXICON: LexiconTerm[] = [{ term: "hawaiian pizza", target_id: HAWAIIAN_PIZZA_ID }];
+
+Deno.test("decide (a — token-based guard): reordered span tokens still resolve — 'medium Hawaiian Pizza' for 'a Hawaiian Pizza in medium size' (conv 55c05b4c)", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "medium Hawaiian Pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  // "medium" is not in the lexicon (not an exact term), but it IS in the
+  // message — guard passes because every span token is in the message.
+  // resolveItem will match on "hawaiian pizza" subset of the span tokens.
+  const result = decide(proposal, [], HAWAIIAN_MENU, HAWAIIAN_LEXICON, undefined, "a Hawaiian Pizza in medium size");
+  assertEquals(result.cart.length, 1, "item must resolve — guard must not block reordered tokens");
+  assertEquals(result.cart[0].menu_item_id, HAWAIIAN_PIZZA_ID);
+});
+
+Deno.test("decide (a — token-based guard): The Slice Cheesesteak still fails for a fries message — no shared tokens", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },
+  ];
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, cart, FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 1, "no second Slice Cheesesteak line — span tokens not in fries message");
+  assertEquals(result.cart[0].quantity, 1);
+  // (b): item IS in cart → guard-drop is silent, 0 declines
+  assertEquals(result.declines.length, 0, "silent when guard-dropped item is already in cart");
+});
+
+// ── (b) guard-drop messaging — 2026-09-18 two-regressions dispatch ──────────
+// A guard-dropped add must never say "didn't catch <span>". If the resolved
+// item is already in cart → silent. Otherwise → "Did you want a X as well?"
+Deno.test("decide (b — guard-drop not in cart): asks 'Did you want a X as well?' — never 'didn't catch'", () => {
+  // Cart is EMPTY — cheesesteak is not in it. Guard fires (span not in
+  // message). Since the item is NOT in cart, the bot must ask, not say
+  // "didn't catch".
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 0, "item must not be added without confirmation");
+  assertEquals(result.declines.length, 1, "one decline — the bot asks");
+  assert(/did you want/i.test(result.declines[0].reason), `must ask 'Did you want…': ${result.declines[0].reason}`);
+  assert(!/didn'?t catch/i.test(result.declines[0].reason), `must never say 'didn't catch' for a guard drop: ${result.declines[0].reason}`);
+});
+
+Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped when item IS in cart — silent (no decline)", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },
   ];
@@ -345,7 +410,7 @@ Deno.test("decide: an add whose item_span never occurs in the customer's message
   const result = decide(proposal, cart, FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
   assertEquals(result.cart.length, 1, "no second Slice Cheesesteak line — the span was never said this turn");
   assertEquals(result.cart[0].quantity, 1);
-  assertEquals(result.declines.length, 1);
+  assertEquals(result.declines.length, 0, "silent when guard-dropped item is already in cart — not a customer concern");
 });
 
 Deno.test("decide: an add whose item_span DOES occur in the message still resolves normally — the guard only blocks a span that was never said", () => {

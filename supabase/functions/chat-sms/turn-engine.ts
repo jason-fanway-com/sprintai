@@ -586,12 +586,25 @@ export function answer(
 // contract already promises. `customerMessage` undefined (an existing call
 // site/test that predates this param) opts out entirely — permissive
 // default, same convention as isRestatementOfExistingOrder below.
+//
+// 2026-09-18 PO dispatch (two-regressions item a): original implementation
+// was an exact substring test, so a model that reordered tokens in the span
+// ("medium Hawaiian Pizza" for "a Hawaiian Pizza in medium size") failed the
+// check and the customer was told "Sorry, I didn't catch 'medium Hawaiian
+// Pizza'" (conv 55c05b4c) — the item WAS in the message, just with a
+// different token order. Token-based: normalize both strings the same way
+// resolve-item.ts does (lowercase, strip non-alphanumeric to spaces,
+// collapse whitespace) then check every span token appears somewhere in the
+// message token set — order-free. "The Slice Cheesesteak" for "I want to
+// add a side of fries" still fails: no shared tokens.
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
-  const normalizedSpan = span.toLowerCase().replace(/\s+/g, " ").trim();
-  if (!normalizedSpan) return false;
-  const normalizedMessage = customerMessage.toLowerCase().replace(/\s+/g, " ");
-  return normalizedMessage.includes(normalizedSpan);
+  const tokenize = (t: string): string[] =>
+    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const spanTokens = tokenize(span);
+  if (spanTokens.length === 0) return false;
+  const messageTokenSet = new Set(tokenize(customerMessage));
+  return spanTokens.every(t => messageTokenSet.has(t));
 }
 
 // 2026-09-18 PO dispatch (self-correction money bug, conv c879937d): "Actually,
@@ -907,12 +920,37 @@ export function decide(
   // say "that item wasn't in your order" with complete confidence, and why a
   // read-back of the order could only ever confirm what the system already
   // believed rather than what the customer actually said.
+  // Built here (before the add loop) rather than at the 00-BD site below:
+  // the guard-drop path needs it to decide between silent and "Did you want
+  // a X as well?" without resolving the add a second time. The set is still
+  // the cart as it stood BEFORE this turn's adds — same semantics as 00-BD.
+  const menuItemIdsAlreadyInCart = new Set(
+    cart.filter(isRealCartLine).map(l => l.menu_item_id),
+  );
+
   const unresolvedSpans: string[] = [];
   for (const add of proposal.adds ?? []) {
-    const resolution = itemSpanNamedInMessage(add.item_span, customerMessage)
-      ? resolveItem(add.item_span, lexicon)
-      : ({ kind: "unresolved" } as const);
-    if (resolution.kind === "resolved") {
+    const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
+    // Always resolve (even on guard failure) so the guard-drop path can check
+    // whether the resolved item is already in cart without a second pass.
+    const resolution = resolveItem(add.item_span, lexicon);
+    if (!guardPassed) {
+      // Guard-dropped: the span's tokens were not in the customer's message —
+      // the model referenced an item the customer never named this turn.
+      // 2026-09-18 PO dispatch (two-regressions item b): "didn't catch" is
+      // for truly unresolved spans; a guard-dropped add must never say that.
+      // If the item resolves AND is already in cart: silent (the model was
+      // echoing an item it could see in state — a harmless restatement the
+      // customer neither asked for nor would notice). Otherwise ask once
+      // without guessing — "Did you want a X as well?" — the customer can
+      // confirm or ignore; no item is ever added without explicit confirmation.
+      const span = (add.item_span ?? "").trim();
+      const inCart = resolution.kind === "resolved"
+        && menuItemIdsAlreadyInCart.has(resolution.menu_item_id);
+      if (!inCart && span) {
+        declines.push({ reason: `Did you want a ${span} as well?` });
+      }
+    } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
       ambiguousSpans.push(resolution.candidates);
@@ -956,11 +994,10 @@ export function decide(
   // 00-BD: if the customer is restating an order they already placed, an add
   // that duplicates a line already in the cart is not a new order. Checked
   // against the cart as it stood BEFORE this turn's adds, so two genuinely
-  // distinct adds in one message still both land.
+  // distinct adds in one message still both land. menuItemIdsAlreadyInCart
+  // is declared above (before the add-resolution loop) for the guard-drop
+  // path; it's the same set used here.
   const restating = isRestatementOfExistingOrder(customerMessage);
-  const menuItemIdsAlreadyInCart = new Set(
-    cart.filter(isRealCartLine).map(l => l.menu_item_id),
-  );
 
   for (const add of addGroups.values()) {
     if (restating && menuItemIdsAlreadyInCart.has(add.menu_item_id)) {
