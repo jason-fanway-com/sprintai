@@ -431,43 +431,7 @@ function bareProductName(item: CompileItem): string | null {
   return bare;
 }
 
-// Family-identity bare form used ONLY for the counting map below — unlike
-// bareProductName (Rule 2's own "is there something to strip" gate, which
-// returns null when the bare form equals the item's own full display
-// name), this always returns product_key's base segment. An unsized item
-// whose display name already IS its bare form ("Bruschetta" the
-// Appetizer) doesn't need a Rule-2 ALIAS — Rule 1 already emits that exact
-// term for it — but it still needs to be COUNTED here, so a sized sibling
-// family sharing the same base key (2026-09-18 PO decision, item 1 below)
-// can find it.
-function familyBareKey(item: CompileItem): string | null {
-  if (!item.product_key) return null;
-  const colonIdx = item.product_key.indexOf(":");
-  const baseSlug = colonIdx === -1 ? item.product_key : item.product_key.slice(colonIdx + 1);
-  if (!baseSlug) return null;
-  return normaliseTerm(baseSlug.replace(/-/g, " ")) || null;
-}
-
-// Menu-wide map of bare product name -> the set of DISTINCT product_keys
-// among UNSIZED items that independently own it. "Unsized" (no size_label)
-// is the signal for "a standalone dish, not one row of a size-folded
-// family". Computed once per menu (compileMenu) and consulted by
-// itemLexiconTerms below to gate a SIZED item's participation in the bare
-// alias — see that call site.
-function unsizedFamilyCountsByBareName(items: CompileItem[]): Map<string, Set<string>> {
-  const counts = new Map<string, Set<string>>();
-  for (const i of items) {
-    if (i.size_label) continue;
-    const bare = familyBareKey(i);
-    if (!bare) continue;
-    const families = counts.get(bare) ?? new Set<string>();
-    families.add(i.product_key!);
-    counts.set(bare, families);
-  }
-  return counts;
-}
-
-function itemLexiconTerms(item: CompileItem, unsizedFamilyCounts?: Map<string, Set<string>>): LexiconTerm[] {
+function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
@@ -497,34 +461,36 @@ function itemLexiconTerms(item: CompileItem, unsizedFamilyCounts?: Map<string, S
   // candidates ("burger", "fries") — no tiebreak, no ranking, every
   // claimant keeps its own row.
   //
-  // 2026-09-18 PO decision (item 1, superseding this same day's earlier
-  // ≥2-unsized-siblings rule below): "When an unsized item's bare name
-  // equals a sized family's base key, the bare term targets the unsized
-  // item AND every family member." A SIZED item (one row of a size-folded
-  // family, e.g. "14\" Chicken Parmesan Stromboli") joins this alias
-  // whenever its own base key is shared by even ONE unsized sibling —
-  // basis is the shared product_key base, never a name list.
+  // 2026-09-18 PO decision (item 1, second pass — supersedes BOTH the
+  // original ≥2-unsized-siblings rule AND this same day's own first
+  // attempt at fixing it, which required ≥1 unsized sibling): "EVERY
+  // size-folded family gets its bare base key as a term for every member,
+  // namesake or not; with a namesake, the namesake is included too."
   //
-  // The earlier same-day rule required ≥2 unsized siblings specifically to
-  // keep "Bruschetta" (a standalone Appetizer) separate from "Bruschetta
-  // Pizza"'s 3 sizes, reasoning they were "genuinely two different foods
-  // that just happen to share a name." Jason's ruling: resolving bare
-  // "bruschetta" straight to the appetizer because the name matches
-  // exactly is a GUESS that happens to be right for one dish and wrong for
-  // the pizza — the same shape as the $2.50 cheeseburger bug (guessing
-  // instead of asking). The fix is not to keep them apart; it's to let the
-  // bare word tie ALL of them, so resolve-item.ts's own narrowing
-  // (category "pizza"/"salad", a stated size) picks the one meant, and a
-  // truly bare "bruschetta" ASKS instead of guessing — never a tiebreak,
-  // same standing rule as everywhere else in this file. Real Vito's shape
-  // now unified this way: bruschetta (appetizer + 3 pizza sizes), house
-  // (salad + 3 stromboli sizes), chicken bacon ranch (flatbread + 3 pizza
-  // sizes), margherita (flatbread + 3 pizza sizes) — all four, one rule,
-  // codable from `familyBareKey` alone.
+  // The ≥1 version regressed 12 of Vito's 29 size-folded families that
+  // have NO unsized sibling at all — calzone, alfredo, cheese (Pizza),
+  // white (Pizza), and others are sized-only, so ≥1 could never be met,
+  // and this file's OWN 2026-09-18 retirement fix (item 3, same day)
+  // correctly retired the stale 'derived' rows that used to paper over
+  // the gap — removing the safety net at the same moment the new rule
+  // needed it. Net effect, live: "calzone"/"a 14-inch calzone" went from
+  // "which size?" to "Sorry, I didn't catch that" (conversations 45b0f2e4,
+  // 0a8b4ffa) — a real customer-facing regression, not just a count drop.
+  //
+  // The fix: drop the sibling-count condition entirely. A sized item
+  // ALWAYS gets its own bare base-key term, unconditionally — an unsized
+  // namesake (Bruschetta the Appetizer, Chicken Bacon Ranch the Flatbread)
+  // needs no special-case inclusion because Rule 1 already emits that
+  // exact term for it (its own display name already IS the bare form);
+  // when no namesake exists (calzone, alfredo), the sized family still
+  // gets the term because nothing here required one in the first place.
+  // Bare "bruschetta"/"calzone" both resolve ambiguous either way;
+  // resolve-item.ts's own narrowing (category/size in the span) picks the
+  // one meant, same principle as item 1's first pass, just without the
+  // now-removed gate that only worked for HALF of Vito's real families.
   const bareName = bareProductName(item);
   if (bareName) {
-    const emit = !item.size_label || (unsizedFamilyCounts?.get(bareName)?.size ?? 0) >= 1;
-    if (emit) terms.push({ term: bareName, target_type: "item", target_id: item.id, provenance: "stated" });
+    terms.push({ term: bareName, target_type: "item", target_id: item.id, provenance: "stated" });
   }
 
   // Rule 6: "X or Y" slot choices → their own names, as choice targets.
@@ -887,7 +853,6 @@ export function compileItem(
   item: CompileItem,
   questions: PendingQuestion[],
   compiledAt: string,
-  unsizedFamilyCounts?: Map<string, Set<string>>,
 ): CompiledItem {
   const { bot_state, bot_state_reason } = computeBotState(item, questions);
   return {
@@ -895,7 +860,7 @@ export function compileItem(
     bot_state,
     bot_state_reason,
     ask_plan: buildAskPlan(item, compiledAt),
-    lexicon_terms: itemLexiconTerms(item, unsizedFamilyCounts),
+    lexicon_terms: itemLexiconTerms(item),
   };
 }
 
@@ -1527,8 +1492,7 @@ export function compileMenu(
   // compileItem) does the scope matching per item (by item id, category, or
   // one of the item's own group/choice ids), so there is no need to
   // pre-partition questions by item here.
-  const unsizedFamilyCounts = unsizedFamilyCountsByBareName(items);
-  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt, unsizedFamilyCounts));
+  const compiledItems = items.map(i => compileItem(i, allQuestions, compiledAt));
   const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
 
   const categories = new Set(items.map(i => i.category).filter((c): c is string => !!c));

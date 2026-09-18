@@ -423,6 +423,28 @@ Deno.test("lexicon rule 2 (2026-09-18 PO decision, item 1): the shared-base-key 
     "the wrap's own base key is 'grilled-chicken-bacon-ranch', not 'chicken-bacon-ranch' — it does not share the family key, so it is not pulled in by this rule");
 });
 
+Deno.test("lexicon rule 2 (2026-09-18 PO decision, item 1 — REGRESSION FIX): a size-folded family with NO unsized namesake at all still gets its bare base-key term (real Vito's 'calzone' bug)", () => {
+  // This is the exact live regression: the first version of item 1's rule
+  // required >=1 unsized sibling sharing the bare name before a sized
+  // family could claim it -- which silently failed every family that has
+  // no unsized member at all. Real Vito's "Calzone" is sized-only (Small/
+  // Medium/Large or similar; no standalone "Calzone" appetizer or entree
+  // exists anywhere on the menu), so the >=1 version emitted NOTHING for
+  // "calzone" and a live customer asking for one got "Sorry, I didn't
+  // catch that" instead of a size question (conversations 45b0f2e4,
+  // 0a8b4ffa). The rule has no sibling-count condition at all now.
+  const small = item({ display_name: "Small Calzone", category: "Stromboli", size_label: "Personal", product_key: "stromboli:calzone" });
+  const medium = item({ display_name: "14\" Calzone", category: "Stromboli", size_label: "14\"", product_key: "stromboli:calzone" });
+  const large = item({ display_name: "16\" Calzone", category: "Stromboli", size_label: "16\"", product_key: "stromboli:calzone" });
+  const { items: compiled } = compileMenu([small, medium, large], [], "t", false);
+
+  const calzoneTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "calzone").map(t => t.target_id)),
+  );
+  assertEquals(calzoneTargets, new Set([small.id, medium.id, large.id]),
+    "bare 'calzone' must tie all 3 sizes even though no unsized 'Calzone' item exists anywhere");
+});
+
 // ============================================================
 // 2026-09-18 PO decision, item 2 (real Vito's "sauce"/"onions"/"fries"
 // collisions — the choice/group-vocabulary rule originally proposed for
