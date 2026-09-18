@@ -76,8 +76,6 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3
 import { buildMenuPriceIndex, type MenuItemForPricing } from "./itemizer.ts";
 import { computeCartSubtotalCents } from "./pricing.ts";
 import { extractCustomerName } from "./dialogue-signals.ts";   // 00-BL
-import { interpretAnswer } from "./answer-interpreter.ts";     // 00-BN
-import { applyDisambiguationPick } from "./turn-engine.ts";    // 00-BN
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
@@ -534,7 +532,6 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // deterministic detectors have all missed. Only ever one of the meanings
   // code offered; see answerVocabularyFor.
   let answerOutcomeFromModel: { kind: "closure" | "confirm_yes" | "confirm_no" } | null = null;
-  let disambiguationPickedByModel: string | null = null;
   const answerVocab = answerVocabularyFor(priorState.open, input.menu, input.cart);
   // 00-BL: the name question wants a VALUE, not a choice. It is now the top
   // repeater: extractCustomerName handles "my name is Alex" and "it's Alex",
@@ -707,35 +704,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // read as either can only be noise or a protest, never legitimate new
     // information PROPOSE needs to interpret. No cart mutation, no model
     // call: the SAME question is re-asked next, exactly once.
-    // 00-BN: ask the model WHICH ONE THEY MEANT, and nothing else.
-    //
-    // 00-AT's reasoning above is right about PROPOSE and wrong about the
-    // model. The danger was never the model reading the message -- it was
-    // PROPOSE's contract, which returns cart changes and re-adds items already
-    // resolved. This call returns ONE id, from the candidate list code itself
-    // supplied, re-checked against those same candidates on the way back. It
-    // cannot add, remove or re-price anything, so the defect 00-AT closed
-    // stays closed.
-    //
-    // Disambiguation is now the largest remaining loop: "Which one would you
-    // like - 1) ... 2) ...?" and "Which dressing on the House?" together are
-    // the biggest group of repeats left, and the deterministic resolver only
-    // catches a customer who names a distinguishing word.
-    if (priorState.open.kind === "disambiguation" && answerVocab && deps.apiKey) {
-      const picked = await interpretAnswer(
-        { question: answerVocab.question, message: input.message, options: answerVocab.options },
-        { apiKey: deps.apiKey, fetchImpl: deps.fetchImpl, model: deps.model, chatApiUrl: deps.chatApiUrl },
-      );
-      if (picked && priorState.open.candidates.includes(picked)) {
-        const r = applyDisambiguationPick(workingCart, input.menu, picked);
-        if (r.applied) {
-          disambiguationPickedByModel = picked;
-          if (r.cartChanged) turnEvents = { ...turnEvents, qualifyingAddMenuItemId: picked };
-        }
-      }
-    }
-
-    if (priorState.open.kind === "disambiguation" && !disambiguationPickedByModel) {
+    if (priorState.open.kind === "disambiguation") {
       // ASK's pendingAmbiguous queue only ever holds a disambiguation
       // BEFORE it wins priority — once one is `open`, its candidates live
       // on `open` itself and nowhere else (see turn-engine.ts's own doc on

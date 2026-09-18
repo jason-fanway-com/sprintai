@@ -271,22 +271,6 @@ function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
 // Returns `{ resolved: false }` when nothing here can settle it — the ONLY
 // case in which the caller may make a model call (PROPOSE, a later phase).
 
-// 00-BN: resolve a disambiguation the MODEL read, through the exact same add
-// path the deterministic resolver uses (applyCompiledAddItem, quantity 1, no
-// asserted choices). The caller has already re-checked that `menuItemId` is
-// one of THIS question's own candidates, so this can only ever add an item
-// that was already on the table in front of the customer.
-export function applyDisambiguationPick(
-  cart: TurnEngineCartLine[],
-  menu: TurnEngineMenuItem[],
-  menuItemId: string,
-): { applied: boolean; cartChanged: boolean } {
-  const menuItem = menu.find(m => m.id === menuItemId);
-  if (!menuItem?.ask_plan) return { applied: false, cartChanged: false };
-  const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, []);
-  return { applied: true, cartChanged: result.cartChanged };
-}
-
 export type AnswerOutcome =
   | { kind: "slot_resolved" }
   | { kind: "disambiguation_resolved"; menuItemId: string }
