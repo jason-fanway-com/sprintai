@@ -336,6 +336,75 @@ interface LexiconLoadResult {
   rows: LexiconTerm[];
 }
 
+// resolveItem's category/size_label narrowing (resolve-item.ts, 2026-09-18
+// PO dispatch) is dead weight on the live path unless the lexicon rows it
+// receives actually carry those two fields — the `lexicon` table itself has
+// neither, only `term`/`target_id`, so they have to be joined in from
+// `menu_items` (keyed by target_id) on the same load. There is no foreign
+// key from lexicon.target_id (TEXT) to menu_items.id (UUID), so PostgREST
+// cannot embed this in the primary select — a second, explicit query is the
+// only option, per this dispatch's own instructions.
+//
+// Batched the same way index.ts's buildEffectiveMenu already had to batch
+// option_groups/option_choices lookups: an `.in("id", ids)` filter whose
+// value list scales with the page (up to 1000 distinct target_ids) can make
+// the request URL long enough to fail outright (TypeError: fetch failed),
+// not a graceful PostgREST error — see index.ts's own IN_BATCH_SIZE comment
+// for the live incident this exact failure class caused on Zio's. index.ts
+// is frozen and out of this dispatch's scope, so the batching constant is
+// duplicated here rather than imported.
+const LEXICON_ITEM_METADATA_BATCH_SIZE = 150;
+
+interface LexiconItemMetadata {
+  category: string | null;
+  size_label: string | null;
+}
+
+// Best-effort: a failure here must never fail the lexicon load itself (the
+// loud count assertion below still protects term/target_id completeness).
+// Losing narrowing metadata for some targets only means resolveItem falls
+// back to its pre-existing (pre-narrowing) behavior for those terms, per its
+// own documented contract for when category/size_label are absent — never a
+// reason to drop or fail the whole turn.
+async function loadLexiconItemMetadata(
+  supabase: SupabaseClient,
+  shopId: string,
+  targetIds: string[],
+): Promise<Map<string, LexiconItemMetadata>> {
+  const metaByTargetId = new Map<string, LexiconItemMetadata>();
+  for (let i = 0; i < targetIds.length; i += LEXICON_ITEM_METADATA_BATCH_SIZE) {
+    const batch = targetIds.slice(i, i + LEXICON_ITEM_METADATA_BATCH_SIZE);
+    try {
+      const { data, error } = await supabase
+        .from("menu_items")
+        .select("id, category, size_label")
+        .in("id", batch);
+      if (error) {
+        await logError(supabase, {
+          shopId,
+          phase: "chat-sms",
+          stage: LEXICON_LOAD_STAGE,
+          error,
+          metadata: { step: "lexicon_item_metadata", batch_size: batch.length },
+        });
+        continue;
+      }
+      for (const row of (data ?? []) as Array<{ id: string; category: string | null; size_label: string | null }>) {
+        metaByTargetId.set(row.id, { category: row.category, size_label: row.size_label });
+      }
+    } catch (thrown) {
+      await logError(supabase, {
+        shopId,
+        phase: "chat-sms",
+        stage: LEXICON_LOAD_STAGE,
+        error: thrown instanceof Error ? thrown : new Error(String(thrown)),
+        metadata: { step: "lexicon_item_metadata", batch_size: batch.length },
+      });
+    }
+  }
+  return metaByTargetId;
+}
+
 async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconLoadResult> {
   const rows: LexiconTerm[] = [];
   let from = 0;
@@ -362,7 +431,15 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
       return { ok: false, rows };
     }
     if (!data || data.length === 0) break;
-    rows.push(...(data as LexiconTerm[]));
+    const page = data as Array<{ term: string; target_id: string }>;
+    const pageTargetIds = [...new Set(page.map(r => r.target_id))];
+    const metaByTargetId = await loadLexiconItemMetadata(supabase, shopId, pageTargetIds);
+    rows.push(...page.map(r => ({
+      term: r.term,
+      target_id: r.target_id,
+      category: metaByTargetId.get(r.target_id)?.category ?? null,
+      size_label: metaByTargetId.get(r.target_id)?.size_label ?? null,
+    })));
     if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
     from += ITEM_LEXICON_PAGE_SIZE;
   }

@@ -73,9 +73,13 @@ interface FakeState {
   errorLogInserted: Array<Record<string, unknown>>;
   shopSettings: { upsell_enabled?: boolean } | null;
   lexicon: Array<{ term: string; target_id: string }>;
+  // loadItemLexicon's category/size_label join target (menu_items, keyed by
+  // id). Empty by default — tests that don't care about narrowing metadata
+  // get an empty-but-successful .in() result, not a thrown error.
+  menuItems: Array<{ id: string; category: string | null; size_label: string | null }>;
 }
 
-interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon">> {
+interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems">> {
   // Makes the .range() call starting at this offset resolve as a PostgREST
   // error (data: null, error) instead of a page of rows — reproduces a real
   // fetch failure on page N>0, distinct from a clean short/empty-page finish.
@@ -95,6 +99,7 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
     errorLogInserted: [],
     shopSettings: null,
     lexicon: LEXICON,
+    menuItems: [],
     ...stateOverrides,
   };
 
@@ -124,6 +129,14 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
         }
         const all = table === "lexicon" ? state.lexicon : [];
         return Promise.resolve({ data: all.slice(from, to + 1), error: null });
+      },
+      // loadLexiconItemMetadata's batched `.in("id", batch)` lookup against
+      // menu_items. Matches real PostgREST .in() semantics: rows whose
+      // `column` value is one of `values`, error: null.
+      in(column: string, values: unknown[]) {
+        if (table !== "menu_items") return Promise.resolve({ data: [], error: null });
+        const matches = state.menuItems.filter((row) => values.includes((row as Record<string, unknown>)[column]));
+        return Promise.resolve({ data: matches, error: null });
       },
       update(row: Record<string, unknown>) {
         if (table === "order_carts") state.orderCartsUpdates.push(row);
