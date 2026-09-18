@@ -46,7 +46,9 @@
  *   - menu_items.display_name, product_key, bot_state, bot_state_reason,
  *     ask_plan                                          (every active item)
  *   - lexicon                                            (upsert desired rows,
- *     deactivate stale rule-generated ('stated') rows no longer produced)
+ *     deactivate stale mechanically-generated ('stated'/'derived') rows no
+ *     longer produced — 'owner_confirmed' is never touched by this scan, a
+ *     human override outlives whatever the compiler currently proposes)
  *
  * Returns: { ok, menu_id, shop_id, compiled_at, items: [...], invariants: [...],
  *            owner_questions: [...] } — the same report shape item 9's
@@ -615,11 +617,25 @@ Deno.serve(async (req: Request) => {
   }
 
   // ---- Write back: lexicon — upsert desired rows, deactivate stale
-  // 'stated' rows no longer produced by this compile (idempotent re-compile
-  // after e.g. a display_name override changes what rules 1/2/3/6 emit).
-  // Derived lexicon terms are included in the upsert but skipped from the
-  // 'stated'-provenance stale scan (they have provenance 'derived' or
-  // 'owner_confirmed', not 'stated'). ----
+  // mechanically-generated ('stated' or 'derived') rows no longer produced
+  // by this compile (idempotent re-compile after e.g. a display_name
+  // override changes what rules 1/2/3/6 emit, or a derivation rule itself
+  // changes what it proposes).
+  //
+  // 2026-09-18 PO decision (item 3, the retirement gap): this scan used to
+  // check 'stated' rows only, on the theory that a 'derived' row's own
+  // upsert (line ~633 below) already keeps it current. That's true for
+  // what a fresh compile DOES still propose, but says nothing about a term
+  // a PRIOR compile derived that this one no longer does — that row just
+  // sat there active forever, invisible to this scan, only ever added to
+  // by the upsert never removed. Real, live incident: 'chicken cheesesteak'
+  // read 4 targets in production (California Chicken Cheesesteak's stale
+  // 'derived' row from before this file's own 2026-09-18 shared-bare-name
+  // fix) for hours after that fix shipped and recompiled, because nothing
+  // ever turned the stale row off. 'owner_confirmed' is deliberately still
+  // exempt — a human's explicit override must outlive whatever the
+  // compiler currently proposes on its own, never silently retired by an
+  // automated recompile the owner didn't touch. ----
   const desiredTerms: LexiconTerm[] = [
     ...result.items.flatMap(c => c.lexicon_terms),
     ...result.categoryLexicon,
@@ -642,13 +658,22 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const { data: existingLexicon } = await supabase
-    .from("lexicon")
-    .select("id, term, target_type, target_id")
-    .eq("menu_id", menuId)
-    .eq("provenance", "stated")
-    .eq("active", true);
-  const staleIds = (existingLexicon ?? [])
+  // 2026-09-18 PO decision (item 3): widening the provenance filter above
+  // to include 'derived' pushes this well past PostgREST's silent 1000-row
+  // cap (Vito's alone: 2724 stated+derived active rows, vs 762 stated-only
+  // before this fix) — an unpaged select here would have silently missed
+  // most of them, leaving them stale-but-active exactly like the gap this
+  // dispatch closes. fetchAllRows (already used elsewhere in this same
+  // file) pages via .range() until a short page.
+  const existingLexicon = await fetchAllRows<{ id: string; term: string; target_type: string; target_id: string }>(() =>
+    supabase
+      .from("lexicon")
+      .select("id, term, target_type, target_id")
+      .eq("menu_id", menuId)
+      .in("provenance", ["stated", "derived"])
+      .eq("active", true),
+  );
+  const staleIds = existingLexicon
     .filter((row: { term: string; target_type: string; target_id: string }) =>
       !desiredKeys.has(`${row.term} ${row.target_type} ${row.target_id}`))
     .map((row: { id: string }) => row.id);
