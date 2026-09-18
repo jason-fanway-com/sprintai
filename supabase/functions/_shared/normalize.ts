@@ -382,10 +382,61 @@ function stripSizeSuffix(name: string, sizeLabel: string | null): { base: string
   return { base, sizeAdjective: sizeAdjective || null };
 }
 
+// 2026-09-18 PO dispatch (two-families follow-up, real Vito's shapes): a
+// genuine size-folded family's suffix isn't always a SIZE — "Wings - 6
+// piece"/"Wings - 12 piece" fold on a piece count, "Alfredo - Chicken"/
+// "Alfredo - Shrimp" fold on a protein. The import never populates
+// size_label for either because nothing about "6 piece" or "Chicken" reads
+// as a size word, even though the name already states exactly the same
+// " - <suffix>" fold shape a real sized row uses (stripSizeSuffix above).
+// This is the generic form of that same clause, independent of size_label:
+// split on the LAST " - " in the name. Used only to detect a candidate
+// family below — never applied on its own, since a single hyphenated name
+// with no sibling sharing its base is far more likely an item whose own
+// real name just happens to contain a dash (see the ≥2-member family gate
+// in normalizeMenuItems, which is what actually decides whether this
+// candidate split gets used).
+function genericSuffixSplit(name: string): { base: string; suffix: string } | null {
+  const m = name.match(/^(.+?)\s+-\s+(.+)$/);
+  if (!m) return null;
+  const base = m[1].trim();
+  const suffix = m[2].replace(/\s*\([^)]*\)/g, "").trim();
+  if (!base || !suffix) return null;
+  return { base, suffix };
+}
+
 export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[] {
-  const items: NormalizedMenuItem[] = rows.map(row => {
+  // Pre-pass: category/or-clause stripping is pure per-row and needed twice
+  // below (once to count generic-suffix families, once in the real map) —
+  // computed once here so both read identical input. Storing the FULL
+  // extractOrClauseFromName result (not just strippedName) matters: calling
+  // it a second time on an already-stripped name finds no "or" clause left
+  // to extract and silently returns zero choices.
+  const preStripped = new Map<string, { strippedName: string; nameChoices: string[] }>();
+  for (const row of rows) {
     const afterCategoryStrip = stripCategorySuffix(row.name, row.category);
     const { strippedName, choices: nameChoices } = extractOrClauseFromName(afterCategoryStrip);
+    preStripped.set(row.id, { strippedName, nameChoices });
+  }
+
+  // 2026-09-18 PO dispatch (two-families follow-up): only trust a generic
+  // " - <suffix>" split (genericSuffixSplit above) as a real fold when ≥2
+  // rows in the same category share the same stripped base — a genuine
+  // family, per the PO's own wording. A LONE item whose own name happens to
+  // contain " - " (no sibling) is left completely untouched: this must
+  // never invent a fold for a one-off name, only confirm one that's already
+  // there twice.
+  const genericFamilyCounts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.size_label) continue; // already has a real size_label — not this fallback's concern
+    const split = genericSuffixSplit(preStripped.get(row.id)!.strippedName);
+    if (!split) continue;
+    const key = `${(row.category ?? "").toLowerCase()}::${split.base.toLowerCase()}`;
+    genericFamilyCounts.set(key, (genericFamilyCounts.get(key) ?? 0) + 1);
+  }
+
+  const items: NormalizedMenuItem[] = rows.map(row => {
+    const { strippedName, nameChoices } = preStripped.get(row.id)!;
     const { slots: descClauses, modifiers } = extractDescriptionClauses(row.description);
 
     const slots: NormalizedSlot[] = [];
@@ -402,7 +453,24 @@ export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[]
       });
     }
 
-    const { base, sizeAdjective } = stripSizeSuffix(strippedName, row.size_label);
+    // Effective size label: the row's own real one when present, otherwise
+    // the generic suffix ("6 piece", "Chicken") IFF this row belongs to a
+    // confirmed ≥2-member family (see genericFamilyCounts above) — never
+    // synthesized for a singleton. Fed straight into the SAME stripSizeSuffix
+    // used for a real size_label, so a piece-count or protein suffix folds,
+    // displays, and title-cases exactly the way a size word already does.
+    let effectiveSizeLabel = row.size_label;
+    if (!effectiveSizeLabel) {
+      const split = genericSuffixSplit(strippedName);
+      if (split) {
+        const key = `${(row.category ?? "").toLowerCase()}::${split.base.toLowerCase()}`;
+        if ((genericFamilyCounts.get(key) ?? 0) >= 2) {
+          effectiveSizeLabel = split.suffix;
+        }
+      }
+    }
+
+    const { base, sizeAdjective } = stripSizeSuffix(strippedName, effectiveSizeLabel);
 
     // A folded (size-varying) product always states its category noun, per
     // the worked example in Appendix B ("Cheese" -> "Cheese Pizza" before
@@ -431,7 +499,7 @@ export function normalizeMenuItems(rows: RawMenuItemRow[]): NormalizedMenuItem[]
       name: row.name,
       category: row.category,
       price_cents: row.price_cents,
-      size_label: row.size_label,
+      size_label: effectiveSizeLabel,
       product_key: productKey,
       display_name: displayName,
       slots,

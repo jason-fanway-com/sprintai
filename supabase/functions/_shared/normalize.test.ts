@@ -65,6 +65,61 @@ Deno.test("size folding: different base names in the same category do NOT fold t
   assert(out[0].product_key !== out[1].product_key);
 });
 
+// ---- Generic " - <suffix>" folding when size_label is absent (2026-09-18
+// PO dispatch, real Vito's shapes: "Wings - 6 piece"/"Wings - 12 piece" fold
+// on a piece count, "Alfredo - Chicken"/"Alfredo - Shrimp" fold on a
+// protein) ------------------------------------------------------------------
+
+Deno.test("generic suffix folding: a protein suffix ('Alfredo - Chicken'/'Alfredo - Shrimp') folds to one product_key when size_label is null on both rows", () => {
+  const rows = [
+    row({ name: "Alfredo - Chicken", category: "Entrees", size_label: null }),
+    row({ name: "Alfredo - Shrimp", category: "Entrees", size_label: null }),
+  ];
+  const out = normalizeMenuItems(rows);
+  assertEquals(out[0].product_key, out[1].product_key);
+  assertEquals(out[0].product_key, "entrees:alfredo");
+  // narrowing needs a real size_label-shaped word to match against — the
+  // discovered suffix becomes the item's own effective size_label, same as
+  // a real size word would.
+  assertEquals(out[0].size_label, "Chicken");
+  assertEquals(out[1].size_label, "Shrimp");
+});
+
+Deno.test("generic suffix folding: a piece-count suffix ('Wings - 6 piece'/'Wings - 12 piece') folds the same way", () => {
+  const rows = [
+    row({ name: "Wings - 6 piece", category: "Wings", size_label: null }),
+    row({ name: "Wings - 12 piece", category: "Wings", size_label: null }),
+  ];
+  const out = normalizeMenuItems(rows);
+  assertEquals(out[0].product_key, out[1].product_key);
+  assertEquals(out[0].product_key, "wings:wings");
+  assertEquals(out[0].size_label, "6 piece");
+  assertEquals(out[1].size_label, "12 piece");
+});
+
+Deno.test("generic suffix folding: a LONE item with an incidental ' - ' in its name and no sibling is left completely untouched — never invents a fold for a one-off name", () => {
+  const rows = [
+    row({ name: "Build-Your-Own - Special", category: "Entrees", size_label: null }),
+    // an unrelated item, no shared base — proves the family gate is real,
+    // not just "any 2 items in the same category"
+    row({ name: "Grilled Salmon", category: "Entrees", size_label: null }),
+  ];
+  const out = normalizeMenuItems(rows);
+  const buildYourOwn = out.find(i => i.name === "Build-Your-Own - Special")!;
+  assertEquals(buildYourOwn.size_label, null, "no sibling shares 'Build-Your-Own' — must not synthesize a size_label");
+  assertEquals(buildYourOwn.product_key, "entrees:build-your-own-special", "base stays the FULL original name, untouched");
+});
+
+Deno.test("generic suffix folding: a real size_label always wins over the generic fallback, even if it would also match the generic pattern", () => {
+  const rows = [
+    row({ name: "Cheese - Small (10\")", category: "Pizza", size_label: "Small (10\")" }),
+    row({ name: "Cheese - Large (16\")", category: "Pizza", size_label: "Large (16\")" }),
+  ];
+  const out = normalizeMenuItems(rows);
+  assertEquals(out[0].size_label, "Small (10\")", "real size_label passed through unchanged, not overwritten by the generic path");
+  assertEquals(out[1].size_label, "Large (16\")");
+});
+
 // ---- "X or Y" in the name -> a stated slot ---------------------------------
 
 Deno.test("'X or Y' in the name becomes a slot and display_name drops the clause", () => {
