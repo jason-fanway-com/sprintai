@@ -240,6 +240,10 @@ const NARROWING_FIXTURE_ITEMS: CompileItem[] = [
   { id: "f320da06-15d2-4503-97b2-001c17b444bf", name: "Chicken Bacon Ranch - Small (10\")", display_name: "Small Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Small (10\")", price_cents: 1295, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
   { id: "dca6fae3-2d94-4a18-b0a9-760474cec7c1", name: "Chicken Bacon Ranch - Medium (14\")", display_name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Medium (14\")", price_cents: 1999, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
   { id: "edac128c-c963-495a-8e4a-ec09a9787267", name: "Chicken Bacon Ranch - Large (16\")", display_name: "Large Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Large (16\")", price_cents: 2299, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  // Italian — same bare name across two categories (Wraps + Homemade Paninis),
+  // the real live-menu shape for "an italian sandwich" ambiguity.
+  { id: "a3b2c1d0-0001-0000-0000-000000000001", name: "Italian", display_name: "Italian Wrap", category: "Wraps", price_cents: 999, active: true, price_provenance: "stated", product_key: "wraps:italian", missing_from_source_since: null, groups: [] },
+  { id: "a3b2c1d0-0001-0000-0000-000000000002", name: "Italian", display_name: "Italian Panini", category: "Homemade Paninis", price_cents: 999, active: true, price_provenance: "stated", product_key: "homemade-paninis:italian", missing_from_source_since: null, groups: [] },
   // "Slice" collision (2026-09-18 PO follow-up dispatch, edge 2): "slice" is
   // simultaneously Regular Slice's own bare item term AND the category noun
   // for "By the Slice" — the exact real live-menu shape that hid the
@@ -416,4 +420,36 @@ Deno.test("resolveItem: 'a 16\" Slice' never resolves directly to Regular Slice,
 Deno.test("resolveItem: '16 inch the slice' is specific enough to resolve cleanly to The Slice - 16\", not ambiguous", () => {
   const result = resolveItem("16 inch the slice", NARROWING_LEXICON);
   assertEquals(result, { kind: "resolved", menu_item_id: SLICE_16_ID });
+});
+
+// ── 2026-09-18 PO amendment: narrowing only reduces a tie, never filters a
+// unique match. Category words in the phrase are hints, not constraints.
+
+// "side salad" resolves uniquely to Side Salad (Appetizers). "salad" is a
+// real category noun for "Salads" — applying the Salads filter empties the
+// set (Side Salad is Appetizers), so it falls back and the unique match stands.
+Deno.test("resolveItem: 'side salad' resolves to the Appetizers Side Salad even though 'salad' is a Salads category noun", () => {
+  const result = resolveItem("side salad", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Side Salad") });
+});
+
+// "italian" ties Italian Wrap (Wraps) and Italian Panini (Homemade Paninis).
+// "sandwich" is a category noun for "Hot Sandwiches". Neither tied candidate
+// is Hot Sandwiches — category filter empties the set, falls back to the full
+// tie, and ASK gets both real options instead of dead-ending.
+Deno.test("resolveItem: 'an italian sandwich' stays ambiguous across both Italian items — 'sandwich' category filter falls back when it empties the set", () => {
+  const result = resolveItem("an italian sandwich", NARROWING_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [idOf("Italian Panini"), idOf("Italian Wrap")].sort(),
+  );
+});
+
+// "the slice cheesesteak" names a single item (Hot Sandwiches) via its own
+// 3-word item-name term. "slice" is a category noun for "By the Slice" —
+// filtering for By the Slice returns empty, falls back, unique match stands.
+Deno.test("resolveItem: 'the slice cheesesteak' resolves uniquely even though 'slice' is a By the Slice category noun", () => {
+  const result = resolveItem("the slice cheesesteak", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("The Slice Cheesesteak") });
 });
