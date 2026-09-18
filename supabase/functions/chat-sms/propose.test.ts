@@ -157,7 +157,7 @@ function fixedClock(startMs = 1_000): () => number {
 
 // ── Success path ──────────────────────────────────────────────────────────
 
-Deno.test("proposeTurn: schema-valid tool_use on the first attempt succeeds, one fetch call, no error_log row", async () => {
+Deno.test("proposeTurn: schema-valid tool_use on the first attempt succeeds, one fetch call, a propose_success row (not propose_call) carries the raw proposal", async () => {
   const { supabase, inserted } = makeFakeSupabase();
   let calls = 0;
   const result = await proposeTurn(baseInput(), {
@@ -176,10 +176,15 @@ Deno.test("proposeTurn: schema-valid tool_use on the first attempt succeeds, one
     assertEquals(result.proposal.adds[0].item_span, "cheeseburger");
     assertEquals(result.attempts, 1);
   }
-  assertEquals(inserted.length, 0);
+  // 2026-09-18 PO dispatch: a successful propose_call used to leave no trace
+  // at all — indistinguishable after the fact from a wrong-but-schema-valid
+  // proposal. Logging only: the return value above is unchanged either way.
+  assertEquals(inserted.length, 1);
+  assertEquals(inserted[0].stage, "propose_success");
+  assertEquals((inserted[0].metadata as Record<string, unknown>).proposal, result.ok ? result.proposal : undefined);
 });
 
-Deno.test("proposeTurn: first attempt fails, second succeeds — exactly one retry, no error_log row (not a terminal failure)", async () => {
+Deno.test("proposeTurn: first attempt fails, second succeeds — exactly one retry, exactly one propose_success row, no propose_call failure row (not a terminal failure)", async () => {
   const { supabase, inserted } = makeFakeSupabase();
   let calls = 0;
   const result = await proposeTurn(baseInput(), {
@@ -195,7 +200,8 @@ Deno.test("proposeTurn: first attempt fails, second succeeds — exactly one ret
   assertEquals(calls, 2);
   assert(result.ok);
   if (result.ok) assertEquals(result.attempts, 2);
-  assertEquals(inserted.length, 0);
+  assertEquals(inserted.length, 1, "the failed first attempt is not a terminal failure and must not log a propose_call row");
+  assertEquals(inserted[0].stage, "propose_success");
 });
 
 // ── Failure paths — each must terminate at exactly 2 attempts and log ────

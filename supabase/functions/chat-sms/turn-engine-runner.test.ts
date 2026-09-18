@@ -324,7 +324,12 @@ Deno.test("runTurnEngineTurn: ANSWER cannot resolve a fresh order message, PROPO
       });
     },
   };
-  const input = baseInput({ message: "two cheeseburgers", cart: [] });
+  // "two cheese burgers", not "two cheeseburgers" -- 2026-09-18's item_span
+  // verbatim-in-message guard (turn-engine.ts's itemSpanNamedInMessage) now
+  // requires the model's span to actually occur in the customer's own
+  // message; the fixture must genuinely contain the two-word phrase it
+  // asserts the model returned.
+  const input = baseInput({ message: "two cheese burgers", cart: [] });
 
   const result = await runTurnEngineTurn(input, deps);
 
@@ -567,7 +572,7 @@ Deno.test("runTurnEngineTurn: persists subtotal_cents/total_cents computed from 
     }),
   };
   const input = baseInput({
-    message: "two cheeseburgers",
+    message: "two cheese burgers",
     cart: [],
     shopContext: {
       deliveryEnabled: true,
@@ -1761,14 +1766,14 @@ Deno.test("00-remainder conv 52: 'white bread' answers the open slot; 'and also 
     { menu_item_id: "item-cheesesteak", name: "Cheesesteak", quantity: 1, price_cents: 999, modifiers: [], line_key: "line-1" },
   ];
   const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
-  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "pasta with clam sauce", target_id: "item-pasta-clam-sauce" }] });
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "pasta w/ clam sauce", target_id: "item-pasta-clam-sauce" }] });
   const captured = { calls: 0, messages: [] as string[] };
   const deps: RunTurnDeps = {
     supabase, apiKey: "test-key",
     newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
     proposeTurnFn: addOnlyProposeFn(captured, () => ({
       ok: true, attempts: 1,
-      proposal: { intent: "order", adds: [{ item_span: "pasta with clam sauce", quantity: 1, choices: [] }], removes: [], modifies: [] },
+      proposal: { intent: "order", adds: [{ item_span: "pasta w/ clam sauce", quantity: 1, choices: [] }], removes: [], modifies: [] },
     })),
   };
   const input = baseInput({ message: "white bread ... and also can i add a pasta w/ clam sauce", cart, menu, dialogueState: priorState });

@@ -46,13 +46,19 @@ Deno.test("00-BD: the other two live restatements behave the same", () => {
 });
 
 Deno.test("00-BD: a GENUINE second order is untouched — this is the dangerous direction", () => {
-  for (const msg of [
-    "can I get another Italian wrap",
-    "one more Italian wrap please",
-    "also add an Italian wrap",
-    "I'd like 2 Italian wraps",          // no restatement marker at all
-  ]) {
-    const result = decide(reAdd, cartWithTwoWraps(), MENU, LEX, undefined, msg);
+  // 2026-09-18: each message pairs with its OWN item_span, genuinely
+  // present in that message — the fixed "2 Italian wraps" span reAdd
+  // above uses would fail the same day's item_span-verbatim-in-message
+  // guard (turn-engine.ts's itemSpanNamedInMessage) for three of these
+  // four, since none of them literally say "2 Italian wraps".
+  for (const [msg, itemSpan, quantity] of [
+    ["can I get another Italian wrap", "Italian wrap", 1],
+    ["one more Italian wrap please", "Italian wrap", 1],
+    ["also add an Italian wrap", "Italian wrap", 1],
+    ["I'd like 2 Italian wraps", "2 Italian wraps", 2],   // no restatement marker at all
+  ] as const) {
+    const proposal: Proposal = { intent: "order", removes: [], modifies: [], adds: [{ item_span: itemSpan, quantity, choices: [] }] };
+    const result = decide(proposal, cartWithTwoWraps(), MENU, LEX, undefined, msg);
     const q = result.cart.find(l => l.menu_item_id === WRAP)?.quantity ?? 0;
     assert(q > 2, `a real add must still land for "${msg}" — got quantity ${q}`);
   }

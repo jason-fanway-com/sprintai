@@ -571,6 +571,67 @@ export function answer(
 // one (same "plain data out" convention as turn-reconciler.ts's
 // reconcileAddProposals).
 
+// 2026-09-18 PO dispatch (fries-duplicate money bug, conv fbc7cab1): PROPOSE's
+// own contract (propose.ts's SYSTEM_PROMPT_PREAMBLE) already states item_span
+// must be "the VERBATIM substring of the customer's own message naming the
+// item — nothing normalized, nothing invented", but nothing here ever
+// verified that. Live: the customer said "I want to add a side of fries,
+// too!" (an item that ties ambiguous, 10 items — correctly queued) and the
+// SAME proposal's adds ALSO carried a second entry that resolved, uniquely,
+// to The Slice Cheesesteak — an item already fully resolved in the cart,
+// never named anywhere in this turn's message. resolve-item.ts worked
+// exactly right on both spans; the gap is that decide() trusted an add's
+// span was really said this turn instead of checking the one guarantee the
+// contract already promises. `customerMessage` undefined (an existing call
+// site/test that predates this param) opts out entirely — permissive
+// default, same convention as isRestatementOfExistingOrder below.
+function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
+  if (customerMessage === undefined) return true;
+  const normalizedSpan = span.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalizedSpan) return false;
+  const normalizedMessage = customerMessage.toLowerCase().replace(/\s+/g, " ");
+  return normalizedMessage.includes(normalizedSpan);
+}
+
+// 2026-09-18 PO dispatch (self-correction money bug, conv c879937d): "Actually,
+// can I add a side salad to that? Just the house salad." resolved BOTH Side
+// Salad ($3.99) and House ($8.99) — two real, distinct, correctly-resolved
+// items, both genuine substrings of the message, so itemSpanNamedInMessage
+// above does not (and should not) catch this: the customer really did say
+// both phrases. The gap is recognizing "Just X" as retracting whatever was
+// named before it, not adding to it — same clause-boundary idea pending-
+// disambiguation.ts already uses for an ANSWER (a marker splits the message;
+// content on the wrong side of it is discarded), applied here to a pair of
+// ADDS instead of a single answer. A correction marker sitting between the
+// end of one add's own span and the start of a LATER add's span means the
+// earlier one was superseded mid-message; only the later survives. Requires
+// customerMessage (an existing call site/test that predates this param
+// keeps every add, unchanged) and at least two resolved adds to do anything.
+const CORRECTION_MARKER_RE = /\b(?:just|actually|i meant|make that)\b/i;
+
+function dropAddsSupersededByCorrection(adds: ResolvedAdd[], customerMessage: string | undefined): ResolvedAdd[] {
+  if (!customerMessage || adds.length < 2) return adds;
+  const lowerMessage = customerMessage.toLowerCase();
+  const spans = adds.map(add => {
+    const span = (add.item_span ?? "").toLowerCase().trim();
+    const start = span ? lowerMessage.indexOf(span) : -1;
+    return { start, end: start >= 0 ? start + span.length : -1 };
+  });
+  const superseded = new Set<number>();
+  for (let i = 0; i < adds.length - 1; i++) {
+    if (spans[i].end < 0) continue;
+    for (let j = i + 1; j < adds.length; j++) {
+      if (spans[j].start < spans[i].end) continue;
+      const between = customerMessage.slice(spans[i].end, spans[j].start);
+      if (CORRECTION_MARKER_RE.test(between)) {
+        superseded.add(i);
+        break;
+      }
+    }
+  }
+  return superseded.size > 0 ? adds.filter((_, idx) => !superseded.has(idx)) : adds;
+}
+
 export interface Decline {
   reason: string;
 }
@@ -847,7 +908,9 @@ export function decide(
   // believed rather than what the customer actually said.
   const unresolvedSpans: string[] = [];
   for (const add of proposal.adds ?? []) {
-    const resolution = resolveItem(add.item_span, lexicon);
+    const resolution = itemSpanNamedInMessage(add.item_span, customerMessage)
+      ? resolveItem(add.item_span, lexicon)
+      : ({ kind: "unresolved" } as const);
     if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
@@ -874,11 +937,16 @@ export function decide(
     carriedDisambiguationCandidateIds = ambiguousSpans.slice(1);
   }
 
+  // See dropAddsSupersededByCorrection's own header: "add a side salad...
+  // Just the house salad" resolves BOTH real items — this drops the one the
+  // customer's own words retracted, before either ever reaches grouping.
+  const survivingAdds = dropAddsSupersededByCorrection(resolvedAdds, customerMessage);
+
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
   // them ever reaches the mutation pipeline.
   const addGroups = new Map<string, ResolvedAdd>();
-  for (const add of resolvedAdds) {
+  for (const add of survivingAdds) {
     const key = addIdentityKey(add);
     const existing = addGroups.get(key);
     if (!existing || add.quantity > existing.quantity) addGroups.set(key, add);

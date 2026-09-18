@@ -312,6 +312,117 @@ Deno.test("decide: quantity is used verbatim from the proposal — nothing here 
   assertEquals(result.cart[0].quantity, 16);
 });
 
+// ============================================================
+// 2026-09-18 PO dispatch (fries-duplicate money bug). Real transcript, conv
+// fbc7cab1: cart already holds The Slice Cheesesteak (Bread: White). The
+// customer says "I want to add a side of fries, too!" — "fries" correctly
+// ties ambiguous across 10 real items (unaffected here, not this fixture's
+// concern), but the SAME turn's proposal also carried a second add whose
+// item_span resolved, uniquely, to The Slice Cheesesteak — an item never
+// named anywhere in the message. Live result: a duplicate $13.99 line with
+// its own unresolved Bread slot, and the bread question restarted.
+// ============================================================
+const SLICE_CHEESESTEAK_ID = "item-slice-cheesesteak";
+const FRIES_MENU: TurnEngineMenuItem[] = [
+  {
+    id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", category: "Hot Sandwiches", price_cents: 1399, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "The Slice Cheesesteak", base_price_cents: 1399, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+const FRIES_LEXICON: LexiconTerm[] = [{ term: "the slice cheesesteak", target_id: SLICE_CHEESESTEAK_ID }];
+
+Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped like an unresolved span, even though it would resolve cleanly", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },
+  ];
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, cart, FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 1, "no second Slice Cheesesteak line — the span was never said this turn");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.declines.length, 1);
+});
+
+Deno.test("decide: an add whose item_span DOES occur in the message still resolves normally — the guard only blocks a span that was never said", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON, undefined, "I'd like The Slice Cheesesteak, please.");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, SLICE_CHEESESTEAK_ID);
+});
+
+Deno.test("decide: omitting customerMessage entirely (pre-fix call sites) never applies the verbatim guard — identical to this function's behavior before it existed", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON);
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, SLICE_CHEESESTEAK_ID);
+});
+
+// ============================================================
+// 2026-09-18 PO dispatch (self-correction money bug). Real transcript, conv
+// c879937d: "Actually, can I add a side salad to that? Just the house
+// salad. Thanks!" resolved BOTH Side Salad ($3.99) and House ($8.99) —
+// two real, distinct, correctly-resolved items, both genuinely present in
+// the message, so the verbatim guard above does not (and must not) catch
+// this. The gap is recognizing "Just X" as retracting "a side salad", not
+// adding to it.
+// ============================================================
+const SIDE_SALAD_ID = "item-side-salad";
+const HOUSE_SALAD_ID = "item-house-salad";
+const SALAD_MENU: TurnEngineMenuItem[] = [
+  {
+    id: SIDE_SALAD_ID, name: "Side Salad", category: "Appetizers", price_cents: 399, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Side Salad", base_price_cents: 399, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: HOUSE_SALAD_ID, name: "House", category: "Salads", price_cents: 899, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "House", base_price_cents: 899, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+const SALAD_LEXICON: LexiconTerm[] = [
+  { term: "side salad", target_id: SIDE_SALAD_ID },
+  { term: "house salad", target_id: HOUSE_SALAD_ID },
+];
+
+Deno.test("decide: 'add a side salad... Just the house salad' -- both spans are real and genuinely said, but the correction marker means only the later one lands", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "a side salad", quantity: 1, choices: [] },
+      { item_span: "the house salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], SALAD_MENU, SALAD_LEXICON, undefined, "Actually, can I add a side salad to that? Just the house salad. Thanks!");
+  assertEquals(result.cart.length, 1, `only the corrected item must land — cart: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, HOUSE_SALAD_ID);
+});
+
+Deno.test("decide: two genuinely distinct adds with NO correction marker between them both land — this is not a general 'second add wins' rule", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "a side salad", quantity: 1, choices: [] },
+      { item_span: "the house salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], SALAD_MENU, SALAD_LEXICON, undefined, "Can I get a side salad and the house salad, please?");
+  assertEquals(result.cart.length, 2, `both real items must land absent a correction marker — cart: ${JSON.stringify(result.cart)}`);
+  assert(result.cart.some(l => l.menu_item_id === SIDE_SALAD_ID));
+  assert(result.cart.some(l => l.menu_item_id === HOUSE_SALAD_ID));
+});
+
 Deno.test("decide: removes a line by line_key", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },

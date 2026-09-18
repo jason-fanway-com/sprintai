@@ -32,7 +32,7 @@
 // (~/po-scratch/propose-mx.py), not here.
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { logError } from "../_shared/error-log.ts";
+import { logError, logProposeSuccess } from "../_shared/error-log.ts";
 import { identityKey } from "./turn-reconciler.ts";
 import type {
   Proposal,
@@ -576,7 +576,22 @@ export async function proposeTurn(input: ProposeTurnInput, deps: ProposeDeps): P
   // failure kinds the first attempt hits.
   for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await attemptOnce(input, resolved);
-    if (result.ok) return { ok: true, proposal: result.proposal, attempts: attempt };
+    if (result.ok) {
+      // 2026-09-18 PO dispatch: logging only, never on the return's critical
+      // path — awaited so a test can assert on it, but its own outcome never
+      // changes what's returned here. See logProposeSuccess's own header for
+      // why this exists: a wrong-but-schema-valid proposal used to leave no
+      // trace at all, identical to any other successful turn.
+      await logProposeSuccess(deps.supabase, {
+        conversationId: deps.conversationId ?? null,
+        shopId: deps.shopId ?? null,
+        tenantId: deps.tenantId ?? null,
+        phase: "chat-sms",
+        customerMessage: input.message,
+        metadata: { attempt, ms: result.ms, model: resolved.model, raw_body: result.rawBody, proposal: result.proposal },
+      });
+      return { ok: true, proposal: result.proposal, attempts: attempt };
+    }
     records.push({ attempt, reason: result.reason, detail: result.detail, rawBody: result.rawBody, ms: result.ms });
   }
 

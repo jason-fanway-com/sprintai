@@ -17,7 +17,7 @@ function truncate(s: string | null | undefined): string | null {
   return s.length > MAX_FIELD_LEN ? s.slice(0, MAX_FIELD_LEN) : s;
 }
 
-export type ErrorLogStage = "tool_loop" | "render" | "outbound_send" | "guard_deny" | "propose_call";
+export type ErrorLogStage = "tool_loop" | "render" | "outbound_send" | "guard_deny" | "propose_call" | "propose_success";
 
 export interface LogErrorParams {
   conversationId?: string | null;
@@ -58,5 +58,53 @@ export async function logError(
     }
   } catch (loggingErr) {
     console.error("[error-log] logError threw while persisting error_log row:", loggingErr);
+  }
+}
+
+// 2026-09-18 PO dispatch (fries-duplicate investigation): propose.ts's own
+// success path persisted nothing at all — only a non-200/malformed/schema-
+// invalid response ever left a trace (logError above, stage "propose_call").
+// A wrong-but-schema-valid proposal (the exact fries-duplicate shape: two
+// real, valid-looking `adds`, one of them spurious) is indistinguishable
+// from any other successful turn after the fact — there was no way to go
+// back and read what the model actually returned, only to reproduce it live
+// and hope the model repeats itself. Reuses the same `error_log` table
+// (no migration, logging only) under its own stage so a success row is
+// never confused with a real failure — `error_message` is always the fixed
+// marker below, never null, matching this table's existing NOT NULL shape.
+const PROPOSE_SUCCESS_MARKER = "(not an error — successful propose_call, persisted for recoverability)";
+
+export interface LogProposeSuccessParams {
+  conversationId?: string | null;
+  shopId?: string | null;
+  tenantId?: string | null;
+  phase: string;
+  customerMessage?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+/** Never throws. Best-effort persistence of a successful propose_call, for post-hoc diagnosis of a wrong-but-schema-valid proposal. */
+export async function logProposeSuccess(
+  supabase: SupabaseClient,
+  params: LogProposeSuccessParams,
+): Promise<void> {
+  try {
+    const { error: insertError } = await supabase.from("error_log").insert({
+      conversation_id: params.conversationId ?? null,
+      shop_id: params.shopId ?? null,
+      tenant_id: params.tenantId ?? null,
+      phase: params.phase,
+      stage: "propose_success" as ErrorLogStage,
+      customer_message: truncate(params.customerMessage ?? null),
+      error_message: PROPOSE_SUCCESS_MARKER,
+      stack: null,
+      metadata: params.metadata ?? {},
+    });
+
+    if (insertError) {
+      console.error("[error-log] failed to persist propose_success row:", insertError.message);
+    }
+  } catch (loggingErr) {
+    console.error("[error-log] logProposeSuccess threw while persisting propose_success row:", loggingErr);
   }
 }
