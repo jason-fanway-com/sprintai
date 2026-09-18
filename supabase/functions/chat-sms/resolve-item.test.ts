@@ -313,20 +313,18 @@ Deno.test("resolveItem: 'chicken cheesesteak hot sandwich' narrows the real 3-wa
   assertEquals(result, { kind: "resolved", menu_item_id: idOf("Chicken Cheesesteak Sandwich") });
 });
 
-// A FRESH compile of these real 3 rows never emits a bare "calzone" term at
-// all (verified in isolation, same method as above) — item.name's Rule-2
-// bareName is gated to sized items only when ≥2 UNSIZED siblings already
-// share it (compile-menu.ts's own 2026-09-18 comment on that gate), and no
-// such sibling exists anywhere on Vito's real menu. Live production's
-// "calzone" (3 targets, provenance "derived") is a STALE row from before
-// that gate's current form — the size-narrowing mechanism itself is proven
-// end-to-end by "small gyro pizza" below, on a term ("gyro") the current
-// compiler does produce. Reporting the real, current result rather than the
-// dispatch's own (stale-data) expectation, per this dispatch's own
-// instruction to report raw captured output.
-Deno.test("resolveItem: 'just a 14-inch calzone' is unresolved because 'calzone' is not a reachable term under a fresh compile (unrelated to this dispatch's narrowing)", () => {
+// 2026-09-18 PO dispatch (two-regressions follow-up): this test used to pin
+// "calzone" being UNREACHABLE under a fresh compile as correct behavior —
+// that was the compiler regression itself (compile-menu.ts's ≥1-unsized-
+// sibling gate on the bare base-key term, since removed in ac7396db), pinned
+// as a green checkmark instead of being fixed. Now that ac7396db makes the
+// bare "calzone" term unconditional for every size-folded family (namesake
+// or not), the 14" size word in the message narrows the 3-way calzone tie
+// to the one candidate whose own size_label is "14\"" — the acceptance
+// criteria's original expectation, restored.
+Deno.test("resolveItem: 'just a 14-inch calzone' resolves to Calzone - 14\" — the bare base-key term is reachable again after ac7396db", () => {
   const result = resolveItem("just a 14-inch calzone", NARROWING_LEXICON);
-  assertEquals(result, { kind: "unresolved" });
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("14\" Calzone Stromboli") });
 });
 
 Deno.test("resolveItem: 'chicken caesar salad' still resolves via its own qualified term (no regression)", () => {
