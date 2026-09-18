@@ -229,6 +229,27 @@ const NARROWING_FIXTURE_ITEMS: CompileItem[] = [
   // real chicken-cheesesteak Panini/Roll/Sandwich/California four-way
   { id: "49bf7de5-95b7-48a5-827d-258f757554bc", name: "Chicken Cheesesteak", display_name: "Chicken Cheesesteak Panini", category: "Homemade Paninis", price_cents: 999, active: true, price_provenance: "stated", product_key: "homemade-paninis:chicken-cheesesteak", missing_from_source_since: null, groups: [] },
   { id: "68945bf7-7c21-4cd7-aa47-bfbbaf1757b0", name: "Chicken Cheesesteak", display_name: "Chicken Cheesesteak Roll", category: "Stromboli Rolls", price_cents: 999, active: true, price_provenance: "stated", product_key: "stromboli-rolls:chicken-cheesesteak", missing_from_source_since: null, groups: [] },
+  // Chicken Bacon Ranch collision (2026-09-18 PO follow-up dispatch, edge
+  // 1): the same dish name spread across Flatbreads (no size), Wraps (a
+  // differently-worded real item), and 3 sized Pizza rows — a customer
+  // naming "chicken bacon ranch" AND "pizzas" must not dead-end into
+  // unresolved just because "pizzas" doesn't apply to the Flatbreads/Wraps
+  // tie the bare dish name itself produces.
+  { id: "5e8fcaf7-a1bd-4c3c-943c-2f066e091c0d", name: "Chicken Bacon Ranch", display_name: "Chicken Bacon Ranch", category: "Flatbreads", price_cents: 1050, active: true, price_provenance: "stated", product_key: "flatbreads:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  { id: "8dcd82db-d635-4b2a-8a73-22d5b39c6da4", name: "Grilled Chicken Bacon & Ranch", display_name: "Grilled Chicken Bacon & Ranch", category: "Wraps", price_cents: 999, active: true, price_provenance: "stated", product_key: "wraps:grilled-chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  { id: "f320da06-15d2-4503-97b2-001c17b444bf", name: "Chicken Bacon Ranch - Small (10\")", display_name: "Small Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Small (10\")", price_cents: 1295, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  { id: "dca6fae3-2d94-4a18-b0a9-760474cec7c1", name: "Chicken Bacon Ranch - Medium (14\")", display_name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Medium (14\")", price_cents: 1999, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  { id: "edac128c-c963-495a-8e4a-ec09a9787267", name: "Chicken Bacon Ranch - Large (16\")", display_name: "Large Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Large (16\")", price_cents: 2299, active: true, price_provenance: "stated", product_key: "pizza:chicken-bacon-ranch", missing_from_source_since: null, groups: [] },
+  // "Slice" collision (2026-09-18 PO follow-up dispatch, edge 2): "slice" is
+  // simultaneously Regular Slice's own bare item term AND the category noun
+  // for "By the Slice" — the exact real live-menu shape that hid the
+  // "resolves to the $2.85 Regular Slice instead of a $22.95 stromboli"
+  // defect from the narrowing mechanism entirely (it never reached the
+  // item-name/category/size pass at all).
+  { id: "a26552ec-c1fd-4ac9-b2a8-63e86e72f6ec", name: "Regular Slice - Slice", display_name: "Regular Slice", category: "By the Slice", size_label: "Slice", price_cents: 285, active: true, price_provenance: "stated", product_key: "by-the-slice:regular-slice", missing_from_source_since: null, groups: [] },
+  { id: "b1f3a60a-b845-4506-89b4-8df7a4dd77a3", name: "The Slice - 14\"", display_name: "14\" The Slice Stromboli", category: "Stromboli", size_label: "14\"", price_cents: 1895, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
+  { id: "1d78ca8d-bdb5-46db-aa93-c8de67a743f8", name: "The Slice - 16\"", display_name: "16\" The Slice Stromboli", category: "Stromboli", size_label: "16\"", price_cents: 2295, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
+  { id: "975bdde8-6df6-4d61-81de-9994e2062349", name: "The Slice - Personal", display_name: "Personal The Slice Stromboli", category: "Stromboli", size_label: "Personal", price_cents: 1295, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
 ];
 
 // item id -> {category, size_label}, straight off the same real rows above
@@ -340,4 +361,59 @@ Deno.test("resolveItem: 'gyro pizza' narrows to the 3 gyro-pizza size candidates
 Deno.test("resolveItem: 'small gyro pizza' resolves to exactly one (category + size narrowing both applied)", () => {
   const result = resolveItem("small gyro pizza", NARROWING_LEXICON);
   assertEquals(result, { kind: "resolved", menu_item_id: idOf("Small Gyro Pizza") });
+});
+
+// ============================================================
+// 2026-09-18 PO follow-up dispatch: two edge cases found probing the live
+// Vito's lexicon once narrowing was actually wired into production.
+
+// ── Edge 1: narrowing to ZERO candidates must fall back to the unfiltered
+// tie, not dead-end into unresolved. "chicken bacon ranch" alone ties
+// Flatbreads ("Chicken Bacon Ranch") and Wraps ("Grilled Chicken Bacon &
+// Ranch") — neither of which is a Pizza — so naming "pizzas" too must not
+// discard both real candidates.
+
+Deno.test("resolveItem: 'chicken bacon ranch' alone ties Flatbreads and Wraps (unaffected baseline for edge 1)", () => {
+  const result = resolveItem("chicken bacon ranch", NARROWING_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [idOf("Chicken Bacon Ranch"), idOf("Grilled Chicken Bacon & Ranch")].sort(),
+  );
+});
+
+Deno.test("resolveItem: 'chicken bacon ranch medium pizzas' stays ambiguous over the real Flatbreads|Wraps tie, never unresolved", () => {
+  const result = resolveItem("chicken bacon ranch medium pizzas", NARROWING_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [idOf("Chicken Bacon Ranch"), idOf("Grilled Chicken Bacon & Ranch")].sort(),
+  );
+});
+
+// ── Edge 2: a stated size must be honored even when the unfiltered match is
+// already unique. "slice" is both Regular Slice's own bare term AND the
+// category noun for "By the Slice", so it's excluded from the item-name pass
+// and falls through to the raw, unnarrowed scan — a 16" order must not
+// silently become the $2.85 Regular Slice.
+
+const SLICE_16_ID = "1d78ca8d-bdb5-46db-aa93-c8de67a743f8"; // display_name '16" The Slice Stromboli'
+const SLICE_14_ID = "b1f3a60a-b845-4506-89b4-8df7a4dd77a3";
+const SLICE_PERSONAL_ID = "975bdde8-6df6-4d61-81de-9994e2062349";
+const REGULAR_SLICE_ID = "a26552ec-c1fd-4ac9-b2a8-63e86e72f6ec";
+
+Deno.test("resolveItem: 'a 16\" Slice' never resolves directly to Regular Slice, and is ambiguous including The Slice - 16\"", () => {
+  const result = resolveItem('a 16" Slice', NARROWING_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  const candidates = result.kind === "ambiguous" ? result.candidates : [];
+  if (result.kind === "resolved") {
+    throw new Error(`must never resolve directly — got ${JSON.stringify(result)}`);
+  }
+  assertEquals([...candidates].includes(SLICE_16_ID), true);
+  assertEquals([...candidates].sort(), [REGULAR_SLICE_ID, SLICE_14_ID, SLICE_PERSONAL_ID, SLICE_16_ID].sort());
+});
+
+Deno.test("resolveItem: '16 inch the slice' is specific enough to resolve cleanly to The Slice - 16\", not ambiguous", () => {
+  const result = resolveItem("16 inch the slice", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: SLICE_16_ID });
 });

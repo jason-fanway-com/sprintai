@@ -103,6 +103,78 @@ function sizeLabelMatchesToken(sizeLabel: string | null | undefined, token: stri
   return toWords(normalize(sizeLabel)).includes(token);
 }
 
+// 2026-09-18 PO dispatch (edge 2 — a stated size must be honored even when a
+// bare term already resolves uniquely): "slice" is simultaneously Regular
+// Slice's own bare item term AND the category noun for "By the Slice", so it
+// gets excluded from itemNameEntries below and the span falls through to the
+// unfiltered, unnarrowed scan. "a 16-inch slice" must not silently resolve to
+// the $2.85 Regular Slice just because it was the only DIRECT term hit — "The
+// Slice - 16\"" family names the same dish via its own compiled terms
+// ("the slice stromboli", "slice stromboli", etc, all carrying its own
+// category noun "stromboli"), and must be offered instead. FILLER_WORDS
+// strips determiners; SIZE_*_TOKENS strip size vocabulary; a term's own
+// entry.category noun is ALSO stripped (see coreContentWordsForEntry) so
+// "the slice stromboli" reduces to the same ["slice"] core as the bare
+// "slice" term that actually matched the span, without requiring a literal
+// "the slice" (no category word) term to exist in the compiled lexicon.
+const FILLER_WORDS = new Set(["a", "an", "the"]);
+
+// The matched term's own reduction — filler/size only. Never strips a
+// category noun here: this is applied to the term that ALREADY matched the
+// span (e.g. "slice", Regular Slice's own bare term), and stripping its own
+// category noun ("slice" is also "By the Slice"'s noun) would wipe it to
+// nothing.
+function coreContentWords(words: string[]): string[] {
+  return words.filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w));
+}
+
+// A CANDIDATE sibling's reduction — filler/size AND that entry's own
+// category noun (singular + plural). This is what lets "the slice stromboli"
+// (Stromboli's own category noun "stromboli") reduce down to the same
+// ["slice"] core the bare "slice" term matched, so the two surface forms are
+// recognized as naming the same dish family despite neither containing the
+// other verbatim.
+function coreContentWordsForEntry(entry: LexiconTerm): string[] {
+  const words = toWords(normalize(entry.term));
+  const categoryNounWords = new Set<string>();
+  if (entry.category) {
+    const noun = categoryNoun(entry.category);
+    if (noun) {
+      categoryNounWords.add(noun);
+      categoryNounWords.add(pluralizeWord(noun));
+    }
+  }
+  return words.filter(w =>
+    !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !categoryNounWords.has(w)
+  );
+}
+
+function sameWordSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((w, i) => w === sortedB[i]);
+}
+
+// Which of `targetId`'s own lexicon terms is the one that actually matched
+// the span at the winning length — needed to know what "the same dish
+// family, modulo filler/size words" means for THIS resolution, not just any
+// term the target happens to carry.
+function findMatchedTermWords(
+  targetId: string,
+  length: number,
+  spanWords: string[],
+  entries: LexiconTerm[],
+): string[] | null {
+  for (const entry of entries) {
+    if (entry.target_id !== targetId) continue;
+    const termWords = toWords(normalize(entry.term));
+    if (termWords.length !== length) continue;
+    if (occursAsWholeWordRun(spanWords, termWords)) return termWords;
+  }
+  return null;
+}
+
 // word -> every category (among whatever `lexicon` this call was given —
 // the shop's own real categories, not a fixed list) whose singular or
 // plural noun is that word. Scanned across the WHOLE array, not just the
@@ -210,6 +282,51 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   // the fallback scan above) — no qualifier to narrow with, and narrowing a
   // bare category word's own candidate set was never part of this dispatch.
   if (!usingItemNameSpan) {
+    // 2026-09-18 PO dispatch, edge 2: a single fallback hit can still be the
+    // WRONG single hit when the span also states a size — check the
+    // resolved item's own size_label against that size before trusting it.
+    const sizeToken = detectSizeToken(spanWords);
+    if (sizeToken && base.targetIds.size === 1) {
+      const [baseId] = base.targetIds;
+      const baseSizeLabel = lexicon.find(e => e.target_id === baseId)?.size_label;
+      if (!sizeLabelMatchesToken(baseSizeLabel, sizeToken)) {
+        const matchedWords = findMatchedTermWords(baseId, base.length, spanWords, lexicon);
+        const wantedCore = matchedWords ? coreContentWords(matchedWords) : null;
+        if (wantedCore && wantedCore.length > 0) {
+          const siblingIds = new Set<string>();
+          for (const entry of lexicon) {
+            if (sameWordSet(coreContentWordsForEntry(entry), wantedCore)) {
+              siblingIds.add(entry.target_id);
+            }
+          }
+          const hasSizedSibling = [...siblingIds].some(
+            id => id !== baseId && lexicon.find(e => e.target_id === id)?.size_label != null,
+          );
+          // Only widen at all when some sibling actually carries a real
+          // size — otherwise the stated size genuinely names nothing else,
+          // and the original single hit is still the right answer.
+          if (hasSizedSibling) {
+            siblingIds.add(baseId);
+            // The customer's own words decide whether "which sibling" is
+            // still an open question or already answered: naming the
+            // family with its OWN definite article ("the slice", not just
+            // "a ... slice") is specific enough to narrow straight to the
+            // one matching the stated size — bare/indefinite phrasing is
+            // not, and must list the whole family so ASK can narrow it
+            // properly instead of guessing which "slice" was meant.
+            const namesFamilyDefinitely = occursAsWholeWordRun(spanWords, ["the", ...wantedCore]);
+            if (namesFamilyDefinitely) {
+              const sized = [...siblingIds].filter(id =>
+                sizeLabelMatchesToken(lexicon.find(e => e.target_id === id)?.size_label, sizeToken)
+              );
+              if (sized.length === 1) return { kind: "resolved", menu_item_id: sized[0] };
+            }
+            return { kind: "ambiguous", candidates: [...siblingIds].sort() };
+          }
+        }
+      }
+    }
+
     if (base.targetIds.size === 1) return { kind: "resolved", menu_item_id: [...base.targetIds][0] };
     return { kind: "ambiguous", candidates: [...base.targetIds].sort() };
   }
@@ -234,21 +351,30 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   // Only apply the filter if category is actually a live dimension for the
   // CURRENT candidates — a named category word with nothing here carrying
   // real category data would otherwise wipe every candidate for no reason.
+  //
+  // 2026-09-18 PO dispatch, edge 1: if the named category leaves ZERO
+  // candidates, the category word wasn't actually a live dimension for
+  // THIS tie (the customer named a real item and a real category, but the
+  // category just doesn't apply to any of the item's own candidates) — keep
+  // the unfiltered tie rather than discarding real candidates down to
+  // unresolved. Never guess which one they meant; ASK still gets a real
+  // list to offer.
   if (namedCategories.size > 0 && candidates.some(id => targetInfo.get(id)?.category != null)) {
-    candidates = candidates.filter(id => {
+    const filteredByCategory = candidates.filter(id => {
       const category = targetInfo.get(id)?.category;
       return category != null && namedCategories.has(category);
     });
-    if (candidates.length === 0) return { kind: "unresolved" };
+    if (filteredByCategory.length > 0) candidates = filteredByCategory;
   }
 
   const sizeToken = detectSizeToken(spanWords);
-  // Same principle as the category guard: only filter on size when at
-  // least one current candidate actually carries a size_label — otherwise a
-  // stray "small"/"large" elsewhere in the phrase has nothing to narrow.
+  // Same principle as the category guard, including the edge-1 empty-result
+  // fallback: only filter on size when at least one current candidate
+  // actually carries a size_label, and never let the size filter wipe a
+  // real tie down to zero.
   if (sizeToken && candidates.some(id => targetInfo.get(id)?.size_label != null)) {
-    candidates = candidates.filter(id => sizeLabelMatchesToken(targetInfo.get(id)?.size_label, sizeToken));
-    if (candidates.length === 0) return { kind: "unresolved" };
+    const filteredBySize = candidates.filter(id => sizeLabelMatchesToken(targetInfo.get(id)?.size_label, sizeToken));
+    if (filteredBySize.length > 0) candidates = filteredBySize;
   }
 
   if (candidates.length === 1) return { kind: "resolved", menu_item_id: candidates[0] };
