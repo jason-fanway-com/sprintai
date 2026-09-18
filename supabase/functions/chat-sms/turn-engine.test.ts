@@ -1513,3 +1513,167 @@ Deno.test("ask: isRestatementOfExistingOrder is never consulted outside confirm 
   const next = ask(cart, priorState, confirmTurnEvents(), shopContext, VITOS_MENU, "So that's the Cheese Burger for pickup, right?");
   assertEquals(next.open, { kind: "order_type" }, "a restatement while order_type is open must not be treated as a checkout confirmation");
 });
+
+// ============================================================
+// 2026-09-18 PO dispatch (address loop, run 181417: address asked 14x
+// across 3 conversations). While address is open: "can I just pick it up?",
+// "forget it, just cancel", and a repeated/different address all got the
+// identical "I couldn't find that" line, forever. Four rules, tested below.
+// ============================================================
+
+const ADDRESS_OPEN_STATE: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null };
+const ADDRESS_CART: TurnEngineCartLine[] = [
+  { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+];
+const ADDRESS_SHOP_CONTEXT: AskShopContext = {
+  deliveryEnabled: true, upsellEnabled: true, orderTypeKnown: true, orderTypeIsDelivery: true,
+  deliveryAddressKnown: false, driverTipKnown: false, pickupNameKnown: false,
+};
+
+// ── Rule 1: an order-type answer while address is open resolves pickup and
+// closes the address question, without ever attempting a geocode. ─────────
+
+for (const phrase of ["can I just pick it up?", "pickup instead", "make it pickup"]) {
+  Deno.test(`answer (address loop, rule 1): "${phrase}" while address is open resolves order_type=pickup, not an address`, () => {
+    const result = answer(ADDRESS_OPEN_STATE, [...ADDRESS_CART], phrase, VITOS_MENU);
+    assertEquals(result, { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false });
+  });
+}
+
+Deno.test("ask (address loop, rule 1): after pickup resolves the address question, ask() never re-opens address — orderTypeIsDelivery flips false", () => {
+  // sideEffects.order_type = "pickup" this turn — mirrors what
+  // turn-engine-runner.ts's switch does with order_type_resolved's outcome,
+  // fed into THIS turn's ask() shopContext exactly as the runner does.
+  const shopContext: AskShopContext = { ...ADDRESS_SHOP_CONTEXT, orderTypeIsDelivery: false };
+  const next = ask(ADDRESS_CART, ADDRESS_OPEN_STATE, NO_TURN_EVENTS, shopContext, VITOS_MENU);
+  assert(next.open?.kind !== "address", `address must not reopen once order type switched to pickup: ${JSON.stringify(next.open)}`);
+});
+
+// ── Rule 2: cancel/forget-it/never-mind while address is open abandons the
+// whole order — clears the cart, never treated as a failed address. ───────
+
+for (const phrase of ["forget it, just cancel", "never mind", "actually, cancel my order"]) {
+  Deno.test(`answer (address loop, rule 2): "${phrase}" while address is open clears the cart and never attempts a geocode`, () => {
+    const cart = [...ADDRESS_CART];
+    const result = answer(ADDRESS_OPEN_STATE, cart, phrase, VITOS_MENU, { geocodedAddress: null });
+    assertEquals(result, { resolved: true, outcome: { kind: "cart_cancelled" }, cartChanged: true });
+    assertEquals(cart.length, 0, "the cart must be cleared in place");
+  });
+}
+
+Deno.test("runTurnEngineTurn (address loop, rule 2): 'forget it, just cancel' while address is open never says \"couldn't find\", ends with an empty cart, and asks the ordering question next — never re-asks address or order_type", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    geocodeAddressFn: () => Promise.resolve(null),
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — cancel resolves deterministically")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-address-cancel", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "forget it, just cancel",
+    history: [], menu: VITOS_MENU, cart: ADDRESS_CART, dialogueState: ADDRESS_OPEN_STATE,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!/couldn'?t find/i.test(result.reply), `must never render the failed-address line for a cancel: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.length, 0, "the whole order must be cleared");
+  const openKind = (result.dialogueState.open as { kind?: string } | null)?.kind;
+  assertEquals(openKind, "ordering", `must ask the ordering question next, not re-open address or order_type: ${JSON.stringify(result.dialogueState.open)}`);
+});
+
+// ── Rule 3: after the SECOND consecutive failed lookup, stop re-asking —
+// offer pickup or a different address once, then fall back to the plain
+// order-type question on any further repeat. A later address that DOES
+// geocode still resolves normally. ─────────────────────────────────────────
+
+Deno.test("ask (address loop, rule 3): a FIRST failed lookup (openRepeatCount 0) still re-asks address plainly — the give-up fallback has not fired yet", () => {
+  const priorState: DialogueState = { ...ADDRESS_OPEN_STATE, openRepeatCount: 0 };
+  const next = ask(ADDRESS_CART, priorState, NO_TURN_EVENTS, ADDRESS_SHOP_CONTEXT, VITOS_MENU);
+  assertEquals(next.open, { kind: "address" });
+});
+
+Deno.test("ask (address loop, rule 3): a SECOND consecutive failed lookup (openRepeatCount 1) switches to order_type with the address-unverifiable reason, never re-asks address a third time", () => {
+  const priorState: DialogueState = { ...ADDRESS_OPEN_STATE, openRepeatCount: 1 };
+  const next = ask(ADDRESS_CART, priorState, NO_TURN_EVENTS, ADDRESS_SHOP_CONTEXT, VITOS_MENU);
+  assertEquals(next.open, { kind: "order_type", reason: "address_unverifiable" });
+});
+
+Deno.test("render (address loop, rule 3): the give-up line shows ONCE (openRepeatCount 0 on the order_type-with-reason state), then the plain order_type question on any repeat", () => {
+  const cartAfter: TurnEngineCartLine[] = [];
+  const firstAsk: DialogueState = { phase: "order_type", open: { kind: "order_type", reason: "address_unverifiable" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+  const reply1 = render(cartAfter, cartAfter, firstAsk, [], VITOS_MENU, {});
+  assert(reply1.includes("I can't verify that address."), `first ask must show the give-up line: ${JSON.stringify(reply1)}`);
+  assert(!/couldn'?t find/i.test(reply1), `must never combine with the old "couldn't find" wording: ${JSON.stringify(reply1)}`);
+
+  const repeatAsk: DialogueState = { ...firstAsk, openRepeatCount: 1 };
+  const reply2 = render(cartAfter, cartAfter, repeatAsk, [], VITOS_MENU, {});
+  assertEquals(reply2.trim(), "Pickup or delivery today?", "a repeat of the SAME question must be the plain, short prompt, not the give-up line again");
+});
+
+Deno.test("runTurnEngineTurn (address loop, rule 3): two consecutive un-geocodable addresses stop re-asking address on the second — reply gives the pickup-or-different-address line, dialogue opens order_type", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    geocodeAddressFn: () => Promise.resolve(null),
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — address resolves deterministically")),
+  };
+  // openRepeatCount: 1 — this cart/state models the conversation ALREADY
+  // having failed once (turn 1's failure already re-opened address with
+  // openRepeatCount incremented to 1); this turn is the SECOND failure.
+  const priorState: DialogueState = { ...ADDRESS_OPEN_STATE, openRepeatCount: 1 };
+  const input: RunTurnInput = {
+    conversationId: "conv-address-2nd-fail", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "456 Oak Street", history: [], menu: VITOS_MENU, cart: ADDRESS_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(result.reply.includes("I can't verify that address."), `second failure must give up and offer pickup/a different address: ${JSON.stringify(result.reply)}`);
+  const openState = result.dialogueState.open as { kind?: string; reason?: string } | null;
+  assertEquals(openState?.kind, "order_type");
+  assertEquals(openState?.reason, "address_unverifiable");
+});
+
+Deno.test("runTurnEngineTurn (address loop, rule 3): a THIRD address attempt that DOES geocode still resolves normally, even though order_type is now the nominal open question", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    geocodeAddressFn: () => Promise.resolve({ formatted: "456 Oak St, Bethlehem, PA 18015", withinZone: true }),
+    // Bare address text doesn't answer the NOMINALLY open order_type
+    // question (no pickup/delivery word in it), so ANSWER's own "order_type"
+    // case can't resolve it and — since order_type isn't in the slot/
+    // disambiguation PROPOSE-blocking set — this DOES fall through to
+    // PROPOSE, same as any other order_type-open turn with an unrelated
+    // message. The address itself is still recovered independently by the
+    // 00-AP opportunistic geocode path, which runs before ANSWER and does
+    // not depend on what's nominally open.
+    proposeTurnFn: () => Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } }),
+  };
+  // Dialogue already gave up once (rule 3's own transition) — order_type
+  // with the address-unverifiable reason is now open, per the previous test.
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type", reason: "address_unverifiable" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+  const input: RunTurnInput = {
+    conversationId: "conv-address-3rd-succeeds", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "456 Oak St, Bethlehem, PA 18015", history: [], menu: VITOS_MENU, cart: ADDRESS_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: true, orderType: "delivery", deliveryAddressKnown: false, driverTipCents: 0, pickupName: "Jason", deliveryFeeCents: 300 },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("I can't verify that address."), `a geocode that succeeds must not repeat the give-up line: ${JSON.stringify(result.reply)}`);
+  const openKind = (result.dialogueState.open as { kind?: string } | null)?.kind;
+  assert(openKind !== "address" && !(openKind === "order_type"), `address must be treated as resolved, not re-asked as either address or order_type: got ${JSON.stringify(result.dialogueState.open)}`);
+});
+
+// ── Rule 4: an address that fails to geocode is never silently accepted as
+// the delivery address — it must always surface as address_declined, never
+// address_resolved, regardless of how plausible the customer's text looks. ─
+
+Deno.test("answer (address loop, rule 4): a failed geocode is NEVER address_resolved — always address_declined, no matter how address-shaped the text is", () => {
+  const result = answer(ADDRESS_OPEN_STATE, [...ADDRESS_CART], "123 Main St", VITOS_MENU, { geocodedAddress: null });
+  assertEquals(result, { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false });
+});

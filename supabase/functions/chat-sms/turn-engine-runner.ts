@@ -839,9 +839,19 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           turnEvents = { ...turnEvents, checkoutIntentThisTurn: true };
         }
         break;
+      case "cart_cancelled":
+        // 2026-09-18 PO dispatch (address loop, rule 2): the cart itself was
+        // already cleared in place by answer() (turn-engine.ts's "address"
+        // case). This flag is what stops ask()'s priorities 4/5
+        // (address/tip) from immediately re-opening either question on the
+        // now-empty cart THIS SAME turn — see AskTurnEvents.cartCancelledThisTurn's
+        // own doc for why it's turn-scoped rather than a general cart-
+        // emptiness check.
+        turnEvents = { ...turnEvents, cartCancelledThisTurn: true };
+        break;
       // slot_resolved / address_declined / upsell_accepted / upsell_declined:
-      // cart already mutated in place by answer() where relevant, nothing else
-      // to persist or feed into ASK.
+      // cart already mutated in place by answer() where relevant, nothing
+      // else to persist or feed into ASK.
       default:
         break;
     }

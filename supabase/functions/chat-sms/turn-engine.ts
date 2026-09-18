@@ -148,7 +148,12 @@ export interface DialogueState {
     | { kind: "slot"; line_key: string; group_id: string }
     | { kind: "disambiguation"; candidates: string[] }
     | { kind: "upsell"; menu_item_id: string }
-    | { kind: "order_type" } | { kind: "address" } | { kind: "tip" }
+    // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
+    // "order type genuinely never asked yet" (render()'s plain "Pickup or
+    // delivery today?") from "opened as the fallback after 2 consecutive
+    // failed address lookups" (render()'s one-time give-up line) — see
+    // ask()'s priority-4 branch and render()'s "order_type" case below.
+    | { kind: "order_type"; reason?: "address_unverifiable" } | { kind: "address" } | { kind: "tip" }
     | { kind: "name"; suggested?: string } | { kind: "confirm" }
     // Dispatch 00-AK (live bug, conv 70c7c02a): every pre-order slot is
     // resolved (order_type/address/tip) but the cart is still EMPTY —
@@ -285,7 +290,14 @@ export type AnswerOutcome =
   | { kind: "upsell_accepted" }
   | { kind: "upsell_declined" }
   | { kind: "checkout_intent" }
-  | { kind: "closure" };
+  | { kind: "closure" }
+  // 2026-09-18 PO dispatch (address loop, rule 2): "cancel"/"forget it"/
+  // "never mind" while address is open must abandon the whole order, not be
+  // treated as a failed address (which re-asks the exact same question the
+  // customer just tried to escape). The cart is cleared in place by the
+  // "address" case below, same mutate-in-place convention the slot/
+  // disambiguation cases already use.
+  | { kind: "cart_cancelled" };
 
 export type AnswerResult =
   | { resolved: false }
@@ -335,7 +347,25 @@ export function impliesClosure(message: string): boolean {
   if (CLOSURE_BLOCKED_BY_RE.test(m)) return false;
   return CLOSURE_ANYWHERE_RE.test(m);
 }
-const ORDER_TYPE_PICKUP_RE = /\bpick[\s-]?up\b/i;
+
+// 2026-09-18 PO dispatch (address loop, rule 2, live: 3 conversations x
+// 14-20 turns, run 181417): "can I just pick it up?", "forget it, just
+// cancel", and a second/third different address were ALL getting the exact
+// same "I couldn't find that address" line as a garbled address, because
+// nothing in the "address" case below recognized abandon-the-order intent
+// as anything other than a failed address attempt. Distinct from
+// impliesClosure/CLOSURE_ANYWHERE_RE above: closure means "I'm done adding
+// items, move on" (a commitment forward); this means the opposite (give up
+// on the order entirely) — conflating them would make "that's everything"
+// while address is open accidentally cancel a real order.
+const CANCEL_ORDER_ANYWHERE_RE = /\b(?:cancel|forget it|forget the whole (?:thing|order)|never\s?mind)\b/i;
+// 2026-09-18 PO dispatch (address loop, rule 1): the PO's own acceptance
+// phrase — "can I just pick it up?" — never matched this regex before: "pick
+// it up" has a word between "pick" and "up" that neither `[\s-]?` (single
+// char) nor the old pattern accounted for, so the general order_type
+// resolver already had this gap for any caller, not just the new address
+// case below.
+const ORDER_TYPE_PICKUP_RE = /\bpick(?:\s+it)?[\s-]?up\b/i;
 const ORDER_TYPE_DELIVERY_RE = /\bdeliver(?:y|ed)?\b/i;
 // Mirrors intent-router.ts's detectBareTipReply decline shape, narrowed to
 // this module's own already-open-tip-question context (that function's own
@@ -495,7 +525,30 @@ export function answer(
     }
 
     case "address": {
-      // Closure/checkout intent gets first crack, same as every other open
+      // 2026-09-18 PO dispatch (address loop, rule 2): abandon-the-order
+      // intent gets the FIRST crack, ahead of even closure — "forget it,
+      // just cancel" must never be read as a failed address, and must never
+      // fall through to a geocode attempt on that literal text. The cart is
+      // cleared in place (same mutate-in-place convention applyCompiledAddItem/
+      // applyCompiledModifyItem already use in the slot/disambiguation cases
+      // above) so the runner needs no extra glue to persist it.
+      if (CANCEL_ORDER_ANYWHERE_RE.test(trimmed)) {
+        cart.length = 0;
+        return { resolved: true, outcome: { kind: "cart_cancelled" }, cartChanged: true };
+      }
+      // 2026-09-18 PO dispatch (address loop, rule 1): an order-type answer
+      // that names pickup switches the order type and closes the address
+      // question outright — the customer no longer needs to give an address
+      // at all. Checked before the closure fallback since this is a real,
+      // positive resolution, not a decline. Delivery isn't checked here: the
+      // address question is already delivery-only, so there is nothing to
+      // switch TO; a customer saying "deliver it" while address is open is
+      // almost certainly retrying the same delivery order, which the
+      // fallback/geocode paths below already handle.
+      if (ORDER_TYPE_PICKUP_RE.test(trimmed)) {
+        return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
+      }
+      // Closure/checkout intent gets next crack, same as every other open
       // kind below — a bare "thats it"/"no thanks" while address is open
       // must resolve as closure, never as an address (declined or
       // otherwise), regardless of what the caller's geocode attempt (if any)
@@ -1156,6 +1209,13 @@ export interface AskTurnEvents {
   checkoutIntentThisTurn: boolean;
   confirmYes: boolean;
   confirmNo: boolean;
+  // 2026-09-18 PO dispatch (address loop, rule 2): true when THIS turn's
+  // ANSWER resolved to cart_cancelled ("cancel"/"forget it" while address
+  // was open). Never persisted — a fresh turnEvents object every turn — so
+  // it only suppresses priorities 4/5 (address/tip) for the one turn the
+  // cancel itself happened on, never on any later turn. Optional so every
+  // existing caller/test that predates this field is unaffected.
+  cartCancelledThisTurn?: boolean;
 }
 
 export function ask(
@@ -1258,14 +1318,42 @@ export function ask(
   // and only reachable at all when the shop can deliver in the first place
   // (00-AL: a shop with delivery disabled must never ask for an address,
   // regardless of what orderTypeIsDelivery claims).
-  if (shopContext.deliveryEnabled && shopContext.orderTypeIsDelivery && !shopContext.deliveryAddressKnown) {
+  //
+  // 2026-09-18 PO dispatch (address loop, rule 2): also gated on
+  // !cartCancelledThisTurn. "cancel"/"forget it" while address is open
+  // clears the cart (see answer()'s "address" case) but does not touch
+  // order_type or delivery_address — without this guard, THIS SAME turn's
+  // ask() call would immediately re-open address regardless, the exact loop
+  // the cancel was supposed to escape. Scoped to THIS turn only (the flag is
+  // never persisted) rather than a general "cart is empty" guard: a shop's
+  // real, intentional flow can ask for a delivery address before any item
+  // is in the cart at all (order type chosen, then address, then the first
+  // item) — a blanket empty-cart guard here broke that legitimate sequence.
+  if (shopContext.deliveryEnabled && shopContext.orderTypeIsDelivery && !shopContext.deliveryAddressKnown && !turnEvents.cartCancelledThisTurn) {
+    // 2026-09-18 PO dispatch (address loop, rule 3): after the address
+    // question has already failed to resolve once before (openRepeatCount
+    // reflects that one prior failed round-trip), a SECOND consecutive
+    // failure lands here and must stop the loop — offer a real way out
+    // (switch to pickup) instead of the same "I couldn't find that" line a
+    // third, fourth, fifth time. A geocode that DOES succeed on a later
+    // message still resolves normally regardless of which question is
+    // nominally open (00-AP's opportunistic address path runs independently
+    // of `open`), so this can never block a real address that arrives late.
+    if (priorState.open?.kind === "address" && (priorState.openRepeatCount ?? 0) >= 1) {
+      return carry({ kind: "order_type", reason: "address_unverifiable" }, "order_type");
+    }
     return carry({ kind: "address" }, "address");
   }
 
   // 5. tip — see header note 1, same gap. Only relevant for delivery, and
   // only once the address is known (matches the standing prompt rule this
-  // replaces: collect the address before anything else).
-  if (shopContext.orderTypeIsDelivery && !shopContext.driverTipKnown) {
+  // replaces: collect the address before anything else). Same
+  // !cartCancelledThisTurn guard as address above and for the same reason:
+  // a cancelled order has nothing to tip a driver for yet — without this,
+  // a cancel with the address ALSO still unknown would fall through
+  // priority 4's skip straight into asking for a tip before ever asking for
+  // an address.
+  if (shopContext.orderTypeIsDelivery && !shopContext.driverTipKnown && !turnEvents.cartCancelledThisTurn) {
     return carry({ kind: "tip" }, "tip");
   }
 
@@ -1442,7 +1530,15 @@ export function render(
         break;
       }
       case "order_type":
-        question = "Pickup or delivery today?";
+        // 2026-09-18 PO dispatch (address loop, rule 3): shown once, on the
+        // transition turn (openRepeatCount 0), when this open was reached
+        // via the address-gave-up fallback in ask()'s priority 4 — every
+        // re-ask after that is the plain question, same "full readback
+        // once, short question after" convention the "confirm" case above
+        // already uses.
+        question = state.open.reason === "address_unverifiable" && (state.openRepeatCount ?? 0) === 0
+          ? "I can't verify that address. I can put the order down for pickup, or you can text a different address."
+          : "Pickup or delivery today?";
         break;
       case "address":
         question = "What's the delivery address?";
