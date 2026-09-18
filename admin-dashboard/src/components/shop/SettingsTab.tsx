@@ -8,7 +8,7 @@ interface Shop {
   email_ticket_recipient: string | null
   pause_message: string | null
   phone_number_e164: string | null
-  merchant_pin?: string | null
+  has_merchant_pin?: boolean
   toast_client_id?: string | null
   has_toast_secret?: boolean
   toast_location_guid?: string | null
@@ -25,6 +25,8 @@ interface SettingsTabProps {
   onSave: UseMutationResult<void, Error, void, unknown>
   toastSecretDraft: string
   onToastSecretDraftChange: (value: string) => void
+  merchantPinDraft: string
+  onMerchantPinDraftChange: (value: string) => void
 }
 
 export default function SettingsTab({
@@ -37,6 +39,8 @@ export default function SettingsTab({
   onSave,
   toastSecretDraft,
   onToastSecretDraftChange,
+  merchantPinDraft,
+  onMerchantPinDraftChange,
 }: SettingsTabProps) {
   return (
     <div className="space-y-6 max-w-lg">
@@ -123,9 +127,25 @@ export default function SettingsTab({
               <p className="text-sm text-gray-700">{shop.delivery_radius_mi != null ? `${shop.delivery_radius_mi} mi` : <span className="text-gray-300">Not set — no zone check</span>}</p>
             )}
           </div>
+          {/* Write-only, same pattern as the Toast secret below: the real PIN
+              never leaves the server. Editing always starts blank; saving
+              blank leaves the stored value untouched. */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Merchant PIN</label>
-            <p className="text-xs font-mono text-gray-400">{(shop as any).merchant_pin ?? <span className="text-gray-300">Not set</span>}</p>
+            {editingShop ? (
+              <input
+                type="password"
+                value={merchantPinDraft}
+                onChange={e => onMerchantPinDraftChange(e.target.value)}
+                placeholder={shop.has_merchant_pin ? 'Leave blank to keep the current PIN' : 'Not configured'}
+                maxLength={8}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+            ) : (
+              <p className="text-sm text-gray-700">
+                {shop.has_merchant_pin ? '•••••••• (configured)' : <span className="text-gray-300">Not set</span>}
+              </p>
+            )}
           </div>
         </div>
       </div>

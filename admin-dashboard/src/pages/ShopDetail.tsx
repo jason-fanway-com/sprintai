@@ -27,6 +27,7 @@ interface Shop {
   toast_client_id: string | null
   has_toast_secret: boolean
   toast_location_guid: string | null
+  has_merchant_pin: boolean
   latitude: number | null
   longitude: number | null
   delivery_radius_mi: number | null
@@ -56,10 +57,13 @@ interface OrderCart {
 
 type Tab = 'menu' | 'orders' | 'settings' | 'chat' | 'qr'
 
-// Every `shops` column except toast_client_secret — its real value must
-// never reach the browser. has_toast_secret (generated column) tells the UI
-// whether one is configured without exposing what it is.
-const SHOP_SELECT_COLUMNS = 'id, tenant_id, name, slug, phone_number_e164, twilio_number_sid, open_hours, timezone, email_ticket_recipient, stripe_connect_account_id, is_paused, pause_message, created_at, updated_at, merchant_pin, shop_context, website_url, ai_instructions, toast_client_id, toast_location_guid, stripe_connected_account_id, stripe_platform_customer_id, connect_account_type, charges_enabled, payouts_enabled, connect_requirements_due, connect_status, onboarding_step, display_name, reply_from_e164, tax_rate_bps, cash_discount_mode, catering_mode, wing_flavors_included, wing_mix_extra, subscription_status, subscription_pm_set, stripe_subscription_id, optin_language, stop_help_wording, delivery_enabled, delivery_paused_until, delivery_pause_reason, delivery_fee_cents, protected, owner_name, onboarding_token, ein, is_test, about, menu_links, crawl_status, crawl_error, delivery_hours, google_place_id, formatted_address, google_rating, google_review_count, business_status, latitude, longitude, delivery_radius_mi, telnyx_number_id, telnyx_messaging_profile_id, campaign_assignment_status, campaign_assignment_checked_at, campaign_id, welcome_email_status, welcome_email_error, welcome_email_last_attempt_at, founding_promo, onboarding_complete, onboarding_complete_at, first_delivery_test_passed_at, first_delivery_test_recorded_by, owner_mobile, ticket_destination_type, ticket_destination_detail, compiled_ordering_engine_enabled, menu_extraction_incomplete, menu_extraction_note, customer_personalization_enabled, sms_provider, prompt_version, upsell_enabled, turn_engine_enabled, has_toast_secret'
+// Every `shops` column except toast_client_secret, merchant_pin, and
+// onboarding_token — their real values must never reach the browser.
+// has_toast_secret / has_merchant_pin (generated columns) tell the UI
+// whether one is configured without exposing what it is. onboarding_token
+// (resume-link auth) isn't rendered or edited anywhere in this UI, so it's
+// simply excluded rather than replaced with a presence flag nobody needs.
+const SHOP_SELECT_COLUMNS = 'id, tenant_id, name, slug, phone_number_e164, twilio_number_sid, open_hours, timezone, email_ticket_recipient, stripe_connect_account_id, is_paused, pause_message, created_at, updated_at, shop_context, website_url, ai_instructions, toast_client_id, toast_location_guid, stripe_connected_account_id, stripe_platform_customer_id, connect_account_type, charges_enabled, payouts_enabled, connect_requirements_due, connect_status, onboarding_step, display_name, reply_from_e164, tax_rate_bps, cash_discount_mode, catering_mode, wing_flavors_included, wing_mix_extra, subscription_status, subscription_pm_set, stripe_subscription_id, optin_language, stop_help_wording, delivery_enabled, delivery_paused_until, delivery_pause_reason, delivery_fee_cents, protected, owner_name, ein, is_test, about, menu_links, crawl_status, crawl_error, delivery_hours, google_place_id, formatted_address, google_rating, google_review_count, business_status, latitude, longitude, delivery_radius_mi, telnyx_number_id, telnyx_messaging_profile_id, campaign_assignment_status, campaign_assignment_checked_at, campaign_id, welcome_email_status, welcome_email_error, welcome_email_last_attempt_at, founding_promo, onboarding_complete, onboarding_complete_at, first_delivery_test_passed_at, first_delivery_test_recorded_by, owner_mobile, ticket_destination_type, ticket_destination_detail, compiled_ordering_engine_enabled, menu_extraction_incomplete, menu_extraction_note, customer_personalization_enabled, sms_provider, prompt_version, upsell_enabled, turn_engine_enabled, has_toast_secret, has_merchant_pin'
 
 export default function ShopDetail() {
   const { id } = useParams<{ id: string }>()
@@ -82,6 +86,7 @@ export default function ShopDetail() {
   const [addItemCategory, setAddItemCategory] = useState('')
   const [chatDirty, setChatDirty] = useState(false)
   const [toastSecretDraft, setToastSecretDraft] = useState('')
+  const [merchantPinDraft, setMerchantPinDraft] = useState('')
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -190,6 +195,12 @@ export default function ShopDetail() {
       if (toastSecretDraft.trim() !== '') {
         updates.toast_client_secret = toastSecretDraft.trim()
       }
+      // Same write-only handling as the Toast secret: merchantPinDraft only
+      // ever holds a newly-typed PIN, and leaving it blank must not clear
+      // an existing one.
+      if (merchantPinDraft.trim() !== '') {
+        updates.merchant_pin = merchantPinDraft.trim()
+      }
       const { error } = await supabase.from('shops').update(updates).eq('id', id!)
       if (error) throw error
     },
@@ -197,6 +208,7 @@ export default function ShopDetail() {
       qc.invalidateQueries({ queryKey: ['shop', id] })
       setEditingShop(false)
       setToastSecretDraft('')
+      setMerchantPinDraft('')
       toast.success('Settings saved')
     },
     onError: (err) => toast.error((err as Error).message),
@@ -428,10 +440,12 @@ export default function ShopDetail() {
           shopForm={shopForm}
           onEditChange={setEditingShop}
           onFormChange={(field, value) => setShopForm(prev => ({ ...prev, [field]: value }))}
-          onFormReset={() => { setShopForm(shop); setToastSecretDraft('') }}
+          onFormReset={() => { setShopForm(shop); setToastSecretDraft(''); setMerchantPinDraft('') }}
           onSave={saveShop}
           toastSecretDraft={toastSecretDraft}
           onToastSecretDraftChange={setToastSecretDraft}
+          merchantPinDraft={merchantPinDraft}
+          onMerchantPinDraftChange={setMerchantPinDraft}
         />
       )}
 
