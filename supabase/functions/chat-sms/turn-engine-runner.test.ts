@@ -866,7 +866,9 @@ Deno.test("00-BT RED->GREEN: a bare customer name resolves the open 'name' quest
 
   assert(!result.reply.includes("What's the name for the order?"), `the name question must not be re-asked once ANSWER resolved it this turn — reply: ${JSON.stringify(result.reply)}`);
   assert(!result.reply.includes("Putting this in for"), `the name question's suggested-name variant must not fire either — reply: ${JSON.stringify(result.reply)}`);
-  assert(result.reply.includes("All good — confirm?"), `the ladder must advance past the just-answered name question to confirm — reply: ${JSON.stringify(result.reply)}`);
+  // 2026-09-18 PO dispatch: confirm's first ask is now the full read-back,
+  // not the bare "All good — confirm?" — "All good?" is its closing line.
+  assert(result.reply.includes("All good?"), `the ladder must advance past the just-answered name question to confirm — reply: ${JSON.stringify(result.reply)}`);
 });
 
 Deno.test("00-BT: a driver tip amount resolves the open 'tip' question — ASK must not re-ask it in the same turn's reply (same mechanism, same fix)", async () => {
@@ -965,7 +967,9 @@ Deno.test("00-BT ACCEPTANCE 3: full pickup order end-to-end — order type, name
   replies.push(r4.reply);
   advanceShopContext(state.orderCartsUpdates[3]);
   assertEquals(shopContext.pickupName, "Joe", "pickup_name must be persisted from turn 4's ANSWER");
-  assert(r4.reply.includes("All good — confirm?"), `turn 4 must advance to confirm, not re-ask name: ${JSON.stringify(r4.reply)}`);
+  // 2026-09-18 PO dispatch: confirm's first ask is now the full read-back,
+  // not the bare "All good — confirm?" — "All good?" is its closing line.
+  assert(r4.reply.includes("All good?"), `turn 4 must advance to confirm, not re-ask name: ${JSON.stringify(r4.reply)}`);
 
   // ── Turn 5: "yes" — confirms, moves to link_sent ─────────────────────────
   const r5 = await runTurnEngineTurn(
@@ -979,11 +983,13 @@ Deno.test("00-BT ACCEPTANCE 3: full pickup order end-to-end — order type, name
   const fullTranscript = replies.join("\n---\n");
   const orderTypeAskCount = (fullTranscript.match(/Pickup or delivery today\?/g) ?? []).length;
   const nameAskCount = (fullTranscript.match(/What's the name for the order\?/g) ?? []).length;
-  const confirmAskCount = (fullTranscript.match(/All good — confirm\?/g) ?? []).length;
+  // 2026-09-18 PO dispatch: confirm's first ask is now the full read-back
+  // ("All good?" as its closing line), not the bare "All good — confirm?".
+  const confirmAskCount = (fullTranscript.match(/All good\?/g) ?? []).length;
 
   assertEquals(orderTypeAskCount, 1, `"Pickup or delivery today?" must be asked exactly once across the transcript, got ${orderTypeAskCount}:\n${fullTranscript}`);
   assertEquals(nameAskCount, 1, `"What's the name for the order?" must be asked exactly once across the transcript, got ${nameAskCount}:\n${fullTranscript}`);
-  assertEquals(confirmAskCount, 1, `"All good — confirm?" must be asked exactly once across the transcript, got ${confirmAskCount}:\n${fullTranscript}`);
+  assertEquals(confirmAskCount, 1, `the confirm read-back must be shown exactly once across the transcript, got ${confirmAskCount}:\n${fullTranscript}`);
 });
 
 // ── Delivery path, as far as this runner can currently go without the
@@ -1207,11 +1213,13 @@ Deno.test("ACCEPTANCE 00-AH-2: pickup order end to end — order type, item, tem
   const orderTypeAskCount = (fullTranscript.match(/Pickup or delivery today\?/g) ?? []).length;
   const tempAskCount = (fullTranscript.match(/cooked/gi) ?? []).length;
   const nameAskCount = (fullTranscript.match(/What's the name for the order\?/g) ?? []).length;
-  const confirmAskCount = (fullTranscript.match(/All good — confirm\?/g) ?? []).length;
+  // 2026-09-18 PO dispatch: confirm's first ask is now the full read-back
+  // ("All good?" as its closing line), not the bare "All good — confirm?".
+  const confirmAskCount = (fullTranscript.match(/All good\?/g) ?? []).length;
   assertEquals(orderTypeAskCount, 1, `order_type must be asked exactly once:\n${fullTranscript}`);
   assertEquals(tempAskCount, 1, `Temp must be asked exactly once:\n${fullTranscript}`);
   assertEquals(nameAskCount, 1, `name must be asked exactly once:\n${fullTranscript}`);
-  assertEquals(confirmAskCount, 1, `confirm must be asked exactly once:\n${fullTranscript}`);
+  assertEquals(confirmAskCount, 1, `the confirm read-back must be shown exactly once:\n${fullTranscript}`);
   assertEquals(dialogueState!.phase, "link_sent", `the pickup transcript must reach link_sent: ${JSON.stringify(dialogueState)}`);
   assertEquals(cart.length, 1);
   assertEquals(cart[0].quantity, 1);

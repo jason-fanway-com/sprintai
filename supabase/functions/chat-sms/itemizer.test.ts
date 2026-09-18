@@ -1,6 +1,6 @@
 // Item 2 (2026-09-09, module extraction): unit tests for itemizer.ts.
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { padReceiptLine, renderItemizedLine, renderItemizedRecap, renderLedgerFooter, type ItemizedCartLine } from "./itemizer.ts";
+import { padReceiptLine, renderItemizedLine, renderItemizedLines, renderItemizedRecap, renderLedgerFooter, type ItemizedCartLine } from "./itemizer.ts";
 
 Deno.test("padReceiptLine: pads to the fixed width, right-aligning the amount", () => {
   const line = padReceiptLine("Cheese Pizza", "$12.99", 20);
@@ -87,4 +87,49 @@ Deno.test("renderLedgerFooter: renders Subtotal / Service fee / Total lines", ()
 
 Deno.test("renderLedgerFooter: empty cart renders nothing", () => {
   assertEquals(renderLedgerFooter([], "building"), "");
+});
+
+// ── renderItemizedLines (2026-09-18 PO dispatch, confirm read-back) ──────
+
+Deno.test("renderItemizedLines: one line per item, no subtotal/fee/total trailer", () => {
+  const cart: ItemizedCartLine[] = [
+    { name: "Cheese Pizza", price_cents: 1500, quantity: 1 },
+    { name: "Coke", price_cents: 200, quantity: 2 },
+  ];
+  const lines = renderItemizedLines(cart);
+  assertStringIncludes(lines, "Cheese Pizza");
+  assertStringIncludes(lines, "$15.00");
+  assertStringIncludes(lines, "2x Coke");
+  assertStringIncludes(lines, "$4.00");
+  assertEquals(lines.includes("Subtotal"), false);
+  assertEquals(lines.includes("Total"), false);
+  assertEquals(lines.split("\n").length, 2);
+});
+
+Deno.test("renderItemizedLines: includeOptions=true shows resolved options in parentheses (default)", () => {
+  const cart: ItemizedCartLine[] = [
+    { menu_item_id: "burger", name: "Cheese Burger", price_cents: 849, quantity: 1, modifiers: ["Medium Well"] },
+  ];
+  const lines = renderItemizedLines(cart);
+  assertStringIncludes(lines, "Cheese Burger (Medium Well) $8.49");
+});
+
+Deno.test("renderItemizedLines: includeOptions=false drops the parenthetical but keeps quantity, name, and price", () => {
+  const cart: ItemizedCartLine[] = [
+    { menu_item_id: "burger", name: "Cheese Burger", price_cents: 849, quantity: 2, modifiers: ["Medium Well"] },
+  ];
+  const lines = renderItemizedLines(cart, undefined, false);
+  assertEquals(lines.trim(), "2x Cheese Burger $16.98");
+});
+
+Deno.test("renderItemizedLines: a bundle's own selections are also dropped when includeOptions=false", () => {
+  const cart: ItemizedCartLine[] = [
+    { type: "bundle", name: "Wing Bundle", price_cents: 1999, complete: true, selections: [{ flavor: "Buffalo", quantity: 10 }] },
+  ];
+  const withOptions = renderItemizedLines(cart);
+  const withoutOptions = renderItemizedLines(cart, undefined, false);
+  assertStringIncludes(withOptions, "Buffalo");
+  assertEquals(withoutOptions.includes("Buffalo"), false);
+  assertStringIncludes(withoutOptions, "Wing Bundle");
+  assertStringIncludes(withoutOptions, "$19.99");
 });

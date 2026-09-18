@@ -130,6 +130,7 @@ import {
   type ItemizedCartLine,
 } from "./itemizer.ts";
 import { firstParseableUpsellName, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
+import { buildConfirmReadback } from "./confirm-readback-20260918.ts";
 import {
   impliesUpsellAcceptance,
   impliesUpsellDecline,
@@ -1098,6 +1099,13 @@ export function ask(
   turnEvents: AskTurnEvents,
   shopContext: AskShopContext,
   menu: TurnEngineMenuItem[],
+  // 2026-09-18 PO dispatch (confirm read-back): the customer's own message
+  // this turn, used ONLY to recognize a restatement while confirm is open
+  // (isRestatementOfExistingOrder — see step 8 below). Optional so every
+  // existing caller and test is unchanged; omitted, the restatement branch
+  // simply never fires, identical to this function's behavior before it
+  // existed.
+  customerMessage?: string,
 ): DialogueState {
   const menuById = new Map(menu.map(m => [m.id, m]));
 
@@ -1243,7 +1251,29 @@ export function ask(
   }
 
   // 8. confirm / link.
-  if (turnEvents.confirmYes) return carry(null, "link_sent");
+  //
+  // 2026-09-18 PO dispatch: "on a restatement that matches the cart,
+  // proceed as a yes." isRestatementOfExistingOrder is text-shape-only (no
+  // item-by-item comparison against the cart — see its own header) by
+  // design: a restatement, by definition, is the customer describing what
+  // they believe is already there, not asking for something new. Gated on
+  // THREE things so it can never fire as a surprise: confirm must already
+  // be the open question (this is a re-statement of THIS decision, not a
+  // fresh order), and nothing this turn produced a qualifying add or a
+  // fresh ambiguous span — if either happened, something genuinely new (or
+  // unresolved) is on the table and the customer must see it before
+  // anything finalizes, never silently confirmed underneath it. A
+  // restatement naming something NOT in the cart needs no special handling
+  // here: ADDITION_MARKERS inside isRestatementOfExistingOrder already
+  // returns false for it, so it falls through unchanged to the existing
+  // PROPOSE/DECIDE path exactly as any other unrecognized confirm-turn
+  // message does today.
+  const restatementConfirms =
+    priorState.open?.kind === "confirm" &&
+    isRestatementOfExistingOrder(customerMessage) &&
+    !turnEvents.qualifyingAddMenuItemId &&
+    turnEvents.disambiguationCandidateIds === null;
+  if (turnEvents.confirmYes || restatementConfirms) return carry(null, "link_sent");
   if (turnEvents.confirmNo) return closureOrOrdering();
   return carry({ kind: "confirm" }, "confirm");
 }
@@ -1267,6 +1297,22 @@ export interface RenderContext {
   // itself, only relays it (same "code decides" discipline renderStepQuestion's
   // own `enumerate` param already follows on the legacy path).
   enumerateSlotChoices?: boolean;
+  // 2026-09-18 PO dispatch (confirm read-back): the real, already-settled
+  // values render() needs to echo back before checkout — order type, the
+  // formatted delivery address (delivery only), and the pickup/order name.
+  // render() never derives or validates these; the caller (turn-engine-
+  // runner.ts) already has all three as plain values on its own shop
+  // context by the time confirm opens (ASK's own priority 3/4/7 guarantee
+  // order type, address, and name are all known before phase can reach
+  // "confirm" at all) and simply needs to pass them through here — a
+  // one-line addition to its existing render() call, not built as part of
+  // this dispatch (scoped to turn-engine.ts). Until that call site is
+  // updated, the read-back below silently omits whatever's missing rather
+  // than showing "undefined" — same "missing beats wrong" convention as
+  // everywhere else in this file.
+  orderType?: "pickup" | "delivery";
+  pickupName?: string;
+  deliveryAddress?: string;
 }
 
 // 00-AU: fixed lead-in for the enumerated-repeat case only — Jason's own
@@ -1343,7 +1389,12 @@ export function render(
         question = state.open.suggested ? `Putting this in for ${state.open.suggested}, right?` : "What's the name for the order?";
         break;
       case "confirm":
-        question = "All good — confirm?";
+        // Shown once per confirm cycle — see buildConfirmReadback's own
+        // header for why openRepeatCount (0 on a fresh open, >0 on every
+        // re-ask) is exactly the right signal, with no new state added.
+        question = (state.openRepeatCount ?? 0) === 0
+          ? buildConfirmReadback(cartAfter, context)
+          : "All good — confirm?";
         break;
       case "ordering": {
         // 00-AK: three distinct phrasings, cycled by askCount. Any three

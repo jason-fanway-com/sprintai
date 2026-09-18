@@ -99,6 +99,38 @@ export function renderItemizedLine(
 }
 
 /**
+ * 2026-09-18 PO dispatch (confirm read-back): the per-item lines ALONE, no
+ * subtotal/fee/total trailer, NOT column-padded — for a caller (turn-
+ * engine.ts's confirm-step read-back) that needs a plain "qty name
+ * (options) price" line per item, one after another, with the money
+ * footer supplied separately by the caller's own existing, unchanged
+ * footer call. Reuses renderItemizedLine (the existing, tested, single-
+ * item sentence format) per line — additive, never a reformat of that
+ * function or of renderItemizedRecap, both untouched with their own tests
+ * unaffected.
+ *
+ * `includeOptions=false` drops the "(Toppings: Pepperoni)"-style detail
+ * from every non-bundle line (quantity, name, and price stay) — the SMS-
+ * length fallback the confirm read-back uses before ever splitting into
+ * two messages. Never drops or truncates a line itself.
+ */
+export function renderItemizedLines(
+  cart: ItemizedCartLine[],
+  priceIndexByMenuItemId?: Map<string, Map<string, number>>,
+  includeOptions = true,
+): string {
+  return cart.map(i => {
+    if (i.type === "bundle") {
+      const detail = includeOptions ? (i.selections ?? []).map(s => `${s.quantity}x ${s.flavor}`).join(", ") : "";
+      const label = i.complete ? i.name : `${i.name} (selecting flavors)`;
+      return `${label}${detail ? ` (${detail})` : ""} $${(i.price_cents / 100).toFixed(2)}`;
+    }
+    const source = includeOptions ? i : { ...i, options: undefined, modifiers: undefined };
+    return renderItemizedLine(source, priceIndexByMenuItemId);
+  }).join("\n");
+}
+
+/**
  * Deterministic itemized recap — a full plain-text receipt (line items with
  * their own price, chosen options, subtotal, service fee, and total), not
  * just a count and a total. This is the structural defense against the

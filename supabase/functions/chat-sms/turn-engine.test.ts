@@ -10,7 +10,8 @@
 // "cheeseburger", "medium", "thats it" — differing only in the OLD, buggy
 // bot's replies (which this engine replaces). One shared walkthrough, run
 // once per conversation id for traceability back to the evidence.
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { CONFIRM_READBACK_SPLIT_MARKER } from "./confirm-readback-20260918.ts";
 import {
   answer,
   decide,
@@ -22,6 +23,7 @@ import {
   type TurnEngineMenuItem,
   type AskTurnEvents,
   type AskShopContext,
+  type RenderContext,
 } from "./turn-engine.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { runTurnEngineTurn, type RunTurnDeps, type RunTurnInput } from "./turn-engine-runner.ts";
@@ -1267,4 +1269,182 @@ Deno.test("00-AK defect 2: three consecutive non-order replies to an empty cart 
     !(replies[0] === replies[1] && replies[1] === replies[2]),
     `the same question must not repeat identically three times in a row on an empty cart: ${JSON.stringify(replies)}`,
   );
+});
+
+// ============================================================
+// 2026-09-18 PO dispatch, Jason direct: read-back before checkout. The
+// confirm step must show every cart line (quantity, name, resolved
+// options, its own price), order type (+ address if delivery) and name,
+// before the customer can finalize — never confirm-in-the-dark.
+// ============================================================
+
+function confirmState(openRepeatCount = 0): DialogueState {
+  return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null, openRepeatCount };
+}
+
+Deno.test("render: confirm read-back — canary, one item (Cheese Burger, Temp: Medium) — one line, unchanged money footer ($8.49 + $0.99 = $9.48)", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+  ];
+  const context: RenderContext = { orderType: "pickup", pickupName: "Jason" };
+  const reply = render(cart, cart, confirmState(), [], VITOS_MENU, context);
+
+  assertStringIncludes(reply, "Here's what I've got - I'm a bot and I sometimes get things wrong, so give it a look:");
+  assertStringIncludes(reply, "Cheese Burger (Temp: Medium) $8.49");
+  assertStringIncludes(reply, "Pickup, name Jason.");
+  assertStringIncludes(reply, "All good?");
+  assertStringIncludes(reply, "Subtotal: $8.49");
+  assertStringIncludes(reply, "Service fee: $0.99");
+  assertStringIncludes(reply, "Total: $9.48");
+  assertEquals(reply.split("\n").filter(l => l.includes("Cheese Burger")).length, 1, "exactly one item line");
+});
+
+Deno.test("render: confirm read-back — 3 items, one with options, each on its own line with its own price", () => {
+  const margherita: TurnEngineMenuItem = {
+    id: "item-margherita", name: "Small Margherita Pizza", category: "Pizza", price_cents: 1295, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Small Margherita Pizza", base_price_cents: 1295, recap_template: "", ticket_template: "", steps: [] },
+  };
+  const coke: TurnEngineMenuItem = {
+    id: "item-coke", name: "Coke", category: "Drinks", price_cents: 299, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Coke", base_price_cents: 299, recap_template: "", ticket_template: "", steps: [] },
+  };
+  const menu = [...VITOS_MENU, margherita, coke];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-margherita", name: "Small Margherita Pizza", quantity: 1, price_cents: 1295, modifiers: [], line_key: "line-1" },
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 2, price_cents: 849, modifiers: [], options: { Temp: ["Medium Well"] }, ask_plan_selections: { [TEMP_GROUP_ID]: "choice-medium-well" }, line_key: "line-2" },
+    { menu_item_id: "item-coke", name: "Coke", quantity: 1, price_cents: 299, modifiers: [], line_key: "line-3" },
+  ];
+  const context: RenderContext = { orderType: "pickup", pickupName: "Alex" };
+  const reply = render(cart, cart, confirmState(), [], menu, context);
+
+  // Quantity 1 shows no "1x" prefix — reusing renderItemizedLine's own,
+  // already-established convention (see itemizer.test.ts's "plain item
+  // with no options" case) exactly, not reformatting it.
+  assertStringIncludes(reply, "Small Margherita Pizza $12.95");
+  assertStringIncludes(reply, "2x Cheese Burger (Temp: Medium Well) $16.98");
+  assertStringIncludes(reply, "Coke $2.99");
+  assertStringIncludes(reply, "Pickup, name Alex.");
+  const subtotalCents = 1295 + 849 * 2 + 299;
+  assertStringIncludes(reply, `Subtotal: $${(subtotalCents / 100).toFixed(2)}`);
+});
+
+Deno.test("render: confirm read-back — delivery shows the address, pickup does not", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+  ];
+  const deliveryReply = render(cart, cart, confirmState(), [], VITOS_MENU, { orderType: "delivery", pickupName: "Alex", deliveryAddress: "123 Main St" });
+  assertStringIncludes(deliveryReply, "Delivery to 123 Main St, name Alex.");
+
+  const pickupReply = render(cart, cart, confirmState(), [], VITOS_MENU, { orderType: "pickup", pickupName: "Alex", deliveryAddress: "123 Main St" });
+  assertStringIncludes(pickupReply, "Pickup, name Alex.");
+  assertEquals(pickupReply.includes("123 Main St"), false, "an address must never appear on a pickup order, even if one happens to be on file");
+});
+
+Deno.test("render: confirm read-back — over 480 chars splits into two messages via the marker, never truncating an item", () => {
+  const cart: TurnEngineCartLine[] = Array.from({ length: 20 }, (_, i) => ({
+    menu_item_id: `item-${i}`, name: `Extra Large Specialty Pizza Number ${i}`, quantity: 1, price_cents: 1999, modifiers: [], line_key: `line-${i}`,
+  }));
+  const context: RenderContext = { orderType: "pickup", pickupName: "Jason" };
+  const reply = render(cart, cart, confirmState(), [], VITOS_MENU, context);
+
+  const splitCount = reply.split(CONFIRM_READBACK_SPLIT_MARKER).length - 1;
+  assertEquals(splitCount, 1, `must split into exactly two messages when over budget — reply: ${JSON.stringify(reply)}`);
+  for (const line of cart) {
+    assertStringIncludes(reply, line.name, `item "${line.name}" must appear in full, never truncated`);
+  }
+  const [page1] = reply.split(CONFIRM_READBACK_SPLIT_MARKER);
+  assert(page1.length <= 480, `page 1 must respect the SMS budget — got ${page1.length} chars`);
+});
+
+Deno.test("render: confirm read-back — dropping options is tried before splitting", () => {
+  // Enough items with options to exceed 480 chars WITH the parentheses, but
+  // fit once they're dropped — must land on the "drop options" branch, not
+  // the split marker.
+  const cart: TurnEngineCartLine[] = Array.from({ length: 8 }, (_, i) => ({
+    menu_item_id: `item-${i}`, name: `Item ${i}`, quantity: 1, price_cents: 999, modifiers: [`Some Long Option Name Number ${i}`], line_key: `line-${i}`,
+  }));
+  const context: RenderContext = { orderType: "pickup", pickupName: "Jason" };
+  const reply = render(cart, cart, confirmState(), [], VITOS_MENU, context);
+
+  assertEquals(reply.includes(CONFIRM_READBACK_SPLIT_MARKER), false, "must not need to split once options are dropped");
+  assertEquals(reply.includes("Some Long Option Name"), false, "options must be dropped before splitting is ever considered");
+  for (const line of cart) assertStringIncludes(reply, line.name);
+});
+
+Deno.test("render: confirm read-back is shown ONCE per cycle — a repeat re-ask is the short prompt, not the full read-back again", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+  ];
+  const context: RenderContext = { orderType: "pickup", pickupName: "Jason" };
+
+  const first = render(cart, cart, confirmState(0), [], VITOS_MENU, context);
+  assertStringIncludes(first, "Here's what I've got");
+
+  const repeat = render(cart, cart, confirmState(1), [], VITOS_MENU, context);
+  assertEquals(repeat.includes("Here's what I've got"), false, "the full read-back must not repeat on the same cycle");
+  assertStringIncludes(repeat, "All good — confirm?");
+});
+
+// ── ask(): restatement while confirm is open (2026-09-18 PO dispatch) ────
+
+const CONFIRM_SHOP_CONTEXT: AskShopContext = {
+  deliveryEnabled: false, upsellEnabled: false, orderTypeKnown: true, orderTypeIsDelivery: false,
+  deliveryAddressKnown: true, driverTipKnown: true, pickupNameKnown: true,
+};
+
+function confirmTurnEvents(overrides: Partial<AskTurnEvents> = {}): AskTurnEvents {
+  return {
+    qualifyingAddMenuItemId: null, disambiguationCandidateIds: null, carriedDisambiguationCandidateIds: [],
+    disambiguationSettledThisTurn: false, checkoutIntentThisTurn: false, confirmYes: false, confirmNo: false,
+    ...overrides,
+  };
+}
+
+Deno.test("ask: a restatement matching the cart, while confirm is open, proceeds as a yes (link_sent)", () => {
+  const priorState: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+  const next = ask(
+    [{ menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" }],
+    priorState, confirmTurnEvents(), CONFIRM_SHOP_CONTEXT, VITOS_MENU,
+    "So that's the Cheese Burger for pickup, right?",
+  );
+  assertEquals(next.open, null);
+  assertEquals(next.phase, "link_sent");
+});
+
+Deno.test("ask: a restatement naming a NEW item (an addition marker) does not auto-confirm — falls through to the normal path instead", () => {
+  const priorState: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+  const next = ask(
+    [{ menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" }],
+    priorState, confirmTurnEvents(), CONFIRM_SHOP_CONTEXT, VITOS_MENU,
+    "So that's the Cheese Burger, and also a Coke.",
+  );
+  assertEquals(next.phase, "confirm");
+  assertEquals(next.open, { kind: "confirm" }, "must not silently finalize when the message also names something new");
+});
+
+Deno.test("ask: a restatement-shaped message does NOT confirm if something was actually added or is pending disambiguation this same turn", () => {
+  const priorState: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [{ menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" }];
+
+  const withQualifyingAdd = ask(cart, priorState, confirmTurnEvents({ qualifyingAddMenuItemId: CHEESE_BURGER_ID }), CONFIRM_SHOP_CONTEXT, VITOS_MENU, "So that's the Cheese Burger.");
+  assertEquals(withQualifyingAdd.phase, "confirm", "a genuine add landing this turn must not be masked by the restatement shortcut");
+
+  // A fresh ambiguous span outranks confirm entirely via ask()'s own
+  // existing priority order (disambiguation is priority 2, confirm is
+  // priority 8) — this never even reaches the new restatement check, which
+  // is itself the safety property: the guard doesn't need to fire because
+  // priority order already prevents the bad outcome.
+  const withAmbiguous = ask(cart, priorState, confirmTurnEvents({ disambiguationCandidateIds: ["a", "b"] }), CONFIRM_SHOP_CONTEXT, VITOS_MENU, "So that's the Cheese Burger.");
+  assertEquals(withAmbiguous.open, { kind: "disambiguation", candidates: ["a", "b"] }, "a fresh ambiguous span this turn must win priority over confirm, never be masked");
+});
+
+Deno.test("ask: isRestatementOfExistingOrder is never consulted outside confirm — a restatement-shaped message while some OTHER question is open behaves exactly as before", () => {
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [{ menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" }];
+  // deliveryEnabled: true — order_type must genuinely be this turn's
+  // priority question (ask()'s priority 3 is itself gated on
+  // deliveryEnabled; a pickup-only shop never asks it at all).
+  const shopContext: AskShopContext = { ...CONFIRM_SHOP_CONTEXT, deliveryEnabled: true, orderTypeKnown: false };
+  const next = ask(cart, priorState, confirmTurnEvents(), shopContext, VITOS_MENU, "So that's the Cheese Burger for pickup, right?");
+  assertEquals(next.open, { kind: "order_type" }, "a restatement while order_type is open must not be treated as a checkout confirmation");
 });
