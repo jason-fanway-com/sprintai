@@ -6058,6 +6058,13 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
         return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
       }
+      else {
+        const closedMsg = `Hey! We're not taking orders right now — check back soon!`;
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
+      }
     }
   }
 
