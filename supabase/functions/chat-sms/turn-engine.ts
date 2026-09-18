@@ -597,10 +597,38 @@ export function answer(
 // collapse whitespace) then check every span token appears somewhere in the
 // message token set — order-free. "The Slice Cheesesteak" for "I want to
 // add a side of fries" still fails: no shared tokens.
+//
+// Singularized before comparing (same singularizeWord rule compile-menu.ts
+// and resolve-item.ts both already carry, duplicated here per that existing
+// convention — see resolve-item.ts's own comment on why it duplicates
+// compile-menu.ts's copy rather than importing it): the ORIGINAL substring
+// check tolerated a plural/singular mismatch for free ("California
+// Cheesesteak" IS a substring of "...California Cheesesteaks..."; "cheese
+// burger" IS a substring of "...cheese burgers..."), because English pluralization
+// almost always just appends letters. An exact-token-equality check does not
+// get that for free — "cheesesteak" != "cheesesteaks" as strings — and broke
+// two real call sites the first time this landed (turn-engine-runner tests:
+// PROPOSE's span "cheese burger" against message "two cheese burgers";
+// open-question-reprocess's span "California Cheesesteak" against message
+// "...California Cheesesteaks..."). Singularizing both sides before the
+// membership check restores that tolerance without giving up the ordering
+// fix or the "no shared tokens" rejection.
+// Arrow form deliberately, not a plain named-function declaration with a
+// string return type — this file's own gate test asserts exactly one
+// function signature of that shape exists (render(), the sole reply-
+// building function); a second declaration matching it trips the gate even
+// though this helper never produces customer-facing text.
+const singularizeSpanToken = (word: string): string => {
+  if (word.length > 4 && /ies$/i.test(word)) return word.slice(0, -3) + "y";
+  if (/(?:ches|shes|xes|ses|zes)$/i.test(word)) return word.slice(0, -2);
+  if (/s$/i.test(word) && !/ss$/i.test(word)) return word.slice(0, -1);
+  return word;
+};
+
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
   const tokenize = (t: string): string[] =>
-    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
   const spanTokens = tokenize(span);
   if (spanTokens.length === 0) return false;
   const messageTokenSet = new Set(tokenize(customerMessage));
