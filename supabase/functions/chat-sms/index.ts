@@ -416,6 +416,11 @@ interface Shop {
   sms_provider:            string | null;
   reply_from_e164:         string | null;
   open_hours:              Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
+  // Delivery-specific hours (migration 060/061), same shape as open_hours.
+  // Empty/unset ({}) means "no narrower delivery window configured" — treat
+  // delivery as available whenever open_hours says so, unchanged from before
+  // this column existed. Only a non-empty value narrows delivery further.
+  delivery_hours?:         Record<string, { closed?: boolean; open?: string; close?: string } | Array<{ open: string; close: string }>>;
   timezone:                string;
   email_ticket_recipient:  string | null;
   is_paused:               boolean;
@@ -1417,7 +1422,17 @@ export function buildSystemPromptV2(
   // test-mode conversation, which skips that short-circuit outright). Reading
   // it here too means a mid-conversation or test-mode pause is still surfaced.
   const deliveryPausedNow = !!(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date());
-  const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false && !deliveryPausedNow;
+  // Delivery hours (migration 060/061): shop.delivery_hours narrows
+  // shop.open_hours for delivery specifically — an owner can stop delivery
+  // earlier than pickup (e.g. kitchen open till 10pm, delivery cut off at
+  // 8pm). Empty/unset ({}) means "never configured", so it falls back to
+  // open_hours — a shop that never set this sees no behavior change. Not
+  // test-mode-gated, same as deliveryPausedNow/deliveryGeoAvailable above.
+  const deliveryHoursSource = (shop.delivery_hours && Object.keys(shop.delivery_hours).length > 0)
+    ? shop.delivery_hours
+    : shop.open_hours;
+  const withinDeliveryHours = isWithinAnyWindow(dayWindows(deliveryHoursSource?.[today]), getLocalMinutes(shop.timezone, now));
+  const canActuallyDeliver = fulfilmentDeliveryConfigured && deliveryGeoAvailable !== false && !deliveryPausedNow && withinDeliveryHours;
   // When the returning-customer delivery-offer clause is eligible (injected
   // via RETURNING CUSTOMER CONTEXT), the generic REQUIRED "pickup or delivery?"
   // instruction would compete with and override it: the model follows REQUIRED
@@ -1469,6 +1484,9 @@ export function buildSystemPromptV2(
     }
     if (deliveryGeoAvailable === false) {
       return `\nDELIVERY AVAILABLE: No — delivery is temporarily unavailable while we finalize our delivery zone. Please order for pickup only. Never offer delivery.`;
+    }
+    if (!withinDeliveryHours) {
+      return `\nDELIVERY AVAILABLE: No — delivery hours have ended for today. Please order for pickup only. Never offer delivery until delivery hours resume.`;
     }
     // When the returning-customer delivery offer is active, suppress "Yes" so
     // the EARLY ORDER TYPE GATE (which fires on "DELIVERY AVAILABLE is Yes")
@@ -4282,16 +4300,18 @@ export function getBusinessDayKey(timezone: string, now: Date = new Date()): str
 // Current minutes-since-midnight in the shop's local timezone (0–1439).
 // Computed from formatted local parts so it is correct regardless of where the
 // function runs (no reliance on server timezone or Date parsing quirks).
-function getLocalMinutes(timezone: string): number {
+// `now` defaults to real wall-clock time at every existing call site; made
+// injectable (same precedent as getBusinessDayKey above) so delivery-hours
+// tests can assert behavior at a specific timestamp.
+function getLocalMinutes(timezone: string, now: Date = new Date()): number {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
+    }).formatToParts(now);
     const h = Number(parts.find(p => p.type === "hour")?.value ?? "0") % 24;
     const m = Number(parts.find(p => p.type === "minute")?.value ?? "0");
     return h * 60 + m;
   } catch {
-    const now = new Date();
     return now.getHours() * 60 + now.getMinutes();
   }
 }
