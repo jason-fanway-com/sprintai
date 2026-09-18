@@ -431,20 +431,34 @@ function bareProductName(item: CompileItem): string | null {
   return bare;
 }
 
+// Family-identity bare form used ONLY for the counting map below — unlike
+// bareProductName (Rule 2's own "is there something to strip" gate, which
+// returns null when the bare form equals the item's own full display
+// name), this always returns product_key's base segment. An unsized item
+// whose display name already IS its bare form ("Bruschetta" the
+// Appetizer) doesn't need a Rule-2 ALIAS — Rule 1 already emits that exact
+// term for it — but it still needs to be COUNTED here, so a sized sibling
+// family sharing the same base key (2026-09-18 PO decision, item 1 below)
+// can find it.
+function familyBareKey(item: CompileItem): string | null {
+  if (!item.product_key) return null;
+  const colonIdx = item.product_key.indexOf(":");
+  const baseSlug = colonIdx === -1 ? item.product_key : item.product_key.slice(colonIdx + 1);
+  if (!baseSlug) return null;
+  return normaliseTerm(baseSlug.replace(/-/g, " ")) || null;
+}
+
 // Menu-wide map of bare product name -> the set of DISTINCT product_keys
 // among UNSIZED items that independently own it. "Unsized" (no size_label)
 // is the signal for "a standalone dish, not one row of a size-folded
-// family" — every required real collision (cheesesteak, buffalo chicken
-// cheesesteak, mussels fra diavolo, chicken parmesan's entree+sandwich) is
-// ≥2 standalone dishes across different categories genuinely sharing one
-// name. Computed once per menu (compileMenu) and consulted by
-// itemLexiconTerms below to gate a SIZED item's participation — see that
-// call site for why sized items need a higher bar than unsized ones.
+// family". Computed once per menu (compileMenu) and consulted by
+// itemLexiconTerms below to gate a SIZED item's participation in the bare
+// alias — see that call site.
 function unsizedFamilyCountsByBareName(items: CompileItem[]): Map<string, Set<string>> {
   const counts = new Map<string, Set<string>>();
   for (const i of items) {
     if (i.size_label) continue;
-    const bare = bareProductName(i);
+    const bare = familyBareKey(i);
     if (!bare) continue;
     const families = counts.get(bare) ?? new Set<string>();
     families.add(i.product_key!);
@@ -483,23 +497,33 @@ function itemLexiconTerms(item: CompileItem, unsizedFamilyCounts?: Map<string, S
   // candidates ("burger", "fries") — no tiebreak, no ranking, every
   // claimant keeps its own row.
   //
-  // A SIZED item (one row of a size-folded family, e.g. "14\" Chicken
-  // Parmesan Stromboli") is held to a stricter bar: it only joins this
-  // alias when ≥2 OTHER, UNSIZED items already independently share the
-  // same bare name — i.e. only when it would be joining an ambiguity that
-  // already exists among real standalone dishes, never when it would be
-  // the SOLE cause of a standalone item losing its only unique term. Real
-  // Vito's shape this protects: "Bruschetta" (a standalone Appetizer) vs.
-  // "Bruschetta Pizza"'s 3 sizes — genuinely two different foods that just
-  // happen to share a name, with no second standalone dish to make "the
-  // ambiguity" a real, pre-existing thing the sizes could join. Contrast
-  // "Chicken Parmesan": the Entree and the Sandwich are BOTH standalone and
-  // already ambiguous with each other before the Stromboli's 3 sizes ever
-  // enter the picture, so the sizes are joining an ambiguity that already
-  // exists, not creating a new one.
+  // 2026-09-18 PO decision (item 1, superseding this same day's earlier
+  // ≥2-unsized-siblings rule below): "When an unsized item's bare name
+  // equals a sized family's base key, the bare term targets the unsized
+  // item AND every family member." A SIZED item (one row of a size-folded
+  // family, e.g. "14\" Chicken Parmesan Stromboli") joins this alias
+  // whenever its own base key is shared by even ONE unsized sibling —
+  // basis is the shared product_key base, never a name list.
+  //
+  // The earlier same-day rule required ≥2 unsized siblings specifically to
+  // keep "Bruschetta" (a standalone Appetizer) separate from "Bruschetta
+  // Pizza"'s 3 sizes, reasoning they were "genuinely two different foods
+  // that just happen to share a name." Jason's ruling: resolving bare
+  // "bruschetta" straight to the appetizer because the name matches
+  // exactly is a GUESS that happens to be right for one dish and wrong for
+  // the pizza — the same shape as the $2.50 cheeseburger bug (guessing
+  // instead of asking). The fix is not to keep them apart; it's to let the
+  // bare word tie ALL of them, so resolve-item.ts's own narrowing
+  // (category "pizza"/"salad", a stated size) picks the one meant, and a
+  // truly bare "bruschetta" ASKS instead of guessing — never a tiebreak,
+  // same standing rule as everywhere else in this file. Real Vito's shape
+  // now unified this way: bruschetta (appetizer + 3 pizza sizes), house
+  // (salad + 3 stromboli sizes), chicken bacon ranch (flatbread + 3 pizza
+  // sizes), margherita (flatbread + 3 pizza sizes) — all four, one rule,
+  // codable from `familyBareKey` alone.
   const bareName = bareProductName(item);
   if (bareName) {
-    const emit = !item.size_label || (unsizedFamilyCounts?.get(bareName)?.size ?? 0) >= 2;
+    const emit = !item.size_label || (unsizedFamilyCounts?.get(bareName)?.size ?? 0) >= 1;
     if (emit) terms.push({ term: bareName, target_type: "item", target_id: item.id, provenance: "stated" });
   }
 
@@ -713,6 +737,28 @@ function trailingWordRuns(term: string): string[] {
   return runs;
 }
 
+// 2026-09-18 PO decision (item 2, real Vito's "sauce"/"onions"/"fries"
+// collisions): a generic head noun after "with"/"w/"/"and"/"on"/"in" is
+// never what a dish IS — it's what the dish comes with. "Pasta with Clam
+// Sauce" trailing-runs down to the bare word "sauce" today, with no
+// competing claimant, so it silently won a customer's "with ranch and BBQ
+// sauce" and added a $21.95 pasta (conv 32, 15:34 run). Cutting the term
+// at the FIRST such preposition — before it ever reaches level 1/2
+// derivation below — means "sauce"/"clam sauce" are never candidates at
+// all, for this or any other item shaped the same way ("Sauteed Pierogies
+// with onions" no longer derives "onions"; "Chicken Fingers (5) with
+// french fries" no longer derives "fries", which today competes with the
+// shop's own real fries items). Only affects DERIVATION input — the
+// item's own Rule 1 (full stated name) and Rule 2 (bare form) terms are
+// built straight from the untouched original name, never this truncated
+// copy. `\s+` on both sides requires the preposition to be its own word,
+// so "Onion Rings" (no leading space before "on") is never affected.
+const PREPOSITIONAL_TAIL_RE = /\s+(?:with|w\/|and|on|in)\s+.*$/i;
+
+function stripPrepositionalTail(term: string): string {
+  return term.replace(PREPOSITIONAL_TAIL_RE, "");
+}
+
 function deriveLexiconSurfaceForms(compiledItems: CompiledItem[]): LexiconTerm[] {
   // The shop's lexicon as it exists before this pass, restricted to rule 1/2
   // ITEM terms only. A candidate matching one of these already "exists as a
@@ -743,11 +789,14 @@ function deriveLexiconSurfaceForms(compiledItems: CompiledItem[]): LexiconTerm[]
     }
   }
 
+  // stripPrepositionalTail: derivation input only (this array feeds level
+  // 1/2 below) — `existing` above already captured every item's real
+  // stated terms in full, untruncated form.
   const statedItemTerms: SurfaceFormCandidate[] = [];
   for (const c of compiledItems) {
     for (const t of c.lexicon_terms) {
       if (t.target_type !== "item") continue;
-      statedItemTerms.push({ term: t.term, itemId: t.target_id });
+      statedItemTerms.push({ term: stripPrepositionalTail(t.term), itemId: t.target_id });
     }
   }
 

@@ -384,6 +384,107 @@ Deno.test("lexicon rule 2 (2026-09-18 PO dispatch, real Vito's 'chicken parmesan
     "'chicken parmesan' must be ambiguous across all 5 real items sharing the dish, not just the unsized two");
 });
 
+Deno.test("lexicon rule 2 (2026-09-18 PO decision, item 1 — supersedes this same day's earlier ≥2-unsized-siblings rule): a sized family's base key shared by even ONE unsized item ties them ALL under the bare term, ambiguous, never a guess (real Vito's 'Bruschetta' appetizer vs 'Bruschetta Pizza')", () => {
+  // The superseded rule kept these apart on purpose, reasoning they were
+  // "genuinely two different foods that just happen to share a name."
+  // Jason's ruling: resolving bare "bruschetta" straight to the appetizer
+  // because the name matches exactly is a GUESS that happens to be right
+  // for one dish and wrong for the pizza — the same shape as the $2.50
+  // cheeseburger bug. The bare word must tie all four; resolve-item.ts's
+  // own narrowing (category "pizza", a stated size) picks the one meant,
+  // and a truly bare "bruschetta" asks instead of guessing.
+  const appetizer = item({ display_name: "Bruschetta", category: "Appetizers", product_key: "appetizers:bruschetta" });
+  const small = item({ display_name: "Small Bruschetta Pizza", category: "Pizza", size_label: "Small (10\")", product_key: "pizza:bruschetta" });
+  const medium = item({ display_name: "Medium Bruschetta Pizza", category: "Pizza", size_label: "Medium (14\")", product_key: "pizza:bruschetta" });
+  const large = item({ display_name: "Large Bruschetta Pizza", category: "Pizza", size_label: "Large (16\")", product_key: "pizza:bruschetta" });
+  const { items: compiled } = compileMenu([appetizer, small, medium, large], [], "t", false);
+
+  const bruschettaTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "bruschetta").map(t => t.target_id)),
+  );
+  assertEquals(bruschettaTargets, new Set([appetizer.id, small.id, medium.id, large.id]),
+    "bare 'bruschetta' must tie the appetizer and all 3 pizza sizes — narrowing, not this compiler, decides which one");
+});
+
+Deno.test("lexicon rule 2 (2026-09-18 PO decision, item 1): the shared-base-key rule is keyed on product_key, not a name list — a same-named item with a DIFFERENT base key does not join", () => {
+  // Negative case for the same rule: an item whose product_key base is
+  // genuinely different text must NOT be pulled in just because its
+  // DISPLAY name happens to contain the same word — the rule's own basis
+  // is the shared key, never a name match.
+  const flatbread = item({ display_name: "Chicken Bacon Ranch", category: "Flatbreads", product_key: "flatbreads:chicken-bacon-ranch" });
+  const pizza = item({ display_name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Medium (14\")", product_key: "pizza:chicken-bacon-ranch" });
+  const wrap = item({ display_name: "Grilled Chicken Bacon & Ranch", category: "Wraps", product_key: "wraps:grilled-chicken-bacon-ranch" });
+  const { items: compiled } = compileMenu([flatbread, pizza, wrap], [], "t", false);
+
+  const cbrTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "chicken bacon ranch").map(t => t.target_id)),
+  );
+  assertEquals(cbrTargets, new Set([flatbread.id, pizza.id]),
+    "the wrap's own base key is 'grilled-chicken-bacon-ranch', not 'chicken-bacon-ranch' — it does not share the family key, so it is not pulled in by this rule");
+});
+
+// ============================================================
+// 2026-09-18 PO decision, item 2 (real Vito's "sauce"/"onions"/"fries"
+// collisions — the choice/group-vocabulary rule originally proposed for
+// this was rejected: it collided with the 2026-09-15 fix that keeps
+// "pasta"/"bagel"/"rye" reachable as real derived item terms even though
+// they're also choice names). Codable, narrower basis instead: strip a
+// prepositional tail before deriving trailing word-runs / head nouns at
+// all, so the generic word after "with"/"w/"/"and"/"on"/"in" is never a
+// candidate in the first place — the item's own stated Rule 1/2 terms are
+// untouched.
+// ============================================================
+
+Deno.test("lexicon surface forms (2026-09-18 PO decision, item 2): a prepositional tail is stripped before deriving trailing word-runs — 'sauce'/'clam sauce' are never candidates for 'Pasta with Clam Sauce'", () => {
+  const pasta = item({ display_name: "Pasta With Clam Sauce", category: "Entrees", product_key: "entrees:pasta-with-clam-sauce" });
+  const { items: compiled } = compileMenu([pasta], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assert(terms.includes("pasta with clam sauce"), "the item's own stated Rule 1 name is untouched");
+  assert(!terms.includes("sauce"), "must never derive the generic word after 'with'");
+  assert(!terms.includes("clam sauce"), "must never derive any trailing run rooted past the preposition");
+  assert(!terms.includes("with clam sauce"));
+});
+
+Deno.test("lexicon surface forms (2026-09-18 PO decision, item 2): the same fix, for free, on 'and'/'in' tails — 'onions' and a competing 'fries' are never derived", () => {
+  const pierogies = item({ display_name: "Sauteed Pierogies with onions", category: "Appetizers", product_key: "appetizers:sauteed-pierogies-with-onions" });
+  const fingersWithFries = item({ display_name: "Chicken Fingers (5) with french fries", category: "Appetizers", product_key: "appetizers:chicken-fingers-5-with-french-fries" });
+  const realFries = item({ display_name: "French Fries", category: "Appetizers", product_key: "appetizers:french-fries" });
+  const { items: compiled } = compileMenu([pierogies, fingersWithFries, realFries], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(!byId.get(pierogies.id)!.lexicon_terms.some(t => t.term === "onions"), "'onions' must never be derived from the pierogies' own prepositional tail");
+
+  const friesTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "fries").map(t => t.target_id)),
+  );
+  assertEquals(friesTargets, new Set([realFries.id]),
+    "'fries' must resolve uniquely to the real French Fries item — the chicken fingers combo's tail must never compete for it");
+});
+
+Deno.test("lexicon surface forms (2026-09-18 PO decision, item 2): the two 2026-09-15 choice-collision tests still pass unchanged — this fix must not reintroduce that regression", () => {
+  // Same fixtures as the two protected tests above (Family Meal/'pizza',
+  // Baked Ziti/'penne') — re-asserted here as a single guard so a future
+  // change to this same derivation path can't silently break them without
+  // this test naming the exact regression it would be.
+  const familyMeal = item({
+    display_name: "Family Meal", category: "Combos",
+    groups: [group({ slot_key: "extra", choices: [choice({ name: "Pizza" })] })],
+  });
+  const tomatoPizza = item({ display_name: "Large Tomato Pizza", category: "Sides" });
+  const choosePasta = item({
+    display_name: "Baked Ziti", category: "Entrees",
+    groups: [group({ slot_key: "pasta", choices: [choice({ name: "Fettuccine" }), choice({ name: "Penne" }), choice({ name: "Rigatoni" })] })],
+  });
+  const chickenPenne = item({ display_name: "Chicken Penne", category: "Entrees" });
+  const { items: compiled } = compileMenu([familyMeal, tomatoPizza, choosePasta, chickenPenne], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(byId.get(tomatoPizza.id)!.lexicon_terms.some(t => t.term === "pizza" && t.target_type === "item"),
+    "'pizza' must still reach Large Tomato Pizza as an item term despite also being a choice name");
+  assert(byId.get(chickenPenne.id)!.lexicon_terms.some(t => t.term === "penne" && t.target_type === "item"),
+    "'penne' must still reach Chicken Penne as an item term despite also being a choice name");
+});
+
 Deno.test("lexicon rule 3: category noun singular + plural -> category target", () => {
   const terms = categoryLexiconTerms("Salads");
   assertEquals(terms.map(t => t.term).sort(), ["salad", "salads"]);

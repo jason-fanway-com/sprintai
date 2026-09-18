@@ -370,29 +370,38 @@ Deno.test("resolveItem: 'small gyro pizza' resolves to exactly one (category + s
 // ============================================================
 // 2026-09-18 PO follow-up dispatch: two edge cases found probing the live
 // Vito's lexicon once narrowing was actually wired into production.
+//
+// UPDATED same day, item-1 decision (compiler-families): the compiler now
+// ties the bare "chicken bacon ranch" term across the Flatbread AND all 3
+// Pizza sizes (shared product_key base "chicken-bacon-ranch"). The Wrap
+// ("Grilled Chicken Bacon & Ranch", base "grilled-chicken-bacon-ranch")
+// shares no base key with that family, so item 1's rule alone would not
+// pull it in — but it ties anyway, via a SEPARATE, pre-existing mechanism:
+// its own derived trailing-run candidate is the RAW string "chicken bacon
+// & ranch" (dropping "grilled" from its stated name), which is a
+// different literal lexicon row than "chicken bacon ranch" but
+// resolveItem's own normalize() strips the "&" before matching, so the
+// two rows collide at resolution time even though they're stored as
+// different text. This was already true before today (it's why the
+// ORIGINAL version of this test — before the item-1 decision — asserted
+// exactly this same Flatbread+Wrap pair); item 1 just adds the 3 real
+// pizza sizes into the same pre-existing tie.
 
-// ── Edge 1: narrowing to ZERO candidates must fall back to the unfiltered
-// tie, not dead-end into unresolved. "chicken bacon ranch" alone ties
-// Flatbreads ("Chicken Bacon Ranch") and Wraps ("Grilled Chicken Bacon &
-// Ranch") — neither of which is a Pizza — so naming "pizzas" too must not
-// discard both real candidates.
-
-Deno.test("resolveItem: 'chicken bacon ranch' alone ties Flatbreads and Wraps (unaffected baseline for edge 1)", () => {
+Deno.test("resolveItem: 'chicken bacon ranch' alone ties the Flatbread, the Wrap (via its own '&'-normalizing derived term), and all 3 Pizza sizes", () => {
   const result = resolveItem("chicken bacon ranch", NARROWING_LEXICON);
   assertEquals(result.kind, "ambiguous");
   assertEquals(
     result.kind === "ambiguous" ? [...result.candidates].sort() : [],
-    [idOf("Chicken Bacon Ranch"), idOf("Grilled Chicken Bacon & Ranch")].sort(),
+    [
+      idOf("Chicken Bacon Ranch"), idOf("Grilled Chicken Bacon & Ranch"),
+      idOf("Small Chicken Bacon Ranch Pizza"), idOf("Medium Chicken Bacon Ranch Pizza"), idOf("Large Chicken Bacon Ranch Pizza"),
+    ].sort(),
   );
 });
 
-Deno.test("resolveItem: 'chicken bacon ranch medium pizzas' stays ambiguous over the real Flatbreads|Wraps tie, never unresolved", () => {
+Deno.test("resolveItem: 'chicken bacon ranch medium pizzas' now narrows cleanly to the one medium pizza (category + size both stated)", () => {
   const result = resolveItem("chicken bacon ranch medium pizzas", NARROWING_LEXICON);
-  assertEquals(result.kind, "ambiguous");
-  assertEquals(
-    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
-    [idOf("Chicken Bacon Ranch"), idOf("Grilled Chicken Bacon & Ranch")].sort(),
-  );
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Medium Chicken Bacon Ranch Pizza") });
 });
 
 // ── Edge 2: a stated size must be honored even when the unfiltered match is
