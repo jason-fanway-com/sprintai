@@ -17,6 +17,7 @@ import {
   decide,
   ask,
   render,
+  extractSlotChoiceWords,
   type DialogueState,
   type Proposal,
   type TurnEngineCartLine,
@@ -1909,4 +1910,128 @@ Deno.test("runTurnEngineTurn (named choice not on the list): 'jalapeno ranch' re
   assert(!result.reply.includes("We don't have"), `a real matching choice must not be treated as unmatched: ${JSON.stringify(result.reply)}`);
   assertEquals(result.dialogueState.open, null, "the dressing slot must resolve — nothing left open, cart is non-empty so ASK falls to \"Anything else?\"");
   assert(result.reply.includes("Anything else?"), `must ask what's next now that the slot resolved: ${JSON.stringify(result.reply)}`);
+});
+
+// ============================================================
+// 2026-09-18 PO dispatch (echo regression in the named-choice-not-on-the-
+// list fix, real conv 4854b0e3, run v489): "Spaghetti, please! Now can you
+// confirm my whole order?" echoed the ENTIRE message back as if it were an
+// unmatched choice, thirteen turns straight, then the turn cap. Real root
+// cause found by pulling the live cart: TWO "Chicken Alfredo Entree" lines
+// existed (a customer recap re-triggered a duplicate add) — one already
+// resolved to Spaghetti, one still blank. applyCompiledModifyItem finds its
+// target line by menu_item_id alone (this file's own header note 4), so it
+// silently matched the ALREADY-RESOLVED line and reported no change, even
+// though matchChoiceInText plainly resolves "Spaghetti" out of every one of
+// these messages. Fixture below reproduces the real duplicate-line shape.
+// ============================================================
+const ALFREDO_ID = "96547aec-338b-4677-9e0f-0de3920c2c7b";
+const PASTA_GROUP_ID = "42c3cc32-dd8b-4053-94b7-958ecf08ce8b";
+const SPAGHETTI_CHOICE_ID = "85494329-ba8b-46e3-8c8b-4a191682dbcc";
+const ALFREDO_ASK_PLAN = {
+  compiled_at: "", compiler_version: 1, display_name: "Chicken Alfredo Entree", base_price_cents: 1995,
+  recap_template: "", ticket_template: "",
+  steps: [{
+    group_id: PASTA_GROUP_ID, slot_key: null, kind: "slot" as const, ask_mode: "ask" as const,
+    prompt_template: "pasta.ask",
+    choices: [
+      { id: "36e676f4-d6c2-4b46-8d77-8a26900b8ac9", display: "Linguine", price_delta_cents: 0 },
+      { id: "77435dfa-3fde-430d-b1a6-94418ce0290c", display: "Angel Hair", price_delta_cents: 0 },
+      { id: SPAGHETTI_CHOICE_ID, display: "Spaghetti", price_delta_cents: 0 },
+      { id: "beb4e1bb-44ee-41ea-b07b-b2dc13a4ab00", display: "Penne", price_delta_cents: 0 },
+    ],
+  }],
+};
+const ALFREDO_MENU: TurnEngineMenuItem[] = [
+  { id: ALFREDO_ID, name: "Alfredo - Chicken", category: "Entrees", price_cents: 1995, bot_state: "orderable", ask_plan: ALFREDO_ASK_PLAN },
+];
+// The exact real duplicate-line shape from conv 4854b0e3's own cart_json:
+// line 1 already resolved to Spaghetti, line 2 (the one ask() actually has
+// open, per the real dialogue_state) still blank.
+function alfredoDuplicateCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: ALFREDO_ID, name: "Chicken Alfredo Entree", quantity: 1, price_cents: 1995, modifiers: [], options: { Pasta: ["Spaghetti"] }, ask_plan_selections: { [PASTA_GROUP_ID]: SPAGHETTI_CHOICE_ID } },
+    { menu_item_id: ALFREDO_ID, name: "Chicken Alfredo Entree", quantity: 1, price_cents: 1995, modifiers: [] },
+  ];
+}
+const ALFREDO_OPEN_STATE: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: `${ALFREDO_ID}::`, group_id: PASTA_GROUP_ID }, upsell_offered: false, asked_message_id: null };
+
+for (const msg of [
+  "Spaghetti, please! Now can you confirm my whole order?",
+  "I already chose spaghetti for the Chicken Alfredo. Could you please just confirm the entire order now?",
+  "Okay, I'll go with Spaghetti for the Chicken Alfredo. Can you just confirm my order now?",
+  "I want Spaghetti for the Chicken Alfredo. My order is: 1x Chicken Alfredo with Spaghetti, 1x Gyro, and 1x Medium Hawaiian Pizza.",
+]) {
+  Deno.test(`answer (echo regression, real transcript): "${msg}" resolves Spaghetti on the SECOND (still-blank) line, not blocked by the first, already-resolved duplicate`, () => {
+    const result = answer(ALFREDO_OPEN_STATE, alfredoDuplicateCart(), msg, ALFREDO_MENU);
+    assertEquals(result, { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true });
+  });
+}
+
+Deno.test("answer (echo regression): resolving the second line leaves the first, already-resolved line untouched", () => {
+  const cart = alfredoDuplicateCart();
+  answer(ALFREDO_OPEN_STATE, cart, "Spaghetti, please! Now can you confirm my whole order?", ALFREDO_MENU);
+  assertEquals(cart[0].ask_plan_selections, { [PASTA_GROUP_ID]: SPAGHETTI_CHOICE_ID }, "first line's own resolved choice must be untouched");
+  assertEquals(cart[1].ask_plan_selections, { [PASTA_GROUP_ID]: SPAGHETTI_CHOICE_ID }, "second (previously blank) line must now be resolved too");
+});
+
+Deno.test("extractSlotChoiceWords: strips a trailing 'for <the item>' clause — 'creamy italian dressing for the house salad' -> 'creamy italian dressing'", () => {
+  assertEquals(extractSlotChoiceWords("creamy italian dressing for the house salad"), "creamy italian dressing");
+});
+
+Deno.test("extractSlotChoiceWords: a short message with no preposition clause is returned whole", () => {
+  assertEquals(extractSlotChoiceWords("cream dressin"), "cream dressin");
+});
+
+Deno.test("runTurnEngineTurn (echo regression, acceptance): a GENUINE miss on the House salad ('creamy italian dressing for the house salad') echoes only the choice words, not the whole message", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "creamy italian dressing for the house salad", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: DRESSING_OPEN_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+  const result = await runTurnEngineTurn(input, deps);
+  assert(
+    result.reply.includes('We don\'t have "creamy italian dressing" for House. The options are: Ranch, Balsamic Vinaigrette, or Caesar.'),
+    `must echo only the choice-shaped fragment, not the whole message: ${JSON.stringify(result.reply)}`,
+  );
+});
+
+Deno.test("runTurnEngineTurn (echo regression, anti-repeat): the SAME quoted words never echo twice in a row — the second identical miss falls back to the plain enumerate wording", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called")),
+  };
+  // Models turn 2 of the same miss: turn 1 already echoed "creamy italian
+  // dressing" and persisted it as lastSlotEchoText.
+  const priorState: DialogueState = { ...DRESSING_OPEN_STATE, openRepeatCount: 1, lastSlotEchoText: "creamy italian dressing" };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "creamy italian dressing for the house salad", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+  const result = await runTurnEngineTurn(input, deps);
+  assert(!result.reply.includes("We don't have"), `must not echo the same words twice in a row: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("Let me list the options for you"), `must fall back to the plain enumerate wording: ${JSON.stringify(result.reply)}`);
+});
+
+Deno.test("runTurnEngineTurn (echo regression, anti-repeat): DIFFERENT quoted words on the second miss still echo fresh — this is not a general 'never echo twice' rule", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called")),
+  };
+  const priorState: DialogueState = { ...DRESSING_OPEN_STATE, openRepeatCount: 1, lastSlotEchoText: "creamy italian dressing" };
+  const input: RunTurnInput = {
+    conversationId: "conv-0", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "cream dressin", history: [], menu: HOUSE_SALAD_MENU, cart: HOUSE_SALAD_CART, dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  };
+  const result = await runTurnEngineTurn(input, deps);
+  assert(result.reply.includes('We don\'t have "cream dressin" for House.'), `different words must still echo: ${JSON.stringify(result.reply)}`);
 });

@@ -85,6 +85,7 @@ import {
   decide,
   ask,
   render,
+  extractSlotChoiceWords,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -733,6 +734,16 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // RenderContext.unmatchedSlotChoiceText's own doc for why this is kept
   // separate from enumerateSlotChoices rather than folded into it.
   let unmatchedSlotChoiceText: string | undefined;
+  // 2026-09-18 PO dispatch (echo regression follow-up): what to persist as
+  // DialogueState.lastSlotEchoText for NEXT turn's anti-repeat comparison.
+  // Deliberately a SEPARATE variable from unmatchedSlotChoiceText, even
+  // though they're equal whenever this turn actually echoes: the slot/
+  // disambiguation branch below also needs to explicitly CLEAR the prior
+  // turn's stored value when this turn's would-be echo was suppressed as a
+  // repeat (unmatchedSlotChoiceText undefined there for a different reason
+  // than "the slot resolved," which also leaves it undefined but must NOT
+  // clear anything since there's a real new state to move to instead).
+  let nextLastSlotEchoText: string | undefined;
 
   // ── STEP 2: ANSWER ───────────────────────────────────────────────────────
   // Dispatch 00-AH: when address is the open question, geocode THIS turn's
@@ -989,11 +1000,27 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // the cart), so ASK's priority-1 check below will reopen this exact
       // same slot; enumerating it here is always the right slot's choices.
       enumerateSlotChoices = true;
-      // 2026-09-18 PO dispatch (named choice not on the list): this exact
-      // branch is the ONLY place a slot answer is known to have genuinely
-      // failed to match THIS turn (see the flag's own doc) — the customer's
-      // raw text, trimmed, is what render() needs to name back to them.
-      unmatchedSlotChoiceText = input.message.trim() || undefined;
+      // 2026-09-18 PO dispatch (named choice not on the list, then echo-
+      // regression follow-up): this exact branch is the ONLY place a slot
+      // answer is known to have genuinely failed to match THIS turn (see
+      // the flag's own doc) — turn-engine.ts's own "slot" case already
+      // tried BOTH applyCompiledModifyItem and a direct matchChoiceInText
+      // fallback before returning unresolved, so a real match was never
+      // missed here; this is a genuine miss. extractSlotChoiceWords trims
+      // the raw message down to the choice-shaped fragment (never the
+      // whole run-on sentence — see its own doc). Never echoed twice in a
+      // row with the SAME quoted words: falls back to the plain enumerate
+      // wording instead, and clears lastSlotEchoText so a LATER attempt
+      // with genuinely different words can still echo fresh.
+      const candidateEcho = extractSlotChoiceWords(input.message) || undefined;
+      const repeatedEcho = priorState.open?.kind === "slot" &&
+        priorState.lastSlotEchoText !== undefined &&
+        priorState.lastSlotEchoText === candidateEcho;
+      unmatchedSlotChoiceText = repeatedEcho ? undefined : candidateEcho;
+      // Cleared (left undefined) on a suppressed repeat, exactly like a
+      // resolved turn would clear it — so a LATER attempt with the same
+      // original words is judged fresh, not "still repeating."
+      nextLastSlotEchoText = repeatedEcho ? undefined : candidateEcho;
     }
   } else {
     // ── STEP 3: PROPOSE (only reached when ANSWER cannot resolve this
@@ -1153,6 +1180,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   };
   const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
   const nextState = ask(workingCart, priorState, turnEvents, shopContext, input.menu);
+  // 2026-09-18 PO dispatch (echo regression follow-up): record what got
+  // echoed THIS turn (if anything) so NEXT turn's anti-repeat check (above)
+  // can tell a genuine second identical miss from a fresh one. Kept outside
+  // `open` deliberately (see DialogueState.lastSlotEchoText's own doc) —
+  // set directly on the object ask() already returned, never fed back into
+  // ask()'s own pure logic. Cleared unconditionally otherwise (slot
+  // resolved and the ladder moved on, OR this turn's echo was itself
+  // suppressed as a repeat — nextLastSlotEchoText is already undefined in
+  // both cases, so there's nothing case-specific to check here).
+  if (nextLastSlotEchoText) nextState.lastSlotEchoText = nextLastSlotEchoText;
+  else delete nextState.lastSlotEchoText;
 
   // ── STEP 6: RENDER ─────────────────────────────────────────────────────────
   // Same values feed persistTurn's total_cents below — one computation, not

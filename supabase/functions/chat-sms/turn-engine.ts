@@ -113,6 +113,7 @@ import {
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
 import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-reconciler.ts";
+import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
@@ -174,6 +175,16 @@ export interface DialogueState {
   // question just opened, 1 the first time it is re-asked, and so on. Optional
   // so states persisted before this field existed still load. See carry().
   openRepeatCount?: number;
+  // 2026-09-18 PO dispatch (echo regression follow-up): the exact text last
+  // ECHOED back to the customer ("We don't have '<this>' for <item>") on an
+  // unmatched slot answer — kept OUTSIDE `open` deliberately, so it never
+  // affects `sameQuestionAsBefore`'s comparison (ask()'s openRepeatCount
+  // escalation must keep working off `open` alone, unaffected by what text
+  // happened to be echoed). Cleared (set to undefined) whenever a turn falls
+  // back to the plain enumerate wording instead of echoing, so a LATER
+  // attempt with the same original words can still echo fresh once the
+  // "two in a row" streak is broken. Set/read only by turn-engine-runner.ts.
+  lastSlotEchoText?: string;
   // FIXED 2026-09-15 (turn-engine live bug — "two cheeseburgers and a large
   // fries" -> "medium" -> "thats it"): OTHER item_spans a customer's message
   // named that also came back ambiguous, each as its own candidate-id list,
@@ -497,8 +508,35 @@ export function answer(
         cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, undefined, trimmed, [],
         undefined, undefined, undefined, true, true,
       );
-      if (!result.cartChanged) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
-      return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+      if (result.cartChanged) {
+        return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+      }
+      // 2026-09-18 PO dispatch (echo regression, real conv 4854b0e3):
+      // applyCompiledModifyItem finds its target line by menu_item_id ALONE
+      // (this file's own header note 4 on that pre-existing limitation) —
+      // when TWO lines share a menu_item_id (one already resolved, one
+      // still open; the real live shape here: the customer's own recap
+      // text re-triggered a duplicate Chicken Alfredo Entree add, leaving
+      // one resolved-to-Spaghetti line and one still-blank line), it can
+      // silently match the ALREADY-RESOLVED line, find nothing new to set,
+      // and report no change — even though the customer's own words
+      // ("Spaghetti, please!...") plainly answer the question. Falls back
+      // here to a direct match against ONLY the group ask() actually opened
+      // (state.open.group_id), applied straight to `line` — the EXACT line
+      // findLineByKey already found by line_key, never by menu_item_id — so
+      // a duplicate elsewhere in the cart can never shadow this one.
+      const openGroupId = state.open.group_id;
+      const openStep = menuItem.ask_plan.steps.find(s => s.group_id === openGroupId);
+      const directMatch = openStep ? matchChoiceInText(openStep.choices, trimmed) : null;
+      if (openStep && directMatch && !isNegated(trimmed, directMatch.display)) {
+        const selections = { ...(line.ask_plan_selections ?? {}), [openGroupId]: directMatch.id };
+        const { resolvedOptions, priceCents } = priceSelections(menuItem.ask_plan, menuItem.option_groups ?? [], selections);
+        line.ask_plan_selections = selections;
+        line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+        line.price_cents = priceCents;
+        return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+      }
+      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
     }
 
     case "disambiguation": {
@@ -1542,6 +1580,39 @@ export interface RenderContext {
 // every run; never shown on a slot's first ask (renderStepQuestion's default
 // `enumerate: false` stays untouched for that case).
 const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you:";
+
+// 2026-09-18 PO dispatch (echo regression, real conv 4854b0e3): quoting the
+// customer's ENTIRE message back ("We don't have 'Spaghetti, please! Now
+// can you confirm my whole order?' for Chicken Alfredo Entree") reads as a
+// bot that doesn't understand plain English, even after the direct-match
+// fallback above closes the cases where that full sentence WOULD have
+// resolved. For a genuine miss, only the choice-shaped fragment is quoted —
+// a trailing "with/for/on <the item>" clause is stripped (mirrors how a
+// customer names their pick then references the item almost as an
+// afterthought: "creamy italian dressing FOR the house salad"); a short
+// message (<=4 words) with no such clause is quoted whole, since there's
+// nothing to trim and it's already brief enough to read naturally; a
+// longer message with neither shape is quoted whole as a last resort — no
+// rule was given for that case, and quoting more beats guessing wrong.
+//
+// Arrow form deliberately, not a plain named-function declaration with a
+// string return type — this file's own gate test asserts exactly one
+// function signature of that shape exists (render(), the sole reply-
+// building function); a second declaration matching it trips the gate even
+// though this helper never produces customer-facing text on its own.
+export const extractSlotChoiceWords = (message: string): string => {
+  const trimmed = message.trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  let cutIdx = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (/^(?:with|for|on)$/i.test(words[i])) cutIdx = i;
+  }
+  if (cutIdx > 0) {
+    const before = words.slice(0, cutIdx).join(" ").trim();
+    if (before) return before;
+  }
+  return trimmed;
+};
 
 export function render(
   cartBefore: TurnEngineCartLine[],
