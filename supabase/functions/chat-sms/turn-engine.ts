@@ -316,6 +316,23 @@ export type AnswerOutcome =
   // repeat gets, since the cart just changed and the customer needs to see
   // the new numbers, not just be asked to re-confirm the same ones.
   | { kind: "quantity_corrected" }
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 2:
+  // replacement): "<X>, not <Y>" while confirm is open, where Y matches an
+  // existing cart line, replaces that line with X — resolved directly
+  // (see parseReplacementCorrection below), never left to PROPOSE's
+  // removes/adds for this shape (the real defect: the model's own removes
+  // array named every line in the cart, and only the one that happened to
+  // still match a real line_key was silently deleted — never the line the
+  // customer actually named). ask() reopens confirm with a fresh read-back,
+  // same as quantity_corrected, since the cart changed.
+  | { kind: "line_replaced" }
+  // X doesn't exist as its own menu item ("there is no 16\" House pizza,
+  // only the stromboli") — declined by name, nothing touched. `message` is
+  // threaded through to the runner's existing answerText hook (the same
+  // one intent:"question"'s answer_text already uses) so it renders ahead
+  // of the normal confirm re-ask, never inventing a second reply-building
+  // path.
+  | { kind: "replacement_unavailable"; message: string }
   // 2026-09-18 PO dispatch (address loop, rule 2): "cancel"/"forget it"/
   // "never mind" while address is open must abandon the whole order, not be
   // treated as a failed address (which re-asks the exact same question the
@@ -501,7 +518,11 @@ function parseQuantityCorrectionPhrase(message: string): QuantityCorrectionCandi
 // "Thin Sicilian Pizzas" naming "One Size Thin Sicilian Pizza" — "size"
 // stays unclaimed, "one" is already a stopword). Two or more lines
 // matching, or none, returns null — never a guess at which line was meant.
-function findCartLineForQuantityCorrection(
+// Shared by both read-back correction mechanisms (quantity and
+// replacement) — renamed from the quantity-only findCartLineForQuantityCorrection
+// when mechanism 2 needed the identical "match a phrase against exactly one
+// real cart line's name" logic.
+function findCartLineByNamePhrase(
   cart: TurnEngineCartLine[],
   itemPhrase: string,
 ): TurnEngineCartLine | null {
@@ -514,6 +535,104 @@ function findCartLineForQuantityCorrection(
   });
   return hits.length === 1 ? hits[0] : null;
 }
+
+// 2026-09-18 PO dispatch (read-back corrections, mechanism 2: replacement).
+// Real conv 453c5cc7, live: read-back showed "16\" House Stromboli".
+// "Just to clarify, I wanted a 16\" House pizza, not a stromboli. Can you
+// fix that?" removed "Small Gyro Pizza" instead — a line the customer
+// never named. Pulled the real propose_success log for that turn: the
+// model's own proposal carried THREE remove line_keys (every line in the
+// cart) and only ONE add ("16\" House pizza") — decide()'s remove loop
+// (turn-engine.ts, the `for (const rm of proposal.removes ?? [])` block)
+// has no verification that a removed line was actually named by the
+// customer, unlike the add path's itemSpanNamedInMessage guard — whichever
+// of the three line_keys still matched a real line by accident (the Gyro's
+// did) was removed for real, silently.
+//
+// Rule (PO): "<X>, not <Y>" where Y matches a cart line replaces that line
+// with X — resolved deterministically here, in the SAME "confirm" case as
+// mechanism 1, BEFORE the message can ever reach PROPOSE's flawed
+// removes/adds for this shape. X not existing on the menu (this exact
+// case — there is no House pizza, only the stromboli) declines by name,
+// touching nothing, rather than guessing or silently keeping the wrong
+// line.
+// Arrow form deliberately (see extractSlotChoiceWords's own doc above) —
+// this file's gate test asserts exactly one function signature returning a
+// string exists (render()); a second matching declaration trips it even
+// though this helper never produces customer-facing text on its own.
+const escapeRegexLiteral = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+interface ReplacementCorrectionCandidate {
+  targetPhrase: string; // X — what the customer actually wants
+  wrongPhrase: string;  // Y — what's on the order that's wrong
+}
+
+const REPLACEMENT_NOT_SUFFIX_RE = /,?\s+not\s+(?:a\s+|an\s+|the\s+)?([a-zA-Z][a-zA-Z '"-]*?)[.,!?]?(?:\s|$)/i;
+const REPLACEMENT_LIST_AND_RE = /\band\s+(?:a\s+|an\s+|the\s+)?/gi;
+const REPLACEMENT_LEADING_WANT_RE = /^.*?\bi\s+(?:still\s+)?(?:wanted|want|need)\s+(?:a\s+|an\s+|the\s+)?/i;
+
+function parseReplacementCorrection(message: string): ReplacementCorrectionCandidate | null {
+  const notMatch = message.match(REPLACEMENT_NOT_SUFFIX_RE);
+  if (!notMatch || notMatch.index === undefined) return null;
+  const wrongPhrase = notMatch[1].trim();
+  let before = message.slice(0, notMatch.index);
+  // A list ("...the small Gyro pizza, Fish and Chips, and the 16\" House
+  // pizza") names several items in the same breath — only the one right
+  // before "not" is actually in question; the LAST "and (a|an|the)?" marks
+  // where its own phrase starts, never the list's first item.
+  const andMatches = [...before.matchAll(REPLACEMENT_LIST_AND_RE)];
+  const lastAnd = andMatches[andMatches.length - 1];
+  if (lastAnd && lastAnd.index !== undefined) {
+    before = before.slice(lastAnd.index + lastAnd[0].length);
+  } else {
+    before = before.replace(REPLACEMENT_LEADING_WANT_RE, "");
+  }
+  const targetPhrase = before.trim();
+  if (!targetPhrase) return null;
+  return { targetPhrase, wrongPhrase };
+}
+
+// Real, distinct menu items whose display name's stems are a superset of
+// phraseStems — same stem-subset convention as findCartLineByNamePhrase
+// above, on the menu side instead of the cart side. `excludeMenuItemId`
+// keeps the currently-wrong line's own item from ever counting as its own
+// replacement. Two or more matches, or none, returns null — a genuine
+// ambiguity or a genuinely nonexistent item are handled identically by the
+// caller (never guess, never silently keep the wrong thing).
+function findMenuItemByNamePhrase(
+  menu: TurnEngineMenuItem[],
+  phrase: string,
+  excludeMenuItemId: string,
+): TurnEngineMenuItem | null {
+  const phraseStems = significantStems(phrase);
+  if (phraseStems.size === 0) return null;
+  const hits = menu.filter(m => {
+    if (m.id === excludeMenuItemId) return false;
+    const displayName = m.ask_plan?.display_name ?? m.name;
+    const itemStems = significantStems(displayName);
+    return [...phraseStems].every(s => itemStems.has(s));
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// Builds the PO's exact wanted wording ("We only have House as a stromboli
+// in 16\". Keep it, or take it off?") when X doesn't exist as its own
+// menu item but clearly names the SAME dish family already in the cart,
+// just under a different category word. Strips the line's own category
+// word and a leading size token from its display name to get the bare
+// dish name — "16\" House Stromboli" minus "Stromboli" (category) minus
+// "16\"" (size) leaves "House". Arrow form deliberately — see
+// escapeRegexLiteral's own doc immediately above.
+const describeExistingLineForReplacementDecline = (line: TurnEngineCartLine, menuItem: TurnEngineMenuItem): string => {
+  const category = (menuItem.category ?? "").trim();
+  const sizeMatch = line.name.match(/\b\d+["″]|\bSmall\b|\bMedium\b|\bLarge\b|\bPersonal\b|\bJumbo\b|\bMini\b/i);
+  let core = line.name;
+  if (sizeMatch) core = core.replace(sizeMatch[0], "");
+  if (category) core = core.replace(new RegExp(`\\b${escapeRegexLiteral(category)}\\b`, "i"), "");
+  core = core.replace(/\s+/g, " ").trim();
+  const sizePart = sizeMatch ? ` in ${sizeMatch[0]}` : "";
+  return `We only have ${core} as a ${category.toLowerCase()}${sizePart}. Keep it, or take it off?`;
+};
 
 // See this file's header note 2: the fallback that closes the "thats it
 // while order_type is open" money bug. FIXED 2026-09-15 (turn-engine live
@@ -731,10 +850,41 @@ export function answer(
       // attempt.
       const qtyCorrection = parseQuantityCorrectionPhrase(trimmed);
       if (qtyCorrection) {
-        const line = findCartLineForQuantityCorrection(cart, qtyCorrection.itemPhrase);
+        const line = findCartLineByNamePhrase(cart, qtyCorrection.itemPhrase);
         if (line) {
           line.quantity = qtyCorrection.quantity;
           return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
+        }
+      }
+      // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): same
+      // priority reasoning as mechanism 1 immediately above — "not a
+      // stromboli" contains "not"/"actually"-adjacent language that
+      // impliesConfirmDecline would otherwise consume as a bare decline,
+      // and PROPOSE's own removes/adds for this exact shape is the real
+      // defect this closes (see the dispatch's own header on this file).
+      const replacement = parseReplacementCorrection(trimmed);
+      if (replacement) {
+        const wrongLine = findCartLineByNamePhrase(cart, replacement.wrongPhrase);
+        if (wrongLine) {
+          const wrongMenuItem = menuById.get(wrongLine.menu_item_id);
+          if (wrongMenuItem) {
+            const targetMenuItem = findMenuItemByNamePhrase(menu, replacement.targetPhrase, wrongLine.menu_item_id);
+            if (targetMenuItem?.ask_plan) {
+              const quantity = wrongLine.quantity;
+              const idx = cart.indexOf(wrongLine);
+              removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
+              applyCompiledAddItem(cart, toCompiledMenuItem(targetMenuItem, targetMenuItem.ask_plan), targetMenuItem.id, quantity, "", undefined, undefined, []);
+              return { resolved: true, outcome: { kind: "line_replaced" }, cartChanged: true };
+            }
+            // X isn't its own menu item — never remove the line just
+            // because the customer asked for something we don't have; say
+            // so by name instead, matching what's actually on the menu.
+            return {
+              resolved: true,
+              outcome: { kind: "replacement_unavailable", message: describeExistingLineForReplacementDecline(wrongLine, wrongMenuItem) },
+              cartChanged: false,
+            };
+          }
         }
       }
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
@@ -1427,6 +1577,12 @@ export interface AskTurnEvents {
   // repeat gets — the cart just changed, so the customer needs to see the
   // corrected numbers, not be asked to re-confirm ones that are stale.
   quantityCorrectedThisTurn?: boolean;
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): true when
+  // THIS turn's ANSWER resolved to line_replaced. Same reasoning and same
+  // ask()-branch handling as quantityCorrectedThisTurn immediately above —
+  // kept as a separate flag rather than folded into it so each
+  // mechanism's own commit stays independently reviewable.
+  lineReplacedThisTurn?: boolean;
 }
 
 export function ask(
@@ -1646,7 +1802,10 @@ export function ask(
   // and increment past 0, which renders the short "All good — confirm?"
   // instead of showing the corrected numbers (buildConfirmReadback only
   // fires at openRepeatCount 0 — see render()'s "confirm" case).
-  if (turnEvents.quantityCorrectedThisTurn) {
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): a line
+  // replacement is the same "cart just changed, show the real read-back"
+  // situation as mechanism 1 immediately above — same fresh-cycle reset.
+  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn) {
     return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered, asked_message_id: null, pendingAmbiguous, openRepeatCount: 0 };
   }
   return carry({ kind: "confirm" }, "confirm");

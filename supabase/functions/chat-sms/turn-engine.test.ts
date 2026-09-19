@@ -2100,3 +2100,87 @@ Deno.test("runTurnEngineTurn (read-back corrections, mechanism 1): the reply is 
   assertEquals((result.dialogueState.open as { kind?: string } | null)?.kind, "confirm");
   assertEquals(result.dialogueState.openRepeatCount, 0, "a fresh cycle — the next re-ask should be the short prompt, not this one");
 });
+
+// ============================================================
+// 2026-09-18 PO dispatch (read-back corrections, mechanism 2: replacement).
+// Real conv 453c5cc7, live: read-back showed "16\" House Stromboli". "Just
+// to clarify, I wanted a 16\" House pizza, not a stromboli. Can you fix
+// that?" removed "Small Gyro Pizza" — a line never named. Pulled the real
+// propose_success log for that turn (not guessed): the model's own
+// proposal removed all THREE cart lines and only re-added ONE ("16\"
+// House pizza") — decide()'s remove loop trusts line_key with no
+// verification the customer actually named that line, unlike the add
+// path's guard. Whichever line_key still matched (the Gyro's) got deleted
+// for real.
+// ============================================================
+const REPLACE_GYRO_ID = "item-replace-gyro";
+const REPLACE_FISH_ID = "item-replace-fish";
+const REPLACE_HOUSE_STROMBOLI_ID = "item-replace-house-stromboli";
+const REPLACE_MENU: TurnEngineMenuItem[] = [
+  { id: REPLACE_GYRO_ID, name: "Small Gyro Pizza", category: "Pizza", price_cents: 1295, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Small Gyro Pizza", base_price_cents: 1295, recap_template: "", ticket_template: "", steps: [] } },
+  { id: REPLACE_FISH_ID, name: "Fish And Chips", category: "Entrees", price_cents: 1350, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Fish And Chips", base_price_cents: 1350, recap_template: "", ticket_template: "", steps: [] } },
+  { id: REPLACE_HOUSE_STROMBOLI_ID, name: "House - 16\"", category: "Stromboli", price_cents: 2295, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "16\" House Stromboli", base_price_cents: 2295, recap_template: "", ticket_template: "", steps: [] } },
+];
+function replaceCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: REPLACE_GYRO_ID, name: "Small Gyro Pizza", quantity: 1, price_cents: 1295, modifiers: [] },
+    { menu_item_id: REPLACE_FISH_ID, name: "Fish And Chips", quantity: 1, price_cents: 1350, modifiers: [] },
+    { menu_item_id: REPLACE_HOUSE_STROMBOLI_ID, name: "16\" House Stromboli", quantity: 1, price_cents: 2295, modifiers: [] },
+  ];
+}
+const REPLACE_CONFIRM_STATE: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+
+for (const msg of [
+  "Just to clarify, I wanted a 16\" House pizza, not a stromboli. Can you fix that? So, I need the small Gyro pizza, Fish and Chips, and the 16\" House pizza for pickup.",
+  "I already told you I want the small Gyro pizza, Fish and Chips, and the 16\" House pizza, not a stromboli! Can you fix that?",
+  "I still want the 16\" House pizza, not the stromboli! Just to confirm: small Gyro pizza with tomatoes and spinach, Fish and Chips, and a 16\" House pizza for pickup. Can you confirm that?",
+  "I need the 16\" House pizza, not a stromboli! Let me just confirm: small Gyro pizza with tomatoes and spinach, Fish and Chips, and a 16\" House pizza for pickup. Can you confirm that?",
+]) {
+  Deno.test(`answer (read-back corrections, mechanism 2): "${msg.slice(0, 60)}..." declines by name — no House pizza exists — and touches NOTHING`, () => {
+    const cart = replaceCart();
+    const result = answer(REPLACE_CONFIRM_STATE, cart, msg, REPLACE_MENU);
+    assertEquals(result, {
+      resolved: true,
+      outcome: { kind: "replacement_unavailable", message: 'We only have House as a stromboli in 16". Keep it, or take it off?' },
+      cartChanged: false,
+    });
+    assertEquals(cart.map(l => l.menu_item_id), [REPLACE_GYRO_ID, REPLACE_FISH_ID, REPLACE_HOUSE_STROMBOLI_ID], "the Gyro (and everything else) must be untouched — nothing the customer didn't name is ever removed");
+  });
+}
+
+Deno.test("answer (read-back corrections, mechanism 2): a real, distinct target item DOES replace the wrong line, preserving quantity", () => {
+  const cheeseId = "item-cheese-pizza-2";
+  const pepperoniId = "item-pepperoni-pizza-2";
+  const menu: TurnEngineMenuItem[] = [
+    { id: cheeseId, name: "Cheese Pizza", category: "Pizza", price_cents: 1299, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Cheese Pizza", base_price_cents: 1299, recap_template: "", ticket_template: "", steps: [] } },
+    { id: pepperoniId, name: "Pepperoni Pizza", category: "Pizza", price_cents: 1499, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Pepperoni Pizza", base_price_cents: 1499, recap_template: "", ticket_template: "", steps: [] } },
+  ];
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: cheeseId, name: "Cheese Pizza", quantity: 2, price_cents: 1299, modifiers: [] },
+  ];
+  const result = answer(REPLACE_CONFIRM_STATE, cart, "I wanted a Pepperoni Pizza, not a Cheese Pizza.", menu);
+  assertEquals(result, { resolved: true, outcome: { kind: "line_replaced" }, cartChanged: true });
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].menu_item_id, pepperoniId);
+  assertEquals(cart[0].quantity, 2, "quantity must carry over from the replaced line");
+});
+
+Deno.test("runTurnEngineTurn (read-back corrections, mechanism 2): the real transcript never removes the Gyro — reply names what's actually on the menu, cart is untouched, never reaches PROPOSE", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — the correction resolves deterministically")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-453c5cc7", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "Just to clarify, I wanted a 16\" House pizza, not a stromboli. Can you fix that? So, I need the small Gyro pizza, Fish and Chips, and the 16\" House pizza for pickup.",
+    history: [], menu: REPLACE_MENU, cart: replaceCart(), dialogueState: REPLACE_CONFIRM_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Alex", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("removed"), `must never claim anything was removed: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes('We only have House as a stromboli in 16". Keep it, or take it off?'), `must name what's actually available: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.map(l => l.menu_item_id), [REPLACE_GYRO_ID, REPLACE_FISH_ID, REPLACE_HOUSE_STROMBOLI_ID]);
+});

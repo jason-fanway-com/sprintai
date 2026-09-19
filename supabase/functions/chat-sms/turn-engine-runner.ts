@@ -876,6 +876,22 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // own doc.
         turnEvents = { ...turnEvents, quantityCorrectedThisTurn: true };
         break;
+      case "line_replaced":
+        // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): the
+        // wrong line was already removed and the right one added in place
+        // by answer() (turn-engine.ts's "confirm" case). Same fresh-
+        // read-back handling as quantity_corrected — see
+        // AskTurnEvents.lineReplacedThisTurn's own doc.
+        turnEvents = { ...turnEvents, lineReplacedThisTurn: true };
+        break;
+      case "replacement_unavailable":
+        // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): X
+        // isn't its own menu item — nothing was touched. The explanation
+        // rides ahead of the normal re-ask via the SAME answerText hook
+        // intent:"question"'s answer_text already uses below, never a
+        // second reply-building path.
+        answerText = outcome.message;
+        break;
       // slot_resolved / address_declined / upsell_accepted / upsell_declined:
       // cart already mutated in place by answer() where relevant, nothing
       // else to persist or feed into ASK.
