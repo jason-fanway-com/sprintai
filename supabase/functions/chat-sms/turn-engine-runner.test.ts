@@ -2383,3 +2383,88 @@ Deno.test('runTurnEngineTurn P0 (round-2 "plain" addendum): a list answer\'s "pl
   for (const line of result.cart) assertEquals(line.quantity, 1);
   assertEquals(result.dialogueState.open, null, "fully resolved — size was already stated, never re-asked");
 });
+
+// ── PO fix (2026-09-19, round-2 item 1 ROOT CAUSE, live repro run TWICE with
+// Jason's exact two turns): the test above pre-seeds priorState.open.spanText
+// as the already-correct "4 large pizzas" — it never exercises how that
+// spanText gets set in the first place. Live, PROPOSE's own item_span for
+// the turn that OPENS the disambiguation is model output and varies call to
+// call for the IDENTICAL customer message: one run's item_span kept "large
+// pizzas", another run's dropped it to bare "pizzas". decide() used to read
+// the held size ONLY from that item_span (extractGlobalSizeWord run against
+// it), so the dropped-word run stored no size at all — every clause in the
+// following list answer then narrowed to a same-kind, multi-size group with
+// nothing to disambiguate them further, and (depending on exactly how thin
+// the remaining candidate set was) could fall all the way through to
+// unresolved instead of asking "What size?" once. The fix reads the held
+// size from the CUSTOMER'S OWN raw message for the opening turn — which
+// always has "large" whether or not the model's item_span kept it — so this
+// must resolve correctly regardless of which shape PROPOSE happens to
+// return. Runs the FULL two turns (open, then answer) through
+// runTurnEngineTurn — never pre-seeds state — so a decide()-level regression
+// in how spanText gets built is not masked by fixture setup.
+Deno.test('runTurnEngineTurn P0 (round-2 item 1 root cause): the held size for a disambiguation survives even when PROPOSE\'s own item_span for the opening turn drops "large"', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: VITO_SHAPED_LEXICON_WITH_PLAIN_ALIAS });
+
+  // Turn 1: "I want 4 large pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat
+  // lovers" — PROPOSE's own item_span for the (still-ambiguous) 4-pizza add
+  // is "pizzas", dropping the word "large" the customer actually typed. This
+  // is the exact live variance the PO's root-cause investigation found —
+  // the SAME customer message, a different model call, a different span.
+  const openDeps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true,
+      attempts: 1,
+      proposal: {
+        intent: "order",
+        adds: [{ item_span: "pizzas", quantity: 4, choices: [] }],
+        removes: [], modifies: [],
+      },
+    }),
+  };
+  const openInput = baseInput({
+    message: "I want 4 large pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers",
+    menu: VITO_SHAPED_MENU,
+    cart: [],
+    dialogueState: null,
+  });
+  const openResult = await runTurnEngineTurn(openInput, openDeps);
+
+  assertEquals(openResult.cart.length, 0, "still ambiguous — nothing resolves on the opening turn");
+  assertEquals(openResult.dialogueState.open?.kind, "disambiguation");
+  if (openResult.dialogueState.open?.kind === "disambiguation") {
+    assertEquals(
+      openResult.dialogueState.open.spanText,
+      "large pizzas",
+      "the held size must come from the customer's own raw message, not the model's item_span which dropped \"large\"",
+    );
+  }
+
+  // Turn 2: the list answer. PROPOSE must never be called — a disambiguation
+  // answer resolves deterministically.
+  const answerDeps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const answerInput = baseInput({
+    message: "one plain, one meat lover, one hawaiian, one pepperoni",
+    menu: VITO_SHAPED_MENU,
+    cart: [],
+    dialogueState: openResult.dialogueState,
+  });
+  const answerResult = await runTurnEngineTurn(answerInput, answerDeps);
+
+  assert(!/not sure what you meant/i.test(answerResult.reply), `all four clauses must resolve via the recovered held size, never "not sure what you meant": ${JSON.stringify(answerResult.reply)}`);
+  assertEquals(answerResult.cart.length, 4, "all four named kinds must land, each at its held Large size");
+  const ids = answerResult.cart.map(l => l.menu_item_id).sort();
+  assertEquals(
+    ids,
+    ["item-vito-0-2", "item-vito-1-2", "item-vito-4-2", "item-vito-6-2"].sort(),
+    "must be the Large Cheese ('plain'), Large Pepperoni, Large Hawaiian, and Large Meat Lover — never Small/Medium and never an empty cart",
+  );
+  for (const line of answerResult.cart) assertEquals(line.quantity, 1);
+  assertEquals(answerResult.dialogueState.open, null, "fully resolved — size was recovered from the raw message, never re-asked");
+});

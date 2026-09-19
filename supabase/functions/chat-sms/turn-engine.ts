@@ -2577,7 +2577,25 @@ export function decide(
   if (ambiguousSpansFiltered.length > 0) {
     disambiguationCandidateIds = ambiguousSpansFiltered[0].candidates;
     disambiguationQuantity = ambiguousSpansFiltered[0].quantity;
-    disambiguationSpanText = ambiguousSpansFiltered[0].spanText;
+    // PO fix (2026-09-19, round-2 item 1 root cause, live repro "4 large
+    // pizzas. 1 pepperoni, 1 plain, 1 hawaiian, 1 meat lovers"): PROPOSE's
+    // own item_span for the ambiguous add is model output and can drop a
+    // size word the customer actually typed ("4 large pizzas" -> item_span
+    // "pizzas") — this varies call to call for the IDENTICAL message. Every
+    // downstream read of this disambiguation's held size (narrowingFacetForOpen,
+    // narrowingKindQuestion, the answer() facet path above) goes through
+    // extractGlobalSizeWord(spanText), so if item_span silently drops "large"
+    // the held size is silently lost too — no size ever gets asked or held,
+    // and a same-kind multi-size clause (pepperoni -> 3 sizes) narrows to
+    // nothing instead of resolving or asking "What size?". The customer's
+    // own raw message for THIS turn always has the real word if they said
+    // one; only fall back to the model's span when the raw message has none
+    // (a legitimately sizeless order like "a pepperoni pizza" answered later).
+    const itemSpanSpanText = ambiguousSpansFiltered[0].spanText;
+    const rawMessageSizeWord = customerMessage ? extractGlobalSizeWord(customerMessage) : null;
+    disambiguationSpanText = (!extractGlobalSizeWord(itemSpanSpanText) && rawMessageSizeWord)
+      ? `${rawMessageSizeWord} ${itemSpanSpanText}`.trim()
+      : itemSpanSpanText;
     carriedDisambiguationCandidateIds = ambiguousSpansFiltered.slice(1).map(s => s.candidates);
   }
 
