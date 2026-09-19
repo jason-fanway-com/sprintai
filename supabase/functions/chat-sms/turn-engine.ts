@@ -1264,7 +1264,8 @@ function dropAddsSupersededByCorrection(adds: ResolvedAdd[], customerMessage: st
 //
 // P0 fix (2026-09-19, phantom-money): "a phrase that matches an option
 // CHOICE" means the candidate's WHOLE resolved span IS that choice's name
-// (matchChoiceAsWholeSpan — stem-set equality), never a substring/contains
+// (matchChoiceAsWholeSpan — whole normalized token-set equality, no
+// stemming/reduction on either side), never a substring/contains
 // check. "a chicken cheesesteak sandwich and a house salad" used to lose
 // the whole $11.99 sandwich here — no decline, no trace — because the bare
 // word "chicken" inside that span is also House's "Chicken" add-on choice,
@@ -1316,7 +1317,8 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
 // sandwich and a garden salad" (garden salad genuinely ambiguous) used to
 // HOLD the whole resolved sandwich as if it were a modifier of whichever
 // salad candidate the customer would pick, and it never came back. Now
-// uses matchChoiceAsWholeSpan (stem-set equality), so only a span that IS
+// uses matchChoiceAsWholeSpan (whole normalized token-set equality, no
+// stemming/reduction on either side), so only a span that IS
 // the choice's name, not one that merely contains it, gets held.
 function holdAddsThatAreModifiersOfAnAmbiguousSibling(
   adds: ResolvedAdd[],

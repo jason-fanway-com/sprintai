@@ -271,18 +271,25 @@ function groupNeedsNumericStems(choices: EngineChoice[]): boolean {
  * question is whether the whole thing is nothing more than a modifier
  * mention, not whether a modifier's name happens to appear inside it.
  *
- * A real modifier mention ("black diamond steak" naming House's own
- * "Black Diamond Steak" choice) has a span whose significant stems are
- * EXACTLY the choice's — nothing more, nothing less. A real second item
- * whose name happens to share a word with some other item's modifier
- * ("chicken cheesesteak sandwich" sharing "chicken" with House's
- * "Chicken" choice) has a strictly LARGER stem set. So: match only on
- * stem-set equality, never a subset in either direction. This is the
- * resolver's own "longest match wins" principle (matchChoiceByStems'
- * isStrictSupersetOfStems tiebreak, above) applied at this seam — when
- * the add's own span is longer/more specific than the choice text, the
- * add's real-item resolution wins and this returns null.
+ * PO correction (2026-09-19, same-day): a first attempt at this fix used
+ * significantStems (stopword-dropping, <3-char-dropping, plural-stripping)
+ * on BOTH sides before comparing — still a REDUCTION, just a symmetric one,
+ * and reduction in either direction is the wrong shape for this seam. The
+ * only question that matters here is "is the add's span, verbatim, nothing
+ * but this choice's name" — so this compares whole normalized TOKEN SETS
+ * (case/whitespace fold, no stopword removal, no length floor, no stemming)
+ * for exact equality. A real modifier mention ("black diamond steak" naming
+ * House's own "Black Diamond Steak" choice) has a token set that is EXACTLY
+ * the choice's. A real second item whose name happens to contain a modifier
+ * word ("chicken cheesesteak sandwich" containing "chicken", House's own
+ * "Chicken" choice) has a strictly LARGER token set and is never equal to
+ * the choice's — so it survives, full stop, regardless of what stemming
+ * might otherwise have collapsed either side down to.
  */
+function wholeSpanTokens(text: string): Set<string> {
+  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
+}
+
 export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string): EngineChoice | null {
   if (!span || choices.length === 0) return null;
 
@@ -291,13 +298,12 @@ export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string): E
   if (exactHits.length === 1) return exactHits[0];
   if (exactHits.length > 1) return null; // two choices sharing a display name — genuinely ambiguous, never guess
 
-  const numericSignificant = groupNeedsNumericStems(choices);
-  const spanStems = significantStems(span, numericSignificant);
-  if (spanStems.size === 0) return null;
-  const spanKey = stemSetKey(spanStems);
-  const stemHits = choices.filter(c => stemSetKey(significantStems(c.display, numericSignificant)) === spanKey);
-  if (stemHits.length === 1) return stemHits[0];
-  return null; // 0 hits, or >1 choices sharing this exact stem set — never guess
+  const spanTokens = wholeSpanTokens(span);
+  if (spanTokens.size === 0) return null;
+  const spanKey = stemSetKey(spanTokens);
+  const tokenHits = choices.filter(c => stemSetKey(wholeSpanTokens(c.display)) === spanKey);
+  if (tokenHits.length === 1) return tokenHits[0];
+  return null; // 0 hits, or >1 choices sharing this exact token set — never guess
 }
 
 /**
