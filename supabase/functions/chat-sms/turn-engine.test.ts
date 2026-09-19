@@ -3420,6 +3420,8 @@ Deno.test("ask (freeze-queue item 5, acceptance 2): order_type resolved on the s
   assert(!/PICKUP or DELIVERY/i.test(reply), `a resolved order_type must never show the repeat-cap escalation wording: ${reply}`);
   assert(reply.includes("Anything else?"), `must never re-ask order_type or show any escalation wording once it has resolved: ${reply}`);
   assert(!reply.includes("Pickup or delivery today?"), `must never re-ask the resolved order_type question: ${reply}`);
+});
+
 // 2026-09-19 PO dispatch (question-clause-not-an-add, live money bug, real
 // customer conversation, sim #5 run right after 07adf9a8 deployed): "...
 // Also, can I get 2 Pepperoni pizzas? And do you have anything gluten
