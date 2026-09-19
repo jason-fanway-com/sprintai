@@ -194,6 +194,63 @@ function sortGroupsCanonical(groups: CompileGroup[]): CompileGroup[] {
   });
 }
 
+// 2026-09-19 PO dispatch (Commit 2, size-token normalization): a shop's raw
+// import data can spell the identical physical size several different ways
+// — 14", 14in, 14-inch all mean the same dimension. Canonicalizes any of
+// the three SQUISHED (no-space) spellings, wherever they occur in a term,
+// to one written form ("14 inch") before normaliseTerm's own punctuation
+// strip runs. The already-spaced "14 inch" form is deliberately untouched
+// (already tokenizes to "14"+"inch" as separate words, already matched by
+// resolve-item.ts's own SIZE_DIGIT_TOKENS) — this only closes the gap for
+// the concatenated/hyphenated spellings, and requires NO space between the
+// digits and the unit word, so it can never misfire on unrelated text like
+// "10 in a box" (a real, plausible shop description, not a size).
+const SIZE_SUFFIX_RE = /(\d+)(?:"|-in(?:ch(?:es)?)?\b|in(?:ch(?:es)?)?\b)/gi;
+
+export function canonicalizeSizeTokens(text: string): string {
+  return text.replace(SIZE_SUFFIX_RE, (_m, digits: string) => `${digits} inch`);
+}
+
+// 2026-09-19 PO dispatch (Commit 2, apostrophe lexicon gap, real Vito's
+// "Grandma's" pizza): normaliseTerm below always strips an apostrophe
+// entirely ("Grandma's" -> "grandmas") — that has always been the ONLY
+// form ever stored. resolve-item.ts's own normalize() turns a CUSTOMER's
+// literal apostrophe into a SPACE instead ("grandma's" -> "grandma s", two
+// words), which can never word-align against the single stored word
+// "grandmas". Live: "grandma's medium 14"" and "medium grandma's" both came
+// back completely unresolved; only "grandmas" (typed with no apostrophe at
+// all) worked.
+//
+// General fix, general rule (not a one-off entry for Grandma's): whenever a
+// raw string contains an apostrophe (straight ' or the curly ’ iOS
+// autocorrect produces), emit the existing stripped form PLUS an as-typed
+// and a curly-quote variant. Whichever way resolve-item.ts's own
+// normalize() ends up splitting the STORED term at match time, it now does
+// so identically to however it splits the customer's own apostrophe — same
+// mechanism, applied to both sides, zero changes needed in resolve-item.ts
+// itself. A term with no apostrophe at all is completely unaffected: the
+// one row it always produced, unchanged.
+const ANY_APOSTROPHE_RE = /['’]/;
+const CURLY_APOSTROPHE = "’";
+
+function normaliseTermKeepingApostrophe(raw: string, apostrophe: string): string {
+  return canonicalizeSizeTokens(raw)
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[.,"()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/'/g, apostrophe);
+}
+
+export function normaliseTermVariants(raw: string): string[] {
+  const stripped = normaliseTerm(raw);
+  if (!ANY_APOSTROPHE_RE.test(raw)) return [stripped];
+  const straight = normaliseTermKeepingApostrophe(raw, "'");
+  const curly = normaliseTermKeepingApostrophe(raw, CURLY_APOSTROPHE);
+  return [...new Set([stripped, straight, curly])];
+}
+
 // ============================================================
 // Normalisation helpers (lexicon terms). Same behaviour as menu-entity-
 // key.ts's normaliseEntityTerm — lowercase, drop punctuation that doesn't
@@ -203,9 +260,9 @@ function sortGroupsCanonical(groups: CompileGroup[]): CompileGroup[] {
 // too would just move the mismatch rather than fix it.
 // ============================================================
 function normaliseTerm(raw: string): string {
-  return raw
+  return canonicalizeSizeTokens(raw)
     .toLowerCase()
-    .replace(/[.,'"()]/g, "")
+    .replace(/[.,'’"()]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -431,13 +488,38 @@ function bareProductName(item: CompileItem): string | null {
   return bare;
 }
 
+// 2026-09-19 PO dispatch (Commit 2, apostrophe lexicon gap): bareProductName
+// above is always apostrophe-free — its input (product_key's own slug) has
+// already had punctuation stripped upstream (normalize.ts's slugify), long
+// before an apostrophe variant could ever be preserved. A sized row's raw
+// `name` ("Grandma's - Medium (14\")") still carries the real apostrophe —
+// this recovers the same bare base FROM that raw name (mirroring
+// normalize.ts's own stripSizeSuffix shape: "<base> - <size_label>"), so an
+// apostrophe-preserving bare term can be emitted for every member of a
+// sized family, the same way bareName already is for the stripped form.
+// Null whenever the item isn't sized this way, or its base has no
+// apostrophe to preserve in the first place (the overwhelmingly common
+// case — this only ever adds rows for a name shaped like Grandma's).
+function rawApostropheBareName(item: CompileItem): string | null {
+  if (!item.size_label) return null;
+  const escaped = item.size_label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = item.name.match(new RegExp(`^(.*?)\\s*-\\s*${escaped}$`, "i"));
+  if (!m) return null;
+  const base = m[1].trim();
+  return ANY_APOSTROPHE_RE.test(base) ? base : null;
+}
+
 function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
 
-  // Rule 1: display_name itself.
-  terms.push({ term: normaliseTerm(displayName), target_type: "item", target_id: item.id, provenance: "stated" });
+  // Rule 1: display_name itself. See normaliseTermVariants's own header —
+  // this now emits an as-typed/curly-quote sibling alongside the stripped
+  // form whenever displayName actually contains an apostrophe.
+  for (const term of normaliseTermVariants(displayName)) {
+    terms.push({ term, target_type: "item", target_id: item.id, provenance: "stated" });
+  }
 
   // Rule 2: an item's bare pre-qualification name as a second term — if
   // display_name was qualified ("Cheesesteak Sandwich"), also index the
@@ -492,6 +574,19 @@ function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   if (bareName) {
     terms.push({ term: bareName, target_type: "item", target_id: item.id, provenance: "stated" });
   }
+  // See rawApostropheBareName's own header: bareName above is always
+  // apostrophe-free by construction (product_key was already slugged
+  // upstream) — this recovers an as-typed/curly-quote bare term straight
+  // from the row's own raw name for a sized family whose base actually has
+  // one ("Grandma's"), so every size sibling carries it and resolve-item.ts's
+  // existing size-narrowing (already tied across the family) can pick the
+  // right one the same way it already does for the size WORD.
+  const rawBare = rawApostropheBareName(item);
+  if (rawBare) {
+    for (const term of normaliseTermVariants(rawBare)) {
+      terms.push({ term, target_type: "item", target_id: item.id, provenance: "stated" });
+    }
+  }
 
   // Rule 6: "X or Y" slot choices → their own names, as choice targets.
   for (const g of item.groups) {
@@ -499,7 +594,9 @@ function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
     for (const c of g.choices) {
       const cName = choiceDisplay(c).trim();
       if (!cName) continue;
-      terms.push({ term: normaliseTerm(cName), target_type: "choice", target_id: c.id, provenance: "stated" });
+      for (const term of normaliseTermVariants(cName)) {
+        terms.push({ term, target_type: "choice", target_id: c.id, provenance: "stated" });
+      }
     }
   }
 

@@ -1644,17 +1644,44 @@ export function decide(
       // Guard-dropped: the span's tokens were not in the customer's message —
       // the model referenced an item the customer never named this turn.
       // 2026-09-18 PO dispatch (two-regressions item b): "didn't catch" is
-      // for truly unresolved spans; a guard-dropped add must never say that.
-      // If the item resolves AND is already in cart: silent (the model was
-      // echoing an item it could see in state — a harmless restatement the
-      // customer neither asked for nor would notice). Otherwise ask once
-      // without guessing — "Did you want a X as well?" — the customer can
-      // confirm or ignore; no item is ever added without explicit confirmation.
+      // for truly unresolved spans; a guard-dropped add must never say that
+      // wording UNLESS the span genuinely never resolved either.
+      //
+      // 2026-09-19 PO dispatch (Commit 2, item 3 — real conv #41): "Did you
+      // want a grandma's medium 14" as well?" was asked for a span that had
+      // FAILED TO RESOLVE (the apostrophe lexicon gap) — the customer said
+      // "yes", and the checkout link went out without it, because a bare
+      // "yes" can never actually add anything: propose.ts's own contract
+      // requires item_span to be a verbatim substring of the CUSTOMER'S
+      // CURRENT message, and "yes" contains no item name, so the model
+      // structurally cannot re-propose the add from that answer alone. Two
+      // fixes:
+      //   1. "as well?" is now used ONLY when resolution.kind is "resolved"
+      //      — a REAL, addable item. An ambiguous or unresolved span gets
+      //      the SAME "couldn't be found/understood" wording as a genuinely
+      //      unresolved add below — never phrased as if saying yes will
+      //      add it, because nothing here CAN be added yet.
+      //   2. Even for the resolved case, the question itself now says what
+      //      actually has to happen ("say it again") rather than implying a
+      //      bare "yes" suffices — so a customer who does just say "yes"
+      //      has been told, honestly, that isn't enough, and checkout can
+      //      never proceed on the false belief that it was added. Recorded
+      //      in unresolvedSpans either way so the next turn's model prompt
+      //      (orderContext.unresolvedRequests) still carries it forward.
+      // If the item resolves AND is already in cart: silent, unchanged (the
+      // model was echoing an item it could see in state — a harmless
+      // restatement the customer neither asked for nor would notice).
       const span = (add.item_span ?? "").trim();
       const inCart = resolution.kind === "resolved"
         && menuItemIdsAlreadyInCart.has(resolution.menu_item_id);
       if (!inCart && span) {
-        declines.push({ reason: `Did you want a ${span} as well?` });
+        if (resolution.kind === "resolved") {
+          const itemName = menuById.get(resolution.menu_item_id)?.name ?? span;
+          declines.push({ reason: `Did you want a ${itemName} too? If so, just say it again and I'll add it.` });
+        } else {
+          declines.push({ reason: `Sorry, I didn't catch "${span}" — mind saying it again?` });
+        }
+        unresolvedSpans.push(span);
       }
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });

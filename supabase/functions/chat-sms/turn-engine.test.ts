@@ -399,6 +399,63 @@ Deno.test("decide (b — guard-drop not in cart): asks 'Did you want a X as well
   assert(!/didn'?t catch/i.test(result.declines[0].reason), `must never say 'didn't catch' for a guard drop: ${result.declines[0].reason}`);
 });
 
+// ── Commit 2, item 3 (2026-09-19, real conv #41): a guard-dropped add whose
+// span FAILED TO RESOLVE must never be phrased as an actionable "as well?"
+// question — "Did you want a grandma's medium 14" as well?" was asked for
+// exactly this shape, the customer said "yes", and the checkout link went
+// out without it, because a bare "yes" can never actually add anything
+// (propose.ts's item_span must be verbatim in the CUSTOMER'S current
+// message — "yes" names nothing). See turn-engine.ts's own header on this
+// branch for the full mechanism.
+Deno.test("decide (Commit 2, item 3): a guard-dropped add that never resolves (unresolved) gets the plain 'didn't catch' wording, never 'as well?'", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "grandma's medium 14 inch pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  // Empty lexicon: the span can never resolve to anything, real or not.
+  const result = decide(proposal, [], FRIES_MENU, [], undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 0);
+  assertEquals(result.declines.length, 1);
+  assert(!/as well/i.test(result.declines[0].reason), `must never phrase an unresolved span as "as well?": ${result.declines[0].reason}`);
+  assert(/didn'?t catch/i.test(result.declines[0].reason), `must say it couldn't be found/understood: ${result.declines[0].reason}`);
+  assert(result.declines[0].reason.includes("grandma's medium 14 inch pizza"), "the reply must name the actual span");
+  assertEquals(result.unresolvedSpans, ["grandma's medium 14 inch pizza"], "carried forward so the next turn's prompt still knows about it");
+});
+
+Deno.test("decide (Commit 2, item 3): a guard-dropped add that resolves AMBIGUOUSLY also gets the plain wording, never 'as well?'", () => {
+  const AMBIG_A = "item-ambig-a";
+  const AMBIG_B = "item-ambig-b";
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "chicken parm", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const lexicon: LexiconTerm[] = [
+    { term: "chicken parm", target_id: AMBIG_A },
+    { term: "chicken parm", target_id: AMBIG_B },
+  ];
+  const result = decide(proposal, [], FRIES_MENU, lexicon, undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 0);
+  assertEquals(result.declines.length, 1);
+  assert(!/as well/i.test(result.declines[0].reason), `must never phrase an ambiguous span as "as well?": ${result.declines[0].reason}`);
+  assertEquals(result.unresolvedSpans, ["chicken parm"]);
+});
+
+Deno.test("decide (Commit 2, item 3): a guard-dropped add that DOES resolve to a real item says to restate it, not just a bare 'as well?' implying yes suffices", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
+  assertEquals(result.cart.length, 0, "not added without the customer actually restating it");
+  assertEquals(result.declines.length, 1);
+  assert(/did you want/i.test(result.declines[0].reason));
+  assert(/say it again/i.test(result.declines[0].reason), `must say what's needed for it to actually be added, not just "as well?": ${result.declines[0].reason}`);
+  assertEquals(result.unresolvedSpans, ["The Slice Cheesesteak"]);
+});
+
 Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped when item IS in cart — silent (no decline)", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },

@@ -10,10 +10,12 @@ import {
   buildAskPlan,
   buildDerivedRows,
   buildOwnerQuestionSummaries,
+  canonicalizeSizeTokens,
   categoryLexiconTerms,
   compileItem,
   compileMenu,
   computeMenuInvariants,
+  normaliseTermVariants,
   planOwnerQuestionsRefresh,
   type AskPlan,
   type CompileGroup,
@@ -526,6 +528,107 @@ Deno.test("lexicon: modifier choices are NOT lexiconized (rule 5/step 4 explicit
   const it = item({ groups: [group({ kind: "modifier", ask_mode: "on_request", choices: [choice({ name: "Pepperoni" })] })] });
   const terms = compileItem(it, [], "t").lexicon_terms;
   assert(!terms.some(t => t.term === "pepperoni"));
+});
+
+// ---- Commit 2 (2026-09-19, real Vito's "Grandma's" pizza): apostrophe
+// lexicon gap + size-token canonicalization ------------------------------
+//
+// Live repro: "grandma's medium 14"" and "medium grandma's" both came back
+// completely unresolved; only "grandmas" (customer typed with NO apostrophe
+// at all) worked. Root cause: normaliseTerm always strips an apostrophe
+// entirely, so that was the ONLY form ever stored — resolve-item.ts's own
+// normalize() turns a customer's literal apostrophe into a SPACE instead
+// ("grandma's" -> "grandma s", two words), which can never word-align
+// against the single stored word "grandmas".
+
+Deno.test("canonicalizeSizeTokens: the three squished spellings all canonicalize to the same '<digits> inch' form", () => {
+  assertEquals(canonicalizeSizeTokens(`14"`), "14 inch");
+  assertEquals(canonicalizeSizeTokens("14in"), "14 inch");
+  assertEquals(canonicalizeSizeTokens("14-inch"), "14 inch");
+  assertEquals(canonicalizeSizeTokens("14-inches"), "14 inch");
+});
+
+Deno.test("canonicalizeSizeTokens: the already-spaced form is left alone (already tokenizes correctly)", () => {
+  assertEquals(canonicalizeSizeTokens("14 inch"), "14 inch");
+  assertEquals(canonicalizeSizeTokens("14 inches"), "14 inches");
+});
+
+Deno.test("canonicalizeSizeTokens: never misfires on unrelated text that merely contains a number then the word 'in'", () => {
+  assertEquals(canonicalizeSizeTokens("Wings (10 in a box)"), "Wings (10 in a box)",
+    "a real space before 'in' is a plausible, unrelated shop description ('10 in a box'), never a size — must not rewrite it");
+  assertEquals(canonicalizeSizeTokens("10 Pins"), "10 Pins", "'Pins' must never be misread as containing the word 'in'");
+});
+
+Deno.test("canonicalizeSizeTokens: applied inside a full name, in context", () => {
+  assertEquals(canonicalizeSizeTokens(`Grandma's - Medium (14")`), "Grandma's - Medium (14 inch)");
+});
+
+Deno.test("normaliseTermVariants: a term with no apostrophe at all is completely unaffected — exactly the one row it always produced", () => {
+  assertEquals(normaliseTermVariants("Gyro"), ["gyro"]);
+  assertEquals(normaliseTermVariants("Cheese Burger"), ["cheese burger"]);
+});
+
+Deno.test("normaliseTermVariants: an apostrophe emits the stripped, as-typed, and curly-quote forms", () => {
+  const variants = normaliseTermVariants("Grandma's Pizza");
+  assert(variants.includes("grandmas pizza"), "stripped form must still be present (unchanged existing behavior)");
+  assert(variants.includes("grandma's pizza"), "as-typed straight-apostrophe form must be present");
+  assert(variants.includes("grandma’s pizza"), "curly-quote form must be present");
+  assertEquals(variants.length, 3, "no duplicates, no extra forms");
+});
+
+Deno.test("normaliseTermVariants: already-curly input still yields all three forms, deduplicated", () => {
+  const variants = normaliseTermVariants("Grandma’s Pizza");
+  assertEquals(new Set(variants), new Set(["grandmas pizza", "grandma's pizza", "grandma’s pizza"]));
+});
+
+function sizedGrandmaItem(overrides: Partial<CompileItem> = {}): CompileItem {
+  return item({
+    name: `Grandma's - Medium (14")`,
+    display_name: "Medium Grandma's Pizza",
+    category: "Pizza",
+    product_key: "pizza:grandmas",
+    size_label: `Medium (14")`,
+    ...overrides,
+  });
+}
+
+Deno.test("lexicon (Commit 2): Rule 1's display_name term gets apostrophe variants alongside the existing stripped form", () => {
+  const it = sizedGrandmaItem();
+  const terms = compileItem(it, [], "t").lexicon_terms;
+  assert(terms.some(t => t.term === "medium grandmas pizza"), "existing stripped form must still be present");
+  assert(terms.some(t => t.term === "medium grandma's pizza"), "as-typed form must now also be present");
+  assert(terms.some(t => t.term === "medium grandma’s pizza"), "curly-quote form must now also be present");
+});
+
+Deno.test("lexicon (Commit 2): an apostrophe-preserving BARE term is emitted for every member of a sized family, alongside the stripped bare term", () => {
+  const medium = sizedGrandmaItem();
+  const large = sizedGrandmaItem({ id: crypto.randomUUID(), name: `Grandma's - Large (16")`, display_name: "Large Grandma's Pizza", size_label: `Large (16")` });
+  const { items: compiled } = compileMenu([medium, large], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  for (const it of [medium, large]) {
+    const terms = byId.get(it.id)!.lexicon_terms;
+    assert(terms.some(t => t.term === "grandmas"), "existing stripped bare term must still be present");
+    assert(terms.some(t => t.term === "grandma's"), "as-typed bare term must now also be present");
+    assert(terms.some(t => t.term === "grandma’s"), "curly-quote bare term must now also be present");
+  }
+});
+
+Deno.test("lexicon (Commit 2): a sized item with NO apostrophe in its base name is completely unaffected — no extra rows", () => {
+  const small = item({ name: "Cheese - Small (10\")", display_name: "Small Cheese Pizza", category: "Pizza", product_key: "pizza:cheese", size_label: "Small (10\")" });
+  const terms = compileItem(small, [], "t").lexicon_terms;
+  assertEquals(terms.filter(t => t.term.includes("'") || t.term.includes("’")).length, 0);
+});
+
+Deno.test("lexicon (Commit 2): Rule 6 choice names also get apostrophe variants (general rule, not item-name-only)", () => {
+  const it = item({
+    display_name: "Gyro",
+    groups: [group({ kind: "slot", choices: [choice({ name: "Chef's Special" }), choice({ name: "Regular" })] })],
+  });
+  const terms = compileItem(it, [], "t").lexicon_terms;
+  assert(terms.some(t => t.term === "chefs special" && t.target_type === "choice"));
+  assert(terms.some(t => t.term === "chef's special" && t.target_type === "choice"));
+  assert(terms.some(t => t.term === "chef’s special" && t.target_type === "choice"));
 });
 
 // ---- Lexicon surface-form variants (space-collapsed + plural) -----------------
