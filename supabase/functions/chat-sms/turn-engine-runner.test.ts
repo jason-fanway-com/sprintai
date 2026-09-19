@@ -76,7 +76,13 @@ interface FakeState {
   // loadItemLexicon's category/size_label join target (menu_items, keyed by
   // id). Empty by default — tests that don't care about narrowing metadata
   // get an empty-but-successful .in() result, not a thrown error.
-  menuItems: Array<{ id: string; category: string | null; size_label: string | null }>;
+  // bot_state is optional here (unlike category/size_label) so every
+  // existing fixture that predates the display_only-exclusion fix keeps
+  // compiling unchanged — an omitted bot_state maps to null in the .in()
+  // response below, and null is treated as "unknown, don't drop" by
+  // loadItemLexicon, the same fallback discipline already applied to a
+  // failed/missing category or size_label lookup.
+  menuItems: Array<{ id: string; category: string | null; size_label: string | null; bot_state?: string | null }>;
 }
 
 interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems">> {
@@ -144,7 +150,9 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
         if (values.some((v) => typeof v !== "string" || !UUID_RE.test(v))) {
           return Promise.resolve({ data: null, error: { message: "invalid input syntax for type uuid", code: "22P02" } });
         }
-        const matches = state.menuItems.filter((row) => values.includes((row as Record<string, unknown>)[column]));
+        const matches = state.menuItems
+          .filter((row) => values.includes((row as Record<string, unknown>)[column]))
+          .map((row) => ({ ...row, bot_state: row.bot_state ?? null }));
         return Promise.resolve({ data: matches, error: null });
       },
       update(row: Record<string, unknown>) {
@@ -514,6 +522,75 @@ Deno.test("runTurnEngineTurn: a non-UUID target_id in the same lexicon page as a
   assertEquals(state.errorLogInserted.length, 1, "dropping a non-UUID target_id must now be logged, never silent");
   assertEquals(state.errorLogInserted[0].stage, "lexicon_load");
   assertEquals((state.errorLogInserted[0].metadata as { dropped_non_uuid_count: number }).dropped_non_uuid_count, 1, "must name the actual dropped count");
+});
+
+// ── loadItemLexicon: a non-orderable row's lexicon term is dropped at load
+// time too — belt-and-suspenders defense alongside the compiler fix ────────
+// The compiler (compile-menu.ts) no longer EMITS a lexicon term for a
+// display_only/blocked row going forward, but a shop compiled before that
+// fix can still carry a stale term for one in its `lexicon` table until it's
+// recompiled. Real Vito's incident: a live customer's "ranch" tied against a
+// $0.00 "Ranch [Pizza Finish]" row (bot_state display_only) with no real
+// item to resolve to. This loader-level filter means a live shop is
+// protected the moment this code deploys, without waiting on a recompile.
+Deno.test("runTurnEngineTurn: a lexicon term whose target menu_item is bot_state display_only is dropped before it ever reaches PROPOSE, and does not trip the count-mismatch trip-wire", async () => {
+  const ORDERABLE_ID = "11111111-1111-1111-1111-111111111111";
+  const DISPLAY_ONLY_ID = "22222222-2222-2222-2222-222222222222";
+  const mixedLexicon = [
+    { term: "grilled chicken bacon ranch", target_id: ORDERABLE_ID },
+    { term: "ranch", target_id: DISPLAY_ONLY_ID },
+  ];
+  const { supabase, state } = makeFakeSupabase({
+    lexicon: mixedLexicon,
+    menuItems: [
+      { id: ORDERABLE_ID, category: "Wraps", size_label: null, bot_state: "orderable" },
+      { id: DISPLAY_ONLY_ID, category: "Pizza Finish", size_label: null, bot_state: "display_only" },
+    ],
+  });
+  let seenLexicon: Array<{ term: string; target_id: string }> = [];
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      seenLexicon = input.lexicon;
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+  const input = baseInput({ message: "ranch", cart: [] });
+
+  await runTurnEngineTurn(input, deps);
+
+  assertEquals(seenLexicon.some((r) => r.target_id === DISPLAY_ONLY_ID), false,
+    "the display_only row's own lexicon term must never reach PROPOSE");
+  assert(seenLexicon.some((r) => r.target_id === ORDERABLE_ID), "the orderable row's term must still reach PROPOSE");
+  assertEquals(state.errorLogInserted.length, 1, "exactly one trip-wire (the dropped-non-orderable one) must be logged — no false count-mismatch");
+  assertEquals((state.errorLogInserted[0].metadata as { dropped_non_orderable_count: number }).dropped_non_orderable_count, 1);
+});
+
+Deno.test("runTurnEngineTurn: a menu_items row with no bot_state on record (fake fixture default) is never dropped — only a POSITIVELY non-orderable bot_state filters a term", async () => {
+  // Same discipline as a failed/missing category or size_label lookup: an
+  // unknown bot_state must fall through to the pre-existing behavior, never
+  // be treated as a reason to drop an otherwise-valid term.
+  const REAL_ITEM_ID = "33333333-3333-3333-3333-333333333333";
+  const { supabase, state } = makeFakeSupabase({
+    lexicon: [{ term: "cheeseburger", target_id: REAL_ITEM_ID }],
+    menuItems: [{ id: REAL_ITEM_ID, category: "Burgers", size_label: null }],
+  });
+  let seenLexicon: Array<{ term: string; target_id: string }> = [];
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      seenLexicon = input.lexicon;
+      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "other", adds: [], removes: [], modifies: [] } });
+    },
+  };
+  const input = baseInput({ message: "cheeseburger", cart: [] });
+
+  await runTurnEngineTurn(input, deps);
+
+  assert(seenLexicon.some((r) => r.target_id === REAL_ITEM_ID), "an unknown bot_state must not drop the term");
+  assertEquals(state.errorLogInserted.length, 0, "no trip-wire and no mismatch when nothing was actually dropped");
 });
 
 Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and routes to ASK's disambiguation question", async () => {

@@ -393,6 +393,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 interface LexiconItemMetadata {
   category: string | null;
   size_label: string | null;
+  bot_state: string | null;
 }
 
 // Best-effort: a failure here must never fail the lexicon load itself (the
@@ -422,7 +423,7 @@ async function loadLexiconItemMetadata(
     try {
       const { data, error } = await supabase
         .from("menu_items")
-        .select("id, category, size_label")
+        .select("id, category, size_label, bot_state")
         .in("id", batch);
       if (error) {
         await logError(supabase, {
@@ -434,8 +435,8 @@ async function loadLexiconItemMetadata(
         });
         continue;
       }
-      for (const row of (data ?? []) as Array<{ id: string; category: string | null; size_label: string | null }>) {
-        metaByTargetId.set(row.id, { category: row.category, size_label: row.size_label });
+      for (const row of (data ?? []) as Array<{ id: string; category: string | null; size_label: string | null; bot_state: string | null }>) {
+        metaByTargetId.set(row.id, { category: row.category, size_label: row.size_label, bot_state: row.bot_state });
       }
     } catch (thrown) {
       await logError(supabase, {
@@ -453,6 +454,14 @@ async function loadLexiconItemMetadata(
 async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconLoadResult> {
   const rows: LexiconTerm[] = [];
   let totalDroppedNonUuid = 0;
+  // Defensive, belt-and-suspenders drop: the compiler (compile-menu.ts) no
+  // longer emits a lexicon term for a non-orderable row (display_only,
+  // blocked, ...) going forward, but an already-compiled shop can still
+  // carry stale terms from before that fix until it's recompiled — see
+  // this dispatch's own header. Dropping them here too means a live shop
+  // never has to wait on a recompile to stop offering a non-sellable row
+  // (e.g. Vito's $0.00 "Ranch [Pizza Finish]") as a resolver candidate.
+  let totalDroppedNonOrderable = 0;
   let from = 0;
   for (;;) {
     const { data, error } = await supabase
@@ -481,12 +490,24 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
     const pageTargetIds = [...new Set(page.map(r => r.target_id))];
     const { metaByTargetId, droppedNonUuidCount } = await loadLexiconItemMetadata(supabase, shopId, pageTargetIds);
     totalDroppedNonUuid += droppedNonUuidCount;
-    rows.push(...page.map(r => ({
-      term: r.term,
-      target_id: r.target_id,
-      category: metaByTargetId.get(r.target_id)?.category ?? null,
-      size_label: metaByTargetId.get(r.target_id)?.size_label ?? null,
-    })));
+    for (const r of page) {
+      const meta = metaByTargetId.get(r.target_id);
+      // Only drop when the row's bot_state is POSITIVELY known and
+      // non-orderable — a lookup miss (metadata query failed, or the
+      // target_id is non-UUID) must fall through to the pre-existing
+      // behavior, same discipline as the category/size_label fallback
+      // above it, never a reason to drop an otherwise-valid term.
+      if (meta && meta.bot_state !== null && meta.bot_state !== "orderable") {
+        totalDroppedNonOrderable++;
+        continue;
+      }
+      rows.push({
+        term: r.term,
+        target_id: r.target_id,
+        category: meta?.category ?? null,
+        size_label: meta?.size_label ?? null,
+      });
+    }
     if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
     from += ITEM_LEXICON_PAGE_SIZE;
   }
@@ -515,17 +536,33 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
   // the table (stale read, concurrent write, off-by-one in the paging
   // bounds, etc.). This never blocks the turn — it's an observability
   // guard, not a second failure path — it only logs the disagreement.
+  // Expected count is reduced by totalDroppedNonOrderable: those rows were
+  // deliberately excluded above, not lost — counting them as missing would
+  // make every shop with a stale non-orderable lexicon term (until its next
+  // recompile) log a permanent false-positive mismatch every single turn.
   const { count, error: countError } = await supabase
     .from("lexicon")
     .select("id", { count: "exact", head: true })
     .eq("shop_id", shopId).eq("target_type", "item").eq("active", true);
-  if (!countError && count != null && count !== rows.length) {
+  if (!countError && count != null && count - totalDroppedNonOrderable !== rows.length) {
     await logError(supabase, {
       shopId,
       phase: "chat-sms",
       stage: LEXICON_LOAD_STAGE,
-      error: new Error(`lexicon count mismatch: expected ${count}, loaded ${rows.length}`),
-      metadata: { expected_count: count, loaded_count: rows.length },
+      error: new Error(`lexicon count mismatch: expected ${count - totalDroppedNonOrderable}, loaded ${rows.length}`),
+      metadata: { expected_count: count, dropped_non_orderable_count: totalDroppedNonOrderable, loaded_count: rows.length },
+    });
+  }
+
+  // Trip-wire, same discipline as the non-UUID drop above: a shop whose
+  // lexicon is clean (already recompiled since this fix) logs nothing here.
+  if (totalDroppedNonOrderable > 0) {
+    await logError(supabase, {
+      shopId,
+      phase: "chat-sms",
+      stage: LEXICON_LOAD_STAGE,
+      error: new Error(`lexicon load dropped ${totalDroppedNonOrderable} non-orderable target_id(s) — stale term(s) from before a shop-level recompile`),
+      metadata: { dropped_non_orderable_count: totalDroppedNonOrderable },
     });
   }
 
