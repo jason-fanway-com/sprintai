@@ -975,6 +975,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
                 ...(turnEvents.carriedDisambiguationCandidateIds ?? []),
                 ...remainderDecide.carriedDisambiguationCandidateIds,
               ],
+              heldModifierText: turnEvents.heldModifierText ?? remainderDecide.heldModifierText,
             };
             // 00-BJ-adjacent: a "yes" is not final the instant it's also
             // carrying a brand-new item -- the order just changed, so
@@ -1018,7 +1019,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // back explicitly or ASK has nothing left to recompute the question
       // from and silently drops it — the exact "item asked for and never
       // added, never even mentioned again" failure this dispatch closes.
-      turnEvents = { ...turnEvents, disambiguationCandidateIds: priorState.open.candidates };
+      // heldModifierText rides along the same way, for the same reason —
+      // see AskTurnEvents.heldModifierText's own doc.
+      turnEvents = {
+        ...turnEvents,
+        disambiguationCandidateIds: priorState.open.candidates,
+        heldModifierText: priorState.open.heldModifierText,
+      };
     } else {
       // 00-AU: the slot case of this same dispatch — see the flag's own doc
       // above. No cart mutation happened above (this branch never mutates
@@ -1161,6 +1168,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       qualifyingAddMenuItemId: decideResult.qualifyingAddMenuItemId,
       disambiguationCandidateIds: decideResult.disambiguationCandidateIds,
       carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
+      heldModifierText: decideResult.heldModifierText,
       checkoutIntentThisTurn: proposal.intent === "checkout",
     };
     if (proposal.intent === "question" && proposal.answer_text) {
