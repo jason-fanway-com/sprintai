@@ -786,6 +786,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     (addressSpan != null && input.shopContext.deliveryEnabled && !input.shopContext.deliveryAddressKnown);
   let externalInputs: AnswerExternalInputs = {};
   let opportunisticAddress: { formatted: string; withinZone: boolean } | null = null;
+  // PO fix (2026-09-19, round 2 addendum): a "what kind?" disambiguation
+  // answer is now resolved through the shop's own lexicon first (see
+  // turn-engine.ts's resolveKindClauseViaLexicon) — loaded here, ONLY when a
+  // disambiguation is actually open, and reused below for the remainder-
+  // PROPOSE call rather than fetched twice. A load failure here is
+  // non-fatal: `answerLexicon` stays undefined, and answer()'s own fallback
+  // to the pre-existing name-facet matcher runs exactly as it did before
+  // this fix — the lexicon is a strictly-better first attempt, never a new
+  // way for this turn to fail.
+  let answerLexicon: LexiconTerm[] | undefined;
+  if (priorState.open?.kind === "disambiguation") {
+    const disambiguationLexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
+    if (disambiguationLexiconResult.ok) answerLexicon = disambiguationLexiconResult.rows;
+    externalInputs = { lexicon: answerLexicon };
+  }
   if (shouldAttemptGeocode) {
     const shopGeo = await loadShopGeo(deps.supabase, input.shopId);
     const geocodeFn = deps.geocodeAddressFn ?? defaultGeocodeAddress;
@@ -989,7 +1004,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     if (REMAINDER_ELIGIBLE_OUTCOME_KINDS.has(outcome.kind)) {
       const remainderMessage = extractRemainderAfterAnswer(input.message);
       if (remainderMessage) {
-        const lexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
+        // Reuse the lexicon already loaded above for answer()'s disambiguation
+        // path when present — same shop, same turn, no reason to fetch it
+        // twice. Falls back to a fresh load otherwise (unchanged behavior).
+        const lexiconResult = answerLexicon !== undefined
+          ? { ok: true, rows: answerLexicon }
+          : await loadItemLexicon(deps.supabase, input.shopId);
         if (lexiconResult.ok) {
           const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
           const remainderShopContext: RunTurnShopContext = {

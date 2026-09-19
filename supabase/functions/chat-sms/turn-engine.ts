@@ -129,6 +129,8 @@ import {
   extractGlobalSizeWord,
   filterCandidatesBySizeWord,
   significantStems,
+  categoryWordMatches,
+  extractSizeAndKind,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
 import { isExplicitCheckoutIntent } from "./checkout-intent-gate-20260913.ts";
@@ -465,6 +467,15 @@ const UNRESOLVED: AnswerResult = { resolved: false };
 // address didn't resolve/was out of zone.
 export interface AnswerExternalInputs {
   geocodedAddress?: { formatted: string; withinZone: boolean } | null;
+  // PO fix (2026-09-19, round 2 addendum): the shop's own item-level lexicon,
+  // same shape decide() already resolves every fresh add's item_span against
+  // (resolve-item.ts). Threaded in here so a "what kind?" disambiguation
+  // answer — single-clause or list — can be resolved the SAME deterministic
+  // way, instead of the disambiguation-only name-facet matcher below that
+  // never sees an alias/typo/category lexicon entry. Undefined on every
+  // pre-existing call site and test (all unaffected — see
+  // resolveKindClauseViaLexicon's own header for the fallback this permits).
+  lexicon?: LexiconTerm[];
 }
 
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
@@ -928,6 +939,54 @@ interface MultiKindClauseResult {
   clarifyMessage: string | null;
 }
 
+// PO fix (2026-09-19, round 2 addendum, live conv on v511): "plain" and
+// "pepperoni" still failed to resolve inside a "what kind?" answer even
+// after the recompile landed the alias/typo lexicon fixes (59510e8e) —
+// because THIS path never consulted the lexicon at all. It matched each
+// clause against candidate NAMES directly via narrowCandidatesByFacetAnswer
+// (name-stem overlap only), so an alias term ("plain" -> Cheese), a category
+// word, a plural, or the resolver's own typo tolerance never applied here,
+// even though decide()'s fresh-add path already resolves every item_span
+// through this exact mechanism (resolve-item.ts's resolveItem). Restricts
+// the shop's full item lexicon down to just the target_ids already open in
+// this disambiguation (never a candidate outside it — a "kind?" answer must
+// never resolve to an item that wasn't already on offer) and runs the same
+// longest-match resolver; only when that yields nothing (e.g. "pepperoni"
+// alone, which intentionally stays a topping-vs-item question — separate,
+// already-queued work) does the caller fall back to the pre-existing
+// name-facet matcher. `lexicon` undefined/empty (every pre-existing call
+// site) always falls through unchanged.
+function resolveKindClauseViaLexicon(
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+  clauseText: string,
+): PendingCandidate[] | null {
+  if (!lexicon || lexicon.length === 0) return null;
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const restricted = lexicon.filter(entry => candidateIds.has(entry.target_id));
+  if (restricted.length === 0) return null;
+
+  const result = resolveItem(clauseText, restricted);
+  if (result.kind === "resolved") {
+    const match = candidates.find(c => c.menu_item_id === result.menu_item_id);
+    return match ? [match] : null;
+  }
+  if (result.kind === "ambiguous") {
+    const matched = candidates.filter(c => result.candidates.includes(c.menu_item_id));
+    return matched.length > 0 ? matched : null;
+  }
+  return null;
+}
+
+function narrowCandidatesByKind(
+  candidates: PendingCandidate[],
+  clauseText: string,
+  lexicon: LexiconTerm[] | undefined,
+): PendingCandidate[] | null {
+  return resolveKindClauseViaLexicon(candidates, lexicon, clauseText)
+    ?? narrowCandidatesByFacetAnswer(candidates, "kind", clauseText);
+}
+
 // The answer to "what kind?" can itself be a LIST ("one plain, one
 // pepperoni, one meat lovers and one hawaiian") -- reuses phrase-split.ts's
 // shared boundary splitter (the same primitive the fresh-order path already
@@ -943,6 +1002,7 @@ function resolveMultiKindClauses(
   message: string,
   totalQuantity: number,
   menu: TurnEngineMenuItem[],
+  lexicon: LexiconTerm[] | undefined,
 ): MultiKindClauseResult | null {
   const phrases = splitCustomerPhrases(message, menu.map(m => ({ name: m.name })));
   if (phrases.length <= 1) return null;
@@ -968,7 +1028,7 @@ function resolveMultiKindClauses(
   const ambiguousClauses: Array<{ candidates: PendingCandidate[]; count: number; text: string }> = [];
 
   for (const clause of clauses) {
-    const matched = narrowCandidatesByFacetAnswer(candidates, "kind", clause.text);
+    const matched = narrowCandidatesByKind(candidates, clause.text, lexicon);
     if (!matched) {
       // Rule 2, no-match: named explicitly, never silently folded into
       // another clause's line or dropped.
@@ -1150,7 +1210,7 @@ export function answer(
           // when `trimmed` isn't structurally a list, in which case the
           // single-match path immediately below runs completely unchanged.
           if (facetResult.facet === "kind") {
-            const multi = resolveMultiKindClauses(effectiveCandidates, trimmed, quantity, menu);
+            const multi = resolveMultiKindClauses(effectiveCandidates, trimmed, quantity, menu, external.lexicon);
             if (multi) {
               let multiCartChanged = false;
               const resolvedIds: string[] = [];
@@ -1183,7 +1243,9 @@ export function answer(
             }
           }
 
-          const matched = narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
+          const matched = facetResult.facet === "kind"
+            ? narrowCandidatesByKind(effectiveCandidates, trimmed, external.lexicon)
+            : narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
           if (!matched) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
 
           // "2 pizzas, one large" -> "pepperoni": the kind answer also
@@ -1240,7 +1302,9 @@ export function answer(
           // named in the same breath.
           const secondFacet = pickNarrowingFacet(matched);
           if (secondFacet) {
-            const doubleMatched = narrowCandidatesByFacetAnswer(matched, secondFacet.facet, trimmed);
+            const doubleMatched = secondFacet.facet === "kind"
+              ? narrowCandidatesByKind(matched, trimmed, external.lexicon)
+              : narrowCandidatesByFacetAnswer(matched, secondFacet.facet, trimmed);
             if (doubleMatched && doubleMatched.length === 1) {
               const cartChanged = addNarrowedCandidateToCart(cart, menuById, doubleMatched[0], quantity);
               return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged };

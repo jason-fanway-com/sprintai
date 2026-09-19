@@ -587,6 +587,77 @@ Deno.test("answer (multi-kind-answer P0): clause counts that don't sum to the op
   assertEquals(cart.length, 0, "nothing is added while the split itself is untrustworthy");
 });
 
+// ── round 2 addendum (2026-09-19, live v511): "plain" and "pepperoni" still
+// failed inside a "what kind?" answer even after the alias/typo lexicon
+// fixes landed (59510e8e), because this list-answer path never consulted
+// the lexicon at all — it matched each clause against candidate NAMES only.
+// "plain" has no name-stem overlap with "Cheese Pizza - Large" whatsoever;
+// it only resolves via the shop's own alias lexicon term, exactly the way
+// decide()'s fresh-add path already resolves it. See
+// resolveKindClauseViaLexicon's header in turn-engine.ts.
+const MULTI_KIND_LEXICON: LexiconTerm[] = [
+  { term: "plain", target_id: MK_CHEESE_ID },
+  { term: "cheese pizza", target_id: MK_CHEESE_ID },
+  { term: "pepperoni pizza", target_id: MK_PEPPERONI_ID },
+  { term: "meat lovers pizza", target_id: MK_MEATLOVERS_ID },
+  { term: "hawaiian pizza", target_id: MK_HAWAIIAN_ID },
+];
+
+Deno.test("answer (round 2 addendum): a list answer's clauses resolve via the lexicon first — 'plain' resolves to Cheese via its alias term, never left unresolved", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(
+    MULTI_KIND_OPEN_STATE,
+    cart,
+    "one plain, one pepperoni, one meat lovers and one hawaiian",
+    MULTI_KIND_PIZZA_MENU,
+    { lexicon: MULTI_KIND_LEXICON },
+  );
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved", `expected disambiguation_multi_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  const ids = cart.map(l => l.menu_item_id).sort();
+  assertEquals(ids, [MK_CHEESE_ID, MK_HAWAIIAN_ID, MK_MEATLOVERS_ID, MK_PEPPERONI_ID].sort(), "'plain' must resolve to Cheese via its lexicon alias term, not go unresolved");
+  for (const line of cart) assertEquals(line.quantity, 1);
+});
+
+Deno.test("answer (round 2 addendum): a lexicon restricted to the open candidates never resolves a clause to an item OUTSIDE the disambiguation", () => {
+  const cart: TurnEngineCartLine[] = [];
+  // "plain" aliased to an item that ISN'T one of the four open candidates —
+  // resolveItem must find nothing (the restricted lexicon excludes it), and
+  // fall back to the pre-existing name-facet matcher, never resolve outside
+  // what was actually offered.
+  const lexiconWithOutsideAlias: LexiconTerm[] = [
+    { term: "plain", target_id: "some-other-item-not-open" },
+  ];
+  const result = answer(
+    MULTI_KIND_OPEN_STATE,
+    cart,
+    "one plain, one pepperoni, one meat lovers and one hawaiian",
+    MULTI_KIND_PIZZA_MENU,
+    { lexicon: lexiconWithOutsideAlias },
+  );
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved");
+  assert(
+    result.resolved && result.outcome.kind === "disambiguation_multi_resolved" &&
+      result.outcome.clarifyMessage?.includes("plain"),
+    `'plain' must fall back to unresolved (asked about), never resolve to an item outside the open candidates: ${JSON.stringify(result.resolved ? result.outcome : null)}`,
+  );
+});
+
+Deno.test("answer (round 2 addendum): the single-clause 'kind?' answer also resolves via the lexicon — a bare 'plain' (not a list) resolves to Cheese", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const singleState: DialogueState = {
+    ...MULTI_KIND_OPEN_STATE,
+    open: {
+      kind: "disambiguation",
+      candidates: MULTI_KIND_PIZZA_MENU.map(m => m.id),
+      quantity: 1,
+      spanText: "a pizza",
+    },
+  };
+  const result = answer(singleState, cart, "plain", MULTI_KIND_PIZZA_MENU, { lexicon: MULTI_KIND_LEXICON });
+  assert(result.resolved && result.outcome.kind === "disambiguation_resolved", `expected disambiguation_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, MK_CHEESE_ID);
+});
+
 Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped when item IS in cart — silent (no decline)", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },
