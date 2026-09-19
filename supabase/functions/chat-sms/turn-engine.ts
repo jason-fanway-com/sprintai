@@ -280,6 +280,23 @@ export interface DialogueState {
   // Optional so state persisted before this field existed still loads
   // (missing = not yet resolved, the correct interpretation either way).
   driverTipResolved?: boolean;
+  // 2026-09-19 live repro (Jason's transcript): the checkout ladder (order
+  // type/address/tip/upsell -> name -> confirm) rewrites `phase` to whatever
+  // intermediate step is open, so by the time the ladder reaches "tip",
+  // `phase` no longer says "name"/"confirm"/"link_sent" -- ask()'s own
+  // `committedToClose` used to read ONLY off `phase` for that fact, so it
+  // forgot the customer had already closed ("That's it") the instant the tip
+  // question resolved and `phase` briefly wasn't one of those three values.
+  // The very next turn fell all the way back to priority 7's
+  // closureOrOrdering(), re-opening "Anything else?" over a cart that had
+  // already been closed and re-answering a stated tip/name as if it were a
+  // fresh order attempt. Same persisted-once-true pattern as
+  // driverTipResolved above: set true the turn checkoutIntentThisTurn first
+  // fires, carried on every return path after that for the rest of the
+  // order, so no later intermediate-phase turn can un-commit it. Optional so
+  // state persisted before this field existed still loads (missing = not yet
+  // closed, the correct interpretation either way).
+  checkoutClosed?: boolean;
 }
 
 // ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
@@ -684,6 +701,17 @@ const CONFIRM_HOURS_QUESTION_RE = /\b(?:hours|what time|when (?:do|are) you|open
 function answerConfirmShopFactsQuestion(
   trimmed: string,
   confirmShopFacts: { deliveryFeeCents: number | null; hoursLine: string | null } | undefined,
+  // 2026-09-19 live repro: the "tip" case below (state.open.kind === "tip")
+  // re-asks "Want to add a tip for the driver?" itself, via render()'s own
+  // "tip" case, on the SAME turn this function's tip-info branch would fire
+  // -- the two questions rode out together in one SMS ("You can add a tip
+  // for the driver — how much?" immediately followed by "Want to add a tip
+  // for the driver?"), asking the identical thing twice. The "confirm" case
+  // needs this branch (tip isn't otherwise open there, so answering "you can
+  // add a tip" is the only place that information comes from), but the
+  // "tip" case's own call site sets this true to skip it -- the re-ask
+  // already covers it.
+  skipTipInfo = false,
 ): AnswerResult | null {
   if (!confirmShopFacts) return null;
   if (CONFIRM_DELIVERY_FEE_QUESTION_RE.test(trimmed)) {
@@ -695,7 +723,7 @@ function answerConfirmShopFactsQuestion(
       : `Delivery is $${(feeCents / 100).toFixed(2)}.`;
     return { resolved: true, outcome: { kind: "confirm_info_answered", infoText }, cartChanged: false };
   }
-  if (CONFIRM_TIP_QUESTION_RE.test(trimmed)) {
+  if (!skipTipInfo && CONFIRM_TIP_QUESTION_RE.test(trimmed)) {
     return { resolved: true, outcome: { kind: "confirm_info_answered", infoText: "You can add a tip for the driver — how much?" }, cartChanged: false };
   }
   if (CONFIRM_HOURS_QUESTION_RE.test(trimmed)) {
@@ -1937,7 +1965,13 @@ export function answer(
       // itself stays unresolved (this doesn't set tip_resolved), so ASK's
       // own ladder naturally re-opens "tip" right after, never confirm —
       // the tip question was never actually answered.
-      const shopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts);
+      //
+      // skipTipInfo=true (2026-09-19 live repro): render()'s own "tip" case
+      // is about to re-ask "Want to add a tip for the driver?" this same
+      // turn regardless — see answerConfirmShopFactsQuestion's own doc on
+      // this param for why answering a bare "tip" mention here as well
+      // duplicated that exact question in one SMS.
+      const shopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts, true);
       if (shopFactsAnswer) return shopFactsAnswer;
       return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
@@ -3104,6 +3138,12 @@ export function ask(
   // above) rather than duplicated in every carry() call site.
   const driverTipResolved = priorState.driverTipResolved === true || turnEvents.tipResolvedThisTurn === true;
 
+  // 2026-09-19 live repro: once true, stays true for the rest of this order
+  // — see DialogueState.checkoutClosed's own doc for why `phase` alone can't
+  // carry this fact through an intermediate ladder step (order_type/address/
+  // tip/upsell). Same persisted-once-true funnel as driverTipResolved above.
+  const checkoutClosed = priorState.checkoutClosed === true || turnEvents.checkoutIntentThisTurn === true;
+
   const carry = (
     open: DialogueState["open"],
     phase: DialogueState["phase"],
@@ -3122,6 +3162,7 @@ export function ask(
         ? (priorState.openRepeatCount ?? 0) + 1
         : 0,
       ...(driverTipResolved ? { driverTipResolved: true } : {}),
+      ...(checkoutClosed ? { checkoutClosed: true } : {}),
     });
 
   // 1. unresolved required slot on any line.
@@ -3266,7 +3307,7 @@ export function ask(
   // "ordering" toward name/confirm/link_sent, it never walks back to
   // "anything else?".
   const committedToClose =
-    turnEvents.checkoutIntentThisTurn ||
+    checkoutClosed ||
     priorState.phase === "name" || priorState.phase === "confirm" || priorState.phase === "link_sent";
 
   // 00-AK/00-AL: the cart is empty — "Anything else?" (the `open: null`
@@ -3339,6 +3380,7 @@ export function ask(
       phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered,
       asked_message_id: null, pendingAmbiguous, openRepeatCount: 0,
       ...(driverTipResolved ? { driverTipResolved: true } : {}),
+      ...(checkoutClosed ? { checkoutClosed: true } : {}),
     };
   }
   return carry({ kind: "confirm" }, "confirm");
