@@ -4348,20 +4348,27 @@ async function saveMessage(
   role:           "customer" | "assistant" | "system",
   content:        string,
   messageSid?:    string,
-): Promise<{ inserted: boolean }> {
-  const { error } = await supabase.from("messages").insert({
+): Promise<{ inserted: boolean; id: string | null }> {
+  // P0 fix (2026-09-19): `id` is selected back so an assistant-role save can
+  // hand its own row's primary key to sendSms, which writes the carrier's
+  // message id onto THIS row once the send actually succeeds — see
+  // sendSmsViaTwilio/sendSmsViaTelnyx's own "carrier id" comments for why
+  // that's the only way NULL on an assistant row comes to mean "unsent"
+  // instead of "we didn't bother recording it."
+  const { data, error } = await supabase.from("messages").insert({
     conversation_id: conversationId,
     tenant_id: tenantId,
     role,
     content,
     ...(messageSid ? { message_sid: messageSid } : {}),
-  });
+  }).select("id").single();
   if (error) {
     // 23505 = unique_violation → duplicate message_sid, already processed
-    if (error.code === "23505") return { inserted: false };
+    if (error.code === "23505") return { inserted: false, id: null };
     console.error("[chat-sms] Failed to save message:", error.message);
+    return { inserted: true, id: null };
   }
-  return { inserted: true };
+  return { inserted: true, id: (data as { id: string } | null)?.id ?? null };
 }
 
 // ─── System event handler ────────────────────────────────────────────────────
@@ -4377,6 +4384,7 @@ async function sendSmsViaTwilio(
   fromNumber: string,
   toNumber:   string,
   message:    string,
+  messageId?: string | null,
 ): Promise<void> {
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
   const authToken  = Deno.env.get("TWILIO_AUTH_TOKEN")  ?? "";
@@ -4409,8 +4417,42 @@ async function sendSmsViaTwilio(
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[chat-sms] Twilio send failed: ${res.status} ${errText}`);
+      // P0 fix (2026-09-19): a non-2xx from the carrier used to only hit
+      // console.error, which Supabase edge-function logs discard after
+      // ~1 minute — the PO had no durable way to find a silently-dropped
+      // reply after the fact. message_sid is never set on this row either
+      // way (saveMessage's assistant-role call sites never pass one), so a
+      // failed send and a successful one are otherwise indistinguishable in
+      // the messages table; this row is what makes the failure findable.
+      await logError(supabase, {
+        conversationId: ctx.conversationId,
+        shopId: ctx.shopId,
+        tenantId: ctx.tenantId,
+        phase: "chat-sms",
+        stage: "outbound_send",
+        customerMessage: message,
+        error: new Error(`Twilio send failed: ${res.status}`),
+        metadata: { provider: "twilio", status: res.status, responseBody: errText, to: toNumber },
+      });
     } else {
       console.log(`[chat-sms] SMS sent to ${toNumber}`);
+      // P0 fix (2026-09-19): write Twilio's own message id back onto the
+      // assistant `messages` row that was saved before this send ran — see
+      // saveMessage's own comment. Without this, NULL on that row meant
+      // nothing (every successful send left it NULL too); this is what
+      // makes NULL reliably mean "never confirmed sent by the carrier."
+      if (messageId) {
+        try {
+          const body = await res.json();
+          const carrierSid = body?.sid as string | undefined;
+          if (carrierSid) {
+            const { error: updateErr } = await supabase.from("messages").update({ message_sid: carrierSid }).eq("id", messageId);
+            if (updateErr) console.error(`[chat-sms] Failed to record Twilio sid on message ${messageId}:`, updateErr.message);
+          }
+        } catch (e) {
+          console.error(`[chat-sms] Failed to parse Twilio response for sid (message ${messageId}):`, e);
+        }
+      }
     }
   }, { supabase, phase: "chat-sms", customerMessage: message });
 
@@ -4429,6 +4471,7 @@ async function sendSmsViaTelnyx(
   fromNumber: string,
   toNumber:   string,
   message:    string,
+  messageId?: string | null,
 ): Promise<void> {
   const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
   if (!apiKey) {
@@ -4448,6 +4491,22 @@ async function sendSmsViaTelnyx(
 
     if (res.ok) {
       console.log(`[chat-sms] SMS sent to ${toNumber} via Telnyx`);
+      // P0 fix (2026-09-19): same rationale as the Twilio success branch —
+      // write Telnyx's own message id back onto the assistant row saved
+      // before this send ran, so NULL there reliably means "never confirmed
+      // sent," not "we didn't bother recording it."
+      if (messageId) {
+        try {
+          const body = await res.json();
+          const carrierId = body?.data?.id as string | undefined;
+          if (carrierId) {
+            const { error: updateErr } = await supabase.from("messages").update({ message_sid: carrierId }).eq("id", messageId);
+            if (updateErr) console.error(`[chat-sms] Failed to record Telnyx id on message ${messageId}:`, updateErr.message);
+          }
+        } catch (e) {
+          console.error(`[chat-sms] Failed to parse Telnyx response for id (message ${messageId}):`, e);
+        }
+      }
       return;
     }
 
@@ -4459,6 +4518,23 @@ async function sendSmsViaTelnyx(
       errCode = errJson?.errors?.[0]?.code;
       errDetail = errJson?.errors?.[0]?.detail ?? errJson?.errors?.[0]?.title;
     } catch { /* not JSON */ }
+
+    // P0 fix (2026-09-19): every non-2xx from Telnyx gets a durable row here,
+    // regardless of which sub-case (transient/opt-out/other) the existing
+    // classification below routes it to — same rationale as the Twilio
+    // branch above. message_sid is never set on the corresponding `messages`
+    // row either way, so this error_log row is the only durable trace of a
+    // reply the customer's phone never received.
+    await logError(supabase, {
+      conversationId: ctx.conversationId,
+      shopId: ctx.shopId,
+      tenantId: ctx.tenantId,
+      phase: "chat-sms",
+      stage: "outbound_send",
+      customerMessage: message,
+      error: new Error(`Telnyx send failed: ${res.status}${errCode ? ` code=${errCode}` : ""}`),
+      metadata: { provider: "telnyx", status: res.status, responseBody: errText, errorCode: errCode ?? null, to: toNumber },
+    });
 
     // Opt-out / blocked detection: Telnyx rejects sends to opted-out numbers.
     // Known opt-out codes: 40002 (blocked/opted-out), 40003 (messaging profile blocked).
@@ -4731,10 +4807,40 @@ function outboundSegmentCount(text: string): number {
   return text.length <= 70 ? 1 : 1 + Math.ceil((text.length - 70) / 67);
 }
 
+// P0 fix (2026-09-19, live conv b685494d-62e9-4a2d-b5c1-f761cd6d6c5b): a
+// reply over ~10 SMS segments (roughly 1,530 GSM-7 chars) used to be sent
+// to the carrier as ONE oversized message, which Telnyx/Twilio silently
+// rejected — nothing recorded the failure and the customer's phone got
+// nothing. Splitting into carrier-safe parts, sent in order, means a long
+// reply (an oversized narrowing question, a big recap, an enumerated
+// options list) always actually reaches the phone instead of risking a
+// silent carrier-side rejection on the raw length alone.
+const MAX_SMS_CHARS = 1500;
+
+// Prefers a whitespace boundary near the limit so a part never ends mid-
+// word; falls back to a hard cut at the limit if no whitespace is found in
+// range (a single "word" of pathological length). Every returned part is
+// guaranteed <= maxLen.
+export function splitForSms(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+  const parts: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf(" ", maxLen);
+    if (cut <= 0) cut = maxLen;
+    const part = remaining.slice(0, cut).trim();
+    if (part) parts.push(part);
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining) parts.push(remaining);
+  return parts;
+}
+
 /**
  * Single routing function for all outbound SMS. Routes to Telnyx or Twilio
  * based on the provider argument. Always wraps in guardedSend (via the
- * per-provider send functions).
+ * per-provider send functions). A reply over MAX_SMS_CHARS is split into
+ * multiple carrier-safe parts and sent in order — see splitForSms's own doc.
  */
 async function sendSms(
   supabase:  SupabaseClient,
@@ -4744,15 +4850,30 @@ async function sendSms(
   fromNumber: string,
   toNumber:   string,
   message:    string,
+  messageId?: string | null,
 ): Promise<void> {
   const cleaned = stripEmDashes(message);
   const segCount = outboundSegmentCount(cleaned);
   console.log(`[chat-sms] outbound-segments (shop=${shopId}): chars=${cleaned.length} segments=${segCount}`);
-  if (segCount > 1) console.warn(`[chat-sms] SMS OVERFLOW (shop=${shopId}): chars=${cleaned.length} segments=${segCount} text="${cleaned.slice(0, 80)}..."`);
-  if (provider === "telnyx") {
-    await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, cleaned);
-  } else {
-    await sendSmsViaTwilio(supabase, ctx, fromNumber, toNumber, cleaned);
+
+  const parts = splitForSms(cleaned, MAX_SMS_CHARS);
+  if (parts.length > 1) {
+    console.warn(`[chat-sms] SMS OVERFLOW (shop=${shopId}): chars=${cleaned.length} segments=${segCount} — splitting into ${parts.length} carrier-safe parts, sent in order`);
+  }
+  // P0 fix (2026-09-19): the carrier id is recorded on the ONE `messages`
+  // row this whole reply was saved as, so only the FIRST part carries
+  // messageId through — a multi-part reply is still one logical message,
+  // and the row is already "confirmed sent" once its first part lands.
+  // Later parts pass no messageId, so a failure on part 2+ never re-marks
+  // an already-confirmed row back toward "unsent."
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const partMessageId = i === 0 ? messageId : undefined;
+    if (provider === "telnyx") {
+      await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, part, partMessageId);
+    } else {
+      await sendSmsViaTwilio(supabase, ctx, fromNumber, toNumber, part, partMessageId);
+    }
   }
 }
 
@@ -4853,7 +4974,7 @@ export async function handleSystemEvent(
     return jsonResponse({ ok: true, silent: true });
   }
 
-  await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message);
+  const savedSystemMsgId = (await saveMessage(supabase, conversation_id, conversation.tenant_id, "assistant", message)).id;
 
   // ── Order ticket email (payment_confirmed only) ──────────────────────────
   //
@@ -5109,7 +5230,7 @@ export async function handleSystemEvent(
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
-      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(shop), shop.phone_number_e164, conversation.customer_phone, message);
+      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(shop), shop.phone_number_e164, conversation.customer_phone, message, savedSystemMsgId);
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
     // iMessage bridge: extract real phone from "web:imsg-{identifier}-{sessionid}"
@@ -5786,8 +5907,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     await supabase.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
     const reply = buildResetReply(effectiveOpen);
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    {
+      const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+    }
     return jsonResponse({ reply, cart: [], phase: "expired", session_id: sessionId });
   }
 
@@ -5795,8 +5918,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (cart.phase === "confirmed") {
     const reply = "Your order is confirmed and paid. Thank you!";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    {
+      const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+    }
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   let checkoutWantsChangeFired = false;
@@ -5827,8 +5952,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         : "\n\nYour payment link is still active — check your texts for it.";
       const reply = `Here's your order:\n\n${recap}${linkLine}`;
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     }
 
@@ -5838,8 +5965,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       await supabase.from("order_carts").update({ cart_json: [], phase: "greeting", stripe_checkout_session_id: null, subtotal_cents: 0, total_cents: 0, pending_disambiguation: null }).eq("id", cart.id);
       const reply = "No problem! Starting fresh. What would you like to order?";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
     }
 
@@ -5912,8 +6041,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
               const replyC9 = `${addedC9} added! Here's your updated order:\n\n${recapC9}\n\nReply YES when you're ready for a new payment link.`;
               console.log(`[chat-sms] checkout wantsChange deterministic add (conv=${conversation.id}): added "${addedC9}"`);
               await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC9);
-              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC9); return emptyTwiml(); }
+              {
+                const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC9)).id;
+                if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC9, savedMsgId); return emptyTwiml(); }
+              }
               return jsonResponse({ reply: replyC9, cart: cartItemsC9, phase: "building", session_id: sessionId });
             }
           }
@@ -5944,8 +6075,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         ? "Payment still pending — tap the link we sent to finish. Reply CHANGE to edit, SHOW ORDER to see it, or RESTART to start over."
         : "Your payment link was sent — check your texts for it. Reply SHOW ORDER to see your order, CHANGE to edit it, or RESTART to start over.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     }
   }
@@ -5979,8 +6112,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   if (effectiveMenu.length === 0 && cart.phase === "greeting") {
     const reply = "Sorry, our menu is not available right now. Please call us to place an order.";
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+    {
+      const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+    }
     return jsonResponse({ reply, cart: [], phase: "greeting", session_id: sessionId });
   }
 
@@ -6029,8 +6164,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       cart.delivery_offer_made_at = null;
       const ack = "You're in test mode 🧪 Order just like it's the real thing — the kitchen's open and this behaves exactly like a live order. At checkout you'll use a test card, and you won't be charged a cent.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", ack);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, ack); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", ack)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, ack, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply: ack, cart: [], phase: "greeting", session_id: sessionId, test_mode: true });
     }
 
@@ -6066,23 +6203,29 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       if (isClosedAllDay) {
         const closedMsg = `Hey! The kitchen is closed today. We'll be back during regular hours — check back soon!`;
         await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
       }
       if (todayHours.length > 0) {
         const hoursDisplay = todayHours.map((h: { open: string; close: string }) => `${fmt12(h.open)}-${fmt12(h.close)}`).join(", ");
         const closedMsg = `Hey! The kitchen is closed right now. Today's hours are ${hoursDisplay}. Come back during business hours — you'll be happy you did!`;
         await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
       }
       else {
         const closedMsg = `Hey! We're not taking orders right now — check back soon!`;
         await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", closedMsg)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, closedMsg, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply: closedMsg, cart: [], phase: "greeting", session_id: sessionId });
       }
     }
@@ -6117,8 +6260,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       : "";
     const pauseMsg = `Quick heads up — we're pickup-only right now.${reason}${resumeTimeStr} Want to put in a pickup order?`;
     await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-    await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", pauseMsg);
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, pauseMsg); return emptyTwiml(); }
+    {
+      const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", pauseMsg)).id;
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, pauseMsg, savedMsgId); return emptyTwiml(); }
+    }
     return jsonResponse({ reply: pauseMsg, cart: [], phase: "greeting", session_id: sessionId });
   }
 
@@ -6233,7 +6378,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         createStripeClient: (key) => new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() }),
       },
     );
-    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnEngineOutgoingReply); return emptyTwiml(); }
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, turnEngineOutgoingReply, turnResult.messageId); return emptyTwiml(); }
     return jsonResponse({ reply: turnEngineOutgoingReply, cart: turnResult.cart, phase: cart.phase, session_id: sessionId });
   }
 
@@ -6298,8 +6443,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       console.log(`[chat-sms] Pending disambiguation declined (conv=${conversation.id}): "${pending.query_name}" abandoned by customer ("${userMessage}"). Clearing state, adding nothing.`);
       await supabase.from("order_carts").update({ pending_disambiguation: null }).eq("id", cart.id);
       const reply = pending.action === "remove_option" ? "No problem — I won't remove that. Anything else?" : "No problem — I won't add that. Anything else?";
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     } else if (resolved && pending.action === "remove_option") {
       // P0 (2026-09-09, live money defect): the customer named an option to
@@ -6320,8 +6467,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         // question was asked) — say so plainly rather than guessing.
         const reply = "That option isn't on that item anymore — anything else?";
         console.log(`[chat-sms] Pending option-removal disambiguation: "${pending.option_phrase}" no longer found on resolved line ${resolved.menu_item_id} (conv=${conversation.id}).`);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
       const removeArgs: { menu_item_id: string; options?: Record<string, string[]>; modifiers?: string[] } = target.group_name
@@ -6349,8 +6498,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
       }
       console.log(`[chat-sms] Pending option-removal disambiguation resolved (conv=${conversation.id}): "${pending.option_phrase}" -> removed "${target.matched_value}" from "${target.name}" (${target.menu_item_id}).`);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
     } else if (resolved) {
       const localCartItems = [...cart.cart_json];
@@ -6388,8 +6539,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
       }
       console.log(`[chat-sms] Pending disambiguation resolved (conv=${conversation.id}): "${pending.query_name}" -> ${resolved.name} (${resolved.category ?? "no category"}, ${resolved.price_cents}c).`);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
     } else {
       // Did not resolve deterministically — could be a checkout signal, a
@@ -6603,8 +6756,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         if (!reply7c.includes(sentence7c)) reply7c = `${reply7c} ${sentence7c}`.trim();
       }
       console.log(`[chat-sms] GUARD 7c (proactive category resolution) tripped (conv=${conversation.id}). "${name7c}" -> ${resolved7c.name} (${resolved7c.category ?? "no category"}).`);
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply7c);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply7c); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply7c)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply7c, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply: reply7c, cart: localCartItems, phase: "building", session_id: sessionId });
     }
   }
@@ -6704,8 +6859,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
         }
         console.log(`[chat-sms] Item 8 compiled pending-answer resolved (conv=${conversation.id}): "${pendingCompiledLine.name}" turn="${userMessage}".`);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply8);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply8); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply8)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply8, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply: reply8, cart: localCartItems8, phase: "building", session_id: sessionId });
       }
       // Not resolved this turn (customer's message didn't match any pending
@@ -6767,8 +6924,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
         }
         console.log(`[chat-sms] Pending option resolved (conv=${conversation.id}): "${pendingQuestion.item_name}" / ${pendingQuestion.group_name} -> ${resolvedChoice.name}.`);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply, cart: localCartItems, phase: "building", session_id: sessionId });
       }
       // Unresolved — not necessarily a garbled answer; could be a genuine
@@ -6834,8 +6993,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           await supabase.from("order_carts").update({ fee_disclosed_at: new Date().toISOString() }).eq("id", cart.id);
         }
         console.log(`[chat-sms] Option removal (conv=${conversation.id}): "${optionRemovalPhrase}" -> removed "${target.matched_value}" from "${target.name}" (${target.menu_item_id}).`);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply, cart: cartItems, phase: "building", session_id: sessionId });
       } else if (optionMatches.length > 1) {
         const pendingPayload: PendingDisambiguation = {
@@ -6848,8 +7009,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         const listStr = renderNumberedPickList(optionMatches, "the ");
         const reply = `Which one did you want to remove ${optionRemovalPhrase} from? ${listStr}. Reply with the number.`;
         console.log(`[chat-sms] Option removal ambiguous (conv=${conversation.id}): "${optionRemovalPhrase}" matched ${optionMatches.length} cart lines, asking.`);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
       // Zero matches — this option is not currently in the cart. Fall
@@ -6878,8 +7041,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (isAmbiguousBareDecline) {
       console.log(`[chat-sms] Ambiguous bare decline (conv=${conversation.id}): "${userMessage}" with ${cartItems.length} cart item(s), no pending question open. Asking instead of guessing.`);
       const reply = "Just to make sure — did you want to remove your last item, or are you all set and ready to checkout?";
-      await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+      {
+        const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      }
       return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
     }
 
@@ -6948,16 +7113,20 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             const cartNames = renderQuotedNameList(cartItems.map(i => (i as CartItem).name));
             const reply = `I don't see "${capturedName}" in your cart — you currently have: ${cartNames}. Did you mean one of those?`;
             console.log(`[chat-sms] Named remove: "${capturedName}" not found in cart (conv=${conversation.id})`);
-            await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-            if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+            {
+              const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+            }
             return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
           } else if (matches.length > 1) {
             // Ambiguous — multiple cart lines match the name, ask which one.
             const listStr = renderNumberedPickList(matches.map(item => ({ name: (item as CartItem).name })));
             const reply = `Which one did you want to remove? ${listStr}. Reply with the number.`;
             console.log(`[chat-sms] Named remove: "${capturedName}" matched ${matches.length} cart lines, asking (conv=${conversation.id})`);
-            await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-            if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+            {
+              const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+            }
             return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
           } else {
             // Exactly one match — remove that specific item.
@@ -7364,8 +7533,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         }
         console.log(`[chat-sms] C2b-name held (conv=${conversation.id}): compound read+confirm turn — showed the order instead of auto-submitting${alreadyAskedUnchanged ? " (name-confirm already pending, suppressed repeat ask)" : ""}.`);
         await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-        await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply);
-        if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply); return emptyTwiml(); }
+        {
+          const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+          if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+        }
         return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
       }
       // P0 fix (2026-09-12, turn-reconciler acceptance matrix, C4 sweep):
@@ -7432,8 +7603,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
                   // total and not repeat it again.
                   await supabase.from("order_carts").update({ name_confirm_pending_total_cents: computeCartSubtotalCents(cartItems) }).eq("id", cart.id);
                   await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-                  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
-                  if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+                  {
+                    const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b)).id;
+                    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b, savedMsgId); return emptyTwiml(); }
+                  }
                   return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
                 }
               }
@@ -7477,8 +7650,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
               // so track the NEW subtotal for this re-ask.
               await supabase.from("order_carts").update({ name_confirm_pending_total_cents: computeCartSubtotalCents(cartItems) }).eq("id", cart.id);
               await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
-              await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b);
-              if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b); return emptyTwiml(); }
+              {
+                const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", replyC2b)).id;
+                if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, replyC2b, savedMsgId); return emptyTwiml(); }
+              }
               return jsonResponse({ reply: replyC2b, cart: cartItems, phase: "building", session_id: sessionId });
             }
           }
@@ -10107,7 +10282,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     safeReply = reply;
   }
 
-  await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", safeReply);
+  const savedFinalMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", safeReply)).id;
 
   // Reload cart for response
   const { data: updatedCart } = await supabase.from("order_carts").select("*").eq("id", cart.id).single();
@@ -10230,7 +10405,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   }
 
   if (isSms) {
-    await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, finalReply);
+    await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, finalReply, savedFinalMsgId);
     return emptyTwiml();
   }
   return jsonResponse({

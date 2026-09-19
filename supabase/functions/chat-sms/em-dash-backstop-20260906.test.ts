@@ -82,9 +82,16 @@ Deno.test("wiring: sendSms cleans the message before dispatching to either provi
   const end = INDEX_SOURCE.indexOf("\n}", start);
   const block = INDEX_SOURCE.slice(start, end);
   assert(block.includes("stripEmDashes(message)"), "sendSms must run stripEmDashes on the outgoing message");
+  // Long replies are split into carrier-safe parts (splitForSms) derived
+  // from `cleaned`, not the raw `message` — each part is dispatched, never
+  // the raw message.
   assert(
-    /sendSmsViaTelnyx\([^)]*cleaned\)/.test(block) && /sendSmsViaTwilio\([^)]*cleaned\)/.test(block),
-    "both provider dispatches must send the CLEANED message, not the raw one",
+    /splitForSms\(cleaned,/.test(block),
+    "sendSms must derive its parts from the CLEANED message via splitForSms, not the raw one",
+  );
+  assert(
+    /sendSmsViaTelnyx\([^)]*\bpart\b[^)]*\)/.test(block) && /sendSmsViaTwilio\([^)]*\bpart\b[^)]*\)/.test(block),
+    "both provider dispatches must send a part derived from the CLEANED message, not the raw one",
   );
 });
 
