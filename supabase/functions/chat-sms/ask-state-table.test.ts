@@ -303,6 +303,12 @@ function progressViolation(
     // satisfy the exhaustive switch now that DialogueState carries it.
     case "multi_size":
       return false;
+    // 2026-09-19 PO dispatch (freeze-queue item 4): same reasoning as
+    // "multi_size" immediately above — "category_confirm" is not one of
+    // this sweep's enumerated open-kinds, added only to satisfy the
+    // exhaustive switch now that DialogueState carries it.
+    case "category_confirm":
+      return false;
   }
 }
 

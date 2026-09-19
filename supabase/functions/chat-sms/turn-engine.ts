@@ -223,6 +223,17 @@ export interface DialogueState {
     // group independently.
     | { kind: "multi_size"; groups: Array<{ candidates: string[]; quantity: number }> }
     | { kind: "upsell"; menu_item_id: string }
+    // 2026-09-19 PO dispatch (freeze-queue item 4): a fresh add resolved to
+    // exactly one real menu item whose OWN category the customer's words
+    // for it don't match (see DecideResult.categoryMismatchPending's own
+    // doc for the live bug and detection). Nothing is in the cart for this
+    // item yet — unlike the disambiguation-path category-rejection fix
+    // (aae67b80), which adds first and asks "keep it or take it off?", a
+    // fresh add has never touched the cart at all, so the question here is
+    // "add it, or skip it?" instead. `message` is the exact wording to
+    // render; `menu_item_id`/`quantity` are applied to the cart only if the
+    // customer answers yes (answer()'s "category_confirm" case).
+    | { kind: "category_confirm"; menu_item_id: string; quantity: number; message: string }
     // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
     // "order type genuinely never asked yet" (render()'s plain "Pickup or
     // delivery today?") from "opened as the fallback after 2 consecutive
@@ -546,7 +557,14 @@ export type AnswerOutcome =
   // rides ahead of the normal confirm re-ask via the same answerText hook
   // replacement_unavailable already uses (never a second reply-building
   // path); confirm itself stays open so ask() re-asks it right after.
-  | { kind: "confirm_info_answered"; infoText: string };
+  | { kind: "confirm_info_answered"; infoText: string }
+  // 2026-09-19 PO dispatch (freeze-queue item 4): the customer answered a
+  // fresh-add category-mismatch question. "added" — cart already mutated in
+  // place by answer() (same convention as upsell_accepted); "declined" —
+  // nothing touched, the held-back item is simply never added. See
+  // DialogueState.open's own "category_confirm" variant.
+  | { kind: "category_confirm_added"; menuItemId: string }
+  | { kind: "category_confirm_declined" };
 
 export type AnswerResult =
   | { resolved: false }
@@ -1088,6 +1106,30 @@ const buildCategoryMismatchMessage = (displayName: string, category: string): st
 // customer who says "not stromboli, the 16 inch one" should get the 16"
 // candidate, not a random one); fall back to the first candidate when no
 // size or when no candidate matches the stated size.
+//
+// Shared core of the category-mismatch detection: does `message` name a menu
+// category whose stems are wholly outside `excludedCategoryStems`? Extracted
+// so the FRESH-ADD path (2026-09-19 PO dispatch, freeze-queue item 4 below)
+// can reuse the exact same "outside category word" test against a single
+// resolved item's own category, instead of a candidate SET's categories —
+// never a second implementation of the same stem-diff rule.
+function messageNamesCategoryOutsideStemSet(
+  message: string,
+  excludedCategoryStems: Set<string>,
+  menu: TurnEngineMenuItem[],
+): boolean {
+  if (excludedCategoryStems.size === 0) return false;
+  const msgStems = significantStems(message);
+  const seenCategories = new Set(menu.map(m => m.category).filter((c): c is string => !!c));
+  for (const category of seenCategories) {
+    const catStems = significantStems(category);
+    if (catStems.size === 0) continue;
+    if ([...catStems].some(w => excludedCategoryStems.has(w))) continue; // same family
+    if ([...catStems].every(s => msgStems.has(s))) return true;
+  }
+  return false;
+}
+
 function findDisambiguationCategoryRejectionCandidate(
   message: string,
   candidates: PendingCandidate[],
@@ -1101,24 +1143,88 @@ function findDisambiguationCategoryRejectionCandidate(
   if (candidateCategoryStems.size === 0) return null;
 
   // Does the message name any menu category NOT in the offered candidates'?
-  const msgStems = significantStems(message);
-  const seenCategories = new Set(menu.map(m => m.category).filter((c): c is string => !!c));
-  let foundNonCandidateCategory = false;
-  for (const category of seenCategories) {
-    const catStems = significantStems(category);
-    if (catStems.size === 0) continue;
-    if ([...catStems].some(w => candidateCategoryStems.has(w))) continue; // same family
-    if ([...catStems].every(s => msgStems.has(s))) {
-      foundNonCandidateCategory = true;
-      break;
-    }
-  }
-  if (!foundNonCandidateCategory) return null;
+  if (!messageNamesCategoryOutsideStemSet(message, candidateCategoryStems, menu)) return null;
 
   // Narrow by stated size if the facet resolver finds one
   const sizeNarrowed = narrowCandidatesByFacetAnswer(candidates, "size", message);
   const narrowed = (sizeNarrowed && sizeNarrowed.length > 0) ? sizeNarrowed : candidates;
   return narrowed[0] ?? null;
+}
+
+// 2026-09-19 PO dispatch (freeze-queue item 4, live bug, two real Vito's
+// repros): "a House Personal pizza" -> resolve-item.ts's own resolver
+// (correctly, by its own contract) resolved this to the Personal House
+// STROMBOLI — "House" ties across the shop's whole House family, "Personal"
+// narrows the tie down to the one candidate that carries that size, and
+// nothing in that resolver's job is to ALSO notice that the customer's
+// OTHER word, "pizza", names a category the winning candidate isn't in
+// (resolve-item.ts's own "data fix b" conflict check only ever fires for a
+// term whose BASE match was already unique before any filter ran — a
+// genuine tie narrowed down to one by the size filter alone, this shape
+// exactly, never re-runs that check). The bot silently added "Personal
+// House Stromboli" and the customer argued for 5-8 turns before either
+// paying for the wrong item or abandoning the order.
+//
+// Fix, at the fresh-add boundary in DECIDE (never inside the resolver
+// itself — the PO's own instruction: this must reuse the disambiguation
+// path's already-shipped detection, never reimplement or touch
+// resolve-item.ts): after an add's item_span resolves to exactly one real
+// menu item, check whether the customer's own words for that add ALSO name
+// a menu category the resolved item's own category shares no stem with —
+// the identical `messageNamesCategoryOutsideStemSet` test
+// findDisambiguationCategoryRejectionCandidate above already uses, just
+// against one item's category instead of a candidate set's.
+//
+// `resolvedItemName` is excluded alongside the category itself (real
+// regression caught writing this fix: "Side Salad" — category "Appetizers"
+// — genuinely resolves from "a side salad and the house salad", and its own
+// NAME contains the word "salad", which is also the unrelated "Salads"
+// category's own noun. Without excluding the resolved item's own name
+// stems too, that reads as the customer naming category "Salads" for an
+// "Appetizers" item and wrongly holds Side Salad back — a word already
+// part of what the item IS CALLED is never an outside qualifier, same
+// "synonym for itself" principle resolve-item.ts's own uniqueBaseCategoryConflict
+// applies via its matchedWords exclusion).
+function findFreshAddCategoryMismatch(
+  itemSpan: string,
+  resolvedItemName: string,
+  resolvedCategory: string | null | undefined,
+  menu: TurnEngineMenuItem[],
+): boolean {
+  if (!resolvedCategory) return false;
+  const ownStems = new Set([...significantStems(resolvedCategory), ...significantStems(resolvedItemName)]);
+  return messageNamesCategoryOutsideStemSet(itemSpan, ownStems, menu);
+}
+
+// Wording for the FRESH-ADD category-mismatch question — deliberately
+// distinct from buildCategoryMismatchMessage's "Keep it, or take it off?"
+// (that wording presumes the item is ALREADY in the cart, which is true for
+// both of buildCategoryMismatchMessage's own callers — a disambiguation
+// rejection and a replacement decline, each of which adds the item before
+// asking). The fresh-add case is the opposite on purpose (PO's explicit
+// instruction): nothing is added until the customer confirms, so the
+// question must not imply it already happened.
+const buildFreshAddCategoryConfirmMessage = (displayName: string, category: string): string => {
+  const cat = category.trim();
+  const sizeMatch = displayName.match(/\b\d+["″]|\bSmall\b|\bMedium\b|\bLarge\b|\bPersonal\b|\bJumbo\b|\bMini\b/i);
+  let core = displayName;
+  if (sizeMatch) core = core.replace(sizeMatch[0], "");
+  if (cat) core = core.replace(new RegExp(`\\b${escapeRegexLiteral(cat)}\\b`, "i"), "");
+  core = core.replace(/\s+/g, " ").trim();
+  const sizePart = sizeMatch ? ` in ${sizeMatch[0]}` : "";
+  return `We only have ${core} as a ${cat.toLowerCase()}${sizePart}. Want that, or skip it?`;
+};
+
+// 2026-09-19 PO dispatch (freeze-queue item 4): the fresh-add
+// category-mismatch question's own acceptance wording ("want the 16"
+// stromboli, or skip it?") includes "keep"/"keep it" as a plain-English
+// yes — impliesUpsellAcceptance's own list (yes/yeah/sure/ok/...) never
+// anticipated that word since nothing before this question ever offered
+// "keep" as the affirmative option. Extends, never forks, the existing list.
+function impliesCategoryConfirmYes(text: string): boolean {
+  if (impliesUpsellAcceptance(text)) return true;
+  const norm = (text ?? "").toLowerCase().trim();
+  return /^keep(?: it)?[.!]?$/.test(norm);
 }
 
 // P0 (2026-09-19, item 9, live repro): `questionNamesSomethingSpecific`
@@ -2247,6 +2353,37 @@ export function answer(
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
+    // 2026-09-19 PO dispatch (freeze-queue item 4): the fresh-add
+    // category-mismatch question — see DialogueState.open's own
+    // "category_confirm" doc. Same shape as "upsell" immediately above
+    // (bare yes/no over a single held item), except the item was NEVER
+    // added to the cart, so "yes" adds it here for the first time rather
+    // than confirming something already there. impliesCategoryConfirmYes
+    // extends impliesUpsellAcceptance with "keep"/"keep it" — the PO's own
+    // acceptance wording for this question — never a second copy of the
+    // whole affirmative list. Anything that isn't a clean yes/no (including
+    // a message about something else entirely) falls to
+    // closureOrAffirmationFallback and, failing that, UNRESOLVED — which
+    // hands the turn to PROPOSE with `open` cleared back to whatever DECIDE
+    // computes fresh next turn (categoryMismatchPending is turn-scoped,
+    // never persisted), so this question is asked AT MOST ONCE per item,
+    // never re-asked forever on an unclear reply (a general repeat cap
+    // across every open kind is freeze-queue item 5, out of scope here).
+    case "category_confirm": {
+      if (impliesCategoryConfirmYes(trimmed)) {
+        const menuItem = menuById.get(state.open.menu_item_id);
+        if (!menuItem?.ask_plan) return UNRESOLVED;
+        const result = applyCompiledAddItem(
+          cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, state.open.quantity, "", undefined, undefined, [],
+        );
+        return { resolved: true, outcome: { kind: "category_confirm_added", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
+      }
+      if (impliesUpsellDecline(trimmed)) {
+        return { resolved: true, outcome: { kind: "category_confirm_declined" }, cartChanged: false };
+      }
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+    }
+
     // "ordering" (00-AK): identical treatment to `state.open === null` above
     // — an empty cart has nothing to close, so this only catches an
     // explicit checkout phrase or a bare closure/affirmation before ever
@@ -2675,6 +2812,22 @@ export interface DecideResult {
   // resolved cleanly -- that swap already happened above, in code, and
   // never touches this field).
   replacementSourceLineKey?: string;
+  // 2026-09-19 PO dispatch (freeze-queue item 4): set when a fresh add this
+  // turn resolved to exactly one real menu item, but the customer's own
+  // words for it also named a menu category that item isn't actually in
+  // ("a House Personal pizza" resolving to the Personal House STROMBOLI —
+  // see findFreshAddCategoryMismatch's own header for the live bug and why
+  // this can't be caught inside resolve-item.ts). That add is held OUT of
+  // the cart this turn (never silently added) and its menu_item_id/quantity
+  // carried here instead, for ASK to open a "category_confirm" question
+  // from (see DialogueState.open's own variant) — `message` is the exact
+  // "We only have X as a Y. Want that, or skip it?" wording to render. Null
+  // when no add this turn hit this conflict. Only the FIRST such add in the
+  // proposal wins this slot (same "one question per turn" scope every other
+  // DecideResult field here uses) — a second, same-turn conflict is rare
+  // enough (no live repro) that it is simply left to add normally rather
+  // than building a carry-forward queue for it.
+  categoryMismatchPending: { menu_item_id: string; quantity: number; message: string } | null;
 }
 
 interface ResolvedAdd {
@@ -3190,6 +3343,10 @@ export function decide(
   const menuById = new Map(menu.map(m => [m.id, m]));
   const declines: Decline[] = [];
   let qualifyingAddMenuItemId: string | null = null;
+  // 2026-09-19 PO dispatch (freeze-queue item 4): see DecideResult.
+  // categoryMismatchPending's own doc — set by the add-application loop
+  // below, at most once per turn.
+  let categoryMismatchPending: { menu_item_id: string; quantity: number; message: string } | null = null;
   let disambiguationCandidateIds: string[] | null = null;
   let disambiguationQuantity: number | undefined;
   let disambiguationSpanText: string | undefined;
@@ -3531,6 +3688,26 @@ export function decide(
     const menuItem = menuById.get(add.menu_item_id);
     if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
+    // 2026-09-19 PO dispatch (freeze-queue item 4, live bug): the customer's
+    // own words for THIS add name a menu category the resolved item isn't
+    // actually in ("a House Personal pizza" -> Personal House Stromboli) —
+    // see findFreshAddCategoryMismatch's own header. Held OUT of the cart
+    // entirely this turn (never silently added) and surfaced as a
+    // keep-or-skip question instead — only the first such add per turn;
+    // see categoryMismatchPending's own declaration above.
+    const freshAddDisplayName = menuItem.ask_plan.display_name ?? menuItem.name;
+    if (
+      !categoryMismatchPending &&
+      findFreshAddCategoryMismatch(add.item_span ?? "", `${freshAddDisplayName} ${menuItem.name}`, menuItem.category, menu)
+    ) {
+      const displayName = freshAddDisplayName;
+      categoryMismatchPending = {
+        menu_item_id: menuItem.id,
+        quantity: add.quantity,
+        message: buildFreshAddCategoryConfirmMessage(displayName, menuItem.category ?? ""),
+      };
+      continue;
+    }
     // 00-BF: the modifier floor. Only when the model asserted NOTHING for this
     // add -- we never override or second-guess a choice it did make.
     let effectiveChoices = add.choices ?? [];
@@ -3637,7 +3814,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText, guardDroppedRemoves, replacementSourceLineKey };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText, guardDroppedRemoves, replacementSourceLineKey, categoryMismatchPending };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -3774,6 +3951,11 @@ export interface AskTurnEvents {
   // "disambiguation" variant for where this lands once ask() opens (or
   // re-opens) the question.
   replacementSourceLineKey?: string;
+  // 2026-09-19 PO dispatch (freeze-queue item 4): mirrors
+  // DecideResult.categoryMismatchPending straight through — see that
+  // field's own doc and DialogueState.open's "category_confirm" variant.
+  // Undefined/null on every turn where no fresh add hit this conflict.
+  categoryMismatchPending?: { menu_item_id: string; quantity: number; message: string } | null;
 }
 
 export function ask(
@@ -3920,6 +4102,18 @@ export function ask(
       priorState.upsell_offered,
       rest,
     );
+  }
+
+  // 2c. category_confirm (2026-09-19 PO dispatch, freeze-queue item 4): a
+  // fresh add this turn resolved to a real item whose own category doesn't
+  // match the customer's words for it — see DecideResult.
+  // categoryMismatchPending's own doc. Same priority band as disambiguation
+  // immediately above (a fresh add still waiting on the customer, never a
+  // persisted/carried queue — see answer()'s "category_confirm" case for
+  // why this is asked at most once and never re-opened from stale state).
+  if (turnEvents.categoryMismatchPending) {
+    const { menu_item_id, quantity, message } = turnEvents.categoryMismatchPending;
+    return carry({ kind: "category_confirm", menu_item_id, quantity, message }, "ordering");
   }
 
   // 3. order_type (only if delivery is enabled and unset).
@@ -4438,6 +4632,14 @@ export function render(
         if (menuItem) question = renderUpsellOfferSentence({ name: menuItem.name, priceCents: menuItem.price_cents });
         break;
       }
+      // 2026-09-19 PO dispatch (freeze-queue item 4): the exact "We only
+      // have X as a Y. Want that, or skip it?" wording DECIDE already built
+      // (buildFreshAddCategoryConfirmMessage) — never re-derived here, same
+      // "message rides on the open state" convention replacement_unavailable
+      // and disambiguation_category_rejected already use via answerText.
+      case "category_confirm":
+        question = state.open.message;
+        break;
       case "order_type":
         // 2026-09-18 PO dispatch (address loop, rule 3): shown once, on the
         // transition turn (openRepeatCount 0), when this open was reached

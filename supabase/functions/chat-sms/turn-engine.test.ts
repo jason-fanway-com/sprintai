@@ -3054,3 +3054,235 @@ Deno.test("decide (Round 2, item 2 control): a genuinely nonexistent add-on span
     `a genuinely nonexistent span must still decline by name: ${JSON.stringify(result.declines)}`,
   );
 });
+
+// ============================================================
+// 2026-09-19 PO dispatch (freeze-queue item 4, live bug, two real Vito's
+// repros, real money/UX impact): on the FRESH-ADD path (a brand new item
+// resolving for the first time, NOT inside an already-open disambiguation),
+// the customer's own words named a menu category the resolved item is NOT
+// actually in, and the bot silently added the wrong item:
+//   "a House Personal pizza"        -> bot replied "Personal House
+//                                       Stromboli added." (customer said
+//                                       "pizza", got a stromboli)
+//   "I'd like a House - 16\" pizza" -> bot replied "16\" House Stromboli
+//                                       added."
+// Both customers then argued for 5-8 turns before either paying for the
+// wrong item or abandoning the order. resolve-item.ts's own resolver is
+// working exactly as designed here — "House" ties across the whole House
+// family, "Personal"/"16\"" narrows the tie to one candidate by size alone,
+// and nothing in that resolver's contract also checks whether the
+// customer's OTHER word ("pizza") names a category the winning candidate
+// isn't in (see findFreshAddCategoryMismatch's own header in turn-engine.ts
+// for exactly why resolve-item.ts's existing "data fix b" conflict check
+// doesn't already catch this shape). The fix reuses the disambiguation-path
+// category-rejection detection (aae67b80's messageNamesCategoryOutsideStemSet,
+// factored out here for exactly this reuse) at the fresh-add boundary in
+// DECIDE — never a second implementation, never a change to resolve-item.ts.
+// ============================================================
+
+const FRESHADD_HOUSE_PERSONAL_ID = "freshadd-house-personal";
+const FRESHADD_HOUSE_16_ID = "freshadd-house-16";
+const FRESHADD_CHEESE_PIZZA_ID = "freshadd-cheese-pizza";
+const FRESHADD_PEPPERONI_ROLL_ID = "freshadd-pepperoni-roll";
+const FRESHADD_SLICE_14_ID = "freshadd-slice-14";
+
+const FRESHADD_MENU: TurnEngineMenuItem[] = [
+  {
+    id: FRESHADD_HOUSE_PERSONAL_ID, name: "House - Personal", category: "Stromboli", price_cents: 999, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Personal House Stromboli", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: FRESHADD_HOUSE_16_ID, name: "House - 16\"", category: "Stromboli", price_cents: 2295, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "16\" House Stromboli", base_price_cents: 2295, recap_template: "", ticket_template: "", steps: [] },
+  },
+  // A real Pizza-category item elsewhere on the menu — this is exactly what
+  // makes "pizza" a category word the fresh-add check can name as a real,
+  // NAMED-BUT-NOT-MATCHING category (Vito's real menu has a whole Pizza
+  // section, which is precisely why the customer believed a "House pizza"
+  // should exist).
+  {
+    id: FRESHADD_CHEESE_PIZZA_ID, name: "Cheese Pizza", category: "Pizza", price_cents: 1650, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Cheese Pizza", base_price_cents: 1650, recap_template: "", ticket_template: "", steps: [] },
+  },
+  // Control (acceptance 5): a real Stromboli Rolls item whose bare name
+  // ("Pepperoni") shares nothing with "pizza" — resolving this must be
+  // completely unaffected by the fix.
+  {
+    id: FRESHADD_PEPPERONI_ROLL_ID, name: "Pepperoni", category: "Stromboli Rolls", price_cents: 999, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Pepperoni", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+  // Control (acceptance 6): an unrelated item with no category conflict at
+  // all in its own item_span.
+  {
+    id: FRESHADD_SLICE_14_ID, name: "The Slice - 14\"", category: "Stromboli", price_cents: 1895, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "14\" The Slice Stromboli", base_price_cents: 1895, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+// Mirrors resolve-item.ts's own real tie shape: "house" ties across BOTH
+// House Stromboli sizes with no competing "House pizza" term anywhere — the
+// exact shape that makes resolve-item.ts's own "data fix b" singleton-only
+// conflict check never fire (base.targetIds.size is 2, not 1) and land the
+// tie-break purely on the stated size, ignoring "pizza" entirely. Verified
+// directly against resolve-item.ts before writing this fixture: both real
+// repro messages below resolve to the wrong stromboli exactly as reported.
+const FRESHADD_LEXICON: LexiconTerm[] = [
+  { term: "house", target_id: FRESHADD_HOUSE_PERSONAL_ID, category: "Stromboli", size_label: "Personal" },
+  { term: "house", target_id: FRESHADD_HOUSE_16_ID, category: "Stromboli", size_label: "16\"" },
+  { term: "cheese pizza", target_id: FRESHADD_CHEESE_PIZZA_ID, category: "Pizza" },
+  { term: "pepperoni", target_id: FRESHADD_PEPPERONI_ROLL_ID, category: "Stromboli Rolls" },
+  { term: "the slice", target_id: FRESHADD_SLICE_14_ID, category: "Stromboli", size_label: "14\"" },
+];
+
+// Acceptance 1: "a House Personal pizza" -> the keep-or-drop question is
+// asked, item is NOT added yet.
+Deno.test("decide (freeze-queue item 4, acceptance 1): 'a House Personal pizza' holds the item back and surfaces a category-confirm question — never silently added", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "a House Personal pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRESHADD_MENU, FRESHADD_LEXICON, undefined, "a House Personal pizza");
+  assertEquals(result.cart.length, 0, `item must NOT be added yet: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.categoryMismatchPending, {
+    menu_item_id: FRESHADD_HOUSE_PERSONAL_ID,
+    quantity: 1,
+    message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+  });
+});
+
+const FRESHADD_CATEGORY_CONFIRM_STATE_PERSONAL: DialogueState = {
+  phase: "ordering",
+  open: {
+    kind: "category_confirm", menu_item_id: FRESHADD_HOUSE_PERSONAL_ID, quantity: 1,
+    message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+  },
+  upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+};
+
+// Acceptance 2: customer then says "yes" -> the stromboli line gets added.
+Deno.test("answer (freeze-queue item 4, acceptance 2): 'yes' to the category-confirm question adds the Personal House Stromboli", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(FRESHADD_CATEGORY_CONFIRM_STATE_PERSONAL, cart, "yes", FRESHADD_MENU);
+  assertEquals(result, {
+    resolved: true,
+    outcome: { kind: "category_confirm_added", menuItemId: FRESHADD_HOUSE_PERSONAL_ID },
+    cartChanged: true,
+  });
+  assertEquals(cart.length, 1, `the stromboli must land: ${JSON.stringify(cart)}`);
+  assertEquals(cart[0].menu_item_id, FRESHADD_HOUSE_PERSONAL_ID);
+  assertEquals(cart[0].quantity, 1);
+});
+
+// Acceptance 3: same flow, customer says "no" -> nothing gets added.
+Deno.test("answer (freeze-queue item 4, acceptance 3): 'no' to the category-confirm question adds nothing", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(FRESHADD_CATEGORY_CONFIRM_STATE_PERSONAL, cart, "no", FRESHADD_MENU);
+  assertEquals(result, { resolved: true, outcome: { kind: "category_confirm_declined" }, cartChanged: false });
+  assertEquals(cart.length, 0, `nothing must be added on a decline: ${JSON.stringify(cart)}`);
+});
+
+// Acceptance 4: "I'd like a House - 16\" pizza" behaves the same way (the
+// keep-or-drop question, then yes/no) — a DIFFERENT candidate in the same
+// House family, narrowed by a different stated size.
+Deno.test('decide (freeze-queue item 4, acceptance 4): \'I\'d like a House - 16" pizza\' holds the 16" stromboli back the same way', () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "a House - 16\" pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRESHADD_MENU, FRESHADD_LEXICON, undefined, "I'd like a House - 16\" pizza");
+  assertEquals(result.cart.length, 0, `item must NOT be added yet: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.categoryMismatchPending, {
+    menu_item_id: FRESHADD_HOUSE_16_ID,
+    quantity: 1,
+    message: 'We only have House as a stromboli in 16". Want that, or skip it?',
+  });
+});
+
+Deno.test('answer (freeze-queue item 4, acceptance 4b): "keep it" after the 16" mismatch question adds the 16" House Stromboli', () => {
+  const state: DialogueState = {
+    phase: "ordering",
+    open: {
+      kind: "category_confirm", menu_item_id: FRESHADD_HOUSE_16_ID, quantity: 1,
+      message: 'We only have House as a stromboli in 16". Want that, or skip it?',
+    },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  const cart: TurnEngineCartLine[] = [];
+  // "keep it" — the PO's own acceptance wording, not covered by the plain
+  // upsell acceptance list (impliesCategoryConfirmYes's own reason for
+  // existing).
+  const result = answer(state, cart, "keep it", FRESHADD_MENU);
+  assertEquals(result, {
+    resolved: true,
+    outcome: { kind: "category_confirm_added", menuItemId: FRESHADD_HOUSE_16_ID },
+    cartChanged: true,
+  });
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].menu_item_id, FRESHADD_HOUSE_16_ID);
+});
+
+// Acceptance 5: "a pepperoni stromboli" (category matches, no mismatch) —
+// unchanged, adds normally, no new question introduced.
+Deno.test("decide (freeze-queue item 4, acceptance 5): 'a pepperoni stromboli' — category matches, adds normally, no question", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "a pepperoni stromboli", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRESHADD_MENU, FRESHADD_LEXICON, undefined, "a pepperoni stromboli");
+  assertEquals(result.categoryMismatchPending, null);
+  assertEquals(result.cart.length, 1, `must add normally: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, FRESHADD_PEPPERONI_ROLL_ID);
+});
+
+// Acceptance 6: "The Slice - 14\"" (unrelated item) — unchanged, adds
+// normally.
+Deno.test('decide (freeze-queue item 4, acceptance 6): \'The Slice - 14"\' — unrelated item, adds normally, no question', () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "The Slice - 14\"", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], FRESHADD_MENU, FRESHADD_LEXICON, undefined, "The Slice - 14\"");
+  assertEquals(result.categoryMismatchPending, null);
+  assertEquals(result.cart.length, 1, `must add normally: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, FRESHADD_SLICE_14_ID);
+});
+
+// "Only ask this once per item": an unclear reply (neither a clean yes nor
+// a clean no) must never loop the identical question forever — it falls
+// through UNRESOLVED, which hands the turn to the caller's PROPOSE path
+// (turn-engine-runner.ts) rather than re-carrying "category_confirm" from
+// stale state. The item is simply never added (same as an explicit
+// decline) — never re-asked from this exact open state a second time.
+Deno.test("answer (freeze-queue item 4): an unclear reply to the category-confirm question is UNRESOLVED — never silently adds, never a third answer shape", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(FRESHADD_CATEGORY_CONFIRM_STATE_PERSONAL, cart, "actually can I get a coke instead", FRESHADD_MENU);
+  assertEquals(result, { resolved: false });
+  assertEquals(cart.length, 0, "must never silently add on an unclear reply");
+});
+
+// ask()/render() wiring: DECIDE's categoryMismatchPending output actually
+// opens the "category_confirm" question with the EXACT wording DECIDE
+// built, never re-derived at render time — same "message rides on the open
+// state" convention disambiguation_category_rejected/replacement_unavailable
+// already use via answerText.
+Deno.test("ask/render (freeze-queue item 4): a fresh categoryMismatchPending opens category_confirm and renders DECIDE's exact wording", () => {
+  const priorState: DialogueState = { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null };
+  const turnEvents: AskTurnEvents = {
+    ...NO_TURN_EVENTS,
+    categoryMismatchPending: {
+      menu_item_id: FRESHADD_HOUSE_PERSONAL_ID, quantity: 1,
+      message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+    },
+  };
+  const nextState = ask([], priorState, turnEvents, SHOP_CONTEXT, FRESHADD_MENU);
+  assertEquals(nextState.open, {
+    kind: "category_confirm", menu_item_id: FRESHADD_HOUSE_PERSONAL_ID, quantity: 1,
+    message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+  });
+  const reply = render([], [], nextState, [], FRESHADD_MENU);
+  assertEquals(reply, "We only have House as a stromboli in Personal. Want that, or skip it?");
+});
