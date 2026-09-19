@@ -458,6 +458,43 @@ Deno.test("decide (ADDENDUM A): a guard-dropped add that DOES resolve to a real 
   assertEquals(result.unresolvedSpans, ["The Slice Cheesesteak"]);
 });
 
+// ── P0 (2026-09-19, live conv ae0eb19b — the swallowed-order investigation):
+// a brand-new conversation's FIRST message was an entire fresh order with
+// casual "that's it rn" filler tacked on the end. answer() read the embedded
+// closure phrase against an EMPTY cart and resolved "closure" outright,
+// so runTurnEngineTurn never called PROPOSE — the order was discarded before
+// it was ever read, and every later resend hit the exact same gate (cart
+// still empty), producing the observed 12-turn loop of nothing but the
+// "ordering" filler questions with zero propose/decide rows logged for the
+// whole conversation. See impliesClosure's own header in turn-engine.ts.
+// UNRESOLVED here is the fix: it lets runTurnEngineTurn fall through to
+// PROPOSE, exactly as any other order-shaped message does.
+Deno.test("answer (P0, ae0eb19b): a fresh conversation's first message, real order + trailing 'that's it rn', does NOT resolve as closure — falls through to PROPOSE", () => {
+  const result = answer(
+    INITIAL_STATE,
+    [],
+    "yo, lemme get 2x buffalo chicken cheesesteaks w/ mild sauce and 1x french fries. that's it rn",
+    FRIES_MENU,
+  );
+  assertEquals(result.resolved, false, "must be UNRESOLVED so runTurnEngineTurn calls PROPOSE, not silently closed");
+});
+
+Deno.test("answer (P0, ae0eb19b): the SAME shape while state.open is the 'ordering' question (a resend) also falls through to PROPOSE", () => {
+  const orderingState: DialogueState = { phase: "ordering", open: { kind: "ordering", askCount: 2 }, upsell_offered: false, asked_message_id: null };
+  const result = answer(
+    orderingState,
+    [],
+    "yo, lemme get 2x buffalo chicken cheesesteaks w/ mild sauce and 1x french fries. that's it rn",
+    FRIES_MENU,
+  );
+  assertEquals(result.resolved, false, "must be UNRESOLVED — the resend must reach PROPOSE too, not loop forever on the same closure misread");
+});
+
+Deno.test("answer (P0, ae0eb19b): a genuine bare closure on an empty cart still closes — regression guard", () => {
+  const result = answer(INITIAL_STATE, [], "nope", FRIES_MENU);
+  assert(result.resolved && result.outcome.kind === "closure", `a real bare closure must still close: ${JSON.stringify(result)}`);
+});
+
 // ── ADDENDUM B (2026-09-19, live repro): the customer typed "One large
 // hawiaan pizza", the model self-corrected the typo in its own item_span
 // ("large hawaiian pizza") — the token-based guard used to reject this
