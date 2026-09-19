@@ -59,6 +59,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import {
   compileMenu,
   buildDerivedRows,
+  computeDanglingLexiconTermInvariant,
+  resolveDerivedLexiconTerms,
   type DerivedRowsDiagnostic,
   applyOverrides,
   buildOwnerQuestionSummaries,
@@ -553,6 +555,16 @@ Deno.serve(async (req: Request) => {
   const desiredEntityKeys = new Set(derivedRows.map(r => r.entity_key));
 
   // Upsert derived rows (insert new, update changed fields of existing).
+  // PO dispatch (2026-09-19, dangling-lexicon-terms P0): derivedIdByEntityKey
+  // captures each row's REAL persisted menu_items.id — existing.id on
+  // update, the inserted row's own returned id on insert — so
+  // resolveDerivedLexiconTerms below can rewrite that row's lexicon terms to
+  // point at the real id instead of the synthetic entity_key
+  // (buildDerivedRows's own header explains why entity_key must never reach
+  // the lexicon table as target_id). A row whose insert/update failed is
+  // simply absent from this map; resolveDerivedLexiconTerms drops its terms
+  // entirely rather than ever writing a dangling one.
+  const derivedIdByEntityKey = new Map<string, string>();
   const CONCURRENCY_DERIVED = 10;
   for (let i = 0; i < derivedRows.length; i += CONCURRENCY_DERIVED) {
     const batch = derivedRows.slice(i, i + CONCURRENCY_DERIVED);
@@ -572,9 +584,11 @@ Deno.serve(async (req: Request) => {
         derived_from: dr.derived_from,
       };
       if (existing) {
-        await supabase.from("menu_items").update(payload).eq("id", existing.id);
+        const { error } = await supabase.from("menu_items").update(payload).eq("id", existing.id);
+        if (error) console.error(`[compile-menu] derived update error (${dr.entity_key}):`, error.message);
+        else derivedIdByEntityKey.set(dr.entity_key, existing.id);
       } else {
-        const { error } = await supabase.from("menu_items").insert({
+        const { data, error } = await supabase.from("menu_items").insert({
           ...payload,
           menu_id: menuId,
           category: dr.category,
@@ -583,8 +597,9 @@ Deno.serve(async (req: Request) => {
           import_key: dr.entity_key,
           description: null,
           name_provenance: dr.provenance,
-        });
+        }).select("id").single();
         if (error) console.error(`[compile-menu] derived insert error (${dr.entity_key}):`, error.message);
+        else if (data) derivedIdByEntityKey.set(dr.entity_key, (data as { id: string }).id);
       }
     }));
   }
@@ -598,8 +613,10 @@ Deno.serve(async (req: Request) => {
     await supabase.from("menu_items").update({ active: false }).in("id", staleDerivedIds.slice(i, i + IN_BATCH_SIZE));
   }
 
-  // Upsert derived rows' lexicon terms alongside the regular lexicon write-back.
-  const derivedLexiconTerms: LexiconTerm[] = derivedRows.flatMap(r => r.lexicon_terms);
+  // Upsert derived rows' lexicon terms alongside the regular lexicon
+  // write-back — rewritten to each row's REAL persisted id, never the
+  // synthetic entity_key. See resolveDerivedLexiconTerms's own header.
+  const derivedLexiconTerms: LexiconTerm[] = resolveDerivedLexiconTerms(derivedRows, derivedIdByEntityKey);
 
   // ---- Write back: menu_items.display_name / product_key / bot_state /
   // bot_state_reason / ask_plan. display_name/product_key come from
@@ -692,6 +709,39 @@ Deno.serve(async (req: Request) => {
     const { error } = await supabase.from("lexicon").update({ active: false }).in("id", batch);
     if (error) throw new Error(`lexicon deactivate batch failed: ${error.message}`);
   }
+
+  // PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 2):
+  // one-time-but-permanent cleanup of every ACTIVE lexicon row still carrying
+  // a pre-fix synthetic entity_key as target_id — regardless of provenance.
+  // The scan above deliberately exempts 'owner_confirmed' rows (a human
+  // override must outlive whatever the compiler currently proposes), but a
+  // synthetic-key row was never a legitimate override to begin with; it's
+  // the exact dangling-pointer defect this dispatch closes, so it's swept
+  // here unconditionally rather than left to survive under that exemption.
+  const staleSyntheticRows = await fetchAllRows<{ id: string; target_id: string }>(() =>
+    supabase
+      .from("lexicon")
+      .select("id, target_id")
+      .eq("menu_id", menuId)
+      .eq("active", true)
+      .like("target_id", "derived:%"),
+  );
+  const staleSyntheticIds = staleSyntheticRows.map(r => r.id);
+  for (let i = 0; i < staleSyntheticIds.length; i += IN_BATCH_SIZE) {
+    const batch = staleSyntheticIds.slice(i, i + IN_BATCH_SIZE);
+    const { error } = await supabase.from("lexicon").update({ active: false }).in("id", batch);
+    if (error) throw new Error(`synthetic-key lexicon deactivate batch failed: ${error.message}`);
+  }
+
+  // PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 4):
+  // hard compile-time invariant 9 — every active item-type lexicon term this
+  // compile just wrote must resolve to a real menu_items id for this shop.
+  // validItemIds is every active, non-derived item this run started from
+  // (itemIds) plus every derived row that was actually persisted this run
+  // (derivedIdByEntityKey's values — never the synthetic entity_keys
+  // themselves). See computeDanglingLexiconTermInvariant's own header.
+  const validItemIds = new Set<string>([...itemIds, ...derivedIdByEntityKey.values()]);
+  result.invariants.push(computeDanglingLexiconTermInvariant(desiredTerms, validItemIds));
 
   return new Response(
     JSON.stringify({

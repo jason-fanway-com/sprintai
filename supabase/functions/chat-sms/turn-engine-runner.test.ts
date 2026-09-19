@@ -398,7 +398,11 @@ Deno.test("runTurnEngineTurn: loadItemLexicon pages past PostgREST's 1000-row ca
 // the whole lexicon — the same silent-truncation failure class one level up.
 
 Deno.test("runTurnEngineTurn: a PostgREST error on page 2 of loadItemLexicon is NOT silently treated as a clean finish", async () => {
-  const fullLexicon = Array.from({ length: 1298 }, (_, i) => ({ term: `term-${i}`, target_id: `target-${i}` }));
+  // UUID-shaped target_ids (not "target-N") — this test is about pagination
+  // error handling, not the non-UUID trip-wire (see the dedicated test for
+  // that below); a non-UUID id here would spuriously add a second, unrelated
+  // error_log row and break this test's single-error assertion.
+  const fullLexicon = Array.from({ length: 1298 }, (_, i) => ({ term: `term-${i}`, target_id: `00000000-0000-0000-0000-${String(i).padStart(12, "0")}` }));
   const { supabase, state } = makeFakeSupabase({ lexicon: fullLexicon, lexiconPageErrorAtOffset: 1000 });
   let proposeCalls = 0;
   const deps: RunTurnDeps = {
@@ -440,7 +444,8 @@ Deno.test("runTurnEngineTurn: a clean paginated finish that disagrees with an in
   // independently reports 1298, simulating the same true count as the live
   // incident (Vito's 1298 active lexicon rows) despite pagination itself
   // having completed cleanly.
-  const exactlyOnePage = Array.from({ length: 1000 }, (_, i) => ({ term: `term-${i}`, target_id: `target-${i}` }));
+  // UUID-shaped target_ids — see the sibling pagination test above for why.
+  const exactlyOnePage = Array.from({ length: 1000 }, (_, i) => ({ term: `term-${i}`, target_id: `00000000-0000-0000-0000-${String(i).padStart(12, "0")}` }));
   const { supabase, state } = makeFakeSupabase({ lexicon: exactlyOnePage, lexiconCountOverride: 1298 });
   const deps: RunTurnDeps = {
     supabase,
@@ -461,18 +466,26 @@ Deno.test("runTurnEngineTurn: a clean paginated finish that disagrees with an in
 });
 
 // ── loadLexiconItemMetadata: a non-UUID target_id sharing a batch with real
-// UUID target_ids must not poison the whole batch ────────────────────────
+// UUID target_ids must not poison the whole batch — and must not vanish
+// silently either ─────────────────────────────────────────────────────────
 // Live incident (Vito's, commit 5e3398eb): lexicon.target_id is TEXT with no
 // FK to menu_items.id, and live data has non-UUID target_ids (e.g.
 // "derived:<uuid>:0:0") mixed in with real menu_items.id UUIDs. A real
 // Postgres rejects `.in("id", batch)` for the ENTIRE batch with 22P02 the
 // moment one value isn't UUID-shaped — silently dropping category/size_label
 // for every other, valid id in that same batch, not just the bad one. The
-// fake's `.in()` above reproduces that all-or-nothing failure; this proves
-// the fix (filtering to UUID-shaped ids before the `.in()` call) keeps the
-// real id's metadata intact and writes no error_log row.
-
-Deno.test("runTurnEngineTurn: a non-UUID target_id in the same lexicon page as a real UUID target_id does not poison that id's category/size_label lookup", async () => {
+// fake's `.in()` above reproduces that all-or-nothing failure; the fix
+// (filtering to UUID-shaped ids before the `.in()` call) keeps the real id's
+// metadata intact.
+//
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 3):
+// this test used to assert the filter wrote NO error_log row at all — that
+// silence is exactly what let months of dead derived-row lexicon terms hide
+// in production undetected (see compile-menu.ts's resolveDerivedLexiconTerms
+// for the compiler-side fix). The filter itself is still correct and still
+// required (a real 22P02 must never poison a batch), but dropping a
+// target_id must now be a LOUD, logged trip-wire, never silent.
+Deno.test("runTurnEngineTurn: a non-UUID target_id in the same lexicon page as a real UUID target_id does not poison that id's category/size_label lookup, and logs a loud trip-wire instead of vanishing silently", async () => {
   const REAL_ITEM_ID = "11111111-1111-1111-1111-111111111111";
   const mixedLexicon = [
     { term: "cheeseburger", target_id: REAL_ITEM_ID },
@@ -498,7 +511,9 @@ Deno.test("runTurnEngineTurn: a non-UUID target_id in the same lexicon page as a
   const realRow = seenLexicon.find((r) => r.target_id === REAL_ITEM_ID);
   assert(realRow, "the real UUID target_id's lexicon row must still be handed to PROPOSE");
   assertEquals(realRow!.category, "Burgers", "the non-UUID id sharing the batch must not poison the real id's category lookup");
-  assertEquals(state.errorLogInserted.length, 0, "filtering the non-UUID id out before .in() must avoid a 22P02 batch error entirely");
+  assertEquals(state.errorLogInserted.length, 1, "dropping a non-UUID target_id must now be logged, never silent");
+  assertEquals(state.errorLogInserted[0].stage, "lexicon_load");
+  assertEquals((state.errorLogInserted[0].metadata as { dropped_non_uuid_count: number }).dropped_non_uuid_count, 1, "must name the actual dropped count");
 });
 
 Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and routes to ASK's disambiguation question", async () => {
@@ -529,7 +544,11 @@ Deno.test("runTurnEngineTurn: an ambiguous item_span adds no cart line and route
 // ── Terminal PROPOSE failure: fallback reply, untouched cart/state, error_log ─
 
 Deno.test("runTurnEngineTurn: terminal PROPOSE failure returns the fallback reply, leaves cart/dialogue_state untouched, and writes an error_log row (stage propose_call) via the real proposeTurn", async () => {
-  const { supabase, state } = makeFakeSupabase();
+  // Empty lexicon: this test only cares about the PROPOSE failure path, and
+  // the default LEXICON fixture's non-UUID target_ids ("item-cheeseburger")
+  // would otherwise also trip the new dropped-non-UUID trip-wire log,
+  // adding an unrelated second error_log row this test isn't about.
+  const { supabase, state } = makeFakeSupabase({ lexicon: [] });
   const priorCart: TurnEngineCartLine[] = [
     { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [] },
   ];

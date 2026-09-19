@@ -1171,6 +1171,34 @@ export function computeMenuInvariants(
   return results;
 }
 
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 4):
+// a hard, compile-time invariant that fails LOUDLY the moment any active
+// item-type lexicon term's target_id doesn't correspond to a real menu_items
+// id for this shop — the exact defect class resolveDerivedLexiconTerms above
+// closes for derived rows specifically, but this invariant is deliberately
+// general (any provenance, any source) so the same failure mode can never
+// hide again the way it did here for months. Not part of
+// computeMenuInvariants itself: that function only ever sees the regular
+// (non-derived) items array, while this needs the FULL set of terms this
+// compile is about to write (regular + category + derived, post-rewrite) and
+// the full set of real ids they're allowed to point at — both of which only
+// exist in the caller (compile-menu/index.ts) after derived rows are
+// upserted. Same MenuInvariantResult shape as invariants 1-8 so the caller
+// appends this as invariant 9 in the same list, not a separate side-channel.
+export function computeDanglingLexiconTermInvariant(
+  terms: LexiconTerm[],
+  validItemIds: Set<string>,
+): MenuInvariantResult {
+  const dangling = terms.filter(t => t.target_type === "item" && !validItemIds.has(t.target_id));
+  const count = dangling.length;
+  return {
+    invariant: 9,
+    description: `${count} dangling lexicon term${count === 1 ? "" : "s"} — every active item-type lexicon term's target_id must resolve to a real menu_items id for this shop`,
+    pass: count === 0,
+    violations: dangling.map(t => `"${t.term}" -> ${t.target_id}`),
+  };
+}
+
 // ============================================================
 // §3 stage 5 "Infer" wiring (§11 item 3's own note: "item 4's compiler ...
 // is the natural caller once it's landed"). Pure glue only: shapes real
@@ -1779,6 +1807,36 @@ export function buildDerivedRows(
   }
 
   return rows;
+}
+
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0): a DerivedMenuRow's own
+// lexicon_terms (above) carry target_id: entity_key — a synthetic string like
+// "derived:pizza|cheese|large (16\")#pepperoni#large 16 inch", never a real
+// menu_items.id. That's correct for buildDerivedRows itself (pure, no DB
+// access, doesn't know the row's eventual id) but entity_key must NEVER reach
+// the lexicon table as target_id: resolveItem finds the term and returns
+// that entity_key as menu_item_id, and every caller then looks it up against
+// the real menu (real UUIDs) and finds nothing — "a feature that produces
+// rows and writes pointers that nothing can follow" (PO's framing). Every
+// derived row this project ever compiled did exactly this — the terms
+// existed, the rows existed, but nothing could walk from one to the other.
+//
+// The caller (compile-menu/index.ts) upserts each DerivedMenuRow into
+// menu_items FIRST, learns its real persisted id (existing row's id on
+// update, the inserted row's returned id on insert), and passes that back
+// here as idByEntityKey. A row whose insert/update failed carries no id in
+// that map and is dropped entirely here — writing a lexicon term for a row
+// that isn't actually in menu_items would just be a new flavor of the same
+// dangling-pointer bug this closes.
+export function resolveDerivedLexiconTerms(
+  derivedRows: DerivedMenuRow[],
+  idByEntityKey: Map<string, string>,
+): LexiconTerm[] {
+  return derivedRows.flatMap(row => {
+    const realId = idByEntityKey.get(row.entity_key);
+    if (!realId) return [];
+    return row.lexicon_terms.map(t => ({ ...t, target_id: realId }));
+  });
 }
 
 export function compileMenu(

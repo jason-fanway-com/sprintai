@@ -389,13 +389,22 @@ interface LexiconItemMetadata {
 // back to its pre-existing (pre-narrowing) behavior for those terms, per its
 // own documented contract for when category/size_label are absent — never a
 // reason to drop or fail the whole turn.
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 3):
+// returns the count of non-UUID target_ids this call filtered out alongside
+// the metadata map, so the caller (loadItemLexicon) can log a real,
+// permanent trip-wire instead of silently discarding them the way a9978826
+// did — that silence is exactly what let months of dangling derived-row
+// lexicon terms hide in production. This never blocks or fails the turn on
+// its own; it's an observability signal, same discipline as the count-
+// mismatch check loadItemLexicon already runs after pagination.
 async function loadLexiconItemMetadata(
   supabase: SupabaseClient,
   shopId: string,
   targetIds: string[],
-): Promise<Map<string, LexiconItemMetadata>> {
+): Promise<{ metaByTargetId: Map<string, LexiconItemMetadata>; droppedNonUuidCount: number }> {
   const metaByTargetId = new Map<string, LexiconItemMetadata>();
   const uuidTargetIds = targetIds.filter((id) => UUID_RE.test(id));
+  const droppedNonUuidCount = targetIds.length - uuidTargetIds.length;
   for (let i = 0; i < uuidTargetIds.length; i += LEXICON_ITEM_METADATA_BATCH_SIZE) {
     const batch = uuidTargetIds.slice(i, i + LEXICON_ITEM_METADATA_BATCH_SIZE);
     try {
@@ -426,11 +435,12 @@ async function loadLexiconItemMetadata(
       });
     }
   }
-  return metaByTargetId;
+  return { metaByTargetId, droppedNonUuidCount };
 }
 
 async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconLoadResult> {
   const rows: LexiconTerm[] = [];
+  let totalDroppedNonUuid = 0;
   let from = 0;
   for (;;) {
     const { data, error } = await supabase
@@ -457,7 +467,8 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
     if (!data || data.length === 0) break;
     const page = data as Array<{ term: string; target_id: string }>;
     const pageTargetIds = [...new Set(page.map(r => r.target_id))];
-    const metaByTargetId = await loadLexiconItemMetadata(supabase, shopId, pageTargetIds);
+    const { metaByTargetId, droppedNonUuidCount } = await loadLexiconItemMetadata(supabase, shopId, pageTargetIds);
+    totalDroppedNonUuid += droppedNonUuidCount;
     rows.push(...page.map(r => ({
       term: r.term,
       target_id: r.target_id,
@@ -466,6 +477,23 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
     })));
     if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
     from += ITEM_LEXICON_PAGE_SIZE;
+  }
+
+  // PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 3):
+  // a9978826's UUID filter above silently dropped every non-UUID target_id
+  // (exactly what every derived-row term carried before that dispatch's own
+  // compiler fix) with no signal anywhere that it had happened — months of
+  // dead derived rows hid behind that silence. Logged once per turn (total
+  // across every page of this load), never blocking: this is a trip-wire,
+  // not a new failure path. A shop with a clean lexicon logs nothing here.
+  if (totalDroppedNonUuid > 0) {
+    await logError(supabase, {
+      shopId,
+      phase: "chat-sms",
+      stage: LEXICON_LOAD_STAGE,
+      error: new Error(`lexicon load dropped ${totalDroppedNonUuid} non-UUID target_id(s) before menu_items lookup`),
+      metadata: { dropped_non_uuid_count: totalDroppedNonUuid },
+    });
   }
 
   // Pagination finishing with no error (ending on a short/empty page) does

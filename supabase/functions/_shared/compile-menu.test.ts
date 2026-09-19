@@ -14,9 +14,11 @@ import {
   categoryLexiconTerms,
   compileItem,
   compileMenu,
+  computeDanglingLexiconTermInvariant,
   computeMenuInvariants,
   normaliseTermVariants,
   planOwnerQuestionsRefresh,
+  resolveDerivedLexiconTerms,
   type AskPlan,
   type CompileGroup,
   type CompileItem,
@@ -24,6 +26,7 @@ import {
   type DerivedRowsDiagnostic,
   type ExistingOwnerQuestionRow,
   type InferSourceItem,
+  type LexiconTerm,
   type OverrideRow,
   type PendingQuestion,
 } from "./compile-menu.ts";
@@ -1671,6 +1674,91 @@ Deno.test("buildDerivedRows: lexicon — three entries per row ('{choice} pizza'
   assert(terms.includes("pepperoni pizza"), "should have '{choice} pizza' term");
   assert(terms.includes("pepperoni pie"), "should have '{choice} pie' term");
   assert(terms.includes("pepperoni"), "should have bare choice term");
+});
+
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0): buildDerivedRows'
+// OWN lexicon_terms always carry target_id: entity_key (the synthetic
+// "derived:..." key) — that's correct in isolation, but that key must never
+// reach the lexicon table as target_id. resolveDerivedLexiconTerms is the
+// pure rewrite step the caller (compile-menu/index.ts) runs AFTER persisting
+// each row and learning its real id.
+Deno.test("resolveDerivedLexiconTerms: rewrites every term's target_id from the synthetic entity_key to the real persisted id", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  assert(pepp.lexicon_terms.length > 0);
+  for (const t of pepp.lexicon_terms) assertEquals(t.target_id, pepp.entity_key, "sanity: the pre-rewrite fixture must still carry the synthetic key");
+
+  const idByEntityKey = new Map([[pepp.entity_key, "real-uuid-1234"]]);
+  const resolved = resolveDerivedLexiconTerms([pepp], idByEntityKey);
+  assertEquals(resolved.length, pepp.lexicon_terms.length);
+  for (const t of resolved) {
+    assertEquals(t.target_id, "real-uuid-1234", `every rewritten term must point at the real id, never the synthetic entity_key: ${JSON.stringify(t)}`);
+    assert(!t.target_id.startsWith("derived:"), "a synthetic entity_key must never survive into the rewritten output");
+  }
+});
+
+Deno.test("resolveDerivedLexiconTerms: a row with no captured id (failed insert/update) contributes NO lexicon terms at all — never a dangling pointer", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  const resolved = resolveDerivedLexiconTerms([pepp], new Map()); // empty map — no id captured
+  assertEquals(resolved, [], "a row whose real id is unknown must never contribute a lexicon term, synthetic or otherwise");
+});
+
+Deno.test("resolveDerivedLexiconTerms: multiple rows resolve independently — each keeps its own real id, unaffected by others", () => {
+  const { small, medium, large, compiled } = buildTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const smallPepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("small"))!;
+  const largePepp = rows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  const idByEntityKey = new Map([
+    [smallPepp.entity_key, "small-real-id"],
+    [largePepp.entity_key, "large-real-id"],
+  ]);
+  const resolved = resolveDerivedLexiconTerms([smallPepp, largePepp], idByEntityKey);
+  const targetIds = new Set(resolved.map(t => t.target_id));
+  assertEquals(targetIds, new Set(["small-real-id", "large-real-id"]));
+});
+
+// PO dispatch (2026-09-19, dangling-lexicon-terms P0, required fix item 4):
+// the hard compile-time invariant that must fail LOUDLY on exactly the
+// defect class this whole dispatch closes — a real fixture deliberately
+// broken the same way the live bug broke (an active item-type term whose
+// target_id points at nothing real), proving the invariant actually fires,
+// not just that it's present in the invariants list.
+Deno.test("computeDanglingLexiconTermInvariant: passes (0 violations) when every active item term's target_id is a real, known id", () => {
+  const terms: LexiconTerm[] = [
+    { term: "cheeseburger", target_type: "item", target_id: "real-id-1", provenance: "stated" },
+    { term: "fries", target_type: "item", target_id: "real-id-2", provenance: "stated" },
+  ];
+  const result = computeDanglingLexiconTermInvariant(terms, new Set(["real-id-1", "real-id-2"]));
+  assertEquals(result.invariant, 9);
+  assertEquals(result.pass, true);
+  assertEquals(result.violations, []);
+  assert(result.description.startsWith("0 dangling"), `description must name the count: ${result.description}`);
+});
+
+Deno.test("computeDanglingLexiconTermInvariant: FAILS LOUDLY — a deliberately broken fixture with a synthetic derived: target_id trips it, naming the exact term and id", () => {
+  const terms: LexiconTerm[] = [
+    { term: "cheeseburger", target_type: "item", target_id: "real-id-1", provenance: "stated" },
+    // The exact live defect shape: an active, never-persisted synthetic key.
+    { term: "pepperoni pizza", target_type: "item", target_id: 'derived:pizza|cheese|large (16")#pepperoni#large 16 inch', provenance: "derived" },
+  ];
+  const result = computeDanglingLexiconTermInvariant(terms, new Set(["real-id-1"]));
+  assertEquals(result.invariant, 9);
+  assertEquals(result.pass, false, "a genuinely dangling target_id must fail the invariant, not just warn");
+  assertEquals(result.violations.length, 1);
+  assert(result.violations[0].includes("pepperoni pizza"), `violation must name the offending term: ${result.violations[0]}`);
+  assert(result.violations[0].includes("derived:"), `violation must name the offending target_id: ${result.violations[0]}`);
+  assert(result.description.startsWith("1 dangling"), `description must name the actual count: ${result.description}`);
+});
+
+Deno.test("computeDanglingLexiconTermInvariant: non-'item' target_type terms (category/modifier) are never checked — only item-type terms point at menu_items", () => {
+  const terms: LexiconTerm[] = [
+    { term: "salad", target_type: "category", target_id: "not-a-menu-item-at-all", provenance: "stated" },
+  ];
+  const result = computeDanglingLexiconTermInvariant(terms, new Set());
+  assertEquals(result.pass, true, "a category-targeted term must never be flagged as a dangling ITEM pointer");
 });
 
 Deno.test("buildDerivedRows: never active if topping choice has inferred provenance", () => {
