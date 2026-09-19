@@ -1901,7 +1901,14 @@ Deno.test("00-AK defect 1 (delivery): address resolves into an EMPTY cart -> ASK
     geocodeAddressFn: () => Promise.resolve({ formatted: "5620 Cetronia Rd, Allentown, PA 18106", withinZone: true }),
     proposeTurnFn: neverProposeFn("address"),
   };
-  const priorState: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null };
+  // Round 3, item 2b: driverTipResolved:true stands in for "the tip
+  // question was already asked/declined earlier this order" — no longer
+  // inferred from driverTipCents:0 below, which order_carts' own NOT NULL
+  // DEFAULT 0 makes indistinguishable from "never asked" (see
+  // DialogueState.driverTipResolved's own doc in turn-engine.ts). This test
+  // is about the address->empty-cart priority, not tip — resolved keeps tip
+  // out of the way so that priority actually gets exercised.
+  const priorState: DialogueState = { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null, driverTipResolved: true };
   const input: RunTurnInput = {
     conversationId: "conv-70c7c02a",
     shopId: "shop-1",
@@ -1970,7 +1977,10 @@ Deno.test("00-AK defect 2: three consecutive non-order replies to an empty cart 
   // pre-order slot resolved) — exactly where conv 70c7c02a got stuck after
   // its address turn.
   let cart: TurnEngineCartLine[] = [];
-  let dialogueState: DialogueState = { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null };
+  // Round 3, item 2b: driverTipResolved:true, same reasoning as the defect
+  // 1 (delivery) fixture above — this test is about the empty-cart
+  // "Anything else?" loop, not tip.
+  let dialogueState: DialogueState = { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null, driverTipResolved: true };
 
   const replies: string[] = [];
   for (const message of ["I didn't order anything yet", "I didn't order anything", "I said I haven't ordered"]) {

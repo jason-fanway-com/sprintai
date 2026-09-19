@@ -1266,6 +1266,12 @@ Deno.test("ACCEPTANCE 00-AH-1 RED->GREEN: delivery order end to end — order ty
   assertEquals(dialogueState!.open, { kind: "ordering", askCount: 1 }, "address must resolve THIS turn — dialogue_state.open must move off the address slot onto the ordering question, since the cart is still empty");
   await turn("a cheeseburger");
   await turn("medium");
+  // Round 3, item 2b: the cart now holds a real line, so ask() correctly
+  // opens the tip question here (previously dead — see
+  // DialogueState.driverTipResolved's own doc in turn-engine.ts) — a real
+  // conversation answers it before moving on, same as address/order_type
+  // above.
+  await turn("no tip");
   await turn("thats it");
   await turn("Jason Flick");
   await turn("yes");

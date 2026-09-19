@@ -263,6 +263,23 @@ export interface DialogueState {
   // is now the ONE place items are enqueued (decide()'s fresh output) and
   // dequeued (priority 2), never re-derived, never dropped on the floor.
   pendingAmbiguous?: string[][];
+  // Round 3, item 2b (2026-09-19, live repro, conv e893e129): whether the
+  // driver-tip question has genuinely been resolved (an amount OR an
+  // explicit decline) at any point THIS order — tracked here, in
+  // dialogue_state, rather than inferred from order_carts.driver_tip_cents
+  // (AskShopContext.driverTipKnown's old signal), because that column is
+  // `NOT NULL DEFAULT 0` (migration 039) — a customer who was never asked
+  // and a customer who declined are BOTH stored as the same 0, so
+  // `driverTipCents != null` reads true from the moment the cart is
+  // created, before the tip is ever asked. Live effect: the priority-5 tip
+  // question in ask() below never fired for ANY delivery order. Set true by
+  // ask() itself (via AskTurnEvents.tipResolvedThisTurn) the same turn
+  // answer() produces a "tip_resolved" outcome — see the priority-5 branch
+  // below — and carried forward by every return path (carry() and the
+  // fresh-cycle-reset branch) exactly like openRepeatCount/upsell_offered.
+  // Optional so state persisted before this field existed still loads
+  // (missing = not yet resolved, the correct interpretation either way).
+  driverTipResolved?: boolean;
 }
 
 // ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
@@ -485,7 +502,15 @@ export type AnswerOutcome =
   // stays open exactly as it was — the runner re-opens the identical
   // question next turn, same as a genuinely-failed answer would, so the
   // still-unresolved item is never silently dropped.
-  | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number };
+  | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number }
+  // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
+  // whose answer lives in the shop's own data (delivery fee, whether a tip
+  // can be added, hours) — answered by CODE, never sent to the model, same
+  // "code decides" principle as everywhere else in this file. `infoText`
+  // rides ahead of the normal confirm re-ask via the same answerText hook
+  // replacement_unavailable already uses (never a second reply-building
+  // path); confirm itself stays open so ask() re-asks it right after.
+  | { kind: "confirm_info_answered"; infoText: string };
 
 export type AnswerResult =
   | { resolved: false }
@@ -514,6 +539,13 @@ export interface AnswerExternalInputs {
   // pre-existing call site and test (all unaffected — see
   // resolveKindClauseViaLexicon's own header for the fallback this permits).
   lexicon?: LexiconTerm[];
+  // Round 3, item 2c(ii): the shop facts a confirm-stage question can be
+  // answered from directly — read by the caller (turn-engine-runner.ts)
+  // ONLY while confirm is the open question (same lazy-load discipline as
+  // `lexicon` above for disambiguation), never fetched on an ordinary
+  // ordering turn. `hoursLine` is shop_settings.hours_line, already
+  // formatted human-readable text (never assembled here from open_hours).
+  confirmShopFacts?: { deliveryFeeCents: number | null; hoursLine: string | null };
 }
 
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
@@ -589,6 +621,27 @@ const CANCEL_ORDER_ANYWHERE_RE = /\b(?:cancel|forget it|forget the whole (?:thin
 // case below.
 const ORDER_TYPE_PICKUP_RE = /\bpick(?:\s+it)?[\s-]?up\b/i;
 const ORDER_TYPE_DELIVERY_RE = /\bdeliver(?:y|ed)?\b/i;
+
+// Round 3, item 2b (2026-09-19, live repro, conv e893e129): exported so
+// turn-engine-runner.ts can read an order-type statement OPPORTUNISTICALLY
+// — regardless of what's actually open — the same way it already reads an
+// address opportunistically (extractAddressSpan/opportunisticAddress). A
+// live delivery+address message can arrive while a completely unrelated
+// question is open (a fries disambiguation, in the repro) and the
+// "order_type" case of answer()'s own switch below is the ONLY other place
+// this ever resolved — meaning order type was silently never captured
+// whenever it wasn't the exact question on the table, and ask()'s tip gate
+// (which requires orderTypeIsDelivery) could then never fire either. Same
+// exact logic as the "order_type" case below, extracted so both callers
+// share one rule.
+export function readOrderTypeReply(message: string): "pickup" | "delivery" | null {
+  const trimmed = (message ?? "").trim();
+  const wantsPickup = ORDER_TYPE_PICKUP_RE.test(trimmed);
+  const wantsDelivery = ORDER_TYPE_DELIVERY_RE.test(trimmed);
+  if (wantsPickup && !wantsDelivery) return "pickup";
+  if (wantsDelivery && !wantsPickup) return "delivery";
+  return null;
+}
 // Mirrors intent-router.ts's detectBareTipReply decline shape, narrowed to
 // this module's own already-open-tip-question context (that function's own
 // "did the prior assistant message offer a tip" half is redundant here —
@@ -609,6 +662,50 @@ const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
 // before -- the tip question is open, so a number here is unambiguous.
 const TIP_DECLINE_ANYWHERE_RE = /\b(?:no tip|without a tip|don'?t want (?:a )?tip|no thanks|no thank you|not (?:now|today)|skip (?:it|the tip)?|none|pass|zero|nothing)\b/i;
 const TIP_AMOUNT_ANYWHERE_RE = /(?:\$\s*(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:dollars?|bucks?)\b)/i;
+// Round 3, item 2c(ii): three shop-data question shapes recognized at
+// confirm, answered by CODE instead of falling through to PROPOSE (a real
+// question about a real number this system already has must never be
+// guessed at, or worse, silently ignored and re-asked the confirm gate).
+// Checked ONLY inside the "confirm" case, after the tip-amount check above
+// has already had first crack — a bare "tip" mention that reaches here
+// carries no dollar amount, so it's a genuine question, not a statement.
+const CONFIRM_DELIVERY_FEE_QUESTION_RE = /\bdeliver(?:y)?\b[^?]*\b(free|fee|charge|cost)\b|\b(free|fee|charge|cost)\b[^?]*\bdeliver(?:y)?\b|\bhow much\b[^?]*\bdeliver/i;
+const CONFIRM_TIP_QUESTION_RE = /\btip\b/i;
+const CONFIRM_HOURS_QUESTION_RE = /\b(?:hours|what time|when (?:do|are) you|open until|close[sd]?|closing)\b/i;
+
+// Round 3, item 2b (2026-09-19, live repro, conv e893e129): item 2c(ii)'s
+// shop-facts answering (delivery fee / tip info / hours, answered by CODE,
+// never sent to the model) extracted so the "tip" case below can reuse it
+// too, not just "confirm" — the repro asks "So delivery is free?" WHILE tip
+// is still the open question (the customer never answered it, just asked
+// something else), and the identical shop-data-question shape deserves the
+// identical direct-from-code answer there, not a bare re-ask or a model
+// guess. Returns null when nothing here matches, exactly as inlined before.
+function answerConfirmShopFactsQuestion(
+  trimmed: string,
+  confirmShopFacts: { deliveryFeeCents: number | null; hoursLine: string | null } | undefined,
+): AnswerResult | null {
+  if (!confirmShopFacts) return null;
+  if (CONFIRM_DELIVERY_FEE_QUESTION_RE.test(trimmed)) {
+    const feeCents = confirmShopFacts.deliveryFeeCents;
+    const infoText = feeCents == null
+      ? "I'm not sure of the exact delivery fee — I'll have the shop confirm."
+      : feeCents === 0
+      ? "Delivery is free."
+      : `Delivery is $${(feeCents / 100).toFixed(2)}.`;
+    return { resolved: true, outcome: { kind: "confirm_info_answered", infoText }, cartChanged: false };
+  }
+  if (CONFIRM_TIP_QUESTION_RE.test(trimmed)) {
+    return { resolved: true, outcome: { kind: "confirm_info_answered", infoText: "You can add a tip for the driver — how much?" }, cartChanged: false };
+  }
+  if (CONFIRM_HOURS_QUESTION_RE.test(trimmed)) {
+    const infoText = confirmShopFacts.hoursLine
+      ? `Our hours: ${confirmShopFacts.hoursLine}`
+      : "I'm not sure of our exact hours — I'll have the shop confirm.";
+    return { resolved: true, outcome: { kind: "confirm_info_answered", infoText }, cartChanged: false };
+  }
+  return null;
+}
 
 export function readTipReply(message: string): { kind: "amount"; cents: number } | { kind: "decline" } | null {
   const m = (message ?? "").trim();
@@ -1185,6 +1282,25 @@ function resolveMultiKindClauses(
   if (phrases.length <= 1) return null;
 
   const clauses = phrases.map(extractLeadingClauseCount);
+
+  // Round 3, item 2b (2026-09-19, live repro, conv e893e129): a message
+  // with nothing to do with the open kind question at all — "Delivery to
+  // 5620 Cetronia Rd, Allentown PA 18106", arriving while a fries
+  // disambiguation was still open — still structurally LOOKS like a list
+  // (splitCustomerPhrases finds 3 comma-separated phrases) and one clause's
+  // leading digits ("5620") got read as a quantity by
+  // extractLeadingClauseCount, producing a nonsense "You said 1 — I've got
+  // 5622" clarify message instead of ever reaching the address/order-type
+  // handling that message actually needed. Bail out (null — "not a
+  // multi-kind answer") before ever computing a count mismatch when NOT
+  // ONE clause's own text resolves to any offered candidate — the exact
+  // same resolver (narrowCandidatesByKind) the real per-clause loop below
+  // uses, so this never accepts a shape that loop would itself reject. A
+  // message that names at least one real candidate still goes through the
+  // count-mismatch check as before (a genuine miscounted list, e.g. a typo
+  // dropping one clause, still deserves that clarify message).
+  if (!clauses.some(c => narrowCandidatesByKind(candidates, c.text, lexicon) !== null)) return null;
+
   const parsedSum = clauses.reduce((s, c) => s + c.count, 0);
   const category = candidates[0]?.category ?? null;
 
@@ -1765,10 +1881,8 @@ export function answer(
     }
 
     case "order_type": {
-      const wantsPickup = ORDER_TYPE_PICKUP_RE.test(trimmed);
-      const wantsDelivery = ORDER_TYPE_DELIVERY_RE.test(trimmed);
-      if (wantsPickup && !wantsDelivery) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
-      if (wantsDelivery && !wantsPickup) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "delivery" }, cartChanged: false };
+      const orderType = readOrderTypeReply(trimmed);
+      if (orderType) return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: false };
       return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
@@ -1817,6 +1931,14 @@ export function answer(
         const tip = readTipReply(trimmed);   // 00-BH
         if (tip) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tip.kind === "amount" ? tip.cents : 0 }, cartChanged: false };
       }
+      // Round 3, item 2b: a shop-data question ("So delivery is free?")
+      // asked WHILE tip is still open — see answerConfirmShopFactsQuestion's
+      // own doc. Answered directly, same as at confirm; the tip question
+      // itself stays unresolved (this doesn't set tip_resolved), so ASK's
+      // own ladder naturally re-opens "tip" right after, never confirm —
+      // the tip question was never actually answered.
+      const shopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts);
+      if (shopFactsAnswer) return shopFactsAnswer;
       return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
@@ -1887,6 +2009,28 @@ export function answer(
           }
         }
       }
+      // Round 3, item 2c(i) (2026-09-19, live repro): a tip amount stated
+      // AT CONFIRM ("$5 tip", "I want to tip the driver $5") must set
+      // driver_tip_cents even though PROPOSE reads this as intent:"order"
+      // with adds:[] — same "trust the message over the model's
+      // classification" principle as items 1 and 2a. Checked ahead of the
+      // checkout/decline checks below since a dollar amount is never a
+      // yes/no. Decline shapes ("no tip") are deliberately NOT read here —
+      // confirm's own decline/affirm checks already own that vocabulary,
+      // and a tip was never offered yet at this point for there to be
+      // anything to decline.
+      const tipAtConfirm = readTipReply(trimmed);
+      if (tipAtConfirm?.kind === "amount") {
+        return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tipAtConfirm.cents }, cartChanged: false };
+      }
+      // Round 3, item 2c(ii): a question about a real shop fact — answered
+      // by CODE, never sent to the model. Checked ahead of checkout/decline
+      // below (none of these shapes are a yes/no) and after the tip-amount
+      // check above (a stated amount always wins over a bare "tip" mention
+      // inside the same message). See answerConfirmShopFactsQuestion's own
+      // doc — shared with the "tip" case above (Round 3, item 2b).
+      const confirmShopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts);
+      if (confirmShopFactsAnswer) return confirmShopFactsAnswer;
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
       if (impliesConfirmDecline(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };   // 00-BH
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
@@ -2534,6 +2678,14 @@ export function decide(
   // instead of stacking (same "never stack more than one clarifying
   // question" rule this whole addendum exists for).
   const genuinelyUnresolvedSpans: string[] = [];
+  // Round 3, item 2a: every guard-dropped add this turn, tagged with
+  // whether it was genuinely STALE — resolved to a real item that's
+  // already in the cart (a re-proposal from history, ADDENDUM A's own
+  // case) — as opposed to a hallucinated span naming nothing the customer
+  // has, which must stay silently dropped and nothing else. Read below,
+  // after the loop, to gate the raw-message fallback precisely: it must
+  // fire ONLY when every guard-dropped add is the former, never the latter.
+  const guardDroppedWasStale: boolean[] = [];
   for (const add of proposal.adds ?? []) {
     const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
     // Always resolve (even on guard failure) so the guard-drop path can check
@@ -2547,6 +2699,7 @@ export function decide(
       // pushed to `declines`.
       const span = (add.item_span ?? "").trim();
       if (span) unresolvedSpans.push(span);
+      guardDroppedWasStale.push(resolution.kind === "resolved" && menuItemIdsAlreadyInCart.has(resolution.menu_item_id));
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
@@ -2562,6 +2715,35 @@ export function decide(
       const span = (add.item_span ?? "").trim();
       genuinelyUnresolvedSpans.push(span);
       unresolvedSpans.push(span);
+    }
+  }
+  // Round 3, item 2a (2026-09-19, live repro: "Yes, I want some fries too."
+  // after four pizzas already in cart): PROPOSE re-proposed only the four
+  // pizzas again — pulled from conversation HISTORY, not from this turn's
+  // message — and produced nothing at all for "fries". The guard above
+  // correctly dropped the stale pizza re-proposals (ADDENDUM A), but that
+  // left NOTHING, and the customer's real new item was never even given to
+  // the resolver, since the model never proposed a span for it in the first
+  // place. Same "trust the message over the model" principle as item 1:
+  // when EVERY add this turn was guard-dropped AND every one of those was
+  // genuinely stale (resolved to a real item already in the cart — never a
+  // hallucinated span naming nothing the customer has), run resolveItem
+  // directly on the raw customer message for whatever the model missed —
+  // the exact same resolver every other add already goes through, just fed
+  // the raw message instead of a model-proposed span. The `guardDroppedWasStale`
+  // gate is what keeps this from becoming a general fuzzy-match backdoor for
+  // hallucinated spans (see the sibling "unrelated span word" test case):
+  // a guard-dropped add that resolves to nothing, or to an item NOT already
+  // in the cart, is a hallucination, not staleness, and must stay silently
+  // dropped with no fallback attempted.
+  if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
+      genuinelyUnresolvedSpans.length === 0 && guardDroppedWasStale.length === proposal.adds.length &&
+      guardDroppedWasStale.every(Boolean)) {
+    const rawResolution = resolveItem(customerMessage ?? "", lexicon);
+    if (rawResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(rawResolution.menu_item_id)) {
+      resolvedAdds.push({ menu_item_id: rawResolution.menu_item_id, quantity: 1, choices: [], item_span: (customerMessage ?? "").trim() });
+    } else if (rawResolution.kind === "ambiguous") {
+      ambiguousSpans.push({ candidates: rawResolution.candidates, quantity: 1, spanText: (customerMessage ?? "").trim() });
     }
   }
   // See dropAddsSupersededByCorrection's own header: "add a side salad...
@@ -2843,6 +3025,20 @@ export interface AskTurnEvents {
   // kept as a separate flag rather than folded into it so each
   // mechanism's own commit stays independently reviewable.
   lineReplacedThisTurn?: boolean;
+  // Round 3, item 2c(i) (2026-09-19): true when THIS turn's ANSWER resolved
+  // a tip amount stated WHILE confirm was already open ("$5 tip" — see the
+  // "confirm" case's tip-amount check above). Same fresh-read-back handling
+  // as quantityCorrectedThisTurn/lineReplacedThisTurn — the total just
+  // changed (a new Tip line), so the customer needs to see the real numbers,
+  // not be asked to re-confirm stale ones.
+  tipStatedAtConfirmThisTurn?: boolean;
+  // Round 3, item 2b: true when THIS turn's ANSWER produced a "tip_resolved"
+  // outcome, from EITHER the ordinary open-tip-question path or the
+  // item 2c(i) tip-at-confirm path above — both are answer() resolving the
+  // exact same outcome kind, so one flag covers both. See
+  // DialogueState.driverTipResolved's own doc for why this can't be read
+  // off order_carts.driver_tip_cents instead.
+  tipResolvedThisTurn?: boolean;
   // 2026-09-18 PO dispatch (add-on rule edge): the customer's own words for
   // an add held back this turn because it was really a modifier of the
   // ambiguous sibling named by disambiguationCandidateIds above, not a
@@ -2903,6 +3099,11 @@ export function ask(
   const sameQuestionAsBefore = (open: DialogueState["open"]): boolean =>
     JSON.stringify(open ?? null) === JSON.stringify(priorState.open ?? null);
 
+  // Round 3, item 2b: once true, stays true for the rest of this order —
+  // computed once here (same funnel reasoning as sameQuestionAsBefore
+  // above) rather than duplicated in every carry() call site.
+  const driverTipResolved = priorState.driverTipResolved === true || turnEvents.tipResolvedThisTurn === true;
+
   const carry = (
     open: DialogueState["open"],
     phase: DialogueState["phase"],
@@ -2920,6 +3121,7 @@ export function ask(
         : sameQuestionAsBefore(open)
         ? (priorState.openRepeatCount ?? 0) + 1
         : 0,
+      ...(driverTipResolved ? { driverTipResolved: true } : {}),
     });
 
   // 1. unresolved required slot on any line.
@@ -3028,7 +3230,23 @@ export function ask(
   // a cancel with the address ALSO still unknown would fall through
   // priority 4's skip straight into asking for a tip before ever asking for
   // an address.
-  if (shopContext.orderTypeIsDelivery && !shopContext.driverTipKnown && !turnEvents.cartCancelledThisTurn) {
+  //
+  // Round 3, item 2b (2026-09-19, live repro): gated on `driverTipResolved`
+  // (computed above, from dialogue_state), NOT `shopContext.driverTipKnown`
+  // — see DialogueState.driverTipResolved's own doc for why that signal is
+  // permanently wrong (order_carts.driver_tip_cents is NOT NULL DEFAULT 0,
+  // so "never asked" and "declined" are the same stored value, and the old
+  // `driverTipCents != null` check read true from the moment the cart was
+  // created). This was a live, standing bug — no delivery order ever
+  // reached this branch before this fix, not just the combined
+  // type+address-in-one-message case that surfaced it.
+  // 00-AK's own reasoning applies here too: a tip is for delivering an
+  // order, and an empty cart has nothing to deliver yet — asking about a
+  // tip before the customer has ordered anything would outrank (and hide)
+  // priority 7's "what would you like to order?" for every empty-cart
+  // delivery conversation (order type + address given up front, nothing
+  // ordered yet), the exact regression ACCEPTANCE 00-AH-1 guards.
+  if (shopContext.orderTypeIsDelivery && !driverTipResolved && !turnEvents.cartCancelledThisTurn && cart.some(isRealCartLine)) {
     return carry({ kind: "tip" }, "tip");
   }
 
@@ -3113,8 +3331,15 @@ export function ask(
   // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): a line
   // replacement is the same "cart just changed, show the real read-back"
   // situation as mechanism 1 immediately above — same fresh-cycle reset.
-  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn) {
-    return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered, asked_message_id: null, pendingAmbiguous, openRepeatCount: 0 };
+  // Round 3, item 2c(i): a tip stated at confirm is the same "cart just
+  // changed" situation — the total now includes a Tip line — same
+  // fresh-cycle reset as the two mechanisms above.
+  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn) {
+    return {
+      phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered,
+      asked_message_id: null, pendingAmbiguous, openRepeatCount: 0,
+      ...(driverTipResolved ? { driverTipResolved: true } : {}),
+    };
   }
   return carry({ kind: "confirm" }, "confirm");
 }
@@ -3499,8 +3724,21 @@ export function render(
         // Shown once per confirm cycle — see buildConfirmReadback's own
         // header for why openRepeatCount (0 on a fresh open, >0 on every
         // re-ask) is exactly the right signal, with no new state added.
+        //
+        // Round 3, item 2c(iii) (2026-09-19, live repro): three different
+        // customer messages at confirm each got the byte-identical "All
+        // good — confirm?" — nothing here ever escalated the way the
+        // disambiguation case above already does at repeatCount>=2. Once a
+        // genuine question is answered (confirm_info_answered's answerText,
+        // prepended by the runner) this question text still rides along
+        // after it, so a repeated confirm never reads as pure silence —
+        // after the second unresolved repeat in a row, name what the bot
+        // can actually do instead of asking the identical bare question a
+        // third time.
         question = (state.openRepeatCount ?? 0) === 0
           ? buildConfirmReadback(cartAfter, context)
+          : (state.openRepeatCount ?? 0) >= 2
+          ? "I can add a tip, change an item, or place the order — which would you like?"
           : "All good — confirm?";
         break;
       case "ordering": {

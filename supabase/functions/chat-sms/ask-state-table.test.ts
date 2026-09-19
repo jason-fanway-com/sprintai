@@ -279,7 +279,11 @@ function progressViolation(
     case "address":
       return shop.deliveryAddressKnown && sameKind;
     case "tip":
-      return shop.driverTipKnown && sameKind;
+      // Round 3, item 2b: "resolved this turn" for tip is now
+      // turnEvents.tipResolvedThisTurn, not shop.driverTipKnown — see
+      // resolveOpen's "tip" case and DialogueState.driverTipResolved's own
+      // doc in turn-engine.ts.
+      return turnEvents.tipResolvedThisTurn === true && sameKind;
     case "name":
       return shop.pickupNameKnown && sameKind;
     case "confirm":
@@ -363,6 +367,15 @@ function resolveOpen(
       break;
     case "tip":
       nextShop.driverTipKnown = true;
+      // Round 3, item 2b (2026-09-19): ask()'s tip gate no longer trusts
+      // shopContext.driverTipKnown (order_carts.driver_tip_cents is NOT
+      // NULL DEFAULT 0, so that signal reads "known" from cart creation,
+      // before the tip is ever asked — the live bug this fix closes; see
+      // DialogueState.driverTipResolved's own doc in turn-engine.ts). The
+      // simulated resolution must also produce the turnEvent that's now the
+      // real source of truth, or this sweep's own termination loop re-opens
+      // "tip" forever.
+      nextEvents.tipResolvedThisTurn = true;
       break;
     case "name":
       nextShop.pickupNameKnown = true;
@@ -475,8 +488,12 @@ Deno.test("ask() exhaustive state-table sweep (00-AL)", () => {
               if (result.open?.kind === "name" && shopContext.pickupNameKnown) {
                 record(2, describeCombo, "opened name while shopContext.pickupNameKnown===true");
               }
-              if (result.open?.kind === "tip" && shopContext.driverTipKnown) {
-                record(2, describeCombo, "opened tip while shopContext.driverTipKnown===true");
+              // Round 3, item 2b: tip's own "known" signal moved off
+              // shopContext.driverTipKnown (see resolveOpen's "tip" case
+              // above for why) onto dialogue_state — checked the same way
+              // ask() itself derives it.
+              if (result.open?.kind === "tip" && (priorState.driverTipResolved === true || turnEvents.tipResolvedThisTurn === true)) {
+                record(2, describeCombo, "opened tip while already resolved (priorState.driverTipResolved or turnEvents.tipResolvedThisTurn)");
               }
 
               // Invariant 3

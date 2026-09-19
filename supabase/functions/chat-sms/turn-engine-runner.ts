@@ -89,6 +89,7 @@ import {
   extractSlotChoiceWords,
   orderShapedMessageQuantity,
   disambiguationDeclineNamesOutsideItem,
+  readOrderTypeReply,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -189,6 +190,17 @@ async function loadUpsellEnabled(supabase: SupabaseClient, shopId: string): Prom
   const { data } = await supabase
     .from("shop_settings").select("upsell_enabled").eq("shop_id", shopId).maybeSingle();
   return (data as { upsell_enabled?: boolean } | null)?.upsell_enabled ?? true;
+}
+
+// Round 3, item 2c(ii): shop_settings.hours_line is already formatted
+// human-readable text (never assembled here from the raw open_hours JSON) —
+// read ONLY when a confirm-stage question actually needs it (see the
+// "confirm" open branch below), same lazy-load discipline as
+// loadItemLexicon's disambiguation-only load above.
+async function loadHoursLine(supabase: SupabaseClient, shopId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("shop_settings").select("hours_line").eq("shop_id", shopId).maybeSingle();
+  return (data as { hours_line?: string | null } | null)?.hours_line ?? null;
 }
 
 // ── Address geocode (dispatch 00-AH) ────────────────────────────────────────
@@ -816,6 +828,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     (addressSpan != null && input.shopContext.deliveryEnabled && !input.shopContext.deliveryAddressKnown);
   let externalInputs: AnswerExternalInputs = {};
   let opportunisticAddress: { formatted: string; withinZone: boolean } | null = null;
+  // Round 3, item 2b (2026-09-19, live repro, conv e893e129): an order-type
+  // statement can arrive embedded in a message answering something else
+  // entirely — "Delivery to 5620 Cetronia Rd..." while a fries
+  // disambiguation was still open, in the repro — the exact same shape
+  // opportunisticAddress below already handles for addresses. Without this,
+  // order_type was only ever captured when it was ITSELF the open question
+  // (answer()'s "order_type" case), so a message like this silently lost
+  // the order type forever, and ask()'s tip gate (which requires
+  // orderTypeIsDelivery) could never fire either. Skipped when order_type
+  // is ALREADY the open question — that path owns this resolution and must
+  // not be raced/duplicated — and once order type is already known, since
+  // there's nothing left to opportunistically capture.
+  const opportunisticOrderType = priorState.open?.kind !== "order_type" && input.shopContext.orderType == null
+    ? readOrderTypeReply(input.message)
+    : null;
   // PO fix (2026-09-19, round 2 addendum): a "what kind?" disambiguation
   // answer is now resolved through the shop's own lexicon first (see
   // turn-engine.ts's resolveKindClauseViaLexicon) — loaded here, ONLY when a
@@ -830,6 +857,18 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     const disambiguationLexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
     if (disambiguationLexiconResult.ok) answerLexicon = disambiguationLexiconResult.rows;
     externalInputs = { lexicon: answerLexicon };
+  }
+  // Round 3, item 2c(ii): loaded while confirm is the open question — see
+  // AnswerExternalInputs.confirmShopFacts's own doc. deliveryFeeCents is
+  // already on hand (input.shopContext, no extra query); hoursLine needs its
+  // own shop_settings read.
+  // Round 3, item 2b: also loaded while tip is open — a shop-data question
+  // ("So delivery is free?") can arrive before the customer ever answers
+  // tip, and answer()'s "tip" case now answers it the same way confirm's
+  // does (see answerConfirmShopFactsQuestion's own doc in turn-engine.ts).
+  if (priorState.open?.kind === "confirm" || priorState.open?.kind === "tip") {
+    const hoursLine = await loadHoursLine(deps.supabase, input.shopId);
+    externalInputs = { ...externalInputs, confirmShopFacts: { deliveryFeeCents: input.shopContext.deliveryFeeCents, hoursLine } };
   }
   if (shouldAttemptGeocode) {
     const shopGeo = await loadShopGeo(deps.supabase, input.shopId);
@@ -887,10 +926,27 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // gate) — the customer never has to get ignored once before being heard.
   const disambiguationDeclineNamesOutside = priorState.open?.kind === "disambiguation" &&
     disambiguationDeclineNamesOutsideItem(input.message.trim(), priorState.open.candidates, input.menu, answerLexicon);
+  // Round 3, item 2b (2026-09-19, live repro, conv e893e129): "Delivery to
+  // 5620 Cetronia Rd, Allentown PA 18106" arrived while a fries
+  // disambiguation was still open — answer()'s disambiguation case
+  // correctly finds no candidate match (nothing here names a kind of
+  // fries) and returns UNRESOLVED, but without this, the short-circuit
+  // branch just below re-asks the identical "what kind?" forever, and the
+  // order-type/address this message actually carries (already captured
+  // opportunistically into sideEffects above) never gets a chance to move
+  // the conversation forward — tip, and eventually confirm, can never be
+  // reached. Same family as disambiguationDeclineNamesOutside above (fires
+  // on the FIRST occurrence, no openRepeatCount gate): a message that
+  // plainly states an order type or a deliverable address is never a
+  // legitimate attempt at answering "what kind?", so there's nothing to
+  // wait out.
+  const disambiguationMessageIsOrderLogistics = priorState.open?.kind === "disambiguation" &&
+    (opportunisticOrderType != null || addressSpan != null);
   const dropDisambiguationList = priorState.open?.kind === "disambiguation" &&
     (
       ((priorState.openRepeatCount ?? 0) >= 1 && isDisambiguationListDropSignal(input.message)) ||
-      disambiguationDeclineNamesOutside
+      disambiguationDeclineNamesOutside ||
+      disambiguationMessageIsOrderLogistics
     );
   // "Okay, no Italian." — spanText is the customer's own words for the span
   // that opened THIS disambiguation (turn-engine.ts's DialogueState.open.
@@ -917,6 +973,28 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         break;
       case "tip_resolved":
         sideEffects = { ...sideEffects, driver_tip_cents: outcome.tipCents };
+        // Round 3, item 2b: mark the tip question genuinely resolved this
+        // turn (amount OR decline, outcome.tipCents is 0 either way) — see
+        // DialogueState.driverTipResolved's own doc for why ask()'s
+        // priority-5 tip gate can no longer trust driver_tip_cents alone.
+        turnEvents = { ...turnEvents, tipResolvedThisTurn: true };
+        // Round 3, item 2c(i): a tip stated WHILE confirm was already open
+        // (priorState.open.kind === "confirm" — see the "confirm" case's
+        // own tip-amount check in turn-engine.ts) needs ASK to reopen
+        // confirm with a fresh read-back, not the short re-ask a genuine
+        // same-cart repeat gets — see AskTurnEvents.tipStatedAtConfirmThisTurn's
+        // own doc. The ordinary "tip" open-question flow (priorState.open.kind
+        // === "tip") never sets this: that path already gets a fresh confirm
+        // naturally, since `open` changes shape from "tip" to "confirm".
+        if (priorState.open?.kind === "confirm") {
+          turnEvents = { ...turnEvents, tipStatedAtConfirmThisTurn: true };
+        }
+        break;
+      case "confirm_info_answered":
+        // Round 3, item 2c(ii): the shop-data answer rides ahead of
+        // whatever confirm re-ask this turn produces — same answerText hook
+        // replacement_unavailable already uses just below.
+        answerText = outcome.infoText;
         break;
       case "name_resolved":
         sideEffects = { ...sideEffects, pickup_name: outcome.name };
@@ -1490,6 +1568,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // fell through to PROPOSE.
   if (opportunisticAddress) {
     sideEffects = { ...sideEffects, delivery_address: { formatted: opportunisticAddress.formatted } };
+  }
+  // Round 3, item 2b: same "independent of whatever the primary ANSWER
+  // switch resolved this turn" reasoning as opportunisticAddress above —
+  // never overwrites an order_type the switch itself already resolved this
+  // turn (sideEffects.order_type == null guard), so there's no race between
+  // the two paths on the rare turn where order_type WAS the open question
+  // and also opportunistically matched.
+  if (opportunisticOrderType && sideEffects.order_type == null) {
+    sideEffects = { ...sideEffects, order_type: opportunisticOrderType };
   }
 
   // ── STEP 5: ASK ───────────────────────────────────────────────────────────
