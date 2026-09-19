@@ -10,10 +10,15 @@ import {
   candidateShortText,
   categoryWordMatches,
   displayGroupName,
+  extractGlobalSizeWord,
+  extractPartialSizeClause,
   extractPriceCentsFromMessage,
+  facetDisplayValues,
   isDisambiguationOptionsRequest,
+  isNarrowingCandidateSet,
   isPendingDisambiguationDeclined,
   matchOrdinalPosition,
+  narrowCandidatesByFacetAnswer,
   pickNarrowingFacet,
   renderDisambiguationReask,
   renderOptionAlternatives,
@@ -456,24 +461,27 @@ const SEVEN_LARGE_PIZZAS: PendingCandidate[] = [
   "Pepperoni", "Cheese", "Sausage", "Buffalo Chicken", "Meat Lovers", "Veggie", "Hawaiian",
 ].map((kind, i) => ({ menu_item_id: `pizza-${i}`, name: `Large ${kind} Pizza`, category: "Pizza", price_cents: 1800 + i * 100 }));
 
-Deno.test("pickNarrowingFacet: 7 large pizzas of different kinds -> a kind question naming at most 5 examples", () => {
+Deno.test("pickNarrowingFacet: 7 large pizzas of different kinds -> a bare kind question, no examples, no head noun", () => {
   const result = pickNarrowingFacet(SEVEN_LARGE_PIZZAS);
   assertEquals(result?.facet, "kind");
-  assert(result?.question.startsWith("What kind of pizza?"), `expected a kind question, got: ${JSON.stringify(result?.question)}`);
-  assert(result!.question.length <= 480);
-  const exampleCount = result!.question.split(",").length;
-  assert(exampleCount <= 5, `must cap examples at 5, got ${exampleCount}: ${result!.question}`);
+  // PO amendment (2026-09-19): the facet question is fixed copy chosen by
+  // the facet alone — no candidate examples, no "of pizza" head noun. The
+  // acknowledgement phrase and any facet-specific follow-up text are
+  // turn-engine.ts's render()'s job (narrowingKindQuestion), not this
+  // function's — see pending-disambiguation.test.ts's own header.
+  assertEquals(result?.question, "What kind?");
 });
 
-Deno.test("pickNarrowingFacet: same kind, different sizes -> a size question, not kind (kind doesn't distinguish)", () => {
-  const sameKindDifferentSizes: PendingCandidate[] = [
-    { menu_item_id: "p-s", name: "Cheese Pizza - Small 10''", category: "Pizza", price_cents: 1200 },
-    { menu_item_id: "p-m", name: "Cheese Pizza - Medium 14''", category: "Pizza", price_cents: 1600 },
-    { menu_item_id: "p-l", name: "Cheese Pizza - Large 18''", category: "Pizza", price_cents: 1900 },
-  ];
-  const result = pickNarrowingFacet(sameKindDifferentSizes);
+const SAME_KIND_DIFFERENT_SIZES: PendingCandidate[] = [
+  { menu_item_id: "p-s", name: "Cheese Pizza - Small 10''", category: "Pizza", price_cents: 1200 },
+  { menu_item_id: "p-m", name: "Cheese Pizza - Medium 14''", category: "Pizza", price_cents: 1600 },
+  { menu_item_id: "p-l", name: "Cheese Pizza - Large 18''", category: "Pizza", price_cents: 1900 },
+];
+
+Deno.test("pickNarrowingFacet: same kind, different sizes -> a bare size question, not kind (kind doesn't distinguish)", () => {
+  const result = pickNarrowingFacet(SAME_KIND_DIFFERENT_SIZES);
   assertEquals(result?.facet, "size");
-  assert(result?.question.startsWith("What size?"), `expected a size question, got: ${JSON.stringify(result?.question)}`);
+  assertEquals(result?.question, "What size?");
 });
 
 Deno.test("pickNarrowingFacet: nothing distinguishes the set -> null (caller falls back to the full list)", () => {
@@ -482,6 +490,77 @@ Deno.test("pickNarrowingFacet: nothing distinguishes the set -> null (caller fal
     { menu_item_id: "b", name: "BLT", category: "Homemade Paninis", price_cents: 1099 },
   ];
   assertEquals(pickNarrowingFacet(identicalKindAndSize), null);
+});
+
+// ── PO amendment (2026-09-19): narrowCandidatesByFacetAnswer/facetDisplayValues/
+// isNarrowingCandidateSet/extractPartialSizeClause/extractGlobalSizeWord — the
+// pure helpers behind the exact fixed-copy narrowing flow. turn-engine-
+// runner.test.ts exercises the full pipeline against a real conversation;
+// these lock the extraction/matching logic down directly.
+
+Deno.test("isNarrowingCandidateSet: 7 candidates is a narrowing set; 2 is not", () => {
+  assertEquals(isNarrowingCandidateSet(SEVEN_LARGE_PIZZAS), true);
+  assertEquals(isNarrowingCandidateSet(BLT_CANDIDATES), false);
+});
+
+Deno.test("narrowCandidatesByFacetAnswer: 'pepperoni' against 7 kinds narrows to the one Pepperoni candidate", () => {
+  const result = narrowCandidatesByFacetAnswer(SEVEN_LARGE_PIZZAS, "kind", "pepperoni");
+  assertEquals(result?.length, 1);
+  assertEquals(result?.[0].menu_item_id, "pizza-0");
+});
+
+Deno.test("narrowCandidatesByFacetAnswer: 'pepperoni' against same-kind-different-sizes candidates narrows by kind, leaving every size", () => {
+  const mixed: PendingCandidate[] = [
+    ...SAME_KIND_DIFFERENT_SIZES,
+    { menu_item_id: "p-s2", name: "Pepperoni Pizza - Small 10''", category: "Pizza", price_cents: 1300 },
+    { menu_item_id: "p-m2", name: "Pepperoni Pizza - Medium 14''", category: "Pizza", price_cents: 1700 },
+    { menu_item_id: "p-l2", name: "Pepperoni Pizza - Large 18''", category: "Pizza", price_cents: 2000 },
+  ];
+  const result = narrowCandidatesByFacetAnswer(mixed, "kind", "pepperoni");
+  assertEquals(result?.length, 3);
+  assert(result?.every(c => c.name.startsWith("Pepperoni")), JSON.stringify(result));
+});
+
+Deno.test("narrowCandidatesByFacetAnswer: 'large' against same-kind-different-sizes narrows by size to exactly one", () => {
+  const result = narrowCandidatesByFacetAnswer(SAME_KIND_DIFFERENT_SIZES, "size", "large please");
+  assertEquals(result?.length, 1);
+  assertEquals(result?.[0].menu_item_id, "p-l");
+});
+
+Deno.test("narrowCandidatesByFacetAnswer: an answer naming nothing real returns null, never guesses", () => {
+  assertEquals(narrowCandidatesByFacetAnswer(SEVEN_LARGE_PIZZAS, "kind", "um not sure"), null);
+});
+
+Deno.test("facetDisplayValues: kind values keep original casing, deduped, no prices", () => {
+  const values = facetDisplayValues(SEVEN_LARGE_PIZZAS, "kind");
+  assertEquals(values, ["Pepperoni", "Cheese", "Sausage", "Buffalo Chicken", "Meat Lovers", "Veggie", "Hawaiian"]);
+});
+
+Deno.test("facetDisplayValues: size values across a same-kind set", () => {
+  const values = facetDisplayValues(SAME_KIND_DIFFERENT_SIZES, "size");
+  assertEquals(values, ["Small", "Medium", "Large"]);
+});
+
+Deno.test("extractGlobalSizeWord: '4 large pizzas' names a global size", () => {
+  assertEquals(extractGlobalSizeWord("large pizzas"), "large");
+});
+
+Deno.test("extractGlobalSizeWord: a bare 'pizza' names no size", () => {
+  assertEquals(extractGlobalSizeWord("pizza"), null);
+});
+
+Deno.test("extractPartialSizeClause: '2 pizzas, one large' is a partial size for 1 of the 2 units", () => {
+  const result = extractPartialSizeClause("2 pizzas, one large", 2);
+  assertEquals(result?.sizeWord, "large");
+  assertEquals(result?.sizeQuantity, 1);
+});
+
+Deno.test("extractPartialSizeClause: '4 large pizzas' (no comma clause) is NOT a partial size", () => {
+  assertEquals(extractPartialSizeClause("large pizzas", 4), null);
+});
+
+Deno.test("extractPartialSizeClause: a sub-quantity equal to the total names nothing partial", () => {
+  assertEquals(extractPartialSizeClause("2 pizzas, two large", 2), null);
 });
 
 Deno.test("isDisambiguationOptionsRequest: 'what are the options' is an explicit options request", () => {

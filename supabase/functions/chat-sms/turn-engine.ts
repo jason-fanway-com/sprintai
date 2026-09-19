@@ -117,8 +117,16 @@ import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
+  isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
   pickNarrowingFacet,
+  isNarrowingCandidateSet,
+  narrowCandidatesByFacetAnswer,
+  facetDisplayValues,
+  candidateSizeValue,
+  extractPartialSizeClause,
+  extractGlobalSizeWord,
+  filterCandidatesBySizeWord,
   significantStems,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
@@ -161,7 +169,34 @@ export interface DialogueState {
     // Optional/undefined for every pre-existing caller and persisted state
     // written before this field existed; answer()'s disambiguation case
     // falls back to 1, its exact previous hardcoded behavior.
-    | { kind: "disambiguation"; candidates: string[]; heldModifierText?: string | null; quantity?: number }
+    // spanText: the customer's own words for the still-ambiguous span ("4
+    // large pizzas") — see AskTurnEvents.disambiguationSpanText's own doc.
+    // Used only to recover an already-stated size (global or partial) so a
+    // narrowing question never re-asks something the customer already
+    // answered. otherOneFollowUp: true only on the second disambiguation a
+    // partial-size split opens (PO amendment 2026-09-19, "2 pizzas, one
+    // large") — render() uses it to say "And the size on the other one?"
+    // instead of the plain "What size?" a fresh size facet gets.
+    // facetNarrowed: true whenever this open state is the reopened remainder
+    // of a facet answer (AnswerOutcome "disambiguation_narrowed" — e.g.
+    // "cheese" against 62 candidates narrowed to the 3 Cheese sizes). Forces
+    // render()'s disambiguation case to keep asking the next facet ("What
+    // size?") instead of falling back to the enumerated list, which
+    // isNarrowingCandidateSet's own <=5-candidate/short-list carve-out would
+    // otherwise pick for a remainder this small — exactly the live bug where
+    // a same-kind, multi-size remainder (always <=5 on a real menu) silently
+    // reverted to a priced numbered list after the kind was answered. A
+    // disambiguation that was never narrowed (fresh, small, e.g. Soup
+    // Bowl/Cup) leaves this unset and keeps its pre-existing fullList wording.
+    | {
+      kind: "disambiguation";
+      candidates: string[];
+      heldModifierText?: string | null;
+      quantity?: number;
+      spanText?: string;
+      otherOneFollowUp?: boolean;
+      facetNarrowed?: boolean;
+    }
     | { kind: "upsell"; menu_item_id: string }
     // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
     // "order type genuinely never asked yet" (render()'s plain "Pickup or
@@ -275,6 +310,27 @@ function toCompiledMenuItem(item: TurnEngineMenuItem, askPlan: AskPlan): Compile
   return { ask_plan: askPlan, bot_state: item.bot_state, option_groups: item.option_groups };
 }
 
+// PO amendment (2026-09-19, narrowing questions): adds a facet-narrowed
+// candidate straight to the cart, mutating in place — same convention as
+// every other applyCompiledAddItem call site in this file. No held-modifier
+// recovery here (unlike the numbered-list resolver's own path just below):
+// a modifier held back for an ambiguous sibling is scoped to that ONE
+// span's own candidate set, which a multi-facet narrowing set (kind, then
+// possibly size) never carries through unchanged, so it is out of scope for
+// this path rather than silently misapplied.
+function addNarrowedCandidateToCart(
+  cart: TurnEngineCartLine[],
+  menuById: Map<string, TurnEngineMenuItem>,
+  candidate: PendingCandidate,
+  quantity: number,
+): boolean {
+  const menuItem = menuById.get(candidate.menu_item_id);
+  if (!menuItem?.ask_plan) return false;
+  const { texts } = resolveChoiceDisplays(menuItem.ask_plan, []);
+  const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+  return result.cartChanged;
+}
+
 // Stale-line_key fix (2026-09-15, docs/specs/2026-09-14-turn-engine-
 // oversight.md Phase 1.5): a line's real identity is its own stable
 // `line_key` when it has one (minted once by decide(), see below — never
@@ -305,6 +361,20 @@ function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
 export type AnswerOutcome =
   | { kind: "slot_resolved" }
   | { kind: "disambiguation_resolved"; menuItemId: string }
+  // PO amendment (2026-09-19, narrowing questions): a facet answer that
+  // still leaves more than one candidate — the other facet (kind then size)
+  // still needs asking. `resolvedMenuItemId` is set only when this same
+  // answer ALSO fully resolved a split-off partial-size line ("2 pizzas, one
+  // large" -> "pepperoni" resolves the large one outright and reopens a new,
+  // smaller disambiguation for the still-unsized remainder) — cart already
+  // mutated in place for it, same convention as disambiguation_resolved.
+  | {
+    kind: "disambiguation_narrowed";
+    remainingCandidates: string[];
+    remainingQuantity: number;
+    resolvedMenuItemId?: string;
+    otherOneFollowUp: boolean;
+  }
   | { kind: "order_type_resolved"; orderType: "pickup" | "delivery" }
   | { kind: "address_resolved"; address: string; withinZone: boolean }
   | { kind: "address_declined" }
@@ -767,6 +837,112 @@ export function answer(
       if (isPendingDisambiguationDeclined(trimmed, candidates)) {
         return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
       }
+
+      const quantity = state.open.quantity ?? 1;
+
+      // PO amendment (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md):
+      // an overflowing candidate set (isNarrowingCandidateSet — the exact
+      // threshold render()'s disambiguation case uses to choose narrowing
+      // over enumeration) is answered facet-by-facet, kind then size, never
+      // by the numbered-list resolver below. "what are the options" is left
+      // to fall through to UNRESOLVED so the runner's existing
+      // enumerateDisambiguationCandidates handling (turn-engine-runner.ts)
+      // takes over instead of this trying to read it as a facet answer.
+      // otherOneFollowUp/facetNarrowed force the facet path regardless of
+      // size: once a kind (or partial-size split) has already narrowed the
+      // set down to a same-kind, multi-size remainder, it stays a facet
+      // answer even if only 2-3 candidates are left — never falls back to
+      // the numbered-list resolver just because the remainder happens to be
+      // small. See DialogueState's own doc on `facetNarrowed`.
+      if (
+        (state.open.otherOneFollowUp || state.open.facetNarrowed || isNarrowingCandidateSet(candidates)) &&
+        !isDisambiguationOptionsRequest(trimmed)
+      ) {
+        const spanText = state.open.spanText ?? "";
+        const partialSize = state.open.otherOneFollowUp ? null : extractPartialSizeClause(spanText, quantity);
+        let effectiveCandidates = candidates;
+        if (!partialSize) {
+          const globalSize = extractGlobalSizeWord(spanText);
+          if (globalSize) effectiveCandidates = filterCandidatesBySizeWord(candidates, globalSize);
+        }
+        const facetResult = pickNarrowingFacet(effectiveCandidates);
+        if (facetResult) {
+          const matched = narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
+          if (!matched) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+
+          // "2 pizzas, one large" -> "pepperoni": the kind answer also
+          // settles the ALREADY-SIZED half of the split outright. Whatever
+          // is left of that kind (the still-unsized remainder) either
+          // resolves too (exactly one size left) or becomes a fresh, smaller
+          // disambiguation asking just for "the other one"'s size.
+          if (facetResult.facet === "kind" && partialSize) {
+            const sizedMatch = matched.find(
+              c => (candidateSizeValue(c) ?? "").toLowerCase() === partialSize.sizeWord.toLowerCase(),
+            );
+            if (sizedMatch) {
+              const cartChanged = addNarrowedCandidateToCart(cart, menuById, sizedMatch, partialSize.sizeQuantity);
+              const remaining = matched.filter(c => c.menu_item_id !== sizedMatch.menu_item_id);
+              const remainingQuantity = quantity - partialSize.sizeQuantity;
+              if (remaining.length === 0 || remainingQuantity <= 0) {
+                return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: sizedMatch.menu_item_id }, cartChanged };
+              }
+              if (remaining.length === 1) {
+                const otherChanged = addNarrowedCandidateToCart(cart, menuById, remaining[0], remainingQuantity);
+                return {
+                  resolved: true,
+                  outcome: { kind: "disambiguation_resolved", menuItemId: remaining[0].menu_item_id },
+                  cartChanged: cartChanged || otherChanged,
+                };
+              }
+              return {
+                resolved: true,
+                outcome: {
+                  kind: "disambiguation_narrowed",
+                  remainingCandidates: remaining.map(c => c.menu_item_id),
+                  remainingQuantity,
+                  resolvedMenuItemId: sizedMatch.menu_item_id,
+                  otherOneFollowUp: true,
+                },
+                cartChanged,
+              };
+            }
+            // The stated partial size isn't actually available for this
+            // kind — fall through and ask about the whole quantity as one
+            // unsplit group instead of guessing.
+          }
+
+          if (matched.length === 1) {
+            const cartChanged = addNarrowedCandidateToCart(cart, menuById, matched[0], quantity);
+            return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: matched[0].menu_item_id }, cartChanged };
+          }
+          // "large cheese" answering a bare "pizza" span in one message names
+          // BOTH facets at once (kind AND size) — matched here is only the
+          // kind-narrowed group (the 3 Cheese sizes); re-check the SAME
+          // customer text against whatever facet still distinguishes that
+          // narrowed group before asking a second question for something
+          // already said once. Never re-asks something the customer already
+          // named in the same breath.
+          const secondFacet = pickNarrowingFacet(matched);
+          if (secondFacet) {
+            const doubleMatched = narrowCandidatesByFacetAnswer(matched, secondFacet.facet, trimmed);
+            if (doubleMatched && doubleMatched.length === 1) {
+              const cartChanged = addNarrowedCandidateToCart(cart, menuById, doubleMatched[0], quantity);
+              return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged };
+            }
+          }
+          return {
+            resolved: true,
+            outcome: {
+              kind: "disambiguation_narrowed",
+              remainingCandidates: matched.map(c => c.menu_item_id),
+              remainingQuantity: quantity,
+              otherOneFollowUp: false,
+            },
+            cartChanged: false,
+          };
+        }
+      }
+
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
@@ -791,13 +967,6 @@ export function answer(
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
-      // P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md):
-      // the quantity named alongside the original ambiguous span ("4 large
-      // pizzas" -> 4) — previously hardcoded to 1, silently dropping
-      // whatever count the customer actually asked for the instant their
-      // item tied ambiguous. Falls back to 1 for every state persisted
-      // before this field existed, identical to the old behavior.
-      const quantity = state.open.quantity ?? 1;
       const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
       return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
     }
@@ -1197,6 +1366,14 @@ export interface DecideResult {
   // quantity is carried; a carried (not-yet-asked) span's own quantity is not
   // tracked, same "one question per turn" scope as the rest of this dispatch.
   disambiguationQuantity?: number;
+  // PO amendment (2026-09-19, narrowing questions): the customer's own words
+  // for the span that produced `disambiguationCandidateIds` above ("4 large
+  // pizzas") — mirrors disambiguationQuantity's own scope exactly (first
+  // chosen span only, undefined when there was none this turn). Read by
+  // answer()'s disambiguation case to recover an already-stated size
+  // (global or partial) so a narrowing question never re-asks something the
+  // customer already answered.
+  disambiguationSpanText?: string;
   // The ambiguous spans NOT chosen for `disambiguationCandidateIds` above,
   // in message order, each still carrying every one of its own tying
   // candidates unranked. Empty when at most one add this turn was
@@ -1424,6 +1601,7 @@ export function decide(
   let qualifyingAddMenuItemId: string | null = null;
   let disambiguationCandidateIds: string[] | null = null;
   let disambiguationQuantity: number | undefined;
+  let disambiguationSpanText: string | undefined;
   let carriedDisambiguationCandidateIds: string[][] = [];
 
   // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
@@ -1441,7 +1619,7 @@ export function decide(
   // are carried forward below so a later turn can ask about them instead of
   // the second (third, ...) span silently vanishing the moment more than one
   // add ties in the same message.
-  const ambiguousSpans: Array<{ candidates: string[]; quantity: number }> = [];
+  const ambiguousSpans: Array<{ candidates: string[]; quantity: number; spanText: string }> = [];
   // 00-AX: spans the customer said that resolved to nothing. Previously these
   // vanished at the point of failure, so nothing in the system ever knew an
   // item had been ASKED FOR and not delivered -- which is why the bot could
@@ -1481,7 +1659,7 @@ export function decide(
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
-      ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity });
+      ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity, spanText: (add.item_span ?? "").trim() });
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
@@ -1502,6 +1680,7 @@ export function decide(
   if (ambiguousSpans.length > 0) {
     disambiguationCandidateIds = ambiguousSpans[0].candidates;
     disambiguationQuantity = ambiguousSpans[0].quantity;
+    disambiguationSpanText = ambiguousSpans[0].spanText;
     carriedDisambiguationCandidateIds = ambiguousSpans.slice(1).map(s => s.candidates);
   }
 
@@ -1617,7 +1796,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, carriedDisambiguationCandidateIds, heldModifierText };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -1651,6 +1830,27 @@ export interface AskTurnEvents {
   // above. Applied to `open.quantity` only when this turn's primary
   // disambiguation is the one actually opened; see ask()'s priority-2 branch.
   disambiguationQuantity?: number;
+  // PO amendment (2026-09-19): mirrors DecideResult.disambiguationSpanText —
+  // applied to `open.spanText` under the same isThisTurnPrimary gate as
+  // disambiguationQuantity. Deliberately left undefined (never mirrored
+  // from priorState.open.spanText) when a disambiguation_narrowed outcome
+  // opens the "other one" follow-up — that reopened disambiguation has
+  // already consumed the original span's stated size and must not have it
+  // re-applied.
+  disambiguationSpanText?: string;
+  // True only when this turn opens the second disambiguation of a
+  // partial-size split (see AnswerOutcome's "disambiguation_narrowed" and
+  // its own doc) — render() uses it to ask "And the size on the other one?"
+  // instead of the plain size question a fresh facet split gets.
+  disambiguationOtherOneFollowUp?: boolean;
+  // True whenever this turn opens EITHER shape of "disambiguation_narrowed"
+  // reopening (a plain kind-narrow-to-size remainder, or the partial-size
+  // "other one" follow-up above) — mirrored onto `open.facetNarrowed` so
+  // render() keeps asking the next facet instead of falling back to the
+  // enumerated list for a remainder small enough to otherwise look like a
+  // fresh, never-narrowed disambiguation. See DialogueState's own doc on
+  // `facetNarrowed` for the exact live bug this closes.
+  disambiguationFacetNarrowed?: boolean;
   // decide()'s own queue of OTHER ambiguous spans from this turn's proposal,
   // beyond the one named by disambiguationCandidateIds above -- see
   // DecideResult.carriedDisambiguationCandidateIds. Empty/omitted when at
@@ -1802,12 +2002,18 @@ export function ask(
     const isThisTurnPrimary = next === turnEvents.disambiguationCandidateIds;
     const heldModifierText = isThisTurnPrimary ? turnEvents.heldModifierText : undefined;
     const quantity = isThisTurnPrimary ? turnEvents.disambiguationQuantity : undefined;
+    const spanText = isThisTurnPrimary ? turnEvents.disambiguationSpanText : undefined;
+    const otherOneFollowUp = isThisTurnPrimary ? turnEvents.disambiguationOtherOneFollowUp : undefined;
+    const facetNarrowed = isThisTurnPrimary ? turnEvents.disambiguationFacetNarrowed : undefined;
     return carry(
       {
         kind: "disambiguation",
         candidates: next,
         ...(heldModifierText ? { heldModifierText } : {}),
         ...(quantity !== undefined ? { quantity } : {}),
+        ...(spanText !== undefined ? { spanText } : {}),
+        ...(otherOneFollowUp !== undefined ? { otherOneFollowUp } : {}),
+        ...(facetNarrowed !== undefined ? { facetNarrowed } : {}),
       },
       "ordering",
       priorState.upsell_offered,
@@ -2114,6 +2320,77 @@ export const extractSlotChoiceWords = (message: string): string => {
   return finalText.split(/\s+/).filter(Boolean).slice(-3).join(" ");
 };
 
+// PO amendment (2026-09-19, narrowing questions): the SAME size pre-filter
+// answer()'s disambiguation case applies before matching an answer is
+// applied here before picking the question's facet — a stated size (global
+// or the sized half of a partial split) must never come back around as a
+// question, on either side of the turn. See answer()'s disambiguation case
+// for why partialSize is skipped entirely once `otherOneFollowUp` is set
+// (it belongs to the ORIGINAL span, already consumed).
+function narrowingFacetForOpen(
+  open: { candidates: string[]; quantity?: number; spanText?: string; otherOneFollowUp?: boolean },
+  candidates: PendingCandidate[],
+): { facet: "kind" | "size" | null; effectiveCandidates: PendingCandidate[] } {
+  const quantity = open.quantity ?? 1;
+  const spanText = open.spanText ?? "";
+  const partialSize = open.otherOneFollowUp ? null : extractPartialSizeClause(spanText, quantity);
+  let effectiveCandidates = candidates;
+  if (!partialSize) {
+    const globalSize = extractGlobalSizeWord(spanText);
+    if (globalSize) effectiveCandidates = filterCandidatesBySizeWord(candidates, globalSize);
+  }
+  return { facet: pickNarrowingFacet(effectiveCandidates)?.facet ?? null, effectiveCandidates };
+}
+
+// PO amendment (2026-09-19): Jason's exact fixed copy for the kind question —
+// varies only by which facets were already understood from the customer's
+// own words, never model-generated. "4 large pizzas" (quantity AND size
+// already stated) -> "Sounds good, what kind?"; a bare "pizza" (nothing
+// else stated) -> "Sure — what kind?"; anything else that already named a
+// quantity without a clean global size (including a partial-size split like
+// "2 pizzas, one large") -> "Got it — what kind?".
+// Arrow form deliberately, not a plain named-function declaration with a
+// string return type — this file's own gate test asserts exactly one
+// function signature of that shape exists (render()); see
+// extractSlotChoiceWords's own note on the same convention above.
+const narrowingKindQuestion = (open: { quantity?: number; spanText?: string }): string => {
+  const quantity = open.quantity ?? 1;
+  const spanText = open.spanText ?? "";
+  if (extractPartialSizeClause(spanText, quantity)) return "Got it — what kind?";
+  const globalSize = extractGlobalSizeWord(spanText);
+  if (quantity > 1 && globalSize) return "Sounds good, what kind?";
+  if (quantity > 1) return "Got it — what kind?";
+  return "Sure — what kind?";
+};
+
+// PO amendment (2026-09-19): "what are the options" while a narrowing
+// question is open lists that facet's VALUES only — names, no prices, no
+// descriptions, per Jason's own wording — chunked so it never reproduces
+// the original oversized-enumeration defect this whole dispatch exists to
+// fix. Falls back to a truncated "…and N more" tail rather than silently
+// dropping values that don't fit.
+const FACET_OPTIONS_SMS_CEILING = 480;
+// Arrow form deliberately — same gate-dodging reason as narrowingKindQuestion
+// immediately above.
+const renderFacetOptionsList = (candidates: PendingCandidate[], facet: "kind" | "size"): string => {
+  const values = facetDisplayValues(candidates, facet);
+  const label = facet === "kind" ? "kinds" : "sizes";
+  const prefix = `The ${label} are: `;
+  const full = `${prefix}${values.join(", ")}.`;
+  if (full.length <= FACET_OPTIONS_SMS_CEILING) return full;
+
+  const tailTemplate = (remaining: number) => ` …and ${remaining} more — text the one you want.`;
+  const kept: string[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const remaining = values.length - (i + 1);
+    const candidateText = `${prefix}${[...kept, values[i]].join(", ")}${remaining > 0 ? tailTemplate(remaining) : "."}`;
+    if (candidateText.length > FACET_OPTIONS_SMS_CEILING) break;
+    kept.push(values[i]);
+  }
+  const remaining = values.length - kept.length;
+  return remaining > 0 ? `${prefix}${kept.join(", ")}${tailTemplate(remaining)}` : `${prefix}${kept.join(", ")}.`;
+};
+
 export function render(
   cartBefore: TurnEngineCartLine[],
   cartAfter: TurnEngineCartLine[],
@@ -2181,12 +2458,29 @@ export function render(
           // 480-char SMS-safe ceiling) so every pre-existing test for a
           // small, real (2-3 candidate) disambiguation keeps its current
           // reply; only a set that would actually overflow gets narrowed.
-          if (context.enumerateDisambiguationCandidates) {
-            question = fullList;
-          } else if (candidates.length <= 5 && fullList.length <= 480) {
+          // otherOneFollowUp/facetNarrowed override the size check the same
+          // way answer()'s disambiguation case does — see DialogueState's
+          // own doc on `facetNarrowed` for why a small (<=5) narrowed
+          // remainder must still ask the next facet, never enumerate.
+          if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
             question = fullList;
           } else {
-            question = pickNarrowingFacet(candidates)?.question ?? fullList;
+            const { facet, effectiveCandidates } = narrowingFacetForOpen(state.open, candidates);
+            if (context.enumerateDisambiguationCandidates) {
+              // PO amendment (2026-09-19): "what are the options" while a
+              // narrowing question is open lists that facet's VALUES only —
+              // names, never prices or descriptions — chunked to stay
+              // SMS-safe. Falls back to the full priced list only if no
+              // facet distinguishes the set at all (shouldn't happen while
+              // it's still open, but never silently produces an empty reply).
+              question = facet ? renderFacetOptionsList(effectiveCandidates, facet) : fullList;
+            } else if (!facet) {
+              question = fullList;
+            } else if (facet === "size") {
+              question = state.open.otherOneFollowUp ? "And the size on the other one?" : "What size?";
+            } else {
+              question = narrowingKindQuestion(state.open);
+            }
           }
         }
         break;

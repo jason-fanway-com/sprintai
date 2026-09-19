@@ -163,6 +163,13 @@ export interface RunTurnResult {
   reply: string;
   cart: TurnEngineCartLine[];
   dialogueState: DialogueState;
+  // P0 fix (2026-09-19): the `messages` row id this turn's assistant reply
+  // was saved under — index.ts's turn_engine_enabled branch hands this to
+  // sendSms so the carrier's own message id can be written back onto THIS
+  // row once the send actually succeeds. See persistTurn/persistOutboundOnly
+  // below and saveMessage's own comment in index.ts for why NULL otherwise
+  // means nothing (every successful send left it NULL too).
+  messageId: string | null;
 }
 
 interface CartSideEffects {
@@ -499,13 +506,15 @@ async function persistOutboundOnly(
   supabase: SupabaseClient,
   input: RunTurnInput,
   reply: string,
-): Promise<void> {
-  await supabase.from("messages").insert({
+): Promise<{ id: string | null }> {
+  const { data, error } = await supabase.from("messages").insert({
     conversation_id: input.conversationId,
     tenant_id: input.tenantId,
     role: "assistant",
     content: reply,
-  });
+  }).select("id").single();
+  if (error) return { id: null };
+  return { id: (data as { id: string } | null)?.id ?? null };
 }
 
 async function persistTurn(
@@ -517,7 +526,7 @@ async function persistTurn(
   reply: string,
   deliveryFeeCents: number,
   driverTipCents: number,
-): Promise<void> {
+): Promise<{ id: string | null }> {
   // Same source of truth as the reply footer (RENDER's renderItemizedRecap/
   // renderLedgerFooter, itemizer.ts) and the Stripe checkout total
   // (createCheckoutSession, checkout-session.ts) — computeCartSubtotalCents
@@ -545,12 +554,14 @@ async function persistTurn(
     ...sideEffects,
   }).eq("id", input.cartId);
 
-  await supabase.from("messages").insert({
+  const { data, error } = await supabase.from("messages").insert({
     conversation_id: input.conversationId,
     tenant_id: input.tenantId,
     role: "assistant",
     content: reply,
-  });
+  }).select("id").single();
+  if (error) return { id: null };
+  return { id: (data as { id: string } | null)?.id ?? null };
 }
 
 // 00-BI: the closed vocabulary code will accept as an answer to each open
@@ -847,6 +858,33 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
         }
         break;
+      // PO amendment (2026-09-19, narrowing questions): a facet answer that
+      // still leaves more than one candidate reopens a SMALLER disambiguation
+      // for the remainder — fed through the exact same
+      // disambiguationCandidateIds/disambiguationQuantity channel ask()'s
+      // priority-2 branch already consumes for a fresh span, with
+      // disambiguationSpanText deliberately left unset (the original span's
+      // stated size is already consumed) and disambiguationOtherOneFollowUp
+      // set only when this reopening is specifically "the other one"'s size
+      // (see AnswerOutcome's own doc on this outcome kind).
+      // disambiguationFacetNarrowed is unconditionally true for EITHER shape
+      // of this outcome — a same-kind, multi-size remainder is very
+      // frequently <=5 candidates on a real menu (Small/Medium/Large), which
+      // would otherwise fall through render()'s own <=5-candidate carve-out
+      // and enumerate a priced list instead of asking "What size?".
+      case "disambiguation_narrowed":
+        if (answerResult.cartChanged && outcome.resolvedMenuItemId) {
+          turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.resolvedMenuItemId };
+        }
+        turnEvents = {
+          ...turnEvents,
+          disambiguationCandidateIds: outcome.remainingCandidates,
+          disambiguationQuantity: outcome.remainingQuantity,
+          disambiguationSpanText: undefined,
+          disambiguationOtherOneFollowUp: outcome.otherOneFollowUp,
+          disambiguationFacetNarrowed: true,
+        };
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the
@@ -979,6 +1017,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
               qualifyingAddMenuItemId: remainderDecide.qualifyingAddMenuItemId ?? turnEvents.qualifyingAddMenuItemId,
               disambiguationCandidateIds: turnEvents.disambiguationCandidateIds ?? remainderDecide.disambiguationCandidateIds,
               disambiguationQuantity: turnEvents.disambiguationCandidateIds ? turnEvents.disambiguationQuantity : remainderDecide.disambiguationQuantity,
+              disambiguationSpanText: turnEvents.disambiguationCandidateIds ? turnEvents.disambiguationSpanText : remainderDecide.disambiguationSpanText,
               carriedDisambiguationCandidateIds: [
                 ...(turnEvents.carriedDisambiguationCandidateIds ?? []),
                 ...remainderDecide.carriedDisambiguationCandidateIds,
@@ -1034,6 +1073,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         ...turnEvents,
         disambiguationCandidateIds: priorState.open.candidates,
         disambiguationQuantity: priorState.open.quantity,
+        disambiguationSpanText: priorState.open.spanText,
+        disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
+        disambiguationFacetNarrowed: priorState.open.facetNarrowed,
         heldModifierText: priorState.open.heldModifierText,
       };
     } else {
@@ -1072,8 +1114,8 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // Same terminal-failure shape as a PROPOSE failure below: nothing
       // changed this turn, only the fallback reply is written to messages.
       // loadItemLexicon has already persisted its own error_log row.
-      await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
-      return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState };
+      const saved = await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
+      return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
     }
     const lexicon = lexiconResult.rows;
     const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
@@ -1155,8 +1197,8 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // Nothing changed this turn: cart and dialogue_state are left
         // exactly as they were, and only the fallback reply is written to
         // messages.
-        await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
-        return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState };
+        const saved = await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
+        return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
       }
     } else {
       // ── STEP 4: DECIDE ─────────────────────────────────────────────────
@@ -1214,6 +1256,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       qualifyingAddMenuItemId: decideResult.qualifyingAddMenuItemId,
       disambiguationCandidateIds: decideResult.disambiguationCandidateIds,
       disambiguationQuantity: decideResult.disambiguationQuantity,
+      disambiguationSpanText: decideResult.disambiguationSpanText,
       carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
       heldModifierText: decideResult.heldModifierText,
       checkoutIntentThisTurn: proposal.intent === "checkout",
@@ -1301,7 +1344,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 
   // ── STEP 7: PERSIST ────────────────────────────────────────────────────────
-  await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply, deliveryFeeCents, driverTipCents);
+  const saved = await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply, deliveryFeeCents, driverTipCents);
 
-  return { reply, cart: workingCart, dialogueState: nextState };
+  return { reply, cart: workingCart, dialogueState: nextState, messageId: saved.id };
 }

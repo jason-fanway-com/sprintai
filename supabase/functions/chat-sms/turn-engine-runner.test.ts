@@ -154,7 +154,19 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
       insert(row: Record<string, unknown>) {
         if (table === "messages") state.messagesInserted.push(row);
         if (table === "error_log") state.errorLogInserted.push(row);
-        return Promise.resolve({ error: null });
+        const msgId = table === "messages" ? `msg-${state.messagesInserted.length}` : null;
+        // Support both:
+        //   `await supabase.from(t).insert(r)` (error_log / plain-await callers)
+        //   `await supabase.from(t).insert(r).select("id").single()` (messages, persistTurn)
+        const insertChain = {
+          select: (_cols: unknown) => ({
+            single: () => Promise.resolve({ data: { id: msgId }, error: null }),
+          }),
+          then(resolve: (v: { error: null }) => void, reject?: (e: unknown) => void) {
+            return Promise.resolve({ error: null }).then(resolve, reject);
+          },
+        };
+        return insertChain;
       },
       // Thenable, for a chain that awaits the builder directly rather than
       // terminating with .maybeSingle()/.range() — mirrors PostgREST's own
@@ -2047,7 +2059,7 @@ function pizzaProposeFn(itemSpan: string, quantity: number) {
   });
 }
 
-Deno.test('runTurnEngineTurn P0 (narrowing questions): "4 large pizzas" asks a kind-narrowing question, never an enumerated list', async () => {
+Deno.test('runTurnEngineTurn P0 (narrowing questions): "4 large pizzas" asks the exact fixed narrowing question, never an enumerated list', async () => {
   const { supabase } = makeFakeSupabase({ lexicon: PIZZA_LEXICON });
   const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: pizzaProposeFn("large pizzas", 4) };
   const input = baseInput({ message: "4 large pizzas", menu: PIZZA_MENU, cart: [] });
@@ -2056,7 +2068,10 @@ Deno.test('runTurnEngineTurn P0 (narrowing questions): "4 large pizzas" asks a k
 
   assertEquals(result.cart.length, 0, "still ambiguous — no line added yet");
   assertEquals(result.dialogueState.open?.kind, "disambiguation");
-  assert(result.reply.includes("What kind of pizza?"), `must ask a kind-narrowing question: ${JSON.stringify(result.reply)}`);
+  // PO amendment (2026-09-19): fixed copy — quantity AND size were already
+  // stated, so the reply acknowledges both and asks only for kind. Never a
+  // candidate list, never model-generated free text.
+  assertEquals(result.reply, "Sounds good, what kind?");
   assert(!result.reply.includes("Which one would you like"), `must never enumerate all 7 candidates: ${JSON.stringify(result.reply)}`);
   assert(result.reply.length <= 480, `narrowing question must stay SMS-safe, got ${result.reply.length} chars: ${JSON.stringify(result.reply)}`);
 });
@@ -2077,14 +2092,13 @@ Deno.test('runTurnEngineTurn P0 (narrowing questions): answering "pepperoni" to 
   const input = baseInput({ message: "pepperoni", menu: PIZZA_MENU, cart: [], dialogueState: priorState });
 
   const result = await runTurnEngineTurn(input, deps);
-
   assertEquals(result.cart.length, 1);
   assertEquals(result.cart[0].menu_item_id, "item-pizza-0", "must resolve to the Large Pepperoni Pizza");
   assertEquals(result.cart[0].quantity, 4, "the quantity originally stated ('4 large pizzas') must carry through, not silently reset to 1");
   assertEquals(result.dialogueState.open, null, "fully resolved — no follow-up question");
 });
 
-Deno.test('runTurnEngineTurn P0 (narrowing questions): a bare "pizza" (no stated size) also asks "What kind of pizza?" first', async () => {
+Deno.test('runTurnEngineTurn P0 (narrowing questions): a bare "pizza" (nothing else stated) asks "Sure — what kind?"', async () => {
   const { supabase } = makeFakeSupabase({ lexicon: PIZZA_LEXICON });
   const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: pizzaProposeFn("pizza", 1) };
   const input = baseInput({ message: "pizza", menu: PIZZA_MENU, cart: [] });
@@ -2092,10 +2106,13 @@ Deno.test('runTurnEngineTurn P0 (narrowing questions): a bare "pizza" (no stated
   const result = await runTurnEngineTurn(input, deps);
 
   assertEquals(result.dialogueState.open?.kind, "disambiguation");
-  assert(result.reply.includes("What kind of pizza?"), `must ask kind first, even fully ambiguous: ${JSON.stringify(result.reply)}`);
+  // PO amendment (2026-09-19): fixed copy — nothing else was stated, so the
+  // acknowledgement is the plain "Sure", not "Sounds good" (which implies
+  // quantity+size were already given).
+  assertEquals(result.reply, "Sure — what kind?");
 });
 
-Deno.test('runTurnEngineTurn P0 (narrowing questions): "what are the options" while the kind question is open lists every candidate', async () => {
+Deno.test('runTurnEngineTurn P0 (narrowing questions): "what are the options" while the kind question is open lists the kind NAMES only, no prices', async () => {
   const { supabase } = makeFakeSupabase({ lexicon: PIZZA_LEXICON });
   const deps: RunTurnDeps = {
     supabase,
@@ -2104,17 +2121,215 @@ Deno.test('runTurnEngineTurn P0 (narrowing questions): "what are the options" wh
   };
   const priorState: DialogueState = {
     phase: "ordering",
-    open: { kind: "disambiguation", candidates: PIZZA_MENU.map(m => m.id), quantity: 4 },
+    open: { kind: "disambiguation", candidates: PIZZA_MENU.map(m => m.id), quantity: 4, spanText: "large pizzas" },
     upsell_offered: false,
     asked_message_id: null,
   };
   const input = baseInput({ message: "what are the options", menu: PIZZA_MENU, cart: [], dialogueState: priorState });
 
   const result = await runTurnEngineTurn(input, deps);
-
   assertEquals(result.dialogueState.open?.kind, "disambiguation", "still open — the customer asked a question, not an answer");
   assertEquals(result.cart.length, 0);
   for (const kind of PIZZA_KINDS) {
-    assert(result.reply.includes(kind), `full options list must name every candidate, missing "${kind}": ${JSON.stringify(result.reply)}`);
+    assert(result.reply.includes(kind), `options list must name every kind, missing "${kind}": ${JSON.stringify(result.reply)}`);
   }
+  // PO amendment (2026-09-19): "lists the kinds only (names, no prices, no
+  // descriptions)" — never the priced numbered list this dispatch's own
+  // enumeration fallback used to produce.
+  assert(!result.reply.includes("$"), `options list must never show prices: ${JSON.stringify(result.reply)}`);
+});
+
+// ── PO amendment (2026-09-19, addendum to p0-narrowing-and-sms-0919 Commit 1):
+// "2 pizzas, one large" states a size for only ONE of the two units — the
+// kind question still comes first ("Got it — what kind?", not "Sounds good",
+// since size is only PARTIALLY known), and answering it resolves the sized
+// half outright while reopening a smaller question for the other unit's
+// size ("And the size on the other one?"). Needs a menu where kind AND size
+// both vary so the split is genuine (the PIZZA_MENU fixture above has only
+// one size per kind, which can't exercise this).
+const MIXED_PIZZA_KINDS = ["Pepperoni", "Cheese"];
+const MIXED_PIZZA_SIZES = ["Small", "Medium", "Large"];
+const MIXED_PIZZA_MENU: TurnEngineMenuItem[] = MIXED_PIZZA_KINDS.flatMap((kind, ki) =>
+  MIXED_PIZZA_SIZES.map((size, si) =>
+    noSlotMenuItem(`item-mixed-${ki}-${si}`, `${kind} Pizza - ${size} 14''`, "Pizza", 1200 + ki * 100 + si * 300)
+  )
+);
+const MIXED_PIZZA_LEXICON = MIXED_PIZZA_MENU.flatMap(m => [{ term: "pizza", target_id: m.id }, { term: "pizzas", target_id: m.id }]);
+
+Deno.test('runTurnEngineTurn P0 (narrowing questions, partial size): "2 pizzas, one large" asks "Got it — what kind?" (not "Sounds good" — size is only partially known)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: MIXED_PIZZA_LEXICON });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: pizzaProposeFn("2 pizzas, one large", 2) };
+  const input = baseInput({ message: "2 pizzas, one large", menu: MIXED_PIZZA_MENU, cart: [] });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "still ambiguous — no line added yet");
+  assertEquals(result.dialogueState.open?.kind, "disambiguation");
+  assertEquals(result.reply, "Got it — what kind?");
+});
+
+Deno.test('runTurnEngineTurn P0 (narrowing questions, partial size): answering "pepperoni" adds the Large one outright and asks for the other one\'s size', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: MIXED_PIZZA_LEXICON });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: pizzaProposeFn("2 pizzas, one large", 2) };
+  const turn1 = await runTurnEngineTurn(baseInput({ message: "2 pizzas, one large", menu: MIXED_PIZZA_MENU, cart: [] }), deps);
+  assertEquals(turn1.reply, "Got it — what kind?");
+
+  const rejectDeps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const turn2 = await runTurnEngineTurn(
+    baseInput({ message: "pepperoni", menu: MIXED_PIZZA_MENU, cart: turn1.cart, dialogueState: turn1.dialogueState }),
+    rejectDeps,
+  );
+
+  assertEquals(turn2.cart.length, 1, "the Large Pepperoni resolves and is added outright");
+  assertEquals(turn2.cart[0].menu_item_id, "item-mixed-0-2", "must be the Large Pepperoni Pizza (kind index 0, size index 2)");
+  assertEquals(turn2.cart[0].quantity, 1, "only the ONE unit that was stated as large");
+  assertEquals(turn2.dialogueState.open?.kind, "disambiguation", "the other, still-unsized unit reopens a question");
+  if (turn2.dialogueState.open?.kind === "disambiguation") {
+    assertEquals(turn2.dialogueState.open.quantity, 1, "only 1 unit remains unsized (2 total - 1 already sized)");
+    assertEquals(turn2.dialogueState.open.otherOneFollowUp, true);
+  }
+  // PO's exact required copy: "And the size on the other one?"
+  assert(turn2.reply.includes("And the size on the other one?"), `verbatim reply: ${JSON.stringify(turn2.reply)}`);
+
+  const turn3 = await runTurnEngineTurn(
+    baseInput({ message: "medium", menu: MIXED_PIZZA_MENU, cart: turn2.cart, dialogueState: turn2.dialogueState }),
+    rejectDeps,
+  );
+  assertEquals(turn3.cart.length, 2, "both units are now in the cart, as two separate lines");
+  const mediumPepperoniLine = turn3.cart.find(l => l.menu_item_id === "item-mixed-0-1");
+  assert(mediumPepperoniLine, `expected the Medium Pepperoni line in the cart: ${JSON.stringify(turn3.cart)}`);
+  assertEquals(mediumPepperoniLine?.quantity, 1);
+  assertEquals(turn3.dialogueState.open, null, "fully resolved — no further question");
+});
+
+// ── PO addendum (2026-09-19, SECOND addendum to p0-narrowing-and-sms-0919
+// Commit 1): the real propose_success row logged live for "4 large pizzas"
+// is item_span="large pizzas", qty=4, choices=[] — and the 62-candidate
+// question that reached Jason's phone still included Small and Medium
+// pizzas, proving the stated size never narrowed the candidate set before
+// the facet question was built. The PIZZA_MENU fixture above (line 2031)
+// cannot catch this regression: every one of its 7 items is already
+// "Large", so a size filter that silently no-ops would still pass those
+// tests. MIXED_PIZZA_MENU is the only fixture in this file with genuine
+// small/medium/large variation across more than one kind — reused here
+// (not a new menu) against the *global* "4 large pizzas" shape, the one
+// the live bug actually hit (MIXED_PIZZA_MENU's other tests above only
+// exercise the partial-size "2 pizzas, one large" shape).
+Deno.test('runTurnEngineTurn P0 (narrowing questions, global size, real span): "4 large pizzas" against a menu with genuine size variation narrows to Large-only before asking kind', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: MIXED_PIZZA_LEXICON });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: pizzaProposeFn("large pizzas", 4) };
+  const input = baseInput({ message: "4 large pizzas", menu: MIXED_PIZZA_MENU, cart: [] });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "still ambiguous — no line added yet");
+  assertEquals(result.dialogueState.open?.kind, "disambiguation");
+  // Size AND quantity were both already stated -> the fixed "both known" copy.
+  assertEquals(result.reply, "Sounds good, what kind?");
+  assert(!/small|medium/i.test(result.reply), `size was already stated as large — must never surface Small/Medium: ${JSON.stringify(result.reply)}`);
+
+  const rejectDeps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const turn2 = await runTurnEngineTurn(
+    baseInput({ message: "pepperoni", menu: MIXED_PIZZA_MENU, cart: result.cart, dialogueState: result.dialogueState }),
+    rejectDeps,
+  );
+
+  assertEquals(turn2.cart.length, 1, "the size was already resolved — one line, not a fresh size question");
+  assertEquals(turn2.cart[0].menu_item_id, "item-mixed-0-2", "must resolve to the Large Pepperoni Pizza, never Small/Medium");
+  assertEquals(turn2.cart[0].quantity, 4, "the originally-stated quantity (4) must carry through whole, not split");
+  assertEquals(turn2.dialogueState.open, null, "fully resolved — size must never be re-asked, it was already stated");
+});
+
+// ── PO addendum (2026-09-19, THIRD addendum to p0-narrowing-and-sms-0919
+// Commit 1): the previous fixture's root-cause note (line 2214 above) already
+// explains why a 1-size-per-kind menu can hide a broken size filter. The
+// SAME shape gap exists on the ANSWER side: MIXED_PIZZA_MENU has only 2
+// kinds, so a bare kind word ("cheese") narrowing a same-kind, multi-size
+// group down to exactly 3 candidates — then asking "What size?" scoped to
+// just those 3 — was never exercised end to end through runTurnEngineTurn.
+// This is the exact shape live Vito's has (7 kinds, each in Small/Medium/
+// Large -> 21 candidates for a bare "pizza"; the real menu has 62 because it
+// carries more kinds still), confirmed against the real menu/lexicon via
+// scripts/tmp-probe-narrow2-20260919.ts.
+const VITO_SHAPED_KINDS = ["Cheese", "Pepperoni", "Margherita", "Buffalo Chicken", "Hawaiian", "Veggie", "Meat Lover"];
+const VITO_SHAPED_SIZES = ["Small", "Medium", "Large"];
+const VITO_SHAPED_MENU: TurnEngineMenuItem[] = VITO_SHAPED_KINDS.flatMap((kind, ki) =>
+  VITO_SHAPED_SIZES.map((size, si) =>
+    noSlotMenuItem(`item-vito-${ki}-${si}`, `${kind} - ${size} (16")`, "Pizza", 1000 + ki * 50 + si * 300)
+  )
+);
+const VITO_SHAPED_LEXICON = VITO_SHAPED_MENU.flatMap(m => [{ term: "pizza", target_id: m.id }, { term: "pizzas", target_id: m.id }]);
+
+Deno.test('runTurnEngineTurn P0 (narrowing questions, kind narrows a same-kind multi-size group): "cheese" against 21 real-shaped candidates (no size stated) narrows to the 3 Cheese sizes and asks "What size?"', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: VITO_SHAPED_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const priorState: DialogueState = {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates: VITO_SHAPED_MENU.map(m => m.id), quantity: 1, spanText: "pizza" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+  const input = baseInput({ message: "cheese", menu: VITO_SHAPED_MENU, cart: [], dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "still narrowed, not resolved — 3 Cheese sizes remain, size was never stated");
+  assertEquals(result.dialogueState.open?.kind, "disambiguation");
+  if (result.dialogueState.open?.kind === "disambiguation") {
+    assertEquals(
+      result.dialogueState.open.candidates.sort(),
+      ["item-vito-0-0", "item-vito-0-1", "item-vito-0-2"].sort(),
+      "narrowed set must be exactly the 3 Cheese sizes, never the other 6 kinds",
+    );
+  }
+  assertEquals(result.reply, "What size?");
+
+  const turn2 = await runTurnEngineTurn(
+    baseInput({ message: "large", menu: VITO_SHAPED_MENU, cart: result.cart, dialogueState: result.dialogueState }),
+    deps,
+  );
+  assertEquals(turn2.cart.length, 1);
+  assertEquals(turn2.cart[0].menu_item_id, "item-vito-0-2", "must resolve to the Large Cheese, never Small/Medium or another kind");
+  assertEquals(turn2.dialogueState.open, null, "fully resolved");
+});
+
+Deno.test('runTurnEngineTurn P0 (data-fact guard): "pepperoni" while a pizza disambiguation is open never dead-ends — it narrows to the 3 Pepperoni PIZZA sizes (the menu\'s Pepperoni Stromboli, a different category, was never a candidate to begin with)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: VITO_SHAPED_LEXICON });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const priorState: DialogueState = {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates: VITO_SHAPED_MENU.map(m => m.id), quantity: 1, spanText: "pizza" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+  const input = baseInput({ message: "pepperoni", menu: VITO_SHAPED_MENU, cart: [], dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0);
+  assertEquals(result.dialogueState.open?.kind, "disambiguation");
+  if (result.dialogueState.open?.kind === "disambiguation") {
+    assertEquals(
+      result.dialogueState.open.candidates.sort(),
+      ["item-vito-1-0", "item-vito-1-1", "item-vito-1-2"].sort(),
+      "narrowed set must be exactly the 3 Pepperoni PIZZA sizes",
+    );
+  }
+  assertEquals(result.reply, "What size?");
 });

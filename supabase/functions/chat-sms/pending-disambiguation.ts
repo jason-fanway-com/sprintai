@@ -650,7 +650,7 @@ export function renderDisambiguationReask(
 // word folded into the name itself) — this handles both.
 const NARROWING_SIZE_WORD_RE = /\b(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular)\b/i;
 
-function extractSizeAndKind(name: string): { kind: string; size: string | null } {
+export function extractSizeAndKind(name: string): { kind: string; size: string | null } {
   const suffixMatch = name.match(/^(.*?)\s*-\s*([^-]+)$/);
   const base = suffixMatch ? suffixMatch[1].trim() : name;
   const sizeSource = suffixMatch ? suffixMatch[2].trim() : name;
@@ -692,37 +692,156 @@ export interface NarrowingQuestion {
   question: string;
 }
 
-const NARROWING_EXAMPLE_CAP = 5;
-
 /**
- * The facet question that splits an ambiguous candidate set, per Jason's
- * direction (docs/specs/2026-09-15-narrowing-questions.md): kind first
- * ("What kind of pizza?"), then size ("What size?"). Returns null when
- * neither facet distinguishes the set (every candidate shares the same
- * derived kind AND size) — the caller falls back to the full list rather
- * than ask a question that can't narrow anything.
+ * The facet that splits an ambiguous candidate set, per Jason's direction
+ * (docs/specs/2026-09-15-narrowing-questions.md): kind first, then size.
+ * PO amendment (2026-09-19): the question itself is fixed copy chosen by the
+ * facet alone — "What kind?"/"What size?" — never a candidate list or
+ * examples; turn-engine.ts's render() prepends the acknowledgement phrase
+ * and owns the one "And the size on the other one?" follow-up variant.
+ * Returns null when neither facet distinguishes the set (every candidate
+ * shares the same derived kind AND size) — the caller falls back to the
+ * full list rather than ask a question that can't narrow anything.
  */
 export function pickNarrowingFacet(candidates: PendingCandidate[]): NarrowingQuestion | null {
   const category = candidates[0]?.category ?? null;
-  const headNoun = categoryDisplayWord(category) || "item";
   const parsed = candidates.map(c => {
     const { kind, size } = extractSizeAndKind(candidateDisplayName(c));
     return { kind: stripCategoryNoun(kind, category), size };
   });
 
   const kindValues = distinctLowerValues(parsed.map(p => p.kind));
-  if (kindValues.length > 1) {
-    const examples = kindValues.slice(0, NARROWING_EXAMPLE_CAP).join(", ");
-    return { facet: "kind", question: `What kind of ${headNoun}? (${examples})` };
-  }
+  if (kindValues.length > 1) return { facet: "kind", question: "What kind?" };
 
   const sizeValues = distinctLowerValues(parsed.map(p => p.size));
-  if (sizeValues.length > 1) {
-    const examples = sizeValues.slice(0, NARROWING_EXAMPLE_CAP).join(", ");
-    return { facet: "size", question: `What size? (${examples})` };
-  }
+  if (sizeValues.length > 1) return { facet: "size", question: "What size?" };
 
   return null;
+}
+
+/** A candidate's own derived size ("Large"), or null if its name carries none. */
+export function candidateSizeValue(c: PendingCandidate): string | null {
+  return extractSizeAndKind(candidateDisplayName(c)).size;
+}
+
+// PO amendment (2026-09-19): candidates.length > 5 (or a full priced list
+// that would exceed the SMS-safe ceiling) is the exact threshold render()'s
+// disambiguation case already uses to choose narrowing over enumeration —
+// factored out here so answer()'s resolution side and render()'s question
+// side can never disagree about which mode a given candidate set is in.
+export function isNarrowingCandidateSet(candidates: PendingCandidate[]): boolean {
+  return candidates.length > 5 || renderAmbiguousItemQuestion(candidates).length > 480;
+}
+
+/**
+ * Which of `candidates` does `message` name, for the given facet? For
+ * "size" this is a direct size-word match against the message. For "kind"
+ * it's a stem-overlap score against each distinct kind value (never a
+ * single candidate — a kind can still span more than one size, which is
+ * exactly the case that leaves the caller with another facet to ask).
+ * Returns null on no match or a genuine tie — same "never guess" discipline
+ * as resolvePendingDisambiguation's own tiers.
+ */
+export function narrowCandidatesByFacetAnswer(
+  candidates: PendingCandidate[],
+  facet: "kind" | "size",
+  message: string,
+): PendingCandidate[] | null {
+  if (facet === "size") {
+    const m = message.match(NARROWING_SIZE_WORD_RE);
+    if (!m) return null;
+    const wanted = m[1].toLowerCase();
+    const hits = candidates.filter(c => (candidateSizeValue(c) ?? "").toLowerCase() === wanted);
+    return hits.length > 0 ? hits : null;
+  }
+
+  const category = candidates[0]?.category ?? null;
+  const msgStems = significantStems(message);
+  if (msgStems.size === 0) return null;
+
+  const groups = new Map<string, PendingCandidate[]>();
+  for (const c of candidates) {
+    const { kind } = extractSizeAndKind(candidateDisplayName(c));
+    const key = stripCategoryNoun(kind, category).toLowerCase();
+    const group = groups.get(key);
+    if (group) group.push(c);
+    else groups.set(key, [c]);
+  }
+
+  let bestKey: string | null = null;
+  let bestScore = 0;
+  let tie = false;
+  for (const key of groups.keys()) {
+    const kindStems = significantStems(key);
+    let score = 0;
+    for (const s of msgStems) if (kindStems.has(s)) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+      tie = false;
+    } else if (score > 0 && score === bestScore && key !== bestKey) {
+      tie = true;
+    }
+  }
+  if (bestScore === 0 || tie || bestKey === null) return null;
+  return groups.get(bestKey) ?? null;
+}
+
+/**
+ * The distinct values a facet takes across `candidates`, in first-seen
+ * order and ORIGINAL casing (unlike the internal grouping above, which
+ * lowercases only for comparison) — for rendering "what are the options"
+ * lists ("Pepperoni, Cheese, Sausage…"), never for matching.
+ */
+export function facetDisplayValues(candidates: PendingCandidate[], facet: "kind" | "size"): string[] {
+  const category = candidates[0]?.category ?? null;
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const c of candidates) {
+    const { kind, size } = extractSizeAndKind(candidateDisplayName(c));
+    const raw = facet === "kind" ? stripCategoryNoun(kind, category) : size;
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    values.push(raw);
+  }
+  return values;
+}
+
+// PO amendment (2026-09-19, exact repro "2 pizzas, one large"): a stated
+// size can apply to only PART of the stated quantity — the customer named a
+// sub-count strictly less than the total, tagged with its own size, in a
+// clause after a comma. Distinct from a size word that applies to the WHOLE
+// span ("4 large pizzas" — see extractGlobalSizeWord below): that shape has
+// no comma-separated sub-quantity naming fewer units than the total.
+const PARTIAL_SIZE_QTY_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+const PARTIAL_SIZE_CLAUSE_RE =
+  /,\s*(\d+|one|two|three|four|five)\s+(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular)\b/i;
+
+export function extractPartialSizeClause(
+  spanText: string,
+  totalQuantity: number,
+): { sizeWord: string; sizeQuantity: number } | null {
+  const m = spanText.match(PARTIAL_SIZE_CLAUSE_RE);
+  if (!m) return null;
+  const rawQty = m[1].toLowerCase();
+  const qty = /^\d+$/.test(rawQty) ? parseInt(rawQty, 10) : PARTIAL_SIZE_QTY_WORDS[rawQty];
+  if (!qty || qty >= totalQuantity) return null;
+  return { sizeWord: m[2], sizeQuantity: qty };
+}
+
+/** A size word naming the WHOLE stated quantity ("4 large pizzas" -> "large"). */
+export function extractGlobalSizeWord(spanText: string): string | null {
+  const m = spanText.match(NARROWING_SIZE_WORD_RE);
+  return m ? m[1] : null;
+}
+
+/** Narrows to candidates whose own derived size matches `sizeWord`; falls back to the unfiltered set if none do (defensive — never produces an empty question). */
+export function filterCandidatesBySizeWord(candidates: PendingCandidate[], sizeWord: string): PendingCandidate[] {
+  const wanted = sizeWord.toLowerCase();
+  const hits = candidates.filter(c => (candidateSizeValue(c) ?? "").toLowerCase() === wanted);
+  return hits.length > 0 ? hits : candidates;
 }
 
 // Explicit-request detection for spec point 4 ("Enumeration only happens if

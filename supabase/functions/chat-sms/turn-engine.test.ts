@@ -1235,7 +1235,17 @@ function makeMinimalFakeSupabase() {
       },
       insert(row: Record<string, unknown>) {
         if (table === "messages") state.messagesInserted.push(row);
-        return Promise.resolve({ error: null });
+        const msgId = table === "messages" ? `msg-${state.messagesInserted.length}` : null;
+        // Support both `await ...insert(r)` (plain-await callers) and
+        // `await ...insert(r).select("id").single()` (persistTurn/saveMessage).
+        return {
+          select: (_cols: unknown) => ({
+            single: () => Promise.resolve({ data: { id: msgId }, error: null }),
+          }),
+          then(resolve: (v: { error: null }) => void, reject?: (e: unknown) => void) {
+            return Promise.resolve({ error: null }).then(resolve, reject);
+          },
+        };
       },
       then(resolve: (v: { data: unknown; error: null; count?: number }) => void, reject?: (e: unknown) => void) {
         return Promise.resolve({ data: [], error: null, count: 0 }).then(resolve, reject);

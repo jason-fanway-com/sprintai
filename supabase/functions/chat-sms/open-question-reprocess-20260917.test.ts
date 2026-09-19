@@ -43,7 +43,18 @@ function makeFakeSupabase(lexicon: Array<{ term: string; target_id: string }>) {
         if (table === "order_carts") orderCartsUpdates.push(row);
         return { eq: () => Promise.resolve({ error: null }) };
       },
-      insert() { return Promise.resolve({ error: null }); },
+      insert() {
+        // Support both `await ...insert(r)` (plain-await callers) and
+        // `await ...insert(r).select("id").single()` (persistTurn/saveMessage).
+        return {
+          select: (_cols: unknown) => ({
+            single: () => Promise.resolve({ data: { id: "msg-1" }, error: null }),
+          }),
+          then(resolve: (v: { error: null }) => void, reject?: (e: unknown) => void) {
+            return Promise.resolve({ error: null }).then(resolve, reject);
+          },
+        };
+      },
       then(resolve: (v: { data: unknown; error: null; count?: number }) => void) {
         return Promise.resolve({ data: [], error: null, count: 0 }).then(resolve);
       },
