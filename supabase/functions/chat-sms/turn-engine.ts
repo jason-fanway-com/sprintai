@@ -1893,7 +1893,7 @@ export function answer(
       if (heldText) {
         for (const step of menuItem.ask_plan.steps) {
           if (step.kind !== "modifier") continue;
-          const recovered = recoverAssertedChoiceFromText(heldText, step.choices);
+          const recovered = recoverAssertedChoiceFromText(heldText, step.choices, menuItem.name);
           if (recovered) heldChoices = [...heldChoices, { group_id: step.group_id, choice_id: recovered }];
         }
       }
@@ -2766,26 +2766,51 @@ function placementGroupMentioned(group: PlacementGroup, textTokens: Set<string>)
   return true;
 }
 
+// PO dispatch 2026-09-19 (Chicken Bacon Ranch regression, a7266e41 fix-up):
+// a candidate's own words are NEVER a modifier request when every one of
+// them is already part of the resolved item's own name — those words are
+// naming the item, not asking for an addition. "2 Medium Chicken Bacon
+// Ranch pizzas" resolved to the item named "Chicken Bacon Ranch - Medium
+// (14")"; scopedModifierText's own name-strip (phrase-split.ts) only
+// matches that FULL literal name verbatim in the customer's text, which
+// never happens here (the customer never typed the size/quote-formatted
+// internal name) -- so "Bacon" survived into the scoped text and matched
+// the standalone "Bacon (Whole pizza)" topping, silently adding $4.50 per
+// pizza with no question asked. This is a second, independent guard at the
+// token level: it fires regardless of whether the literal-substring strip
+// above succeeded, so a topping whose name is wholly contained in the
+// item's own name is excluded even when the two never matched as a
+// substring. A topping with any word NOT in the item's name (e.g.
+// "Chicken Steak" on this same pizza -- "steak" isn't part of the name)
+// is untouched.
+function isSubsetOfItemName(candidateTokens: Set<string>, itemNameTokens: Set<string>): boolean {
+  if (candidateTokens.size === 0 || itemNameTokens.size === 0) return false;
+  for (const t of candidateTokens) if (!itemNameTokens.has(t)) return false;
+  return true;
+}
+
 // Every core-name group the text mentions, resolved to the ONE choice id
 // that group's own placement signal (the presence/absence of the literal
 // word "half" anywhere in the text) selects — never both, never a guess
 // when the selected variant doesn't exist on this item.
-function recoverPlacementHits(groups: PlacementGroup[], textTokens: Set<string>): string[] {
+function recoverPlacementHits(groups: PlacementGroup[], textTokens: Set<string>, itemNameTokens: Set<string>): string[] {
   const hasHalfWord = textTokens.has("half");
   const hits: string[] = [];
   for (const g of groups) {
     if (!placementGroupMentioned(g, textTokens)) continue;
+    if (isSubsetOfItemName(modifierFloorTokens(g.core), itemNameTokens)) continue;
     const chosen = hasHalfWord ? g.half : g.whole;
     if (chosen) hits.push(chosen.id);
   }
   return hits;
 }
 
-function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, textTokens: Set<string>): string[] {
+function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, textTokens: Set<string>, itemNameTokens: Set<string>): string[] {
   const hits: string[] = [];
   for (const c of plainChoices) {
     const choiceTokens = modifierFloorTokens(c.display);
     if (choiceTokens.size === 0) continue;
+    if (isSubsetOfItemName(choiceTokens, itemNameTokens)) continue;
     let ok = true;
     for (const t of choiceTokens) if (!textTokens.has(t)) { ok = false; break; }
     if (ok) hits.push(c.id);
@@ -2796,13 +2821,15 @@ function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, 
 export function recoverAssertedChoiceFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
+  itemName?: string,
 ): string | null {
   const text = (scopedText ?? "").trim();
   if (!text || choices.length === 0) return null;
   if (MODIFIER_NEGATION_RE.test(text)) return null;
   const textTokens = modifierFloorTokens(text);
+  const itemNameTokens = modifierFloorTokens(itemName ?? "");
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
-  const hits = [...recoverPlacementHits(placementGroups, textTokens), ...recoverPlainHits(plainChoices, textTokens)];
+  const hits = [...recoverPlacementHits(placementGroups, textTokens, itemNameTokens), ...recoverPlainHits(plainChoices, textTokens, itemNameTokens)];
   if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
   return hits[0];
 }
@@ -2824,14 +2851,16 @@ export function recoverAssertedChoiceFromText(
 export function recoverAssertedChoicesFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
+  itemName?: string,
 ): string[] {
   const text = (scopedText ?? "").trim();
   if (!text || choices.length === 0) return [];
   if (MODIFIER_NEGATION_RE.test(text)) return [];
   const textTokens = modifierFloorTokens(text);
+  const itemNameTokens = modifierFloorTokens(itemName ?? "");
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
-  const placementHits = recoverPlacementHits(placementGroups, textTokens);
-  const plainHits = recoverPlainHits(plainChoices, textTokens);
+  const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens);
+  const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens);
   return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
 }
 
@@ -3377,7 +3406,7 @@ export function decide(
         // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
         // placed toppings in one clause ("half pepperoni half sausage") both
         // land, instead of the singular floor's own tie-guard dropping both.
-        for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices)) {
+        for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
           effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
         }
       }
