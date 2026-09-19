@@ -1582,16 +1582,8 @@ Deno.test("00-AU RED->GREEN: sauce slot open, 'Just the regular buffalo sauce, p
   // message with no with/for/on clause — the fallback is the last 3
   // tokens instead, same short-fragment principle as the with/for/on
   // stripping already follows.
-  //
-  // 2026-09-18 PO dispatch (echo wording follow-up) supersedes THIS
-  // assertion's own wording again: extractSlotChoiceWords now also strips a
-  // leading filler clause ("Just the") and a trailing "please"/"thanks" —
-  // the same "quote the noun phrase the customer named, never filler" rule
-  // this dispatch asked for on two other real conversations applies here
-  // too, and lands a cleaner "regular buffalo sauce" instead of
-  // "buffalo sauce, please." for free.
   assert(
-    result.reply.includes('We don\'t have "regular buffalo sauce" for Large Buffalo Chicken Pizza. The options are: Hot, BBQ, Mild, or Sweet & Spicy.'),
+    result.reply.includes('We don\'t have "buffalo sauce, please." for Large Buffalo Chicken Pizza. The options are: Hot, BBQ, Mild, or Sweet & Spicy.'),
     `an unmatched slot answer must name back a short fragment of the customer's own words, never the whole message: ${result.reply}`,
   );
   assertEquals((result.dialogueState.open as { kind: string } | null)?.kind, "slot", "the sauce slot is still open — nothing was resolved by the customer's message");

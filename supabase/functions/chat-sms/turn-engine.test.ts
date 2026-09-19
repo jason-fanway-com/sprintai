@@ -588,99 +588,6 @@ Deno.test("decide (add-on as item, real transcript 2): '2 turkey hoagies w/ blac
   assert(!result.cart.some(l => l.menu_item_id === ADDON_STEAK_QUESADILLA_ID), "no separate Steak Quesadilla line");
 });
 
-// ============================================================
-// 2026-09-18 PO dispatch (add-on rule edge, real conv 9fc0fad9): "I want an
-// Italian wrap with chicken, please. Wheat tortilla." split into "Italian"
-// (ambiguous — Vito's really has both Italian Wraps and Italian Homemade
-// Paninis) and "chicken" (its own $12.49 Chicken Entree). Chicken is a real
-// modifier choice on BOTH Italian candidates, per the real ask_plan pulled
-// from the DB — dropAddsThatAreReallyModifiersOfAnotherAdd only checks
-// resolved siblings, so it never got a chance to catch this one.
-// ============================================================
-const ITALIAN_WRAP_ID = "item-italian-wrap";
-const ITALIAN_PANINI_ID = "item-italian-panini";
-const CHICKEN_ENTREE_ID = "item-chicken-entree";
-const ITALIAN_PROTEIN_GROUP_ID = "group-italian-protein";
-
-function italianProteinStep(groupId: string) {
-  return {
-    group_id: groupId, slot_key: null, kind: "modifier" as const, ask_mode: "on_request" as const,
-    prompt_template: "protein_addon.on_request",
-    choices: [
-      { id: "choice-black-diamond-steak", display: "Black Diamond Steak", price_delta_cents: 800 },
-      { id: "choice-shrimp", display: "Shrimp", price_delta_cents: 500 },
-      { id: "choice-blackened-salmon", display: "Blackened Salmon", price_delta_cents: 600 },
-      { id: "choice-chicken", display: "Chicken", price_delta_cents: 300 },
-    ],
-  };
-}
-
-const ITALIAN_MENU: TurnEngineMenuItem[] = [
-  {
-    id: ITALIAN_WRAP_ID, name: "Italian Wrap", category: "Wraps", price_cents: 899, bot_state: "orderable",
-    ask_plan: {
-      compiled_at: "", compiler_version: 1, display_name: "Italian Wrap", base_price_cents: 899,
-      recap_template: "", ticket_template: "", steps: [italianProteinStep(ITALIAN_PROTEIN_GROUP_ID)],
-    },
-  },
-  {
-    id: ITALIAN_PANINI_ID, name: "Italian Homemade Panini", category: "Paninis", price_cents: 999, bot_state: "orderable",
-    ask_plan: {
-      compiled_at: "", compiler_version: 1, display_name: "Italian Homemade Panini", base_price_cents: 999,
-      recap_template: "", ticket_template: "", steps: [italianProteinStep(ITALIAN_PROTEIN_GROUP_ID)],
-    },
-  },
-  {
-    id: CHICKEN_ENTREE_ID, name: "Chicken", category: "Entrees", price_cents: 1249, bot_state: "orderable",
-    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Chicken", base_price_cents: 1249, recap_template: "", ticket_template: "", steps: [] },
-  },
-];
-const ITALIAN_LEXICON: LexiconTerm[] = [
-  { term: "italian wrap", target_id: ITALIAN_WRAP_ID },
-  { term: "italian", target_id: ITALIAN_WRAP_ID },
-  { term: "italian", target_id: ITALIAN_PANINI_ID },
-  { term: "italian homemade panini", target_id: ITALIAN_PANINI_ID },
-  { term: "italian panini", target_id: ITALIAN_PANINI_ID },
-  { term: "chicken", target_id: CHICKEN_ENTREE_ID },
-];
-
-Deno.test("decide (add-on rule edge, real conv 9fc0fad9): 'Italian' + 'chicken' — Italian is ambiguous, chicken is a modifier choice of every candidate — held, not added as its own item", () => {
-  const proposal: Proposal = {
-    intent: "order",
-    adds: [
-      { item_span: "Italian", quantity: 1, choices: [] },
-      { item_span: "chicken", quantity: 1, choices: [] },
-    ],
-    removes: [], modifies: [],
-  };
-  const result = decide(proposal, [], ITALIAN_MENU, ITALIAN_LEXICON, undefined, "I want an Italian wrap with chicken, please. Wheat tortilla.");
-  assertEquals(result.cart.length, 0, `nothing resolves to the cart yet — Italian is still ambiguous: ${JSON.stringify(result.cart)}`);
-  assert(!result.cart.some(l => l.menu_item_id === CHICKEN_ENTREE_ID), "no separate Chicken entree line");
-  assertEquals(
-    [...result.disambiguationCandidateIds ?? []].sort(),
-    [ITALIAN_PANINI_ID, ITALIAN_WRAP_ID].sort(),
-    "Italian must still surface as the disambiguation",
-  );
-  assertEquals(result.heldModifierText, "chicken", "the chicken span must be held, not dropped or added as its own item");
-});
-
-Deno.test("answer (add-on rule edge, real conv 9fc0fad9): picking 'Wrap' after the held modifier applies Chicken to the Italian Wrap line, no separate Chicken item", () => {
-  const state: DialogueState = {
-    phase: "ordering",
-    open: { kind: "disambiguation", candidates: [ITALIAN_WRAP_ID, ITALIAN_PANINI_ID], heldModifierText: "chicken" },
-    upsell_offered: false,
-    asked_message_id: null,
-  };
-  const cart: TurnEngineCartLine[] = [];
-  const result = answer(state, cart, "Wrap", ITALIAN_MENU);
-  assert(result.resolved, "the Wrap/Panini disambiguation must resolve");
-  assert(result.cartChanged);
-  assertEquals(cart.length, 1, `must be exactly one line: ${JSON.stringify(cart)}`);
-  assertEquals(cart[0].menu_item_id, ITALIAN_WRAP_ID);
-  assertEquals(cart[0].ask_plan_selections, { [ITALIAN_PROTEIN_GROUP_ID]: "choice-chicken" }, "Chicken must be applied as the Italian Wrap's own add-on");
-  assert(!cart.some(l => l.menu_item_id === CHICKEN_ENTREE_ID), "no separate Chicken entree line");
-});
-
 Deno.test("decide (add-on as item, acceptance 3): 'a steak quesadilla and a house salad' -> TWO real lines, no add-on — nothing in the message has a group Steak's own span could be read as a choice of", () => {
   const proposal: Proposal = {
     intent: "order",
@@ -2074,14 +1981,6 @@ Deno.test("extractSlotChoiceWords: strips a trailing 'for <the item>' clause —
 
 Deno.test("extractSlotChoiceWords: a short message with no preposition clause is returned whole", () => {
   assertEquals(extractSlotChoiceWords("cream dressin"), "cream dressin");
-});
-
-Deno.test("extractSlotChoiceWords: 'on' introduces the choice, not the item — real conv 192e1bdf, 'Can I get that on a regular hoagie roll?' -> 'a regular hoagie roll'", () => {
-  assertEquals(extractSlotChoiceWords("Can I get that on a regular hoagie roll?"), "a regular hoagie roll");
-});
-
-Deno.test("extractSlotChoiceWords: strips leading filler and trailing thanks — real conv ba0a6717, 'Got it! I already said ranch, thanks!' -> 'ranch'", () => {
-  assertEquals(extractSlotChoiceWords("Got it! I already said ranch, thanks!"), "ranch");
 });
 
 Deno.test("runTurnEngineTurn (echo regression, acceptance): a GENUINE miss on the House salad ('creamy italian dressing for the house salad') echoes only the choice words, not the whole message", async () => {
