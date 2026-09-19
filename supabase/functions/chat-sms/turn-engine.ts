@@ -1139,6 +1139,30 @@ function messageNamesItemOutsideCandidates(
   return { menuItemId: result.menu_item_id, quantity: count };
 }
 
+// Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
+// decide, BEFORE calling answer(), whether an open disambiguation should be
+// dropped-and-reprocessed this turn — see the "disambiguation" case's own
+// header on isPendingDisambiguationDeclined above for the full reasoning.
+// Duplicates none of that logic; it's the exact same two checks
+// (isPendingDisambiguationDeclined, then messageNamesItemOutsideCandidates)
+// answer() itself runs, just callable from outside with raw candidate ids
+// instead of an already-open DialogueState.
+export function disambiguationDeclineNamesOutsideItem(
+  message: string,
+  candidateIds: string[],
+  menu: TurnEngineMenuItem[],
+  lexicon: LexiconTerm[] | undefined,
+): boolean {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  if (candidates.length === 0) return false;
+  if (!isPendingDisambiguationDeclined(message, candidates)) return false;
+  return messageNamesItemOutsideCandidates(message, candidates, lexicon) !== null;
+}
+
 // The answer to "what kind?" can itself be a LIST ("one plain, one
 // pepperoni, one meat lovers and one hawaiian") -- reuses phrase-split.ts's
 // shared boundary splitter (the same primitive the fresh-order path already
@@ -1358,28 +1382,58 @@ export function answer(
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
       if (isPendingDisambiguationDeclined(trimmed, candidates)) {
-        // 2026-09-19 PO dispatch (Commit 3): before treating as item dropped,
-        // check if this is a category rejection rather than a full decline.
+        // Round 2 (2026-09-19, TOP item, real phantom charge, 50-run v511:
+        // 42/50 paid, this the one money-wrong case): aae67b80's rejection-
+        // add rule below treated ANY decline that also named a menu category
+        // outside the offered candidates' own as a category CORRECTION
+        // ("not stromboli, I meant pizza") and added the offered item anyway
+        // — including "oh no, just salad rn! ... house salad w/ steak,
+        // salmon n creamy italian only", where "salad" is just as much an
+        // outside category as "pizza" is. The two read identically as bare
+        // category words; the only reliable signal that tells them apart is
+        // whether the OTHER category word, run through the shop's own real
+        // lexicon (messageNamesItemOutsideCandidates — the exact same
+        // "resolves cleanly to a SPECIFIC item outside the candidates, never
+        // an ambiguous tie" primitive the outside-item dispatch above this
+        // one already uses), resolves to something that ISN'T one of the
+        // offered candidates. "pizza" alone is ordinarily ambiguous across a
+        // real menu's many pizzas (never a single clean hit, so the
+        // correction reading survives); "house salad" is a real, specific,
+        // uniquely-named dish. When it does resolve to something outside the
+        // candidates, this is a decline, not a correction — the category-
+        // reject-add path below is skipped entirely and UNRESOLVED is
+        // returned so turn-engine-runner.ts's own drop-and-reprocess
+        // mechanism (disambiguationDeclineNamesOutsideItem, mirroring the
+        // "list already missed, drop it" mechanism Round 2 item A rule 2
+        // built) can drop this list and run the WHOLE message through
+        // PROPOSE fresh — never silently discarding "house salad w/ steak,
+        // salmon" the way plain `closure` below would (closure is
+        // deliberately excluded from every remainder mechanism this engine
+        // has).
         const quantity = state.open.quantity ?? 1;
-        const categoryRejectCandidate = findDisambiguationCategoryRejectionCandidate(
-          trimmed, candidates, menu,
-        );
-        if (categoryRejectCandidate) {
-          const cartChanged = addNarrowedCandidateToCart(cart, menuById, categoryRejectCandidate, quantity);
-          const displayName = menuById.get(categoryRejectCandidate.menu_item_id)?.ask_plan?.display_name
-            ?? menuById.get(categoryRejectCandidate.menu_item_id)?.name
-            ?? categoryRejectCandidate.name;
-          return {
-            resolved: true,
-            outcome: {
-              kind: "disambiguation_category_rejected",
-              message: buildCategoryMismatchMessage(displayName, categoryRejectCandidate.category ?? ""),
-              menuItemId: categoryRejectCandidate.menu_item_id,
-            },
-            cartChanged,
-          };
+        const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
+        if (!outsideItem) {
+          const categoryRejectCandidate = findDisambiguationCategoryRejectionCandidate(
+            trimmed, candidates, menu,
+          );
+          if (categoryRejectCandidate) {
+            const cartChanged = addNarrowedCandidateToCart(cart, menuById, categoryRejectCandidate, quantity);
+            const displayName = menuById.get(categoryRejectCandidate.menu_item_id)?.ask_plan?.display_name
+              ?? menuById.get(categoryRejectCandidate.menu_item_id)?.name
+              ?? categoryRejectCandidate.name;
+            return {
+              resolved: true,
+              outcome: {
+                kind: "disambiguation_category_rejected",
+                message: buildCategoryMismatchMessage(displayName, categoryRejectCandidate.category ?? ""),
+                menuItemId: categoryRejectCandidate.menu_item_id,
+              },
+              cartChanged,
+            };
+          }
+          return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
         }
-        return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
+        return UNRESOLVED;
       }
 
       const quantity = state.open.quantity ?? 1;
@@ -2011,7 +2065,7 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
       if (!otherMenuItem?.ask_plan) continue;
       for (const step of otherMenuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (matchChoiceAsWholeSpan(step.choices, span)) return true;
+        if (matchChoiceAsWholeSpan(step.choices, span, step.prompt_template.split(".")[0])) return true;
       }
     }
     return false;
@@ -2059,7 +2113,7 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
       if (!menuItem?.ask_plan) continue;
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (matchChoiceAsWholeSpan(step.choices, span)) return true;
+        if (matchChoiceAsWholeSpan(step.choices, span, step.prompt_template.split(".")[0])) return true;
       }
     }
     return false;
@@ -2073,6 +2127,43 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
     return true;
   });
   return { survivingAdds, heldModifierText };
+}
+
+// Round 2, items 1/2 (2026-09-19, live sim): an add whose span resolveItem
+// came back AMBIGUOUS or fully UNRESOLVED can still really just be naming a
+// choice of another item resolved THIS SAME turn — "house salad w/ steak,
+// salmon n creamy italian" proposed "creamy italian dressing" as its own
+// add; "italian" is a real item-lexicon term shared by the Italian Wrap and
+// Italian Homemade Panini, so it came back ambiguous instead of naming House
+// Salad's own "Creamy Italian" dressing choice. "blackened salmon" matched
+// no item-lexicon term at all (fully unresolved) even though it's a real
+// add-ons choice on that same House Salad. Checked against BOTH slot-kind
+// steps (a required choice like Dressing) and modifier-kind steps (an
+// on-request extra like Blackened Salmon) — dropAddsThatAreReallyModifiers-
+// OfAnotherAdd/holdAddsThatAreModifiersOfAnAmbiguousSibling above are
+// deliberately scoped to modifier-kind only (a different, narrower bug); a
+// required slot choice is just as ordinary a thing for a customer to name in
+// its own clause. Same "don't attach it here" discipline as those two: the
+// caller only drops the false disambiguation/decline, never applies the
+// choice directly — the span's words stay in customerMessage, so the
+// surviving item's own 00-BF modifier-floor pass finds and applies the real
+// choice on its own.
+function spanIsWholeChoiceOfAnyAdd(
+  span: string,
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): boolean {
+  const trimmed = span.trim();
+  if (!trimmed) return false;
+  for (const add of adds) {
+    const menuItem = menuById.get(add.menu_item_id);
+    if (!menuItem?.ask_plan) continue;
+    for (const step of menuItem.ask_plan.steps) {
+      if (step.kind !== "modifier" && step.kind !== "slot") continue;
+      if (matchChoiceAsWholeSpan(step.choices, trimmed, step.prompt_template.split(".")[0])) return true;
+    }
+  }
+  return false;
 }
 
 export interface Decline {
@@ -2428,18 +2519,38 @@ export function decide(
       unresolvedSpans.push(span);
     }
   }
+  // See dropAddsSupersededByCorrection's own header: "add a side salad...
+  // Just the house salad" resolves BOTH real items — this drops the one the
+  // customer's own words retracted, before either ever reaches grouping.
+  // Moved ahead of the decline/disambiguation blocks below (Round 2, items
+  // 1/2) so spanIsWholeChoiceOfAnyAdd has this turn's real resolved adds to
+  // check the ambiguous/unresolved spans against before either becomes
+  // customer-facing.
+  const correctedAdds = dropAddsSupersededByCorrection(resolvedAdds, customerMessage);
+
+  // Round 2, items 1/2 (2026-09-19, live sim): before either bucket becomes
+  // a decline or reopens a disambiguation, drop any span that's really just
+  // naming a slot/modifier choice of one of THIS turn's own resolved adds —
+  // see spanIsWholeChoiceOfAnyAdd's own header.
+  const genuinelyUnresolvedSpansFiltered = genuinelyUnresolvedSpans.filter(
+    span => !spanIsWholeChoiceOfAnyAdd(span, correctedAdds, menuById),
+  );
+  const ambiguousSpansFiltered = ambiguousSpans.filter(
+    a => !spanIsWholeChoiceOfAnyAdd(a.spanText, correctedAdds, menuById),
+  );
+
   // ADDENDUM A: exactly the pre-existing 035a2bd3 wording, unchanged, for
   // the single-span case; two or more combine into ONE line rather than
   // stacking.
-  if (genuinelyUnresolvedSpans.length === 1) {
-    const span = genuinelyUnresolvedSpans[0];
+  if (genuinelyUnresolvedSpansFiltered.length === 1) {
+    const span = genuinelyUnresolvedSpansFiltered[0];
     declines.push({
       reason: span
         ? `Sorry, I didn't catch "${span}" — mind saying it again?`
         : "Sorry, I didn't catch what item that was — mind saying it again?",
     });
-  } else if (genuinelyUnresolvedSpans.length > 1) {
-    const quoted = genuinelyUnresolvedSpans.filter(Boolean).map(s => `"${s}"`);
+  } else if (genuinelyUnresolvedSpansFiltered.length > 1) {
+    const quoted = genuinelyUnresolvedSpansFiltered.filter(Boolean).map(s => `"${s}"`);
     const joined = quoted.length <= 1
       ? (quoted[0] ?? "")
       : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
@@ -2449,17 +2560,13 @@ export function decide(
         : "Sorry, I didn't catch a couple of those — mind saying them again?",
     });
   }
-  if (ambiguousSpans.length > 0) {
-    disambiguationCandidateIds = ambiguousSpans[0].candidates;
-    disambiguationQuantity = ambiguousSpans[0].quantity;
-    disambiguationSpanText = ambiguousSpans[0].spanText;
-    carriedDisambiguationCandidateIds = ambiguousSpans.slice(1).map(s => s.candidates);
+  if (ambiguousSpansFiltered.length > 0) {
+    disambiguationCandidateIds = ambiguousSpansFiltered[0].candidates;
+    disambiguationQuantity = ambiguousSpansFiltered[0].quantity;
+    disambiguationSpanText = ambiguousSpansFiltered[0].spanText;
+    carriedDisambiguationCandidateIds = ambiguousSpansFiltered.slice(1).map(s => s.candidates);
   }
 
-  // See dropAddsSupersededByCorrection's own header: "add a side salad...
-  // Just the house salad" resolves BOTH real items — this drops the one the
-  // customer's own words retracted, before either ever reaches grouping.
-  const correctedAdds = dropAddsSupersededByCorrection(resolvedAdds, customerMessage);
   // See dropAddsThatAreReallyModifiersOfAnotherAdd's own header: "house
   // salad w/ black diamond steak" resolves BOTH the House Salad and,
   // independently, Quesadillas' own "Steak" item — this drops the one that

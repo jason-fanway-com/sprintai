@@ -43,7 +43,7 @@
 // named-item-removal fix earlier this session ("reuse the resolution
 // primitives, don't hand-roll a new ad hoc regex matcher").
 
-import { significantStems } from "./pending-disambiguation.ts";
+import { significantStems, stemWord } from "./pending-disambiguation.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 import { writeCartLine, writeSplitCartLine, findCartLineIndexByIdentity, type ReconcilerCartLine } from "./turn-reconciler.ts";
@@ -286,11 +286,30 @@ function groupNeedsNumericStems(choices: EngineChoice[]): boolean {
  * the choice's — so it survives, full stop, regardless of what stemming
  * might otherwise have collapsed either side down to.
  */
-function wholeSpanTokens(text: string): Set<string> {
-  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
+// Round 2, item 1 (2026-09-19, live sim, real phantom charge fallout):
+// "creamy italian dressing" naming House Salad's own "Creamy Italian"
+// dressing choice failed this exact whole-token-set-equality check —
+// customers say the group's own generic noun as often as not ("dressing",
+// "sauce", "topping", "bread"), and the choice's compiled display name never
+// carries it. `ignoreNoun` (the group's own noun — see matchChoiceAsWholeSpan's
+// own header for where callers derive it) is stripped from BOTH sides before
+// comparing, via the same singular/plural-tolerant stemWord pending-
+// disambiguation.ts already uses for category words — "dressing"/"dressings"
+// fold the same way "salad"/"salads" already does there. Optional so every
+// pre-existing call and test (none of which pass a third argument) is
+// unaffected.
+function wholeSpanTokens(text: string, ignoreNoun?: string): Set<string> {
+  const ignoreStem = ignoreNoun ? stemWord(ignoreNoun) : null;
+  const tokens = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  return new Set(ignoreStem ? tokens.filter(w => stemWord(w) !== ignoreStem) : tokens);
 }
 
-export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string): EngineChoice | null {
+// `groupNoun` (Round 2, item 1): the group's own generic noun, so a mention
+// of it on either side (span or choice display) never breaks an otherwise-
+// exact match — see wholeSpanTokens' own header. Callers derive it the same
+// way renderStepQuestion already does for the fallback question wording:
+// `step.prompt_template.split(".")[0]`.
+export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string, groupNoun?: string): EngineChoice | null {
   if (!span || choices.length === 0) return null;
 
   const normalizedSpan = normalizeForExactMatch(span);
@@ -298,10 +317,10 @@ export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string): E
   if (exactHits.length === 1) return exactHits[0];
   if (exactHits.length > 1) return null; // two choices sharing a display name — genuinely ambiguous, never guess
 
-  const spanTokens = wholeSpanTokens(span);
+  const spanTokens = wholeSpanTokens(span, groupNoun);
   if (spanTokens.size === 0) return null;
   const spanKey = stemSetKey(spanTokens);
-  const tokenHits = choices.filter(c => stemSetKey(wholeSpanTokens(c.display)) === spanKey);
+  const tokenHits = choices.filter(c => stemSetKey(wholeSpanTokens(c.display, groupNoun)) === spanKey);
   if (tokenHits.length === 1) return tokenHits[0];
   return null; // 0 hits, or >1 choices sharing this exact token set — never guess
 }

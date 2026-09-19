@@ -18,6 +18,7 @@ import {
   ask,
   render,
   extractSlotChoiceWords,
+  disambiguationDeclineNamesOutsideItem,
   type DialogueState,
   type Proposal,
   type TurnEngineCartLine,
@@ -2727,4 +2728,244 @@ Deno.test("answer (Commit 3, genuine decline): 'forget the stromboli' with NO ot
     `genuine decline must still return closure, got: ${JSON.stringify(result)}`);
   assertEquals(result.cartChanged, false);
   assertEquals(cart.length, 0, "genuine decline must not add anything to the cart");
+});
+
+// ============================================================
+// Round 2 (2026-09-19, TOP item, real phantom charge — 50-run v511, 42/50
+// paid, this the one money-wrong case): aae67b80's rejection-add rule fired
+// on ANY decline naming an outside category, even when that category names a
+// real, DIFFERENT, specific item ("just salad" ... "house salad w/ steak,
+// salmon n creamy italian only") rather than a bare category correction
+// ("not stromboli, I meant pizza"). Fixture mirrors the real live data:
+// Vito's own two "Italian" items (Wraps/Homemade Paninis) as the offered
+// candidates, and a real House Salads item with its own dressing slot and
+// add-ons modifier group, exercised again by items 1/2 below.
+// ============================================================
+const ROUND2_ITALIAN_WRAP_ID = "round2-italian-wrap";
+const ROUND2_ITALIAN_PANINI_ID = "round2-italian-panini";
+const ROUND2_HOUSE_SALAD_ID = "round2-house-salad";
+const ROUND2_DRESSING_GROUP_ID = "round2-dressing-group";
+const ROUND2_ADDONS_GROUP_ID = "round2-addons-group";
+
+const ROUND2_MENU: TurnEngineMenuItem[] = [
+  {
+    id: ROUND2_ITALIAN_WRAP_ID, name: "Italian", category: "Wraps", price_cents: 999,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Italian Wrap", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: ROUND2_ITALIAN_PANINI_ID, name: "Italian", category: "Homemade Paninis", price_cents: 1099,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Italian Homemade Panini", base_price_cents: 1099, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: ROUND2_HOUSE_SALAD_ID, name: "House Salads", category: "Salads", price_cents: 899,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "House Salads", base_price_cents: 899,
+      recap_template: "", ticket_template: "",
+      steps: [
+        {
+          group_id: ROUND2_DRESSING_GROUP_ID, slot_key: "dressing", kind: "slot", ask_mode: "ask",
+          prompt_template: "dressing.ask",
+          choices: [
+            { id: "choice-ranch", display: "Ranch", price_delta_cents: 0 },
+            { id: "choice-creamy-italian", display: "Creamy Italian", price_delta_cents: 0 },
+            { id: "choice-italian", display: "Italian", price_delta_cents: 0 },
+          ],
+        },
+        {
+          group_id: ROUND2_ADDONS_GROUP_ID, slot_key: null, kind: "modifier", ask_mode: "on_request",
+          prompt_template: "add-ons.on_request",
+          choices: [
+            { id: "choice-chicken", display: "Chicken", price_delta_cents: 200 },
+            { id: "choice-blackened-salmon", display: "Blackened Salmon", price_delta_cents: 400 },
+            { id: "choice-steak", display: "Black Diamond Steak", price_delta_cents: 500 },
+          ],
+        },
+      ],
+    },
+  },
+];
+
+const ROUND2_LEXICON: LexiconTerm[] = [
+  { term: "italian wrap", target_id: ROUND2_ITALIAN_WRAP_ID },
+  { term: "italian", target_id: ROUND2_ITALIAN_WRAP_ID },
+  { term: "italian", target_id: ROUND2_ITALIAN_PANINI_ID },
+  { term: "italian panini", target_id: ROUND2_ITALIAN_PANINI_ID },
+  { term: "house salad", target_id: ROUND2_HOUSE_SALAD_ID },
+  { term: "house salads", target_id: ROUND2_HOUSE_SALAD_ID },
+];
+
+const ROUND2_DISAMBIG_STATE: DialogueState = {
+  phase: "ordering",
+  open: { kind: "disambiguation", candidates: [ROUND2_ITALIAN_WRAP_ID, ROUND2_ITALIAN_PANINI_ID], quantity: 1, spanText: "italian" },
+  upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+};
+
+const ROUND2_SALAD_DECLINE_MESSAGE =
+  "oh no, just salad rn! so just the house salad w/ steak, salmon n creamy italian only.";
+
+Deno.test("answer (Round 2, TOP item): declining with a real outside item named ('house salad...') returns UNRESOLVED, never adds the offered Italian item — the phantom charge this closes", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(ROUND2_DISAMBIG_STATE, cart, ROUND2_SALAD_DECLINE_MESSAGE, ROUND2_MENU, { lexicon: ROUND2_LEXICON });
+  assertEquals(result.resolved, false, `must be unresolved so the runner can drop and reprocess, got: ${JSON.stringify(result)}`);
+  assertEquals(cart.length, 0, "the offered Italian item must never be added — this is the exact phantom $9.99 charge");
+});
+
+Deno.test("answer (Round 2, TOP item): the genuine category correction ('not stromboli, I want pizza') is UNAFFECTED — still adds and returns disambiguation_category_rejected", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(SLICE_DISAMBIG_STATE, cart, "I meant pizza, not stromboli", SLICE_DISAMBIGUATION_MENU, { lexicon: [] });
+  assert(result.resolved && result.outcome.kind === "disambiguation_category_rejected",
+    `genuine correction must be unaffected by the new outside-item check, got: ${JSON.stringify(result)}`);
+  assertEquals(cart.length, 1);
+});
+
+Deno.test("disambiguationDeclineNamesOutsideItem (Round 2, TOP item): true for the real salad decline, false for a plain decline with nothing else named", () => {
+  assertEquals(
+    disambiguationDeclineNamesOutsideItem(ROUND2_SALAD_DECLINE_MESSAGE, [ROUND2_ITALIAN_WRAP_ID, ROUND2_ITALIAN_PANINI_ID], ROUND2_MENU, ROUND2_LEXICON),
+    true,
+  );
+  assertEquals(
+    disambiguationDeclineNamesOutsideItem("forget it, not interested", [ROUND2_ITALIAN_WRAP_ID, ROUND2_ITALIAN_PANINI_ID], ROUND2_MENU, ROUND2_LEXICON),
+    false,
+  );
+  assertEquals(
+    disambiguationDeclineNamesOutsideItem(ROUND2_SALAD_DECLINE_MESSAGE, [ROUND2_ITALIAN_WRAP_ID, ROUND2_ITALIAN_PANINI_ID], ROUND2_MENU, undefined),
+    false,
+    "no lexicon loaded -> never claims an outside item, same fail-safe as messageNamesItemOutsideCandidates elsewhere",
+  );
+});
+
+// makeMinimalFakeSupabase's `range()` always answers empty — fine for every
+// other test here, but this one needs the runner's own loadItemLexicon call
+// (triggered because a disambiguation is open) to see ROUND2_LEXICON, or
+// disambiguationDeclineNamesOutsideItem has nothing to resolve "house salad"
+// against and the whole mechanism this test exists to prove never fires.
+function makeRound2FakeSupabase() {
+  // deno-lint-ignore no-explicit-any
+  function builder(table: string): any {
+    const b: any = {
+      select() { return b; },
+      eq() { return b; },
+      order() { return b; },
+      maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+      // Keyed on the pagination cursor, not a one-shot flag: loadItemLexicon
+      // is called TWICE per turn here (once for answerLexicon, once again in
+      // STEP 3) and each call restarts its own pagination from `from=0` — a
+      // global "already served" flag would starve the second call.
+      range(from: number) {
+        if (table === "lexicon" && from === 0) {
+          return Promise.resolve({ data: ROUND2_LEXICON, error: null });
+        }
+        return Promise.resolve({ data: [], error: null });
+      },
+      update() { return { eq: () => Promise.resolve({ error: null }) }; },
+      insert(row: Record<string, unknown>) {
+        const msgId = table === "messages" ? `msg-${Math.random()}` : null;
+        return {
+          select: () => ({ single: () => Promise.resolve({ data: { id: msgId }, error: null }) }),
+          then(resolve: (v: { error: null }) => void, reject?: (e: unknown) => void) {
+            return Promise.resolve({ error: null }).then(resolve, reject);
+          },
+        };
+      },
+      then(resolve: (v: { data: unknown; error: null; count?: number }) => void, reject?: (e: unknown) => void) {
+        return Promise.resolve({ data: [], error: null, count: 0 }).then(resolve, reject);
+      },
+    };
+    return b;
+  }
+  // deno-lint-ignore no-explicit-any
+  const supabase = { from: (table: string) => builder(table) } as any;
+  return { supabase };
+}
+
+Deno.test("runTurnEngineTurn (Round 2, TOP item): the decline drops the Italian list, prepends 'Okay, no Italian.', and runs the real order through PROPOSE — no phantom Italian line", async () => {
+  const { supabase } = makeRound2FakeSupabase();
+  let proposeCalledWith: { open: unknown; message: string } | null = null;
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: (input) => {
+      proposeCalledWith = { open: input.open, message: input.message };
+      return Promise.resolve({
+        ok: true, attempts: 1,
+        proposal: { intent: "order", adds: [{ item_span: "house salad", quantity: 1, choices: [] }], removes: [], modifies: [] },
+      });
+    },
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-round2-top", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: ROUND2_SALAD_DECLINE_MESSAGE,
+    history: [], menu: ROUND2_MENU, cart: [], dialogueState: ROUND2_DISAMBIG_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Alex", deliveryFeeCents: null },
+  };
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(proposeCalledWith !== null, "PROPOSE must be called with the rest of the message — never silently dropped as closure");
+  assertEquals((proposeCalledWith as { open: unknown }).open, null, "PROPOSE must not be told a disambiguation is still open — it's been dropped");
+  assertEquals((proposeCalledWith as { message: string }).message, ROUND2_SALAD_DECLINE_MESSAGE);
+  assert(result.reply.startsWith("Okay, no Italian."), `must acknowledge the decline by name: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.length, 1, "exactly the real House Salads line — no phantom Italian item");
+  assertEquals(result.cart[0].menu_item_id, ROUND2_HOUSE_SALAD_ID);
+});
+
+// ============================================================
+// Round 2, items 1/2 (2026-09-19, same live sim): within that PROPOSE
+// remainder, "creamy italian dressing" and "blackened salmon" are real
+// choices on the House Salads item being added THIS SAME turn — decide()
+// must recognize them as slot/modifier choices of that add, not as their
+// own false items (item 1) or an unresolved "didn't catch" (item 2). See
+// spanIsWholeChoiceOfAnyAdd's own header in turn-engine.ts.
+// ============================================================
+
+Deno.test("decide (Round 2, item 1): 'house salad' + 'creamy italian dressing' as two proposed adds — the salad lands, no phantom Italian-wrap disambiguation reopens", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "house salad", quantity: 1, choices: [] },
+      { item_span: "creamy italian dressing", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ROUND2_MENU, ROUND2_LEXICON, undefined, "house salad with creamy italian dressing");
+  assertEquals(result.disambiguationCandidateIds, null, "the ambiguous 'creamy italian dressing' span must never reopen the Italian wrap/panini disambiguation");
+  assertEquals(result.cart.length, 1, "exactly one line — the House Salads");
+  assertEquals(result.cart[0].menu_item_id, ROUND2_HOUSE_SALAD_ID);
+  assertEquals(result.declines.length, 0, "must not decline 'creamy italian dressing' as unresolved either");
+});
+
+Deno.test("decide (Round 2, item 2): 'house salad' + 'blackened salmon' as two proposed adds — no 'Sorry, I didn't catch' decline, since Blackened Salmon is a real add-on on the salad being added", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "house salad", quantity: 1, choices: [] },
+      { item_span: "blackened salmon", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ROUND2_MENU, ROUND2_LEXICON, undefined, "house salad with blackened salmon");
+  assertEquals(result.cart.length, 1, "exactly one line — the House Salads");
+  assertEquals(result.cart[0].menu_item_id, ROUND2_HOUSE_SALAD_ID);
+  assert(
+    result.declines.every(d => !d.reason.includes("didn't catch")),
+    `must not decline "blackened salmon" as unresolved — it's a real choice on the salad being added: ${JSON.stringify(result.declines)}`,
+  );
+});
+
+Deno.test("decide (Round 2, item 2 control): a genuinely nonexistent add-on span still declines as 'didn't catch' — the fix does not swallow real misses", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "house salad", quantity: 1, choices: [] },
+      { item_span: "unicorn tears", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ROUND2_MENU, ROUND2_LEXICON, undefined, "house salad with unicorn tears");
+  assertEquals(result.cart.length, 1);
+  assert(
+    result.declines.some(d => d.reason.includes("didn't catch") && d.reason.includes("unicorn tears")),
+    `a genuinely nonexistent span must still decline by name: ${JSON.stringify(result.declines)}`,
+  );
 });

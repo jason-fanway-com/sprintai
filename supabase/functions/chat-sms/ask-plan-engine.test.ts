@@ -6,6 +6,7 @@ import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.t
 import type { AskPlan, CompiledStep } from "../_shared/compile-menu.ts";
 import {
   matchChoiceInText,
+  matchChoiceAsWholeSpan,
   matchAssertedChoice,
   matchAllAssertedChoices,
   renderChoiceList,
@@ -1549,4 +1550,37 @@ Deno.test("normalizeForExactMatch (choice longest match): trailing punctuation n
   // tier even runs, for a choice list with no other overlapping candidate.
   const soloChoice = [{ id: "t-medium-well", display: "Medium Well", price_delta_cents: 0 }];
   assertEquals(matchChoiceInText(soloChoice, "Medium Well.")?.id, "t-medium-well");
+});
+
+// Round 2, item 1 (2026-09-19, live sim, real House Salads dressing group):
+// "creamy italian dressing" naming the "Creamy Italian" choice failed the
+// whole-token-set-equality check before this fix — the choice's own display
+// name never carries the group's generic noun, but customers say it as
+// often as not. groupNoun mirrors production's own derivation
+// (`step.prompt_template.split(".")[0]`, e.g. "dressing.ask" -> "dressing").
+Deno.test("matchChoiceAsWholeSpan (Round 2, item 1): 'creamy italian dressing' matches Creamy Italian once the group noun 'dressing' is ignored", () => {
+  assertEquals(matchChoiceAsWholeSpan(HOUSE_DRESSING_CHOICES, "creamy italian dressing", "dressing")?.id, "d-creamy-italian");
+});
+
+Deno.test("matchChoiceAsWholeSpan (Round 2, item 1): without the group noun, the extra word 'dressing' still blocks the match — proves the noun-strip is what fixes it", () => {
+  assertEquals(matchChoiceAsWholeSpan(HOUSE_DRESSING_CHOICES, "creamy italian dressing"), null);
+});
+
+Deno.test("matchChoiceAsWholeSpan (Round 2, item 1): plain 'creamy italian' (no noun word) still matches Creamy Italian exactly, group noun present or not", () => {
+  assertEquals(matchChoiceAsWholeSpan(HOUSE_DRESSING_CHOICES, "creamy italian", "dressing")?.id, "d-creamy-italian");
+  assertEquals(matchChoiceAsWholeSpan(HOUSE_DRESSING_CHOICES, "creamy italian")?.id, "d-creamy-italian");
+});
+
+Deno.test("matchChoiceAsWholeSpan (Round 2, item 1): the group noun strip never creates a false match — 'ranch dressing' still resolves Ranch only, not Jalapeno Ranch", () => {
+  assertEquals(matchChoiceAsWholeSpan(HOUSE_DRESSING_CHOICES, "ranch dressing", "dressing")?.id, "d-ranch");
+});
+
+Deno.test("matchChoiceAsWholeSpan (Round 2, item 2): 'blackened salmon' (no noun word in the span or choice) already matched exactly — the noun param has no effect when there's nothing to strip", () => {
+  const addOns = [
+    { id: "a-chicken", display: "Chicken", price_delta_cents: 200 },
+    { id: "a-salmon", display: "Blackened Salmon", price_delta_cents: 400 },
+    { id: "a-steak", display: "Black Diamond Steak", price_delta_cents: 500 },
+    { id: "a-shrimp", display: "Shrimp", price_delta_cents: 400 },
+  ];
+  assertEquals(matchChoiceAsWholeSpan(addOns, "blackened salmon", "add-ons")?.id, "a-salmon");
 });

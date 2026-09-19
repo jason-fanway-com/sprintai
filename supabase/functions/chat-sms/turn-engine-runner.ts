@@ -80,7 +80,7 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
-import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal } from "./pending-disambiguation.ts";
+import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal, categoryDisplayWord } from "./pending-disambiguation.ts";
 import {
   answer,
   decide,
@@ -88,6 +88,7 @@ import {
   render,
   extractSlotChoiceWords,
   orderShapedMessageQuantity,
+  disambiguationDeclineNamesOutsideItem,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -849,9 +850,35 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // once, used below both to skip the re-carry-forward branch (which would
   // otherwise re-open the identical dead list forever) and to keep PROPOSE
   // from being told about a question we're dropping.
+  // Round 2 (2026-09-19, TOP item, real phantom charge): a decline of the
+  // open list that ALSO names a real, specific item outside it ("oh no,
+  // just salad rn! ... house salad w/ steak, salmon n creamy italian only")
+  // — see turn-engine.ts's disambiguationDeclineNamesOutsideItem and the
+  // "disambiguation" case's own header for the full reasoning. Unlike the
+  // list-drop signal above, this fires on the FIRST answer (no openRepeatCount
+  // gate) — the customer never has to get ignored once before being heard.
+  const disambiguationDeclineNamesOutside = priorState.open?.kind === "disambiguation" &&
+    disambiguationDeclineNamesOutsideItem(input.message.trim(), priorState.open.candidates, input.menu, answerLexicon);
   const dropDisambiguationList = priorState.open?.kind === "disambiguation" &&
-    (priorState.openRepeatCount ?? 0) >= 1 &&
-    isDisambiguationListDropSignal(input.message);
+    (
+      ((priorState.openRepeatCount ?? 0) >= 1 && isDisambiguationListDropSignal(input.message)) ||
+      disambiguationDeclineNamesOutside
+    );
+  // "Okay, no Italian." — spanText is the customer's own words for the span
+  // that opened THIS disambiguation (turn-engine.ts's DialogueState.open.
+  // spanText doc); falls back to the shared category of the offered
+  // candidates when a persisted row predates that field. Prepended ahead of
+  // whatever the fresh PROPOSE call below decides, same answerText mechanism
+  // disambiguation_category_rejected already uses.
+  if (disambiguationDeclineNamesOutside && priorState.open?.kind === "disambiguation") {
+    const declinedLabel = (priorState.open.spanText ?? "").trim() ||
+      categoryDisplayWord(
+        priorState.open.candidates.map(id => input.menu.find(m => m.id === id)?.category).find(Boolean) ?? null,
+      );
+    if (declinedLabel) {
+      answerText = `Okay, no ${declinedLabel.charAt(0).toUpperCase()}${declinedLabel.slice(1)}.`;
+    }
+  }
 
   if (answerResult.resolved) {
     turnEvents = { ...turnEvents, disambiguationSettledThisTurn: priorOpenWasDisambiguation };
