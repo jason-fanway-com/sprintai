@@ -190,12 +190,13 @@ function findMatchedTermWords(
   length: number,
   spanWords: string[],
   entries: LexiconTerm[],
+  fuzzy = false,
 ): string[] | null {
   for (const entry of entries) {
     if (entry.target_id !== targetId) continue;
     const termWords = toWords(normalize(entry.term));
     if (termWords.length !== length) continue;
-    if (occursAsWholeWordRun(spanWords, termWords)) return termWords;
+    if (occursAsWholeWordRun(spanWords, termWords, fuzzy)) return termWords;
   }
   return null;
 }
@@ -244,68 +245,40 @@ function toWords(normalized: string): string[] {
 // This is the entire "not a substring inside another word" guarantee — a
 // term's words are matched one-for-one against span words, never against a
 // slice of a single longer word.
-function occursAsWholeWordRun(spanWords: string[], termWords: string[]): boolean {
-  if (termWords.length === 0 || termWords.length > spanWords.length) return false;
-  for (let start = 0; start <= spanWords.length - termWords.length; start++) {
-    let matched = true;
-    for (let i = 0; i < termWords.length; i++) {
-      if (spanWords[start + i] !== termWords[i]) { matched = false; break; }
-    }
-    if (matched) return true;
-  }
-  return false;
-}
-
-// Round 2, item 1c: the same whole-word-run scan as occursAsWholeWordRun,
-// except each word pair may also match via fuzzyWordMatch instead of exact
-// equality — so a single typo'd word inside an otherwise-correct span
-// ("hawiaan pizza") still finds the term ("hawaiian pizza") it names.
-function occursAsWholeWordRunFuzzy(spanWords: string[], termWords: string[]): boolean {
+//
+// Round 2, item 2 (2026-09-19): `fuzzy` widens each word-pair comparison
+// from strict equality to fuzzyWordMatch (guard19-fuzzy-item-match.ts's
+// bounded prefix/edit-distance rule) — the SAME matcher and SAME tolerance
+// pending-disambiguation.ts's narrowCandidatesByFacetAnswer already uses for
+// its own typo fallback, not a second, independently-tuned typo rule.
+function occursAsWholeWordRun(spanWords: string[], termWords: string[], fuzzy = false): boolean {
   if (termWords.length === 0 || termWords.length > spanWords.length) return false;
   for (let start = 0; start <= spanWords.length - termWords.length; start++) {
     let matched = true;
     for (let i = 0; i < termWords.length; i++) {
       const sw = spanWords[start + i];
       const tw = termWords[i];
-      if (sw !== tw && !fuzzyWordMatch(sw, tw)) { matched = false; break; }
+      if (sw !== tw && !(fuzzy && fuzzyWordMatch(sw, tw))) { matched = false; break; }
     }
     if (matched) return true;
   }
   return false;
 }
 
-// Fuzzy sibling of longestMatch, used ONLY as a fallback once an exact scan
-// found nothing at all (resolveItem below) — never runs alongside, and
-// never overrides, an exact hit or an exact tie.
-function fuzzyLongestMatch(spanWords: string[], entries: LexiconTerm[]): { length: number; targetIds: Set<string> } {
+// Longest-match scan, used both as the primary pass (below) and as the
+// fallback for a phrase that names nothing but a bare category word
+// ("salad" alone). `fuzzy` (Round 2, item 2) threads through to
+// occursAsWholeWordRun so a typo'd span still unions EVERY lexicon term
+// within tolerance at the winning length — not just the first/closest one —
+// exactly like the exact-spelling scan already does; resolveItem's existing
+// narrowing/widening logic then runs over that union unmodified.
+function longestMatch(spanWords: string[], entries: LexiconTerm[], fuzzy = false): { length: number; targetIds: Set<string> } {
   let longestMatchedLength = 0;
   const targetIdsAtLongest = new Set<string>();
   for (const entry of entries) {
     const termWords = toWords(normalize(entry.term));
     if (termWords.length === 0) continue;
-    if (!occursAsWholeWordRunFuzzy(spanWords, termWords)) continue;
-
-    if (termWords.length > longestMatchedLength) {
-      longestMatchedLength = termWords.length;
-      targetIdsAtLongest.clear();
-      targetIdsAtLongest.add(entry.target_id);
-    } else if (termWords.length === longestMatchedLength) {
-      targetIdsAtLongest.add(entry.target_id);
-    }
-  }
-  return { length: longestMatchedLength, targetIds: targetIdsAtLongest };
-}
-
-// The original, unmodified longest-match scan — unchanged behavior, used
-// both as the primary pass (below) and as the exact fallback for a phrase
-// that names nothing but a bare category word ("salad" alone).
-function longestMatch(spanWords: string[], entries: LexiconTerm[]): { length: number; targetIds: Set<string> } {
-  let longestMatchedLength = 0;
-  const targetIdsAtLongest = new Set<string>();
-  for (const entry of entries) {
-    const termWords = toWords(normalize(entry.term));
-    if (termWords.length === 0) continue;
-    if (!occursAsWholeWordRun(spanWords, termWords)) continue;
+    if (!occursAsWholeWordRun(spanWords, termWords, fuzzy)) continue;
 
     if (termWords.length > longestMatchedLength) {
       longestMatchedLength = termWords.length;
@@ -357,8 +330,9 @@ function widenIntoSizedFamily(
   spanWords: string[],
   lexicon: LexiconTerm[],
   namedCategories: Set<string>,
+  fuzzy = false,
 ): ResolveItemResult | null {
-  const matchedWords = findMatchedTermWords(baseId, matchedLength, spanWords, lexicon);
+  const matchedWords = findMatchedTermWords(baseId, matchedLength, spanWords, lexicon, fuzzy);
   if (!matchedWords) return null;
   const wantedCore = coreContentWords(matchedWords);
   if (wantedCore.length === 0) return null;
@@ -418,24 +392,37 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
     return termWords.length > 0 && !(termWords.length === 1 && categoryNounIndex.has(termWords[0]));
   });
 
-  const primary = longestMatch(spanWords, itemNameEntries);
-  const usingItemNameSpan = primary.targetIds.size > 0;
-  const base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
-
-  // Round 2, item 1c: nothing matched EXACTLY at all — try the same scan
-  // fuzzy (occursAsWholeWordRunFuzzy) before giving up. Resolves ONLY when
-  // it narrows to a single target family (targetIds.size === 1), same
-  // "never guess" discipline as everywhere else in this function — two or
-  // more fuzzy-matching families, or none, stays unresolved rather than
-  // guessing or listing a fuzzy-derived candidate set.
-  if (base.targetIds.size === 0) {
-    const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries);
-    const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon);
-    if (fuzzyBase.targetIds.size === 1) {
-      return { kind: "resolved", menu_item_id: [...fuzzyBase.targetIds][0] };
-    }
-    return { kind: "unresolved" };
+  // Round 2, item 2 (2026-09-19): typo tolerance is a FALLBACK tier, tried
+  // only once the exact scan at each stage finds nothing — an exact
+  // item-name hit always wins over a fuzzy one, and (critically) a fuzzy
+  // item-name hit is tried BEFORE falling all the way back to the bare,
+  // unfiltered lexicon scan. Without that ordering, a misspelled item name
+  // next to a correctly-spelled bare category word ("large hawiaan pizza")
+  // let the exact "pizza" category hit win first and handed back the whole
+  // category (every pizza) instead of ever giving the typo a chance.
+  //
+  // Once a base is found — exact or fuzzy — it feeds through the EXACT same
+  // narrowing/widening logic below as an exact-spelling match always has.
+  // In particular, a fuzzy hit that lands uniquely on one sibling still
+  // reaches widenIntoSizedFamily (fuzzy-aware via the flag threaded below),
+  // which is what turns a single typo'd hit ("meat lovrs" -> the Stromboli
+  // Roll) into the full real-world family tie ("meat lovers" and "meat
+  // lover" share a core word set once singularized) — a UNION over every
+  // matching lexicon term, not a single closest guess.
+  let primary = longestMatch(spanWords, itemNameEntries);
+  let fuzzy = false;
+  if (primary.targetIds.size === 0) {
+    const fuzzyPrimary = longestMatch(spanWords, itemNameEntries, true);
+    if (fuzzyPrimary.targetIds.size > 0) { primary = fuzzyPrimary; fuzzy = true; }
   }
+  const usingItemNameSpan = primary.targetIds.size > 0;
+  let base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
+  if (!usingItemNameSpan && base.targetIds.size === 0) {
+    const fuzzyBase = longestMatch(spanWords, lexicon, true);
+    if (fuzzyBase.targetIds.size > 0) { base = fuzzyBase; fuzzy = true; }
+  }
+
+  if (base.targetIds.size === 0) return { kind: "unresolved" };
 
   // No item-name span in the phrase (a bare category word, matched only via
   // the fallback scan above) — no qualifier to narrow with, and narrowing a
@@ -449,7 +436,7 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
       const [baseId] = base.targetIds;
       const baseSizeLabel = lexicon.find(e => e.target_id === baseId)?.size_label;
       if (!sizeLabelMatchesToken(baseSizeLabel, sizeToken)) {
-        const widened = widenIntoSizedFamily(baseId, base.length, spanWords, lexicon, namedCategories);
+        const widened = widenIntoSizedFamily(baseId, base.length, spanWords, lexicon, namedCategories, fuzzy);
         if (widened) return widened;
       }
     }
@@ -508,7 +495,7 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
     if (filteredByCategory.length > 0) {
       candidates = filteredByCategory;
     } else if (base.targetIds.size === 1 && targetInfo.get(candidates[0])?.category != null) {
-      const matchedWords = new Set(findMatchedTermWords(candidates[0], base.length, spanWords, lexicon) ?? []);
+      const matchedWords = new Set(findMatchedTermWords(candidates[0], base.length, spanWords, lexicon, fuzzy) ?? []);
       const ownCategory = targetInfo.get(candidates[0])?.category;
       // Real Vito's shape that must NOT trip this: "pepperoni stromboli"
       // resolving to the Stromboli Rolls "Pepperoni" — the shop has TWO
@@ -553,7 +540,7 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
     // words never matched it" shape (a plural/singular mismatch, or any
     // other surface-form gap the core-word reduction catches).
     if (base.targetIds.size === 1) {
-      const widened = widenIntoSizedFamily(candidates[0], base.length, spanWords, lexicon, namedCategories);
+      const widened = widenIntoSizedFamily(candidates[0], base.length, spanWords, lexicon, namedCategories, fuzzy);
       if (widened) return widened;
     }
     // Data fix (b): widening above found no sibling in the named category
