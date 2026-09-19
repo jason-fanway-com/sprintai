@@ -150,7 +150,12 @@ export interface DialogueState {
   open:
     | null
     | { kind: "slot"; line_key: string; group_id: string }
-    | { kind: "disambiguation"; candidates: string[] }
+    // heldModifierText: see AskTurnEvents.heldModifierText's own doc — the
+    // customer's own words for an add that turned out to be a modifier of
+    // whichever candidate they're about to pick, applied once they do
+    // (answer()'s disambiguation case). Optional so state persisted before
+    // this field existed still parses.
+    | { kind: "disambiguation"; candidates: string[]; heldModifierText?: string | null }
     | { kind: "upsell"; menu_item_id: string }
     // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
     // "order type genuinely never asked yet" (render()'s plain "Pickup or
@@ -760,7 +765,27 @@ export function answer(
       if (!resolved) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
-      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, []);
+      // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
+      // while this item's own name was still ambiguous (see
+      // DecideResult.heldModifierText's own header) is recovered against the
+      // WINNING candidate's own modifier choices — same
+      // recoverAssertedChoiceFromText helper decide()'s own 00-BF modifier
+      // floor already uses for a genuinely resolved item — and passed as an
+      // asserted choice, never as free customerMessage text: ask-plan-
+      // engine.ts's modifier branch stopped reactively scanning free text
+      // entirely (2026-09-09, the pepperoni-bleed defect) and now resolves
+      // modifiers ONLY via an asserted choice.
+      let heldChoices: Array<{ group_id: string; choice_id: string }> = [];
+      const heldText = state.open.heldModifierText;
+      if (heldText) {
+        for (const step of menuItem.ask_plan.steps) {
+          if (step.kind !== "modifier") continue;
+          const recovered = recoverAssertedChoiceFromText(heldText, step.choices);
+          if (recovered) heldChoices = [...heldChoices, { group_id: step.group_id, choice_id: recovered }];
+        }
+      }
+      const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, texts);
       return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
     }
 
@@ -1075,6 +1100,53 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
   return adds.filter(add => !isReallyAModifierOfAnother(add));
 }
 
+// 2026-09-18 PO dispatch (add-on rule edge, real conv 9fc0fad9): "I want an
+// Italian wrap with chicken, please. Wheat tortilla." split into two adds,
+// "Italian" and "chicken" — "chicken" became its own $12.49 line instead of
+// a modifier of the Italian item, because "Italian" alone is AMBIGUOUS
+// (Italian Wrap vs. Italian Homemade Panini). dropAddsThatAreReallyModifier-
+// sOfAnotherAdd above only checks a span against OTHER RESOLVED adds — an
+// ambiguous sibling never became a ResolvedAdd, so there was nothing for
+// "chicken" to check against. Both Italian candidates carry a Chicken
+// modifier choice, so "chicken" was never really a separate item; it just
+// had nowhere to attach until the disambiguation resolves. Held here
+// instead of dropped: the caller gets the span back as `heldModifierText`
+// so answer()'s disambiguation branch can apply it as the winning item's
+// customerMessage once the customer picks Wrap or Panini, letting that
+// item's own 00-BF modifier floor pick it up the same way a resolved
+// sibling already would have.
+function holdAddsThatAreModifiersOfAnAmbiguousSibling(
+  adds: ResolvedAdd[],
+  ambiguousCandidateIds: string[] | null,
+  menuById: Map<string, TurnEngineMenuItem>,
+): { survivingAdds: ResolvedAdd[]; heldModifierText: string | null } {
+  if (!ambiguousCandidateIds || ambiguousCandidateIds.length === 0) {
+    return { survivingAdds: adds, heldModifierText: null };
+  }
+  const isModifierOfAnyCandidate = (candidate: ResolvedAdd): boolean => {
+    const span = (candidate.item_span ?? "").trim();
+    if (!span) return false;
+    for (const candidateId of ambiguousCandidateIds) {
+      const menuItem = menuById.get(candidateId);
+      if (!menuItem?.ask_plan) continue;
+      for (const step of menuItem.ask_plan.steps) {
+        if (step.kind !== "modifier") continue;
+        if (matchChoiceInText(step.choices, span)) return true;
+      }
+    }
+    return false;
+  };
+  let heldModifierText: string | null = null;
+  const survivingAdds = adds.filter(add => {
+    if (heldModifierText === null && isModifierOfAnyCandidate(add)) {
+      heldModifierText = (add.item_span ?? "").trim();
+      return false;
+    }
+    return true;
+  });
+  return { survivingAdds, heldModifierText };
+}
+
 export interface Decline {
   reason: string;
 }
@@ -1112,6 +1184,13 @@ export interface DecideResult {
   // ambiguous. See DialogueState's `pendingAmbiguous` and ask()'s priority 2
   // for how this queue gets asked on a later turn.
   carriedDisambiguationCandidateIds: string[][];
+  // 2026-09-18 PO dispatch (add-on rule edge): the customer's own words for
+  // an add that turned out to be a modifier of THIS turn's ambiguous
+  // sibling (disambiguationCandidateIds above), not a separate item — see
+  // holdAddsThatAreModifiersOfAnAmbiguousSibling's own header. Null unless
+  // exactly that happened this turn. Applied once the sibling resolves;
+  // see answer()'s disambiguation case.
+  heldModifierText: string | null;
 }
 
 interface ResolvedAdd {
@@ -1414,7 +1493,12 @@ export function decide(
   // independently, Quesadillas' own "Steak" item — this drops the one that
   // is really a modifier choice of the OTHER item in the same message,
   // before either ever reaches grouping.
-  const survivingAdds = dropAddsThatAreReallyModifiersOfAnotherAdd(correctedAdds, menuById);
+  const modifierDroppedAdds = dropAddsThatAreReallyModifiersOfAnotherAdd(correctedAdds, menuById);
+  const { survivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
+    modifierDroppedAdds,
+    disambiguationCandidateIds,
+    menuById,
+  );
 
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
@@ -1512,7 +1596,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds, heldModifierText };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -1583,6 +1667,15 @@ export interface AskTurnEvents {
   // kept as a separate flag rather than folded into it so each
   // mechanism's own commit stays independently reviewable.
   lineReplacedThisTurn?: boolean;
+  // 2026-09-18 PO dispatch (add-on rule edge): the customer's own words for
+  // an add held back this turn because it was really a modifier of the
+  // ambiguous sibling named by disambiguationCandidateIds above, not a
+  // separate item — see DecideResult.heldModifierText and
+  // holdAddsThatAreModifiersOfAnAmbiguousSibling's own header. Threaded
+  // through unchanged on both the fresh-decide path and the re-ask carry-
+  // forward path (turn-engine-runner.ts), same as disambiguationCandidateIds
+  // itself, so it survives however many turns the ambiguity stays open.
+  heldModifierText?: string | null;
 }
 
 export function ask(
@@ -1672,7 +1765,21 @@ export function ask(
   // via `carry`'s default, to be asked on a later turn instead of dropped.
   if (pendingAmbiguous.length > 0) {
     const [next, ...rest] = pendingAmbiguous;
-    return carry({ kind: "disambiguation", candidates: next }, "ordering", priorState.upsell_offered, rest);
+    // heldModifierText only ever describes THIS specific candidate group —
+    // reference-equal to disambiguationCandidateIds on both the turn it was
+    // computed (decide()'s fresh output) and every re-ask turn after
+    // (turn-engine-runner.ts mirrors priorState.open.candidates straight
+    // through, unchanged), never on an older span still waiting behind it.
+    // Key omitted entirely (not set to undefined) when there is none, so a
+    // plain `{ kind: "disambiguation", candidates }` equality check against
+    // a state built before this field existed still holds.
+    const heldModifierText = next === turnEvents.disambiguationCandidateIds ? turnEvents.heldModifierText : undefined;
+    return carry(
+      heldModifierText ? { kind: "disambiguation", candidates: next, heldModifierText } : { kind: "disambiguation", candidates: next },
+      "ordering",
+      priorState.upsell_offered,
+      rest,
+    );
   }
 
   // 3. order_type (only if delivery is enabled and unset).
@@ -1897,23 +2004,74 @@ const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you:";
 // short fragment, never the run-on sentence" principle the with/for/on
 // stripping already follows.
 //
+// 2026-09-18 PO dispatch (echo wording, follow-up): two more real
+// conversations show the single "always take the before side" rule from
+// the prior dispatch was itself incomplete, not wrong — "for" and
+// "with"/"on" point opposite directions depending on which side of the
+// preposition actually names the item vs. the choice.
+//   - Conv 192e1bdf: "Can I get that on a regular hoagie roll?" — "on"
+//     introduces the CHOICE itself ("on a regular hoagie roll"); the old
+//     before-only rule echoed "Can I get that", exactly the reported bad
+//     echo. The choice here is AFTER "on".
+//   - Conv 6748e1c4 (already validated above): "gimme the jalapeno ranch
+//     for House" — "for" introduces the ITEM being modified; the choice
+//     is BEFORE "for". Still correct, unchanged.
+// So: "for" keeps the before-side; "with"/"on" now take the after-side.
+// Checked "with" against every prior with-clause example in this file's
+// own tests before making this change — none exercise "with" as the cut
+// word, only "for"/"on", so this is a genuine gap-fill, not a flip of an
+// already-proven case.
+//   - Conv ba0a6717: "Got it! I already said ranch, thanks!" — no
+//     with/for/on token at all, so it falls to the no-preposition path,
+//     which used to be a raw last-3-tokens fallback and produced the
+//     other reported bad echo, "said ranch, thanks!". A leading filler
+//     clause ("Got it! I already said") and a trailing closing word
+//     ("thanks!") are now stripped from that path before the last-3-
+//     tokens fallback runs, leaving "ranch".
+//
 // Arrow form deliberately, not a plain named-function declaration with a
 // string return type — this file's own gate test asserts exactly one
 // function signature of that shape exists (render(), the sole reply-
 // building function); a second declaration matching it trips the gate even
 // though this helper never produces customer-facing text on its own.
+const SLOT_CHOICE_LEADING_FILLER_RE =
+  /^.*?\b(?:i(?:'ll)?\s+(?:already\s+)?(?:said|meant|want|need|take|do|go\s+with|have)|can\s+i\s+(?:get|have)(?:\s+that)?|got\s+it[.,!]?\s*)\b[.,!]?\s*/i;
+const SLOT_CHOICE_TRAILING_FILLER_RE = /[,]?\s*(?:thanks|thank\s+you|please)[.!]?\s*$/i;
+
 export const extractSlotChoiceWords = (message: string): string => {
-  const trimmed = message.trim();
+  const trimmed = message.trim().replace(/[?!.,]+$/, "");
   const words = trimmed.split(/\s+/).filter(Boolean);
-  let cutIdx = -1;
+
+  let lastFor = -1;
   for (let i = 0; i < words.length; i++) {
-    if (/^(?:with|for|on)$/i.test(words[i])) cutIdx = i;
+    if (/^for$/i.test(words[i])) lastFor = i;
   }
-  if (cutIdx > 0) {
-    const before = words.slice(0, cutIdx).join(" ").trim();
+  if (lastFor > 0) {
+    const before = words.slice(0, lastFor).join(" ").trim();
     if (before) return before;
   }
-  return words.slice(-3).join(" ");
+
+  let lastWithOn = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (/^(?:with|on)$/i.test(words[i])) lastWithOn = i;
+  }
+  if (lastWithOn >= 0 && lastWithOn < words.length - 1) {
+    const after = words.slice(lastWithOn + 1).join(" ").trim();
+    if (after) return after;
+  }
+
+  // A message can stack more than one filler clause ("Got it! I already
+  // said ranch, thanks!" has both a "Got it!" opener and an "I already
+  // said" lead-in) — strip repeatedly until nothing more matches.
+  let noLeadingFiller = trimmed;
+  for (let i = 0; i < 3; i++) {
+    const next = noLeadingFiller.replace(SLOT_CHOICE_LEADING_FILLER_RE, "").trim();
+    if (next === noLeadingFiller) break;
+    noLeadingFiller = next;
+  }
+  const noFiller = noLeadingFiller.replace(SLOT_CHOICE_TRAILING_FILLER_RE, "").trim();
+  const finalText = noFiller || noLeadingFiller || trimmed;
+  return finalText.split(/\s+/).filter(Boolean).slice(-3).join(" ");
 };
 
 export function render(
