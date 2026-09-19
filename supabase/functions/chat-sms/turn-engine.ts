@@ -2782,13 +2782,38 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
 // the cart (unambiguous referent). Deliberately checks the raw message,
 // never the model's proposal text -- same reasoning as itemSpanNamedInMessage
 // above.
-const REMOVAL_VERBS = ["no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without"];
+// Round 4 P0 (2026-09-19, remove-guard pronoun + replacement): "switch"/
+// "swap"/"change"/"replace"/"drop" added alongside the original set --
+// live repro, "switch that to a Cheesesteak instead" and "swap out the
+// pizza for Buffalo Chicken" both carry unambiguous removal/replacement
+// intent that the original verb list (written before this shape was seen)
+// didn't recognize, so hasVerb below returned false and the guard blocked
+// a real, customer-intended removal exactly as hard as it blocks a
+// hallucinated one. "instead" is added bare (not just "instead of") for
+// the same reason -- "switch that to a Cheesesteak instead" never says
+// "instead of".
+const REMOVAL_VERBS = [
+  "no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without",
+  "switch", "swap", "change", "replace", "drop", "instead",
+];
+
+// Round 4 P0 (2026-09-19): which REAL cart line a bare pronoun ("it"/
+// "that"/"this") refers to, for both the remove guard below and the
+// replacement parser further down. The codebase has no last_added_item /
+// last_discussed_item tracking (grepped -- there is none), so the only
+// signal available is cart order itself: the LAST real line is the most
+// recently added one, and doubles as "the only line" when there's just
+// one. Null when the cart has no real line at all (nothing to refer to).
+function resolvePronounTargetLineKey(cart: TurnEngineCartLine[]): string | undefined {
+  const realLines = cart.filter(isRealCartLine);
+  return realLines.length > 0 ? realLines[realLines.length - 1].line_key : undefined;
+}
 
 function removeHasRemovalLanguage(
   message: string | undefined,
   lineName: string,
   lineCategory: string | null | undefined,
-  singleRealLineInCart: boolean,
+  isPronounTargetLine: boolean,
 ): boolean {
   const msg = (message ?? "").toLowerCase().trim();
   if (!msg) return false;
@@ -2808,8 +2833,88 @@ function removeHasRemovalLanguage(
   const nameWords = (lineName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
   if (nameWords.some(w => msgFlat.includes(w))) return true;
   if (categoryWordMatches(lineCategory, msg)) return true;
-  if (singleRealLineInCart && /\b(it|that|them|those)\b/.test(msg)) return true;
+  // Round 4 P0: this now passes for the resolved pronoun TARGET line even
+  // in a 2+-line cart (resolvePronounTargetLineKey above), not only when
+  // it's the sole real line -- "switch that to X" with several lines in
+  // the cart refers to the most recently added one, same as a human
+  // listener would assume.
+  if (isPronounTargetLine && /\b(it|that|them|those|this)\b/.test(msg)) return true;
   return false;
+}
+
+// Round 4 P0 (2026-09-19, replacement parsing): "swap out the pizza for
+// Buffalo Chicken", "change my Grilled Cheese to Chicken Fingers", "switch
+// that to a Cheesesteak instead" are a REMOVE and an ADD spoken in the same
+// breath. PROPOSE's own removes/adds for this shape is exactly as
+// unreliable as the hallucinated-remove case above -- the model may name
+// the wrong line_key, drop the remove entirely, or drop the add -- so this
+// is resolved directly from the CUSTOMER'S CURRENT message, in code,
+// bypassing whatever PROPOSE produced for this pair entirely. X (what's
+// being replaced) and Y (what it's being replaced with) are captured
+// separately; X is deliberately allowed to be a bare pronoun ("that"/"it"/
+// "this") since that is how a customer refers to the item they were just
+// discussing.
+interface ReplacementIntent {
+  xPhrase: string | null; // null only for "make it Y instead" (implicit pronoun)
+  yPhrase: string;
+}
+
+function parseReplacementIntent(message: string): ReplacementIntent | null {
+  const m = (message ?? "").trim();
+  if (!m) return null;
+  const STOP = String.raw`(?=[,.!?]|\s+and\b|$)`;
+  const patterns: RegExp[] = [
+    // "swap out the pizza for Buffalo Chicken" / "swap the pizza for X"
+    new RegExp(String.raw`\bswap(?:\s+out)?\s+(?:the\s+|my\s+|our\s+|a\s+|an\s+)?(.+?)\s+for\s+(?:a\s+|an\s+|the\s+)?(.+?)${STOP}`, "i"),
+    // "change my Grilled Cheese to Chicken Fingers" / "...to X instead"
+    new RegExp(String.raw`\bchange\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+to\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+instead\b)?${STOP}`, "i"),
+    // "switch that to a Cheesesteak instead" / "switch X to Y"
+    new RegExp(String.raw`\bswitch\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+to\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+instead\b)?${STOP}`, "i"),
+    // "replace X with Y"
+    new RegExp(String.raw`\breplace\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+with\s+(?:a\s+|an\s+|the\s+)?(.+?)${STOP}`, "i"),
+  ];
+  for (const re of patterns) {
+    const mm = m.match(re);
+    if (!mm) continue;
+    const xPhrase = mm[1]?.trim();
+    const yPhrase = mm[2]?.trim();
+    if (!xPhrase || !yPhrase) continue;
+    return { xPhrase, yPhrase };
+  }
+  // "make it Y instead" / "make that Y instead" -- X is never named, only
+  // ever a pronoun, so there is no capture group for it.
+  const makeIt = m.match(/\bmake\s+(?:it|that|this)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+instead\b/i);
+  const yPhrase = makeIt?.[1]?.trim();
+  if (yPhrase) return { xPhrase: null, yPhrase };
+  return null;
+}
+
+// Resolves X (the ReplacementIntent's xPhrase) to a single REAL cart line.
+// A bare pronoun ("that"/"it"/"this", or xPhrase === null for "make it Y
+// instead") uses the same last-real-line convention as
+// resolvePronounTargetLineKey above. A named phrase ("the pizza", "my
+// Grilled Cheese") is matched against cart line NAMES first (stem subset,
+// same convention as findCartLineByNamePhrase), then against menu
+// CATEGORY (a raw stored name like "Cheese - Large (16\")" never contains
+// the word "pizza" -- same gap named-remove-20260907.test.ts's header
+// documents). Null when neither resolves to exactly one line -- the
+// caller asks which item rather than guessing.
+function resolveReplacementTargetLine(
+  xPhrase: string | null,
+  cart: TurnEngineCartLine[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): TurnEngineCartLine | null {
+  const realLines = cart.filter(isRealCartLine);
+  const trimmed = (xPhrase ?? "").trim();
+  const isBarePronoun = !trimmed || /^(?:that|it|this)$/i.test(trimmed);
+  if (!isBarePronoun) {
+    const stripped = trimmed.replace(/^(?:that|it|this|the|my|our|a|an)\s+/i, "").trim() || trimmed;
+    const byName = findCartLineByNamePhrase(cart, stripped);
+    if (byName) return byName;
+    const categoryHits = realLines.filter(l => categoryWordMatches(menuById.get(l.menu_item_id)?.category, stripped));
+    return categoryHits.length === 1 ? categoryHits[0] : null;
+  }
+  return realLines.length > 0 ? realLines[realLines.length - 1] : null;
 }
 
 export function decide(
@@ -2846,6 +2951,48 @@ export function decide(
   let disambiguationQuantity: number | undefined;
   let disambiguationSpanText: string | undefined;
   let carriedDisambiguationCandidateIds: string[][] = [];
+
+  // Round 4 P0 (2026-09-19, replacement parsing): resolved BEFORE anything
+  // else in this function touches the cart, and entirely independent of
+  // `proposal` -- see parseReplacementIntent's own header. X unresolved
+  // asks which item rather than guessing; Y unresolved (ambiguous or
+  // unresolved on the shop's own lexicon) leaves the cart untouched here
+  // and falls through to the normal add path below, which still gets a
+  // chance to add Y "naturally" if PROPOSE separately proposed a span for
+  // it (see acceptance case: "change my Grilled Cheese to Chicken Fingers,
+  // and add fries" -- fries goes through the ordinary path unaffected).
+  let replacementHandledLineKey: string | undefined;
+  let replacementHandledMenuItemId: string | null = null;
+  const replacementIntent = customerMessage ? parseReplacementIntent(customerMessage) : null;
+  if (replacementIntent) {
+    const targetLine = resolveReplacementTargetLine(replacementIntent.xPhrase, nextCart, menuById);
+    if (!targetLine) {
+      declines.push({ reason: "Which item did you want to replace?" });
+    } else {
+      const yResolution = resolveItem(replacementIntent.yPhrase, lexicon);
+      if (yResolution.kind === "resolved") {
+        const newMenuItem = menuById.get(yResolution.menu_item_id);
+        if (newMenuItem?.ask_plan) {
+          const idx = nextCart.indexOf(targetLine);
+          const quantity = targetLine.quantity;
+          removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
+          const lengthBeforeAdd = nextCart.length;
+          const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
+          if (result.ok && result.cartChanged) {
+            qualifyingAddMenuItemId = newMenuItem.id;
+            if (newLineKey && nextCart.length === lengthBeforeAdd + 1) {
+              nextCart[nextCart.length - 1].line_key = newLineKey();
+            }
+          }
+          replacementHandledLineKey = targetLine.line_key;
+          replacementHandledMenuItemId = yResolution.menu_item_id;
+        }
+      }
+      // Y ambiguous or unresolved: deliberately do nothing here -- "treat
+      // as normal add" per spec, i.e. let PROPOSE's own add path (below)
+      // handle it however it otherwise would have.
+    }
+  }
 
   // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
   // "item_span is an input to a deterministic, total function that runs
@@ -3066,6 +3213,11 @@ export function decide(
       // the money footer already shows them exactly what is in the cart.
       continue;
     }
+    // Round 4 P0: Y was already added directly by the replacement parser
+    // above -- PROPOSE's own proposal.adds for the identical item this same
+    // turn (very likely, since the model saw the same message) would
+    // otherwise double the quantity.
+    if (replacementHandledMenuItemId && add.menu_item_id === replacementHandledMenuItemId) continue;
     const menuItem = menuById.get(add.menu_item_id);
     if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
@@ -3110,13 +3262,21 @@ export function decide(
   }
 
   const guardDroppedRemoves: Array<{ line_key: string; item_name: string }> = [];
+  // Round 4 P0: the pronoun's referent is resolved ONCE against the cart as
+  // it stands after the replacement parser and this turn's adds above --
+  // same "most recently added real line" convention throughout this file.
+  const pronounTargetLineKey = resolvePronounTargetLineKey(nextCart);
   for (const rm of proposal.removes ?? []) {
+    // Already executed directly by the replacement parser above -- the line
+    // is gone, so findLineByKey below would otherwise read this as "that
+    // item wasn't in your order" and surface a spurious decline.
+    if (rm.line_key === replacementHandledLineKey) continue;
     const idx = findLineByKey(nextCart, rm.line_key);
     if (idx < 0) { declines.push({ reason: "That item wasn't in your order." }); continue; }
     const line = nextCart[idx];
-    const singleRealLineInCart = nextCart.filter(isRealCartLine).length === 1;
     const lineCategory = menuById.get(line.menu_item_id)?.category;
-    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, singleRealLineInCart)) {
+    const isPronounTargetLine = line.line_key === pronounTargetLineKey;
+    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, isPronounTargetLine)) {
       guardDroppedRemoves.push({ line_key: rm.line_key, item_name: line.name });
       continue;
     }
