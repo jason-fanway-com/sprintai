@@ -681,6 +681,28 @@ in this repository's history and hasn't been updated in over a week — worth a 
 with deploy access confirming what's really live there before anything gets
 deployed on top of it blind. Full detail in `HANDOFF.md` and `RUNBOOK.md`.
 
+### Added 2026-09-18 — a restaurant's real PIN and POS secret were visible in the browser; a reliability jump confirmed live on real shops
+
+**Privacy/compliance fix, live today**: the admin dashboard's shop-settings page had been
+loading a restaurant's real 4-digit staff PIN and their real Toast POS integration secret
+into the browser on every page load. Anyone with the page open and their browser's
+developer tools out — a shop owner looking at their own shop, or a super-admin looking at
+any shop — could read either value directly off the network response; the PIN wasn't even
+visually masked. Fixed today: the browser now only ever receives a yes/no "is one set"
+flag, never the real value, and setting a new PIN or secret is a blank write-only field.
+Confirmed live on the production admin site, not just committed.
+
+**Reliability jump, confirmed on real shop traffic.** The engine change from 2026-09-14/15
+is now confirmed switched on for all three real shops (previously unverified). A batch of
+50 simulated customer orders against the demo shop, in Stripe's test mode, went from 39 of
+49 reaching a real payment link this morning to 46 of 50 by tonight, after a day of fixes
+to how the bot resolves disambiguated items, handles a second request in the same text
+message, and shows a full read-back of the cart before asking the customer to confirm. Order
+totals were correct in every run measured today, both before and after — today's fixes were
+about orders completing and staying accurate to what was said, not about billing math. This
+was measured against the team's own sandbox shop; the same test has not yet been run
+against either of the two real, non-test restaurants on the platform.
+
 ---
 
 ## What's next (near-term roadmap)

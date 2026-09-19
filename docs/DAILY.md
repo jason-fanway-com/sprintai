@@ -2878,3 +2878,178 @@ the older ordering path. This local environment doesn't have the database creden
 read that flag; someone with DB access should confirm it per shop before assuming the
 fixes above apply everywhere.
 
+## 2026-09-18
+
+41 commits, 04:06–22:24. This resolves yesterday's open question first, then covers the
+rest of the day.
+
+### Yesterday's open question, answered: the new engine is on for all three real shops
+
+Queried `shops.turn_engine_enabled` directly against the live database. It is `true` for
+Zio's Pizzeria, Not Just Bagels, and Vito's Pizza — every real shop. Everything below that
+touches ordering behavior applies to real customer traffic on all three, not just the demo
+shop. (Vito's itself is flagged `is_test: true` in the database — it's the sandbox/demo
+shop the team uses for its own testing, not a real restaurant with real diners; Zio's and
+Not Just Bagels are the two that are not marked test.)
+
+### Deploy status, checked by downloading the live code, not by reading commit messages
+
+- `chat-sms`: downloaded the running function directly. It carries
+  `DEPLOY_SHA: 6ffb4e2dbff79258b51e8b0f9c79be44c3bf463a` — today's 21:33 commit. Because that
+  commit's own tree is what got copied and deployed, **everything committed today before
+  21:33 is live**, even though most of those individual commits say "No deploy" in their own
+  message (that note describes the moment they were committed, not the end of the day — a
+  single deploy later that evening picked up all of them at once). Only the very last commit
+  of the day (22:24, new local test cases, see below) postdates that deploy and isn't function
+  code anyway, so nothing is missing.
+- `compile-menu`: same check, downloaded directly. It carries
+  `DEPLOY_SHA: 6898989f8cebf98d6390f8ee50c88d6a6c5269e9` (19:28), which covers all four of
+  today's menu-compiler fixes (13:49 through 18:56, see below).
+- Practical effect: the read-back-before-checkout feature, the address-question-loop fix, the
+  add-on-double-charge fix, the quantity-correction fix, and the echo-wording fix are all
+  live right now for Zio's and Not Just Bagels customers, not just tested and waiting.
+
+### What the day's own simulation runs show, in customer terms
+
+The team ran the same 50 simulated orders against Vito's (the sandbox shop, Stripe test
+mode — no real money) repeatedly through the day as fixes landed:
+
+| | reached a real payment link | asked for something that never showed up in the cart | stuck asking the same question 3+ times |
+|---|---|---|---|
+| this morning | 39 of 49 | 11 | 17 |
+| tonight, last run (21:33 deploy) | 46 of 50 | 2 | 6 |
+
+The order total was correct in every one of the 19 runs measured today, including before
+any of today's fixes — so today's work was about orders completing and staying accurate to
+what was said, not about the math. I did not re-run this simulation myself; this is the
+day's own harness output, cross-checked against the deploy-SHA finding above (the numbers
+line up with what's actually deployed).
+
+### A real bug, introduced and fixed the same day: calzones briefly stopped resolving
+
+At 17:39 (`a5483800`) a fix taught the menu compiler to treat a sized item's plain name
+("calzone") as always matching its own family, so customers don't have to say the exact
+listed name. The first version of that rule only fired when the family also had an
+unsized sibling item — true for 17 of Vito's 29 sized families, false for the other 12
+(calzone, alfredo, cheese pizza, white pizza, and others). For about 50 minutes, in real
+sandbox test conversations, asking for a calzone by name got "Sorry, I didn't catch that."
+Fixed at 18:31 (`ac7396db`) by dropping that condition — every sized family now gets its
+plain-name match unconditionally. Fixed before the evening's `compile-menu` deploy went
+out, so the broken version was never in what's serving traffic once that deploy landed at
+19:28.
+
+### The admin dashboard was sending a restaurant's real PIN and POS secret to the browser — now fixed and confirmed live
+
+Two commits (`c3b6061a` at 11:11, `6274e5ea` at 12:55) stopped the shop-settings page from
+loading a restaurant's real Toast POS client secret and real 4-digit staff PIN into the
+browser on every page load — previously, anyone with the page open and devtools could read
+either value straight off the network response, whether they were the shop's own owner or
+a super-admin looking at a different shop. The page now only receives a yes/no "is one
+configured" flag (two new database columns, migrations 144 and 145), and setting a new PIN
+or secret goes through a blank write-only field instead of ever reading the old one back.
+
+Confirmed two ways: (1) queried the live `shops` table directly — both new columns exist
+and return real true/false values today, not the old plaintext columns; (2) fetched
+`getsprintai.com/admin` and its JS bundle directly — the code currently being served to
+browsers already contains this fix. Note: the rebuilt browser bundle files sitting in this
+repo's working tree (`admin-dashboard/dist/`, `admin-dashboard/deploy-root/`) are
+uncommitted as of this writing, even though the build they represent is the one actually
+live in production — worth committing so the tree matches what's deployed.
+
+### The "propose_success" logging bug: writing zero rows since the moment it shipped
+
+A 17:26 commit (`3070a9ce`) added logging for every time an item is added to a cart
+successfully. It silently wrote nothing from the moment it shipped — the database's own
+rule for that table didn't recognize the new log category and rejected every insert, and
+because the logging code is deliberately built to never throw an error on failure (so a
+logging bug can't take down an order), nothing anywhere surfaced the rejection. Fixed at
+18:38 (`4d8bb0bc`, migration 146, widening the database rule). I could not independently
+re-check the row count myself — the credentials available in this environment can read the
+`shops` table but not `error_log` — but the team's own end-of-day check reports 1,543
+matching rows now present, the most recent written seconds before they looked, which is
+consistent with the fix working.
+
+### Deploy script now refuses two ways it could previously lie about what shipped
+
+Both same-day, both to `scripts/deploy-function.sh`: it now refuses to deploy if there are
+uncommitted files anywhere in what `chat-sms` actually imports (13:44, `6986ffe9`) —
+previously it would copy the literal working directory and stamp it as the committed
+version even if a file in it wasn't actually committed. And it refuses to deploy while one
+of the 50-order simulation runs is still in progress (13:06, `442ea384`) — previously a
+deploy landing mid-run would split one simulation's results across two different code
+versions and attribute all of it to whichever version was live when the run started. Both
+are guardrails around trusting what "deployed" means, not behavior changes for customers.
+
+### The rest of the day's ordering-bot fixes, grouped by what customers actually experienced
+
+All of the following are in the 21:33 deploy above (i.e., live for Zio's and Not Just
+Bagels), each pinned to a real conversation the team pulled from logs rather than a
+hypothetical:
+
+- **Answering a "which one did you mean?" question in plain English.** Before today, only a
+  bare number ("2") was understood; "3 please, the hot sandwich" or "I'd like the hot
+  sandwich" got the same question repeated. Fixed in stages (14:29–16:11): the bot now reads
+  ordinals, option text, and named categories/sizes as real answers, and — because an early
+  version of this briefly pulled the wrong item when a customer's answer also happened to
+  restate their whole order in the same text message, once charging for a pizza nobody asked
+  for in testing — it now reads only the answer part of the message first.
+- **A second request tacked onto the same text message was being dropped.** "Wheat bread for
+  the cheesesteak, and can I also get 10 wings?" would set the bread and never mention the
+  wings again, because the code stopped processing the message as soon as it answered the
+  open question. Fixed 17:16 (`260f7c1f`) by detecting phrases like "also," "and a," "can I
+  add" and giving the leftover text a second pass.
+- **The bot was trusting the AI model's word for what a customer said, without checking.**
+  17:26 (`3070a9ce`): an item the model proposed adding is now checked against the actual
+  words the customer typed before it's trusted — one real test conversation had the model
+  add a cheesesteak to the cart that was never mentioned at all. Same commit: a customer
+  correcting themselves ("actually, just the house salad") now removes the item it's
+  replacing instead of leaving both in the cart.
+- **An add-on named alongside its item was being charged twice.** "House salad with black
+  diamond steak" correctly added the $8 steak topping to the salad, and separately added a
+  bogus $12.49 "Steak" item as its own line — the same words matched two different parts of
+  the menu and nobody had reconciled that. Fixed 19:37 (`0bc58645`).
+- **A customer naming an unavailable choice got a generic list instead of being heard.**
+  Naming a dressing that isn't on the menu got "Let me list the options for you," over and
+  over, never acknowledging what the customer actually said — one test conversation repeated
+  the same unavailable answer 5 times. Fixed 19:28 (`6898989f`) to echo back what they said
+  and the real list; a follow-up same evening (19:58, `37fbc9f9`) fixed a case where that new
+  echo was covering for cart data that had gotten duplicated rather than the slot logic
+  itself.
+- **Read-back before checkout.** 18:09 (`c38d454e`), a Jason-requested feature: the
+  confirmation step now lists every cart line with its price before asking "confirm?"
+  instead of just showing the total — so a dropped or duplicated item is visible before
+  payment, not after. Two follow-ups same evening fixed corrections made *while* that
+  read-back is on screen: a quantity fix ("I meant 2, not 1") was being read as a flat "no"
+  and discarded (20:08, `47c82d45`), and "X, not Y" was sometimes deleting a cart line the
+  customer never mentioned instead of the one they named (20:19, `7949261f`).
+- **The address question could loop forever.** One real run asked for a delivery address 14
+  times across 3 conversations, with "can I just pick it up instead?", "forget it, cancel",
+  and a different address each producing the identical "I couldn't find that address" reply
+  forever. Fixed 19:27 (`33aa8755`): switching to pickup or cancelling now works while the
+  address question is open, and after two failed lookups the bot offers pickup instead of
+  asking a third time.
+- **A plural item name was silently matching the wrong dish.** "2 small Meat Lovers pizzas"
+  was resolving to a $9.99 stromboli roll also named "Meat Lovers" instead of the $12.95
+  pizza, because the roll's real name is plural and the pizza family's shared name is
+  singular, and the matching logic didn't account for that. Fixed 20:38 (`6489e00c`).
+- A same-evening revert-then-reapply (`3928a2f2` then `e79c689f`, both 21:14–21:18, 4
+  minutes apart) left the code exactly as it was before either — net effect: nothing
+  changed. Noting it only because it happened, not because anything about production
+  behavior is different for it.
+
+### Test suite: slang words added ahead of a new shop's go-live
+
+22:24 (`f038bc88`) adds test cases asserting the bot resolves regional slang — "hoagie,"
+"pop," "pie" (meaning a whole pizza), "mozz sticks," "schmear," "frappe" — to the correct
+item and price. This is a local test-generator file, not chat-sms runtime code, so it
+needs no deploy; it exists to be run before a shop with no track record yet goes live, and
+I found no evidence it has been run against a real shop yet.
+
+### Not checked today
+
+Whether Zio's or Not Just Bagels has been run through the same 50-order simulation Vito's
+was — every fix today was written and described as a general rule rather than a
+Vito's-specific patch, but that claim is untested on the other two shops. The ~15-migration
+backlog and the `import-menu-csv` deployed-code mismatch flagged in yesterday's entry were
+not re-examined today; nothing found today changes either finding.
+

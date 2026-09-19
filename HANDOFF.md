@@ -1516,6 +1516,58 @@ migration 124, not a new problem introduced today.
 **Not checked today**: per-shop `shops.turn_engine_enabled` — which real shops are
 actually exercising the fixes above. Needs DB access this environment didn't have.
 
+## Update — 2026-09-18: the new engine is confirmed on for all three real shops; a security leak in the admin dashboard closed; read-back-before-checkout live
+
+**`shops.turn_engine_enabled` is `true` for all three real shops** (Zio's Pizzeria, Not
+Just Bagels, Vito's Pizza) — checked directly against the database, closing the "not
+checked" item from 2026-09-17. Vito's is flagged `is_test: true` (the team's own sandbox,
+Stripe test mode); Zio's and Not Just Bagels are not. Every ordering-bot fix below applies
+to real customer traffic on the two real shops, not just the sandbox.
+
+**LIVE right now (new since 2026-09-17 evening)**, confirmed by downloading the running
+code directly (not by reading commit messages):
+- `chat-sms` — `DEPLOY_SHA: 6ffb4e2dbff79258b51e8b0f9c79be44c3bf463a` (today's 21:33 commit).
+  This one deploy carries everything committed before it today: read-back-before-checkout
+  (full cart shown before "confirm?"), the address-question-loop fix (pickup switch, cancel,
+  2-strike give-up), an add-on-named-with-its-item no longer double-charging, a quantity
+  correction while confirm is open now applying on the first try, natural-language answers
+  to "which one did you mean?", and several item-matching fixes (plural names, choice-tie
+  narrowing, second request in the same text message no longer dropped). Full list in
+  `docs/DAILY.md` under `## 2026-09-18`.
+- `compile-menu` — `DEPLOY_SHA: 6898989f8cebf98d6390f8ee50c88d6a6c5269e9` (19:28). Carries
+  today's menu-compiler fixes: shared bare item names (e.g. "cheesesteak") ask instead of
+  silently guessing the wrong dish; every sized family (calzone, alfredo, etc.) matches on
+  its plain name whether or not it has an unsized sibling.
+- Admin dashboard's PIN/POS-secret leak (below) — confirmed live by fetching
+  `getsprintai.com/admin` directly.
+
+**Security fix, live**: the shop-settings page was loading a restaurant's real Toast POS
+client secret and real staff PIN into the browser on every page load (any shop owner or
+super-admin with devtools open could read them). Now only a yes/no "is one configured" flag
+is sent (migrations 144, 145); the page writes new values through a blank field instead of
+ever reading the old one back.
+
+**Also fixed today**: a logging bug where every successful item-resolution log write had
+been silently rejected since the feature shipped a few hours earlier (a database rule
+didn't recognize the new log category) — fixed via migration 146. The deploy script now
+refuses to ship uncommitted files or deploy mid-simulation-run.
+
+**A live bug happened and was fixed the same day**: an item-matching change briefly broke
+12 of Vito's 29 sized item families (calzone, alfredo, and others) — asking for a calzone
+by name got "Sorry, I didn't catch that" for about 50 minutes in sandbox testing — fixed
+before the evening's `compile-menu` deploy, so it was never in what's live now.
+
+**Simulation result** (Vito's sandbox, Stripe test mode, same 50 simulated customers,
+re-run through the day as fixes landed): orders reaching a real payment link went from
+39/49 this morning to 46/50 tonight; items a customer asked for that never showed up in
+the cart went from 11 to 2. Order totals were correct in all 19 runs measured today,
+including before any of today's fixes.
+
+**Not checked today**: Zio's and Not Just Bagels haven't been run through the same
+simulation Vito's was — today's fixes are written as general rules, not Vito's-specific,
+but that's untested on the other two shops. The ~15-migration backlog and the
+`import-menu-csv` deployed-code mismatch (both flagged 2026-09-17) were not re-examined.
+
 ## Quickstart for development
 
 ```bash

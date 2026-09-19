@@ -2842,3 +2842,33 @@ are live. `public-tester`'s session-cap raise (`483b9f76`, 1000 → 5000) is als
 live by downloading that function directly. Local test suite at the same `HEAD`: 1500
 passed, 0 failed, 7 ignored (`deno test --allow-all` across `chat-sms`, `_shared`,
 `import-menu-csv`).
+
+## `deploy-function.sh` now refuses two more ways of lying about what shipped — 2026-09-18
+
+Two additive guards, both in `scripts/deploy-function.sh`:
+
+1. **Refuses a dirty bundle.** The script copies the working tree and stamps `DEPLOY_SHA`
+   with `HEAD` — so an uncommitted change to any file in the function's actual `deno info`
+   import graph used to ship under a stamp claiming it was a specific commit when it wasn't.
+   It now checks that file list (not the whole directory — an unrelated dirty file elsewhere
+   in the repo does not block a deploy) and refuses if any of it is uncommitted.
+2. **Refuses mid-simulation.** A deploy landing while one of the 50-order simulation runs
+   (`simcustomer.py`) is in flight used to split that run's results across two different code
+   versions and attribute all of it to whichever version was live when the run started.
+   `simcustomer.py` now writes its pid to `~/po-scratch/simruns/INFLIGHT`; the deploy script
+   refuses while that pid is alive and ignores a stale lock.
+
+Net effect for anyone verifying "is X actually deployed": a passed deploy is now good
+evidence the stamped SHA really is what's running, on top of the existing practice of
+downloading the artifact and checking `DEPLOY_SHA` directly (see the entry above) —
+one confirms the stamp CAN'T lie by construction, the other confirms IT DIDN'T this time.
+
+## One deploy at end-of-day can retroactively ship a whole day of "No deploy, per dispatch" commits — 2026-09-18
+
+Today, 8 of roughly 20 `chat-sms` commits said "No deploy" or "No deploy, per dispatch" in
+their own commit message — accurate at the moment each was written. A single deploy cut at
+21:33 (`6ffb4e2d`) then shipped the cumulative working tree as of that commit, which
+included every one of those "not deployed" commits from earlier the same day. Reading a
+commit message's own "no deploy" note as still true later is a mistake — always re-check
+the currently-deployed `DEPLOY_SHA` against `git log`, don't rely on what any single commit
+said about itself at the time it was written.
