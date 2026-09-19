@@ -500,6 +500,21 @@ function formatDelta(cents: number): string {
 export function renderStepQuestion(step: CompiledStep, displayName: string, enumerate = false, leadIn?: string): string {
   const key = step.prompt_template.split(".")[0] || "";
   const template = TEMPLATE_QUESTIONS[key];
+  // PO fix (2026-09-19, freeze item 1 — Vito's "Gyro (Beef or Chicken)" slot
+  // loop): an "X or Y"-shaped key (real DB group name, e.g. "Beef or
+  // chicken" -> "beef_or_chicken", or a name-derived slot -- neither has a
+  // row in TEMPLATE_QUESTIONS) rendered through the generic fallback below
+  // as "What beef or chicken would you like for the Gyro Sandwich?" --
+  // grammatical but not how a person asks a binary choice, and reported
+  // live as "What choice would you like?" once isRedundantDerivedStep
+  // (this file) stopped masking it with a worse-worded duplicate step.
+  // General (not gyro-specific): ANY group whose key contains "_or_" gets
+  // this phrasing instead, using the group's own real choice names --
+  // never a second, redundant enumeration, since the choices are already
+  // named in the question itself.
+  if (!template && key.includes("_or_")) {
+    return `Would you like ${renderChoiceList(step.choices, false)} for the ${displayName}?`;
+  }
   const base = template
     ? template.replace("{display_name}", displayName)
     // Generic fallback for a slot_key not in the fixed Appendix C list —
@@ -686,6 +701,45 @@ export function stripDeferredStepQuestion(
   return kept.join(" ").trim();
 }
 
+function choiceSetKey(choices: EngineChoice[]): string {
+  return choices.map(c => c.display.trim().toLowerCase()).sort().join("|");
+}
+
+/**
+ * PO fix (2026-09-19, freeze item 1 — Vito's "Gyro (Beef or Chicken)" slot
+ * loop): compile-menu/index.ts's header documents that normalize.ts parses
+ * an "X or Y" pattern straight out of an item's raw NAME into a synthetic,
+ * DB-id-free step (group_id `derived:<item>:<n>`, slot_key "choice" —
+ * compile-menu.ts's SLOT_RANK calls this "pre-infer normalize.ts placeholder
+ * slot_key"). When the shop ALSO has a real, hand-defined option_groups row
+ * for that exact same choice (Vito's "Beef or chicken" group on the Gyro,
+ * provenance "stated") the compiler emits BOTH into the same ask_plan.steps
+ * array — the derived one AND the real one, offering the identical choice
+ * set. Live probe (decide()+ask() against Vito's real menu/lexicon,
+ * 2026-09-19): adding "a gyro sandwich" opens the DERIVED step first, and
+ * because its slot_key "choice" has no row in TEMPLATE_QUESTIONS,
+ * renderStepQuestion's generic fallback fires verbatim as "What choice
+ * would you like for the Gyro Sandwich?" — the exact wording reported live.
+ * A single clear answer ("beef"/"chicken") happens to resolve both steps in
+ * one shot today (resolveAskPlan reapplies the same customerText to every
+ * still-open step in one call), so this has not produced a true infinite
+ * loop in probing — but the customer is shown a confusing, mis-worded
+ * question that should never have existed, and the two steps staying in
+ * sync is incidental to how much text overlaps, not guaranteed. Fix: never
+ * surface (ask, or require resolved) a `derived:` step whose choice set
+ * exactly matches a REAL (non-derived) step's choice set elsewhere in the
+ * same plan — the real step, with real option ids and real prices, always
+ * wins. Scoped narrowly to the `derived:` prefix (only ever produced by the
+ * name-parser, never a real option_groups id) so two independently-defined
+ * real groups that happen to share choice names (never observed, but not
+ * impossible) are completely unaffected.
+ */
+export function isRedundantDerivedStep(step: CompiledStep, allSteps: CompiledStep[]): boolean {
+  if (!step.group_id.startsWith("derived:")) return false;
+  const key = choiceSetKey(step.choices);
+  return allSteps.some(other => other !== step && !other.group_id.startsWith("derived:") && choiceSetKey(other.choices) === key);
+}
+
 /**
  * The sequencer + resolver core. Walks `ask_plan.steps` in canonical order
  * (already sorted by the compiler). For each SLOT step not yet in
@@ -827,6 +881,7 @@ export function resolveAskPlan(
 
   for (const step of askPlan.steps) {
     if (alreadyResolvedGroupIds.has(step.group_id)) continue;
+    if (isRedundantDerivedStep(step, askPlan.steps)) continue;
 
     // Modifiers (bug 4, 2026-09-07: "buffalo chicken pizza with pepperoni"
     // silently dropped the topping and its $3.00 price): apply reactively,
@@ -927,7 +982,9 @@ export function resolveAskPlan(
 
 /** True iff every SLOT step in the plan has a resolution (ignores modifiers). */
 export function allSlotsResolved(askPlan: AskPlan, resolvedGroupIds: Set<string>): boolean {
-  return askPlan.steps.every(step => step.kind !== "slot" || resolvedGroupIds.has(step.group_id));
+  return askPlan.steps.every(step =>
+    step.kind !== "slot" || resolvedGroupIds.has(step.group_id) || isRedundantDerivedStep(step, askPlan.steps)
+  );
 }
 
 // ── Structural types for the add_item integration (deliberately minimal —

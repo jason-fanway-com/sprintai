@@ -13,6 +13,7 @@ import {
   renderStepQuestion,
   resolveAskPlan,
   allSlotsResolved,
+  isRedundantDerivedStep,
   enforceVerbatimStepQuestion,
   stripDeferredStepQuestion,
   asksForOptions,
@@ -1583,4 +1584,91 @@ Deno.test("matchChoiceAsWholeSpan (Round 2, item 2): 'blackened salmon' (no noun
     { id: "a-shrimp", display: "Shrimp", price_delta_cents: 400 },
   ];
   assertEquals(matchChoiceAsWholeSpan(addOns, "blackened salmon", "add-ons")?.id, "a-salmon");
+});
+
+// PO freeze item 1 (2026-09-19, live report — Vito's "Gyro (Beef or
+// Chicken)" slot loop, sim #5, nearly every run). Confirmed live shape (menu
+// item 7d457415-b011-4182-86a1-5869aab665c3, "Gyro Sandwich"): the compiler
+// emits BOTH a synthetic, name-derived step (group_id `derived:<item>:0`,
+// slot_key "choice" — compile-menu.ts's own comment: "pre-infer normalize.ts
+// placeholder slot_key") AND the real, hand-defined "Beef or chicken"
+// option_groups row, offering the identical Beef/Chicken choice set. The
+// derived step sorts first (SLOT_RANK ranks "choice" at 1, ahead of the
+// real step's unranked slot_key at 5.5), so it's the one customers saw,
+// worded through renderStepQuestion's generic fallback as "What choice
+// would you like for the Gyro Sandwich?". isRedundantDerivedStep is the
+// fix: a `derived:`-prefixed step is ignored wherever a REAL step elsewhere
+// in the same plan offers the identical choice set.
+const GYRO_DERIVED_CHOICE_STEP: CompiledStep = {
+  group_id: "derived:7d457415-b011-4182-86a1-5869aab665c3:0",
+  slot_key: "choice", kind: "slot", ask_mode: "ask", prompt_template: "choice.ask",
+  choices: [
+    { id: "derived:7d457415-b011-4182-86a1-5869aab665c3:0:0", display: "Beef", price_delta_cents: 0 },
+    { id: "derived:7d457415-b011-4182-86a1-5869aab665c3:0:1", display: "Chicken", price_delta_cents: 0 },
+  ],
+};
+const GYRO_REAL_BEEF_OR_CHICKEN_STEP: CompiledStep = {
+  group_id: "d9bb5d81-9c98-42d3-b9a9-ff434f0bdbee",
+  slot_key: null, kind: "slot", ask_mode: "ask", prompt_template: "beef_or_chicken.ask",
+  choices: [
+    { id: "92815677-125e-4ecd-ba05-71f421e943ce", display: "Chicken", price_delta_cents: 400 },
+    { id: "f72e1df2-fde0-4bc4-a50a-b24409a1a89d", display: "Beef", price_delta_cents: 0 },
+  ],
+};
+const GYRO_SANDWICH_PLAN: AskPlan = {
+  compiled_at: "2026-09-19T16:43:21.051Z", compiler_version: 1, display_name: "Gyro Sandwich",
+  recap_template: "{qty} {display_name}", ticket_template: "{name}", base_price_cents: 1099,
+  steps: [GYRO_DERIVED_CHOICE_STEP, GYRO_REAL_BEEF_OR_CHICKEN_STEP],
+};
+
+Deno.test("isRedundantDerivedStep: the derived 'choice' step is flagged redundant because a real (non-derived) step offers the identical Beef/Chicken choice set", () => {
+  assertEquals(isRedundantDerivedStep(GYRO_DERIVED_CHOICE_STEP, GYRO_SANDWICH_PLAN.steps), true);
+  assertEquals(isRedundantDerivedStep(GYRO_REAL_BEEF_OR_CHICKEN_STEP, GYRO_SANDWICH_PLAN.steps), false, "the real step is never itself flagged, regardless of order");
+});
+
+Deno.test("isRedundantDerivedStep: a derived step with NO matching real step (the common, correct case) is never flagged", () => {
+  const soloItem = [{ ...GYRO_DERIVED_CHOICE_STEP }];
+  assertEquals(isRedundantDerivedStep(soloItem[0], soloItem), false);
+});
+
+Deno.test("isRedundantDerivedStep: two REAL (non-derived) steps that happen to share a choice set are never collapsed — only a `derived:`-prefixed id can be suppressed", () => {
+  const realA: CompiledStep = { group_id: "real-group-a", slot_key: null, kind: "slot", ask_mode: "ask", prompt_template: "a.ask", choices: GYRO_DERIVED_CHOICE_STEP.choices };
+  const realB: CompiledStep = { group_id: "real-group-b", slot_key: null, kind: "slot", ask_mode: "ask", prompt_template: "b.ask", choices: GYRO_DERIVED_CHOICE_STEP.choices };
+  assertEquals(isRedundantDerivedStep(realA, [realA, realB]), false);
+  assertEquals(isRedundantDerivedStep(realB, [realA, realB]), false);
+});
+
+Deno.test("resolveAskPlan: the Gyro Sandwich's real plan (derived duplicate + real step) never sets nextStep to the derived step — 'What choice would you like' can never be asked", () => {
+  const result = resolveAskPlan(GYRO_SANDWICH_PLAN, "", new Set(), new Map());
+  assertEquals(result.nextStep?.group_id, GYRO_REAL_BEEF_OR_CHICKEN_STEP.group_id);
+});
+
+Deno.test("resolveAskPlan: answering 'beef' resolves ONLY the real group_id — the derived group_id never appears in `resolved`, so it can never desync from the real selection", () => {
+  const result = resolveAskPlan(GYRO_SANDWICH_PLAN, "beef", new Set(), new Map());
+  assertEquals(result.resolved.length, 1);
+  assertEquals(result.resolved[0].group_id, GYRO_REAL_BEEF_OR_CHICKEN_STEP.group_id);
+  assertEquals(result.resolved[0].choice.id, "f72e1df2-fde0-4bc4-a50a-b24409a1a89d");
+  assertEquals(result.nextStep, null, "no more open slots after the one real question is answered");
+});
+
+Deno.test("allSlotsResolved: true once only the REAL group_id is resolved — the derived duplicate's group_id is never required", () => {
+  const resolvedRealOnly = new Set([GYRO_REAL_BEEF_OR_CHICKEN_STEP.group_id]);
+  assertEquals(allSlotsResolved(GYRO_SANDWICH_PLAN, resolvedRealOnly), true);
+});
+
+Deno.test("allSlotsResolved: false when nothing at all is resolved yet (the derived step's presence doesn't vacuously satisfy the plan)", () => {
+  assertEquals(allSlotsResolved(GYRO_SANDWICH_PLAN, new Set()), false);
+});
+
+Deno.test("applyCompiledAddItem: adding a Gyro Sandwich renders the REAL beef-or-chicken question, never the generic 'What choice would you like' the derived step used to produce", () => {
+  const cart: CompiledCartLine[] = [];
+  const menuItem: CompiledMenuItem = {
+    ask_plan: GYRO_SANDWICH_PLAN, bot_state: "orderable",
+    option_groups: [{ id: GYRO_REAL_BEEF_OR_CHICKEN_STEP.group_id, name: "Beef or chicken" }],
+  };
+  const result = applyCompiledAddItem(cart, menuItem, "gyro-sandwich", 1, "a gyro sandwich", undefined, undefined, []);
+  const r = result.result as { next_question?: string | null };
+  assert(r.next_question, "must ask a follow-up question");
+  assertEquals(r.next_question, "Would you like Chicken or Beef for the Gyro Sandwich?");
+  assert(!r.next_question!.toLowerCase().includes("what choice"));
 });

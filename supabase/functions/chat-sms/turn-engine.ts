@@ -110,6 +110,7 @@ import {
   renderChoiceList,
   matchChoiceInText,
   matchChoiceAsWholeSpan,
+  isRedundantDerivedStep,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -3699,7 +3700,9 @@ export function ask(
     const menuItem = menuById.get(line.menu_item_id);
     if (!menuItem?.ask_plan) continue;
     const resolvedGroupIds = new Set(Object.keys(line.ask_plan_selections ?? {}));
-    const openSlotStep = menuItem.ask_plan.steps.find(s => s.kind === "slot" && !resolvedGroupIds.has(s.group_id));
+    const openSlotStep = menuItem.ask_plan.steps.find(s =>
+      s.kind === "slot" && !resolvedGroupIds.has(s.group_id) && !isRedundantDerivedStep(s, menuItem.ask_plan!.steps)
+    );
     if (openSlotStep) {
       return carry({ kind: "slot", line_key: effectiveLineKey(line), group_id: openSlotStep.group_id }, "ordering");
     }
