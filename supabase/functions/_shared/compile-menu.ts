@@ -1434,6 +1434,66 @@ const DERIVED_BASE_PIZZA_RE = /\b(cheese|plain|neapolitan|regular|traditional)\b
 const DERIVED_PIZZA_CATEGORY_RE = /^pizza/i;
 const DERIVED_DEFAULT_CAP = 40;
 
+// A group's slot_key is only populated by archetypes.ts's bind_to_list_named
+// classification, which runs against extractedGroups during initial menu
+// import. A group the OWNER creates later (admin dashboard "add a modifier
+// group") never goes through that classifier, so slot_key stays null even
+// when the group is plainly named "Toppings" — this is what left Vito's
+// pizza toppings group (`slot_key: null`, `name: "Toppings"`, owner_edited)
+// invisible to D1 (2026-09-19 PO dispatch). Fall back to the SAME name
+// pattern archetypes.ts already uses for this slot (`/topping/i`) whenever
+// slot_key hasn't been classified, rather than requiring a recompile of the
+// whole classification pipeline just to unblock derived rows.
+const DERIVED_TOPPINGS_NAME_RE = /topping/i;
+
+function isToppingsGroup(g: CompileGroup): boolean {
+  if (g.kind !== "modifier") return false;
+  if (g.slot_key === "toppings") return true;
+  return g.slot_key == null && DERIVED_TOPPINGS_NAME_RE.test(g.name);
+}
+
+// Compile-time single-topping derivation is deliberately narrow: a real
+// toppings group pairs every topping with BOTH a "(Half pizza)" and a
+// "(Whole pizza)" choice, both marked composable (Vito's 2026-09-19: all 32
+// choices across 16 toppings have not_composable=false) — deriving one row
+// per composable choice would spawn a "Bacon (Half pizza) Pizza" beside
+// "Bacon (Whole pizza) Pizza", and a full derived pizza for every one of the
+// 16 toppings (Steak, Gyro Meat, Roasted Peppers, ...), not just the ones a
+// customer actually orders by name. Per the PO dispatch, only this fixed,
+// code-defined list of commonly-ordered single toppings gets a derived
+// whole-pizza row; every other topping combination stays reachable only
+// through the base pizza + topping modifier flow. NOT per-shop configurable.
+const STANDARD_SINGLE_TOPPING_ALIASES: Record<string, string> = {
+  "pepperoni": "pepperoni",
+  "pepperonis": "pepperoni",
+  "sausage": "sausage",
+  "sausages": "sausage",
+  "mushroom": "mushroom",
+  "mushrooms": "mushroom",
+  "onion": "onion",
+  "onions": "onion",
+  "green pepper": "green pepper",
+  "green peppers": "green pepper",
+  "extra cheese": "extra cheese",
+};
+const STANDARD_SINGLE_TOPPING_ORDER = ["pepperoni", "sausage", "mushroom", "onion", "green pepper", "extra cheese"];
+
+// Strips a trailing "(Whole pizza)" / "(Half pizza)" portion qualifier, case-
+// and spacing-insensitive, from a topping choice's display text.
+const TOPPING_PORTION_RE = /\s*\(\s*(whole|half)(?:\s*pizza)?\s*\)\s*$/i;
+
+function toppingPortion(display: string): "whole" | "half" | null {
+  const m = display.match(TOPPING_PORTION_RE);
+  return m ? (m[1].toLowerCase() as "whole" | "half") : null;
+}
+
+// "Pepperoni (Whole pizza)" -> "Pepperoni"; a choice with no portion
+// qualifier at all (shops that don't split half/whole) passes through
+// unchanged.
+function toppingCleanDisplay(display: string): string {
+  return display.replace(TOPPING_PORTION_RE, "").trim();
+}
+
 // Size-word regexp used to extract the leading size from a size_label like
 // "Small 14''" → "Small". Falls back to the full label when no known word
 // leads it.
@@ -1467,7 +1527,7 @@ export function buildDerivedRows(
     if (!item.active) return false;
     if (!item.category || !DERIVED_PIZZA_CATEGORY_RE.test(item.category)) return false;
     if (!baseRe.test(item.name)) return false;
-    if (!item.groups.some(g => g.kind === "modifier" && g.slot_key === "toppings" && g.choices.length > 0)) return false;
+    if (!item.groups.some(g => isToppingsGroup(g) && g.choices.length > 0)) return false;
     // Orderable check — derived rows inherit the base item's state
     if (compiled.get(item.id)?.bot_state !== "orderable") return false;
     return true;
@@ -1532,18 +1592,38 @@ export function buildDerivedRows(
   const rows: DerivedMenuRow[] = [];
 
   for (const [sizeKey, baseItem] of bySize) {
-    const toppingsGroup = baseItem.groups.find(
-      g => g.kind === "modifier" && g.slot_key === "toppings",
-    );
+    const toppingsGroup = baseItem.groups.find(isToppingsGroup);
     if (!toppingsGroup) continue;
 
-    // Filter composable choices, then apply cap.
-    const composableChoices = toppingsGroup.choices
-      .filter(c => !c.not_composable)
+    // Pick, per standard topping, the single composable choice to derive
+    // from: the "(Whole pizza)" variant when the shop distinguishes half vs
+    // whole, else a choice with no portion qualifier at all. A "(Half
+    // pizza)"-only choice never backs a whole-pizza derived row — see
+    // STANDARD_SINGLE_TOPPING_ALIASES above for why this list is short.
+    const selected = new Map<string, CompileChoice>();
+    for (const choice of toppingsGroup.choices) {
+      if (choice.not_composable) continue;
+      const rawDisplay = (choice.display_name?.trim() || choice.name).trim();
+      const canonical = STANDARD_SINGLE_TOPPING_ALIASES[toppingCleanDisplay(rawDisplay).toLowerCase()];
+      if (!canonical) continue;
+      const portion = toppingPortion(rawDisplay);
+      if (portion === "half") continue;
+      const existing = selected.get(canonical);
+      if (!existing) {
+        selected.set(canonical, choice);
+        continue;
+      }
+      const existingPortion = toppingPortion((existing.display_name?.trim() || existing.name).trim());
+      if (existingPortion !== "whole" && portion === "whole") selected.set(canonical, choice);
+    }
+    const composableChoices = STANDARD_SINGLE_TOPPING_ORDER
+      .filter(k => selected.has(k))
+      .map(k => selected.get(k)!)
       .slice(0, cap);
 
     for (const choice of composableChoices) {
-      const choiceDisplay = (choice.display_name?.trim() || choice.name).trim();
+      const rawDisplay = (choice.display_name?.trim() || choice.name).trim();
+      const choiceDisplay = toppingCleanDisplay(rawDisplay);
       const choiceKey = normaliseTerm(choiceDisplay);
       const baseKey = baseItem.import_key ?? `id:${baseItem.id}`;
       const entityKey = `derived:${baseKey}#${choiceKey}#${sizeKey}`;
@@ -1593,8 +1673,14 @@ export function buildDerivedRows(
         ticket_template: `${baseName}\n  + ${choiceDisplay} x{qty}`,
       };
 
-      // Lexicon: three entries per derived row, all in ITEM position.
-      // "{choice} pizza", "{choice} pie", and the bare choice term.
+      // Lexicon: three entries per derived row in ITEM position — "{choice}
+      // pizza", "{choice} pie", and the bare choice term — plus a fourth,
+      // "{size} {choice} pizza", when this row has a size. The bare and
+      // unqualified terms tie across every size of the same topping (menu_
+      // items.size_label is intentionally left null for derived rows, see
+      // compile-menu/index.ts), so a customer who names the size up front
+      // ("the large pepperoni pizza") needs a term that resolves straight to
+      // THIS size's entity_key without depending on that narrowing signal.
       const choiceLower = choiceDisplay.toLowerCase();
       const lexiconTerms = dedupeLexicon([
         {
@@ -1615,6 +1701,14 @@ export function buildDerivedRows(
           target_id: entityKey,
           provenance,
         },
+        ...(sizeWord
+          ? [{
+              term: normaliseTerm(`${sizeWord.toLowerCase()} ${choiceLower} pizza`),
+              target_type: "item" as LexiconTargetType,
+              target_id: entityKey,
+              provenance,
+            }]
+          : []),
       ]);
 
       rows.push({

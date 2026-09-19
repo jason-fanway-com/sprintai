@@ -1549,10 +1549,12 @@ function buildTestMenu() {
   return { small, medium, large, sicilian, compiled };
 }
 
-Deno.test("buildDerivedRows: row count — 9 composable toppings × 3 Neapolitan sizes = 27 rows (Sicilian single-size family is inferior)", () => {
+Deno.test("buildDerivedRows: row count — of 9 composable toppings, only the 4 on the standard single-topping list (Pepperoni, Sausage, Mushrooms, Onions) derive × 3 Neapolitan sizes = 12 rows (Bacon/Peppers/Hot Peppers/Roasted Red Peppers/Fresh Garlic do not; Sicilian single-size family is inferior)", () => {
   const { small, medium, large, sicilian, compiled } = buildTestMenu();
   const rows = buildDerivedRows([small, medium, large, sicilian], compiled, new Map(), T_COMPILED_AT);
-  assertEquals(rows.length, 27);
+  assertEquals(rows.length, 12);
+  const toppingsDerived = new Set(rows.map(r => r.product_key));
+  assertEquals(toppingsDerived, new Set(["pizza:pepperoni", "pizza:sausage", "pizza:mushrooms", "pizza:onions"]));
 });
 
 Deno.test("buildDerivedRows: not_composable choice (Extra Cheese) is excluded from all derived rows", () => {
@@ -1587,19 +1589,33 @@ Deno.test("buildDerivedRows: price arithmetic — base + topping delta (exact)",
   assertEquals(largePepp?.price_cents, 1799 + 300);
 });
 
-Deno.test("buildDerivedRows: cap — 40 choices max per size (all 9 composable fit well under cap)", () => {
-  const { small, medium, large, compiled } = buildTestMenu();
-  // Build an item with 50 toppings — only 40 should appear
-  const manyToppings = Array.from({ length: 50 }, (_, i) => `Topping${i}`);
+Deno.test("buildDerivedRows: cap — capPerSize still limits the standard-topping list (all 6 fit well under the default 40)", () => {
+  // All 6 standard toppings present, none not_composable (unlike the shared
+  // helper's NOT_COMPOSABLE_NAME special-case for "Extra Cheese") — default
+  // cap (40) keeps all of them.
+  const allStandardNames = ["Pepperoni", "Sausage", "Mushrooms", "Onions", "Green Peppers", "Extra Cheese"];
+  const allStandardGroup: CompileGroup = {
+    ...toppingsGroup([]),
+    choices: allStandardNames.map((name, i) => ({
+      id: `standard-choice-${i}`, name, display_name: name, price_cents: 300, is_default: false,
+      provenance: "stated", not_composable: false,
+    })),
+  };
   const bigItem = pizzaItem({
     name: "Neapolitan Cheese Pizza - Large 18''",
     price_cents: 1799,
     size_label: "Large 18''",
-    groups: [toppingsGroup(manyToppings)],
+    groups: [allStandardGroup],
   });
   const compiledBig = new Map([orderable(bigItem.id)]);
   const rows = buildDerivedRows([bigItem], compiledBig, new Map(), T_COMPILED_AT);
-  assertEquals(rows.length, 40);
+  assertEquals(rows.length, 6);
+
+  // A tighter cap still truncates, in STANDARD_SINGLE_TOPPING_ORDER order
+  // (pepperoni, sausage, mushroom, ...) — not source/insertion order.
+  const capped = buildDerivedRows([bigItem], compiledBig, new Map(), T_COMPILED_AT, { capPerSize: 2 });
+  assertEquals(capped.length, 2);
+  assertEquals(new Set(capped.map(r => r.product_key)), new Set(["pizza:pepperoni", "pizza:sausage"]));
 });
 
 Deno.test("buildDerivedRows: regeneration is idempotent — identical inputs produce byte-identical output except compiled_at", () => {
@@ -1701,8 +1717,114 @@ Deno.test("buildDerivedRows: base item not orderable → skipped (no derived row
   const compiledWithBlock = new Map([...compiled]);
   compiledWithBlock.set(large.id, { ...compiled.get(large.id)!, bot_state: "blocked" });
   const rows = buildDerivedRows([small, medium, large], compiledWithBlock, new Map(), T_COMPILED_AT);
-  // Only small and medium should produce rows (9 × 2 = 18)
-  assertEquals(rows.length, 18);
+  // Only small and medium should produce rows (4 standard toppings × 2 = 8)
+  assertEquals(rows.length, 8);
   const hasLarge = rows.some(r => r.entity_key.includes("large"));
   assertEquals(hasLarge, false);
+});
+
+// ============================================================
+// buildDerivedRows — Vito's-shaped fixture (2026-09-19 PO dispatch, "pepperoni
+// pizza" root cause): real Vito's data has a "Cheese" pizza item with a
+// modifier group literally named "Toppings", slot_key NULL (owner_edited,
+// never ran through archetypes.ts's bind_to_list_named classifier), 16
+// toppings each with a not_composable=false "(Half pizza)" AND
+// "(Whole pizza)" choice pair. Live probe 2026-09-19 confirmed both gaps:
+// zero derived rows existed at all (slot_key gap), and a naive fix deriving
+// from every composable choice would have produced a "Bacon (Half pizza)
+// Pizza" beside "Bacon (Whole pizza) Pizza" for all 16 toppings.
+// ============================================================
+
+function vitosPortionChoice(base: string, portion: "half" | "whole", id: string): CompileGroup["choices"][0] {
+  const portionLabel = portion === "half" ? "Half pizza" : "Whole pizza";
+  const name = `${base} (${portionLabel})`;
+  return {
+    id, name, display_name: name,
+    price_cents: portion === "half" ? 350 : 450,
+    is_default: false, provenance: "owner_confirmed", not_composable: false,
+  };
+}
+
+function vitosToppingsGroup(): CompileGroup {
+  const toppingBases = ["Pepperoni", "Sausage", "Mushrooms", "Onions", "Green Peppers", "Steak", "Gyro Meat", "Bacon"];
+  const choices = toppingBases.flatMap((base, i) => [
+    vitosPortionChoice(base, "half", `vito-${i}-half`),
+    vitosPortionChoice(base, "whole", `vito-${i}-whole`),
+  ]);
+  return {
+    id: "vito-toppings-group", name: "Toppings", kind: "modifier", slot_key: null,
+    min_select: 0, max_select: 32, kitchen_critical: false, price_critical: false,
+    default_choice_id: null, ask_mode: null, provenance: "owner_confirmed", display_order: 0,
+    choices,
+  };
+}
+
+function vitosCheeseItem(overrides: Partial<CompileItem> & { name: string; price_cents: number; size_label: string | null }): CompileItem {
+  return {
+    id: `vito-item-${overrides.name.replace(/\W+/g, "-").toLowerCase()}`,
+    display_name: overrides.name,
+    category: "Pizza",
+    active: true,
+    price_provenance: "stated",
+    product_key: null,
+    missing_from_source_since: null,
+    import_key: `vito-import-${overrides.name.replace(/\W+/g, "-").toLowerCase()}`,
+    groups: [vitosToppingsGroup()],
+    ...overrides,
+  };
+}
+
+function buildVitosTestMenu() {
+  const small = vitosCheeseItem({ name: "Cheese - Small (10\")", price_cents: 849, size_label: "Small (10\")" });
+  const medium = vitosCheeseItem({ name: "Cheese - Medium (14\")", price_cents: 1250, size_label: "Medium (14\")" });
+  const large = vitosCheeseItem({ name: "Cheese - Large (16\")", price_cents: 1650, size_label: "Large (16\")" });
+  const compiled = new Map([orderable(small.id), orderable(medium.id), orderable(large.id)]);
+  return { small, medium, large, compiled };
+}
+
+Deno.test("buildDerivedRows: Vito's shape — a 'Toppings' group with slot_key null still qualifies (name-pattern fallback)", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  assert(rows.length > 0, "a null-slot_key group literally named 'Toppings' must still produce derived rows");
+});
+
+Deno.test("buildDerivedRows: Vito's shape — only the 5 standard toppings present (Pepperoni/Sausage/Mushrooms/Onions/Green Peppers) derive, not Steak/Gyro Meat/Bacon, × 3 sizes = 15 rows", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  assertEquals(rows.length, 15);
+  const productKeys = new Set(rows.map(r => r.product_key));
+  assertEquals(productKeys, new Set(["pizza:pepperoni", "pizza:sausage", "pizza:mushrooms", "pizza:onions", "pizza:green peppers"]));
+});
+
+Deno.test("buildDerivedRows: Vito's shape — the derived Large Pepperoni Pizza uses the WHOLE-pizza price delta, not the half", () => {
+  const { large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([large], compiled, new Map(), T_COMPILED_AT);
+  const largePepp = rows.find(r => r.product_key === "pizza:pepperoni")!;
+  assert(largePepp, "should have a large pepperoni derived row");
+  assertEquals(largePepp.price_cents, 1650 + 450, "must use the (Whole pizza) $4.50 delta, not the (Half pizza) $3.50 one");
+  assertEquals(largePepp.name, "Pepperoni Pizza - Large (16\")");
+  assertEquals(largePepp.display_name, "Large Pepperoni Pizza");
+  // Neither the row name nor its lexicon terms leak the "(Whole pizza)" qualifier.
+  assert(!largePepp.name.includes("Whole"), "derived row name must not include the portion qualifier");
+  for (const t of largePepp.lexicon_terms) assert(!t.term.includes("whole"), `lexicon term "${t.term}" must not include the portion qualifier`);
+});
+
+Deno.test("buildDerivedRows: Vito's shape — no 'Pepperoni (Half pizza) Pizza' or 'Pepperoni (Whole pizza) Pizza' row is ever produced, only one clean 'Pepperoni Pizza' per size", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const pepperoniRows = rows.filter(r => r.product_key === "pizza:pepperoni");
+  assertEquals(pepperoniRows.length, 3, "exactly one pepperoni derived row per size, not two (half + whole)");
+  for (const r of pepperoniRows) {
+    assert(!/half|whole/i.test(r.name), `row name "${r.name}" must not carry a half/whole qualifier`);
+  }
+});
+
+Deno.test("buildDerivedRows: Vito's shape — lexicon carries a size-qualified term ('large pepperoni pizza') alongside the bare and unqualified terms", () => {
+  const { large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([large], compiled, new Map(), T_COMPILED_AT);
+  const largePepp = rows.find(r => r.product_key === "pizza:pepperoni")!;
+  const terms = largePepp.lexicon_terms.map(t => t.term);
+  assert(terms.includes("pepperoni pizza"), "bare '{topping} pizza' term");
+  assert(terms.includes("pepperoni"), "bare topping term");
+  assert(terms.includes("large pepperoni pizza"), "size-qualified '{size} {topping} pizza' term — needed because derived rows carry no size_label of their own");
 });
