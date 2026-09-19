@@ -1026,12 +1026,20 @@ export function compileItem(
   compiledAt: string,
 ): CompiledItem {
   const { bot_state, bot_state_reason } = computeBotState(item, questions);
+  // A non-orderable row (display_only, blocked, stale, ...) is not a
+  // sellable item — it must never contribute a lexicon term a customer's
+  // wording can resolve to, or the resolver offers it as a candidate for
+  // something that can't actually be ordered (real incident: Vito's
+  // "Ranch [Pizza Finish]", bot_state display_only, price $0.00, tied a
+  // customer's "ranch" against the real "Grilled Chicken Bacon & Ranch"
+  // wrap with no way to break the tie toward something orderable).
+  const lexiconTerms = bot_state === "orderable" ? itemLexiconTerms(item) : [];
   return {
     item_id: item.id,
     bot_state,
     bot_state_reason,
     ask_plan: buildAskPlan(item, compiledAt),
-    lexicon_terms: itemLexiconTerms(item),
+    lexicon_terms: lexiconTerms,
   };
 }
 
@@ -1757,8 +1765,12 @@ export function buildDerivedRows(
       // compile-menu/index.ts), so a customer who names the size up front
       // ("the large pepperoni pizza") needs a term that resolves straight to
       // THIS size's entity_key without depending on that narrowing signal.
+      // A display_only derived row (isInferred above) is not sellable —
+      // same rule compileItem() applies to stated rows: no lexicon term is
+      // ever generated for a non-orderable row, so it can't surface as a
+      // resolver candidate.
       const choiceLower = choiceDisplay.toLowerCase();
-      const lexiconTerms = dedupeLexicon([
+      const lexiconTerms = isInferred ? [] : dedupeLexicon([
         {
           term: normaliseTerm(`${choiceLower} pizza`),
           target_type: "item" as LexiconTargetType,

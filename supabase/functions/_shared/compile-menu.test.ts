@@ -249,6 +249,23 @@ Deno.test("bot_state: display_only when the blocking owner_question was dismisse
   assertEquals(compileItem(it, [q], "t").bot_state, "display_only");
 });
 
+Deno.test("freeze-queue item 3 (display_only rows excluded from resolver candidates): a non-orderable item gets ZERO lexicon terms, no matter how many rules would otherwise fire", () => {
+  // Real Vito's incident: "Ranch" (a $0.00 Pizza Finish row, bot_state
+  // display_only) still carried its own rule-1 lexicon term ("ranch"),
+  // so a customer's "ranch" tied against it and the resolver had nothing
+  // real to narrow to — see this dispatch's own report. A non-orderable
+  // row is not sellable; it must never contribute a candidate term, full
+  // stop, regardless of which rule (1/2/3/6) would have produced one for
+  // an otherwise-identical orderable item.
+  const displayOnly = item({ display_name: "Ranch", category: "Pizza Finish", price_cents: 0, product_key: "pizza-finish:ranch" });
+  assertEquals(compileItem(displayOnly, [], "t").bot_state, "display_only");
+  assertEquals(compileItem(displayOnly, [], "t").lexicon_terms, []);
+
+  const blocked = item({ category: "Sandwiches", groups: [group({ slot_key: "bread", kitchen_critical: true, choices: [] })] });
+  assertEquals(compileItem(blocked, [], "t").bot_state, "blocked");
+  assertEquals(compileItem(blocked, [], "t").lexicon_terms, []);
+});
+
 Deno.test("bot_state: non-blocking pending question does not affect the item", () => {
   const it = item();
   const q: PendingQuestion = { scope_type: "item", scope_id: it.id, slot_key: "confirm_alias", blocking: false, status: "pending", question_text: "Alias?", exclusions: [] };
@@ -1789,6 +1806,7 @@ Deno.test("buildDerivedRows: never active if topping choice has inferred provena
   assertEquals(rows.length, 1);
   assertEquals(rows[0].active, false);
   assertEquals(rows[0].bot_state, "display_only");
+  assertEquals(rows[0].lexicon_terms, [], "a display_only derived row must never contribute a lexicon term either — same rule compileItem() applies to stated rows");
 });
 
 Deno.test("buildDerivedRows: family tie (two single-size families, same priority and price) returns empty — missing beats wrong", () => {
@@ -1801,6 +1819,46 @@ Deno.test("buildDerivedRows: family tie (two single-size families, same priority
   const compiled = new Map([orderable(sicilian.id), orderable(grandma.id)]);
   const rows = buildDerivedRows([sicilian, grandma], compiled, new Map(), T_COMPILED_AT);
   assertEquals(rows.length, 0, "tied families must produce no derived rows");
+});
+
+// ---- freeze-queue item 3: display_only rows excluded from resolver
+// candidates, end to end (compileMenu -> resolveItem) --------------------
+//
+// Real Vito's incident: a live customer typed "ranch" and the resolver
+// went ambiguous between the orderable "Grilled Chicken Bacon & Ranch"
+// wrap and a $0.00 "Ranch [Pizza Finish]" row (bot_state display_only) —
+// a row that exists only to describe a topping option on the menu display,
+// never something a customer can actually order on its own. With nothing
+// real to resolve the tie to, the customer got stuck looping "Sure - what
+// kind?" six times (sim #43, run 20260919-085038). These two tests prove
+// the fix end to end, the same way resolve-item.ts is actually exercised
+// in production (compileMenu's own lexicon output fed straight into
+// resolveItem), not just at the unit level.
+
+Deno.test("freeze-queue item 3, acceptance 1: 'ranch' resolves straight to the orderable wrap alone — the display_only 'Ranch' row is never offered, never part of a disambiguation", () => {
+  const wrap = item({ display_name: "Grilled Chicken Bacon & Ranch", category: "Wraps", product_key: "wraps:ranch" });
+  const ranchFinish = item({ display_name: "Ranch", category: "Pizza Finish", price_cents: 0 }); // display_only: source lacks a price
+  const { items: compiled } = compileMenu([wrap, ranchFinish], [], "t", false);
+
+  const ranchCompiled = compiled.find(c => c.item_id === ranchFinish.id)!;
+  assertEquals(ranchCompiled.bot_state, "display_only");
+  assertEquals(ranchCompiled.lexicon_terms, [], "the display_only row must contribute zero lexicon terms");
+
+  const lexicon = compiled.flatMap(c => c.lexicon_terms);
+  const result = resolveItem("ranch", lexicon);
+  assertEquals(result, { kind: "resolved", menu_item_id: wrap.id },
+    "must resolve straight to the wrap — never ambiguous, never the display_only row");
+});
+
+Deno.test("freeze-queue item 3, acceptance 2: a search term matching ONLY a display_only row is unresolved, never a false success", () => {
+  const ranchFinish = item({ display_name: "Ranch", category: "Pizza Finish", price_cents: 0 }); // display_only: source lacks a price
+  const { items: compiled } = compileMenu([ranchFinish], [], "t", false);
+  const lexicon = compiled.flatMap(c => c.lexicon_terms);
+  assertEquals(lexicon, []);
+
+  const result = resolveItem("ranch", lexicon);
+  assertEquals(result, { kind: "unresolved" },
+    "a term that only ever matched a non-orderable row must behave exactly like no menu match at all, never silently resolve to that row");
 });
 
 Deno.test("buildDerivedRows: base item not orderable → skipped (no derived rows for that size)", () => {
