@@ -11,8 +11,10 @@ import {
   categoryWordMatches,
   displayGroupName,
   extractPriceCentsFromMessage,
+  isDisambiguationOptionsRequest,
   isPendingDisambiguationDeclined,
   matchOrdinalPosition,
+  pickNarrowingFacet,
   renderDisambiguationReask,
   renderOptionAlternatives,
   resolvePendingDisambiguation,
@@ -442,4 +444,56 @@ Deno.test("LIVE MONEY BUG: the same answer, with a full-order restatement append
     )?.menu_item_id,
     "gyro-hot-sandwich",
   );
+});
+
+// ── P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md, live
+// conv b685494d-62e9-4a2d-b5c1-f761cd6d6c5b): pickNarrowingFacet/
+// isDisambiguationOptionsRequest unit coverage — turn-engine-runner.test.ts
+// exercises the full render() pipeline; these lock the pure facet-extraction
+// logic down directly.
+
+const SEVEN_LARGE_PIZZAS: PendingCandidate[] = [
+  "Pepperoni", "Cheese", "Sausage", "Buffalo Chicken", "Meat Lovers", "Veggie", "Hawaiian",
+].map((kind, i) => ({ menu_item_id: `pizza-${i}`, name: `Large ${kind} Pizza`, category: "Pizza", price_cents: 1800 + i * 100 }));
+
+Deno.test("pickNarrowingFacet: 7 large pizzas of different kinds -> a kind question naming at most 5 examples", () => {
+  const result = pickNarrowingFacet(SEVEN_LARGE_PIZZAS);
+  assertEquals(result?.facet, "kind");
+  assert(result?.question.startsWith("What kind of pizza?"), `expected a kind question, got: ${JSON.stringify(result?.question)}`);
+  assert(result!.question.length <= 480);
+  const exampleCount = result!.question.split(",").length;
+  assert(exampleCount <= 5, `must cap examples at 5, got ${exampleCount}: ${result!.question}`);
+});
+
+Deno.test("pickNarrowingFacet: same kind, different sizes -> a size question, not kind (kind doesn't distinguish)", () => {
+  const sameKindDifferentSizes: PendingCandidate[] = [
+    { menu_item_id: "p-s", name: "Cheese Pizza - Small 10''", category: "Pizza", price_cents: 1200 },
+    { menu_item_id: "p-m", name: "Cheese Pizza - Medium 14''", category: "Pizza", price_cents: 1600 },
+    { menu_item_id: "p-l", name: "Cheese Pizza - Large 18''", category: "Pizza", price_cents: 1900 },
+  ];
+  const result = pickNarrowingFacet(sameKindDifferentSizes);
+  assertEquals(result?.facet, "size");
+  assert(result?.question.startsWith("What size?"), `expected a size question, got: ${JSON.stringify(result?.question)}`);
+});
+
+Deno.test("pickNarrowingFacet: nothing distinguishes the set -> null (caller falls back to the full list)", () => {
+  const identicalKindAndSize: PendingCandidate[] = [
+    { menu_item_id: "a", name: "BLT", category: "Cold Sandwiches", price_cents: 799 },
+    { menu_item_id: "b", name: "BLT", category: "Homemade Paninis", price_cents: 1099 },
+  ];
+  assertEquals(pickNarrowingFacet(identicalKindAndSize), null);
+});
+
+Deno.test("isDisambiguationOptionsRequest: 'what are the options' is an explicit options request", () => {
+  assert(isDisambiguationOptionsRequest("what are the options"));
+});
+
+Deno.test("isDisambiguationOptionsRequest: 'what do you have' and 'what kinds do you have' are also explicit requests", () => {
+  assert(isDisambiguationOptionsRequest("what do you have"));
+  assert(isDisambiguationOptionsRequest("what kinds do you have"));
+});
+
+Deno.test("isDisambiguationOptionsRequest: an ordinary answer naming a candidate is never mistaken for an options request", () => {
+  assert(!isDisambiguationOptionsRequest("pepperoni"));
+  assert(!isDisambiguationOptionsRequest("the large one"));
 });

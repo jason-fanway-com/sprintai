@@ -635,3 +635,107 @@ export function renderDisambiguationReask(
   if (priorReply !== primary) return primary;
   return `Just to be sure — ${list}. Reply with the number: ${nums}.`;
 }
+
+// P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md, live
+// conv b685494d-62e9-4a2d-b5c1-f761cd6d6c5b): "4 large pizzas" hit Vito's 20
+// large-pizza candidates and renderAmbiguousItemQuestion enumerated all of
+// them — a 3,378-character reply Telnyx/Twilio silently refused to carry, so
+// the customer got nothing. The compiler does not yet expose a dedicated
+// kind/size facet column (that's the durable fix the spec asks for); this
+// derives the same two facets from data already on every candidate — its own
+// `name` and `category` — so the fix doesn't have to wait on a compiler
+// migration + redeploy. A menu-item name is one of two shapes in practice:
+// "Pepperoni Pizza - Large 18''" (compiler-derived rows: base name, dash,
+// size label) or "Large Pepperoni Pizza" (a plain imported row with the size
+// word folded into the name itself) — this handles both.
+const NARROWING_SIZE_WORD_RE = /\b(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular)\b/i;
+
+function extractSizeAndKind(name: string): { kind: string; size: string | null } {
+  const suffixMatch = name.match(/^(.*?)\s*-\s*([^-]+)$/);
+  const base = suffixMatch ? suffixMatch[1].trim() : name;
+  const sizeSource = suffixMatch ? suffixMatch[2].trim() : name;
+
+  const sizeMatch = sizeSource.match(NARROWING_SIZE_WORD_RE);
+  const size = sizeMatch ? sizeMatch[1] : null;
+  const kind = base.replace(NARROWING_SIZE_WORD_RE, "").replace(/\s+/g, " ").trim();
+  return { kind: kind || base, size };
+}
+
+// Strips the category's own singular word ("Pizza") out of a kind value
+// ("Pepperoni Pizza" -> "Pepperoni") so the narrowing question's examples
+// name only the distinguishing word, not the noun already in the question
+// itself ("What kind of pizza? pepperoni, cheese…", never "…pepperoni
+// pizza, cheese pizza…"). Falls back to the un-stripped kind rather than an
+// empty string if stripping would remove the whole thing.
+function stripCategoryNoun(kind: string, category: string | null | undefined): string {
+  const word = categoryDisplayWord(category);
+  if (!word) return kind;
+  const stripped = kind.replace(new RegExp(`\\b${word}\\b`, "i"), "").replace(/\s+/g, " ").trim();
+  return stripped || kind;
+}
+
+function distinctLowerValues(values: Array<string | null>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    if (!v) continue;
+    const lower = v.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(lower);
+  }
+  return out;
+}
+
+export interface NarrowingQuestion {
+  facet: "kind" | "size";
+  question: string;
+}
+
+const NARROWING_EXAMPLE_CAP = 5;
+
+/**
+ * The facet question that splits an ambiguous candidate set, per Jason's
+ * direction (docs/specs/2026-09-15-narrowing-questions.md): kind first
+ * ("What kind of pizza?"), then size ("What size?"). Returns null when
+ * neither facet distinguishes the set (every candidate shares the same
+ * derived kind AND size) — the caller falls back to the full list rather
+ * than ask a question that can't narrow anything.
+ */
+export function pickNarrowingFacet(candidates: PendingCandidate[]): NarrowingQuestion | null {
+  const category = candidates[0]?.category ?? null;
+  const headNoun = categoryDisplayWord(category) || "item";
+  const parsed = candidates.map(c => {
+    const { kind, size } = extractSizeAndKind(candidateDisplayName(c));
+    return { kind: stripCategoryNoun(kind, category), size };
+  });
+
+  const kindValues = distinctLowerValues(parsed.map(p => p.kind));
+  if (kindValues.length > 1) {
+    const examples = kindValues.slice(0, NARROWING_EXAMPLE_CAP).join(", ");
+    return { facet: "kind", question: `What kind of ${headNoun}? (${examples})` };
+  }
+
+  const sizeValues = distinctLowerValues(parsed.map(p => p.size));
+  if (sizeValues.length > 1) {
+    const examples = sizeValues.slice(0, NARROWING_EXAMPLE_CAP).join(", ");
+    return { facet: "size", question: `What size? (${examples})` };
+  }
+
+  return null;
+}
+
+// Explicit-request detection for spec point 4 ("Enumeration only happens if
+// the customer explicitly asks what the options are"). Deliberately NOT
+// wired to "any failed answer" the way the slot case's enumerateSlotChoices
+// is (turn-engine.ts render()'s "slot" case) — a disambiguation set can be
+// 60+ candidates, so silently falling back to the full list on every
+// mis-parsed answer would reintroduce this exact P0's oversized-reply risk
+// on a different trigger. Only a message that actually names "options" (or
+// the "what do you have" variant Jason's own spec quotes) counts.
+const DISAMBIGUATION_OPTIONS_REQUEST_RE =
+  /\bwhat\s+(?:are|is|'s|s)?\s*(?:the\s+)?options\b|\bwhat\s+(?:kinds?|sizes?)\s+do\s+you\s+have\b|\bwhat\s+do\s+you\s+have\b/i;
+
+export function isDisambiguationOptionsRequest(message: string): boolean {
+  return DISAMBIGUATION_OPTIONS_REQUEST_RE.test(message);
+}

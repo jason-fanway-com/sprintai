@@ -118,6 +118,7 @@ import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
   renderAmbiguousItemQuestion,
+  pickNarrowingFacet,
   significantStems,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
@@ -155,7 +156,12 @@ export interface DialogueState {
     // whichever candidate they're about to pick, applied once they do
     // (answer()'s disambiguation case). Optional so state persisted before
     // this field existed still parses.
-    | { kind: "disambiguation"; candidates: string[]; heldModifierText?: string | null }
+    // quantity: the count named alongside the still-ambiguous span ("4 large
+    // pizzas" -> 4) — see AskTurnEvents.disambiguationQuantity's own doc.
+    // Optional/undefined for every pre-existing caller and persisted state
+    // written before this field existed; answer()'s disambiguation case
+    // falls back to 1, its exact previous hardcoded behavior.
+    | { kind: "disambiguation"; candidates: string[]; heldModifierText?: string | null; quantity?: number }
     | { kind: "upsell"; menu_item_id: string }
     // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
     // "order type genuinely never asked yet" (render()'s plain "Pickup or
@@ -785,7 +791,14 @@ export function answer(
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
-      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, 1, "", undefined, undefined, texts);
+      // P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md):
+      // the quantity named alongside the original ambiguous span ("4 large
+      // pizzas" -> 4) — previously hardcoded to 1, silently dropping
+      // whatever count the customer actually asked for the instant their
+      // item tied ambiguous. Falls back to 1 for every state persisted
+      // before this field existed, identical to the old behavior.
+      const quantity = state.open.quantity ?? 1;
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
       return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
     }
 
@@ -1178,6 +1191,12 @@ export interface DecideResult {
   // `carriedDisambiguationCandidateIds`, same order, so ASK can ask about
   // this one now and the rest on later turns instead of dropping them.
   disambiguationCandidateIds: string[] | null;
+  // P0 fix (2026-09-19): the quantity named alongside the span that produced
+  // `disambiguationCandidateIds` above ("4 large pizzas" -> 4) — undefined
+  // when there was no ambiguous span this turn. Only the FIRST (chosen) span's
+  // quantity is carried; a carried (not-yet-asked) span's own quantity is not
+  // tracked, same "one question per turn" scope as the rest of this dispatch.
+  disambiguationQuantity?: number;
   // The ambiguous spans NOT chosen for `disambiguationCandidateIds` above,
   // in message order, each still carrying every one of its own tying
   // candidates unranked. Empty when at most one add this turn was
@@ -1404,6 +1423,7 @@ export function decide(
   const declines: Decline[] = [];
   let qualifyingAddMenuItemId: string | null = null;
   let disambiguationCandidateIds: string[] | null = null;
+  let disambiguationQuantity: number | undefined;
   let carriedDisambiguationCandidateIds: string[][] = [];
 
   // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
@@ -1421,7 +1441,7 @@ export function decide(
   // are carried forward below so a later turn can ask about them instead of
   // the second (third, ...) span silently vanishing the moment more than one
   // add ties in the same message.
-  const ambiguousSpans: string[][] = [];
+  const ambiguousSpans: Array<{ candidates: string[]; quantity: number }> = [];
   // 00-AX: spans the customer said that resolved to nothing. Previously these
   // vanished at the point of failure, so nothing in the system ever knew an
   // item had been ASKED FOR and not delivered -- which is why the bot could
@@ -1461,7 +1481,7 @@ export function decide(
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
-      ambiguousSpans.push(resolution.candidates);
+      ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity });
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
@@ -1480,8 +1500,9 @@ export function decide(
     }
   }
   if (ambiguousSpans.length > 0) {
-    disambiguationCandidateIds = ambiguousSpans[0];
-    carriedDisambiguationCandidateIds = ambiguousSpans.slice(1);
+    disambiguationCandidateIds = ambiguousSpans[0].candidates;
+    disambiguationQuantity = ambiguousSpans[0].quantity;
+    carriedDisambiguationCandidateIds = ambiguousSpans.slice(1).map(s => s.candidates);
   }
 
   // See dropAddsSupersededByCorrection's own header: "add a side salad...
@@ -1596,7 +1617,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, carriedDisambiguationCandidateIds, heldModifierText };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, carriedDisambiguationCandidateIds, heldModifierText };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -1625,6 +1646,11 @@ export interface AskShopContext {
 export interface AskTurnEvents {
   qualifyingAddMenuItemId: string | null;
   disambiguationCandidateIds: string[] | null;
+  // P0 fix (2026-09-19): mirrors DecideResult.disambiguationQuantity — the
+  // quantity named alongside the span that produced disambiguationCandidateIds
+  // above. Applied to `open.quantity` only when this turn's primary
+  // disambiguation is the one actually opened; see ask()'s priority-2 branch.
+  disambiguationQuantity?: number;
   // decide()'s own queue of OTHER ambiguous spans from this turn's proposal,
   // beyond the one named by disambiguationCandidateIds above -- see
   // DecideResult.carriedDisambiguationCandidateIds. Empty/omitted when at
@@ -1773,9 +1799,16 @@ export function ask(
     // Key omitted entirely (not set to undefined) when there is none, so a
     // plain `{ kind: "disambiguation", candidates }` equality check against
     // a state built before this field existed still holds.
-    const heldModifierText = next === turnEvents.disambiguationCandidateIds ? turnEvents.heldModifierText : undefined;
+    const isThisTurnPrimary = next === turnEvents.disambiguationCandidateIds;
+    const heldModifierText = isThisTurnPrimary ? turnEvents.heldModifierText : undefined;
+    const quantity = isThisTurnPrimary ? turnEvents.disambiguationQuantity : undefined;
     return carry(
-      heldModifierText ? { kind: "disambiguation", candidates: next, heldModifierText } : { kind: "disambiguation", candidates: next },
+      {
+        kind: "disambiguation",
+        candidates: next,
+        ...(heldModifierText ? { heldModifierText } : {}),
+        ...(quantity !== undefined ? { quantity } : {}),
+      },
       "ordering",
       priorState.upsell_offered,
       rest,
@@ -1966,6 +1999,13 @@ export interface RenderContext {
   orderType?: "pickup" | "delivery";
   pickupName?: string;
   deliveryAddress?: string;
+  // P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md): set by
+  // the runner ONLY when this turn's message explicitly asked what the
+  // options are (isDisambiguationOptionsRequest) while a disambiguation was
+  // open — the one case the spec allows the full candidate list instead of a
+  // narrowing question. Never set on a plain failed/repeat answer — see this
+  // field's read site in render()'s "disambiguation" case for why.
+  enumerateDisambiguationCandidates?: boolean;
 }
 
 // 00-AU: fixed lead-in for the enumerated-repeat case only — Jason's own
@@ -2130,7 +2170,25 @@ export function render(
           .map(id => menuById.get(id))
           .filter((m): m is TurnEngineMenuItem => !!m)
           .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
-        if (candidates.length > 0) question = renderAmbiguousItemQuestion(candidates);
+        if (candidates.length > 0) {
+          const fullList = renderAmbiguousItemQuestion(candidates);
+          // P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md,
+          // live conv b685494d-62e9-4a2d-b5c1-f761cd6d6c5b): enumerating every
+          // candidate by default produced a 3,378-char reply Telnyx/Twilio
+          // silently refused — "ambiguity is narrowed, never listed as a
+          // default". A short candidate set's exact existing wording is left
+          // untouched (candidates.length <= 5 with a list already under the
+          // 480-char SMS-safe ceiling) so every pre-existing test for a
+          // small, real (2-3 candidate) disambiguation keeps its current
+          // reply; only a set that would actually overflow gets narrowed.
+          if (context.enumerateDisambiguationCandidates) {
+            question = fullList;
+          } else if (candidates.length <= 5 && fullList.length <= 480) {
+            question = fullList;
+          } else {
+            question = pickNarrowingFacet(candidates)?.question ?? fullList;
+          }
+        }
         break;
       }
       case "upsell": {

@@ -80,6 +80,7 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
+import { isDisambiguationOptionsRequest } from "./pending-disambiguation.ts";
 import {
   answer,
   decide,
@@ -727,6 +728,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // that's conclusive). Threaded into render() so the next question lists
   // the real choices instead of re-asking the identical short one forever.
   let enumerateSlotChoices = false;
+  // P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md): set
+  // ONLY when this turn's message explicitly asked what the options are
+  // while a disambiguation was open — see the flag's own doc on
+  // RenderContext (turn-engine.ts) for why this is deliberately narrower
+  // than enumerateSlotChoices's "any failed answer" trigger.
+  let enumerateDisambiguationCandidates = false;
   // 2026-09-18 PO dispatch (named choice not on the list): the customer's
   // raw text, set ONLY at the exact moment a slot answer genuinely fails to
   // match any real choice THIS turn (never for a re-render driven purely by
@@ -971,6 +978,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
               ...turnEvents,
               qualifyingAddMenuItemId: remainderDecide.qualifyingAddMenuItemId ?? turnEvents.qualifyingAddMenuItemId,
               disambiguationCandidateIds: turnEvents.disambiguationCandidateIds ?? remainderDecide.disambiguationCandidateIds,
+              disambiguationQuantity: turnEvents.disambiguationCandidateIds ? turnEvents.disambiguationQuantity : remainderDecide.disambiguationQuantity,
               carriedDisambiguationCandidateIds: [
                 ...(turnEvents.carriedDisambiguationCandidateIds ?? []),
                 ...remainderDecide.carriedDisambiguationCandidateIds,
@@ -1021,9 +1029,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // added, never even mentioned again" failure this dispatch closes.
       // heldModifierText rides along the same way, for the same reason —
       // see AskTurnEvents.heldModifierText's own doc.
+      if (isDisambiguationOptionsRequest(input.message)) enumerateDisambiguationCandidates = true;
       turnEvents = {
         ...turnEvents,
         disambiguationCandidateIds: priorState.open.candidates,
+        disambiguationQuantity: priorState.open.quantity,
         heldModifierText: priorState.open.heldModifierText,
       };
     } else {
@@ -1203,6 +1213,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       ...turnEvents,
       qualifyingAddMenuItemId: decideResult.qualifyingAddMenuItemId,
       disambiguationCandidateIds: decideResult.disambiguationCandidateIds,
+      disambiguationQuantity: decideResult.disambiguationQuantity,
       carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
       heldModifierText: decideResult.heldModifierText,
       checkoutIntentThisTurn: proposal.intent === "checkout",
@@ -1285,6 +1296,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // asked the same thing twice, show them the real choices.
     enumerateSlotChoices: enumerateSlotChoices || (priorState.openRepeatCount ?? 0) >= 1,
     unmatchedSlotChoiceText,
+    enumerateDisambiguationCandidates,
   });
   const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
 
