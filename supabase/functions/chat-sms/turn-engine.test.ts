@@ -2427,3 +2427,178 @@ Deno.test("runTurnEngineTurn (read-back corrections, mechanism 2): the real tran
   assert(result.reply.includes('We only have House as a stromboli in 16". Keep it, or take it off?'), `must name what's actually available: ${JSON.stringify(result.reply)}`);
   assertEquals(result.cart.map(l => l.menu_item_id), [REPLACE_GYRO_ID, REPLACE_FISH_ID, REPLACE_HOUSE_STROMBOLI_ID]);
 });
+
+// ============================================================
+// 2026-09-19 PO dispatch (P0 money bug, pepperoni-as-stromboli, re-landed):
+// a bare topping word ("pepperoni") that is ALSO a real item-name alias
+// (Vito's Stromboli Rolls "Pepperoni") used to resolve as its own $9.99
+// cart line instead of being applied as a topping on a pizza named in the
+// same message. First landing (a8be399a) shipped three regressions, live-
+// measured net negative (43/50 paid vs the prior 46/50) and reverted
+// (920e80a3); this fixture proves the re-landing closes the original bug
+// AND all three named regressions AND the black-diamond-steak/vanishing-
+// sandwich protections it must not reopen.
+// ============================================================
+const PEPPERONI_ROLL_ID = "item-pepperoni-roll";
+const CHEESE_PIZZA_LARGE_ID = "item-cheese-pizza-large";
+const CHICKEN_BACON_RANCH_MEDIUM_ID = "item-chicken-bacon-ranch-medium";
+const HOUSE_STROMBOLI_16_ID = "item-house-stromboli-16";
+const TOPPING_GROUP_ID = "group-pizza-toppings";
+
+function pizzaToppingsStep() {
+  return {
+    group_id: TOPPING_GROUP_ID, slot_key: null, kind: "modifier" as const, ask_mode: "on_request" as const,
+    prompt_template: "toppings.on_request",
+    choices: [
+      { id: "choice-pepperoni-half", display: "Pepperoni (Half pizza)", price_delta_cents: 350 },
+      { id: "choice-pepperoni-whole", display: "Pepperoni (Whole pizza)", price_delta_cents: 450 },
+      { id: "choice-bacon-half", display: "Bacon (Half pizza)", price_delta_cents: 350 },
+      { id: "choice-bacon-whole", display: "Bacon (Whole pizza)", price_delta_cents: 450 },
+    ],
+  };
+}
+
+const PEPPERONI_MENU: TurnEngineMenuItem[] = [
+  {
+    id: PEPPERONI_ROLL_ID, name: "Pepperoni", category: "Stromboli Rolls", price_cents: 999, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Pepperoni", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: CHEESE_PIZZA_LARGE_ID, name: "Cheese - Large (16\")", category: "Pizza", price_cents: 1650, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Large Cheese Pizza", base_price_cents: 1650,
+      recap_template: "", ticket_template: "", steps: [pizzaToppingsStep()],
+    },
+  },
+  {
+    id: CHICKEN_BACON_RANCH_MEDIUM_ID, name: "Chicken Bacon Ranch - Medium (14\")", category: "Pizza", price_cents: 1999, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Medium Chicken Bacon Ranch Pizza", base_price_cents: 1999,
+      recap_template: "", ticket_template: "", steps: [pizzaToppingsStep()],
+    },
+  },
+  {
+    id: HOUSE_STROMBOLI_16_ID, name: "House - 16\"", category: "Stromboli", price_cents: 2295, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "16\" House Stromboli", base_price_cents: 2295, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+const PEPPERONI_LEXICON: LexiconTerm[] = [
+  { term: "pepperoni", target_id: PEPPERONI_ROLL_ID },
+  { term: "large cheese pizza", target_id: CHEESE_PIZZA_LARGE_ID },
+  { term: "cheese pizza", target_id: CHEESE_PIZZA_LARGE_ID },
+  { term: "medium chicken bacon ranch pizza", target_id: CHICKEN_BACON_RANCH_MEDIUM_ID },
+  { term: "chicken bacon ranch pizza", target_id: CHICKEN_BACON_RANCH_MEDIUM_ID },
+  { term: "chicken bacon ranch", target_id: CHICKEN_BACON_RANCH_MEDIUM_ID },
+  { term: "house pizza", target_id: HOUSE_STROMBOLI_16_ID },
+  { term: "house", target_id: HOUSE_STROMBOLI_16_ID },
+];
+
+Deno.test("decide (pepperoni-as-stromboli, original bug): 'a large cheese pizza with pepperoni' never bills a separate $9.99 Stromboli Rolls line", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "large cheese pizza", quantity: 1, choices: [] },
+      { item_span: "pepperoni", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a large cheese pizza with pepperoni");
+  assertEquals(result.cart.length, 1, `must be exactly one line, never a separate Pepperoni roll: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, CHEESE_PIZZA_LARGE_ID);
+  assert(!result.cart.some(l => l.menu_item_id === PEPPERONI_ROLL_ID), "no separate $9.99 Stromboli Rolls Pepperoni line");
+  // Half vs Whole was never stated -- ask, never guess (same "missing beats
+  // wrong" floor recoverAssertedChoiceFromText already holds for money).
+  assert(result.declines.some(d => /Pepperoni \(Half pizza\) or Pepperoni \(Whole pizza\)/.test(d.reason)), `must ask which, not guess: ${JSON.stringify(result.declines)}`);
+});
+
+Deno.test("decide (pepperoni-as-stromboli): 'pepperoni' with the placement stated resolves to ONE exact choice, no question", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "large cheese pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a large cheese pizza with pepperoni on the whole thing");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].ask_plan_selections, { [TOPPING_GROUP_ID]: "choice-pepperoni-whole" });
+  assertEquals(result.declines, []);
+});
+
+Deno.test("decide (pepperoni-as-stromboli): negation still suppresses the ambiguous-choice question, never asks about a topping the customer declined", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "large cheese pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a large cheese pizza no pepperoni please");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].ask_plan_selections, {});
+  assertEquals(result.declines, [], "a declined topping must never be asked about");
+});
+
+Deno.test("decide (regression 1, own-name bleed): 'a medium chicken bacon ranch pizza' never asks about the Bacon topping its own name merely contains", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "medium chicken bacon ranch pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a medium chicken bacon ranch pizza");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, CHICKEN_BACON_RANCH_MEDIUM_ID);
+  assertEquals(result.cart[0].ask_plan_selections, {}, "no Bacon topping -- the customer never asked for one, its own name just contains the word");
+  assertEquals(result.declines, [], `must never ask about Bacon: ${JSON.stringify(result.declines)}`);
+});
+
+Deno.test("decide (regression 1, own-name bleed): a GENUINE extra-topping request that reuses a name word still lands, once the item's own name is out of the way", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "medium chicken bacon ranch pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a medium chicken bacon ranch pizza with extra bacon on the whole thing");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].ask_plan_selections, { [TOPPING_GROUP_ID]: "choice-bacon-whole" }, `the genuine, later 'extra bacon' request must still be recovered: ${JSON.stringify(result.cart[0])}`);
+});
+
+Deno.test("decide (regression 2, category-mismatch loop): 'a House pizza, 16 inches' resolves and ADDS the real item, informs once, never declines/drops it", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "House pizza, 16 inches", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a House pizza, 16 inches");
+  assertEquals(result.cart.length, 1, `must ADD the real item, never drop it: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, HOUSE_STROMBOLI_16_ID);
+  assertEquals(result.unresolvedSpans, [], "resolved and added -- never recorded as unresolved");
+  assert(
+    result.declines.some(d => d.reason === 'We only have House as a stromboli in 16". Keep it, or take it off?'),
+    `must use the exact working wording, once: ${JSON.stringify(result.declines)}`,
+  );
+  assertEquals(result.declines.length, 1, "exactly one note, not a repeated/looping question");
+});
+
+Deno.test("decide (regression 3, category word-overlap): 'a pepperoni stromboli' never flags a contradiction -- 'Stromboli' and 'Stromboli Rolls' are the same family under different labels", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "pepperoni stromboli", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], PEPPERONI_MENU, PEPPERONI_LEXICON, undefined, "a pepperoni stromboli");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, PEPPERONI_ROLL_ID);
+  assertEquals(result.declines, [], `same-family category words must never contradict: ${JSON.stringify(result.declines)}`);
+});
+
+Deno.test("decide (pepperoni-as-stromboli): black-diamond-steak/vanishing-sandwich protections still hold alongside the new topping-group reduction", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "chicken cheesesteak sandwich", quantity: 1, choices: [] },
+      { item_span: "house salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "a chicken cheesesteak sandwich and a house salad");
+  assertEquals(result.cart.length, 2, `both real, distinct items must still land: ${JSON.stringify(result.cart)}`);
+  assert(result.cart.some(l => l.menu_item_id === ADDON_CHEESESTEAK_SANDWICH_ID));
+  assert(result.cart.some(l => l.menu_item_id === ADDON_HOUSE_SALAD_ID));
+});
