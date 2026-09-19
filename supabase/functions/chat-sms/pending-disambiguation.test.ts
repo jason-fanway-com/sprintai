@@ -403,6 +403,39 @@ Deno.test("resolvePendingDisambiguation: '2 of those, please' is a quantity, not
   assertEquals(resolvePendingDisambiguation("2 of those, please", THREE_ITEM_CANDIDATES), null);
 });
 
+// LIVE MONEY BUG (2026-09-19, PO dispatch, priority item 3): the negative
+// case above only exercised a BARE leading number with no qualifier before
+// it. "I want 2 of the medium ones" against a rendered "1) Medium 2) Large
+// 3) Small" has "I want" sitting right before the "2" -- a real qualifier
+// (LEADING_ORDINAL_TWO_WORD_QUALIFIERS) -- so the qualifier tier used to
+// return position 2 (Large) before ever checking what follows the number,
+// silently discarding "medium" (the word that actually answers the
+// question) and charging for the wrong size: $45.98 for what should have
+// been $39.98 (2x $19.99 Large vs 2x $19.99... i.e. the wrong item at all).
+const SIZE_ONLY_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "id-medium", name: "Cheese - Medium (14\")", category: "Pizza", price_cents: 1499 },
+  { menu_item_id: "id-large",  name: "Cheese - Large (16\")",  category: "Pizza", price_cents: 1650 },
+  { menu_item_id: "id-small",  name: "Cheese - Small (10\")",  category: "Pizza", price_cents: 1295 },
+];
+
+Deno.test("resolvePendingDisambiguation: 'I want 2 of the medium ones' resolves to MEDIUM, not position #2 (Large) — the money bug", () => {
+  assertEquals(resolvePendingDisambiguation("I want 2 of the medium ones", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-medium");
+});
+
+Deno.test("resolvePendingDisambiguation: '2 of the medium ones' (no leading qualifier either) also resolves to MEDIUM", () => {
+  assertEquals(resolvePendingDisambiguation("2 of the medium ones", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-medium");
+});
+
+// Every OTHER wrapping around a genuine position pick must keep working —
+// this fix only rejects a number immediately followed by "of".
+Deno.test("resolvePendingDisambiguation: genuine position picks are unaffected by the quantity-partitive fix", () => {
+  assertEquals(resolvePendingDisambiguation("I'll take 2", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-large");
+  assertEquals(resolvePendingDisambiguation("the second one", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-large");
+  assertEquals(resolvePendingDisambiguation("#2", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-large");
+  assertEquals(resolvePendingDisambiguation("2)", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-large");
+  assertEquals(resolvePendingDisambiguation("option 2", SIZE_ONLY_CANDIDATES)?.menu_item_id, "id-large");
+});
+
 // Negative case 2 (PO dispatch, 2026-09-18): "salad" alone narrows the
 // category to two different salads with no further distinguishing word —
 // category+name narrowing must return null (re-list), never guess between

@@ -342,6 +342,22 @@ function leadingOrdinalTokenValue(coreLower: string, count: number): number | nu
  * 2026-09-15 live-money-bug fix relies on, just not requiring the position
  * pick to be the ENTIRE message the way that function does.
  */
+// PO dispatch (2026-09-19, live money bug): a number immediately followed
+// by "of" ("2 of the medium ones", "3 of those", "4 of them") is a
+// QUANTITY-partitive construction, never a position pick — "I want 2 of the
+// medium ones" against a rendered "1) Medium 2) Large 3) Small" was reading
+// the "2" as picking list-option #2 (Large) via the "i want" qualifier
+// below, silently discarding "medium" -- the word that actually answers the
+// question -- and charging for the wrong size ($45.98 for what should have
+// been $39.98). Checked before the qualifier/glued-terminator/lone-token
+// tiers below so no wrapping language overrides it; a rejected token here
+// simply isn't a pick, same "never guess" discipline as every other tier —
+// the scan continues past it looking for a later, genuine one.
+function isQuantityPartitive(words: string[], i: number): boolean {
+  if (i + 1 >= words.length) return false;
+  return splitLeadingWord(words[i + 1]).core.toLowerCase() === "of";
+}
+
 function matchLeadingOrdinal(message: string, count: number): number | null {
   const words = message.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
@@ -351,6 +367,7 @@ function matchLeadingOrdinal(message: string, count: number): number | null {
     const { core, punct, hadHash } = splitLeadingWord(words[i]);
     const idx = leadingOrdinalTokenValue(core.toLowerCase(), count);
     if (idx === null) continue;
+    if (isQuantityPartitive(words, i)) continue;
 
     let hasQualifier = hadHash;
     if (!hasQualifier && i > 0) {
