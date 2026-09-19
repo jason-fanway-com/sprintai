@@ -2482,6 +2482,55 @@ const singularizeSpanToken = (word: string): string => {
 // "hawiaan"/"hawaiian" (dist 2, well inside its 8-char tolerance) without
 // widening the guard any further than a defect already fixed elsewhere in
 // this codebase.
+// P0 fix (2026-09-19, live money bug, phantom $20 charge): "... Also, can I
+// get 2 Pepperoni pizzas? And do you have anything gluten free?" fused the
+// customer's own QUESTION about availability into the same add as the two
+// pepperoni pizzas actually ordered — the bot added a $20.00 "Gluten-Free
+// Pizza (Toppings: Pepperoni (Whole))" line nobody asked to buy, and the two
+// real pepperoni pizzas never landed. itemSpanNamedInMessage above only
+// checks that a span's words appear SOMEWHERE in the message; it has no
+// notion of a word that appears ONLY inside a question — "gluten" and
+// "free" passed that check cleanly (they really are in the message), even
+// though the clause they came from was the customer asking a question, not
+// placing an order.
+//
+// Rule: split the message into clauses (sentence-ending punctuation, then
+// the coordinating conjunctions PROPOSE routinely runs an add and a
+// question together across — "and"/"also"/"but"/"plus"), find every clause
+// that carries a real availability-question marker ("do you have", "is
+// there", "are there", "what about", "does it have", "you have/got any",
+// "have/got any"), and collect whichever tokens show up ONLY inside those
+// clauses and nowhere else in the message. A word that ALSO appears in a
+// non-question clause is never excluded — the customer really did use it to
+// order something — this only strips vocabulary used exclusively to ask.
+//
+// Deliberately narrow trigger phrases: "can I get" is this SMS channel's own
+// common ordering phrasing ("can I get 2 pepperoni pizzas") and must never
+// itself be treated as a question clause, or every order phrased that way
+// would have its own words stripped and silently dropped.
+const AVAILABILITY_QUESTION_MARKER_RE =
+  /\b(?:do you have|does\s+\S+(?:\s+\S+){0,3}\s+have|is there|are there|what about|you (?:have|got) any|have any|got any)\b/i;
+
+function questionClauseOnlyTokens(customerMessage: string | undefined): Set<string> {
+  if (!customerMessage) return new Set();
+  const tokenize = (t: string): string[] =>
+    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
+  // Sentence-ending punctuation splits first (a literal "?" closes the
+  // question clause and starts fresh for whatever follows), then the
+  // conjunctions PROPOSE commonly runs an add and a question together
+  // across within the SAME sentence.
+  const clauses = customerMessage.split(/[.!?]+/).flatMap(s => s.split(/\b(?:and|also|but|plus)\b/i));
+  const questionTokens = new Set<string>();
+  const nonQuestionTokens = new Set<string>();
+  for (const clause of clauses) {
+    const isQuestionClause = AVAILABILITY_QUESTION_MARKER_RE.test(clause);
+    for (const t of tokenize(clause)) (isQuestionClause ? questionTokens : nonQuestionTokens).add(t);
+  }
+  const exclusive = new Set<string>();
+  for (const t of questionTokens) if (!nonQuestionTokens.has(t)) exclusive.add(t);
+  return exclusive;
+}
+
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
   const tokenize = (t: string): string[] =>
@@ -2489,11 +2538,16 @@ function itemSpanNamedInMessage(span: string, customerMessage: string | undefine
   const spanTokens = tokenize(span);
   if (spanTokens.length === 0) return false;
   const messageTokens = tokenize(customerMessage);
-  const messageTokenSet = new Set(messageTokens);
+  const questionOnly = questionClauseOnlyTokens(customerMessage);
+  const messageTokenSet = new Set(messageTokens.filter(t => !questionOnly.has(t)));
   return spanTokens.every(t => {
+    // A span token used nowhere but a question clause is never valid
+    // support for an add, even if it also happens to be 5+ letters and
+    // would otherwise pass the fuzzy fallback below.
+    if (questionOnly.has(t)) return false;
     if (messageTokenSet.has(t)) return true;
     if (t.length < 5) return false;
-    return messageTokens.some(mt => mt.length >= 5 && fuzzyWordMatch(t, mt));
+    return messageTokens.some(mt => mt.length >= 5 && !questionOnly.has(mt) && fuzzyWordMatch(t, mt));
   });
 }
 
