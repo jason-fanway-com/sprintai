@@ -1179,6 +1179,7 @@ function resolveMultiKindClauses(
   totalQuantity: number,
   menu: TurnEngineMenuItem[],
   lexicon: LexiconTerm[] | undefined,
+  heldSize: string | null = null,
 ): MultiKindClauseResult | null {
   const phrases = splitCustomerPhrases(message, menu.map(m => ({ name: m.name })));
   if (phrases.length <= 1) return null;
@@ -1219,6 +1220,18 @@ function resolveMultiKindClauses(
       unresolvedNames.push(clause.text);
     } else if (matched.length === 1) {
       resolvedAdds.push({ candidate: matched[0], count: clause.count });
+    } else if (heldSize && filterCandidatesBySizeWord(matched, heldSize).length === 1) {
+      // PO fix (2026-09-19, round-2 "plain" addendum): a clause's lexicon
+      // lookup can land on an ambiguous same-kind, multi-size hit (e.g.
+      // "plain" -> the 3 Cheese sizes) even though the size was already
+      // stated earlier in the conversation ("4 large pizzas") and is sitting
+      // in `heldSize`. Reuses the exact same filterCandidatesBySizeWord the
+      // single-kind answer path already applies — never reinvented here —
+      // so a held size narrows this clause down exactly like it would any
+      // other disambiguation. Checked BEFORE clauseCandidatesShareOneKind so
+      // a clause that's fully resolvable this turn is never asked about
+      // again as if it still needed a size.
+      resolvedAdds.push({ candidate: filterCandidatesBySizeWord(matched, heldSize)[0], count: clause.count });
     } else if (clauseCandidatesShareOneKind(matched)) {
       needsSize.push({ candidates: matched, count: clause.count, text: clause.text });
     } else {
@@ -1487,9 +1500,10 @@ export function answer(
         const spanText = state.open.spanText ?? "";
         const partialSize = state.open.otherOneFollowUp ? null : extractPartialSizeClause(spanText, quantity);
         let effectiveCandidates = candidates;
+        let heldSize: string | null = null;
         if (!partialSize) {
-          const globalSize = extractGlobalSizeWord(spanText);
-          if (globalSize) effectiveCandidates = filterCandidatesBySizeWord(candidates, globalSize);
+          heldSize = extractGlobalSizeWord(spanText);
+          if (heldSize) effectiveCandidates = filterCandidatesBySizeWord(candidates, heldSize);
         }
         const facetResult = pickNarrowingFacet(effectiveCandidates);
         if (facetResult) {
@@ -1499,7 +1513,7 @@ export function answer(
           // when `trimmed` isn't structurally a list, in which case the
           // single-match path immediately below runs completely unchanged.
           if (facetResult.facet === "kind") {
-            const multi = resolveMultiKindClauses(effectiveCandidates, trimmed, quantity, menu, external.lexicon);
+            const multi = resolveMultiKindClauses(effectiveCandidates, trimmed, quantity, menu, external.lexicon, heldSize);
             if (multi) {
               let multiCartChanged = false;
               const resolvedIds: string[] = [];

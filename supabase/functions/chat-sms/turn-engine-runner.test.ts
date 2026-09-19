@@ -2333,3 +2333,53 @@ Deno.test('runTurnEngineTurn P0 (data-fact guard): "pepperoni" while a pizza dis
   }
   assertEquals(result.reply, "What size?");
 });
+
+// ── PO fix (2026-09-19, round-2 "plain" addendum, live conv on v511/c8b69c26):
+// a list answer's own lexicon lookup for a clause like "plain" can land on an
+// ambiguous same-kind, multi-size hit (all 3 Cheese sizes) even when the size
+// was ALREADY stated earlier in the same conversation ("4 large pizzas").
+// Before this fix, the held size was never applied to that ambiguous hit, so
+// the clause fell through to "I'm not sure what you meant by plain" even
+// though the lexicon found exactly the right family — see
+// resolveMultiKindClauses's own "else if (heldSize && ..." branch in
+// turn-engine.ts. VITO_SHAPED_LEXICON's items don't carry a "plain" alias by
+// name (the item is literally named "Cheese"), so this needs its own lexicon
+// row, same as the real compiled menu's alias rows.
+const VITO_SHAPED_LEXICON_WITH_PLAIN_ALIAS = [
+  ...VITO_SHAPED_LEXICON,
+  ...VITO_SHAPED_SIZES.map((_, si) => ({ term: "plain", target_id: `item-vito-0-${si}` })),
+];
+
+Deno.test('runTurnEngineTurn P0 (round-2 "plain" addendum): a list answer\'s "plain" clause resolves via the lexicon AND the already-held size, never "not sure what you meant"', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: VITO_SHAPED_LEXICON_WITH_PLAIN_ALIAS });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+  const priorState: DialogueState = {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates: VITO_SHAPED_MENU.map(m => m.id), quantity: 4, spanText: "4 large pizzas" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+  const input = baseInput({
+    message: "one plain, one meat lover, one hawaiian, one pepperoni",
+    menu: VITO_SHAPED_MENU,
+    cart: [],
+    dialogueState: priorState,
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!/not sure what you meant/i.test(result.reply), `"plain" must resolve via the held size, not fall back to a clarify question: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.length, 4, "all four named kinds must resolve, each to its held Large size");
+  const ids = result.cart.map(l => l.menu_item_id).sort();
+  assertEquals(
+    ids,
+    ["item-vito-0-2", "item-vito-1-2", "item-vito-4-2", "item-vito-6-2"].sort(),
+    "must be the Large Cheese ('plain'), Large Pepperoni, Large Hawaiian, and Large Meat Lover — never Small/Medium",
+  );
+  for (const line of result.cart) assertEquals(line.quantity, 1);
+  assertEquals(result.dialogueState.open, null, "fully resolved — size was already stated, never re-asked");
+});
