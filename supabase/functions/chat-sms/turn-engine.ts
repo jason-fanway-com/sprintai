@@ -1260,157 +1260,6 @@ function dropAddsSupersededByCorrection(adds: ResolvedAdd[], customerMessage: st
 // floor pass (unchanged, below) finds and applies the same match on its
 // own — this function's only job is to stop the SPURIOUS item line from
 // ever being created.
-// 2026-09-19 PO dispatch (P0 money bug, pepperoni-as-stromboli): a topping
-// group whose EVERY choice's display carries the same boilerplate suffix
-// ("Pepperoni (Half pizza)", "Sausage (Whole pizza)", ...) silently broke
-// BOTH dropAddsThatAreReallyModifiersOfAnotherAdd below (via
-// ask-plan-engine.ts's matchChoiceInText) AND the 00-BF modifier floor
-// (recoverAssertedChoiceFromText) — matchChoiceInText's own fuzzy tier
-// requires EVERY stem a choice's display contributes to be present in the
-// customer's text, and "pizza" is one of those stems on every single
-// choice in the group, but no customer ever says "half pizza pepperoni"
-// when naming a topping. Root cause is the GROUP's shape, not this one
-// topping — "pepperoni" was simply the one that got noticed, live.
-//
-// General, data-driven fix (same discipline as ask-plan-engine.ts's own
-// groupNeedsNumericStems: computed fresh from whichever choices are passed
-// each call, never a fixed vocabulary tied to any one item): a word shared
-// by EVERY choice in the group carries no discriminating signal and is
-// dropped before matching. "half"/"whole" are additionally always
-// droppable when nothing else distinguishes two choices — the same fixed,
-// standard pizza-ordering vocabulary resolve-item.ts's own SIZE_WORD_TOKENS
-// already treats as qualifier tokens, not a per-topping special case — but
-// only as a last resort: if the customer's text DOES carry one, it still
-// narrows which of two same-named choices (Half vs Whole) is meant, never
-// guessed away. Either kind of word is only ever dropped when doing so
-// leaves EVERY choice with at least one word left — a choice reduced to
-// nothing would otherwise match ANY text, which this floor's own "no
-// fuzzy/stem tolerance, never a guess" discipline forbids.
-const PLACEMENT_AXIS_WORDS = new Set(["half", "whole"]);
-
-function choiceWordSet(display: string): Set<string> {
-  return new Set(
-    (display ?? "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter(w => w.length >= 3),
-  );
-}
-
-// Words present in EVERY one of these word sets — never applied unless
-// `safeToDrop` also holds, so this alone never decides anything.
-function wordsCommonToAll(wordSets: Set<string>[]): Set<string> {
-  if (wordSets.length < 2) return new Set();
-  let common: Set<string> = new Set(wordSets[0]);
-  for (const words of wordSets.slice(1)) {
-    common = new Set([...common].filter(w => words.has(w)));
-    if (common.size === 0) break;
-  }
-  return common;
-}
-
-// Dropping `candidateWords` is only safe when every one of `wordSets` keeps
-// at least one word afterward — otherwise some choice would be reduced to
-// an empty requirement and match literally any text.
-function safeToDrop(wordSets: Set<string>[], candidateWords: Set<string>): boolean {
-  if (candidateWords.size === 0) return false;
-  return wordSets.every(words => [...words].some(w => !candidateWords.has(w)));
-}
-
-interface ModifierMatchAnalysis {
-  choices: Array<{ id: string; display: string }>;
-  exactHits: number[];
-  familyHits: number[];
-  familyWordSets: Set<string>[];
-}
-
-// Shared analysis behind both spanNamesAModifierChoice (boolean: is this
-// span clearly about SOME choice in this group at all, used to decide
-// whether a spurious item line should be dropped) and resolveModifierChoiceId
-// (which EXACT choice, used to actually apply one — stricter, since a wrong
-// guess there charges real money). Word matching stays whole-word/exact, no
-// stemming — recoverAssertedChoiceFromText's own long-standing "no fuzzy
-// tolerance" contract — only WHICH words are required per choice changes.
-function analyzeModifierMatch(
-  choices: Array<{ id: string; display: string }>,
-  text: string,
-): ModifierMatchAnalysis {
-  const rawWordSets = choices.map(c => choiceWordSet(c.display));
-  const common = wordsCommonToAll(rawWordSets);
-  const coreWordSets = safeToDrop(rawWordSets, common)
-    ? rawWordSets.map(words => new Set([...words].filter(w => !common.has(w))))
-    : rawWordSets;
-  const textWords = choiceWordSet(text);
-
-  // Tier 1: a choice's own full core (whatever it states, including a
-  // placement word when it has one) is entirely present in the text.
-  const exactHits: number[] = [];
-  coreWordSets.forEach((words, i) => {
-    if (words.size > 0 && [...words].every(w => textWords.has(w))) exactHits.push(i);
-  });
-
-  // Tier 2: nobody matched in full — try dropping the placement axis words
-  // too (a customer who never says "half"/"whole" still names a real
-  // topping). Only meaningful when it doesn't erase a choice down to
-  // nothing.
-  const placementWords = new Set([...PLACEMENT_AXIS_WORDS].filter(w => coreWordSets.some(words => words.has(w))));
-  const familyWordSets = safeToDrop(coreWordSets, placementWords)
-    ? coreWordSets.map(words => new Set([...words].filter(w => !placementWords.has(w))))
-    : coreWordSets;
-  const familyHits: number[] = [];
-  familyWordSets.forEach((words, i) => {
-    if (words.size > 0 && [...words].every(w => textWords.has(w))) familyHits.push(i);
-  });
-
-  return { choices, exactHits, familyHits, familyWordSets };
-}
-
-// Boolean existence check — used only to decide whether a resolved add is
-// clearly SOME modifier choice of another item in this message, so the
-// spurious item line can be dropped. Deliberately looser than
-// resolveModifierChoiceId: "large cheese with pepperoni" (no half/whole
-// stated) must still be recognized as being about the Pepperoni topping
-// family so the spurious line is dropped, even though which exact choice
-// to apply is a separate, stricter question the surviving item's own 00-BF
-// floor asks next.
-function spanNamesAModifierChoice(choices: Array<{ id: string; display: string }>, span: string): boolean {
-  if (!span || choices.length === 0) return false;
-  const { exactHits, familyHits } = analyzeModifierMatch(choices, span);
-  return exactHits.length > 0 || familyHits.length > 0;
-}
-
-// 2026-09-19 PO dispatch (P0 money bug, pepperoni-as-stromboli): a topping
-// clearly named ("pepperoni") but genuinely ambiguous between two real
-// choices in the same family (Half vs Whole pizza, neither stated) used to
-// vanish with no trace at all — dropAddsThatAreReallyModifiersOfAnotherAdd
-// correctly stops the spurious item line, and resolveModifierChoiceId
-// correctly refuses to guess which half/whole choice was meant, but nothing
-// told the customer either happened. "Missing beats wrong" only holds when
-// the customer finds out something is missing — silently doing nothing is
-// still an item they asked for and didn't get. Returns a clarifying
-// question naming the real choices on offer, or null when there's nothing
-// ambiguous to ask about (customer named it plainly, or didn't name a
-// topping at all).
-function describeAmbiguousModifierChoice(
-  choices: Array<{ id: string; display: string }>,
-  text: string,
-): string | null {
-  if (!text || choices.length === 0) return null;
-  const { choices: cs, exactHits, familyHits, familyWordSets } = analyzeModifierMatch(choices, text);
-  if (exactHits.length > 1) {
-    return `Did you mean ${cs[exactHits[0]].display} or ${cs[exactHits[1]].display}?`;
-  }
-  if (exactHits.length === 0 && familyHits.length > 1) {
-    const familyKeyOf = (words: Set<string>) => [...words].sort().join(" ");
-    const distinctFamilies = new Set(familyHits.map(i => familyKeyOf(familyWordSets[i])));
-    if (distinctFamilies.size === 1) {
-      return `Did you want ${familyHits.map(i => cs[i].display).join(" or ")}?`;
-    }
-  }
-  return null;
-}
-
 function dropAddsThatAreReallyModifiersOfAnotherAdd(
   adds: ResolvedAdd[],
   menuById: Map<string, TurnEngineMenuItem>,
@@ -1425,7 +1274,7 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
       if (!otherMenuItem?.ask_plan) continue;
       for (const step of otherMenuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (spanNamesAModifierChoice(step.choices, span)) return true;
+        if (matchChoiceInText(step.choices, span)) return true;
       }
     }
     return false;
@@ -1464,7 +1313,7 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
       if (!menuItem?.ask_plan) continue;
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (spanNamesAModifierChoice(step.choices, span)) return true;
+        if (matchChoiceInText(step.choices, span)) return true;
       }
     }
     return false;
@@ -1478,61 +1327,6 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
     return true;
   });
   return { survivingAdds, heldModifierText };
-}
-
-// Mirrors resolve-item.ts's own (unexported) categoryNoun/singularizeWord —
-// duplicated rather than imported, same footprint as that file's own header
-// note: this is a narrow, self-contained check, not a shared primitive.
-function categoryNounWords(category: string): string[] {
-  const cleaned = category.replace(/\([^)]*\)/g, " ").trim();
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [];
-  const last = words[words.length - 1].toLowerCase();
-  const singular = last.length > 4 && /ies$/i.test(last) ? `${last.slice(0, -3)}y`
-    : /(?:ches|shes|xes|ses|zes)$/i.test(last) ? last.slice(0, -2)
-    : /s$/i.test(last) && !/ss$/i.test(last) ? last.slice(0, -1)
-    : last;
-  const plural = /s$/i.test(singular) ? singular : `${singular}s`;
-  return [...new Set([singular, plural])];
-}
-
-function wordsOf(text: string): Set<string> {
-  return new Set((text ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
-}
-
-// 2026-09-19 PO dispatch (P0 money bug, pepperoni-as-stromboli, part a):
-// resolveItem's own longest-match can resolve a span UNIQUELY to an item
-// whose real category the customer's own words directly contradict — "2
-// large pepperoni pizzas" resolves to the Stromboli Rolls "Pepperoni" item
-// because that is the only item actually named "pepperoni", even though
-// the customer said "pizzas" and that item isn't one. resolve-item.ts's own
-// category-narrowing (2026-09-18 dispatch) only fires when a real TIE
-// exists to narrow — a span that was never tied in the first place sails
-// through unfiltered (its own documented "edge 1" fallback). This is
-// decide()'s backstop, run only on an add that SURVIVED the modifier-drop
-// checks above (nothing else in the message could claim it as a modifier
-// instead): if the customer's own words name some OTHER real category in
-// this shop, and that word is not also part of the resolved item's own
-// name (so a legitimately cross-filed dish — a "Side Salad" under
-// Appetizers — is never second-guessed), don't silently trust it. Ask
-// instead of guessing, same "missing beats wrong" principle as everywhere
-// else in this file. General: keyed off the shop's own real categories
-// (from `menu`), never a fixed list or a name check on any one item.
-function spanNamesAContradictingCategory(
-  span: string,
-  resolvedItem: TurnEngineMenuItem,
-  menu: TurnEngineMenuItem[],
-): boolean {
-  const spanWords = wordsOf(span);
-  if (spanWords.size === 0) return false;
-  const ownCategory = resolvedItem.category ?? null;
-  const nameWords = new Set([...wordsOf(resolvedItem.name), ...wordsOf(resolvedItem.ask_plan?.display_name ?? "")]);
-  const categories = new Set(menu.map(m => m.category).filter((c): c is string => !!c));
-  for (const category of categories) {
-    if (category === ownCategory) continue;
-    if (categoryNounWords(category).some(w => spanWords.has(w) && !nameWords.has(w))) return true;
-  }
-  return false;
 }
 
 export interface Decline {
@@ -1682,26 +1476,6 @@ function applyRemoveChoiceIds(
 // after paying. So every ambiguity resolves to doing nothing.
 const MODIFIER_NEGATION_RE = /\b(?:no|not|without|hold|skip|minus|except|omit|leave off|lose the)\b/i;
 
-// The exact choice this text names, or null on anything short of certainty
-// (nothing, or a genuine tie). See analyzeModifierMatch's own header for why
-// this reuses the same two-tier word analysis as spanNamesAModifierChoice
-// instead of a plain literal-substring check: a choice display that carries
-// a boilerplate suffix shared by its whole group ("Pepperoni (Half pizza)")
-// never matched literally, because no customer says the word "pizza" when
-// naming a topping. Still exact-word, still no stemming, still "a tie
-// resolves nothing" — only WHICH words a choice requires changed.
-function resolveModifierChoiceId(choices: Array<{ id: string; display: string }>, text: string): string | null {
-  const { choices: cs, exactHits, familyHits, familyWordSets } = analyzeModifierMatch(choices, text);
-  if (exactHits.length === 1) return cs[exactHits[0]].id;
-  if (exactHits.length > 1) return null;
-  if (familyHits.length === 0) return null;
-  const familyKeyOf = (words: Set<string>) => [...words].sort().join(" ");
-  const distinctFamilies = new Set(familyHits.map(i => familyKeyOf(familyWordSets[i])));
-  if (distinctFamilies.size !== 1) return null; // two different toppings both matched -- genuine tie
-  if (familyHits.length === 1) return cs[familyHits[0]].id; // exactly one member of that family -- unambiguous
-  return null; // 2+ members of the same family (Half/Whole) and neither was stated -- ask, never guess
-}
-
 export function recoverAssertedChoiceFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
@@ -1709,7 +1483,14 @@ export function recoverAssertedChoiceFromText(
   const text = (scopedText ?? "").trim();
   if (!text || choices.length === 0) return null;
   if (MODIFIER_NEGATION_RE.test(text)) return null;
-  return resolveModifierChoiceId(choices, text);
+  const hay = text.toLowerCase();
+  const hits = choices.filter(c => {
+    const d = (c.display ?? "").trim().toLowerCase();
+    if (d.length < 3) return false;
+    return new RegExp(`\\b${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i").test(hay);
+  });
+  if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
+  return hits[0].id;
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
@@ -1913,27 +1694,11 @@ export function decide(
   // is really a modifier choice of the OTHER item in the same message,
   // before either ever reaches grouping.
   const modifierDroppedAdds = dropAddsThatAreReallyModifiersOfAnotherAdd(correctedAdds, menuById);
-  const { survivingAdds: heldSurvivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
+  const { survivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
     modifierDroppedAdds,
     disambiguationCandidateIds,
     menuById,
   );
-
-  // See spanNamesAContradictingCategory's own header: run only on adds that
-  // survived the modifier-drop checks above — nothing else in this message
-  // could claim this span as its own modifier, so a category the customer
-  // named that contradicts what this item actually is gets asked about
-  // instead of silently trusted.
-  const survivingAdds = heldSurvivingAdds.filter(add => {
-    const menuItem = menuById.get(add.menu_item_id);
-    const span = (add.item_span ?? "").trim();
-    if (!menuItem || !span || !spanNamesAContradictingCategory(span, menuItem, menu)) return true;
-    declines.push({
-      reason: `Just to confirm — did you want the ${menuItem.name}, or is "${span}" something else? Let me know and I'll get it right.`,
-    });
-    unresolvedSpans.push(span);
-    return false;
-  });
 
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of
@@ -1963,50 +1728,20 @@ export function decide(
     const menuItem = menuById.get(add.menu_item_id);
     if (!menuItem) { declines.push({ reason: "That item isn't on the menu." }); continue; }
     if (!menuItem.ask_plan) { declines.push({ reason: `${menuItem.name} isn't available to order this way yet.` }); continue; }
-    // 00-BF: the modifier floor. Only when NOTHING the model asserted for this
-    // add turned out to be a REAL choice -- we never override or second-guess
-    // a choice it did genuinely make.
-    //
-    // 2026-09-19 PO dispatch (P0 money bug, pepperoni-as-stromboli, the "2 of
-    // 5 dropped, no stromboli either" half of that repro): buildMenuIndex
-    // deliberately withholds a fresh add's own option groups/choices from the
-    // model (see its own header) -- with no real id to assert, the model
-    // sometimes invents a group_id/choice_id rather than leaving `choices`
-    // empty. That invented, always-invalid assertion used to count as "the
-    // model DID assert something" and permanently blocked this floor, so the
-    // customer's own plainly-stated topping was silently dropped (only a
-    // generic "skipped" decline, never recovered). Eligibility is now based
-    // on whether anything the model asserted actually resolved to a real
-    // choice (`texts.length === 0`), not on whether it asserted anything at
-    // all -- a genuinely valid assertion (texts.length > 0) is still never
-    // second-guessed.
+    // 00-BF: the modifier floor. Only when the model asserted NOTHING for this
+    // add -- we never override or second-guess a choice it did make.
     let effectiveChoices = add.choices ?? [];
-    let { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
-    if (texts.length === 0 && customerMessage) {
+    if (effectiveChoices.length === 0 && customerMessage) {
       const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
       const scoped = scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
-      const recoveredChoices: Array<{ group_id: string; choice_id: string }> = [];
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
         const recovered = recoverAssertedChoiceFromText(scoped, step.choices);
-        if (recovered) recoveredChoices.push({ group_id: step.group_id, choice_id: recovered });
-      }
-      if (recoveredChoices.length > 0) {
-        effectiveChoices = recoveredChoices;
-        ({ texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices));
-      } else {
-        // See describeAmbiguousModifierChoice's own header: the customer
-        // clearly named a topping family (e.g. "pepperoni") but never said
-        // which real choice they meant (Half vs Whole pizza) -- ask, rather
-        // than silently doing nothing.
-        for (const step of menuItem.ask_plan.steps) {
-          if (step.kind !== "modifier") continue;
-          const question = describeAmbiguousModifierChoice(step.choices, scoped);
-          if (question) { declines.push({ reason: question }); break; }
-        }
+        if (recovered) effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
       }
     }
+    const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
