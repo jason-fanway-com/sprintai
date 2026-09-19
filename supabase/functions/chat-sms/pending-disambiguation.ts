@@ -13,6 +13,8 @@
 // and the "never repeat the identical re-ask" invariant are unit-testable
 // without spinning up the whole edge function.
 
+import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
+
 export interface PendingCandidate {
   menu_item_id: string;
   name:         string;
@@ -800,8 +802,31 @@ export function narrowCandidatesByFacetAnswer(
       tie = true;
     }
   }
-  if (bestScore === 0 || tie || bestKey === null) return null;
-  return groups.get(bestKey) ?? null;
+  if (bestScore > 0 && !tie && bestKey !== null) return groups.get(bestKey) ?? null;
+
+  // Data fix (c), 2026-09-19, real customer typo ("hawiaan" for "hawaiian"):
+  // no exact stem overlap at all — try a bounded fuzzy fallback (6+ letter
+  // words only, fuzzyWordMatch's own graduated tolerance — see
+  // itemSpanNamedInMessage's sibling fix in turn-engine.ts for why a flat
+  // edit-distance-1 cap does not actually cover this repro:
+  // levenshteinDistance("hawaiian","hawiaan") is 2) before giving up. Fires
+  // ONLY when EXACTLY ONE candidate family has a fuzzy-matching stem — two
+  // or more within tolerance is genuine ambiguity between real kinds, never
+  // guessed at, same as the exact-match tie rule just above.
+  let fuzzyKey: string | null = null;
+  let fuzzyTie = false;
+  for (const key of groups.keys()) {
+    const kindStems = [...significantStems(key)].filter(s => s.length >= 6);
+    if (kindStems.length === 0) continue;
+    const hasFuzzyHit = [...msgStems].some(s =>
+      s.length >= 6 && kindStems.some(ks => fuzzyWordMatch(s, ks)),
+    );
+    if (!hasFuzzyHit) continue;
+    if (fuzzyKey === null) fuzzyKey = key;
+    else if (key !== fuzzyKey) fuzzyTie = true;
+  }
+  if (fuzzyKey !== null && !fuzzyTie) return groups.get(fuzzyKey) ?? null;
+  return null;
 }
 
 /**

@@ -336,6 +336,35 @@ Deno.test("lexicon rule 2: a bare base name claimed by only ONE item is generate
   assert(byId.get(sausage.id)!.lexicon_terms.some(t => t.term === "sausage"));
 });
 
+// ── Data fix (a), 2026-09-19: "plain"/"regular" aliases for the Cheese pizza ─
+
+Deno.test("lexicon data fix (a): 'plain'/'plain cheese'/'regular' resolve to a Pizza-category item literally named 'Cheese', every sized row", () => {
+  const small = item({ name: 'Cheese - Small (10")', display_name: 'Cheese - Small (10")', category: "Pizza", size_label: 'Small (10")', product_key: "pizza:cheese" });
+  const large = item({ name: 'Cheese - Large (16")', display_name: 'Cheese - Large (16")', category: "Pizza", size_label: 'Large (16")', product_key: "pizza:cheese" });
+  const { items: compiled } = compileMenu([small, large], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+  for (const alias of ["plain", "plain cheese", "regular"]) {
+    assert(byId.get(small.id)!.lexicon_terms.some(t => t.term === alias && t.target_type === "item"), `small must carry "${alias}"`);
+    assert(byId.get(large.id)!.lexicon_terms.some(t => t.term === alias && t.target_type === "item"), `large must carry "${alias}"`);
+  }
+});
+
+Deno.test("lexicon data fix (a): 'plain'/'regular' are NOT emitted for a 'Cheese' item outside the Pizza category", () => {
+  const cheeseFries = item({ name: "Cheese Fries", display_name: "Cheese Fries", category: "Appetizers", product_key: "appetizers:cheese-fries" });
+  const { items: compiled } = compileMenu([cheeseFries], [], "t", false);
+  const terms = compiled.find(c => c.item_id === cheeseFries.id)!.lexicon_terms.map(t => t.term);
+  assert(!terms.includes("plain"), `must not carry "plain": ${JSON.stringify(terms)}`);
+  assert(!terms.includes("regular"), `must not carry "regular": ${JSON.stringify(terms)}`);
+});
+
+Deno.test("lexicon data fix (a): 'plain'/'regular' are NOT emitted for a Pizza item that isn't named 'Cheese'", () => {
+  const buffalo = item({ name: 'Buffalo Chicken - Large (16")', display_name: 'Buffalo Chicken - Large (16")', category: "Pizza", size_label: 'Large (16")', product_key: "pizza:buffalo-chicken" });
+  const { items: compiled } = compileMenu([buffalo], [], "t", false);
+  const terms = compiled.find(c => c.item_id === buffalo.id)!.lexicon_terms.map(t => t.term);
+  assert(!terms.includes("plain"), `must not carry "plain": ${JSON.stringify(terms)}`);
+  assert(!terms.includes("regular"), `must not carry "regular": ${JSON.stringify(terms)}`);
+});
+
 Deno.test("lexicon rule 2 vs. derived pass (2026-09-18 PO dispatch, real Vito's 'cheesesteak' bug): a shared bare base name is never shadowed by an unrelated item's derived trailing-run candidate", () => {
   // Real bug: "Cheesesteak Sandwich"/"Panini"/"Roll" all share base
   // "cheesesteak" and, under the OLD (display_name-regex) rule, had that

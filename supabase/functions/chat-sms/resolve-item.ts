@@ -407,6 +407,24 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   }
   let candidates = [...base.targetIds];
 
+  // Data fix (b), 2026-09-19, real live bug: "pepperoni pizza" resolved to
+  // the Stromboli Roll "Pepperoni" — its own stated term is the single word
+  // "pepperoni" (no 2-word "pepperoni pizza" term competes for it), so
+  // "pizza" is a span word left OVER, outside the matched term itself, that
+  // happens to be a category noun conflicting with the resolved item's own
+  // real category ("Stromboli"). Recorded here (not acted on yet) — edge 1's
+  // "never let the category filter wipe a real TIE to zero" rule just below
+  // is still exactly right for a genuine tie (`base.targetIds.size > 1`),
+  // AND for a unique match whose ENTIRE span is consumed by its own matched
+  // term ("side salad" — "salad" is part of the item's own two-word name,
+  // not an extra qualifier; "the slice cheesesteak" — same shape). Only a
+  // category-noun word that is NOT part of the matched term counts as a
+  // real conflict — checked once widenIntoSizedFamily below has had its
+  // existing chance to find a same-name sibling in the named category
+  // instead (real live case: "small meat lovers pizzas" must still find the
+  // Meat Lover pizza, not just disqualify the Stromboli hit and give up).
+  let uniqueBaseCategoryConflict = false;
+
   // Only apply the filter if category is actually a live dimension for the
   // CURRENT candidates — a named category word with nothing here carrying
   // real category data would otherwise wipe every candidate for no reason.
@@ -423,7 +441,28 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
       const category = targetInfo.get(id)?.category;
       return category != null && namedCategories.has(category);
     });
-    if (filteredByCategory.length > 0) candidates = filteredByCategory;
+    if (filteredByCategory.length > 0) {
+      candidates = filteredByCategory;
+    } else if (base.targetIds.size === 1 && targetInfo.get(candidates[0])?.category != null) {
+      const matchedWords = new Set(findMatchedTermWords(candidates[0], base.length, spanWords, lexicon) ?? []);
+      const ownCategory = targetInfo.get(candidates[0])?.category;
+      // Real Vito's shape that must NOT trip this: "pepperoni stromboli"
+      // resolving to the Stromboli Rolls "Pepperoni" — the shop has TWO
+      // real categories both about the same dish family ("Stromboli" and
+      // "Stromboli Rolls"), so categoryNoun's own "last word only" rule
+      // maps the word "stromboli" to the OTHER one. A word that already
+      // appears inside the candidate's OWN category name (either way) is a
+      // synonym for what it already is, never an outside qualifier — only a
+      // word with NO textual relationship to the item's own category
+      // counts as a real conflict ("pizza" shares nothing with "Stromboli
+      // Rolls" at all).
+      const ownCategoryLower = (ownCategory ?? "").toLowerCase();
+      const extraConflictingWord = [...categoryNounIndex.entries()].some(([word, cats]) =>
+        spanWords.includes(word) && !matchedWords.has(word) && !ownCategoryLower.includes(word) &&
+        [...cats].some(c => c !== ownCategory && namedCategories.has(c)),
+      );
+      if (extraConflictingWord) uniqueBaseCategoryConflict = true;
+    }
   }
 
   const sizeToken = detectSizeToken(spanWords);
@@ -453,6 +492,11 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
       const widened = widenIntoSizedFamily(candidates[0], base.length, spanWords, lexicon, namedCategories);
       if (widened) return widened;
     }
+    // Data fix (b): widening above found no sibling in the named category
+    // either — this singleton's own real category conflicts with what the
+    // customer said, and there is nothing else to resolve to. Genuinely
+    // unresolved, never silently returned.
+    if (uniqueBaseCategoryConflict) return { kind: "unresolved" };
     return { kind: "resolved", menu_item_id: candidates[0] };
   }
   // Sorted for deterministic, byte-identical output on identical input —

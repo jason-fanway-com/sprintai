@@ -269,6 +269,14 @@ const NARROWING_FIXTURE_ITEMS: CompileItem[] = [
   { id: "c0528557-3923-4c2a-91e4-2eb09aea2d11", name: "Meat Lover - Small (10\")", display_name: "Small Meat Lover Pizza", category: "Pizza", size_label: "Small (10\")", price_cents: 1295, active: true, price_provenance: "stated", product_key: "pizza:meat-lover", missing_from_source_since: null, groups: [] },
   { id: "6191bc55-1675-4588-9031-1a907f620b92", name: "Meat Lover - Medium (14\")", display_name: "Medium Meat Lover Pizza", category: "Pizza", size_label: "Medium (14\")", price_cents: 1799, active: true, price_provenance: "stated", product_key: "pizza:meat-lover", missing_from_source_since: null, groups: [] },
   { id: "46fd6e25-263e-4eff-9ebb-dac8697a4819", name: "Meat Lovers", display_name: "Meat Lovers", category: "Stromboli Rolls", price_cents: 999, active: true, price_provenance: "stated", product_key: "stromboli-rolls:meat-lovers", missing_from_source_since: null, groups: [] },
+  // Data fix (b), 2026-09-19 (live P0, Jason's transcript conv 0bdc1ae3):
+  // "pepperoni pizza" resolved to this real Stromboli Rolls item (real id
+  // 9598933c) — its own stated term is the single word "pepperoni" (no
+  // standalone Pepperoni pizza item/term exists on Vito's real menu), so
+  // the extra word "pizza" in the span, a real category noun for the
+  // unrelated "Pizza" category above, must disqualify this match instead
+  // of silently winning by default.
+  { id: "9598933c-a8d8-4dc4-ba91-408a87b96f82", name: "Pepperoni", display_name: "Pepperoni", category: "Stromboli Rolls", price_cents: 999, active: true, price_provenance: "stated", product_key: "stromboli-rolls:pepperoni", missing_from_source_since: null, groups: [] },
 ];
 
 // item id -> {category, size_label}, straight off the same real rows above
@@ -495,4 +503,26 @@ Deno.test("resolveItem: 'meat lovers' alone is ambiguous across the roll and all
       idOf("Medium Meat Lover Pizza"),
     ].sort(),
   );
+});
+
+// ── Data fix (b), 2026-09-19: "pepperoni pizza" must never resolve to the
+// Stromboli Rolls "Pepperoni" — real live P0 (Jason's transcript conv
+// 0bdc1ae3, exact repro against the real menu row, id 9598933c) ──
+
+Deno.test("resolveItem: 'pepperoni' alone still resolves to the real Stromboli Rolls Pepperoni — no regression", () => {
+  const result = resolveItem("pepperoni", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Pepperoni") });
+});
+
+Deno.test("resolveItem (data fix b): 'pepperoni pizza' never resolves to the Stromboli Rolls Pepperoni — 'pizza' is an outside category word Pepperoni's own category shares nothing with", () => {
+  const result = resolveItem("pepperoni pizza", NARROWING_LEXICON);
+  if (result.kind === "resolved") {
+    assertEquals(result.menu_item_id === idOf("Pepperoni"), false, "must never silently resolve to the Stromboli Rolls Pepperoni");
+  }
+  assertEquals(result.kind, "unresolved", `must be unresolved (no real Pepperoni Pizza item exists on this menu) — got ${JSON.stringify(result)}`);
+});
+
+Deno.test("resolveItem (data fix b): 'pepperoni stromboli' still resolves to the Stromboli Rolls Pepperoni — 'stromboli' is a synonym for its own category, not an outside qualifier", () => {
+  const result = resolveItem("pepperoni stromboli", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Pepperoni") });
 });

@@ -476,6 +476,30 @@ function computeBotState(
 // product_key's base segment has neither failure mode: it is exactly the
 // dish's own pre-qualification identity, independent of guesswork on the
 // qualified display_name text.
+// Data fix (a), 2026-09-19: see this constant's use in itemLexiconTerms
+// below. Same "^pizza" convention buildDerivedRows' own
+// DERIVED_PIZZA_CATEGORY_RE already uses for the same reason — a shop's
+// category is sometimes "Pizzas", "Pizza Specialty", etc., never assumed
+// to be the exact literal string "Pizza".
+const PIZZA_CATEGORY_RE = /^pizza/i;
+const CHEESE_BASE_NAME_RE = /^cheese$/i;
+const CHEESE_PIZZA_ALIASES = ["plain", "plain cheese", "regular"];
+
+// Strips a trailing " - <size_label>" suffix from a raw item name the same
+// way rawApostropheBareName below does, generalized to any base name (not
+// just an apostrophe-carrying one) — falls back to the generic "trailing
+// ' - anything'" strip when size_label isn't set or doesn't match, same
+// shape derivedFamilyKey (this file's own pizza-topping-compose section)
+// already uses for an unrelated purpose.
+function baseNameBeforeSize(name: string, sizeLabel: string | null | undefined): string {
+  if (sizeLabel) {
+    const escaped = sizeLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = name.match(new RegExp(`^(.*?)\\s*-\\s*${escaped}$`, "i"));
+    if (m) return m[1].trim();
+  }
+  return name.replace(/\s*-\s*[^-]*$/, "").trim();
+}
+
 function bareProductName(item: CompileItem): string | null {
   if (!item.product_key) return null;
   const colonIdx = item.product_key.indexOf(":");
@@ -585,6 +609,24 @@ function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   if (rawBare) {
     for (const term of normaliseTermVariants(rawBare)) {
       terms.push({ term, target_type: "item", target_id: item.id, provenance: "stated" });
+    }
+  }
+
+  // Data fix (a), 2026-09-19: "plain"/"plain cheese"/"regular" are standard
+  // customer aliases for the Cheese pizza at ANY pizzeria, not a term any
+  // shop's own menu data ever states literally — general rule, not
+  // name-specific, so it fires for whichever row's own base name (before a
+  // trailing " - <size>" suffix, when sized) is exactly "Cheese" within any
+  // Pizza-category item, for every shop. A sized family gets the alias on
+  // every size row, the same way bareName above does — resolve-item.ts's
+  // existing size/category narrowing already knows how to pick the one
+  // meant when a size word rides along ("plain large").
+  if (item.category && PIZZA_CATEGORY_RE.test(item.category)) {
+    const baseName = baseNameBeforeSize(item.name, item.size_label);
+    if (CHEESE_BASE_NAME_RE.test(baseName)) {
+      for (const alias of CHEESE_PIZZA_ALIASES) {
+        terms.push({ term: normaliseTerm(alias), target_type: "item", target_id: item.id, provenance: "derived" });
+      }
     }
   }
 
