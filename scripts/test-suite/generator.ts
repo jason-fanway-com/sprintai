@@ -14,6 +14,7 @@ import { LIBRARY_CASES, CONVERSATIONAL_CASES, type TestCase, type Conversational
 import { buildCartOpsCases } from "./cart-ops.ts";
 import { HOURS_CLOSED_CASES } from "./hours-closed.ts";
 import { buildCategoryCoverageCases } from "./category-coverage.ts";
+import { buildSlangCases } from "./slang.ts";
 
 // ── DB Types ────────────────────────────────────────────────────────────────
 
@@ -708,6 +709,7 @@ export interface GenerateCasesResult {
   derivedCount: number;
   hoursClosedCount: number;
   categoryCoverageCount: number;
+  slangCount: number;
 }
 
 /** Optional helper to avoid duplicates while building */
@@ -748,6 +750,7 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
       derivedCount: 0,
       hoursClosedCount: HOURS_CLOSED_CASES.length,
       categoryCoverageCount: 0,
+      slangCount: 0,
     };
   }
 
@@ -870,8 +873,11 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
     input.shopId, input.supabaseUrl, input.serviceRoleKey,
   );
 
+  // ═══ Slang-resolution cases (regional/generic customer wording → menu item) ══
+  const slangCases = buildSlangCases(activeItems);
+
   return {
-    cases: [...derivedCases, ...LIBRARY_CASES, ...cartOpsCases, ...categoryCoverageCases, ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
+    cases: [...derivedCases, ...LIBRARY_CASES, ...cartOpsCases, ...categoryCoverageCases, ...slangCases, ...HOURS_CLOSED_CASES, ...CONVERSATIONAL_CASES],
     shop: { id: shop.id, name: shop.name, tenant_id: shop.tenant_id },
     menuItemCount: activeItems.length,
     libraryCount: LIBRARY_CASES.length,
@@ -880,5 +886,6 @@ export async function generateCases(input: GenerateCasesInput): Promise<Generate
     derivedCount: derivedCases.length,
     hoursClosedCount: HOURS_CLOSED_CASES.length,
     categoryCoverageCount: categoryCoverageCases.length,
+    slangCount: slangCases.length,
   };
 }

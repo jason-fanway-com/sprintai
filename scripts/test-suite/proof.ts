@@ -76,12 +76,12 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 // 1. Generate all cases from the shop's real menu
 console.log("Generating cases...");
-const { cases, shop, menuItemCount, libraryCount, cartOpsCount, conversationalCount, derivedCount, hoursClosedCount, categoryCoverageCount } =
+const { cases, shop, menuItemCount, libraryCount, cartOpsCount, conversationalCount, derivedCount, hoursClosedCount, categoryCoverageCount, slangCount } =
   await generateCases({ supabaseUrl: SUPABASE_URL, serviceRoleKey: SERVICE_ROLE_KEY, shopId: SHOP_ID });
 
 console.log(`  Shop: ${shop.name} (${shop.id})`);
 console.log(`  Menu items: ${menuItemCount}`);
-console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOpsCount} cart-ops + ${categoryCoverageCount} category-coverage + ${derivedCount} derived + ${hoursClosedCount} hours-closed + ${conversationalCount} conversational)`);
+console.log(`  Cases: ${cases.length} total (${libraryCount} library + ${cartOpsCount} cart-ops + ${categoryCoverageCount} category-coverage + ${slangCount} slang + ${derivedCount} derived + ${hoursClosedCount} hours-closed + ${conversationalCount} conversational)`);
 console.log("");
 
 // Write a test_runs row at the START of the run — same table the queue path
