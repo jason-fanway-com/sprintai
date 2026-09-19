@@ -2427,3 +2427,79 @@ Deno.test("runTurnEngineTurn (read-back corrections, mechanism 2): the real tran
   assert(result.reply.includes('We only have House as a stromboli in 16". Keep it, or take it off?'), `must name what's actually available: ${JSON.stringify(result.reply)}`);
   assertEquals(result.cart.map(l => l.menu_item_id), [REPLACE_GYRO_ID, REPLACE_FISH_ID, REPLACE_HOUSE_STROMBOLI_ID]);
 });
+
+// ============================================================
+// 2026-09-19 PO dispatch (Commit 3): when a disambiguation answer explicitly
+// rejects the offered category ("not stromboli", "I meant pizza not X"),
+// respond with "We only have X as a Y. Keep it, or take it off?" and add the
+// item — never silently drop it as a closure. The Slice live repro:
+// customer says "The Slice pizza, the large one" -> bot offers Slice Stromboli
+// candidates -> customer replies "I meant pizza, not stromboli" -> must NOT
+// drop, must add and say "We only have ...".
+// ============================================================
+const SLICE_STROMBOLI_SMALL_ID = "slice-stromboli-small";
+const SLICE_STROMBOLI_LARGE_ID = "slice-stromboli-large";
+const CHEESE_PIZZA_DISAMG_ID = "cheese-pizza-disambig-test";
+
+const SLICE_DISAMBIGUATION_MENU: TurnEngineMenuItem[] = [
+  {
+    id: SLICE_STROMBOLI_SMALL_ID, name: "The Slice - Small", category: "Stromboli", price_cents: 999,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Small The Slice Stromboli", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: SLICE_STROMBOLI_LARGE_ID, name: "The Slice - Large", category: "Stromboli", price_cents: 1299,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Large The Slice Stromboli", base_price_cents: 1299, recap_template: "", ticket_template: "", steps: [] },
+  },
+  {
+    id: CHEESE_PIZZA_DISAMG_ID, name: "Cheese Pizza", category: "Pizza", price_cents: 1650,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Cheese Pizza", base_price_cents: 1650, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+const SLICE_DISAMBIG_STATE: DialogueState = {
+  phase: "ordering",
+  open: { kind: "disambiguation", candidates: [SLICE_STROMBOLI_SMALL_ID, SLICE_STROMBOLI_LARGE_ID], quantity: 1 },
+  upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+};
+
+Deno.test("answer (Commit 3, category rejection): 'not stromboli, I want pizza' is NOT a closure — adds item and returns disambiguation_category_rejected", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(SLICE_DISAMBIG_STATE, cart, "I meant pizza, not stromboli", SLICE_DISAMBIGUATION_MENU);
+  assertEquals(result.resolved, true);
+  assert(result.resolved && result.outcome.kind === "disambiguation_category_rejected",
+    `expected disambiguation_category_rejected, got: ${JSON.stringify(result)}`);
+  assert(result.resolved && (result.outcome as { kind: string; message: string }).message.includes("We only have"),
+    `message must include "We only have": ${JSON.stringify(result)}`);
+  assert(result.resolved && (result.outcome as { kind: string; message: string }).message.includes("Keep it, or take it off?"),
+    `message must include "Keep it, or take it off?": ${JSON.stringify(result)}`);
+  assertEquals(result.cartChanged, true, "the item must be added to the cart");
+  assertEquals(cart.length, 1, "cart must have one line after category rejection");
+  assert(
+    cart[0].menu_item_id === SLICE_STROMBOLI_SMALL_ID || cart[0].menu_item_id === SLICE_STROMBOLI_LARGE_ID,
+    `added item must be a slice stromboli, got: ${cart[0].menu_item_id}`,
+  );
+});
+
+Deno.test("answer (Commit 3, category rejection): size token narrows to Large when customer says 'large, not stromboli, I want pizza'", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(SLICE_DISAMBIG_STATE, cart, "large, I meant pizza not stromboli", SLICE_DISAMBIGUATION_MENU);
+  assertEquals(result.resolved, true);
+  assert(result.resolved && result.outcome.kind === "disambiguation_category_rejected",
+    `expected disambiguation_category_rejected, got: ${JSON.stringify(result)}`);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].menu_item_id, SLICE_STROMBOLI_LARGE_ID, "size token 'large' must narrow to the Large stromboli");
+});
+
+Deno.test("answer (Commit 3, genuine decline): 'forget the stromboli' with NO other category named is still a closure, not category rejection", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(SLICE_DISAMBIG_STATE, cart, "forget the stromboli", SLICE_DISAMBIGUATION_MENU);
+  assertEquals(result.resolved, true);
+  assert(result.resolved && result.outcome.kind === "closure",
+    `genuine decline must still return closure, got: ${JSON.stringify(result)}`);
+  assertEquals(result.cartChanged, false);
+  assertEquals(cart.length, 0, "genuine decline must not add anything to the cart");
+});

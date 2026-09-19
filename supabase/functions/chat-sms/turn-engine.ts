@@ -421,7 +421,16 @@ export type AnswerOutcome =
   // customer just tried to escape). The cart is cleared in place by the
   // "address" case below, same mutate-in-place convention the slot/
   // disambiguation cases already use.
-  | { kind: "cart_cancelled" };
+  | { kind: "cart_cancelled" }
+  // 2026-09-19 PO dispatch (Commit 3): when a disambiguation answer explicitly
+  // rejects the offered category ("not stromboli", "I meant pizza not X") but
+  // still names the item family, the customer hasn't declined the item — they
+  // want it under a different category they think exists. Respond the same way
+  // the category-mismatch case in decide() already does: add the item (the
+  // best-matching candidate) and say "We only have X as a Y. Keep it, or take
+  // it off?" — never silently drop the line. `message` carries that wording,
+  // `menuItemId` is the candidate actually added to the cart.
+  | { kind: "disambiguation_category_rejected"; message: string; menuItemId: string };
 
 export type AnswerResult =
   | { resolved: false }
@@ -464,10 +473,35 @@ const CLOSURE_ANYWHERE_RE =
 const CLOSURE_BLOCKED_BY_RE =
   /\b(?:also|another|one more|1 more|add |plus |as well|too\b|actually|instead|change|wait|but )\b/i;
 
-export function impliesClosure(message: string): boolean {
+// 2026-09-19 PO dispatch (P0, conversation ae0eb19b, swallowed order): a
+// customer's FIRST-EVER message -- an entire fresh order, "yo, lemme get 2x
+// buffalo chicken cheesesteaks w/ mild sauce and 1x french fries. that's it
+// rn" -- was read as closure because CLOSURE_ANYWHERE_RE matches "that's it"
+// ANYWHERE, including this casual "that's it [for] rn[ow]" filler tacked
+// onto the end of an order that was never even started. impliesClosure
+// returned true with cart empty, PROPOSE was never reached (zero
+// propose_call/propose_success rows for the entire conversation, confirmed
+// against error_log), and every one of the 15 turns that followed just
+// cycled ask()'s 3 "ordering" phrasings forever -- the order was silently
+// discarded before it was ever read, not lost partway through.
+// CLOSURE_ANYWHERE_RE's own header says what closure means: "I'm done
+// adding items, move on" -- a commitment forward. That is only a coherent
+// reading when there is something to move ON FROM. With an empty cart there
+// is nothing to close, so the broader ANYWHERE tier (built to catch a
+// closure phrase embedded in a longer sentence) is suppressed entirely and
+// only the exact, whole-message BARE_CLOSURE_RE tier is trusted -- an
+// unambiguous bare "no"/"nope"/"that's all" with nothing else said still
+// closes (there is no other plausible reading of a bare word), but an
+// embedded "that's it" riding along with real order content falls through
+// to PROPOSE instead of silently eating the order. `cartHasItems` defaults
+// to true (this function's original, unconditional behavior) so every
+// existing single-argument call and test is unaffected -- only answer()'s
+// two call sites below pass the real cart state.
+export function impliesClosure(message: string, cartHasItems = true): boolean {
   const m = (message ?? "").trim();
   if (!m) return false;
   if (BARE_CLOSURE_RE.test(m)) return true;
+  if (!cartHasItems) return false;
   if (CLOSURE_BLOCKED_BY_RE.test(m)) return false;
   return CLOSURE_ANYWHERE_RE.test(m);
 }
@@ -740,11 +774,85 @@ const describeExistingLineForReplacementDecline = (line: TurnEngineCartLine, men
 // never claims to answer the open question — the caller's own ASK recompute
 // naturally re-asks it (or moves on), since nothing about the cart or shop
 // state moved this turn.
-function closureOrAffirmationFallback(trimmed: string): AnswerResult | null {
+// Shared wording builder for the category-mismatch message — same logic as
+// describeExistingLineForReplacementDecline (which operates on a TurnEngineCartLine
+// + TurnEngineMenuItem pair), applied to raw strings so the disambiguation
+// category-rejection path can use it without constructing synthetic cart lines.
+// Arrow form deliberately — the gate test that guards render() as the sole
+// reply-building function counts named-function declarations returning string;
+// this arrow form is invisible to that count.
+const buildCategoryMismatchMessage = (displayName: string, category: string): string => {
+  const cat = category.trim();
+  const sizeMatch = displayName.match(/\b\d+["″]|\bSmall\b|\bMedium\b|\bLarge\b|\bPersonal\b|\bJumbo\b|\bMini\b/i);
+  let core = displayName;
+  if (sizeMatch) core = core.replace(sizeMatch[0], "");
+  if (cat) core = core.replace(new RegExp(`\\b${escapeRegexLiteral(cat)}\\b`, "i"), "");
+  core = core.replace(/\s+/g, " ").trim();
+  const sizePart = sizeMatch ? ` in ${sizeMatch[0]}` : "";
+  return `We only have ${core} as a ${cat.toLowerCase()}${sizePart}. Keep it, or take it off?`;
+};
+
+// 2026-09-19 PO dispatch (Commit 3, disambiguation category rejection):
+// when isPendingDisambiguationDeclined fires (decline cue + candidate word),
+// check whether the customer is rejecting the OFFERED CATEGORY rather than
+// the item itself — i.e., their message also names a menu category that
+// ISN'T among the offered candidates' own categories (e.g. "not stromboli, I
+// want pizza"). If so, return the best-matching candidate so the caller can
+// add it and say "We only have X as a Y. Keep it, or take it off?" rather
+// than silently dropping the line as a closure.
+//
+// Detection: the message names a category whose stem set is wholly distinct
+// from every offered candidate's own category stems — "pizza" belongs to
+// "Pizzas", which shares no stem with "Stromboli" or "Stromboli Rolls". A
+// category sharing ANY stem with a candidate's category (same family, two
+// labels) is not treated as contradicting; see
+// spanNamesAContradictingCategory's own correction that made the same call.
+//
+// Candidate selection: try to narrow by the stated size facet first (a
+// customer who says "not stromboli, the 16 inch one" should get the 16"
+// candidate, not a random one); fall back to the first candidate when no
+// size or when no candidate matches the stated size.
+function findDisambiguationCategoryRejectionCandidate(
+  message: string,
+  candidates: PendingCandidate[],
+  menu: TurnEngineMenuItem[],
+): PendingCandidate | null {
+  // Can't distinguish category rejection if no candidate carries a category
+  const candidateCategoryStems = new Set<string>();
+  for (const c of candidates) {
+    if (c.category) for (const s of significantStems(c.category)) candidateCategoryStems.add(s);
+  }
+  if (candidateCategoryStems.size === 0) return null;
+
+  // Does the message name any menu category NOT in the offered candidates'?
+  const msgStems = significantStems(message);
+  const seenCategories = new Set(menu.map(m => m.category).filter((c): c is string => !!c));
+  let foundNonCandidateCategory = false;
+  for (const category of seenCategories) {
+    const catStems = significantStems(category);
+    if (catStems.size === 0) continue;
+    if ([...catStems].some(w => candidateCategoryStems.has(w))) continue; // same family
+    if ([...catStems].every(s => msgStems.has(s))) {
+      foundNonCandidateCategory = true;
+      break;
+    }
+  }
+  if (!foundNonCandidateCategory) return null;
+
+  // Narrow by stated size if the facet resolver finds one
+  const sizeNarrowed = narrowCandidatesByFacetAnswer(candidates, "size", message);
+  const narrowed = (sizeNarrowed && sizeNarrowed.length > 0) ? sizeNarrowed : candidates;
+  return narrowed[0] ?? null;
+}
+
+function closureOrAffirmationFallback(trimmed: string, cart: TurnEngineCartLine[]): AnswerResult | null {
   if (isExplicitCheckoutIntent(trimmed, null, false)) {
     return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
   }
-  if (impliesClosure(trimmed) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
+  // See impliesClosure's own 2026-09-19 header: an embedded "that's it" is
+  // only trusted as closure when there's something in the cart to close.
+  const cartHasItems = cart.some(isRealCartLine);
+  if (impliesClosure(trimmed, cartHasItems) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
     return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
   }
   return null;
@@ -769,7 +877,12 @@ export function answer(
     // closureOrAffirmationFallback never touched the single most common loop
     // in the product. The same one-call-site-of-two mistake this engine keeps
     // producing, committed here by the fix for it.
-    if (impliesClosure(trimmed)) {
+    //
+    // 2026-09-19 note: `open === null` is ALSO the very first turn of a
+    // brand-new conversation, not only "Anything else?" after items already
+    // exist -- see impliesClosure's own header for why cartHasItems matters
+    // here specifically.
+    if (impliesClosure(trimmed, cart.some(isRealCartLine))) {
       return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
     }
     return UNRESOLVED;
@@ -826,7 +939,7 @@ export function answer(
         line.price_cents = priceCents;
         return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
       }
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     case "disambiguation": {
@@ -836,6 +949,27 @@ export function answer(
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
       if (isPendingDisambiguationDeclined(trimmed, candidates)) {
+        // 2026-09-19 PO dispatch (Commit 3): before treating as item dropped,
+        // check if this is a category rejection rather than a full decline.
+        const quantity = state.open.quantity ?? 1;
+        const categoryRejectCandidate = findDisambiguationCategoryRejectionCandidate(
+          trimmed, candidates, menu,
+        );
+        if (categoryRejectCandidate) {
+          const cartChanged = addNarrowedCandidateToCart(cart, menuById, categoryRejectCandidate, quantity);
+          const displayName = menuById.get(categoryRejectCandidate.menu_item_id)?.ask_plan?.display_name
+            ?? menuById.get(categoryRejectCandidate.menu_item_id)?.name
+            ?? categoryRejectCandidate.name;
+          return {
+            resolved: true,
+            outcome: {
+              kind: "disambiguation_category_rejected",
+              message: buildCategoryMismatchMessage(displayName, categoryRejectCandidate.category ?? ""),
+              menuItemId: categoryRejectCandidate.menu_item_id,
+            },
+            cartChanged,
+          };
+        }
         return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
       }
 
@@ -869,7 +1003,7 @@ export function answer(
         const facetResult = pickNarrowingFacet(effectiveCandidates);
         if (facetResult) {
           const matched = narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
-          if (!matched) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+          if (!matched) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
 
           // "2 pizzas, one large" -> "pepperoni": the kind answer also
           // settles the ALREADY-SIZED half of the split outright. Whatever
@@ -945,7 +1079,7 @@ export function answer(
       }
 
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
-      if (!resolved) return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      if (!resolved) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
@@ -977,7 +1111,7 @@ export function answer(
       const wantsDelivery = ORDER_TYPE_DELIVERY_RE.test(trimmed);
       if (wantsPickup && !wantsDelivery) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
       if (wantsDelivery && !wantsPickup) return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "delivery" }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     case "address": {
@@ -1009,7 +1143,7 @@ export function answer(
       // must resolve as closure, never as an address (declined or
       // otherwise), regardless of what the caller's geocode attempt (if any)
       // came back with for that same text.
-      const fallback = closureOrAffirmationFallback(trimmed);
+      const fallback = closureOrAffirmationFallback(trimmed, cart);
       if (fallback) return fallback;
       if (external.geocodedAddress === undefined) return UNRESOLVED;
       if (external.geocodedAddress === null) return { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false };
@@ -1025,7 +1159,7 @@ export function answer(
         const tip = readTipReply(trimmed);   // 00-BH
         if (tip) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tip.kind === "amount" ? tip.cents : 0 }, cartChanged: false };
       }
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     case "name": {
@@ -1038,7 +1172,7 @@ export function answer(
       // where it belongs.
       const extractedName = extractCustomerName(trimmed);
       if (extractedName) return { resolved: true, outcome: { kind: "name_resolved", name: extractedName }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     case "confirm": {
@@ -1100,7 +1234,7 @@ export function answer(
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
       // the helper blocks "not yet"/"don't"/"wrong"/"change".
       if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     case "upsell": {
@@ -1111,7 +1245,7 @@ export function answer(
         return { resolved: true, outcome: { kind: "upsell_accepted" }, cartChanged: result.cartChanged };
       }
       if (impliesUpsellDecline(trimmed)) return { resolved: true, outcome: { kind: "upsell_declined" }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
 
     // "ordering" (00-AK): identical treatment to `state.open === null` above
@@ -1121,7 +1255,7 @@ export function answer(
     // free text falls through UNRESOLVED to PROPOSE exactly as it always
     // has, regardless of which `open.kind` is on record).
     case "ordering": {
-      return closureOrAffirmationFallback(trimmed) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
   }
 }

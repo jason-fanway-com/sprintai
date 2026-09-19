@@ -858,6 +858,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
         }
         break;
+      // 2026-09-19 PO dispatch (Commit 3): same "unit added" qualification as
+      // disambiguation_resolved; answerText carries the "We only have X as a Y.
+      // Keep it, or take it off?" wording rendered before the normal turn reply.
+      case "disambiguation_category_rejected":
+        if (answerResult.cartChanged) {
+          turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
+        }
+        answerText = outcome.message;
+        break;
       // PO amendment (2026-09-19, narrowing questions): a facet answer that
       // still leaves more than one candidate reopens a SMALLER disambiguation
       // for the remainder — fed through the exact same
