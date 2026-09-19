@@ -919,23 +919,25 @@ export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string
   // stated terms PLUS every item's own unqualified bare name, and both are
   // now the same set.
   const existing = new Set<string>();
+  // Every item's own real stated term, itemId included and UNTRUNCATED —
+  // used below (freeze-queue item 2) to recover a trailing portion count a
+  // prepositional-tail cut would otherwise carry off with it.
+  const rawStatedTerms: SurfaceFormCandidate[] = [];
   for (const c of compiledItems) {
     for (const t of c.lexicon_terms) {
       if (t.target_type !== "item") continue;
       existing.add(t.term);
+      rawStatedTerms.push({ term: t.term, itemId: t.target_id });
     }
   }
 
   // stripPrepositionalTail: derivation input only (this array feeds level
   // 1/2 below) — `existing` above already captured every item's real
   // stated terms in full, untruncated form.
-  const statedItemTerms: SurfaceFormCandidate[] = [];
-  for (const c of compiledItems) {
-    for (const t of c.lexicon_terms) {
-      if (t.target_type !== "item") continue;
-      statedItemTerms.push({ term: stripPrepositionalTail(t.term), itemId: t.target_id });
-    }
-  }
+  const statedItemTerms: SurfaceFormCandidate[] = rawStatedTerms.map(({ term, itemId }) => ({
+    term: stripPrepositionalTail(term),
+    itemId,
+  }));
 
   const level1 = gateSurfaceFormCandidates(statedItemTerms, existing, level1SurfaceForms);
 
@@ -945,7 +947,38 @@ export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string
   const level2Source = [...statedItemTerms, ...level1];
   const level2 = gateSurfaceFormCandidates(level2Source, existingAfterLevel1, trailingWordRuns);
 
-  return [...level1, ...level2].map(({ term, itemId }) => ({
+  // Freeze-queue item 2, 2026-09-19 (real Vito's "Sauteed Pierogies With
+  // Onions (5)"): level1SurfaceForms' own stripTrailingCount already strips
+  // a trailing portion count for a name shaped "<dish> (<count>)" — but it
+  // only ever sees `statedItemTerms`, which has ALREADY had a prepositional
+  // tail cut off by stripPrepositionalTail above. For a name shaped "<dish>
+  // with <tail> (<count>)" the count digit sits AFTER that tail, so the cut
+  // removes the tail AND the digit together ("sauteed pierogies with onions
+  // 5" -> "sauteed pierogies"), and stripTrailingCount never sees a trailing
+  // digit to strip — the count-stripped, preposition-INTACT bare name
+  // ("sauteed pierogies with onions") was never derived at all. Live: a
+  // customer asking for it by name twice got charged for "Pierogies (3)"
+  // instead (sim #21, run 20260919-094006).
+  //
+  // Computed straight off each item's untouched, pre-tail-strip stated term
+  // (`rawStatedTerms`), and only when a prepositional tail actually exists
+  // to strip — when it doesn't, this is the exact same string
+  // level1SurfaceForms already derives via its own stripTrailingCount call
+  // above, so skipping it here avoids proposing the identical candidate
+  // twice. Same exclusion-only gate as level 1 (a real stated item term
+  // blocks it; another derived candidate for a different item does not —
+  // both are kept, ambiguous, no tiebreak, same as "chicken fingers (5)" vs
+  // "(3)" today).
+  const prepositionalCountStripped: SurfaceFormCandidate[] = [];
+  for (const { term, itemId } of rawStatedTerms) {
+    if (stripPrepositionalTail(term) === term) continue;
+    for (const stripped of stripTrailingCount(term)) {
+      prepositionalCountStripped.push({ term: stripped, itemId });
+    }
+  }
+  const countStrippedBareNames = gateSurfaceFormCandidates(prepositionalCountStripped, existing, t => [t]);
+
+  return [...level1, ...level2, ...countStrippedBareNames].map(({ term, itemId }) => ({
     term,
     target_type: "item" as const,
     target_id: itemId,

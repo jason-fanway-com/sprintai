@@ -799,6 +799,50 @@ Deno.test("lexicon surface forms: a trailing run that merely CONTAINS a digit al
     "a multi-word trailing run containing a digit is still derived normally, only a PURELY numeric run is excluded");
 });
 
+// ---- Freeze-queue item 2, 2026-09-19: a count/portion suffix AFTER a
+// prepositional tail ("Sauteed Pierogies With Onions (5)") — real Vito's
+// incident. stripPrepositionalTail (2026-09-18) cuts the tail BEFORE
+// stripTrailingCount (also 2026-09-18) ever runs, so for this shape the cut
+// removes the tail and the trailing count together and the count-stripped,
+// preposition-intact bare name was never derived at all; only the exact
+// suffixed string ("sauteed pierogies with onions 5") ever resolved. -------
+
+Deno.test("lexicon surface forms (freeze item 2): a trailing portion count AFTER a prepositional tail is stripped and the bare name (preposition intact) resolves uniquely", () => {
+  const pierogies = item({
+    display_name: "Sauteed Pierogies With Onions (5)",
+    category: "Appetizers",
+    product_key: "appetizers:sauteed-pierogies-with-onions-5",
+  });
+  const { items: compiled } = compileMenu([pierogies], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+
+  assert(terms.includes("sauteed pierogies with onions 5"), "the item's own stated Rule 1 name is untouched");
+  const stripped = compiled[0].lexicon_terms.find(t => t.term === "sauteed pierogies with onions");
+  assert(stripped, "'sauteed pierogies with onions' (count stripped, preposition intact) must resolve to this item");
+  assertEquals(stripped!.target_type, "item");
+  assertEquals(stripped!.target_id, pierogies.id);
+  assertEquals(stripped!.provenance, "derived");
+
+  // The 2026-09-18 generic-noun protection this fix sits alongside must
+  // still hold: "onions" alone is never a candidate.
+  assert(!terms.includes("onions"), "'onions' must never be derived from the prepositional tail");
+});
+
+Deno.test("lexicon surface forms (freeze item 2): a colliding bare name (two portion sizes of the same dish, no preposition) stays ambiguous, exactly like today — unaffected by this fix", () => {
+  const fingers3 = item({ display_name: "Chicken Fingers (3)", category: "Appetizers" });
+  const fingers5 = item({ display_name: "Chicken Fingers (5)", category: "Appetizers" });
+  const { items: compiled } = compileMenu([fingers3, fingers5], [], "t", false);
+
+  const bareTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "chicken fingers").map(t => t.target_id)),
+  );
+  assertEquals(bareTargets, new Set([fingers3.id, fingers5.id]),
+    "'chicken fingers' must still carry exactly one row per claimant, ambiguous — no standalone unique winner");
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+  assertEquals(byId.get(fingers3.id)!.lexicon_terms.filter(t => t.term === "chicken fingers").length, 1);
+  assertEquals(byId.get(fingers5.id)!.lexicon_terms.filter(t => t.term === "chicken fingers").length, 1);
+});
+
 Deno.test("lexicon surface forms: output is byte-identical across two separate compileMenu runs on the same input", () => {
   const items = [
     item({ display_name: "Cheese Burger", category: "Burgers" }),
