@@ -3286,3 +3286,138 @@ Deno.test("ask/render (freeze-queue item 4): a fresh categoryMismatchPending ope
   const reply = render([], [], nextState, [], FRESHADD_MENU);
   assertEquals(reply, "We only have House as a stromboli in Personal. Want that, or skip it?");
 });
+
+// ============================================================
+// 2026-09-19 PO dispatch (freeze-queue item 5, live bug): the bot can ask
+// the exact same open question 3+ turns running without making progress.
+// Live 50-conversation run 20260919-190323 (deployed sha 07adf9a8) scored
+// this as P1_no_triple_question 11/50 — the worst single repro (conv
+// 5a77ef82) asked "Pickup or delivery today?" 15 turns straight because
+// order_type, unlike every other DialogueState.open kind, had NO
+// repeat-aware wording at all (see render()'s "order_type" case). Another
+// repro (conv e1b02fd0) hit the same order_type gap 3 turns running before
+// the customer gave up.
+//
+// ask()'s generic openRepeatCount funnel (00-AZ, already shipped, comment
+// above `sameQuestionAsBefore` in ask()) already counts every open kind's
+// consecutive repeats identically — disambiguation and confirm already
+// escalate off it (see the "escalates at 2" test above and the "confirm"
+// render case). This closes the two kinds that didn't: order_type (no
+// escalation at all) and category_confirm (freeze-queue item 4, shipped
+// without one since its own repro resolves in one round-trip). Both follow
+// the exact same convention: openRepeatCount 0 and 1 (the first ask and one
+// re-ask) are byte-identical to today; openRepeatCount 2 (what would be a
+// third identical ask) swaps in wording that never repeats the bare
+// question again — an explicit PICKUP/DELIVERY list for order_type (a real,
+// small, two-candidate set, same "list the candidates" convention as
+// disambiguation), a stated skip for category_confirm (a plain yes/no with
+// no list to give, same "name the exit" convention "confirm" already uses).
+// ============================================================
+
+// Acceptance 1 + 2: order_type repeats identically on the first re-ask,
+// then escalates on what would be a third identical ask.
+Deno.test("render (freeze-queue item 5, acceptance 1+2): order_type repeats identically once (openRepeatCount 0 and 1), then escalates at 2 instead of asking a 4th time", () => {
+  const openState = { kind: "order_type" as const };
+  const first: DialogueState = { phase: "order_type", open: openState, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+  const firstReply = render([], [], first, [], VITOS_MENU, {});
+  assertEquals(firstReply.trim(), "Pickup or delivery today?");
+
+  const second = { ...first, openRepeatCount: 1 };
+  const secondReply = render([], [], second, [], VITOS_MENU, {});
+  assertEquals(secondReply, firstReply, "the second ask (first re-ask) is still allowed to be byte-identical — unchanged from before this fix");
+
+  const third = { ...first, openRepeatCount: 2 };
+  const thirdReply = render([], [], third, [], VITOS_MENU, {});
+  assert(thirdReply !== firstReply, `a third identical order_type ask must never happen: ${thirdReply}`);
+  assert(/pickup/i.test(thirdReply) && /delivery/i.test(thirdReply), `escalated wording must name both real choices explicitly: ${thirdReply}`);
+});
+
+// Acceptance 1 (address_unverifiable variant): the escalation wins even
+// when this open was reached via the address give-up fallback — the
+// one-time give-up line only ever shows at openRepeatCount 0, so it can
+// never collide with the repeat-cap escalation.
+Deno.test("render (freeze-queue item 5): order_type's address-unverifiable give-up line still escalates at openRepeatCount 2, same as the plain question", () => {
+  const openState = { kind: "order_type" as const, reason: "address_unverifiable" as const };
+  const state: DialogueState = { phase: "order_type", open: openState, upsell_offered: false, asked_message_id: null, openRepeatCount: 2 };
+  const reply = render([], [], state, [], VITOS_MENU, {});
+  assert(/pickup/i.test(reply) && /delivery/i.test(reply), `must escalate to the explicit choice list, not keep repeating either order_type wording: ${reply}`);
+  assert(!reply.includes("I can't verify that address."), `the one-time give-up line must not resurface at repeatCount 2: ${reply}`);
+});
+
+// Acceptance 1 + 2: category_confirm (freeze-queue item 4's own open kind)
+// gets the identical treatment — unresolved twice is unchanged, unresolved
+// a third time states the exit instead of repeating DECIDE's message again.
+Deno.test("render (freeze-queue item 5, acceptance 1+2): category_confirm repeats identically once, then states the exit at openRepeatCount 2 instead of asking a 4th time", () => {
+  const first = FRESHADD_CATEGORY_CONFIRM_STATE_PERSONAL;
+  const firstReply = render([], [], first, [], FRESHADD_MENU);
+  assertEquals(firstReply, "We only have House as a stromboli in Personal. Want that, or skip it?");
+
+  const second = { ...first, openRepeatCount: 1 };
+  const secondReply = render([], [], second, [], FRESHADD_MENU);
+  assertEquals(secondReply, firstReply, "the second ask (first re-ask) is still allowed to be byte-identical — unchanged from before this fix");
+
+  const third = { ...first, openRepeatCount: 2 };
+  const thirdReply = render([], [], third, [], FRESHADD_MENU);
+  assert(thirdReply !== firstReply, `a third identical category_confirm ask must never happen: ${thirdReply}`);
+  assert(/leave that off|skip/i.test(thirdReply), `escalated wording must state the exit (skip the item): ${thirdReply}`);
+});
+
+// Acceptance 3: a DIFFERENT question opening after an unresolved one must
+// never inherit the stuck counter — this rides entirely on ask()'s existing
+// generic sameQuestionAsBefore/openRepeatCount funnel (00-AZ), already
+// shipped and already exercised by the address-loop and disambiguation
+// tests above; confirmed here directly for both kinds this dispatch touches.
+Deno.test("ask (freeze-queue item 5, acceptance 3): order_type opening fresh after a DIFFERENT prior open starts at openRepeatCount 0, not carrying over the other question's count", () => {
+  const priorState: DialogueState = {
+    phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 2,
+  };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+  ];
+  const shopContext: AskShopContext = {
+    deliveryEnabled: true, upsellEnabled: true, orderTypeIsDelivery: false, orderTypeKnown: false,
+    deliveryAddressKnown: false, driverTipKnown: true, pickupNameKnown: false,
+  };
+  const next = ask(cart, priorState, NO_TURN_EVENTS, shopContext, VITOS_MENU);
+  assertEquals(next.open, { kind: "order_type" });
+  assertEquals(next.openRepeatCount, 0, "a freshly-opened DIFFERENT question must never inherit the previous question's repeat count");
+});
+
+Deno.test("ask (freeze-queue item 5, acceptance 3): category_confirm opening fresh after a DIFFERENT prior open starts at openRepeatCount 0", () => {
+  const priorState: DialogueState = { phase: "ordering", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 2 };
+  const turnEvents: AskTurnEvents = {
+    ...NO_TURN_EVENTS,
+    categoryMismatchPending: {
+      menu_item_id: FRESHADD_HOUSE_PERSONAL_ID, quantity: 1,
+      message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+    },
+  };
+  const next = ask([], priorState, turnEvents, SHOP_CONTEXT, FRESHADD_MENU);
+  assertEquals(next.open, {
+    kind: "category_confirm", menu_item_id: FRESHADD_HOUSE_PERSONAL_ID, quantity: 1,
+    message: "We only have House as a stromboli in Personal. Want that, or skip it?",
+  });
+  assertEquals(next.openRepeatCount, 0, "a freshly-opened DIFFERENT question must never inherit the previous question's repeat count");
+});
+
+// Acceptance 2 (resolution path, not just a second unresolved ask): the
+// SAME order_type question resolved on the second turn behaves completely
+// unchanged from before this fix — no premature escalation, no leaked
+// PICKUP/DELIVERY wording, straight through to whatever ask() opens next.
+Deno.test("ask (freeze-queue item 5, acceptance 2): order_type resolved on the second turn (openRepeatCount 1) proceeds normally, never touches the repeat-cap escalation", () => {
+  const priorState: DialogueState = { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 1 };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID }, line_key: "line-1" },
+  ];
+  const shopContext: AskShopContext = {
+    deliveryEnabled: true, upsellEnabled: true, orderTypeIsDelivery: false, orderTypeKnown: true,
+    deliveryAddressKnown: true, driverTipKnown: true, pickupNameKnown: false,
+  };
+  const next = ask(cart, priorState, NO_TURN_EVENTS, shopContext, VITOS_MENU);
+  const openKind = (next.open as { kind?: string } | null)?.kind;
+  assertEquals(openKind, undefined, "order_type resolving (orderTypeKnown now true) must move past order_type entirely, exactly as before this fix — the customer hasn't committed to closing yet, so this is the plain 'Anything else?' state");
+  const reply = render(cart, cart, next, [], VITOS_MENU, {});
+  assert(!/PICKUP or DELIVERY/i.test(reply), `a resolved order_type must never show the repeat-cap escalation wording: ${reply}`);
+  assert(reply.includes("Anything else?"), `must never re-ask order_type or show any escalation wording once it has resolved: ${reply}`);
+  assert(!reply.includes("Pickup or delivery today?"), `must never re-ask the resolved order_type question: ${reply}`);
+});
