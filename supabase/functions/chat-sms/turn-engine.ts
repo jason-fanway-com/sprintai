@@ -152,6 +152,7 @@ import {
   extractCustomerName,
 } from "./dialogue-signals.ts";
 import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
+import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
 
 // ─── §3a: the state record — EXACT shape from the spec ─────────────────────
 
@@ -375,6 +376,20 @@ export type AnswerOutcome =
     remainingQuantity: number;
     resolvedMenuItemId?: string;
     otherOneFollowUp: boolean;
+  }
+  // P0 (2026-09-19, multi-kind-answer, see resolveMultiKindClauses's own
+  // header): a "what kind?" answer that was a LIST ("one plain, one
+  // pepperoni, one meat lovers and one hawaiian") resolved zero, one, or
+  // several of its clauses outright — each already added to cart, its own
+  // count, in place (same mutate-in-place convention as
+  // disambiguation_resolved). `clarifyMessage` names whatever clause(s)
+  // didn't cleanly resolve to exactly one candidate (no match, a quantity
+  // that didn't sum to the original open quantity, or more than one
+  // still-ambiguous clause) — undefined when every clause resolved cleanly.
+  | {
+    kind: "disambiguation_multi_resolved";
+    resolvedMenuItemIds: string[];
+    clarifyMessage?: string;
   }
   | { kind: "order_type_resolved"; orderType: "pickup" | "delivery" }
   | { kind: "address_resolved"; address: string; withinZone: boolean }
@@ -858,6 +873,133 @@ function closureOrAffirmationFallback(trimmed: string, cart: TurnEngineCartLine[
   return null;
 }
 
+// ─── Multi-kind-answer (P0, 2026-09-19, Jason's live transcript conv
+// 0bdc1ae3): "4 large pizzas" -> "what kind?" -> "One plain, one pepperoni,
+// one meat lovers and one hawiaan" charged 4x Large Meat Lover Pizza. The
+// single-match path just below (facetResult.facet === "kind") used to score
+// the WHOLE answer against every kind group and apply the ENTIRE open
+// quantity to whichever group scored highest -- discarding that the
+// customer named four different pizzas in a list. See
+// resolveMultiKindClauses's own header for the fix.
+
+const CLAUSE_COUNT_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+const CLAUSE_LEADING_COUNT_RE = /^(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\b\s*/i;
+
+// A clause's OWN count ("one meat lovers" -> {count:1, text:"meat lovers"})
+// -- rule 1 of the multi-kind-answer spec: a leading number word/digit is
+// THAT clause's count; no explicit count defaults to 1.
+function extractLeadingClauseCount(clause: string): { count: number; text: string } {
+  const trimmed = clause.trim();
+  const m = trimmed.match(CLAUSE_LEADING_COUNT_RE);
+  if (!m) return { count: 1, text: trimmed };
+  const raw = m[1].toLowerCase();
+  const count = /^\d+$/.test(raw) ? parseInt(raw, 10) : (CLAUSE_COUNT_WORDS[raw] ?? 1);
+  const rest = trimmed.slice(m[0].length).trim();
+  return { count, text: rest || trimmed };
+}
+
+// Arrow form deliberately, not a plain named-function declaration with a
+// string return type — this file's own gate test asserts exactly one
+// function signature of that shape exists (render(), the sole reply-
+// building function); see extractSlotChoiceWords/narrowingKindQuestion's own
+// notes on the same convention.
+const buildMultiClauseClarifyMessage = (names: string[], category: string | null): string => {
+  const quoted = names.map(n => `"${n}"`);
+  const joined = quoted.length === 1
+    ? quoted[0]
+    : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+  const noun = (category ?? "one").toLowerCase();
+  return names.length === 1
+    ? `I'm not sure what you meant by ${joined} — which ${noun} is that?`
+    : `I'm not sure what you meant by ${joined} — which ${noun}s are those?`;
+};
+
+interface MultiKindClauseResult {
+  resolvedAdds: Array<{ candidate: PendingCandidate; count: number }>;
+  // Exactly one clause still narrows to more than one candidate, with
+  // nothing else unresolved -- reopened as a real, smaller disambiguation
+  // by the caller (reuses the existing disambiguation_narrowed outcome, so
+  // a size answer next turn resolves it exactly like any other narrowed
+  // remainder).
+  singleAmbiguous: { candidates: PendingCandidate[]; count: number } | null;
+  clarifyMessage: string | null;
+}
+
+// The answer to "what kind?" can itself be a LIST ("one plain, one
+// pepperoni, one meat lovers and one hawaiian") -- reuses phrase-split.ts's
+// shared boundary splitter (the same primitive the fresh-order path already
+// uses) so a list answer is split into its own clauses, each narrowing its
+// OWN COPY of `candidates` (already whatever-size-filtered by the caller)
+// independently, never against the whole message. Returns null when
+// `message` isn't structurally a list at all (splitCustomerPhrases finds
+// <=1 phrase) -- the caller's pre-existing single-match path handles that
+// case completely unchanged (spec rule 4: a bare "cheese" still applies the
+// whole open quantity).
+function resolveMultiKindClauses(
+  candidates: PendingCandidate[],
+  message: string,
+  totalQuantity: number,
+  menu: TurnEngineMenuItem[],
+): MultiKindClauseResult | null {
+  const phrases = splitCustomerPhrases(message, menu.map(m => ({ name: m.name })));
+  if (phrases.length <= 1) return null;
+
+  const clauses = phrases.map(extractLeadingClauseCount);
+  const parsedSum = clauses.reduce((s, c) => s + c.count, 0);
+  const category = candidates[0]?.category ?? null;
+
+  // Rule 3: every clause's own count must sum to the originally-open
+  // quantity -- a mismatch means the split itself is untrustworthy, so
+  // nothing is added and the customer is asked, rather than guessing which
+  // clause to shortchange.
+  if (parsedSum !== totalQuantity) {
+    return {
+      resolvedAdds: [],
+      singleAmbiguous: null,
+      clarifyMessage: `You said ${totalQuantity} — I've got ${parsedSum}. What's the rest?`,
+    };
+  }
+
+  const resolvedAdds: Array<{ candidate: PendingCandidate; count: number }> = [];
+  const unresolvedNames: string[] = [];
+  const ambiguousClauses: Array<{ candidates: PendingCandidate[]; count: number; text: string }> = [];
+
+  for (const clause of clauses) {
+    const matched = narrowCandidatesByFacetAnswer(candidates, "kind", clause.text);
+    if (!matched) {
+      // Rule 2, no-match: named explicitly, never silently folded into
+      // another clause's line or dropped.
+      unresolvedNames.push(clause.text);
+    } else if (matched.length === 1) {
+      resolvedAdds.push({ candidate: matched[0], count: clause.count });
+    } else {
+      ambiguousClauses.push({ candidates: matched, count: clause.count, text: clause.text });
+    }
+  }
+
+  // Exactly one clause still ambiguous and nothing else unresolved: reopen
+  // a real, smaller disambiguation scoped to just that clause. Any other
+  // shape (a second ambiguous clause, or an ambiguous clause alongside a
+  // genuinely unmatched one) is named in the combined clarify question
+  // instead, rather than trying to track two independently-resolvable open
+  // questions in the same turn.
+  let singleAmbiguous: { candidates: PendingCandidate[]; count: number } | null = null;
+  if (ambiguousClauses.length === 1 && unresolvedNames.length === 0) {
+    singleAmbiguous = { candidates: ambiguousClauses[0].candidates, count: ambiguousClauses[0].count };
+  } else {
+    for (const a of ambiguousClauses) unresolvedNames.push(a.text);
+  }
+
+  return {
+    resolvedAdds,
+    singleAmbiguous,
+    clarifyMessage: unresolvedNames.length > 0 ? buildMultiClauseClarifyMessage(unresolvedNames, category) : null,
+  };
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -1002,6 +1144,45 @@ export function answer(
         }
         const facetResult = pickNarrowingFacet(effectiveCandidates);
         if (facetResult) {
+          // P0 (2026-09-19, multi-kind-answer): the answer to "what kind?"
+          // can be a LIST — see resolveMultiKindClauses's own header. Only
+          // ever intercepts here (never for the "size" facet); returns null
+          // when `trimmed` isn't structurally a list, in which case the
+          // single-match path immediately below runs completely unchanged.
+          if (facetResult.facet === "kind") {
+            const multi = resolveMultiKindClauses(effectiveCandidates, trimmed, quantity, menu);
+            if (multi) {
+              let multiCartChanged = false;
+              const resolvedIds: string[] = [];
+              for (const add of multi.resolvedAdds) {
+                if (addNarrowedCandidateToCart(cart, menuById, add.candidate, add.count)) multiCartChanged = true;
+                resolvedIds.push(add.candidate.menu_item_id);
+              }
+              if (multi.singleAmbiguous) {
+                return {
+                  resolved: true,
+                  outcome: {
+                    kind: "disambiguation_narrowed",
+                    remainingCandidates: multi.singleAmbiguous.candidates.map(c => c.menu_item_id),
+                    remainingQuantity: multi.singleAmbiguous.count,
+                    resolvedMenuItemId: resolvedIds.length > 0 ? resolvedIds[resolvedIds.length - 1] : undefined,
+                    otherOneFollowUp: false,
+                  },
+                  cartChanged: multiCartChanged,
+                };
+              }
+              return {
+                resolved: true,
+                outcome: {
+                  kind: "disambiguation_multi_resolved",
+                  resolvedMenuItemIds: resolvedIds,
+                  ...(multi.clarifyMessage ? { clarifyMessage: multi.clarifyMessage } : {}),
+                },
+                cartChanged: multiCartChanged,
+              };
+            }
+          }
+
           const matched = narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
           if (!matched) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
 
@@ -1321,14 +1502,44 @@ const singularizeSpanToken = (word: string): string => {
   return word;
 };
 
+// ADDENDUM B (2026-09-19, live repro): the customer typed "One large
+// hawiaan pizza", the model correctly self-corrected the typo in its own
+// item_span ("large hawaiian pizza"), and the exact-token check below
+// rejected it — "hawaiian" is nowhere in the customer's literal message,
+// only "hawiaan" is — so a genuine typo fix was punished exactly like a
+// hallucinated item, and the customer had to repeat themselves a third
+// time. A span token of 5+ letters that doesn't exact-match is now also
+// accepted when it's within edit distance 1 of SOME message token of 5+
+// letters — this guard's job is to block a span the customer never said
+// anything resembling, not to punish a correct typo fix. Deliberately
+// narrower than guard19-fuzzy-item-match.ts's own fuzzyWordMatch (which
+// also allows a >=4-char prefix match and a wider distance for 8+ char
+// words): this guard's job is catching a hallucinated item, so it stays at
+// the tightest tolerance that still fixes the live repro.
+// PO correction to the dispatch's own wording: a flat "edit distance 1"
+// cap does NOT fix the cited live repro — levenshteinDistance("hawaiian",
+// "hawiaan") is 2, not 1 (verified against the real customer typo before
+// shipping this). Reuses guard19-fuzzy-item-match.ts's own fuzzyWordMatch
+// instead of a hand-rolled distance-1-only check: it already carries
+// exactly the graduated tolerance this needs (prefix match for 4+ chars,
+// distance 1 for 5-7 chars, distance 2 for 8+ chars, extended to 3 when
+// both words are 6+/8+), is already tested, and already comfortably covers
+// "hawiaan"/"hawaiian" (dist 2, well inside its 8-char tolerance) without
+// widening the guard any further than a defect already fixed elsewhere in
+// this codebase.
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
   const tokenize = (t: string): string[] =>
     t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
   const spanTokens = tokenize(span);
   if (spanTokens.length === 0) return false;
-  const messageTokenSet = new Set(tokenize(customerMessage));
-  return spanTokens.every(t => messageTokenSet.has(t));
+  const messageTokens = tokenize(customerMessage);
+  const messageTokenSet = new Set(messageTokens);
+  return spanTokens.every(t => {
+    if (messageTokenSet.has(t)) return true;
+    if (t.length < 5) return false;
+    return messageTokens.some(mt => mt.length >= 5 && fuzzyWordMatch(t, mt));
+  });
 }
 
 // 2026-09-18 PO dispatch (self-correction money bug, conv c879937d): "Actually,
@@ -1792,54 +2003,36 @@ export function decide(
   );
 
   const unresolvedSpans: string[] = [];
+  // ADDENDUM A (2026-09-19, live repro: "No thats wrong." after a
+  // multi-kind-answer clarify question): the model re-proposed all four
+  // pizzas again from CONVERSATION HISTORY, not from what the customer
+  // typed that turn. itemSpanNamedInMessage correctly guard-dropped all
+  // four, but the OLD code below replied to each one individually — four
+  // stacked "Did you want X too?"/"Sorry, I didn't catch X" lines in one
+  // SMS, repeating on every turn after. A span absent from the CURRENT
+  // message is now dropped completely SILENTLY (no reply text at all) —
+  // still recorded in unresolvedSpans (internal state only, never rendered)
+  // so a later turn's model prompt can still see it was asked about. This
+  // is ONLY for guard-dropped spans; a span the customer DID say this turn
+  // that still failed to resolve keeps the exact pre-existing 035a2bd3
+  // wording below, unchanged, now collected into `genuinelyUnresolvedSpans`
+  // so two or more of THOSE in the same turn also combine into one line
+  // instead of stacking (same "never stack more than one clarifying
+  // question" rule this whole addendum exists for).
+  const genuinelyUnresolvedSpans: string[] = [];
   for (const add of proposal.adds ?? []) {
     const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
     // Always resolve (even on guard failure) so the guard-drop path can check
     // whether the resolved item is already in cart without a second pass.
     const resolution = resolveItem(add.item_span, lexicon);
     if (!guardPassed) {
-      // Guard-dropped: the span's tokens were not in the customer's message —
-      // the model referenced an item the customer never named this turn.
-      // 2026-09-18 PO dispatch (two-regressions item b): "didn't catch" is
-      // for truly unresolved spans; a guard-dropped add must never say that
-      // wording UNLESS the span genuinely never resolved either.
-      //
-      // 2026-09-19 PO dispatch (Commit 2, item 3 — real conv #41): "Did you
-      // want a grandma's medium 14" as well?" was asked for a span that had
-      // FAILED TO RESOLVE (the apostrophe lexicon gap) — the customer said
-      // "yes", and the checkout link went out without it, because a bare
-      // "yes" can never actually add anything: propose.ts's own contract
-      // requires item_span to be a verbatim substring of the CUSTOMER'S
-      // CURRENT message, and "yes" contains no item name, so the model
-      // structurally cannot re-propose the add from that answer alone. Two
-      // fixes:
-      //   1. "as well?" is now used ONLY when resolution.kind is "resolved"
-      //      — a REAL, addable item. An ambiguous or unresolved span gets
-      //      the SAME "couldn't be found/understood" wording as a genuinely
-      //      unresolved add below — never phrased as if saying yes will
-      //      add it, because nothing here CAN be added yet.
-      //   2. Even for the resolved case, the question itself now says what
-      //      actually has to happen ("say it again") rather than implying a
-      //      bare "yes" suffices — so a customer who does just say "yes"
-      //      has been told, honestly, that isn't enough, and checkout can
-      //      never proceed on the false belief that it was added. Recorded
-      //      in unresolvedSpans either way so the next turn's model prompt
-      //      (orderContext.unresolvedRequests) still carries it forward.
-      // If the item resolves AND is already in cart: silent, unchanged (the
-      // model was echoing an item it could see in state — a harmless
-      // restatement the customer neither asked for nor would notice).
+      // Guard-dropped: the span's tokens were not in the customer's CURRENT
+      // message — the model referenced an item the customer didn't name
+      // this turn (stale re-proposal from history, or a genuine
+      // hallucination either way). Silent per ADDENDUM A above — nothing
+      // pushed to `declines`.
       const span = (add.item_span ?? "").trim();
-      const inCart = resolution.kind === "resolved"
-        && menuItemIdsAlreadyInCart.has(resolution.menu_item_id);
-      if (!inCart && span) {
-        if (resolution.kind === "resolved") {
-          const itemName = menuById.get(resolution.menu_item_id)?.name ?? span;
-          declines.push({ reason: `Did you want a ${itemName} too? If so, just say it again and I'll add it.` });
-        } else {
-          declines.push({ reason: `Sorry, I didn't catch "${span}" — mind saying it again?` });
-        }
-        unresolvedSpans.push(span);
-      }
+      if (span) unresolvedSpans.push(span);
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
@@ -1853,13 +2046,30 @@ export function decide(
       // Day and an Italian sandwich on wheat" -- soup added, sandwich never,
       // and the customer was never told which half failed.
       const span = (add.item_span ?? "").trim();
-      declines.push({
-        reason: span
-          ? `Sorry, I didn't catch "${span}" — mind saying it again?`
-          : "Sorry, I didn't catch what item that was — mind saying it again?",
-      });
+      genuinelyUnresolvedSpans.push(span);
       unresolvedSpans.push(span);
     }
+  }
+  // ADDENDUM A: exactly the pre-existing 035a2bd3 wording, unchanged, for
+  // the single-span case; two or more combine into ONE line rather than
+  // stacking.
+  if (genuinelyUnresolvedSpans.length === 1) {
+    const span = genuinelyUnresolvedSpans[0];
+    declines.push({
+      reason: span
+        ? `Sorry, I didn't catch "${span}" — mind saying it again?`
+        : "Sorry, I didn't catch what item that was — mind saying it again?",
+    });
+  } else if (genuinelyUnresolvedSpans.length > 1) {
+    const quoted = genuinelyUnresolvedSpans.filter(Boolean).map(s => `"${s}"`);
+    const joined = quoted.length <= 1
+      ? (quoted[0] ?? "")
+      : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+    declines.push({
+      reason: joined
+        ? `Sorry, I didn't catch ${joined} — mind saying those again?`
+        : "Sorry, I didn't catch a couple of those — mind saying them again?",
+    });
   }
   if (ambiguousSpans.length > 0) {
     disambiguationCandidateIds = ambiguousSpans[0].candidates;

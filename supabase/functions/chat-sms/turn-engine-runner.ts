@@ -894,6 +894,29 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           disambiguationFacetNarrowed: true,
         };
         break;
+      // P0 (2026-09-19, multi-kind-answer): one or more clauses of a
+      // list-shaped "what kind?" answer resolved outright — cart already
+      // mutated in place by answer() for each, same convention as
+      // disambiguation_resolved. The LAST resolved clause qualifies for the
+      // upsell step (same one-qualifying-add-per-turn convention every
+      // other outcome here uses). `clarifyMessage`, when present, is pushed
+      // as a single combined decline — reuses the exact rendering slot
+      // decide()'s own "Sorry, I didn't catch X" wording already uses (shown
+      // ahead of the cart recap), so a partially-resolved list gets ONE
+      // clarifying line, never a stack (see turn-engine.ts's ADDENDUM A doc
+      // on itemSpanNamedInMessage for the sibling fix to the same "no
+      // stacked apologies" rule on the DECIDE side).
+      case "disambiguation_multi_resolved":
+        if (answerResult.cartChanged && outcome.resolvedMenuItemIds.length > 0) {
+          turnEvents = {
+            ...turnEvents,
+            qualifyingAddMenuItemId: outcome.resolvedMenuItemIds[outcome.resolvedMenuItemIds.length - 1],
+          };
+        }
+        if (outcome.clarifyMessage) {
+          declines = [...declines, { reason: outcome.clarifyMessage }];
+        }
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the

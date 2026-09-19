@@ -380,13 +380,21 @@ Deno.test("decide (a — token-based guard): The Slice Cheesesteak still fails f
   assertEquals(result.declines.length, 0, "silent when guard-dropped item is already in cart");
 });
 
-// ── (b) guard-drop messaging — 2026-09-18 two-regressions dispatch ──────────
-// A guard-dropped add must never say "didn't catch <span>". If the resolved
-// item is already in cart → silent. Otherwise → "Did you want a X as well?"
-Deno.test("decide (b — guard-drop not in cart): asks 'Did you want a X as well?' — never 'didn't catch'", () => {
+// ── (b) guard-drop messaging — ADDENDUM A (2026-09-19, live repro conv
+// 0bdc1ae3, "No thats wrong."): a guard-dropped add's span was NOT in the
+// customer's CURRENT message — a stale re-proposal from history, not
+// something they just said. The bot used to ask "Did you want a X as
+// well?" for this shape; live, when a turn carries several such spans at
+// once (all re-proposed from history after a rejected multi-item
+// clarification), that stacked into 4 apology/question lines in one SMS,
+// repeating every turn after. Silent now, unconditionally, regardless of
+// whether the span happens to resolve, resolve ambiguously, or fail to
+// resolve — see turn-engine.ts's own ADDENDUM A comment on this branch.
+// `unresolvedSpans` still records it internally (never rendered) so a
+// later turn's model prompt can still see it was asked about.
+Deno.test("decide (ADDENDUM A, guard-drop not in cart): silent — no 'Did you want…' text stacked or otherwise", () => {
   // Cart is EMPTY — cheesesteak is not in it. Guard fires (span not in
-  // message). Since the item is NOT in cart, the bot must ask, not say
-  // "didn't catch".
+  // message).
   const proposal: Proposal = {
     intent: "order",
     adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
@@ -394,20 +402,20 @@ Deno.test("decide (b — guard-drop not in cart): asks 'Did you want a X as well
   };
   const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
   assertEquals(result.cart.length, 0, "item must not be added without confirmation");
-  assertEquals(result.declines.length, 1, "one decline — the bot asks");
-  assert(/did you want/i.test(result.declines[0].reason), `must ask 'Did you want…': ${result.declines[0].reason}`);
-  assert(!/didn'?t catch/i.test(result.declines[0].reason), `must never say 'didn't catch' for a guard drop: ${result.declines[0].reason}`);
+  assertEquals(result.declines.length, 0, "guard-dropped spans are silent — never asked about");
+  assertEquals(result.unresolvedSpans, ["The Slice Cheesesteak"], "still tracked internally, just never rendered");
 });
 
-// ── Commit 2, item 3 (2026-09-19, real conv #41): a guard-dropped add whose
-// span FAILED TO RESOLVE must never be phrased as an actionable "as well?"
-// question — "Did you want a grandma's medium 14" as well?" was asked for
-// exactly this shape, the customer said "yes", and the checkout link went
-// out without it, because a bare "yes" can never actually add anything
-// (propose.ts's item_span must be verbatim in the CUSTOMER'S current
-// message — "yes" names nothing). See turn-engine.ts's own header on this
-// branch for the full mechanism.
-Deno.test("decide (Commit 2, item 3): a guard-dropped add that never resolves (unresolved) gets the plain 'didn't catch' wording, never 'as well?'", () => {
+// ── ADDENDUM A (2026-09-19, real conv #41 + conv 0bdc1ae3): a guard-dropped
+// add whose span FAILED TO RESOLVE is ALSO silent now — previously phrased
+// as "Did you want a grandma's medium 14" as well?", the customer said
+// "yes", and the checkout link went out without it, because a bare "yes"
+// can never actually add anything (propose.ts's item_span must be verbatim
+// in the CUSTOMER'S current message — "yes" names nothing). Asking at all
+// about a span absent from this turn's message risks the exact same dead
+// end; silence plus letting the customer name it fresh is the fix that
+// held.
+Deno.test("decide (ADDENDUM A): a guard-dropped add that never resolves (unresolved) is silent, never 'didn't catch' or 'as well?'", () => {
   const proposal: Proposal = {
     intent: "order",
     adds: [{ item_span: "grandma's medium 14 inch pizza", quantity: 1, choices: [] }],
@@ -416,14 +424,11 @@ Deno.test("decide (Commit 2, item 3): a guard-dropped add that never resolves (u
   // Empty lexicon: the span can never resolve to anything, real or not.
   const result = decide(proposal, [], FRIES_MENU, [], undefined, "I want to add a side of fries, too!");
   assertEquals(result.cart.length, 0);
-  assertEquals(result.declines.length, 1);
-  assert(!/as well/i.test(result.declines[0].reason), `must never phrase an unresolved span as "as well?": ${result.declines[0].reason}`);
-  assert(/didn'?t catch/i.test(result.declines[0].reason), `must say it couldn't be found/understood: ${result.declines[0].reason}`);
-  assert(result.declines[0].reason.includes("grandma's medium 14 inch pizza"), "the reply must name the actual span");
-  assertEquals(result.unresolvedSpans, ["grandma's medium 14 inch pizza"], "carried forward so the next turn's prompt still knows about it");
+  assertEquals(result.declines.length, 0, "guard-dropped spans are silent, even when they also fail to resolve");
+  assertEquals(result.unresolvedSpans, ["grandma's medium 14 inch pizza"], "carried forward internally so the next turn's prompt still knows about it");
 });
 
-Deno.test("decide (Commit 2, item 3): a guard-dropped add that resolves AMBIGUOUSLY also gets the plain wording, never 'as well?'", () => {
+Deno.test("decide (ADDENDUM A): a guard-dropped add that resolves AMBIGUOUSLY is also silent", () => {
   const AMBIG_A = "item-ambig-a";
   const AMBIG_B = "item-ambig-b";
   const proposal: Proposal = {
@@ -437,12 +442,11 @@ Deno.test("decide (Commit 2, item 3): a guard-dropped add that resolves AMBIGUOU
   ];
   const result = decide(proposal, [], FRIES_MENU, lexicon, undefined, "I want to add a side of fries, too!");
   assertEquals(result.cart.length, 0);
-  assertEquals(result.declines.length, 1);
-  assert(!/as well/i.test(result.declines[0].reason), `must never phrase an ambiguous span as "as well?": ${result.declines[0].reason}`);
+  assertEquals(result.declines.length, 0, "guard-dropped spans are silent, even when they resolve ambiguously");
   assertEquals(result.unresolvedSpans, ["chicken parm"]);
 });
 
-Deno.test("decide (Commit 2, item 3): a guard-dropped add that DOES resolve to a real item says to restate it, not just a bare 'as well?' implying yes suffices", () => {
+Deno.test("decide (ADDENDUM A): a guard-dropped add that DOES resolve to a real item is still silent, not added, and never asked about", () => {
   const proposal: Proposal = {
     intent: "order",
     adds: [{ item_span: "The Slice Cheesesteak", quantity: 1, choices: [] }],
@@ -450,10 +454,100 @@ Deno.test("decide (Commit 2, item 3): a guard-dropped add that DOES resolve to a
   };
   const result = decide(proposal, [], FRIES_MENU, FRIES_LEXICON, undefined, "I want to add a side of fries, too!");
   assertEquals(result.cart.length, 0, "not added without the customer actually restating it");
-  assertEquals(result.declines.length, 1);
-  assert(/did you want/i.test(result.declines[0].reason));
-  assert(/say it again/i.test(result.declines[0].reason), `must say what's needed for it to actually be added, not just "as well?": ${result.declines[0].reason}`);
+  assertEquals(result.declines.length, 0, "guard-dropped spans are silent, even when they resolve cleanly");
   assertEquals(result.unresolvedSpans, ["The Slice Cheesesteak"]);
+});
+
+// ── ADDENDUM B (2026-09-19, live repro): the customer typed "One large
+// hawiaan pizza", the model self-corrected the typo in its own item_span
+// ("large hawaiian pizza") — the token-based guard used to reject this
+// outright because "hawaiian" is nowhere in the customer's literal message.
+// A span token of 5+ letters is now also accepted within edit distance 1 of
+// some 5+-letter message token, so a genuine typo fix is no longer punished
+// like a hallucinated item.
+Deno.test("decide (ADDENDUM B, typo-tolerant guard): 'large hawaiian pizza' span resolves against the customer's literal 'hawiaan' typo", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "large hawaiian pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], HAWAIIAN_MENU, HAWAIIAN_LEXICON, undefined, "One large hawiaan pizza");
+  assertEquals(result.cart.length, 1, "a genuine typo fix must resolve, not be guard-dropped");
+  assertEquals(result.cart[0].menu_item_id, HAWAIIAN_PIZZA_ID);
+  assertEquals(result.declines.length, 0);
+});
+
+Deno.test("decide (ADDENDUM B, typo-tolerant guard): an unrelated span word is still guard-dropped — tolerance is for typos, not hallucinations", () => {
+  // "pepperoni" is not a near-miss of anything in the message ("hawiaan",
+  // "pizza") — the guard must still block it, proving the edit-distance
+  // allowance did not widen into a general fuzzy-match backdoor.
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "pepperoni pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], HAWAIIAN_MENU, HAWAIIAN_LEXICON, undefined, "One large hawiaan pizza");
+  assertEquals(result.cart.length, 0, "an item the customer never named, even loosely, must still be guard-dropped");
+});
+
+// ── multi-kind-answer P0 (2026-09-19, Jason's live transcript conv
+// 0bdc1ae3): "4 large pizzas" -> "What kind?" -> "One cheese, one
+// pepperoni, one meat lovers and one hawaiian" used to score the WHOLE
+// answer against every kind group and apply the ENTIRE open quantity to
+// whichever group scored highest — charging 4x whichever pizza won,
+// discarding that the customer named four different pizzas in a list. See
+// resolveMultiKindClauses's own header in turn-engine.ts.
+const MK_CHEESE_ID = "mk-pizza-cheese";
+const MK_PEPPERONI_ID = "mk-pizza-pepperoni";
+const MK_MEATLOVERS_ID = "mk-pizza-meatlovers";
+const MK_HAWAIIAN_ID = "mk-pizza-hawaiian";
+const MK_VEGGIE_ID = "mk-pizza-veggie";
+const MK_BBQCHICKEN_ID = "mk-pizza-bbqchicken";
+const mkPizza = (id: string, name: string, price: number): TurnEngineMenuItem => ({
+  id, name: `${name} - Large`, category: "Pizza", price_cents: price, bot_state: "orderable",
+  ask_plan: { compiled_at: "", compiler_version: 1, display_name: `${name} - Large`, base_price_cents: price, recap_template: "", ticket_template: "", steps: [] },
+});
+const MULTI_KIND_PIZZA_MENU: TurnEngineMenuItem[] = [
+  mkPizza(MK_CHEESE_ID, "Cheese Pizza", 1499),
+  mkPizza(MK_PEPPERONI_ID, "Pepperoni Pizza", 1699),
+  mkPizza(MK_MEATLOVERS_ID, "Meat Lovers Pizza", 1999),
+  mkPizza(MK_HAWAIIAN_ID, "Hawaiian Pizza", 1799),
+  mkPizza(MK_VEGGIE_ID, "Veggie Pizza", 1699),
+  mkPizza(MK_BBQCHICKEN_ID, "BBQ Chicken Pizza", 1899),
+];
+const MULTI_KIND_OPEN_STATE: DialogueState = {
+  phase: "ordering",
+  open: {
+    kind: "disambiguation",
+    candidates: MULTI_KIND_PIZZA_MENU.map(m => m.id),
+    quantity: 4,
+    spanText: "4 large pizzas",
+  },
+  upsell_offered: false,
+  asked_message_id: null,
+};
+
+Deno.test("answer (multi-kind-answer P0): a list answer to 'what kind?' resolves EACH named clause to its own line — never dumps the whole quantity on one winner", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(MULTI_KIND_OPEN_STATE, cart, "One cheese, one pepperoni, one meat lovers and one hawaiian", MULTI_KIND_PIZZA_MENU);
+  assert(result.resolved, "a fully-matched list answer must resolve");
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved", `expected disambiguation_multi_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(cart.length, 4, "four distinct clauses must produce four distinct lines, not one line at quantity 4");
+  const ids = cart.map(l => l.menu_item_id).sort();
+  assertEquals(ids, [MK_CHEESE_ID, MK_HAWAIIAN_ID, MK_MEATLOVERS_ID, MK_PEPPERONI_ID].sort(), "must be exactly the four named kinds, never all Meat Lovers");
+  for (const line of cart) assertEquals(line.quantity, 1, "each clause's own count is 1, never the original open quantity of 4");
+});
+
+Deno.test("answer (multi-kind-answer P0): clause counts that don't sum to the open quantity ask for the rest, and add nothing yet", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(MULTI_KIND_OPEN_STATE, cart, "One cheese, one pepperoni", MULTI_KIND_PIZZA_MENU);
+  assert(result.resolved, "a mismatched-count list answer still resolves (asks a clarifying question), never silently drops the turn");
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved");
+  assert(
+    result.resolved && result.outcome.kind === "disambiguation_multi_resolved" && /4.*2|2.*4/.test(result.outcome.clarifyMessage ?? ""),
+    `must tell the customer the count is short, naming both numbers: ${JSON.stringify(result.resolved ? result.outcome : null)}`,
+  );
+  assertEquals(cart.length, 0, "nothing is added while the split itself is untrustworthy");
 });
 
 Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped when item IS in cart — silent (no decline)", () => {
