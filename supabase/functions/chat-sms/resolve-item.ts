@@ -59,6 +59,17 @@ export interface LexiconTerm {
   size_label?: string | null;
 }
 
+// Round 2, item 1c (2026-09-19): a fresh add ("hawiaan" for "Hawaiian
+// Pizza") that is NOT inside an open disambiguation could never resolve,
+// typo or not — the only typo tolerance in the codebase lived in
+// pending-disambiguation.ts's narrowCandidatesByFacetAnswer, reachable
+// solely from an already-open list-answer question. Reusing the SAME rule
+// here (guard19-fuzzy-item-match.ts's fuzzyWordMatch — see that file's own
+// header for why a flat edit-distance-1 cap doesn't actually cover
+// "hawiaan"/"hawaiian", dist 2) means every caller of resolveItem gets typo
+// tolerance, not just the list-answer path.
+import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
+
 // Mirrors compile-menu.ts's own (unexported) categoryNoun/singularizeWord/
 // pluralizeWord exactly, so "the shop's actual categories" reduce to the
 // same noun a customer would say ("Hot Sandwiches" -> "sandwich") as the
@@ -245,6 +256,46 @@ function occursAsWholeWordRun(spanWords: string[], termWords: string[]): boolean
   return false;
 }
 
+// Round 2, item 1c: the same whole-word-run scan as occursAsWholeWordRun,
+// except each word pair may also match via fuzzyWordMatch instead of exact
+// equality — so a single typo'd word inside an otherwise-correct span
+// ("hawiaan pizza") still finds the term ("hawaiian pizza") it names.
+function occursAsWholeWordRunFuzzy(spanWords: string[], termWords: string[]): boolean {
+  if (termWords.length === 0 || termWords.length > spanWords.length) return false;
+  for (let start = 0; start <= spanWords.length - termWords.length; start++) {
+    let matched = true;
+    for (let i = 0; i < termWords.length; i++) {
+      const sw = spanWords[start + i];
+      const tw = termWords[i];
+      if (sw !== tw && !fuzzyWordMatch(sw, tw)) { matched = false; break; }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
+// Fuzzy sibling of longestMatch, used ONLY as a fallback once an exact scan
+// found nothing at all (resolveItem below) — never runs alongside, and
+// never overrides, an exact hit or an exact tie.
+function fuzzyLongestMatch(spanWords: string[], entries: LexiconTerm[]): { length: number; targetIds: Set<string> } {
+  let longestMatchedLength = 0;
+  const targetIdsAtLongest = new Set<string>();
+  for (const entry of entries) {
+    const termWords = toWords(normalize(entry.term));
+    if (termWords.length === 0) continue;
+    if (!occursAsWholeWordRunFuzzy(spanWords, termWords)) continue;
+
+    if (termWords.length > longestMatchedLength) {
+      longestMatchedLength = termWords.length;
+      targetIdsAtLongest.clear();
+      targetIdsAtLongest.add(entry.target_id);
+    } else if (termWords.length === longestMatchedLength) {
+      targetIdsAtLongest.add(entry.target_id);
+    }
+  }
+  return { length: longestMatchedLength, targetIds: targetIdsAtLongest };
+}
+
 // The original, unmodified longest-match scan — unchanged behavior, used
 // both as the primary pass (below) and as the exact fallback for a phrase
 // that names nothing but a bare category word ("salad" alone).
@@ -371,7 +422,20 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   const usingItemNameSpan = primary.targetIds.size > 0;
   const base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
 
-  if (base.targetIds.size === 0) return { kind: "unresolved" };
+  // Round 2, item 1c: nothing matched EXACTLY at all — try the same scan
+  // fuzzy (occursAsWholeWordRunFuzzy) before giving up. Resolves ONLY when
+  // it narrows to a single target family (targetIds.size === 1), same
+  // "never guess" discipline as everywhere else in this function — two or
+  // more fuzzy-matching families, or none, stays unresolved rather than
+  // guessing or listing a fuzzy-derived candidate set.
+  if (base.targetIds.size === 0) {
+    const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries);
+    const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon);
+    if (fuzzyBase.targetIds.size === 1) {
+      return { kind: "resolved", menu_item_id: [...fuzzyBase.targetIds][0] };
+    }
+    return { kind: "unresolved" };
+  }
 
   // No item-name span in the phrase (a bare category word, matched only via
   // the fallback scan above) — no qualifier to narrow with, and narrowing a

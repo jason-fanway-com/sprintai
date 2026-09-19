@@ -1395,7 +1395,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // the SAME decide()/ask()/render() pipeline as any other add — the
     // model's own answer_text is discarded entirely, never rendered; "the
     // model phrases, the code decides."
-    if (proposal.intent === "question" && (proposal.adds?.length ?? 0) === 0) {
+    //
+    // Round 2, item 1b (2026-09-19, live 2/5 runs): the SAME underlying bug
+    // also showed up as intent:"order" with adds:[] — a different shape
+    // (zero adds instead of prose-as-answer), same root cause: the model's
+    // own classification of whether this message contains an order is
+    // being trusted over the message text itself. Dropped the intent
+    // check entirely — an order-shaped message with an empty adds array
+    // re-runs through this same path regardless of what intent the model
+    // assigned it. One detector (orderShapedMessageQuantity), one re-run
+    // path, covering both trigger shapes.
+    if ((proposal.adds?.length ?? 0) === 0) {
       const orderShapedQuantity = orderShapedMessageQuantity(input.message, input.menu);
       if (orderShapedQuantity !== null) {
         proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
