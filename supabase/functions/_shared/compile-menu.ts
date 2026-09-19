@@ -835,10 +835,28 @@ function level1SurfaceForms(term: string): string[] {
 // "10 pieces wings boneless" -> "pieces wings boneless", "wings boneless",
 // "boneless". A single-word term has no proper trailing run shorter than
 // itself, so it contributes nothing.
+//
+// Round 2 addendum item A, 2026-09-19 (live, Vito's): a bare-digit run
+// ("3") is excluded. stripTrailingCount above already turns "Chicken
+// Fingers (3)" -> "chicken fingers 3" -> "chicken fingers", the correct
+// bare-name term — but the SAME "chicken fingers 3" string also feeds this
+// function (via statedItemTerms in deriveLexiconSurfaceForms), whose plain
+// trailing-run logic has no idea "3" came from a portion count rather than
+// a real word, and happily emits "3" as its own one-word term. Every item
+// on the shop carrying a "(3)" portion suffix then claims that same bare
+// digit ("3 small pizzas" live-matched Chicken Fingers (3), Nonas
+// Meatballs (3) and Pierogies (3) at once) — and a customer's bare
+// quantity ("3", "5", "6"...) is never a dish name. A run that is nothing
+// but digits is dropped outright, regardless of position; a run that
+// merely CONTAINS a digit alongside real words ("wings 6") is unaffected.
 function trailingWordRuns(term: string): string[] {
   const words = term.split(" ");
   const runs: string[] = [];
-  for (let i = 1; i < words.length; i++) runs.push(words.slice(i).join(" "));
+  for (let i = 1; i < words.length; i++) {
+    const run = words.slice(i).join(" ");
+    if (/^\d+$/.test(run)) continue;
+    runs.push(run);
+  }
   return runs;
 }
 

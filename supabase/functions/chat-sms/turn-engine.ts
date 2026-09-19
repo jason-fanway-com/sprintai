@@ -201,6 +201,14 @@ export interface DialogueState {
       otherOneFollowUp?: boolean;
       facetNarrowed?: boolean;
     }
+    // Round 2, item 1 (2026-09-19, live v511): two or more same-kind,
+    // multi-size groups from a single list answer, still waiting on ONE
+    // shared size word — see AnswerOutcome's "disambiguation_multi_size_narrowed"
+    // and resolveMultiKindClauses's own header (needsSizeGroups). Each
+    // group keeps its own candidate ids/quantity; answer()'s own
+    // `"multi_size"` case applies whatever size the customer names to every
+    // group independently.
+    | { kind: "multi_size"; groups: Array<{ candidates: string[]; quantity: number }> }
     | { kind: "upsell"; menu_item_id: string }
     // 2026-09-18 PO dispatch (address loop, rule 3): `reason` distinguishes
     // "order type genuinely never asked yet" (render()'s plain "Pickup or
@@ -393,6 +401,25 @@ export type AnswerOutcome =
     resolvedMenuItemIds: string[];
     clarifyMessage?: string;
   }
+  // Round 2, item 1 (2026-09-19, live v511): two or more clauses of a list
+  // answer each matched their own kind cleanly but left several sizes open,
+  // with no size ever stated ("one cheese, one hawaiian, two meat lovers" —
+  // see resolveMultiKindClauses's own header, needsSizeGroups). Opens a
+  // SHARED "What size?" question covering every one of `groups` at once —
+  // the next turn's single size answer resolves all of them together (see
+  // DialogueState's own "multi_size" open kind), rather than the customer
+  // being asked the same question once per kind. `resolvedMenuItemIds`
+  // carries whatever OTHER clauses in the SAME message resolved outright
+  // this turn (cart already mutated in place for those, same convention as
+  // disambiguation_multi_resolved); `clarifyMessage`, when present, names
+  // whatever clause(s) are still genuinely unclear (not just missing a
+  // size) — rides alongside the size question rather than replacing it.
+  | {
+    kind: "disambiguation_multi_size_narrowed";
+    groups: Array<{ candidates: string[]; quantity: number }>;
+    resolvedMenuItemIds: string[];
+    clarifyMessage?: string;
+  }
   | { kind: "order_type_resolved"; orderType: "pickup" | "delivery" }
   | { kind: "address_resolved"; address: string; withinZone: boolean }
   | { kind: "address_declined" }
@@ -447,7 +474,18 @@ export type AnswerOutcome =
   // best-matching candidate) and say "We only have X as a Y. Keep it, or take
   // it off?" — never silently drop the line. `message` carries that wording,
   // `menuItemId` is the candidate actually added to the cart.
-  | { kind: "disambiguation_category_rejected"; message: string; menuItemId: string };
+  | { kind: "disambiguation_category_rejected"; message: string; menuItemId: string }
+  // Round 2, item 3 (2026-09-19, live repro): an answer to "which one?"
+  // that names an entirely DIFFERENT item than anything on the offered
+  // list — see messageNamesItemOutsideCandidates's own header for why the
+  // pre-existing resolvers can misread this as picking a position/category
+  // within the open list instead. The named item is added on its own
+  // (`menuItemId`, `quantity` — cart already mutated in place, same
+  // convention as disambiguation_resolved), and the ORIGINAL disambiguation
+  // stays open exactly as it was — the runner re-opens the identical
+  // question next turn, same as a genuinely-failed answer would, so the
+  // still-unresolved item is never silently dropped.
+  | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number };
 
 export type AnswerResult =
   | { resolved: false }
@@ -936,7 +974,39 @@ interface MultiKindClauseResult {
   // a size answer next turn resolves it exactly like any other narrowed
   // remainder).
   singleAmbiguous: { candidates: PendingCandidate[]; count: number } | null;
+  // Round 2, item 1 (2026-09-19, live v511): TWO OR MORE clauses each
+  // cleanly matched a single KIND but left several SIZES open ("one cheese,
+  // one hawaiian, two meat lovers" against a menu with no size stated —
+  // every one of those three groups is a same-kind, multi-size tie). The
+  // OLD code folded any matched.length > 1 group into the same bucket as a
+  // genuinely-unclear clause; with two or more such groups in one message,
+  // singleAmbiguous's own "exactly one" gate never fired, so ALL of them
+  // fell into the clarify-message bucket ("I'm not sure what you meant by
+  // 'cheese', 'hawaiian' and 'meat lovers'") and the whole list died with
+  // an EMPTY cart, even though every kind was actually understood. See
+  // clauseCandidatesShareOneKind's own header for why matched.length > 1 is
+  // safe to treat as "needs a size" rather than "genuinely ambiguous" here.
+  needsSizeGroups: Array<{ candidates: PendingCandidate[]; count: number }>;
   clarifyMessage: string | null;
+}
+
+// Round 2, item 1: is `matched` (the result of narrowCandidatesByKind for
+// the "kind" facet) a single kind's several sizes, or a real tie between
+// DIFFERENT kinds? narrowCandidatesByFacetAnswer's own fallback tier only
+// ever returns ONE winning kind-group (a tie between two DIFFERENT kinds
+// returns null, not a union) — so a multi-candidate `matched` set coming
+// out of narrowCandidatesByKind is virtually always one kind's own size
+// spread. Checked anyway (never assumed) via extractSizeAndKind, the exact
+// same kind/size split pickNarrowingFacet itself already derives, so a
+// resolveItem "ambiguous" result that genuinely spans two dish families
+// (rare, but resolveItem's own lexicon fallback can produce it) still gets
+// asked about by name rather than mistaken for a size question.
+function clauseCandidatesShareOneKind(candidates: PendingCandidate[]): boolean {
+  if (candidates.length < 2) return false;
+  const kinds = new Set(
+    candidates.map(c => extractSizeAndKind((c.display_name?.trim() ? c.display_name : c.name)).kind.toLowerCase()),
+  );
+  return kinds.size === 1;
 }
 
 // PO fix (2026-09-19, round 2 addendum, live conv on v511): "plain" and
@@ -987,6 +1057,88 @@ function narrowCandidatesByKind(
     ?? narrowCandidatesByFacetAnswer(candidates, "kind", clauseText);
 }
 
+// Round 2, item 3 (2026-09-19, live repro): a typo'd word ("hawiaan") that
+// would name a real lexicon term ("hawaiian") if spelled correctly, but
+// resolveItem itself does only exact whole-word matching (no fuzzy
+// tolerance — that lives in narrowCandidatesByFacetAnswer's own fallback
+// tier and in itemSpanNamedInMessage's guard, neither of which this gate
+// reuses). Without this, "One large hawiaan pizza" would never resolve via
+// the lexicon at all and messageNamesItemOutsideCandidates below would
+// silently miss the exact case it exists for. Same tight, narrow tolerance
+// as itemSpanNamedInMessage's own ADDENDUM B fix (5+ letter words only,
+// fuzzyWordMatch's graduated distance) — this is a typo-correction pass,
+// not a general fuzzy search.
+// Arrow form deliberately, not a plain named-function declaration with a
+// string return type — this file's own gate test asserts exactly one
+// function signature of that shape exists (render(), the sole reply-
+// building function); see buildMultiClauseClarifyMessage's own note on the
+// same convention.
+const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
+  const lexiconWords = new Set<string>();
+  for (const entry of lexicon) {
+    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
+  }
+  if (lexiconWords.size === 0) return text;
+  return text.replace(/[a-zA-Z]+/g, word => {
+    const bare = word.toLowerCase();
+    if (bare.length < 5 || lexiconWords.has(bare)) return word;
+    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
+    return word;
+  });
+};
+
+// Round 2, item 3 (2026-09-19, live repro, real Meat-Lover size list —
+// stromboli / Medium / Large / Small): "One large hawiaan pizza" answered
+// that open disambiguation with "Large Meat Lover Pizza added" —
+// resolvePendingDisambiguation's own name/category-narrowing tiers scored
+// whatever words DID happen to overlap (the size word "large" against the
+// Large candidate's own rendered name) without ever checking whether the
+// REST of the message named something else altogether — "hawiaan" (a typo
+// of Hawaiian) was simply discarded as noise instead of being recognized as
+// the actual answer: a brand-new item, not a pick within the open list.
+//
+// The fix, per the PO's own framing: if the message resolves CLEANLY (via
+// the shop's real lexicon, restricted to nothing — a "which one?" answer
+// naming something new isn't scoped to the open candidates the way a
+// "what kind?" facet answer is) to an item that ISN'T one of the currently
+// offered candidates, that's a new add, not a pick. Deliberately narrow: a
+// clean `resolveItem` "resolved" (never "ambiguous" — a tie is not a
+// confident enough signal to override the disambiguation resolvers) to
+// something genuinely outside the candidate set is the only trigger, so an
+// answer that legitimately picks a candidate (even one that ALSO shares a
+// stray word, like a stated size) is never second-guessed by this gate.
+//
+// Regression guard (00-remainder conv 84, real test): "Can I just stick
+// with the side salad and add chicken fingers?" answers the disambiguation
+// with "the side salad" (a real candidate) AND appends a fresh, unrelated
+// request — the exact shape turn-engine-runner.ts's own remainder mechanism
+// (extractRemainderAfterAnswer, same REMAINDER_MARKERS vocabulary) already
+// exists to hand off to a second PROPOSE call, never to this gate. Checking
+// resolveItem against the WHOLE message would find "chicken fingers" (a
+// real lexicon term outside the candidates) and short-circuit the turn
+// before the side salad ever resolved, silently eating the remainder
+// mechanism's own job. Scoped to the text BEFORE the first such marker —
+// unaffected on the live repro this gate exists for ("One large hawiaan
+// pizza" contains none of them).
+const OUTSIDE_ITEM_REMAINDER_MARKER_RE = /\balso\b|\band a\b|\bplus\b|\bcan i get\b|\bcan i add\b|\badd\b|\boh and\b/i;
+
+function messageNamesItemOutsideCandidates(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+): { menuItemId: string; quantity: number } | null {
+  if (!lexicon || lexicon.length === 0) return null;
+  const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
+  const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
+  const { count, text } = extractLeadingClauseCount(scoped);
+  const corrected = fuzzyCorrectAgainstLexicon(text, lexicon);
+  const result = resolveItem(corrected, lexicon);
+  if (result.kind !== "resolved") return null;
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  if (candidateIds.has(result.menu_item_id)) return null;
+  return { menuItemId: result.menu_item_id, quantity: count };
+}
+
 // The answer to "what kind?" can itself be a LIST ("one plain, one
 // pepperoni, one meat lovers and one hawaiian") -- reuses phrase-split.ts's
 // shared boundary splitter (the same primitive the fresh-order path already
@@ -1019,13 +1171,21 @@ function resolveMultiKindClauses(
     return {
       resolvedAdds: [],
       singleAmbiguous: null,
+      needsSizeGroups: [],
       clarifyMessage: `You said ${totalQuantity} — I've got ${parsedSum}. What's the rest?`,
     };
   }
 
   const resolvedAdds: Array<{ candidate: PendingCandidate; count: number }> = [];
   const unresolvedNames: string[] = [];
-  const ambiguousClauses: Array<{ candidates: PendingCandidate[]; count: number; text: string }> = [];
+  // Round 2, item 1: split into two buckets instead of one — a same-kind,
+  // multi-size tie (needsSize) gets asked about with ONE shared "What
+  // size?" question (see the caller's own handling); a real tie between
+  // different kinds/unclear text (trulyAmbiguous) still only ever gets
+  // folded into singleAmbiguous when it's the LONE loose end, same as
+  // before.
+  const needsSize: Array<{ candidates: PendingCandidate[]; count: number; text: string }> = [];
+  const trulyAmbiguous: Array<{ candidates: PendingCandidate[]; count: number; text: string }> = [];
 
   for (const clause of clauses) {
     const matched = narrowCandidatesByKind(candidates, clause.text, lexicon);
@@ -1035,29 +1195,76 @@ function resolveMultiKindClauses(
       unresolvedNames.push(clause.text);
     } else if (matched.length === 1) {
       resolvedAdds.push({ candidate: matched[0], count: clause.count });
+    } else if (clauseCandidatesShareOneKind(matched)) {
+      needsSize.push({ candidates: matched, count: clause.count, text: clause.text });
     } else {
-      ambiguousClauses.push({ candidates: matched, count: clause.count, text: clause.text });
+      trulyAmbiguous.push({ candidates: matched, count: clause.count, text: clause.text });
     }
   }
 
-  // Exactly one clause still ambiguous and nothing else unresolved: reopen
-  // a real, smaller disambiguation scoped to just that clause. Any other
-  // shape (a second ambiguous clause, or an ambiguous clause alongside a
-  // genuinely unmatched one) is named in the combined clarify question
-  // instead, rather than trying to track two independently-resolvable open
-  // questions in the same turn.
-  let singleAmbiguous: { candidates: PendingCandidate[]; count: number } | null = null;
-  if (ambiguousClauses.length === 1 && unresolvedNames.length === 0) {
-    singleAmbiguous = { candidates: ambiguousClauses[0].candidates, count: ambiguousClauses[0].count };
-  } else {
-    for (const a of ambiguousClauses) unresolvedNames.push(a.text);
+  // Exactly one clause still open (needing a size OR genuinely unclear) and
+  // nothing else unresolved: reopen a real, smaller disambiguation scoped
+  // to just that clause — the exact pre-existing behavior, now reachable
+  // from either bucket. Any other shape (two or more open clauses, or one
+  // open clause alongside a genuinely unmatched one) falls through to the
+  // multi-open-ended handling below instead of guessing which to ask about
+  // first.
+  const openEnded = [...needsSize, ...trulyAmbiguous];
+  if (openEnded.length === 1 && unresolvedNames.length === 0) {
+    return {
+      resolvedAdds,
+      singleAmbiguous: { candidates: openEnded[0].candidates, count: openEnded[0].count },
+      needsSizeGroups: [],
+      clarifyMessage: null,
+    };
   }
 
+  // Two or more needs-size groups (or one alongside something else still
+  // unresolved this turn): ask the shared size question for every group at
+  // once (item 1's own fix) — never silently drop the ones that DID
+  // understand their kind just because another clause in the same message
+  // didn't. Whatever's genuinely unclear is still named explicitly in
+  // clarifyMessage, exactly as before; it simply rides alongside the size
+  // question instead of swallowing it.
+  for (const a of trulyAmbiguous) unresolvedNames.push(a.text);
   return {
     resolvedAdds,
-    singleAmbiguous,
+    singleAmbiguous: null,
+    needsSizeGroups: needsSize.map(g => ({ candidates: g.candidates, count: g.count })),
     clarifyMessage: unresolvedNames.length > 0 ? buildMultiClauseClarifyMessage(unresolvedNames, category) : null,
   };
+}
+
+// Round 2, item 4 (2026-09-19, live v511, 1 of 4 runs): "4 large pizzas" —
+// a bare quantity plus a real menu category word, nothing else — came back
+// from PROPOSE as intent:"question" with the MODEL'S OWN prose ("What kind
+// of large pizzas would you like? We have many options...") instead of a
+// real add proposal. turn-engine-runner.ts rendered that prose verbatim
+// (the normal, correct handling for a genuine question, e.g. "what's in the
+// meat lovers?"), so the customer got a numbered list from the model's own
+// head, never DECIDE's real narrowing-question flow — the list answer that
+// followed then landed with NO open disambiguation state at all and was
+// processed as four fresh, independent adds instead. "The model phrases,
+// the code decides": an order-shaped message is recognized by CODE (a
+// leading quantity — digit or number word — directly followed, anywhere in
+// the rest of the message, by one of the shop's own real category words),
+// never by trusting the model's own intent label. Deliberately narrow: a
+// real question ("what's in the meat lovers?") has no leading quantity at
+// all and is completely unaffected. Returns the parsed leading quantity
+// (never a boolean) so the caller can synthesize a real add proposal
+// carrying the customer's actual count ("4 large pizzas" -> 4), not a
+// silent quantity-1 guess.
+export function orderShapedMessageQuantity(message: string, menu: TurnEngineMenuItem[]): number | null {
+  const trimmed = (message ?? "").trim();
+  const leadingMatch = trimmed.match(CLAUSE_LEADING_COUNT_RE);
+  if (!leadingMatch) return null;
+  const raw = leadingMatch[1].toLowerCase();
+  const count = /^\d+$/.test(raw) ? parseInt(raw, 10) : (CLAUSE_COUNT_WORDS[raw] ?? 1);
+  const categories = new Set(menu.map(item => item.category).filter((c): c is string => !!c));
+  for (const category of categories) {
+    if (categoryWordMatches(category, trimmed)) return count;
+  }
+  return null;
 }
 
 export function answer(
@@ -1177,6 +1384,34 @@ export function answer(
 
       const quantity = state.open.quantity ?? 1;
 
+      // Round 2, item 3 (2026-09-19, live repro): before letting either
+      // resolver below (the facet path or resolvePendingDisambiguation)
+      // score whatever words in this message happen to overlap the open
+      // candidates, check whether the message actually names a DIFFERENT,
+      // real item entirely — see messageNamesItemOutsideCandidates's own
+      // header. Checked for every disambiguation, small list or narrowing
+      // facet alike: both resolvers below share the same failure mode (a
+      // stray size/category word winning a tiebreak while the actual
+      // answer — a different dish's name — is discarded as noise).
+      const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
+      if (outsideItem) {
+        const outsideMenuItem = menuById.get(outsideItem.menuItemId);
+        if (outsideMenuItem?.ask_plan) {
+          const outsideCandidate: PendingCandidate = {
+            menu_item_id: outsideMenuItem.id,
+            name: outsideMenuItem.name,
+            category: outsideMenuItem.category ?? null,
+            price_cents: outsideMenuItem.price_cents,
+          };
+          const cartChanged = addNarrowedCandidateToCart(cart, menuById, outsideCandidate, outsideItem.quantity);
+          return {
+            resolved: true,
+            outcome: { kind: "disambiguation_new_item_added", menuItemId: outsideItem.menuItemId, quantity: outsideItem.quantity },
+            cartChanged,
+          };
+        }
+      }
+
       // PO amendment (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md):
       // an overflowing candidate set (isNarrowingCandidateSet — the exact
       // threshold render()'s disambiguation case uses to choose narrowing
@@ -1227,6 +1462,23 @@ export function answer(
                     remainingQuantity: multi.singleAmbiguous.count,
                     resolvedMenuItemId: resolvedIds.length > 0 ? resolvedIds[resolvedIds.length - 1] : undefined,
                     otherOneFollowUp: false,
+                  },
+                  cartChanged: multiCartChanged,
+                };
+              }
+              // Round 2, item 1: two or more same-kind groups still need a
+              // size, with nothing stated yet — ask the shared question
+              // once, for all of them, instead of dumping the unresolved
+              // ones into "I'm not sure what you meant" (see
+              // resolveMultiKindClauses's own header).
+              if (multi.needsSizeGroups.length > 0) {
+                return {
+                  resolved: true,
+                  outcome: {
+                    kind: "disambiguation_multi_size_narrowed",
+                    groups: multi.needsSizeGroups.map(g => ({ candidates: g.candidates.map(c => c.menu_item_id), quantity: g.count })),
+                    resolvedMenuItemIds: resolvedIds,
+                    ...(multi.clarifyMessage ? { clarifyMessage: multi.clarifyMessage } : {}),
                   },
                   cartChanged: multiCartChanged,
                 };
@@ -1349,6 +1601,68 @@ export function answer(
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
       const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
       return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
+    }
+
+    // Round 2, item 1 (2026-09-19, live v511): the shared "What size?"
+    // question opened for two or more same-kind groups at once — see
+    // AnswerOutcome's "disambiguation_multi_size_narrowed" and
+    // resolveMultiKindClauses's own header. Each group is resolved
+    // independently against the SAME size word; a group that narrows to
+    // exactly one candidate is added at its own count, same mutate-in-place
+    // convention as every other disambiguation resolution in this switch.
+    case "multi_size": {
+      const groups = state.open.groups
+        .map(g => ({
+          candidates: g.candidates
+            .map(id => menuById.get(id))
+            .filter((m): m is TurnEngineMenuItem => !!m)
+            .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents })),
+          quantity: g.quantity,
+        }))
+        .filter(g => g.candidates.length > 0);
+      if (groups.length === 0) return UNRESOLVED;
+
+      if (isPendingDisambiguationDeclined(trimmed, groups.flatMap(g => g.candidates))) {
+        return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
+      }
+
+      let anyCartChanged = false;
+      const resolvedIds: string[] = [];
+      const stillOpen: Array<{ candidates: PendingCandidate[]; quantity: number }> = [];
+      for (const group of groups) {
+        const matched = narrowCandidatesByFacetAnswer(group.candidates, "size", trimmed);
+        if (matched && matched.length === 1) {
+          if (addNarrowedCandidateToCart(cart, menuById, matched[0], group.quantity)) anyCartChanged = true;
+          resolvedIds.push(matched[0].menu_item_id);
+        } else {
+          stillOpen.push({ candidates: (matched && matched.length > 1) ? matched : group.candidates, quantity: group.quantity });
+        }
+      }
+
+      // The size word didn't match anything at all for ANY group — never
+      // silently drop the whole open question; give closure/checkout intent
+      // a crack first (same discipline as every other facet path in this
+      // switch), then genuinely unresolved so the SAME question re-asks.
+      if (resolvedIds.length === 0) {
+        return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      }
+
+      // Rare on a real menu (every kind normally shares the same size set),
+      // but never guessed at: whatever's left reopens the same shared
+      // question for just what's still unresolved.
+      if (stillOpen.length > 0) {
+        return {
+          resolved: true,
+          outcome: {
+            kind: "disambiguation_multi_size_narrowed",
+            groups: stillOpen.map(g => ({ candidates: g.candidates.map(c => c.menu_item_id), quantity: g.quantity })),
+            resolvedMenuItemIds: resolvedIds,
+          },
+          cartChanged: anyCartChanged,
+        };
+      }
+
+      return { resolved: true, outcome: { kind: "disambiguation_multi_resolved", resolvedMenuItemIds: resolvedIds }, cartChanged: anyCartChanged };
     }
 
     case "order_type": {
@@ -2309,6 +2623,14 @@ export interface AskTurnEvents {
   // fresh, never-narrowed disambiguation. See DialogueState's own doc on
   // `facetNarrowed` for the exact live bug this closes.
   disambiguationFacetNarrowed?: boolean;
+  // Round 2, item 1 (2026-09-19, live v511): set whenever this turn's
+  // ANSWER opened or re-opened the SHARED "What size?" question over two or
+  // more same-kind groups — see AnswerOutcome's own
+  // "disambiguation_multi_size_narrowed" and DialogueState's "multi_size"
+  // open kind. ask() opens `{kind: "multi_size", groups}` straight off this
+  // field, same "mirror the outcome onto the next state" convention as
+  // every other disambiguation* field above.
+  disambiguationMultiSizeGroups?: Array<{ candidates: string[]; quantity: number }>;
   // decide()'s own queue of OTHER ambiguous spans from this turn's proposal,
   // beyond the one named by disambiguationCandidateIds above -- see
   // DecideResult.carriedDisambiguationCandidateIds. Empty/omitted when at
@@ -2440,6 +2762,18 @@ export function ask(
     if (openSlotStep) {
       return carry({ kind: "slot", line_key: effectiveLineKey(line), group_id: openSlotStep.group_id }, "ordering");
     }
+  }
+
+  // 1b. multi_size (2026-09-19, round 2 item 1): the shared "What size?"
+  // question over two or more same-kind groups from a list answer — see
+  // AskTurnEvents.disambiguationMultiSizeGroups's own doc and DialogueState's
+  // "multi_size" open kind. Checked at the same priority a fresh/reopened
+  // disambiguation gets (right after a required slot, ahead of everything
+  // else) — this field is only ever set by answer()'s own "kind"-facet or
+  // "multi_size" cases, never alongside a pendingAmbiguous push in the same
+  // turn, so there's no real ordering conflict with priority 2 below.
+  if (turnEvents.disambiguationMultiSizeGroups && turnEvents.disambiguationMultiSizeGroups.length > 0) {
+    return carry({ kind: "multi_size", groups: turnEvents.disambiguationMultiSizeGroups }, "ordering");
   }
 
   // 2. disambiguation -- the oldest span still waiting, whether it's fresh
@@ -2921,7 +3255,22 @@ export function render(
           // own doc on `facetNarrowed` for why a small (<=5) narrowed
           // remainder must still ask the next facet, never enumerate.
           if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
-            question = fullList;
+            // Round 2 addendum item A, 2026-09-19 (live sim persona, Vito's
+            // count-suffix collision): `openRepeatCount` (ask()'s own
+            // carry(), computed generically for every open kind via
+            // sameQuestionAsBefore) is 0 the first time this exact numbered
+            // list is asked, 1 on the first re-ask (still byte-identical —
+            // "never re-asked identically more than twice" allows this
+            // one), 2 on what would be a THIRD identical ask. At 2+, swap to
+            // wording that names the actual problem and gives an explicit
+            // way out ("none of those" — read by isDisambiguationListDropSignal,
+            // this function's caller-side counterpart in turn-engine-runner.ts)
+            // instead of repeating the same list forever — the live failure
+            // this closes: "I just want the pizzas" answered five times,
+            // five byte-identical lists, no escalation, no exit.
+            question = (state.openRepeatCount ?? 0) >= 2
+              ? "I couldn't match that. Reply with a number, or say \"none of those\"."
+              : fullList;
           } else {
             const { facet, effectiveCandidates } = narrowingFacetForOpen(state.open, candidates);
             if (context.enumerateDisambiguationCandidates) {
@@ -2943,6 +3292,14 @@ export function render(
         }
         break;
       }
+      // Round 2, item 1 (2026-09-19): the shared size question over two or
+      // more same-kind groups — always the plain "What size?" wording,
+      // never the enumerate/facet-value branching the "disambiguation" case
+      // above needs (a multi_size open is, by construction, always exactly
+      // this one question).
+      case "multi_size":
+        question = "What size?";
+        break;
       case "upsell": {
         const menuItem = menuById.get(state.open.menu_item_id);
         if (menuItem) question = renderUpsellOfferSentence({ name: menuItem.name, priceCents: menuItem.price_cents });

@@ -759,6 +759,39 @@ Deno.test("lexicon surface forms: a trailing portion count stripped from TWO dif
   assert(byId.get(fingers5.id)!.lexicon_terms.some(t => t.term === "chicken fingers 5"));
 });
 
+Deno.test("lexicon surface forms: a bare digit trailing-run off a portion-count suffix is never itself a lexicon term (round 2 addendum item A, 2026-09-19, live Vito's repro)", () => {
+  // The real live bug: "3 small pizzas" -> the numbered list offered
+  // Chicken Fingers (3) / Nonas Meatballs (3) / Pierogies (3) — the digit
+  // "3" in the customer's own bare quantity matched the "(3)" portion
+  // suffix shared by three unrelated items, because trailingWordRuns (fed
+  // the un-stripped "chicken fingers 3" stated term) derived the bare
+  // digit "3" as its own one-word candidate and every item sharing that
+  // suffix claimed it.
+  const fingers = item({ display_name: "Chicken Fingers (3)", category: "Appetizers" });
+  const meatballs = item({ display_name: "Nonas Meatballs (3)", category: "Appetizers" });
+  const pierogies = item({ display_name: "Pierogies (3)", category: "Appetizers" });
+  const { items: compiled } = compileMenu([fingers, meatballs, pierogies], [], "t", false);
+
+  const bareDigitClaimants = compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "3"));
+  assertEquals(bareDigitClaimants.length, 0, "a bare digit must never be a matchable lexicon term at all");
+
+  // The count-suffix stripping this fix sits alongside (already landed,
+  // covered above) is unaffected: each item's own bare dish name still
+  // resolves, ambiguous across the real claimants, same as before.
+  const bareNameTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "nonas meatballs").map(t => t.target_id)),
+  );
+  assertEquals(bareNameTargets, new Set([meatballs.id]));
+});
+
+Deno.test("lexicon surface forms: a trailing run that merely CONTAINS a digit alongside real words is unaffected by the bare-digit exclusion", () => {
+  const wings = item({ display_name: "Boneless Wings 6 Pieces", category: "Wings" });
+  const { items: compiled } = compileMenu([wings], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assert(terms.includes("pieces") || terms.includes("6 pieces") || terms.includes("wings 6 pieces"),
+    "a multi-word trailing run containing a digit is still derived normally, only a PURELY numeric run is excluded");
+});
+
 Deno.test("lexicon surface forms: output is byte-identical across two separate compileMenu runs on the same input", () => {
   const items = [
     item({ display_name: "Cheese Burger", category: "Burgers" }),

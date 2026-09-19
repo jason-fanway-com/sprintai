@@ -1223,6 +1223,29 @@ Deno.test("render: a single ambiguous span asks a confident question — no apol
   assert(reply.includes("Turkey Burger"), `must name every candidate: ${reply}`);
 });
 
+// Round 2 addendum item A, rule 2 (2026-09-19, live sim persona): a
+// numbered "which one?" list must never be re-asked byte-identically more
+// than twice. openRepeatCount 0/1 (asked once, re-asked once — still
+// allowed) keep the plain enumerated list; openRepeatCount 2 (what would
+// be a THIRD identical ask) switches to wording that names the problem and
+// gives an explicit way out.
+Deno.test("render: a numbered disambiguation list repeats identically once (openRepeatCount 0 and 1), then escalates at 2", () => {
+  const openState = { kind: "disambiguation" as const, candidates: [AMBIGUOUS_BURGER_A_ID, AMBIGUOUS_BURGER_B_ID] };
+
+  const first = { phase: "ordering" as const, open: openState, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+  const firstReply = render([], [], first, [], AMBIGUOUS_MENU);
+  assert(firstReply.includes("Bacon Burger") && firstReply.includes("Turkey Burger"), `first ask must be the full list: ${firstReply}`);
+
+  const second = { ...first, openRepeatCount: 1 };
+  const secondReply = render([], [], second, [], AMBIGUOUS_MENU);
+  assertEquals(secondReply, firstReply, "the second ask (first re-ask) is still allowed to be byte-identical");
+
+  const third = { ...first, openRepeatCount: 2 };
+  const thirdReply = render([], [], third, [], AMBIGUOUS_MENU);
+  assert(thirdReply !== firstReply, `a third identical ask must never happen: ${thirdReply}`);
+  assert(/none of those/i.test(thirdReply), `escalated wording must offer an explicit way out: ${thirdReply}`);
+});
+
 Deno.test("decide: a genuinely unresolvable item_span keeps the existing apology wording — ambiguous and unresolved must not collapse into shared copy", () => {
   const proposal: Proposal = { intent: "order", adds: [{ item_span: "flying spaghetti monster sandwich", quantity: 1, choices: [] }], removes: [], modifies: [] };
   const d = decide(proposal, [], AMBIGUOUS_MENU, AMBIGUOUS_LEXICON);

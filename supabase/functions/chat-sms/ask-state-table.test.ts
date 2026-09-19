@@ -294,6 +294,11 @@ function progressViolation(
     case "upsell":
     case "ordering":
       return false; // no derivable "resolved this turn" signal — see comment above
+    // Round 2, item 1 (2026-09-19): "multi_size" is not one of this sweep's
+    // enumerated open-kinds (see this file's header count) — added only to
+    // satisfy the exhaustive switch now that DialogueState carries it.
+    case "multi_size":
+      return false;
   }
 }
 

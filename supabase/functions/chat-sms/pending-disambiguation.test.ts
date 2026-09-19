@@ -14,6 +14,7 @@ import {
   extractPartialSizeClause,
   extractPriceCentsFromMessage,
   facetDisplayValues,
+  isDisambiguationListDropSignal,
   isDisambiguationOptionsRequest,
   isNarrowingCandidateSet,
   isPendingDisambiguationDeclined,
@@ -562,6 +563,52 @@ Deno.test("narrowCandidatesByFacetAnswer: 'large' against same-kind-different-si
 
 Deno.test("narrowCandidatesByFacetAnswer: an answer naming nothing real returns null, never guesses", () => {
   assertEquals(narrowCandidatesByFacetAnswer(SEVEN_LARGE_PIZZAS, "kind", "um not sure"), null);
+});
+
+// Round 2 addendum item B, 2026-09-19 (live + offline, real Vito's "White"
+// vs "Gourmet White Fiesta" pizzas): an exact kind-name match must always
+// beat a merely partial/substring one. Before this fix "one white" scored
+// an identical stem-overlap tie between the two kinds (both contain the
+// word "white") and the clause was silently dropped.
+const WHITE_PIZZA_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "white-l", name: "White Pizza - Large 18''", category: "Pizza", price_cents: 1900 },
+  { menu_item_id: "gwf-l", name: "Gourmet White Fiesta Pizza - Large 18''", category: "Pizza", price_cents: 2200 },
+];
+
+Deno.test("narrowCandidatesByFacetAnswer: 'white' names the exact 'White' kind, not the merely-containing 'Gourmet White Fiesta' kind", () => {
+  const result = narrowCandidatesByFacetAnswer(WHITE_PIZZA_CANDIDATES, "kind", "one white");
+  assertEquals(result?.length, 1);
+  assertEquals(result?.[0].menu_item_id, "white-l");
+});
+
+Deno.test("narrowCandidatesByFacetAnswer: 'gourmet white fiesta' still resolves to its own exact (longer) kind", () => {
+  const result = narrowCandidatesByFacetAnswer(WHITE_PIZZA_CANDIDATES, "kind", "gourmet white fiesta");
+  assertEquals(result?.length, 1);
+  assertEquals(result?.[0].menu_item_id, "gwf-l");
+});
+
+// Round 2 addendum item A, rule 2 (2026-09-19, live sim persona, real
+// repro): "I just want the pizzas" answered a dead numbered list five
+// times with no exit. isDisambiguationListDropSignal names the replies
+// that abandon a list outright (turn-engine-runner.ts gates this on the
+// list already having missed at least once — see its own doc).
+Deno.test("isDisambiguationListDropSignal: bare 'no' and 'none'/'none of those'/'none of them' all drop the list", () => {
+  for (const msg of ["no", "No.", "none", "none of those", "None of them!"]) {
+    assert(isDisambiguationListDropSignal(msg), `"${msg}" must be a drop signal`);
+  }
+});
+
+Deno.test("isDisambiguationListDropSignal: 'I just want the pizzas' (the live repro) drops the list", () => {
+  assert(isDisambiguationListDropSignal("I just want the pizzas"));
+  assert(isDisambiguationListDropSignal("I only want a large cheese"));
+});
+
+Deno.test("isDisambiguationListDropSignal: an ordinary answer naming a candidate — including a plain 'I want X' with no 'just'/'only' — is never mistaken for a drop signal", () => {
+  assert(!isDisambiguationListDropSignal("the bacon one"));
+  assert(!isDisambiguationListDropSignal("2"));
+  assert(!isDisambiguationListDropSignal("cheese pizza"));
+  assert(!isDisambiguationListDropSignal("I want the large"), "'I want X' with no just/only is the single most ordinary way to answer — must not drop");
+  assert(!isDisambiguationListDropSignal("nope that's not right, I want the large"), "embedded 'no' inside a real answer must not drop it");
 });
 
 Deno.test("facetDisplayValues: kind values keep original casing, deduped, no prices", () => {

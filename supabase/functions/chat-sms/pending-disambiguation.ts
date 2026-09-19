@@ -197,6 +197,32 @@ export function isPendingDisambiguationDeclined(
   return false;
 }
 
+// Round 2 addendum item A, rule 2 (2026-09-19, live sim persona, real
+// Vito's count-suffix collision — "3 small pizzas" -> a numbered list of
+// three unrelated items sharing a "(3)" portion suffix, then "I just want
+// the pizzas" answered FIVE times, FIVE byte-identical lists, no exit):
+// once a numbered "which one?" list has already missed at least once (see
+// turn-engine.ts's DialogueState/render() own use of `openRepeatCount` for
+// this same list, and this function's caller-side gate in turn-engine-
+// runner.ts), a reply that abandons the list outright — a bare "no"/"none"/
+// "none of those", or "I('m) (just|only) want <something>" — drops it, same
+// discipline as isPendingDisambiguationDeclined above (a real word, not
+// silence, decides this), but deliberately narrower and NOT gated on
+// naming a candidate: unlike a genuine decline, this fires specifically
+// because the list has already proven itself unmatchable, so the customer
+// restating what they want in their own words (not the list's words) is
+// itself the signal, not incidental overlap with a candidate's name.
+// "just"/"only" is REQUIRED, not merely optional — a bare "I want the
+// large" is the single most ordinary way to answer ANY open question and
+// must never be misread as abandonment; only the "just"/"only" framing
+// ("I just want X", not "I want X") signals the customer restating from
+// scratch rather than naming a candidate.
+const DISAMBIGUATION_LIST_DROP_RE = /^(?:none(?:\s+of\s+(?:those|them))?|no)\.?!?$|\bi(?:'m| am)?\s+(?:just|only)\s+want\b/i;
+
+export function isDisambiguationListDropSignal(message: string): boolean {
+  return DISAMBIGUATION_LIST_DROP_RE.test((message ?? "").trim());
+}
+
 // Dispatch 00-AT (conv 8b9636c9 live repro, and conv b65b60eb "Lobster
 // Bisque - Bowl" vs "Cup"): category is frequently the SAME across every
 // candidate a disambiguation ever offers (three Jack's Special sizes are
@@ -790,10 +816,22 @@ export function narrowCandidatesByFacetAnswer(
   let bestKey: string | null = null;
   let bestScore = 0;
   let tie = false;
+  // Round 2 addendum item B, 2026-09-19 (live/offline: Vito's "White" vs
+  // "Gourmet White Fiesta", "one white" clause): the loop below scores by
+  // raw stem-overlap count alone, so a short kind name that is fully named
+  // ("white" naming "White" exactly) ties with a longer kind that merely
+  // CONTAINS that word ("Gourmet White Fiesta" only partially named) —
+  // both score 1, `tie` fires, and the clause was silently dropped (never
+  // even reaching the clarify-message fallback). `exactKeys` collects
+  // every kind whose ENTIRE stem set is named in the message (score equals
+  // that kind's own stem count) — an exact name always outranks a partial
+  // one, checked before the tie above ever gets a say.
+  const exactKeys: string[] = [];
   for (const key of groups.keys()) {
     const kindStems = significantStems(key);
     let score = 0;
     for (const s of msgStems) if (kindStems.has(s)) score++;
+    if (kindStems.size > 0 && score === kindStems.size) exactKeys.push(key);
     if (score > bestScore) {
       bestScore = score;
       bestKey = key;
@@ -802,6 +840,12 @@ export function narrowCandidatesByFacetAnswer(
       tie = true;
     }
   }
+  // Exactly one kind was named in full: that wins outright, whether or not
+  // the raw-overlap loop above called it a tie. Two or more exact matches
+  // is a genuine tie between real kinds (falls through, same "never guess"
+  // discipline as everywhere else in this function) — ask about it by name
+  // rather than pick one.
+  if (exactKeys.length === 1) return groups.get(exactKeys[0]) ?? null;
   if (bestScore > 0 && !tie && bestKey !== null) return groups.get(bestKey) ?? null;
 
   // Data fix (c), 2026-09-19, real customer typo ("hawiaan" for "hawaiian"):

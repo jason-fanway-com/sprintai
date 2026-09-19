@@ -80,13 +80,14 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
-import { isDisambiguationOptionsRequest } from "./pending-disambiguation.ts";
+import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal } from "./pending-disambiguation.ts";
 import {
   answer,
   decide,
   ask,
   render,
   extractSlotChoiceWords,
+  orderShapedMessageQuantity,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -839,6 +840,18 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // coincidental resolution of something else. See turn-engine.ts's ask(),
   // priority 2b, for what this unlocks.
   const priorOpenWasDisambiguation = priorState.open?.kind === "disambiguation";
+  // Round 2 addendum item A, rule 2 (2026-09-19): the SAME numbered list
+  // has already missed at least once (`openRepeatCount` — ask()'s own
+  // carry(), tracked generically for every open kind, not just this one;
+  // see turn-engine.ts's render() disambiguation case for the matching
+  // escalation-wording read of the same field) and this reply abandons the
+  // list outright — see isDisambiguationListDropSignal's own doc. Read
+  // once, used below both to skip the re-carry-forward branch (which would
+  // otherwise re-open the identical dead list forever) and to keep PROPOSE
+  // from being told about a question we're dropping.
+  const dropDisambiguationList = priorState.open?.kind === "disambiguation" &&
+    (priorState.openRepeatCount ?? 0) >= 1 &&
+    isDisambiguationListDropSignal(input.message);
 
   if (answerResult.resolved) {
     turnEvents = { ...turnEvents, disambiguationSettledThisTurn: priorOpenWasDisambiguation };
@@ -930,6 +943,50 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         }
         if (outcome.clarifyMessage) {
           declines = [...declines, { reason: outcome.clarifyMessage }];
+        }
+        break;
+      // Round 2, item 1 (2026-09-19, live v511): the shared "What size?"
+      // question over two or more same-kind groups — see AnswerOutcome's own
+      // doc and turn-engine.ts's DialogueState "multi_size" open kind.
+      // `disambiguationMultiSizeGroups` is what ask()'s own priority-1b
+      // branch consumes to open (or re-open, on a still-unresolved partial
+      // answer) that question next. Same "last resolved clause qualifies
+      // for upsell" and "clarifyMessage rides along as one combined decline"
+      // conventions as disambiguation_multi_resolved immediately above.
+      case "disambiguation_multi_size_narrowed":
+        if (answerResult.cartChanged && outcome.resolvedMenuItemIds.length > 0) {
+          turnEvents = {
+            ...turnEvents,
+            qualifyingAddMenuItemId: outcome.resolvedMenuItemIds[outcome.resolvedMenuItemIds.length - 1],
+          };
+        }
+        turnEvents = { ...turnEvents, disambiguationMultiSizeGroups: outcome.groups };
+        if (outcome.clarifyMessage) {
+          declines = [...declines, { reason: outcome.clarifyMessage }];
+        }
+        break;
+      // Round 2, item 3 (2026-09-19, live repro): the customer's answer to
+      // "which one?" named a totally different, real item — added on its
+      // own (cart already mutated in place by answer()), and the ORIGINAL
+      // disambiguation is still unresolved. Mirrors the exact "no model
+      // call, re-ask the same question" carry-forward the unresolved-answer
+      // branch below already does for `priorState.open.kind === "disambiguation"`
+      // — this outcome just reaches it from the RESOLVED side instead (the
+      // turn genuinely did something, so `answerResult.resolved` is true),
+      // so the fields have to be set here rather than falling into that
+      // branch naturally.
+      case "disambiguation_new_item_added":
+        turnEvents = { ...turnEvents, qualifyingAddMenuItemId: outcome.menuItemId };
+        if (priorState.open?.kind === "disambiguation") {
+          turnEvents = {
+            ...turnEvents,
+            disambiguationCandidateIds: priorState.open.candidates,
+            disambiguationQuantity: priorState.open.quantity,
+            disambiguationSpanText: priorState.open.spanText,
+            disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
+            disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            heldModifierText: priorState.open.heldModifierText,
+          };
         }
         break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
@@ -1090,7 +1147,10 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         }
       }
     }
-  } else if (priorState.open?.kind === "slot" || priorState.open?.kind === "disambiguation") {
+  } else if (
+    priorState.open?.kind === "slot" || priorState.open?.kind === "multi_size" ||
+    (priorState.open?.kind === "disambiguation" && !dropDisambiguationList)
+  ) {
     // Dispatch 00-AT (conv 8b9636c9: "every message is re-read as a fresh
     // order while a question is open"). ANSWER's own resolver for this
     // exact open kind — and, after that, closureOrAffirmationFallback —
@@ -1130,6 +1190,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         disambiguationFacetNarrowed: priorState.open.facetNarrowed,
         heldModifierText: priorState.open.heldModifierText,
       };
+    } else if (priorState.open.kind === "multi_size") {
+      // Round 2, item 1 (2026-09-19): same "hand the open question's own
+      // state back explicitly or ASK has nothing left to recompute it from"
+      // reasoning as the disambiguation branch just above — a size answer
+      // that genuinely failed to resolve ANY group (answer()'s own "multi_size"
+      // case returns UNRESOLVED there) must re-open the identical shared
+      // question, never fall through to a model call.
+      turnEvents = { ...turnEvents, disambiguationMultiSizeGroups: priorState.open.groups };
     } else {
       // 00-AU: the slot case of this same dispatch — see the flag's own doc
       // above. No cart mutation happened above (this branch never mutates
@@ -1174,7 +1242,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     const proposeResult: ProposeResult = await proposeFn(
       {
         cart: workingCart,
-        open: priorState.open,
+        // Round 2 addendum item A, rule 2 (2026-09-19): a dropped
+        // disambiguation list is treated as a genuinely fresh message —
+        // PROPOSE must not be told a question is still open (it isn't;
+        // that's the whole point of dropping it), so `open` and its vocab
+        // go to null/undefined here exactly as they would for a message
+        // that arrived with nothing open at all.
+        open: dropDisambiguationList ? null : priorState.open,
         menu: input.menu,
         lexicon,
         history: input.history,
@@ -1184,8 +1258,8 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // order was pickup or delivery, whether a name was already given, or
         // what had already been settled. Published as STATE, not as history.
         // 00-BI: the closed vocabulary for whatever question is open.
-        answerQuestion: answerVocab?.question,
-        answerOptions: answerVocab?.options,
+        answerQuestion: dropDisambiguationList ? undefined : answerVocab?.question,
+        answerOptions: dropDisambiguationList ? undefined : answerVocab?.options,
         answerValueWanted,
         orderContext: {
           orderType: input.shopContext.orderType ?? null,
@@ -1255,6 +1329,22 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     } else {
       // ── STEP 4: DECIDE ─────────────────────────────────────────────────
       proposal = proposeResult.proposal;
+    }
+    // Round 2, item 4 (2026-09-19, live v511, 1 of 4 runs): an order-shaped
+    // message ("4 large pizzas" — a leading quantity plus a real menu
+    // category word) that PROPOSE read as intent:"question" with the
+    // model's OWN prose and no adds at all is the model substituting for
+    // the real narrowing-question flow, not a genuine question ("what's in
+    // the meat lovers?" has no leading quantity and is unaffected). See
+    // isOrderShapedMessage's own header in turn-engine.ts. Re-run through
+    // the SAME decide()/ask()/render() pipeline as any other add — the
+    // model's own answer_text is discarded entirely, never rendered; "the
+    // model phrases, the code decides."
+    if (proposal.intent === "question" && (proposal.adds?.length ?? 0) === 0) {
+      const orderShapedQuantity = orderShapedMessageQuantity(input.message, input.menu);
+      if (orderShapedQuantity !== null) {
+        proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
+      }
     }
     // 00-BI: ANSWER already ran and missed -- that is the only way execution
     // reaches here. If the model could read the message as one of the meanings
