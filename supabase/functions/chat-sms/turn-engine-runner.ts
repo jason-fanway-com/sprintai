@@ -1322,6 +1322,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
                 ...remainderDecide.carriedDisambiguationCandidateIds,
               ],
               heldModifierText: turnEvents.heldModifierText ?? remainderDecide.heldModifierText,
+              categoryMismatchPending: turnEvents.categoryMismatchPending ?? remainderDecide.categoryMismatchPending,
             };
             // 00-BJ-adjacent: a "yes" is not final the instant it's also
             // carrying a brand-new item -- the order just changed, so
@@ -1620,6 +1621,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
       heldModifierText: decideResult.heldModifierText,
       replacementSourceLineKey: decideResult.replacementSourceLineKey,
+      categoryMismatchPending: decideResult.categoryMismatchPending,
       checkoutIntentThisTurn: proposal.intent === "checkout",
     };
     if (proposal.intent === "question" && proposal.answer_text) {
