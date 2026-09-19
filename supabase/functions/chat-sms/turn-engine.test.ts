@@ -659,6 +659,73 @@ Deno.test("answer (round 2 addendum): the single-clause 'kind?' answer also reso
   assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, MK_CHEESE_ID);
 });
 
+// ── Round 2, item 3 (2026-09-19, live repro): a "what size?" question open
+// for a same-kind, multi-size group (state.open.kind === "multi_size") never
+// ran the outside-item check the sibling "disambiguation" case already has —
+// see turn-engine.ts's "multi_size" case and messageNamesItemOutsideCandidates.
+// "One large hawaiian pizza" answering an open Meat-Lover-sizes question
+// matched the bare size word "large" against the Meat Lover group itself and
+// added Large Meat Lover Pizza, discarding that "hawaiian" named a
+// completely different, real item on the menu.
+const ML_LARGE_ID = "meat-lover-large";
+const ML_MEDIUM_ID = "meat-lover-medium";
+const ML_SMALL_ID = "meat-lover-small";
+const HAWAIIAN_LARGE_ID = "hawaiian-large";
+const mkSizedPizza = (id: string, name: string, price: number): TurnEngineMenuItem => ({
+  id, name, category: "Pizza", price_cents: price, bot_state: "orderable",
+  ask_plan: { compiled_at: "", compiler_version: 1, display_name: name, base_price_cents: price, recap_template: "", ticket_template: "", steps: [] },
+});
+const MULTI_SIZE_PIZZA_MENU: TurnEngineMenuItem[] = [
+  mkSizedPizza(ML_LARGE_ID, "Meat Lover Pizza - Large", 2199),
+  mkSizedPizza(ML_MEDIUM_ID, "Meat Lover Pizza - Medium", 1799),
+  mkSizedPizza(ML_SMALL_ID, "Meat Lover Pizza - Small", 1295),
+  mkSizedPizza(HAWAIIAN_LARGE_ID, "Hawaiian Pizza - Large", 2199),
+];
+const MULTI_SIZE_LEXICON: LexiconTerm[] = [
+  { term: "meat lover pizza", target_id: ML_LARGE_ID, category: "Pizza", size_label: "Large" },
+  { term: "meat lover pizza", target_id: ML_MEDIUM_ID, category: "Pizza", size_label: "Medium" },
+  { term: "meat lover pizza", target_id: ML_SMALL_ID, category: "Pizza", size_label: "Small" },
+  { term: "hawaiian pizza", target_id: HAWAIIAN_LARGE_ID, category: "Pizza", size_label: "Large" },
+];
+const MEAT_LOVER_MULTI_SIZE_STATE: DialogueState = {
+  phase: "ordering",
+  open: {
+    kind: "multi_size",
+    groups: [{ candidates: [ML_LARGE_ID, ML_MEDIUM_ID, ML_SMALL_ID], quantity: 1 }],
+  },
+  upsell_offered: false,
+  asked_message_id: null,
+};
+
+Deno.test("answer (multi_size, round 2 item 3): 'One large hawaiian pizza' against an open Meat-Lover-sizes question adds Hawaiian, never Large Meat Lover", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(
+    MEAT_LOVER_MULTI_SIZE_STATE,
+    cart,
+    "One large hawaiian pizza",
+    MULTI_SIZE_PIZZA_MENU,
+    { lexicon: MULTI_SIZE_LEXICON },
+  );
+  assert(result.resolved && result.outcome.kind === "disambiguation_new_item_added", `expected disambiguation_new_item_added, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(result.resolved && result.outcome.kind === "disambiguation_new_item_added" ? result.outcome.menuItemId : null, HAWAIIAN_LARGE_ID);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0]?.menu_item_id, HAWAIIAN_LARGE_ID, "must add Hawaiian, never phantom-add Large Meat Lover off the stray size word 'large'");
+});
+
+Deno.test("answer (multi_size, round 2 item 3 — no regression): a genuine size answer to the same open question still resolves the intended group", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(
+    MEAT_LOVER_MULTI_SIZE_STATE,
+    cart,
+    "large",
+    MULTI_SIZE_PIZZA_MENU,
+    { lexicon: MULTI_SIZE_LEXICON },
+  );
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved", `expected disambiguation_multi_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0]?.menu_item_id, ML_LARGE_ID, "a bare, genuine size answer with no outside item named must still resolve the open group");
+});
+
 Deno.test("decide: an add whose item_span never occurs in the customer's message is dropped when item IS in cart — silent (no decline)", () => {
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: SLICE_CHEESESTEAK_ID, name: "The Slice Cheesesteak", quantity: 1, price_cents: 1399, modifiers: [], options: { Bread: ["White"] }, line_key: "line-1" },

@@ -1694,6 +1694,37 @@ export function answer(
         return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
       }
 
+      // Round 2, item 3 (2026-09-19, live repro, real Meat-Lover size list):
+      // this case never ran the same outside-item check the sibling
+      // "disambiguation" case above already has (see
+      // messageNamesItemOutsideCandidates's own header) — "One large
+      // hawaiian pizza" against an open Meat-Lover-sizes question matched
+      // the bare size word "large" in the per-group loop below and added
+      // Large Meat Lover Pizza, discarding that "hawaiian" named a
+      // completely different, real item. Same fix, same primitive: a clean
+      // (never ambiguous) lexicon resolution to something outside every
+      // open group is a new add, checked once across all groups before any
+      // group's own size facet gets a chance to score a stray word.
+      const allGroupCandidates = groups.flatMap(g => g.candidates);
+      const outsideItem = messageNamesItemOutsideCandidates(trimmed, allGroupCandidates, external.lexicon);
+      if (outsideItem) {
+        const outsideMenuItem = menuById.get(outsideItem.menuItemId);
+        if (outsideMenuItem?.ask_plan) {
+          const outsideCandidate: PendingCandidate = {
+            menu_item_id: outsideMenuItem.id,
+            name: outsideMenuItem.name,
+            category: outsideMenuItem.category ?? null,
+            price_cents: outsideMenuItem.price_cents,
+          };
+          const cartChanged = addNarrowedCandidateToCart(cart, menuById, outsideCandidate, outsideItem.quantity);
+          return {
+            resolved: true,
+            outcome: { kind: "disambiguation_new_item_added", menuItemId: outsideItem.menuItemId, quantity: outsideItem.quantity },
+            cartChanged,
+          };
+        }
+      }
+
       let anyCartChanged = false;
       const resolvedIds: string[] = [];
       const stillOpen: Array<{ candidates: PendingCandidate[]; quantity: number }> = [];
