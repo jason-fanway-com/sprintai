@@ -4637,10 +4637,43 @@ export function render(
       // (buildFreshAddCategoryConfirmMessage) — never re-derived here, same
       // "message rides on the open state" convention replacement_unavailable
       // and disambiguation_category_rejected already use via answerText.
+      //
+      // 2026-09-19 PO dispatch (freeze-queue item 5): item 4 shipped this
+      // question with no repeat-aware wording — it wasn't exercised by item
+      // 4's own repro (built to resolve in one round-trip), but a customer
+      // who restates the same ambiguous words recomputes the identical
+      // categoryMismatchPending fresh each turn, and ask()'s generic
+      // openRepeatCount funnel (00-AZ, computed for every open kind alike)
+      // counts that exactly like any other open kind. At openRepeatCount>=2
+      // (a third identical ask), this is a plain yes/no with no candidate
+      // list to enumerate — name the exit instead, same "state what
+      // happens" convention the "confirm" case's own repeat>=2 escalation
+      // below uses.
       case "category_confirm":
-        question = state.open.message;
+        question = (state.openRepeatCount ?? 0) >= 2
+          ? "I'll leave that off your order since I can't tell what you want — let me know if you'd still like it added."
+          : state.open.message;
         break;
-      case "order_type":
+      case "order_type": {
+        // 2026-09-19 PO dispatch (freeze-queue item 5, live bug): unlike
+        // every other open kind, order_type had NO repeat-aware wording at
+        // all — live 50-conversation run 20260919-190323 (baseline
+        // P1_no_triple_question 11/50) caught "Pickup or delivery today?"
+        // asked 15 turns straight in one conversation (openRepeatCount
+        // climbing 0 through 13, never capped) while the customer kept
+        // trying to restate their order instead of answering. At
+        // openRepeatCount>=2 (a third identical ask), stop repeating the
+        // bare question and name the two literal answers instead —
+        // order_type only ever has two valid replies, so "list the
+        // candidates" is exactly PICKUP or DELIVERY, the same convention
+        // disambiguation's own escalation above already established for a
+        // question with a small, real candidate set. Checked BEFORE the
+        // address-unverifiable reason below so a third repeat always wins
+        // regardless of how this open was reached.
+        if ((state.openRepeatCount ?? 0) >= 2) {
+          question = "Reply PICKUP or DELIVERY to keep going.";
+          break;
+        }
         // 2026-09-18 PO dispatch (address loop, rule 3): shown once, on the
         // transition turn (openRepeatCount 0), when this open was reached
         // via the address-gave-up fallback in ask()'s priority 4 — every
@@ -4651,6 +4684,7 @@ export function render(
           ? "I can't verify that address. I can put the order down for pickup, or you can text a different address."
           : "Pickup or delivery today?";
         break;
+      }
       case "address":
         question = "What's the delivery address?";
         break;
