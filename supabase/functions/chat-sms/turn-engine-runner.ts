@@ -867,6 +867,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // emptiness check.
         turnEvents = { ...turnEvents, cartCancelledThisTurn: true };
         break;
+      case "quantity_corrected":
+        // 2026-09-18 PO dispatch (read-back corrections, mechanism 1): the
+        // line's quantity was already mutated in place by answer()
+        // (turn-engine.ts's "confirm" case). This flag is what makes ask()
+        // reopen confirm with a fresh read-back instead of the short
+        // re-confirm prompt — see AskTurnEvents.quantityCorrectedThisTurn's
+        // own doc.
+        turnEvents = { ...turnEvents, quantityCorrectedThisTurn: true };
+        break;
       // slot_resolved / address_declined / upsell_accepted / upsell_declined:
       // cart already mutated in place by answer() where relevant, nothing
       // else to persist or feed into ASK.

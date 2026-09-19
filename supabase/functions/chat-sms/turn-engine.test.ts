@@ -2035,3 +2035,68 @@ Deno.test("runTurnEngineTurn (echo regression, anti-repeat): DIFFERENT quoted wo
   const result = await runTurnEngineTurn(input, deps);
   assert(result.reply.includes('We don\'t have "cream dressin" for House.'), `different words must still echo: ${JSON.stringify(result.reply)}`);
 });
+
+// ============================================================
+// 2026-09-18 PO dispatch (read-back corrections, mechanism 1: quantity).
+// Real conv e46f1c41, live: read-back showed "One Size Thin Sicilian Pizza"
+// (customer ordered 2). Three consecutively differently-worded corrections
+// all hit "Anything else?" with the cart untouched — impliesConfirmDecline
+// consumed "wrong"/"instead"/"actually" as a bare decline before the
+// correction's actual content (the real quantity) was ever read. Only a
+// FOURTH attempt, phrased as a plain restatement with no decline word,
+// happened to reach the existing PROPOSE path and succeed.
+// ============================================================
+const SICILIAN_PIZZA_ID = "item-sicilian-pizza";
+const GARLIC_KNOTS_ID = "item-garlic-knots";
+const QTY_FIX_MENU: TurnEngineMenuItem[] = [
+  { id: SICILIAN_PIZZA_ID, name: "One Size Thin Sicilian Pizza", category: "Pizza", price_cents: 1750, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "One Size Thin Sicilian Pizza", base_price_cents: 1750, recap_template: "", ticket_template: "", steps: [] } },
+  { id: GARLIC_KNOTS_ID, name: "Garlic Knots (6)", category: "Appetizers", price_cents: 599, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Garlic Knots (6)", base_price_cents: 599, recap_template: "", ticket_template: "", steps: [] } },
+];
+function qtyFixCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: SICILIAN_PIZZA_ID, name: "One Size Thin Sicilian Pizza", quantity: 1, price_cents: 1750, modifiers: [] },
+    { menu_item_id: GARLIC_KNOTS_ID, name: "Garlic Knots (6)", quantity: 1, price_cents: 599, modifiers: [] },
+  ];
+}
+const QTY_FIX_CONFIRM_STATE: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+
+for (const msg of [
+  "I think you got the pizzas wrong. I meant 2 Thin Sicilian Pizzas, not one.",
+  "Okay, then let's make it 2 Thin Sicilian Pizzas and the Garlic Knots! That's all.",
+  "No, it's actually 2 x Thin Sicilian Pizzas instead of one. So it should be $35.00 for the pizzas. Can you update that?",
+]) {
+  Deno.test(`answer (read-back corrections, mechanism 1): "${msg}" sets quantity to 2 on the FIRST attempt, never a plain decline`, () => {
+    const result = answer(QTY_FIX_CONFIRM_STATE, qtyFixCart(), msg, QTY_FIX_MENU);
+    assertEquals(result, { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true });
+  });
+}
+
+Deno.test("answer (read-back corrections, mechanism 1): the correction mutates the matched line's quantity in place, leaves the other line untouched", () => {
+  const cart = qtyFixCart();
+  answer(QTY_FIX_CONFIRM_STATE, cart, "I think you got the pizzas wrong. I meant 2 Thin Sicilian Pizzas, not one.", QTY_FIX_MENU);
+  assertEquals(cart[0].quantity, 2, "the pizza line must be corrected to 2");
+  assertEquals(cart[1].quantity, 1, "the Garlic Knots line must be untouched");
+});
+
+Deno.test("runTurnEngineTurn (read-back corrections, mechanism 1): the reply is the read-back again, NEVER 'Anything else?'", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — the correction resolves deterministically")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-e46f1c41", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "I think you got the pizzas wrong. I meant 2 Thin Sicilian Pizzas, not one.",
+    history: [], menu: QTY_FIX_MENU, cart: qtyFixCart(), dialogueState: QTY_FIX_CONFIRM_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Alex", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("Anything else?"), `must never fall through to the empty-correction dead end: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("All good?"), `must re-show the read-back, not the short re-confirm: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("2x One Size Thin Sicilian Pizza") || result.reply.includes("2 One Size Thin Sicilian Pizza"), `read-back must reflect the corrected quantity: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals((result.dialogueState.open as { kind?: string } | null)?.kind, "confirm");
+  assertEquals(result.dialogueState.openRepeatCount, 0, "a fresh cycle — the next re-ask should be the short prompt, not this one");
+});

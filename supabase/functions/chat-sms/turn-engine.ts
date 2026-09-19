@@ -118,6 +118,7 @@ import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
   renderAmbiguousItemQuestion,
+  significantStems,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
 import { isExplicitCheckoutIntent } from "./checkout-intent-gate-20260913.ts";
@@ -304,6 +305,17 @@ export type AnswerOutcome =
   | { kind: "upsell_declined" }
   | { kind: "checkout_intent" }
   | { kind: "closure" }
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 1: quantity):
+  // a correction like "2 Thin Sicilian Pizzas, not one" while confirm is
+  // open is a QUANTITY SET on that existing line — resolved and applied
+  // directly (see parseQuantityCorrection below), never read as a plain
+  // decline (impliesConfirmDecline would otherwise catch "wrong"/"instead"
+  // and discard the correction entirely, landing on "Anything else?" with
+  // nothing fixed). ask() reopens confirm with a FRESH read-back on this
+  // outcome specifically — never the short "All good — confirm?" a genuine
+  // repeat gets, since the cart just changed and the customer needs to see
+  // the new numbers, not just be asked to re-confirm the same ones.
+  | { kind: "quantity_corrected" }
   // 2026-09-18 PO dispatch (address loop, rule 2): "cancel"/"forget it"/
   // "never mind" while address is open must abandon the whole order, not be
   // treated as a failed address (which re-asks the exact same question the
@@ -424,6 +436,83 @@ export function impliesConfirmDecline(message: string): boolean {
   const m = (message ?? "").trim();
   if (!m) return false;
   return CONFIRM_DECLINE_RE.test(m) || CONFIRM_DECLINE_ANYWHERE_RE.test(m);
+}
+
+// 2026-09-18 PO dispatch (read-back corrections, mechanism 1). Real conv
+// e46f1c41, live: read-back showed "One Size Thin Sicilian Pizza" (customer
+// ordered 2). "I think you got the pizzas wrong. I meant 2 Thin Sicilian
+// Pizzas, not one." contains "wrong"/"instead"/"actually" — exactly the
+// words CONFIRM_DECLINE_ANYWHERE_RE above already treats as a plain
+// decline, discarding the correction's actual content and landing on
+// "Anything else?" with the cart untouched. Three consecutive attempts
+// (differently worded, same correction) all hit this same dead end; only
+// the fourth, phrased as a plain restatement with no decline word in it,
+// happened to reach PROPOSE and succeed. This is the deterministic path
+// that makes the FIRST attempt work, for any of the PO's four listed
+// shapes — checked in `answer()`'s "confirm" case BEFORE
+// impliesConfirmDecline gets a chance to consume the message as a bare no.
+const QUANTITY_WORD_RE = "(\\d+|one|two|three|four|five|six|seven|eight|nine|ten)";
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+function parseQtyToken(tok: string): number | null {
+  const n = Number(tok);
+  if (Number.isFinite(n) && n > 0) return n;
+  return NUMBER_WORDS[tok.toLowerCase()] ?? null;
+}
+// "<N> <item>, not/instead of <M>" — covers "2 Thin Sicilian Pizzas, not
+// one" and "2 x Thin Sicilian Pizzas instead of one" (the "x" is optional).
+const QUANTITY_CORRECTION_NOT_RE = new RegExp(
+  `\\b${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?),?\\s+(?:not|instead of)\\s+${QUANTITY_WORD_RE}\\b`, "i",
+);
+// "I meant <N> <item>" — a correction that states the right number without
+// necessarily naming the wrong one too.
+const QUANTITY_CORRECTION_MEANT_RE = new RegExp(
+  `\\bi meant\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|$)`, "i",
+);
+// "make it <N> <item>" — stops the item-phrase capture at a trailing
+// "and <something else>" clause ("make it 2 Thin Sicilian Pizzas and the
+// Garlic Knots") so a second, unrelated item mentioned in the same breath
+// never gets folded into the corrected item's own name.
+const QUANTITY_CORRECTION_MAKE_IT_RE = new RegExp(
+  `\\bmake it\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|\\band\\b|$)`, "i",
+);
+
+interface QuantityCorrectionCandidate {
+  quantity: number;
+  itemPhrase: string;
+}
+
+function parseQuantityCorrectionPhrase(message: string): QuantityCorrectionCandidate | null {
+  for (const re of [QUANTITY_CORRECTION_NOT_RE, QUANTITY_CORRECTION_MEANT_RE, QUANTITY_CORRECTION_MAKE_IT_RE]) {
+    const m = message.match(re);
+    if (!m) continue;
+    const quantity = parseQtyToken(m[1]);
+    const itemPhrase = m[2]?.trim();
+    if (quantity && itemPhrase) return { quantity, itemPhrase };
+  }
+  return null;
+}
+
+// Matches itemPhrase against exactly one REAL cart line by stem subset —
+// same "missing beats wrong" convention as matchChoiceInText/
+// matchReactiveExtras elsewhere in this codebase: every significant stem
+// the phrase contributes must appear in the line's own name (tolerates
+// "Thin Sicilian Pizzas" naming "One Size Thin Sicilian Pizza" — "size"
+// stays unclaimed, "one" is already a stopword). Two or more lines
+// matching, or none, returns null — never a guess at which line was meant.
+function findCartLineForQuantityCorrection(
+  cart: TurnEngineCartLine[],
+  itemPhrase: string,
+): TurnEngineCartLine | null {
+  const phraseStems = significantStems(itemPhrase);
+  if (phraseStems.size === 0) return null;
+  const hits = cart.filter(line => {
+    if (!isRealCartLine(line)) return false;
+    const lineStems = significantStems(line.name);
+    return [...phraseStems].every(s => lineStems.has(s));
+  });
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // See this file's header note 2: the fallback that closes the "thats it
@@ -626,6 +715,28 @@ export function answer(
     }
 
     case "confirm": {
+      // 2026-09-18 PO dispatch (read-back corrections, mechanism 1): checked
+      // FIRST, ahead of both isExplicitCheckoutIntent and impliesConfirmDecline
+      // below — a quantity correction like "2 Thin Sicilian Pizzas, not one"
+      // contains "wrong"/"instead"/"actually" (would be read as a bare
+      // decline) and is often said in the SAME breath as a closing phrase
+      // like "That's all" (would be read as an immediate yes) — either way,
+      // the correction's actual content would be silently discarded. Same
+      // principle as the remainder mechanism elsewhere in this file ("a yes
+      // is not final the instant it's also carrying something new"): a real
+      // correction always forces a fresh read-back before anything can be
+      // silently confirmed on the same turn it arrived. Applied directly to
+      // the matched line (mutate-in-place, same convention as the slot/
+      // disambiguation cases above) and resolved on the customer's FIRST
+      // attempt.
+      const qtyCorrection = parseQuantityCorrectionPhrase(trimmed);
+      if (qtyCorrection) {
+        const line = findCartLineForQuantityCorrection(cart, qtyCorrection.itemPhrase);
+        if (line) {
+          line.quantity = qtyCorrection.quantity;
+          return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
+        }
+      }
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
       if (impliesConfirmDecline(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };   // 00-BH
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
@@ -1309,6 +1420,13 @@ export interface AskTurnEvents {
   // cancel itself happened on, never on any later turn. Optional so every
   // existing caller/test that predates this field is unaffected.
   cartCancelledThisTurn?: boolean;
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 1): true when
+  // THIS turn's ANSWER resolved to quantity_corrected. ask()'s confirm
+  // branch uses this to force a FRESH read-back (openRepeatCount reset to
+  // 0) instead of the short "All good — confirm?" a genuine same-cart
+  // repeat gets — the cart just changed, so the customer needs to see the
+  // corrected numbers, not be asked to re-confirm ones that are stale.
+  quantityCorrectedThisTurn?: boolean;
 }
 
 export function ask(
@@ -1521,6 +1639,16 @@ export function ask(
     turnEvents.disambiguationCandidateIds === null;
   if (turnEvents.confirmYes || restatementConfirms) return carry(null, "link_sent");
   if (turnEvents.confirmNo) return closureOrOrdering();
+  // 2026-09-18 PO dispatch (read-back corrections, mechanism 1): a
+  // quantity correction just changed the cart, so confirm reopens with a
+  // FRESH read-back — carry()'s own repeat-count logic would otherwise see
+  // the identical `{kind:"confirm"}` shape as "the same question again"
+  // and increment past 0, which renders the short "All good — confirm?"
+  // instead of showing the corrected numbers (buildConfirmReadback only
+  // fires at openRepeatCount 0 — see render()'s "confirm" case).
+  if (turnEvents.quantityCorrectedThisTurn) {
+    return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered, asked_message_id: null, pendingAmbiguous, openRepeatCount: 0 };
+  }
   return carry({ kind: "confirm" }, "confirm");
 }
 
