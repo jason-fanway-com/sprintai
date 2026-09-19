@@ -1125,7 +1125,7 @@ Deno.test("decide: removes a line by line_key", () => {
   ];
   const lineKey = `${CHEESE_BURGER_ID}::Temp=Medium`;
   const proposal: Proposal = { intent: "order", adds: [], removes: [{ line_key: lineKey }], modifies: [] };
-  const result = decide(proposal, cart, VITOS_MENU, VITOS_LEXICON);
+  const result = decide(proposal, cart, VITOS_MENU, VITOS_LEXICON, undefined, "remove the cheese burger");
   assertEquals(result.cart.length, 0);
 });
 

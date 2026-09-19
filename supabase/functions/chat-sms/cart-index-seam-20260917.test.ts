@@ -51,7 +51,7 @@ Deno.test("00-AW: a remove using the key the MODEL was actually given removes th
     removes: [{ line_key: keyTheModelSees }],
   };
 
-  const result = decide(proposal, cart, MENU, []);
+  const result = decide(proposal, cart, MENU, [], undefined, "actually remove the cheeseburger");
 
   assertEquals(
     result.cart.filter(l => l.menu_item_id === "item-burger").length, 0,

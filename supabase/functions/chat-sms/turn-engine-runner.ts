@@ -1536,6 +1536,23 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     );
     workingCart.splice(0, workingCart.length, ...decideResult.cart);
     declines = decideResult.declines;
+    // Round 3 P0 (2026-09-19, hallucinated-remove): decide() already dropped
+    // these silently (no decline text -- see DecideResult.guardDroppedRemoves'
+    // own header); logging here is purely an observability trip-wire, same
+    // discipline as the lexicon-load logging above, never a second failure
+    // path and never anything the customer sees.
+    for (const dropped of decideResult.guardDroppedRemoves) {
+      await logError(deps.supabase, {
+        conversationId: input.conversationId,
+        shopId: input.shopId,
+        tenantId: input.tenantId,
+        phase: "chat-sms",
+        stage: "guard_deny",
+        customerMessage: input.message,
+        error: new Error("remove without removal language"),
+        metadata: { line_key: dropped.line_key, item_name: dropped.item_name },
+      });
+    }
     turnEvents = {
       ...turnEvents,
       qualifyingAddMenuItemId: decideResult.qualifyingAddMenuItemId,

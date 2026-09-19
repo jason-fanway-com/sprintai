@@ -2447,6 +2447,16 @@ export interface DecideResult {
   // exactly that happened this turn. Applied once the sibling resolves;
   // see answer()'s disambiguation case.
   heldModifierText: string | null;
+  // Round 3 P0 (2026-09-19, hallucinated-remove, live repro: 4 pizzas in
+  // cart, "Yes, I want some fries too." -> PROPOSE re-proposed removes for
+  // all four pizza lines, pulled from conversation HISTORY same as the
+  // stale-add class this file already guards against, never from anything
+  // the customer said this turn). Every proposed remove this turn that
+  // failed removeHasRemovalLanguage below -- dropped silently from the
+  // cart (never a decline, same "silent" discipline as a guard-dropped add)
+  // but recorded here so the caller can log a guard_deny row. Empty when
+  // every remove this turn was authorized or there were no removes.
+  guardDroppedRemoves: Array<{ line_key: string; item_name: string }>;
 }
 
 interface ResolvedAdd {
@@ -2627,6 +2637,51 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
   const m = message.toLowerCase();
   if (ADDITION_MARKERS.some(a => m.includes(a))) return false;
   return RESTATEMENT_MARKERS.some(r => m.includes(r));
+}
+
+// Round 3 P0 (2026-09-19, hallucinated-remove): same "model proposes, code
+// validates" principle as the stale-add guard above -- a proposed remove's
+// line_key is model output and is never, on its own, authorization to
+// delete a line from the cart. It is executed only when the CUSTOMER'S
+// CURRENT message itself carries removal language naming that specific
+// line: a negation/removal verb, AND one of (a) a word from the line's own
+// stored name, (b) a word naming the line's menu CATEGORY (real stored
+// names are often a raw variant SKU label like "Cheese - Large (16\")" that
+// never contains the word a customer actually says, e.g. "pizza" -- same
+// gap named-remove-20260907.test.ts's header documents for the legacy
+// regex remover; this reuses categoryWordMatches, the same shared matcher),
+// or (c) "it"/"that"/"them"/"those" when this is the only real line open in
+// the cart (unambiguous referent). Deliberately checks the raw message,
+// never the model's proposal text -- same reasoning as itemSpanNamedInMessage
+// above.
+const REMOVAL_VERBS = ["no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without"];
+
+function removeHasRemovalLanguage(
+  message: string | undefined,
+  lineName: string,
+  lineCategory: string | null | undefined,
+  singleRealLineInCart: boolean,
+): boolean {
+  const msg = (message ?? "").toLowerCase().trim();
+  if (!msg) return false;
+  const hasVerb = REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msg));
+  if (!hasVerb) return false;
+  const nameStems = significantStems(lineName ?? "");
+  if (nameStems.size > 0) {
+    const msgStems = significantStems(msg);
+    for (const s of msgStems) if (nameStems.has(s)) return true;
+  }
+  // Merged/compound wording ("the cheeseburger" for a line named "Cheese
+  // Burger") tokenizes to a single word on the message side, so it can
+  // never land in msgStems' set-intersection above -- fall back to a
+  // flattened substring check against the item name's own (unstemmed)
+  // words, same >= 3 char significance floor as significantStems.
+  const msgFlat = msg.replace(/[^a-z0-9]/g, "");
+  const nameWords = (lineName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
+  if (nameWords.some(w => msgFlat.includes(w))) return true;
+  if (categoryWordMatches(lineCategory, msg)) return true;
+  if (singleRealLineInCart && /\b(it|that|them|those)\b/.test(msg)) return true;
+  return false;
 }
 
 export function decide(
@@ -2926,9 +2981,17 @@ export function decide(
     }
   }
 
+  const guardDroppedRemoves: Array<{ line_key: string; item_name: string }> = [];
   for (const rm of proposal.removes ?? []) {
     const idx = findLineByKey(nextCart, rm.line_key);
     if (idx < 0) { declines.push({ reason: "That item wasn't in your order." }); continue; }
+    const line = nextCart[idx];
+    const singleRealLineInCart = nextCart.filter(isRealCartLine).length === 1;
+    const lineCategory = menuById.get(line.menu_item_id)?.category;
+    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, singleRealLineInCart)) {
+      guardDroppedRemoves.push({ line_key: rm.line_key, item_name: line.name });
+      continue;
+    }
     removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
   }
 
@@ -2954,7 +3017,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText, guardDroppedRemoves };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
