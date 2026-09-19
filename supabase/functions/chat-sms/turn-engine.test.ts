@@ -1138,7 +1138,15 @@ Deno.test("answer: order_type resolves 'delivery' deterministically, no model ca
 
 Deno.test("answer: tip resolves a bare dollar figure", () => {
   const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
-  const result = answer(state, [], "$5", VITOS_MENU);
+  // P0 (2026-09-19): readTipReply now caps the tip at the cart's subtotal
+  // (rule 5b) — a non-empty cart here is required for that cap not to zero
+  // out a legitimate $5 tip. An empty cart with tip open isn't reachable in
+  // practice anyway: ask()'s own tip gate only ever opens "tip" once the
+  // cart has at least one real line.
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+  const result = answer(state, cart, "$5", VITOS_MENU);
   assertEquals(result, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 500 }, cartChanged: false });
 });
 

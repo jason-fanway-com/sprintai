@@ -970,6 +970,20 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     switch (outcome.kind) {
       case "order_type_resolved":
         sideEffects = { ...sideEffects, order_type: outcome.orderType };
+        // P0 (2026-09-19, live money bug, deploy v528): a pickup order
+        // never carries a driver tip (turn-engine.ts's "tip" case rule 4) —
+        // zero out any tip that was set before order type resolved to
+        // pickup (a tip stated/misparsed while order type was still
+        // assumed delivery, or a customer switching from delivery to
+        // pickup after already answering the tip question). Without this,
+        // computeCartSubtotalCents's total_cents math (turn-engine-
+        // runner.ts's own persistTurn) adds driverTipCents unconditionally,
+        // regardless of order type, so a stale tip survived the switch and
+        // still got charged on a pickup order.
+        if (outcome.orderType === "pickup") {
+          sideEffects = { ...sideEffects, driver_tip_cents: 0 };
+          turnEvents = { ...turnEvents, tipResolvedThisTurn: true };
+        }
         break;
       case "tip_resolved":
         sideEffects = { ...sideEffects, driver_tip_cents: outcome.tipCents };

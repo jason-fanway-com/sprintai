@@ -135,6 +135,7 @@ import {
 } from "./pending-disambiguation.ts";
 import { isExplicitCheckoutIntent } from "./checkout-intent-gate-20260913.ts";
 import { parseBareTipDollars } from "./intent-router.ts";
+import { computeCartSubtotalCents } from "./pricing.ts";
 import {
   detectCartMutation,
   renderActionConfirmation,
@@ -677,8 +678,33 @@ const CONFIRM_DECLINE_RE = /^(?:no|nope|nah|not yet|wait|hold on)[.!]?$/i;
 // re-asked. An amount WINS over a decline word, so "no more than $5" tips $5
 // rather than declining. A bare number is still read as dollars exactly as
 // before -- the tip question is open, so a number here is unambiguous.
-const TIP_DECLINE_ANYWHERE_RE = /\b(?:no tip|without a tip|don'?t want (?:a )?tip|no thanks|no thank you|not (?:now|today)|skip (?:it|the tip)?|none|pass|zero|nothing)\b/i;
-const TIP_AMOUNT_ANYWHERE_RE = /(?:\$\s*(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(?:dollars?|bucks?)\b)/i;
+// P0 (2026-09-19, live money bug, deploy v528): "driver" now optional
+// between "want a" and "tip" -- "I don't want a driver tip" used to miss
+// this entirely (the literal word "tip" had to sit right after "want a"),
+// so a real decline fell through to the amount scan below and read whatever
+// dollar figure happened to be elsewhere in the same message as the tip.
+const TIP_DECLINE_ANYWHERE_RE = /\b(?:no tip|without a tip|don'?t want (?:a |any )?(?:driver )?tip|no thanks|no thank you|not (?:now|today)|skip (?:it|the tip)?|none|pass|zero|nothing)\b/i;
+// P0 (2026-09-19, live money bug, deploy v528, conv-level repro: "I don't
+// want a driver tip. Is it really $19.99 for that?" charged a $19.99 tip on
+// an $8.49 order): the old TIP_AMOUNT_ANYWHERE_RE scanned the WHOLE message
+// for ANY dollar figure and, checked BEFORE the decline above, used
+// whichever one it found first -- here, the delivery fee the customer was
+// ASKING about, in a second sentence that had nothing to do with tipping.
+// Two independent fixes, both required: (1) decline is now checked FIRST
+// (see readTipReply below), so an explicit decline always wins over a
+// number appearing anywhere else in the same message; (2) a number is only
+// ever read as an explicit tip when it sits next to the word "tip" (or a
+// word-number amount is stated "for the driver") -- never scanned out of
+// an unrelated clause on its own. This intentionally tightens the old
+// "leave $5" / "5 dollars" / "$3.50 please" / "2 bucks" behavior (see
+// anchored-detectors-20260917.test.ts's own updated header) -- those were
+// exactly the "guess a bare number means tip" shape this P0 was filed to
+// remove; a bare "$5"/"5" (the whole message, nothing else said) is still
+// read fine via TIP_AMOUNT_RE below, unchanged.
+const TIP_NUMBER_NEAR_TIP_WORD_RE = /\btip\b[^.?!]{0,25}?\$?\s*(\d+(?:\.\d{1,2})?)|\$?\s*(\d+(?:\.\d{1,2})?)[^.?!]{0,25}?\btip\b/i;
+const TIP_WORDNUMBER_FOR_DRIVER_RE = /\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+dollars?\b[^.?!]{0,25}?\bdriver\b/i;
+const TIP_BARE_PERCENT_RE = /^\s*(\d{1,3})\s*%\s*$/;
+const TIP_PERCENT_NEAR_TIP_WORD_RE = /\btip\b[^.?!]*?(\d{1,3})\s*%|(\d{1,3})\s*%[^.?!]*?\btip\b/i;
 // Round 3, item 2c(ii): three shop-data question shapes recognized at
 // confirm, answered by CODE instead of falling through to PROPOSE (a real
 // question about a real number this system already has must never be
@@ -735,18 +761,61 @@ function answerConfirmShopFactsQuestion(
   return null;
 }
 
-export function readTipReply(message: string): { kind: "amount"; cents: number } | { kind: "decline" } | null {
+// P0 (2026-09-19): the number itself, read ONLY from an explicit tip
+// phrase -- "$5 tip"/"tip $5"/"tip the driver 5" (number within 25 chars of
+// the word "tip"), "five dollars for the driver" (word-number + "dollars"
+// + "driver"), "20%"/"tip 20%" (percent, resolved against subtotalCents
+// when known), or the bare whole-message "$5"/"5" (TIP_AMOUNT_RE,
+// unambiguous since nothing else is being said). Returns null -- never a
+// guess -- for anything else, e.g. a dollar figure that just happens to
+// appear in an unrelated sentence.
+function extractExplicitTipCents(m: string, subtotalCents: number | undefined): number | null {
+  if (TIP_AMOUNT_RE.test(m)) return Math.round(parseBareTipDollars(m) * 100);
+  const barePercent = TIP_BARE_PERCENT_RE.exec(m);
+  if (barePercent && subtotalCents != null) {
+    return Math.round(subtotalCents * (parseInt(barePercent[1], 10) / 100));
+  }
+  const nearTip = TIP_NUMBER_NEAR_TIP_WORD_RE.exec(m);
+  if (nearTip) {
+    const raw = nearTip[1] ?? nearTip[2];
+    return Math.round(parseFloat(raw) * 100);
+  }
+  const wordNum = TIP_WORDNUMBER_FOR_DRIVER_RE.exec(m);
+  if (wordNum) {
+    const n = NUMBER_WORDS[wordNum[1].toLowerCase()];
+    if (n) return n * 100;
+  }
+  const tipPercent = TIP_PERCENT_NEAR_TIP_WORD_RE.exec(m);
+  if (tipPercent && subtotalCents != null) {
+    const pct = tipPercent[1] ?? tipPercent[2];
+    return Math.round(subtotalCents * (parseInt(pct, 10) / 100));
+  }
+  return null;
+}
+
+export function readTipReply(
+  message: string,
+  ctx: { subtotalCents?: number; lineItemPricesCents?: number[] } = {},
+): { kind: "amount"; cents: number } | { kind: "decline" } | null {
   const m = (message ?? "").trim();
   if (!m) return null;
-  const amt = TIP_AMOUNT_ANYWHERE_RE.exec(m);
-  if (amt) {
-    const raw = amt[1] ?? amt[2];
-    const cents = Math.round(parseFloat(raw) * 100);
-    if (Number.isFinite(cents) && cents >= 0) return { kind: "amount", cents };
-  }
-  if (TIP_AMOUNT_RE.test(m)) return { kind: "amount", cents: parseBareTipDollars(m) * 100 };
+  // Decline checked FIRST -- see TIP_DECLINE_ANYWHERE_RE's own header. An
+  // explicit decline always wins over a dollar figure appearing anywhere
+  // else in the same message.
   if (TIP_DECLINE_RE.test(m) || TIP_DECLINE_ANYWHERE_RE.test(m)) return { kind: "decline" };
-  return null;
+  const isBareNumber = TIP_AMOUNT_RE.test(m);
+  const cents = extractExplicitTipCents(m, ctx.subtotalCents);
+  if (cents == null) return null;
+  // Rule 5a: a number is never accepted as the tip if that exact figure
+  // also names a real line-item price elsewhere in the same message (the
+  // $19.99-delivery-fee-mistaken-for-tip shape) -- defense in depth
+  // alongside the decline-checked-first fix above. Never applied to the
+  // bare whole-message case: there is no "elsewhere" in a message that IS
+  // just the number.
+  if (!isBareNumber && ctx.lineItemPricesCents?.includes(cents)) return null;
+  // Rule 5b: capped at the subtotal -- a tip can never exceed the order.
+  const cappedCents = ctx.subtotalCents != null ? Math.min(cents, ctx.subtotalCents) : cents;
+  return { kind: "amount", cents: cappedCents };
 }
 
 // CONFIRM: declining just reopens ordering -- it never charges anyone -- so
@@ -1034,13 +1103,31 @@ function findDisambiguationCategoryRejectionCandidate(
   return narrowed[0] ?? null;
 }
 
-function closureOrAffirmationFallback(trimmed: string, cart: TurnEngineCartLine[]): AnswerResult | null {
+// P0 (2026-09-19, item 9, live repro): `questionNamesSomethingSpecific`
+// distinguishes the "ordering" open kind (the bare "Anything else?" loop,
+// where the cart can still legitimately be completely empty — a resend of
+// the customer's very FIRST message, "that's it rn" tacked on as filler at
+// the end of an order that was never actually read, must still reach
+// PROPOSE rather than being misread as closure; see impliesClosure's own
+// 2026-09-19 header and the ae0eb19b regression tests) from every OTHER
+// open kind (slot/disambiguation/multi_size/order_type/address/tip/name/
+// confirm/upsell), where a question about something SPECIFIC is already
+// pending — that ambiguity cannot exist there, so a closure phrase is
+// always trusted even when `cart` itself is still empty because the only
+// thing "in progress" is the very question this message is declining to
+// answer (e.g. a pending "what kind?" narrowing question with nothing
+// added to the cart yet — "Nope, that's it for now" used to be left
+// unresolved and the same question re-asked forever). Every call site
+// except the "ordering" case's own passes `true`.
+function closureOrAffirmationFallback(
+  trimmed: string,
+  cart: TurnEngineCartLine[],
+  questionNamesSomethingSpecific = false,
+): AnswerResult | null {
   if (isExplicitCheckoutIntent(trimmed, null, false)) {
     return { resolved: true, outcome: { kind: "checkout_intent" }, cartChanged: false };
   }
-  // See impliesClosure's own 2026-09-19 header: an embedded "that's it" is
-  // only trusted as closure when there's something in the cart to close.
-  const cartHasItems = cart.some(isRealCartLine);
+  const cartHasItems = questionNamesSomethingSpecific || cart.some(isRealCartLine);
   if (impliesClosure(trimmed, cartHasItems) || impliesUpsellDecline(trimmed) || impliesUpsellAcceptance(trimmed)) {
     return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
   }
@@ -1529,7 +1616,7 @@ export function answer(
         line.price_cents = priceCents;
         return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
       }
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     case "disambiguation": {
@@ -1710,7 +1797,7 @@ export function answer(
           const matched = facetResult.facet === "kind"
             ? narrowCandidatesByKind(effectiveCandidates, trimmed, external.lexicon)
             : narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
-          if (!matched) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+          if (!matched) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
 
           // "2 pizzas, one large" -> "pepperoni": the kind answer also
           // settles the ALREADY-SIZED half of the split outright. Whatever
@@ -1788,7 +1875,7 @@ export function answer(
       }
 
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
-      if (!resolved) return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
@@ -1887,7 +1974,7 @@ export function answer(
       // a crack first (same discipline as every other facet path in this
       // switch), then genuinely unresolved so the SAME question re-asks.
       if (resolvedIds.length === 0) {
-        return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+        return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       }
 
       // Rare on a real menu (every kind normally shares the same size set),
@@ -1911,7 +1998,7 @@ export function answer(
     case "order_type": {
       const orderType = readOrderTypeReply(trimmed);
       if (orderType) return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     case "address": {
@@ -1943,7 +2030,7 @@ export function answer(
       // must resolve as closure, never as an address (declined or
       // otherwise), regardless of what the caller's geocode attempt (if any)
       // came back with for that same text.
-      const fallback = closureOrAffirmationFallback(trimmed, cart);
+      const fallback = closureOrAffirmationFallback(trimmed, cart, true);
       if (fallback) return fallback;
       if (external.geocodedAddress === undefined) return UNRESOLVED;
       if (external.geocodedAddress === null) return { resolved: true, outcome: { kind: "address_declined" }, cartChanged: false };
@@ -1955,8 +2042,26 @@ export function answer(
     }
 
     case "tip": {
+      // P0 (2026-09-19, live money bug, deploy v528): the customer can
+      // restate the order type WHILE the tip question is open ("Can you
+      // just do the two pizzas for pickup?") -- a pickup order never has a
+      // tip step at all (rule 4), so this must switch the order type
+      // (turn-engine-runner.ts's "order_type_resolved" case also zeros any
+      // tip already set, so nothing charges on pickup) rather than being
+      // handed to readTipReply below, which has nothing to do with a
+      // pickup statement and would otherwise leave this turn unresolved.
+      if (readOrderTypeReply(trimmed) === "pickup") {
+        return { resolved: true, outcome: { kind: "order_type_resolved", orderType: "pickup" }, cartChanged: false };
+      }
       {
-        const tip = readTipReply(trimmed);   // 00-BH
+        // P0 (2026-09-19): subtotal/line-item prices threaded through so
+        // readTipReply can cap the tip and reject a number that's really a
+        // menu price stated in the same message -- see its own header
+        // (rules 5a/5b).
+        const tip = readTipReply(trimmed, {
+          subtotalCents: computeCartSubtotalCents(cart),
+          lineItemPricesCents: cart.map(l => l.price_cents),
+        });   // 00-BH
         if (tip) return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tip.kind === "amount" ? tip.cents : 0 }, cartChanged: false };
       }
       // Round 3, item 2b: a shop-data question ("So delivery is free?")
@@ -1973,7 +2078,7 @@ export function answer(
       // duplicated that exact question in one SMS.
       const shopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts, true);
       if (shopFactsAnswer) return shopFactsAnswer;
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     case "name": {
@@ -1986,7 +2091,7 @@ export function answer(
       // where it belongs.
       const extractedName = extractCustomerName(trimmed);
       if (extractedName) return { resolved: true, outcome: { kind: "name_resolved", name: extractedName }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     case "confirm": {
@@ -2053,7 +2158,10 @@ export function answer(
       // confirm's own decline/affirm checks already own that vocabulary,
       // and a tip was never offered yet at this point for there to be
       // anything to decline.
-      const tipAtConfirm = readTipReply(trimmed);
+      const tipAtConfirm = readTipReply(trimmed, {
+        subtotalCents: computeCartSubtotalCents(cart),
+        lineItemPricesCents: cart.map(l => l.price_cents),
+      });
       if (tipAtConfirm?.kind === "amount") {
         return { resolved: true, outcome: { kind: "tip_resolved", tipCents: tipAtConfirm.cents }, cartChanged: false };
       }
@@ -2070,7 +2178,7 @@ export function answer(
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
       // the helper blocks "not yet"/"don't"/"wrong"/"change".
       if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     case "upsell": {
@@ -2081,7 +2189,7 @@ export function answer(
         return { resolved: true, outcome: { kind: "upsell_accepted" }, cartChanged: result.cartChanged };
       }
       if (impliesUpsellDecline(trimmed)) return { resolved: true, outcome: { kind: "upsell_declined" }, cartChanged: false };
-      return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
+      return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
     // "ordering" (00-AK): identical treatment to `state.open === null` above
