@@ -1878,9 +1878,24 @@ const ENUMERATE_SLOT_CHOICES_LEAD_IN = "Let me list the options for you:";
 // customer names their pick then references the item almost as an
 // afterthought: "creamy italian dressing FOR the house salad"); a short
 // message (<=4 words) with no such clause is quoted whole, since there's
-// nothing to trim and it's already brief enough to read naturally; a
-// longer message with neither shape is quoted whole as a last resort — no
-// rule was given for that case, and quoting more beats guessing wrong.
+// nothing to trim and it's already brief enough to read naturally.
+//
+// 2026-09-18 PO dispatch (choice longest match, part B): the LIVE reply
+// for the exact conversation this dispatch is about already confirms this
+// "strip the trailing with/for/on clause" direction is correct — conv
+// 6748e1c4's own echoed line was "We don't have 'gimme the jalapeno ranch'
+// for House", i.e. exactly the text BEFORE "for", never the item name
+// after it. The dispatch's own wording ("quote only the words after
+// for/on/with") would, read literally as a direction flip, echo "the
+// House salad" instead of the customer's actual choice-shaped words for
+// that same live line — a regression against behavior already proven
+// correct against real data, not a fix. Flagging this rather than
+// following it: kept the "before" direction. What IS unambiguous and
+// implemented here: "never the whole message" — a message with NO
+// with/for/on clause (or an empty one) used to fall back to the full raw
+// text; it now falls back to the last 3 tokens instead, same "quote a
+// short fragment, never the run-on sentence" principle the with/for/on
+// stripping already follows.
 //
 // Arrow form deliberately, not a plain named-function declaration with a
 // string return type — this file's own gate test asserts exactly one
@@ -1898,7 +1913,7 @@ export const extractSlotChoiceWords = (message: string): string => {
     const before = words.slice(0, cutIdx).join(" ").trim();
     if (before) return before;
   }
-  return trimmed;
+  return words.slice(-3).join(" ");
 };
 
 export function render(

@@ -1456,3 +1456,97 @@ Deno.test("applyCompiledAddItem: a stale line with a DIFFERENT resolved choice i
   assertEquals(cart.length, 2, "a genuinely different resolved choice must still get its own line");
   assertEquals(result.cartChanged, true);
 });
+
+// ============================================================
+// 2026-09-18 PO dispatch (choice longest match). Live loop, run 20:12
+// v491: 29 echo replies across 9 conversations, conv 6748e1c4: "Which
+// dressing on the House?" -> "ok, gimme the jalapeno ranch for the House
+// salad" -> "We don't have..." six times. The stem tier accepted every
+// choice whose stems are all present in the text; "Jalapeno Ranch" and
+// "Ranch" both qualified against "jalapeno ranch" (Ranch's one stem is a
+// subset of Jalapeno Ranch's own two), and >1 hit has always meant
+// "ambiguous, return null" — even though this isn't two competing dishes,
+// it's the same choice family named at two specificities. Real Vito's
+// House salad dressing group (13 choices) and Cheese Burger temp group (5
+// choices), pulled directly from the live compiled ask_plan.
+// ============================================================
+const HOUSE_DRESSING_CHOICES = [
+  { id: "d-french", display: "French", price_delta_cents: 0 },
+  { id: "d-bleu", display: "Bleu Cheese", price_delta_cents: 0 },
+  { id: "d-thousand", display: "Thousand Island", price_delta_cents: 0 },
+  { id: "d-caesar", display: "Caesar", price_delta_cents: 0 },
+  { id: "d-jalapeno-ranch", display: "Jalapeno Ranch", price_delta_cents: 0 },
+  { id: "d-creamy-italian", display: "Creamy Italian", price_delta_cents: 0 },
+  { id: "d-oil-vinegar", display: "Oil-Vinegar", price_delta_cents: 0 },
+  { id: "d-raspberry", display: "Raspberry Vinaigrette", price_delta_cents: 0 },
+  { id: "d-cilantro-lime", display: "Cilantro Lime", price_delta_cents: 0 },
+  { id: "d-ranch", display: "Ranch", price_delta_cents: 0 },
+  { id: "d-honey-mustard", display: "Honey Mustard", price_delta_cents: 0 },
+  { id: "d-italian", display: "Italian", price_delta_cents: 0 },
+  { id: "d-house-balsamic", display: "House Balsamic", price_delta_cents: 0 },
+];
+
+// The six real dressing-turn messages from conv 6748e1c4, verbatim.
+const DRESSING_LOOP_MESSAGES: Array<{ message: string; expectedId: string }> = [
+  { message: "creamy italian dressing pls", expectedId: "d-creamy-italian" },
+  { message: "ok, gimme the jalapeno ranch for the House salad", expectedId: "d-jalapeno-ranch" },
+  { message: "alright, just the jalapeno ranch for the House salad", expectedId: "d-jalapeno-ranch" },
+  { message: "gimme jalapeno ranch for the House salad", expectedId: "d-jalapeno-ranch" },
+  { message: "ok, so jalapeno ranch for the House salad", expectedId: "d-jalapeno-ranch" },
+  { message: "gimme jalapeno ranch for the House salad", expectedId: "d-jalapeno-ranch" },
+];
+
+for (const { message, expectedId } of DRESSING_LOOP_MESSAGES) {
+  Deno.test(`matchChoiceInText (choice longest match, real conv 6748e1c4): "${message}" resolves ${expectedId}, not null`, () => {
+    const match = matchChoiceInText(HOUSE_DRESSING_CHOICES, message);
+    assertEquals(match?.id, expectedId);
+  });
+}
+
+const BURGER_TEMP_CHOICES = [
+  { id: "t-well", display: "Well Done", price_delta_cents: 0 },
+  { id: "t-medium", display: "Medium", price_delta_cents: 0 },
+  { id: "t-rare", display: "Rare", price_delta_cents: 0 },
+  { id: "t-medium-well", display: "Medium Well", price_delta_cents: 0 },
+  { id: "t-medium-rare", display: "Medium Rare", price_delta_cents: 0 },
+];
+
+for (const message of ["Medium Well.", "medium well please", "medium well"]) {
+  Deno.test(`matchChoiceInText (choice longest match, temp group): "${message}" resolves Medium Well, not null and not Medium`, () => {
+    const match = matchChoiceInText(BURGER_TEMP_CHOICES, message);
+    assertEquals(match?.id, "t-medium-well");
+  });
+}
+
+Deno.test("matchChoiceInText (choice longest match): 'ranch' alone resolves Ranch, not ambiguous with Jalapeno Ranch", () => {
+  assertEquals(matchChoiceInText(HOUSE_DRESSING_CHOICES, "ranch")?.id, "d-ranch");
+});
+
+Deno.test("matchChoiceInText (choice longest match): 'italian' resolves Italian, not Creamy Italian", () => {
+  assertEquals(matchChoiceInText(HOUSE_DRESSING_CHOICES, "italian")?.id, "d-italian");
+});
+
+Deno.test("matchChoiceInText (choice longest match): 'medium' resolves Medium, not Medium Well or Medium Rare", () => {
+  assertEquals(matchChoiceInText(BURGER_TEMP_CHOICES, "medium")?.id, "t-medium");
+});
+
+Deno.test("matchChoiceInText (choice longest match): a genuine tie (disjoint stems, both present) still returns null, never guesses", () => {
+  // Neither choice's stems are a subset of the other's — a real ambiguity,
+  // not a specificity difference — so longest-match must not resolve it.
+  assertEquals(matchChoiceInText(HOUSE_DRESSING_CHOICES, "ranch and italian dressing please"), null);
+});
+
+Deno.test("matchChoiceInText (choice longest match): pre-existing pizza-size behavior is unchanged — 'large 18 inch' still resolves Large", () => {
+  const pizzaSizeChoices = [
+    { id: "s-small", display: "Small 14\"", price_delta_cents: 0 },
+    { id: "s-large", display: "Large 18\"", price_delta_cents: 400 },
+  ];
+  assertEquals(matchChoiceInText(pizzaSizeChoices, "large 18 inch")?.id, "s-large");
+});
+
+Deno.test("normalizeForExactMatch (choice longest match): trailing punctuation no longer blocks the exact tier — 'Medium Well.' exact-matches 'Medium Well'", () => {
+  // Exercised indirectly: exactHits should short-circuit before the stem
+  // tier even runs, for a choice list with no other overlapping candidate.
+  const soloChoice = [{ id: "t-medium-well", display: "Medium Well", price_delta_cents: 0 }];
+  assertEquals(matchChoiceInText(soloChoice, "Medium Well.")?.id, "t-medium-well");
+});

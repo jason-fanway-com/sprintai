@@ -169,9 +169,15 @@ export interface EngineResult {
   totalDeltaCents: number;
 }
 
-/** Case/whitespace-fold for exact-string comparison — not a stem, no plural handling. */
+/**
+ * Case/whitespace-fold for exact-string comparison — not a stem, no plural
+ * handling. Also strips trailing sentence punctuation (2026-09-18 PO
+ * dispatch, choice longest match): "Medium Well." was failing this exact
+ * tier purely because of the trailing period, falling through to the stem
+ * tier for something that should have matched directly.
+ */
 function normalizeForExactMatch(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, " ");
+  return s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?,]+$/, "");
 }
 
 /**
@@ -256,10 +262,20 @@ function groupNeedsNumericStems(choices: EngineChoice[]): boolean {
  * stems minus whatever this same call already resolved via the item's own
  * name or an unrelated slot — without re-deriving a synthetic text string.
  */
+// True iff `a` contains every stem in `b` AND has at least one stem `b`
+// doesn't — a STRICT superset, never equal sets (two choices can't share
+// an identical stem set here in practice, but equality must never count
+// as domination either way).
+function isStrictSupersetOfStems(a: Set<string>, b: Set<string>): boolean {
+  if (a.size <= b.size) return false;
+  for (const s of b) if (!a.has(s)) return false;
+  return true;
+}
+
 function matchChoiceByStems(choices: EngineChoice[], availableStems: Set<string>, numericSignificant = false): EngineChoice | null {
   if (availableStems.size === 0) return null;
 
-  const hits: EngineChoice[] = [];
+  const hits: { choice: EngineChoice; stems: Set<string> }[] = [];
   for (const choice of choices) {
     const choiceStems = significantStems(choice.display, numericSignificant);
     if (choiceStems.size === 0) continue;
@@ -267,12 +283,28 @@ function matchChoiceByStems(choices: EngineChoice[], availableStems: Set<string>
     // available stems (so "large" matches a choice displayed "Large" or
     // "Large 18 inch", but "large" alone never matches "Extra Large").
     const allPresent = [...choiceStems].every(s => availableStems.has(s));
-    if (allPresent) hits.push(choice);
+    if (allPresent) hits.push({ choice, stems: choiceStems });
   }
 
-  if (hits.length === 1) return hits[0];
-  // Ambiguous (0 or >1 hits) — the sequencer will ask, not guess.
-  return null;
+  if (hits.length === 0) return null;
+  if (hits.length === 1) return hits[0].choice;
+
+  // 2026-09-18 PO dispatch (choice longest match, live loop: 29 echo
+  // replies across 9 conversations, run 20:12 v491). "jalapeno ranch"
+  // matched BOTH "Ranch" and "Jalapeno Ranch" — every stem each contributes
+  // is present in the text either way — and the old rule treated any
+  // >1-hit result as an unresolvable tie, forever. But "Ranch" and
+  // "Jalapeno Ranch" aren't two competing dishes tied on the same words;
+  // one is a more specific description of the same family, and its own
+  // stems are a strict SUPERSET of the other's. When that's true, the more
+  // specific (superset) choice wins — the "longest match." A genuine tie
+  // (two choices whose stems are DISJOINT, both fully present in the text —
+  // e.g. the customer really did name two unrelated real choices) is still
+  // exactly as ambiguous as before and still returns null; this only
+  // resolves the case where one hit's words are wholly contained in
+  // another's.
+  const maximal = hits.filter(h => !hits.some(other => other !== h && isStrictSupersetOfStems(other.stems, h.stems)));
+  return maximal.length === 1 ? maximal[0].choice : null;
 }
 
 /**
