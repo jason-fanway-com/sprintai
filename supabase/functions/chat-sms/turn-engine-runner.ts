@@ -1067,6 +1067,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           disambiguationSpanText: undefined,
           disambiguationOtherOneFollowUp: outcome.otherOneFollowUp,
           disambiguationFacetNarrowed: true,
+          // 2026-09-19 PO dispatch (replacement, ambiguous target hole):
+          // Y's own narrowing wasn't fully settled by this facet answer —
+          // still-held X rides forward onto the reopened, smaller
+          // disambiguation exactly like every other field in this object.
+          replacementSourceLineKey: outcome.replacementSourceLineKey,
         };
         break;
       // P0 (2026-09-19, multi-kind-answer): one or more clauses of a
@@ -1133,6 +1138,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
             disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
             disambiguationFacetNarrowed: priorState.open.facetNarrowed,
             heldModifierText: priorState.open.heldModifierText,
+            replacementSourceLineKey: priorState.open.replacementSourceLineKey,
           };
         }
         break;
@@ -1336,6 +1342,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
         disambiguationFacetNarrowed: priorState.open.facetNarrowed,
         heldModifierText: priorState.open.heldModifierText,
+        replacementSourceLineKey: priorState.open.replacementSourceLineKey,
       };
     } else if (priorState.open.kind === "multi_size") {
       // Round 2, item 1 (2026-09-19): same "hand the open question's own
@@ -1575,6 +1582,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       disambiguationSpanText: decideResult.disambiguationSpanText,
       carriedDisambiguationCandidateIds: decideResult.carriedDisambiguationCandidateIds,
       heldModifierText: decideResult.heldModifierText,
+      replacementSourceLineKey: decideResult.replacementSourceLineKey,
       checkoutIntentThisTurn: proposal.intent === "checkout",
     };
     if (proposal.intent === "question" && proposal.answer_text) {

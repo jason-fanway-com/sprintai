@@ -202,6 +202,17 @@ export interface DialogueState {
       spanText?: string;
       otherOneFollowUp?: boolean;
       facetNarrowed?: boolean;
+      // 2026-09-19 PO dispatch (replacement, ambiguous target hole): the
+      // line_key of X, a same-breath replacement's ORIGINAL item, still
+      // sitting untouched in the cart while THIS question narrows down Y.
+      // Mirrors heldModifierText's exact "reference-equal to this specific
+      // candidate group, survives however many turns the ambiguity stays
+      // open" contract -- see DecideResult.replacementSourceLineKey and
+      // AskTurnEvents.replacementSourceLineKey for the other two legs.
+      // Undefined for every ordinary disambiguation (a fresh ambiguous add,
+      // never a replacement) and for state persisted before this field
+      // existed.
+      replacementSourceLineKey?: string;
     }
     // Round 2, item 1 (2026-09-19, live v511): two or more same-kind,
     // multi-size groups from a single list answer, still waiting on ONE
@@ -422,6 +433,12 @@ export type AnswerOutcome =
     remainingQuantity: number;
     resolvedMenuItemId?: string;
     otherOneFollowUp: boolean;
+    // 2026-09-19 PO dispatch: mirrors DialogueState.open's own
+    // replacementSourceLineKey — carried forward so a replacement's still-
+    // unresolved Y (narrowed by one facet, e.g. kind, but not yet down to
+    // one candidate) keeps X held for however many more turns the
+    // narrowing takes.
+    replacementSourceLineKey?: string;
   }
   // P0 (2026-09-19, multi-kind-answer, see resolveMultiKindClauses's own
   // header): a "what kind?" answer that was a LIST ("one plain, one
@@ -1536,6 +1553,24 @@ export function orderShapedMessageQuantity(message: string, menu: TurnEngineMenu
   return null;
 }
 
+// 2026-09-19 PO dispatch (replacement, ambiguous target hole): removes a
+// replacement's held X line once Y -- the candidate group
+// state.open.replacementSourceLineKey rides alongside -- has resolved to
+// exactly one item. Called from every "disambiguation_resolved" terminal
+// point inside answer()'s "disambiguation" case below, right alongside the
+// call that adds the winning candidate, so the swap is one atomic mutation
+// from the caller's point of view: X out, Y in, same turn. No-op (returns
+// false) when there is no held X — the overwhelmingly common case, an
+// ordinary disambiguation that was never a replacement — or the line is
+// somehow already gone.
+function removeReplacementSourceLine(cart: TurnEngineCartLine[], lineKey: string | undefined): boolean {
+  if (!lineKey) return false;
+  const idx = findLineByKey(cart, lineKey);
+  if (idx < 0) return false;
+  removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
+  return true;
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -1626,6 +1661,11 @@ export function answer(
         .filter((m): m is TurnEngineMenuItem => !!m)
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
+      // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set
+      // only when this open question is Y's own narrowing, opened by a
+      // same-breath replacement whose target tied — see DialogueState.open's
+      // "disambiguation" variant and removeReplacementSourceLine's own doc.
+      const replacementSourceLineKey = state.open.replacementSourceLineKey;
       if (isPendingDisambiguationDeclined(trimmed, candidates)) {
         // Round 2 (2026-09-19, TOP item, real phantom charge, 50-run v511:
         // 42/50 paid, this the one money-wrong case): aae67b80's rejection-
@@ -1762,6 +1802,7 @@ export function answer(
                     remainingQuantity: multi.singleAmbiguous.count,
                     resolvedMenuItemId: resolvedIds.length > 0 ? resolvedIds[resolvedIds.length - 1] : undefined,
                     otherOneFollowUp: false,
+                    ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
                   },
                   cartChanged: multiCartChanged,
                 };
@@ -1814,14 +1855,16 @@ export function answer(
               const remaining = matched.filter(c => c.menu_item_id !== sizedMatch.menu_item_id);
               const remainingQuantity = quantity - partialSize.sizeQuantity;
               if (remaining.length === 0 || remainingQuantity <= 0) {
-                return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: sizedMatch.menu_item_id }, cartChanged };
+                const removed = removeReplacementSourceLine(cart, replacementSourceLineKey);
+                return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: sizedMatch.menu_item_id }, cartChanged: cartChanged || removed };
               }
               if (remaining.length === 1) {
                 const otherChanged = addNarrowedCandidateToCart(cart, menuById, remaining[0], remainingQuantity);
+                const removed = removeReplacementSourceLine(cart, replacementSourceLineKey);
                 return {
                   resolved: true,
                   outcome: { kind: "disambiguation_resolved", menuItemId: remaining[0].menu_item_id },
-                  cartChanged: cartChanged || otherChanged,
+                  cartChanged: cartChanged || otherChanged || removed,
                 };
               }
               return {
@@ -1832,6 +1875,7 @@ export function answer(
                   remainingQuantity,
                   resolvedMenuItemId: sizedMatch.menu_item_id,
                   otherOneFollowUp: true,
+                  ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
                 },
                 cartChanged,
               };
@@ -1843,7 +1887,8 @@ export function answer(
 
           if (matched.length === 1) {
             const cartChanged = addNarrowedCandidateToCart(cart, menuById, matched[0], quantity);
-            return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: matched[0].menu_item_id }, cartChanged };
+            const removed = removeReplacementSourceLine(cart, replacementSourceLineKey);
+            return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: matched[0].menu_item_id }, cartChanged: cartChanged || removed };
           }
           // "large cheese" answering a bare "pizza" span in one message names
           // BOTH facets at once (kind AND size) — matched here is only the
@@ -1859,7 +1904,8 @@ export function answer(
               : narrowCandidatesByFacetAnswer(matched, secondFacet.facet, trimmed);
             if (doubleMatched && doubleMatched.length === 1) {
               const cartChanged = addNarrowedCandidateToCart(cart, menuById, doubleMatched[0], quantity);
-              return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged };
+              const removed = removeReplacementSourceLine(cart, replacementSourceLineKey);
+              return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged: cartChanged || removed };
             }
           }
           return {
@@ -1869,6 +1915,7 @@ export function answer(
               remainingCandidates: matched.map(c => c.menu_item_id),
               remainingQuantity: quantity,
               otherOneFollowUp: false,
+              ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
             },
             cartChanged: false,
           };
@@ -1900,7 +1947,14 @@ export function answer(
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
       const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
-      return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
+      // 2026-09-19 PO dispatch (replacement, ambiguous target hole): Y just
+      // resolved (the numbered-list path — the one a small candidate set
+      // like a two-item Chicken Fingers tie actually takes, per
+      // isNarrowingCandidateSet's own <=5 threshold) — X comes out THIS
+      // SAME turn, right alongside Y going in, so the swap is one atomic
+      // mutation from the caller's point of view.
+      const removed = removeReplacementSourceLine(cart, replacementSourceLineKey);
+      return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: menuItem.id }, cartChanged: result.cartChanged || removed };
     }
 
     // Round 2, item 1 (2026-09-19, live v511): the shared "What size?"
@@ -2606,6 +2660,21 @@ export interface DecideResult {
   // but recorded here so the caller can log a guard_deny row. Empty when
   // every remove this turn was authorized or there were no removes.
   guardDroppedRemoves: Array<{ line_key: string; item_name: string }>;
+  // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set only
+  // when a same-breath replacement's own Y span (parseReplacementIntent/
+  // resolveReplacementTargetLine above) tied across two or more menu items
+  // this turn -- the line_key of X, the ORIGINAL item still sitting in the
+  // cart, untouched, waiting for the narrowing question this same turn's
+  // disambiguationCandidateIds now carries to settle Y. Mirrors
+  // heldModifierText's own "reference-equal to disambiguationCandidateIds,
+  // survives however many turns the ambiguity stays open" contract exactly
+  // -- see AskTurnEvents.replacementSourceLineKey and DialogueState.open's
+  // "disambiguation" variant for the two other legs of this same thread.
+  // Undefined whenever no replacement's own target was ambiguous this turn
+  // (the overwhelmingly common case, including a replacement whose Y
+  // resolved cleanly -- that swap already happened above, in code, and
+  // never touches this field).
+  replacementSourceLineKey?: string;
 }
 
 interface ResolvedAdd {
@@ -3125,16 +3194,45 @@ export function decide(
   let disambiguationQuantity: number | undefined;
   let disambiguationSpanText: string | undefined;
   let carriedDisambiguationCandidateIds: string[][] = [];
+  // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set from
+  // ambiguousSpansFiltered[0] below, ONLY when this turn's chosen
+  // disambiguation is a replacement's own Y span -- see DecideResult's own
+  // doc on this field.
+  let replacementSourceLineKey: string | undefined;
+  // Declared here (rather than alongside resolvedAdds/unresolvedSpans
+  // below, its pre-existing location) so the replacement block immediately
+  // below -- which must run BEFORE proposal.adds are resolved, per
+  // parseReplacementIntent's own header -- can push Y's own tied candidates
+  // onto the SAME queue a plain ambiguous add's span joins moments later.
+  // Pushed first, so a replacement's own narrowing question always wins
+  // ambiguousSpansFiltered[0] over anything else this turn ties on -- it is
+  // the customer's own explicit, deliberate correction, never a side issue.
+  const ambiguousSpans: Array<{ candidates: string[]; quantity: number; spanText: string; replacementSourceLineKey?: string }> = [];
 
   // Round 4 P0 (2026-09-19, replacement parsing): resolved BEFORE anything
   // else in this function touches the cart, and entirely independent of
   // `proposal` -- see parseReplacementIntent's own header. X unresolved
-  // asks which item rather than guessing; Y unresolved (ambiguous or
-  // unresolved on the shop's own lexicon) leaves the cart untouched here
-  // and falls through to the normal add path below, which still gets a
-  // chance to add Y "naturally" if PROPOSE separately proposed a span for
-  // it (see acceptance case: "change my Grilled Cheese to Chicken Fingers,
-  // and add fries" -- fries goes through the ordinary path unaffected).
+  // asks which item rather than guessing.
+  //
+  // 2026-09-19 PO dispatch (ambiguous target hole): Y ambiguous or
+  // unresolved BOTH hold X -- the replacement is one atomic unit, so if Y
+  // can't be added cleanly THIS turn (immediately or, for the ambiguous
+  // case, after the narrowing question below resolves it), X must not be
+  // removed either. Previously this branch did nothing at all for a
+  // not-cleanly-resolved Y, on the theory that "leave it for the normal add
+  // path" was enough -- it wasn't: leaving replacementHandledLineKey unset
+  // meant PROPOSE's own remove for X (very likely, same message) sailed
+  // through the removes loop below completely unguarded, deleting X with
+  // nothing added in its place. Y ambiguous additionally opens the exact
+  // narrowing question the customer would get for a fresh ambiguous add
+  // (reusing disambiguationCandidateIds/ambiguousSpans, never a parallel
+  // mechanism) with replacementSourceLineKey riding along so the eventual
+  // answer (answer()'s "disambiguation" case) knows to remove X once Y
+  // resolves. Y genuinely unresolved (matches nothing on the shop's own
+  // lexicon) still holds X but asks nothing further -- there is no
+  // candidate list to narrow -- matching this function's pre-existing "a
+  // span that resolves to nothing leaves the line alone" discipline
+  // elsewhere (see the resolveItem "unresolved" branch below).
   let replacementHandledLineKey: string | undefined;
   let replacementHandledMenuItemId: string | null = null;
   const replacementIntent = customerMessage ? parseReplacementIntent(customerMessage) : null;
@@ -3161,12 +3259,28 @@ export function decide(
           replacementHandledLineKey = targetLine.line_key;
           replacementHandledMenuItemId = yResolution.menu_item_id;
         }
+      } else {
+        // Y did not resolve cleanly -- ambiguous (ties two or more menu
+        // items) or unresolved (matches nothing). Either way X is held:
+        // set BEFORE the ambiguous-only branch below so both failure modes
+        // suppress PROPOSE's own remove/modify of X this turn identically.
+        replacementHandledLineKey = targetLine.line_key;
+        if (yResolution.kind === "ambiguous") {
+          ambiguousSpans.push({
+            candidates: yResolution.candidates,
+            quantity: targetLine.quantity,
+            spanText: replacementIntent.yPhrase,
+            replacementSourceLineKey: targetLine.line_key,
+          });
+        }
       }
-      // Y ambiguous or unresolved: deliberately do nothing here -- "treat
-      // as normal add" per spec, i.e. let PROPOSE's own add path (below)
-      // handle it however it otherwise would have.
     }
   }
+  // See the "ambiguous" branch of the proposal.adds loop below for why this
+  // is captured as a Set here, right after the replacement block has had
+  // its one chance to push its own entry (at most one -- parseReplacementIntent
+  // returns a single Y span per message).
+  const replacementPendingCandidateIds = ambiguousSpans.length > 0 ? new Set(ambiguousSpans[0].candidates) : null;
 
   // Resolve each add's item_span BEFORE anything reaches the cart (spec §4:
   // "item_span is an input to a deterministic, total function that runs
@@ -3182,8 +3296,8 @@ export function decide(
   // count or anything else. The FIRST one becomes this turn's ASK; the rest
   // are carried forward below so a later turn can ask about them instead of
   // the second (third, ...) span silently vanishing the moment more than one
-  // add ties in the same message.
-  const ambiguousSpans: Array<{ candidates: string[]; quantity: number; spanText: string }> = [];
+  // add ties in the same message. Declared above (with the replacement
+  // block) now -- see that declaration's own comment for why.
   // 00-AX: spans the customer said that resolved to nothing. Previously these
   // vanished at the point of failure, so nothing in the system ever knew an
   // item had been ASKED FOR and not delivered -- which is why the bot could
@@ -3241,7 +3355,25 @@ export function decide(
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
-      ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity, spanText: (add.item_span ?? "").trim() });
+      // 2026-09-19 PO dispatch (ambiguous target hole): PROPOSE frequently
+      // proposes its OWN add for the exact same span the replacement block
+      // above already turned into a pending question (live repro: "change
+      // the Grilled Cheese to a Chicken Fingers (5) instead" produced BOTH
+      // the replacement's remove/add pair AND a redundant top-level add for
+      // "Chicken Fingers (5)") -- pushing this as a SECOND ambiguousSpans
+      // entry would queue a duplicate "which one?" question behind the
+      // replacement's own, and answering IT would add a second, disconnected
+      // Chicken Fingers line with no memory that Grilled Cheese was ever
+      // meant to go. Ties against the exact same candidate set the
+      // replacement is already asking about are dropped here, silently --
+      // the replacement's own entry is the sole, correct question for this
+      // item this turn.
+      const isReplacementDuplicate = replacementPendingCandidateIds !== null &&
+        resolution.candidates.length === replacementPendingCandidateIds.size &&
+        resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
+      if (!isReplacementDuplicate) {
+        ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity, spanText: (add.item_span ?? "").trim() });
+      }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
@@ -3348,6 +3480,10 @@ export function decide(
       ? `${rawMessageSizeWord} ${itemSpanSpanText}`.trim()
       : itemSpanSpanText;
     carriedDisambiguationCandidateIds = ambiguousSpansFiltered.slice(1).map(s => s.candidates);
+    // 2026-09-19 PO dispatch (ambiguous target hole): only set when THIS
+    // turn's chosen span (index 0, never a carried one) is a replacement's
+    // own Y -- see DecideResult.replacementSourceLineKey's own doc.
+    replacementSourceLineKey = ambiguousSpansFiltered[0].replacementSourceLineKey;
   }
 
   // See dropAddsThatAreReallyModifiersOfAnotherAdd's own header: "house
@@ -3462,6 +3598,24 @@ export function decide(
   }
 
   for (const mod of proposal.modifies ?? []) {
+    // 2026-09-19 PO dispatch (false "wasn't in your order" line): PROPOSE
+    // proposes a `modify` for X's line_key ALONGSIDE its own `remove` for
+    // the exact same shape the replacement block above already handles in
+    // code -- live repro, "change the Grilled Cheese to a Chicken Fingers
+    // (5) instead" produced both `removes: [{line_key}]` AND
+    // `modifies: [{line_key, quantity: 1}]` for the identical line. The
+    // removes loop above already skips a proposed remove that matches
+    // replacementHandledLineKey; this loop never had the same guard, so
+    // when X had ALREADY been removed (Y resolved cleanly, swap already
+    // executed above) OR is being deliberately held (Y ambiguous/
+    // unresolved, this same turn), findLineByKey below either can't find
+    // it (a resolved swap: the line is genuinely gone) and reads that as
+    // "that item wasn't in your order" -- FALSE, the item was right there
+    // and was intentionally replaced -- or, for the held case, would
+    // otherwise apply a stray no-op quantity/choice mutation to a line
+    // that's mid-replacement. Same skip, same reasoning, same variable as
+    // the removes loop immediately above.
+    if (mod.line_key === replacementHandledLineKey) continue;
     const idx = findLineByKey(nextCart, mod.line_key);
     if (idx < 0) { declines.push({ reason: "That item wasn't in your order." }); continue; }
     const line = nextCart[idx];
@@ -3483,7 +3637,7 @@ export function decide(
     }
   }
 
-  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText, guardDroppedRemoves };
+  return { cart: nextCart, declines, unresolvedSpans, qualifyingAddMenuItemId, disambiguationCandidateIds, disambiguationQuantity, disambiguationSpanText, carriedDisambiguationCandidateIds, heldModifierText, guardDroppedRemoves, replacementSourceLineKey };
 }
 
 // ─── STEP 5: ASK ────────────────────────────────────────────────────────────
@@ -3611,6 +3765,15 @@ export interface AskTurnEvents {
   // forward path (turn-engine-runner.ts), same as disambiguationCandidateIds
   // itself, so it survives however many turns the ambiguity stays open.
   heldModifierText?: string | null;
+  // 2026-09-19 PO dispatch (replacement, ambiguous target hole): mirrors
+  // heldModifierText immediately above exactly — the line_key of a
+  // replacement's held X, threaded through unchanged on both the fresh-
+  // decide path (DecideResult.replacementSourceLineKey) and every re-ask
+  // carry-forward path (turn-engine-runner.ts), so it survives however
+  // many turns Y's own ambiguity stays open. See DialogueState.open's
+  // "disambiguation" variant for where this lands once ask() opens (or
+  // re-opens) the question.
+  replacementSourceLineKey?: string;
 }
 
 export function ask(
@@ -3741,6 +3904,7 @@ export function ask(
     const spanText = isThisTurnPrimary ? turnEvents.disambiguationSpanText : undefined;
     const otherOneFollowUp = isThisTurnPrimary ? turnEvents.disambiguationOtherOneFollowUp : undefined;
     const facetNarrowed = isThisTurnPrimary ? turnEvents.disambiguationFacetNarrowed : undefined;
+    const replacementSourceLineKey = isThisTurnPrimary ? turnEvents.replacementSourceLineKey : undefined;
     return carry(
       {
         kind: "disambiguation",
@@ -3750,6 +3914,7 @@ export function ask(
         ...(spanText !== undefined ? { spanText } : {}),
         ...(otherOneFollowUp !== undefined ? { otherOneFollowUp } : {}),
         ...(facetNarrowed !== undefined ? { facetNarrowed } : {}),
+        ...(replacementSourceLineKey !== undefined ? { replacementSourceLineKey } : {}),
       },
       "ordering",
       priorState.upsell_offered,
