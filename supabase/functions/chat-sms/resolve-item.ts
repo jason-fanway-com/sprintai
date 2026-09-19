@@ -124,8 +124,20 @@ const FILLER_WORDS = new Set(["a", "an", "the"]);
 // span (e.g. "slice", Regular Slice's own bare term), and stripping its own
 // category noun ("slice" is also "By the Slice"'s noun) would wipe it to
 // nothing.
+//
+// 2026-09-18 PO dispatch (plural family widening): each surviving word is
+// SINGULARIZED (reusing this file's own singularizeWord, the same stemmer
+// compile-menu.ts uses) before being returned. Real Vito's shape: the
+// Stromboli Rolls "Meat Lovers" item's own name is plural, while the Meat
+// Lover pizza family's bare base-key term is singular — an exact,
+// unstemmed word comparison (sameWordSet) saw {meat, lovers} != {meat,
+// lover} and never recognized the two as the same dish family, so a stated
+// size on the pizza never widened the roll's own unique-but-wrong hit into
+// the real 4-way tie.
 function coreContentWords(words: string[]): string[] {
-  return words.filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w));
+  return words
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w))
+    .map(singularizeWord);
 }
 
 // A CANDIDATE sibling's reduction — filler/size AND that entry's own
@@ -133,7 +145,9 @@ function coreContentWords(words: string[]): string[] {
 // (Stromboli's own category noun "stromboli") reduce down to the same
 // ["slice"] core the bare "slice" term matched, so the two surface forms are
 // recognized as naming the same dish family despite neither containing the
-// other verbatim.
+// other verbatim. Singularized for the same reason as coreContentWords
+// above — filtering against categoryNounWords (already both singular and
+// plural) happens on the RAW word first, singularizing only the survivors.
 function coreContentWordsForEntry(entry: LexiconTerm): string[] {
   const words = toWords(normalize(entry.term));
   const categoryNounWords = new Set<string>();
@@ -144,9 +158,9 @@ function coreContentWordsForEntry(entry: LexiconTerm): string[] {
       categoryNounWords.add(pluralizeWord(noun));
     }
   }
-  return words.filter(w =>
-    !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !categoryNounWords.has(w)
-  );
+  return words
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !categoryNounWords.has(w))
+    .map(singularizeWord);
 }
 
 function sameWordSet(a: string[], b: string[]): boolean {
@@ -253,11 +267,92 @@ function longestMatch(spanWords: string[], entries: LexiconTerm[]): { length: nu
   return { length: longestMatchedLength, targetIds: targetIdsAtLongest };
 }
 
+// 2026-09-18 PO dispatch (plural family widening, real conv c9027bee): "2
+// small Meat Lovers pizzas" resolved to the $9.99 Stromboli Roll "Meat
+// Lovers" instead of the $12.95 Meat Lover - Small (10") pizza. Root
+// cause: the Roll's own exact name is plural ("Meat Lovers"), the pizza
+// family's bare base-key term is singular ("Meat Lover" — compile-menu.ts
+// folds every size onto one base-key term regardless of the raw import's
+// own plural/singular spelling), so the plural span word "lovers" matched
+// the Roll's own term at length 2 while the singular pizza term never
+// matched at all (occursAsWholeWordRun is an exact word comparison, no
+// stemming) — a UNIQUE, non-tied hit that silently ignored a real sibling
+// family sharing the same dish name, one word apart.
+//
+// This is the SAME shape edge 2 below already solves for a stated size
+// that doesn't match the one hit found ("a 16-inch slice" must not
+// silently resolve to the cheap Regular Slice) — the fix generalizes that
+// mechanism two ways: (1) coreContentWords/coreContentWordsForEntry now
+// SINGULARIZE each word before comparing, so "lovers" and "lover" reduce
+// to the identical core and the pizza family is actually found as a
+// sibling; (2) this same widening now also runs for a unique ITEM-NAME
+// match (not just the bare-fallback-scan case edge 2 originally covered),
+// since "Meat Lovers" is a real item-name term, not a bare category word.
+//
+// Specific enough to resolve straight to one sibling: either the customer
+// names the family with its own definite article ("the meat lover(s)",
+// edge 2's original signal), OR the span states a CATEGORY word matching
+// one of the newly-surfaced siblings ("pizzas" — a stronger, more direct
+// signal than a bare size number ever was, which is why "a 16-inch slice"
+// — no category word for the sibling "Stromboli" family — still correctly
+// stays ambiguous rather than resolving). Neither signal present, or the
+// stated size doesn't uniquely match one sibling, returns every family
+// member as an ambiguous list — "meat lovers" alone (no size, no category
+// word) must never silently resolve to the roll either; it's genuinely
+// unclear which of the four the customer means.
+function widenIntoSizedFamily(
+  baseId: string,
+  matchedLength: number,
+  spanWords: string[],
+  lexicon: LexiconTerm[],
+  namedCategories: Set<string>,
+): ResolveItemResult | null {
+  const matchedWords = findMatchedTermWords(baseId, matchedLength, spanWords, lexicon);
+  if (!matchedWords) return null;
+  const wantedCore = coreContentWords(matchedWords);
+  if (wantedCore.length === 0) return null;
+
+  const siblingIds = new Set<string>();
+  for (const entry of lexicon) {
+    if (sameWordSet(coreContentWordsForEntry(entry), wantedCore)) siblingIds.add(entry.target_id);
+  }
+  const hasSizedSibling = [...siblingIds].some(
+    id => id !== baseId && lexicon.find(e => e.target_id === id)?.size_label != null,
+  );
+  // Only widen at all when some sibling actually carries a real size —
+  // otherwise the shared core word genuinely names nothing else, and the
+  // original single hit is still the right answer.
+  if (!hasSizedSibling) return null;
+
+  siblingIds.add(baseId);
+
+  const namesFamilyDefinitely = occursAsWholeWordRun(spanWords, ["the", ...wantedCore]);
+  const namesSiblingCategory = [...siblingIds].some(id => {
+    const category = lexicon.find(e => e.target_id === id)?.category;
+    return category != null && namedCategories.has(category);
+  });
+
+  if (namesFamilyDefinitely || namesSiblingCategory) {
+    const sizeToken = detectSizeToken(spanWords);
+    if (sizeToken) {
+      const sized = [...siblingIds].filter(id =>
+        sizeLabelMatchesToken(lexicon.find(e => e.target_id === id)?.size_label, sizeToken)
+      );
+      if (sized.length === 1) return { kind: "resolved", menu_item_id: sized[0] };
+    }
+  }
+  return { kind: "ambiguous", candidates: [...siblingIds].sort() };
+}
+
 export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemResult {
   const spanWords = toWords(normalize(span));
   if (spanWords.length === 0) return { kind: "unresolved" };
 
   const categoryNounIndex = buildCategoryNounIndex(lexicon);
+  const namedCategories = new Set<string>();
+  for (const [word, categories] of categoryNounIndex) {
+    if (spanWords.includes(word)) for (const c of categories) namedCategories.add(c);
+  }
 
   // A bare CATEGORY-NOUN entry is a single word whose text IS one of the
   // shop's own category nouns ("salad" for category "Salads"). Excluded
@@ -290,40 +385,8 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
       const [baseId] = base.targetIds;
       const baseSizeLabel = lexicon.find(e => e.target_id === baseId)?.size_label;
       if (!sizeLabelMatchesToken(baseSizeLabel, sizeToken)) {
-        const matchedWords = findMatchedTermWords(baseId, base.length, spanWords, lexicon);
-        const wantedCore = matchedWords ? coreContentWords(matchedWords) : null;
-        if (wantedCore && wantedCore.length > 0) {
-          const siblingIds = new Set<string>();
-          for (const entry of lexicon) {
-            if (sameWordSet(coreContentWordsForEntry(entry), wantedCore)) {
-              siblingIds.add(entry.target_id);
-            }
-          }
-          const hasSizedSibling = [...siblingIds].some(
-            id => id !== baseId && lexicon.find(e => e.target_id === id)?.size_label != null,
-          );
-          // Only widen at all when some sibling actually carries a real
-          // size — otherwise the stated size genuinely names nothing else,
-          // and the original single hit is still the right answer.
-          if (hasSizedSibling) {
-            siblingIds.add(baseId);
-            // The customer's own words decide whether "which sibling" is
-            // still an open question or already answered: naming the
-            // family with its OWN definite article ("the slice", not just
-            // "a ... slice") is specific enough to narrow straight to the
-            // one matching the stated size — bare/indefinite phrasing is
-            // not, and must list the whole family so ASK can narrow it
-            // properly instead of guessing which "slice" was meant.
-            const namesFamilyDefinitely = occursAsWholeWordRun(spanWords, ["the", ...wantedCore]);
-            if (namesFamilyDefinitely) {
-              const sized = [...siblingIds].filter(id =>
-                sizeLabelMatchesToken(lexicon.find(e => e.target_id === id)?.size_label, sizeToken)
-              );
-              if (sized.length === 1) return { kind: "resolved", menu_item_id: sized[0] };
-            }
-            return { kind: "ambiguous", candidates: [...siblingIds].sort() };
-          }
-        }
+        const widened = widenIntoSizedFamily(baseId, base.length, spanWords, lexicon, namedCategories);
+        if (widened) return widened;
       }
     }
 
@@ -344,10 +407,6 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   }
   let candidates = [...base.targetIds];
 
-  const namedCategories = new Set<string>();
-  for (const [word, categories] of categoryNounIndex) {
-    if (spanWords.includes(word)) for (const c of categories) namedCategories.add(c);
-  }
   // Only apply the filter if category is actually a live dimension for the
   // CURRENT candidates — a named category word with nothing here carrying
   // real category data would otherwise wipe every candidate for no reason.
@@ -377,7 +436,25 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
     if (filteredBySize.length > 0) candidates = filteredBySize;
   }
 
-  if (candidates.length === 1) return { kind: "resolved", menu_item_id: candidates[0] };
+  if (candidates.length === 1) {
+    // 2026-09-18 PO dispatch (plural family widening): only when `base`
+    // itself was ALREADY unique (size 1) BEFORE either filter above ran —
+    // never when a real tie got narrowed down to one by the category/size
+    // filters actually doing their job ("just a 14-inch calzone" ties all
+    // 3 sizes on the bare "calzone" term, then the size filter correctly
+    // narrows to the 14" one — that candidate's own real size_label WAS
+    // tested and matched, so there's nothing left to widen into). A `base`
+    // that started at exactly 1 never had that chance: no tie existed for
+    // the size/category filters to narrow in the first place, which is
+    // exactly the "a real sibling family exists but this candidate's own
+    // words never matched it" shape (a plural/singular mismatch, or any
+    // other surface-form gap the core-word reduction catches).
+    if (base.targetIds.size === 1) {
+      const widened = widenIntoSizedFamily(candidates[0], base.length, spanWords, lexicon, namedCategories);
+      if (widened) return widened;
+    }
+    return { kind: "resolved", menu_item_id: candidates[0] };
+  }
   // Sorted for deterministic, byte-identical output on identical input —
   // never as a tiebreak (every id here is a genuine tie; none is dropped).
   return { kind: "ambiguous", candidates: candidates.sort() };

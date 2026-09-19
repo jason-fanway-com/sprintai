@@ -254,6 +254,21 @@ const NARROWING_FIXTURE_ITEMS: CompileItem[] = [
   { id: "b1f3a60a-b845-4506-89b4-8df7a4dd77a3", name: "The Slice - 14\"", display_name: "14\" The Slice Stromboli", category: "Stromboli", size_label: "14\"", price_cents: 1895, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
   { id: "1d78ca8d-bdb5-46db-aa93-c8de67a743f8", name: "The Slice - 16\"", display_name: "16\" The Slice Stromboli", category: "Stromboli", size_label: "16\"", price_cents: 2295, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
   { id: "975bdde8-6df6-4d61-81de-9994e2062349", name: "The Slice - Personal", display_name: "Personal The Slice Stromboli", category: "Stromboli", size_label: "Personal", price_cents: 1295, active: true, price_provenance: "stated", product_key: "stromboli:the-slice", missing_from_source_since: null, groups: [] },
+  // Meat Lovers collision (2026-09-18 PO dispatch, plural family widening,
+  // real conv c9027bee): the Stromboli Rolls "Meat Lovers" item's own
+  // name is plural; the Meat Lover pizza family's bare base-key term
+  // (compile-menu.ts) is singular, from the raw import's own singular
+  // product name. "2 small Meat Lovers pizzas" uniquely matched the
+  // ROLL's own plural term at the longest length — the pizza family's
+  // singular term never matched the plural span word at all — and
+  // silently resolved to the $9.99 roll instead of asking, or resolving
+  // to, the $12.95 pizza the customer actually stated a size and category
+  // for. Real ids/prices/product_keys, pulled directly from Vito's live
+  // menu_items.
+  { id: "66878ffc-62d6-44c0-a59f-591cdc08cbfd", name: "Meat Lover - Large (16\")", display_name: "Large Meat Lover Pizza", category: "Pizza", size_label: "Large (16\")", price_cents: 2199, active: true, price_provenance: "stated", product_key: "pizza:meat-lover", missing_from_source_since: null, groups: [] },
+  { id: "c0528557-3923-4c2a-91e4-2eb09aea2d11", name: "Meat Lover - Small (10\")", display_name: "Small Meat Lover Pizza", category: "Pizza", size_label: "Small (10\")", price_cents: 1295, active: true, price_provenance: "stated", product_key: "pizza:meat-lover", missing_from_source_since: null, groups: [] },
+  { id: "6191bc55-1675-4588-9031-1a907f620b92", name: "Meat Lover - Medium (14\")", display_name: "Medium Meat Lover Pizza", category: "Pizza", size_label: "Medium (14\")", price_cents: 1799, active: true, price_provenance: "stated", product_key: "pizza:meat-lover", missing_from_source_since: null, groups: [] },
+  { id: "46fd6e25-263e-4eff-9ebb-dac8697a4819", name: "Meat Lovers", display_name: "Meat Lovers", category: "Stromboli Rolls", price_cents: 999, active: true, price_provenance: "stated", product_key: "stromboli-rolls:meat-lovers", missing_from_source_since: null, groups: [] },
 ];
 
 // item id -> {category, size_label}, straight off the same real rows above
@@ -459,4 +474,25 @@ Deno.test("resolveItem: 'an italian sandwich' stays ambiguous across both Italia
 Deno.test("resolveItem: 'the slice cheesesteak' resolves uniquely even though 'slice' is a By the Slice category noun", () => {
   const result = resolveItem("the slice cheesesteak", NARROWING_LEXICON);
   assertEquals(result, { kind: "resolved", menu_item_id: idOf("The Slice Cheesesteak") });
+});
+
+// ── Plural family widening (2026-09-18 PO dispatch, real conv c9027bee) ──
+
+Deno.test("resolveItem: 'small meat lovers pizzas' (the live message, verbatim) resolves to Meat Lover - Small (10\"), never the Stromboli Roll", () => {
+  const result = resolveItem("small meat lovers pizzas", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Small Meat Lover Pizza") });
+});
+
+Deno.test("resolveItem: 'meat lovers' alone is ambiguous across the roll and all 3 pizza sizes — never silently the roll", () => {
+  const result = resolveItem("meat lovers", NARROWING_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [
+      idOf("Meat Lovers"),
+      idOf("Large Meat Lover Pizza"),
+      idOf("Small Meat Lover Pizza"),
+      idOf("Medium Meat Lover Pizza"),
+    ].sort(),
+  );
 });
