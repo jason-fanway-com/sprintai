@@ -16,6 +16,8 @@ import {
   compileMenu,
   computeDanglingLexiconTermInvariant,
   computeMenuInvariants,
+  deriveLexiconSurfaceForms,
+  itemLexiconTerms,
   normaliseTermVariants,
   planOwnerQuestionsRefresh,
   resolveDerivedLexiconTerms,
@@ -31,6 +33,7 @@ import {
   type PendingQuestion,
 } from "./compile-menu.ts";
 import type { OwnerQuestionDraft } from "./archetypes.ts";
+import { resolveItem } from "../chat-sms/resolve-item.ts";
 
 function inferSourceItem(overrides: Partial<InferSourceItem> = {}): InferSourceItem {
   return {
@@ -2016,4 +2019,97 @@ Deno.test("buildDerivedRows: Vito's shape — lexicon carries a size-qualified t
   assert(terms.includes("pepperoni pizza"), "bare '{topping} pizza' term");
   assert(terms.includes("pepperoni"), "bare topping term");
   assert(terms.includes("large pepperoni pizza"), "size-qualified '{size} {topping} pizza' term — needed because derived rows carry no size_label of their own");
+});
+
+// PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): live
+// repro — "4 large pizzas" opens a "what kind?" disambiguation whose
+// candidate set is gathered off the BARE "pizza"/"pizzas" lexicon terms, and
+// derived rows (Pepperoni/Sausage/Mushrooms/Onions/Green Peppers) never had
+// one — only stated items did, via compileMenu()'s own internal
+// deriveLexiconSurfaceForms call, which derived rows never flow through
+// (buildDerivedRows needs compileMenu()'s OWN output as an input, so they
+// can't go through the same call). "pepperoni" then had nothing to match
+// against in that candidate set at all — 4/5 live runs landed only 3 lines,
+// stuck asking "I'm not sure what you meant by 'pepperoni'". These tests
+// mirror compile-menu/index.ts's own second-pass wiring exactly (the same
+// exported deriveLexiconSurfaceForms/itemLexiconTerms/
+// resolveDerivedLexiconTerms this file already ships, never a second,
+// derived-only copy of the rule) — index.ts itself is never imported by
+// tests (Deno.serve at module scope), same constraint as every other
+// index.ts in this codebase.
+
+function buildDerivedRowsSurfaceFormFixture() {
+  const { small, medium, large, sicilian } = buildTestMenu();
+  const statedItems = [small, medium, large, sicilian];
+  const compileResult = compileMenu(statedItems, [], T_COMPILED_AT, true);
+  const compiledMap = new Map(compileResult.items.map(c => [c.item_id, c]));
+  const derivedRows = buildDerivedRows(statedItems, compiledMap, new Map(), T_COMPILED_AT);
+  assert(derivedRows.length > 0, "sanity: fixture must actually produce derived rows");
+
+  // Simulate compile-menu/index.ts capturing each row's REAL persisted id.
+  const derivedIdByEntityKey = new Map(derivedRows.map((r, i) => [r.entity_key, `real-derived-id-${i}`]));
+  const derivedRealIds = new Set(derivedIdByEntityKey.values());
+  const resolvedDerivedTerms = resolveDerivedLexiconTerms(derivedRows, derivedIdByEntityKey);
+
+  // index.ts's exact second-pass source construction: stated items'
+  // PRE-surface-form terms (itemLexiconTerms — never result.items' already-
+  // merged lexicon_terms, which would wrongly self-exclude) + each derived
+  // row's own terms, rewritten to its real id.
+  const surfaceFormSource = [
+    ...statedItems.map(item => ({ item_id: item.id, lexicon_terms: itemLexiconTerms(item) })),
+    ...derivedRows.map(row => {
+      const realId = derivedIdByEntityKey.get(row.entity_key)!;
+      return { item_id: realId, lexicon_terms: row.lexicon_terms.map(t => ({ ...t, target_id: realId })) };
+    }),
+  ];
+  const derivedSurfaceForms = deriveLexiconSurfaceForms(surfaceFormSource)
+    .filter(t => derivedRealIds.has(t.target_id));
+
+  return { statedItems, compileResult, derivedRows, derivedIdByEntityKey, derivedRealIds, resolvedDerivedTerms, derivedSurfaceForms };
+}
+
+Deno.test("derived-row category terms: every derived row gets its own bare 'pizza' surface-form term, the same way every stated pizza row already does", () => {
+  const { derivedRows, derivedRealIds, derivedSurfaceForms } = buildDerivedRowsSurfaceFormFixture();
+  const pizzaTermTargets = new Set(derivedSurfaceForms.filter(t => t.term === "pizza").map(t => t.target_id));
+  assertEquals(pizzaTermTargets.size, derivedRows.length, "every derived row must get its own bare 'pizza' term, not just some of them");
+  for (const id of derivedRealIds) assert(pizzaTermTargets.has(id), `derived row ${id} is missing the bare 'pizza' category term`);
+});
+
+Deno.test("derived-row category terms: the plural 'pizzas' surface form is also present for every derived row", () => {
+  const { derivedRows, derivedRealIds, derivedSurfaceForms } = buildDerivedRowsSurfaceFormFixture();
+  const pizzasTermTargets = new Set(derivedSurfaceForms.filter(t => t.term === "pizzas").map(t => t.target_id));
+  assertEquals(pizzasTermTargets.size, derivedRows.length);
+  for (const id of derivedRealIds) assert(pizzasTermTargets.has(id));
+});
+
+Deno.test("derived-row category terms: no stated item's real id leaks into the derived-only output (the filter actually filters)", () => {
+  const { statedItems, derivedSurfaceForms } = buildDerivedRowsSurfaceFormFixture();
+  const statedIds = new Set(statedItems.map(i => i.id));
+  assert(derivedSurfaceForms.every(t => !statedIds.has(t.target_id)), "a stated item's own id must never appear in the derived-row-only surface form output");
+});
+
+Deno.test("resolveItem (acceptance-level proof): a bare category query ('pizza') now ties across BOTH stated AND derived pizza rows — the exact candidate-set gap this dispatch closes", () => {
+  const { derivedRows, derivedRealIds, compileResult, resolvedDerivedTerms, derivedSurfaceForms } = buildDerivedRowsSurfaceFormFixture();
+  const fullLexicon: LexiconTerm[] = [
+    ...compileResult.items.flatMap(c => c.lexicon_terms),
+    ...resolvedDerivedTerms,
+    ...derivedSurfaceForms,
+  ];
+  const result = resolveItem("pizza", fullLexicon);
+  assert(result.kind === "ambiguous", `a bare 'pizza' query with 4 stated pizzas + ${derivedRows.length} derived pizzas open must tie, not resolve/unresolve: ${JSON.stringify(result)}`);
+  const derivedInResult = result.kind === "ambiguous" ? result.candidates.filter(id => derivedRealIds.has(id)) : [];
+  assertEquals(derivedInResult.length, derivedRows.length, `every derived row must be among the 'pizza' candidates — live bug had ZERO`);
+});
+
+Deno.test("resolveItem (acceptance-level proof): 'large pepperoni pizza' still resolves cleanly to the one derived Large Pepperoni row, unaffected by the new bare-category terms", () => {
+  const { compileResult, resolvedDerivedTerms, derivedSurfaceForms, derivedRows, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
+  const fullLexicon: LexiconTerm[] = [
+    ...compileResult.items.flatMap(c => c.lexicon_terms),
+    ...resolvedDerivedTerms,
+    ...derivedSurfaceForms,
+  ];
+  const largePepp = derivedRows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
+  const expectedId = derivedIdByEntityKey.get(largePepp.entity_key)!;
+  const result = resolveItem("large pepperoni pizza", fullLexicon);
+  assertEquals(result, { kind: "resolved", menu_item_id: expectedId });
 });

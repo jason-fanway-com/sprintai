@@ -533,7 +533,13 @@ function rawApostropheBareName(item: CompileItem): string | null {
   return ANY_APOSTROPHE_RE.test(base) ? base : null;
 }
 
-function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
+// PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): exported
+// so compile-menu/index.ts can reconstruct a stated item's PRE-surface-form
+// lexicon terms (rule 1/2/6 + the Cheese-pizza aliases) when it runs
+// deriveLexiconSurfaceForms a second time over derived rows below — the
+// exact same terms compileItem() already computes for the internal call
+// inside compileMenu(), never a second, reinvented copy of this rule set.
+export function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
   const terms: LexiconTerm[] = [];
   const displayName = (item.display_name ?? item.name).trim();
   if (!displayName) return terms;
@@ -882,7 +888,15 @@ function stripPrepositionalTail(term: string): string {
   return term.replace(PREPOSITIONAL_TAIL_RE, "");
 }
 
-function deriveLexiconSurfaceForms(compiledItems: CompiledItem[]): LexiconTerm[] {
+// PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): the
+// input is structural (`{ item_id, lexicon_terms }`), not literally
+// `CompiledItem[]` — so this same function, unchanged, can run a SECOND time
+// in compile-menu/index.ts over derived rows (shaped the same way once their
+// real persisted id is known — see resolveDerivedLexiconTerms) without a
+// second, derived-only copy of this rule. compileMenu()'s own internal call
+// below is completely unaffected (CompiledItem already has exactly these two
+// fields); the second call site is index.ts's own concern, not this file's.
+export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string; lexicon_terms: LexiconTerm[] }>): LexiconTerm[] {
   // The shop's lexicon as it exists before this pass, restricted to rule 1/2
   // ITEM terms only. A candidate matching one of these already "exists as a
   // term" (own item) or would create a cross-target ambiguity against a

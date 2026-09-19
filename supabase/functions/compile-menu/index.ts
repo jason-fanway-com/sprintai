@@ -60,6 +60,8 @@ import {
   compileMenu,
   buildDerivedRows,
   computeDanglingLexiconTermInvariant,
+  deriveLexiconSurfaceForms,
+  itemLexiconTerms,
   resolveDerivedLexiconTerms,
   type DerivedRowsDiagnostic,
   applyOverrides,
@@ -617,6 +619,44 @@ Deno.serve(async (req: Request) => {
   // write-back — rewritten to each row's REAL persisted id, never the
   // synthetic entity_key. See resolveDerivedLexiconTerms's own header.
   const derivedLexiconTerms: LexiconTerm[] = resolveDerivedLexiconTerms(derivedRows, derivedIdByEntityKey);
+
+  // PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): a
+  // derived row is a member of its category exactly like any stated row —
+  // it must get the SAME bare-category / size-qualified-category surface-
+  // form terms ("pizza", "pizzas", "large pizza(s)") that compileMenu()'s
+  // own internal deriveLexiconSurfaceForms call already gives every stated
+  // item, via trailing-word-run derivation off each item's own full name.
+  // Derived rows never flow through compileMenu() itself (buildDerivedRows
+  // needs `compiled`, compileMenu()'s own OUTPUT, as an input — they can't
+  // go through the SAME call), so this is the same function run a SECOND
+  // time, here, over the union of both populations — never a second,
+  // derived-only copy of the rule.
+  //
+  // `existing`/`source` for this second call are reconstructed from each
+  // population's PRE-surface-form terms (itemLexiconTerms(item) for stated
+  // items — identical input compileMenu()'s own internal call already used;
+  // each derived row's own lexicon_terms, already rewritten to its real id,
+  // for derived rows). Deliberately NOT result.items' already-merged
+  // lexicon_terms: those already carry the first pass's own surface forms
+  // (e.g. "pizza"), and feeding an already-added surface form back in as
+  // `existing` would wrongly exclude it as a NEW candidate for every derived
+  // row — the exact bug this dispatch closes, reintroduced by a careless
+  // wiring. Only the newly-produced DERIVED-row terms are kept — the
+  // stated-item half of this second pass exactly reproduces what
+  // compileMenu() already added to result.items, and re-adding those to the
+  // same lexicon upsert batch would write the same (menu_id, term,
+  // target_type, target_id) conflict target twice in one request.
+  const derivedRealIds = new Set(derivedIdByEntityKey.values());
+  const surfaceFormSource = [
+    ...compileItems.map(item => ({ item_id: item.id, lexicon_terms: itemLexiconTerms(item) })),
+    ...derivedRows
+      .map(row => ({ item_id: derivedIdByEntityKey.get(row.entity_key), lexicon_terms: row.lexicon_terms }))
+      .filter((r): r is { item_id: string; lexicon_terms: LexiconTerm[] } => r.item_id !== undefined)
+      .map(r => ({ item_id: r.item_id, lexicon_terms: r.lexicon_terms.map(t => ({ ...t, target_id: r.item_id })) })),
+  ];
+  const derivedCategorySurfaceForms = deriveLexiconSurfaceForms(surfaceFormSource)
+    .filter(t => derivedRealIds.has(t.target_id));
+  derivedLexiconTerms.push(...derivedCategorySurfaceForms);
 
   // ---- Write back: menu_items.display_name / product_key / bot_state /
   // bot_state_reason / ask_plan. display_name/product_key come from
