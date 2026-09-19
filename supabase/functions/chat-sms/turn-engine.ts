@@ -2479,6 +2479,45 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
 // choice directly — the span's words stay in customerMessage, so the
 // surviving item's own 00-BF modifier-floor pass finds and applies the real
 // choice on its own.
+// PO dispatch 2026-09-19 (pepperoni wart a): matchChoiceAsWholeSpan requires
+// the span's token set to equal a choice's FULL display token set exactly —
+// but a pizza topping choice always displays with its placement qualifier
+// ("Pepperoni (Whole pizza)"), which a bare topping mention ("pepperoni")
+// never contains. That exact-equality miss let a topping already destined to
+// land as this add's own modifier (via the 00-BF floor, below) ALSO come
+// back from resolveItem as a separately ambiguous span ("did you mean
+// Pepperoni Pizza or Pepperoni Roll?") for the very same word. Comparing
+// against the choice's CORE name (the display minus its placement suffix)
+// as a second, narrower attempt catches exactly this case without loosening
+// matchChoiceAsWholeSpan itself (which other callers rely on staying an
+// exact real-second-item-vs-modifier-mention guard, see its own header).
+// The span may also carry the customer's own placement word ("half
+// pepperoni", not just "pepperoni") — PROPOSE sometimes hands this exact
+// wording back as its own ambiguous item_span (real live shape, wart a/b
+// dispatch probe). Stripped before the equality check below so either
+// surface form still names the same core topping.
+const SPAN_PLACEMENT_WORDS_RE = /^(half|whole)$/i;
+
+function spanMatchesPlacementCoreAsWholeSpan(
+  choices: Array<{ id: string; display: string }>,
+  span: string,
+): boolean {
+  const spanTokens = new Set([...modifierFloorTokens(span)].filter(t => !SPAN_PLACEMENT_WORDS_RE.test(t)));
+  if (spanTokens.size === 0) return false;
+  const cores = new Set<string>();
+  for (const c of choices) {
+    const m = (c.display ?? "").trim().match(PLACEMENT_SUFFIX_RE);
+    const core = m?.[1]?.trim();
+    if (core) cores.add(core);
+  }
+  for (const core of cores) {
+    const coreTokens = modifierFloorTokens(core);
+    if (coreTokens.size === 0) continue;
+    if (coreTokens.size === spanTokens.size && [...coreTokens].every(t => spanTokens.has(t))) return true;
+  }
+  return false;
+}
+
 function spanIsWholeChoiceOfAnyAdd(
   span: string,
   adds: ResolvedAdd[],
@@ -2492,6 +2531,7 @@ function spanIsWholeChoiceOfAnyAdd(
     for (const step of menuItem.ask_plan.steps) {
       if (step.kind !== "modifier" && step.kind !== "slot") continue;
       if (matchChoiceAsWholeSpan(step.choices, trimmed, step.prompt_template.split(".")[0])) return true;
+      if (step.kind === "modifier" && spanMatchesPlacementCoreAsWholeSpan(step.choices, trimmed)) return true;
     }
   }
   return false;
@@ -2671,6 +2711,88 @@ function modifierFloorTokens(text: string): Set<string> {
   return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
 }
 
+// PO dispatch 2026-09-19 (pepperoni warts, item a/c): pizza toppings compile
+// as TWO choices per topping, "X (Whole pizza)" and "X (Half pizza)" — see
+// this function's own header, point 3. The word-subset rule above already
+// handles "half pepperoni" (the text plainly contains "half", "pepperoni"
+// and "pizza"), but a BARE topping mention with no half/whole word at all
+// ("with pepperoni") never contains the literal word "whole", so the Whole
+// choice's own token set was never a subset and NOTHING was recovered — the
+// topping silently priced as if never asked for. A customer who names a
+// topping and says nothing about placement means the whole pizza; "half" is
+// the only placement word customers ever actually say, so its ABSENCE is
+// itself the signal for Whole, not the literal word "whole". Grouping each
+// topping's Whole/Half pair by its own core name (the display minus the
+// placement suffix) and picking the variant by whether "half" appears in
+// the text — rather than requiring both variants' full literal wording —
+// makes a bare mention resolve to Whole while an explicit "half X" still
+// resolves to Half exactly as before (regression-tested: b65c5bea).
+const PLACEMENT_SUFFIX_RE = /^(.*?)\s*\((Whole pizza|Half pizza)\)$/i;
+
+interface PlacementGroup {
+  core: string;
+  whole?: { id: string };
+  half?: { id: string };
+}
+
+function groupChoicesByPlacement(
+  choices: Array<{ id: string; display: string }>,
+): { placementGroups: PlacementGroup[]; plainChoices: Array<{ id: string; display: string }> } {
+  const groupsByCore = new Map<string, PlacementGroup>();
+  const plainChoices: Array<{ id: string; display: string }> = [];
+  for (const c of choices) {
+    const d = (c.display ?? "").trim();
+    if (d.length < 3) continue;
+    const m = d.match(PLACEMENT_SUFFIX_RE);
+    if (!m) { plainChoices.push(c); continue; }
+    const core = m[1].trim();
+    if (!core) { plainChoices.push(c); continue; }
+    const key = core.toLowerCase();
+    const g = groupsByCore.get(key) ?? { core };
+    if (/half/i.test(m[2])) g.half = { id: c.id }; else g.whole = { id: c.id };
+    groupsByCore.set(key, g);
+  }
+  return { placementGroups: [...groupsByCore.values()], plainChoices };
+}
+
+// A placement group's own core name (e.g. "Pepperoni") is "mentioned" when
+// every one of ITS OWN words appears somewhere in the scoped text — same
+// word-level, non-stemmed subset rule as the plain-choice path below, just
+// applied to the core name instead of the full "(Whole/Half pizza)" display.
+function placementGroupMentioned(group: PlacementGroup, textTokens: Set<string>): boolean {
+  const coreTokens = modifierFloorTokens(group.core);
+  if (coreTokens.size === 0) return false;
+  for (const t of coreTokens) if (!textTokens.has(t)) return false;
+  return true;
+}
+
+// Every core-name group the text mentions, resolved to the ONE choice id
+// that group's own placement signal (the presence/absence of the literal
+// word "half" anywhere in the text) selects — never both, never a guess
+// when the selected variant doesn't exist on this item.
+function recoverPlacementHits(groups: PlacementGroup[], textTokens: Set<string>): string[] {
+  const hasHalfWord = textTokens.has("half");
+  const hits: string[] = [];
+  for (const g of groups) {
+    if (!placementGroupMentioned(g, textTokens)) continue;
+    const chosen = hasHalfWord ? g.half : g.whole;
+    if (chosen) hits.push(chosen.id);
+  }
+  return hits;
+}
+
+function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, textTokens: Set<string>): string[] {
+  const hits: string[] = [];
+  for (const c of plainChoices) {
+    const choiceTokens = modifierFloorTokens(c.display);
+    if (choiceTokens.size === 0) continue;
+    let ok = true;
+    for (const t of choiceTokens) if (!textTokens.has(t)) { ok = false; break; }
+    if (ok) hits.push(c.id);
+  }
+  return hits;
+}
+
 export function recoverAssertedChoiceFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
@@ -2679,16 +2801,38 @@ export function recoverAssertedChoiceFromText(
   if (!text || choices.length === 0) return null;
   if (MODIFIER_NEGATION_RE.test(text)) return null;
   const textTokens = modifierFloorTokens(text);
-  const hits = choices.filter(c => {
-    const d = (c.display ?? "").trim();
-    if (d.length < 3) return false;
-    const choiceTokens = modifierFloorTokens(d);
-    if (choiceTokens.size === 0) return false;
-    for (const t of choiceTokens) if (!textTokens.has(t)) return false;
-    return true;
-  });
+  const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
+  const hits = [...recoverPlacementHits(placementGroups, textTokens), ...recoverPlainHits(plainChoices, textTokens)];
   if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
-  return hits[0].id;
+  return hits[0];
+}
+
+// PO dispatch 2026-09-19 (pepperoni wart c): "half pepperoni half sausage"
+// names TWO distinct toppings, each with its own explicit placement — both
+// must land as modifiers, neither silently dropped. recoverAssertedChoice-
+// FromText above stays singular on purpose (its own "hits.length !== 1"
+// tie-guard is what keeps "with sausage and onions" — two PLAIN toppings,
+// no placement language, genuinely ambiguous which one, if either, the
+// customer meant as a modifier versus a second item — resolving to nothing,
+// per its own pre-existing test). A topping named WITH placement language is
+// a different, unambiguous shape: the customer is explicitly building a
+// split pizza, one named half at a time, so every distinctly-named core
+// group this text mentions is recovered independently, all at once —
+// plain (non-placement) choices keep the exact original single-recovery
+// behavior via recoverAssertedChoiceFromText itself, appended to the same
+// result set.
+export function recoverAssertedChoicesFromText(
+  scopedText: string,
+  choices: Array<{ id: string; display: string }>,
+): string[] {
+  const text = (scopedText ?? "").trim();
+  if (!text || choices.length === 0) return [];
+  if (MODIFIER_NEGATION_RE.test(text)) return [];
+  const textTokens = modifierFloorTokens(text);
+  const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
+  const placementHits = recoverPlacementHits(placementGroups, textTokens);
+  const plainHits = recoverPlainHits(plainChoices, textTokens);
+  return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
@@ -3230,8 +3374,12 @@ export function decide(
       const scoped = scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
-        const recovered = recoverAssertedChoiceFromText(scoped, step.choices);
-        if (recovered) effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+        // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
+        // placed toppings in one clause ("half pepperoni half sausage") both
+        // land, instead of the singular floor's own tie-guard dropping both.
+        for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices)) {
+          effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+        }
       }
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);

@@ -526,3 +526,54 @@ Deno.test("resolveItem (data fix b): 'pepperoni stromboli' still resolves to the
   const result = resolveItem("pepperoni stromboli", NARROWING_LEXICON);
   assertEquals(result, { kind: "resolved", menu_item_id: idOf("Pepperoni") });
 });
+
+// ── PO dispatch 2026-09-19 (pepperoni wart b): the fixture above never
+// exercises the real live bug, because its own "pepperoni" term has no
+// competing Pizza-family item at all (see its own comment: "no real
+// Pepperoni Pizza item exists on this menu") — so the category-synonym
+// reasoning only ever ran through the UNIQUE-base branch (base.targetIds.
+// size === 1). Real Vito's data has an ACTUAL Pepperoni Pizza family that
+// also carries the bare "pepperoni" term, so "a pepperoni stromboli" is a
+// genuine 3-way TIE (2 pizza sizes + the roll) — and the tied CATEGORY
+// filter (a plain `namedCategories.has(category)` equality check) dropped
+// the roll entirely, because "stromboli" is only ever indexed as a category
+// noun for the UNRELATED "Stromboli" platter category, never for "Stromboli
+// Rolls" (categoryNoun only ever reduces a multi-word category to its LAST
+// word — "rolls" — same root cause description as the dispatch's own
+// singular/plural framing: the customer's own word for this category never
+// stem-matches its compiled noun at all). A resolver that doesn't extend the
+// synonym reasoning to genuine ties reproduces "did you mean Large/Medium/
+// Small Pepperoni Pizza or Pepperoni Roll?" for a customer who plainly named
+// the roll.
+const TIE_PEPPERONI_PIZZA_LARGE = "item-tie-pepperoni-pizza-large";
+const TIE_PEPPERONI_PIZZA_MEDIUM = "item-tie-pepperoni-pizza-medium";
+const TIE_PEPPERONI_ROLL = "item-tie-pepperoni-roll";
+const TIE_GYRO_PLATTER = "item-tie-gyro-platter"; // populates the unrelated "Stromboli" platter category into the index
+
+const TIE_LEXICON: LexiconTerm[] = [
+  { term: "pepperoni", target_id: TIE_PEPPERONI_PIZZA_LARGE, category: "Pizza", size_label: "Large" },
+  { term: "large pepperoni pizza", target_id: TIE_PEPPERONI_PIZZA_LARGE, category: "Pizza", size_label: "Large" },
+  { term: "pepperoni", target_id: TIE_PEPPERONI_PIZZA_MEDIUM, category: "Pizza", size_label: "Medium" },
+  { term: "medium pepperoni pizza", target_id: TIE_PEPPERONI_PIZZA_MEDIUM, category: "Pizza", size_label: "Medium" },
+  { term: "pepperoni", target_id: TIE_PEPPERONI_ROLL, category: "Stromboli Rolls" },
+  { term: "gyro", target_id: TIE_GYRO_PLATTER, category: "Stromboli" },
+];
+
+Deno.test("resolveItem (wart b, genuine tie): 'a pepperoni stromboli' resolves straight to the Stromboli Rolls Pepperoni, not a 3-way disambiguation, even though a real Pepperoni Pizza family shares the bare term", () => {
+  const result = resolveItem("a pepperoni stromboli", TIE_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: TIE_PEPPERONI_ROLL });
+});
+
+Deno.test("resolveItem (wart b, no regression): 'a pepperoni pizza' with no size still ties across BOTH pizza sizes only — the roll must not leak back in, and neither size is guessed", () => {
+  const result = resolveItem("a pepperoni pizza", TIE_LEXICON);
+  assertEquals(result.kind, "ambiguous");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [TIE_PEPPERONI_PIZZA_LARGE, TIE_PEPPERONI_PIZZA_MEDIUM].sort(),
+  );
+});
+
+Deno.test("resolveItem (wart b, no regression): a stated size still resolves the real Pepperoni Pizza directly, never the roll", () => {
+  const result = resolveItem("a large pepperoni pizza", TIE_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: TIE_PEPPERONI_PIZZA_LARGE });
+});

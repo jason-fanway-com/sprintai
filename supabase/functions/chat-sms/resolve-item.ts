@@ -503,7 +503,28 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   if (namedCategories.size > 0 && candidates.some(id => targetInfo.get(id)?.category != null)) {
     const filteredByCategory = candidates.filter(id => {
       const category = targetInfo.get(id)?.category;
-      return category != null && namedCategories.has(category);
+      if (category == null) return false;
+      if (namedCategories.has(category)) return true;
+      // Data fix (b) extension, 2026-09-19 (wart b, real live bug): the exact
+      // membership check above only ever recognizes a named category that IS
+      // one of the tied candidates' own category strings verbatim. Real
+      // Vito's shape: "a pepperoni stromboli" ties the real Pepperoni Pizza
+      // family against the Stromboli Rolls "Pepperoni" — categoryNoun's own
+      // "last word only" rule maps the span's word "stromboli" to the
+      // UNRELATED "Stromboli" platter category, never to "Stromboli Rolls",
+      // so the roll — the one candidate actually named — was wrongly
+      // filtered OUT instead of kept. Same "a word already inside a
+      // candidate's own category name is a synonym for it, not an outside
+      // qualifier" rule the unique-base branch below already applies,
+      // generalized to a genuine tie: a named category that textually
+      // contains (or is contained by) this candidate's REAL category is the
+      // same dish family by another name, so the candidate survives.
+      const categoryLower = category.toLowerCase();
+      for (const nc of namedCategories) {
+        const ncLower = nc.toLowerCase();
+        if (categoryLower.includes(ncLower) || ncLower.includes(categoryLower)) return true;
+      }
+      return false;
     });
     if (filteredByCategory.length > 0) {
       candidates = filteredByCategory;
