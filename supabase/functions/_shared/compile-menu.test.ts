@@ -21,6 +21,7 @@ import {
   type CompileGroup,
   type CompileItem,
   type CompiledItem,
+  type DerivedRowsDiagnostic,
   type ExistingOwnerQuestionRow,
   type InferSourceItem,
   type OverrideRow,
@@ -1781,6 +1782,106 @@ function buildVitosTestMenu() {
   const compiled = new Map([orderable(small.id), orderable(medium.id), orderable(large.id)]);
   return { small, medium, large, compiled };
 }
+
+// ============================================================
+// buildDerivedRows diagnostics (2026-09-19 PO dispatch, D1 audit): a shop
+// with a real base-pizza-plus-toppings shape that ends at zero rows must be
+// loud about it, distinguishable from a shop that genuinely sells no pizza
+// (Not Just Bagels — 0 rows, 0 warning, correct). Each test below is a
+// synthetic fixture that dead-ends at ONE specific stage.
+// ============================================================
+
+Deno.test("buildDerivedRows diagnostics: a shop with no Pizza-category items at all gets NO warning — 0 rows is correct, not an anomaly (Not Just Bagels shape)", () => {
+  const bagel = item({ name: "Everything Bagel", category: "Bagels", active: true });
+  const compiled = new Map([orderable(bagel.id)]);
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([bagel], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assertEquals(diagnostics.warning, null);
+});
+
+Deno.test("buildDerivedRows diagnostics: Pizza-category items exist but none match the base-name pattern (cheese/plain/neapolitan/regular/traditional) -> named warning", () => {
+  const veggiePizza = item({ name: "Veggie Pizza - Large", category: "Pizza", active: true, groups: [vitosToppingsGroup()] });
+  const compiled = new Map([orderable(veggiePizza.id)]);
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([veggiePizza], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assert(diagnostics.warning, "must not be silent — a real Pizza-category item existed");
+  assert(diagnostics.warning!.includes("Veggie Pizza"), diagnostics.warning!);
+  assert(diagnostics.warning!.includes("base-pizza name pattern"), diagnostics.warning!);
+});
+
+Deno.test("buildDerivedRows diagnostics: base-pizza-named item exists but has no toppings group at all -> named warning naming the item", () => {
+  const cheeseNoToppings = item({ name: "Cheese Pizza - Large", category: "Pizza", active: true, groups: [] });
+  const compiled = new Map([orderable(cheeseNoToppings.id)]);
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([cheeseNoToppings], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assert(diagnostics.warning, "must not be silent — a real base-pizza item existed");
+  assert(diagnostics.warning!.includes("Cheese Pizza - Large"), diagnostics.warning!);
+  assert(diagnostics.warning!.includes("toppings/modifier group"), diagnostics.warning!);
+});
+
+Deno.test("buildDerivedRows diagnostics: base item + toppings group exist but the item is not orderable (blocked) -> named warning", () => {
+  const blockedCheese = vitosCheeseItem({ name: "Cheese - Large (16\")", price_cents: 1650, size_label: "Large (16\")" });
+  const compiled = new Map<string, CompiledItem>([[blockedCheese.id, {
+    item_id: blockedCheese.id, bot_state: "display_only", bot_state_reason: "blocked by an owner question",
+    ask_plan: { compiled_at: T_COMPILED_AT, compiler_version: 1, display_name: "", base_price_cents: 0, steps: [], recap_template: "", ticket_template: "" },
+    lexicon_terms: [],
+  }]]);
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([blockedCheese], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assert(diagnostics.warning, "must not be silent — a real base+toppings item existed, just blocked");
+  assert(diagnostics.warning!.includes("orderable"), diagnostics.warning!);
+});
+
+Deno.test("buildDerivedRows diagnostics: the toppings group's choice names match NONE of the standard six toppings -> named warning naming the family and sampling its real choice names", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  // Overwrite every family member's toppings group with choices that share
+  // none of STANDARD_SINGLE_TOPPING_ALIASES' vocabulary.
+  const exoticGroup: CompileGroup = {
+    id: "exotic-toppings", name: "Toppings", kind: "modifier", slot_key: null,
+    min_select: 0, max_select: 8, kitchen_critical: false, price_critical: false,
+    default_choice_id: null, ask_mode: null, provenance: "owner_confirmed", display_order: 0,
+    choices: [
+      { id: "c1", name: "Kalamata Olives (Whole pizza)", display_name: "Kalamata Olives (Whole pizza)", price_cents: 350, is_default: false, provenance: "owner_confirmed", not_composable: false },
+      { id: "c2", name: "Artichoke Hearts (Whole pizza)", display_name: "Artichoke Hearts (Whole pizza)", price_cents: 350, is_default: false, provenance: "owner_confirmed", not_composable: false },
+    ],
+  };
+  const exoticSmall = { ...small, groups: [exoticGroup] };
+  const exoticMedium = { ...medium, groups: [exoticGroup] };
+  const exoticLarge = { ...large, groups: [exoticGroup] };
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([exoticSmall, exoticMedium, exoticLarge], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assert(diagnostics.warning, "must not be silent — a real base family and toppings group existed");
+  assert(diagnostics.warning!.includes("Cheese"), diagnostics.warning!);
+  assert(diagnostics.warning!.includes("Kalamata Olives") || diagnostics.warning!.includes("Artichoke Hearts"), diagnostics.warning!);
+  assert(diagnostics.warning!.includes("standard-topping list"), diagnostics.warning!);
+});
+
+Deno.test("buildDerivedRows diagnostics: two base families genuinely tie (same size count, same name priority, same price) -> named warning naming both", () => {
+  // Both names contain "cheese" (same PRIORITY tier, index 1) but are
+  // DIFFERENT family keys (derivedFamilyKey doesn't strip "Deluxe") — same
+  // size-variant count (1 each) and same price, so nothing breaks the tie.
+  const familyA = vitosCheeseItem({ name: "Cheese - Large (16\")", price_cents: 1650, size_label: "Large (16\")" });
+  const familyB = vitosCheeseItem({ name: "Cheese Deluxe - Large (16\")", price_cents: 1650, size_label: "Large (16\")" });
+  const compiled = new Map([orderable(familyA.id), orderable(familyB.id)]);
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([familyA, familyB], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assertEquals(rows.length, 0);
+  assert(diagnostics.warning, "must not be silent — two real families tied");
+  assert(diagnostics.warning!.includes("tied"), diagnostics.warning!);
+});
+
+Deno.test("buildDerivedRows diagnostics: the normal working case (Vito's shape) leaves warning null — rows exist, nothing to report", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  const diagnostics: DerivedRowsDiagnostic = { warning: null };
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT, { diagnostics });
+  assert(rows.length > 0);
+  assertEquals(diagnostics.warning, null);
+});
 
 Deno.test("buildDerivedRows: Vito's shape — a 'Toppings' group with slot_key null still qualifies (name-pattern fallback)", () => {
   const { small, medium, large, compiled } = buildVitosTestMenu();

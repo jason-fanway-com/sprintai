@@ -1511,29 +1511,60 @@ function derivedFamilyKey(name: string): string {
   return name.replace(/\s*-\s*[^-]*$/, "").trim().toLowerCase();
 }
 
+// 2026-09-19 PO dispatch (D1 audit): buildDerivedRows silently returning zero
+// rows for a shop that plainly HAS a base-pizza-plus-toppings shape (Vito's,
+// before the isToppingsGroup slot_key fallback above) went unnoticed until
+// someone happened to ask "why didn't derived rows happen?" — nothing in the
+// compile report distinguished that from "this shop genuinely sells no
+// pizza" (Not Just Bagels, 0 rows, correctly — it has no Pizza-category items
+// at all). `diagnostics`, when passed, is filled with a human-readable
+// reason naming the actual rejecting condition and the family/item involved,
+// but ONLY when zero rows resulted AND there was a real pizza-category,
+// base-name-matching item to explain — never fired for a shop with no pizza
+// category at all, so this is a genuine anomaly signal, not noise on every
+// non-pizza shop. Left null on any run that produces at least one row.
+export interface DerivedRowsDiagnostic {
+  warning: string | null;
+}
+
 export function buildDerivedRows(
   items: CompileItem[],
   compiled: Map<string, CompiledItem>,
   derivedOverrides: Map<string, Record<string, unknown>>,
   compiledAt: string,
-  opts?: { basePattern?: RegExp; capPerSize?: number },
+  opts?: { basePattern?: RegExp; capPerSize?: number; diagnostics?: DerivedRowsDiagnostic },
 ): DerivedMenuRow[] {
   const baseRe = opts?.basePattern ?? DERIVED_BASE_PIZZA_RE;
   const cap = opts?.capPerSize ?? DERIVED_DEFAULT_CAP;
+  const warn = (msg: string) => { if (opts?.diagnostics) opts.diagnostics.warning = msg; };
 
   // Step 1: Find pizza base candidates — active, pizza category, name matches
-  // base regex, has at least one toppings modifier group with choices.
-  const candidates = items.filter(item => {
-    if (!item.active) return false;
-    if (!item.category || !DERIVED_PIZZA_CATEGORY_RE.test(item.category)) return false;
-    if (!baseRe.test(item.name)) return false;
-    if (!item.groups.some(g => isToppingsGroup(g) && g.choices.length > 0)) return false;
-    // Orderable check — derived rows inherit the base item's state
-    if (compiled.get(item.id)?.bot_state !== "orderable") return false;
-    return true;
-  });
+  // base regex, has at least one toppings modifier group with choices, and
+  // is itself orderable. Staged (not one combined filter) so a zero-row
+  // outcome can name the EXACT stage nothing survived, instead of just "no
+  // candidates" — see DerivedRowsDiagnostic's own header.
+  const pizzaCategoryItems = items.filter(item =>
+    item.active && !!item.category && DERIVED_PIZZA_CATEGORY_RE.test(item.category));
+  if (pizzaCategoryItems.length === 0) return []; // shop has no pizza category at all — not an anomaly, nothing to warn about
 
-  if (candidates.length === 0) return [];
+  const baseNameItems = pizzaCategoryItems.filter(item => baseRe.test(item.name));
+  if (baseNameItems.length === 0) {
+    warn(`${pizzaCategoryItems.length} active Pizza-category item(s) exist (e.g. "${pizzaCategoryItems[0].name}"), but none match the base-pizza name pattern (cheese/plain/neapolitan/regular/traditional) — no base family to derive toppings onto`);
+    return [];
+  }
+
+  const withToppingsGroup = baseNameItems.filter(item =>
+    item.groups.some(g => isToppingsGroup(g) && g.choices.length > 0));
+  if (withToppingsGroup.length === 0) {
+    warn(`${baseNameItems.length} base-pizza-named item(s) exist (e.g. "${baseNameItems[0].name}"), but none has a toppings/modifier group buildDerivedRows recognizes (isToppingsGroup: slot_key === "toppings", or an unclassified group whose name matches /topping/i) — check the group's slot_key and name on "${baseNameItems[0].name}"`);
+    return [];
+  }
+
+  const candidates = withToppingsGroup.filter(item => compiled.get(item.id)?.bot_state === "orderable");
+  if (candidates.length === 0) {
+    warn(`${withToppingsGroup.length} base-pizza item(s) with a real toppings group exist (e.g. "${withToppingsGroup[0].name}"), but none is bot_state "orderable" (blocked by an unanswered owner question, or display_only) — derived rows inherit the base item's own orderable state`);
+    return [];
+  }
 
   // Step 2: Group candidates by family key (name stripped of size suffix).
   const families = new Map<string, CompileItem[]>();
@@ -1574,7 +1605,10 @@ export function buildDerivedRows(
     tiedFamilies = tiedFamilies.filter(m => minPrice(m) === lowestPrice);
   }
 
-  if (tiedFamilies.length !== 1) return [];
+  if (tiedFamilies.length !== 1) {
+    warn(`${tiedFamilies.length} base-pizza families tied on size-variant count, name priority, AND lowest price (e.g. "${tiedFamilies[0][0].name}" vs "${tiedFamilies[1][0].name}") — genuinely ambiguous which is the real base family, so none was picked (missing beats wrong)`);
+    return [];
+  }
   const bestFamily = tiedFamilies[0];
 
   // Step 4: Group family members by their size_label (null → '__no_size__').
@@ -1728,6 +1762,20 @@ export function buildDerivedRows(
         lexicon_terms: lexiconTerms,
       });
     }
+  }
+
+  // A real base family with a real toppings group was found and survived
+  // every stage above, yet still produced zero rows — the only remaining
+  // cause is that none of the toppings group's own choice names match the
+  // fixed STANDARD_SINGLE_TOPPING_ALIASES list at all (a shop whose
+  // vocabulary is entirely different toppings, or names them in a way
+  // toppingCleanDisplay/the alias map doesn't recognize).
+  if (rows.length === 0) {
+    const sampleGroup = bestFamily[0].groups.find(isToppingsGroup);
+    const sampleChoiceNames = (sampleGroup?.choices ?? [])
+      .map(c => toppingCleanDisplay((c.display_name?.trim() || c.name).trim()))
+      .slice(0, 8);
+    warn(`base family "${bestFamily[0].name}" and its toppings group "${sampleGroup?.name ?? "?"}" were found, but none of its ${sampleGroup?.choices.length ?? 0} choice name(s) (e.g. ${sampleChoiceNames.map(n => `"${n}"`).join(", ")}) match the fixed standard-topping list (pepperoni/sausage/mushroom/onion/green pepper/extra cheese)`);
   }
 
   return rows;

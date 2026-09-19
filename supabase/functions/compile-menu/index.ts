@@ -59,6 +59,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import {
   compileMenu,
   buildDerivedRows,
+  type DerivedRowsDiagnostic,
   applyOverrides,
   buildOwnerQuestionSummaries,
   type CompileItem,
@@ -528,7 +529,16 @@ Deno.serve(async (req: Request) => {
   }
 
   const compiledMap = new Map(result.items.map(c => [c.item_id, c]));
-  const derivedRows = buildDerivedRows(compileItems, compiledMap, derivedOverrides, compiledAt);
+  // 2026-09-19 PO dispatch (D1 audit): a shop with a real base-pizza-plus-
+  // toppings shape that still ends up with zero derived rows is a silent
+  // failure (this is exactly how Vito's sat at 0 rows unnoticed) — see
+  // DerivedRowsDiagnostic's own header. `derivedRowsDiagnostic.warning`
+  // rides in the compile report below (derived_rows.warning), never just a
+  // console.log, so it surfaces to whoever reads the report, not buried in
+  // function logs. Stays null for a shop with no pizza category at all
+  // (Not Just Bagels) — that is not an anomaly.
+  const derivedRowsDiagnostic: DerivedRowsDiagnostic = { warning: null };
+  const derivedRows = buildDerivedRows(compileItems, compiledMap, derivedOverrides, compiledAt, { diagnostics: derivedRowsDiagnostic });
 
   // Fetch existing derived rows for this menu (for upsert / stale-deactivate).
   interface DerivedItemRow { id: string; import_key: string; active: boolean }
@@ -701,6 +711,12 @@ Deno.serve(async (req: Request) => {
             derivedRows.filter(r => r.entity_key.endsWith(`#${sizeKey}`)).length,
           ]),
         ),
+        // Non-null ONLY when this shop has a real base-pizza-plus-toppings
+        // shape that still produced zero rows — see DerivedRowsDiagnostic's
+        // own header in compile-menu.ts. A shop that simply sells no pizza
+        // (e.g. Not Just Bagels) reports total: 0, warning: null — that is
+        // correct, not an anomaly.
+        warning: derivedRowsDiagnostic.warning,
       },
     }),
     { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
