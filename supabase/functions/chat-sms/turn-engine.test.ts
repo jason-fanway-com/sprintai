@@ -566,6 +566,7 @@ const ADDON_STEAK_QUESADILLA_ID = "item-addon-steak-quesadilla";
 const ADDON_CHICKEN_ID = "item-addon-chicken";
 const ADDON_PROTEIN_GROUP_ID = "group-addon-protein";
 const ADDON_HOAGIE_PROTEIN_GROUP_ID = "group-addon-hoagie-protein";
+const ADDON_CHEESESTEAK_SANDWICH_ID = "item-addon-chicken-cheesesteak-sandwich";
 
 function proteinAddOnStep(groupId: string) {
   return {
@@ -601,6 +602,15 @@ const ADDON_MENU: TurnEngineMenuItem[] = [
     id: ADDON_CHICKEN_ID, name: "Chicken", category: "Entrees", price_cents: 999, bot_state: "orderable",
     ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Chicken", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] },
   },
+  // 2026-09-19 P0 (phantom money, real live bug): a choice/add-on name
+  // ("Chicken") that is literally one WORD inside a DIFFERENT item's full
+  // name ("Chicken Cheesesteak Sandwich") — the exact shape that made the
+  // whole $11.99 sandwich silently vanish, no decline, no trace. See
+  // ADDON_CHEESESTEAK_SANDWICH_ID's tests below.
+  {
+    id: ADDON_CHEESESTEAK_SANDWICH_ID, name: "Chicken Cheesesteak Sandwich", category: "Sandwiches", price_cents: 1199, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Chicken Cheesesteak Sandwich", base_price_cents: 1199, recap_template: "", ticket_template: "", steps: [] },
+  },
 ];
 const ADDON_LEXICON: LexiconTerm[] = [
   { term: "house salad", target_id: ADDON_HOUSE_SALAD_ID },
@@ -610,6 +620,7 @@ const ADDON_LEXICON: LexiconTerm[] = [
   { term: "steak", target_id: ADDON_STEAK_QUESADILLA_ID },
   { term: "steak quesadilla", target_id: ADDON_STEAK_QUESADILLA_ID },
   { term: "chicken", target_id: ADDON_CHICKEN_ID },
+  { term: "chicken cheesesteak sandwich", target_id: ADDON_CHEESESTEAK_SANDWICH_ID },
 ];
 
 Deno.test("decide (add-on as item, real transcript 1): 'house salad w/ black diamond steak' -> ONE House line with the add-on applied, no separate Steak line", () => {
@@ -772,6 +783,70 @@ Deno.test("decide (add-on as item, acceptance 4): 'house salad with chicken' -> 
   assertEquals(result.cart[0].menu_item_id, ADDON_HOUSE_SALAD_ID);
   assertEquals(result.cart[0].ask_plan_selections, { [ADDON_PROTEIN_GROUP_ID]: "choice-grilled-chicken" }, "the Chicken add-on must be applied to the House line");
   assert(!result.cart.some(l => l.menu_item_id === ADDON_CHICKEN_ID), "no separate Chicken item line");
+});
+
+// ============================================================
+// 2026-09-19 P0 (phantom money, real live bug, deterministic 3/3 offline
+// and live): "a chicken cheesesteak sandwich and a house salad" -> the
+// resolved $11.99 sandwich silently vanished -- no decline, no trace, not
+// applied as anyone's add-on either. Root cause: House's own "Chicken"
+// add-on choice is a bare WORD inside the sandwich's full resolved span,
+// and dropAddsThatAreReallyModifiersOfAnotherAdd used to drop on ANY
+// substring/stem-subset match (matchChoiceInText) instead of requiring the
+// whole span to BE the choice's name. Fixed via matchChoiceAsWholeSpan
+// (stem-set equality) -- see turn-engine.ts's header comment on that
+// function call for the "longest match wins" reasoning.
+// ============================================================
+Deno.test("decide (P0 phantom money): 'a chicken cheesesteak sandwich and a house salad' -> TWO real lines, sandwich never dropped as a modifier of House's 'Chicken' choice", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "chicken cheesesteak sandwich", quantity: 1, choices: [] },
+      { item_span: "house salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], ADDON_MENU, ADDON_LEXICON, undefined, "a chicken cheesesteak sandwich and a house salad");
+  assertEquals(result.cart.length, 2, `both real, distinct items must land: ${JSON.stringify(result.cart)}`);
+  assert(result.cart.some(l => l.menu_item_id === ADDON_CHEESESTEAK_SANDWICH_ID), "Chicken Cheesesteak Sandwich must still be its own line");
+  const houseLine = result.cart.find(l => l.menu_item_id === ADDON_HOUSE_SALAD_ID);
+  assert(houseLine, "House must still be its own line");
+  assert(
+    !houseLine!.ask_plan_selections || !(ADDON_PROTEIN_GROUP_ID in houseLine!.ask_plan_selections),
+    `no add-on -- 'chicken cheesesteak sandwich' is a real item, not a modifier claim on House: ${JSON.stringify(houseLine!.ask_plan_selections)}`,
+  );
+  assertEquals(result.unresolvedSpans, [], "the sandwich must not be recorded as dropped/unresolved either");
+});
+
+Deno.test("decide (P0 phantom money, ambiguous sibling shape): 'a chicken cheesesteak sandwich and a garden salad' -> sandwich survives, garden salad's own (unrelated) ambiguity is untouched", () => {
+  const AMBIGUOUS_SALAD_A = "item-ambiguous-salad-a";
+  const AMBIGUOUS_SALAD_B = "item-ambiguous-salad-b";
+  const menu: TurnEngineMenuItem[] = [
+    ...ADDON_MENU,
+    { id: AMBIGUOUS_SALAD_A, name: "Garden - Small", category: "Salads", price_cents: 699, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Garden - Small", base_price_cents: 699, recap_template: "", ticket_template: "", steps: [] } },
+    { id: AMBIGUOUS_SALAD_B, name: "Garden - Large", category: "Salads", price_cents: 999, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Garden - Large", base_price_cents: 999, recap_template: "", ticket_template: "", steps: [] } },
+  ];
+  const lexicon: LexiconTerm[] = [
+    ...ADDON_LEXICON,
+    { term: "garden salad", target_id: AMBIGUOUS_SALAD_A },
+    { term: "garden salad", target_id: AMBIGUOUS_SALAD_B },
+  ];
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "chicken cheesesteak sandwich", quantity: 1, choices: [] },
+      { item_span: "garden salad", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], menu, lexicon, undefined, "a chicken cheesesteak sandwich and a garden salad");
+  assert(result.cart.some(l => l.menu_item_id === ADDON_CHEESESTEAK_SANDWICH_ID), `sandwich must survive, not be held as a modifier of the ambiguous salad: ${JSON.stringify(result.cart)}`);
+  assertEquals(
+    [...result.disambiguationCandidateIds ?? []].sort(),
+    [AMBIGUOUS_SALAD_A, AMBIGUOUS_SALAD_B].sort(),
+    "garden salad's own, unrelated ambiguity must still surface",
+  );
+  assertEquals(result.heldModifierText, null, "the sandwich's span must never be held as a modifier text");
 });
 
 Deno.test("decide: removes a line by line_key", () => {

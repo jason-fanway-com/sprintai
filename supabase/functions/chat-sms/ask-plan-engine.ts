@@ -255,6 +255,52 @@ function groupNeedsNumericStems(choices: EngineChoice[]): boolean {
 }
 
 /**
+ * P0 fix (2026-09-19, phantom-money "chicken cheesesteak sandwich" vanish):
+ * turn-engine.ts's dropAddsThatAreReallyModifiersOfAnotherAdd and
+ * holdAddsThatAreModifiersOfAnAmbiguousSibling both used to call
+ * matchChoiceInText(step.choices, span) to ask "is this OTHER add's whole
+ * resolved span actually just naming a modifier choice of the item I'm
+ * looking at?" But matchChoiceInText's fuzzy tier is a SUBSET match —
+ * every stem the CHOICE contributes must appear in the text, not the other
+ * way around — so it happily matched a choice literally displayed
+ * "Chicken" against the span "chicken cheesesteak sandwich", because
+ * "chicken" is one of that span's three stems. That is correct for
+ * matching an ANSWER against a known slot (the customer's answer often
+ * only needs to mention the choice), but wrong for this seam: here the
+ * span is a DIFFERENT add's own full resolved customer wording, and the
+ * question is whether the whole thing is nothing more than a modifier
+ * mention, not whether a modifier's name happens to appear inside it.
+ *
+ * A real modifier mention ("black diamond steak" naming House's own
+ * "Black Diamond Steak" choice) has a span whose significant stems are
+ * EXACTLY the choice's — nothing more, nothing less. A real second item
+ * whose name happens to share a word with some other item's modifier
+ * ("chicken cheesesteak sandwich" sharing "chicken" with House's
+ * "Chicken" choice) has a strictly LARGER stem set. So: match only on
+ * stem-set equality, never a subset in either direction. This is the
+ * resolver's own "longest match wins" principle (matchChoiceByStems'
+ * isStrictSupersetOfStems tiebreak, above) applied at this seam — when
+ * the add's own span is longer/more specific than the choice text, the
+ * add's real-item resolution wins and this returns null.
+ */
+export function matchChoiceAsWholeSpan(choices: EngineChoice[], span: string): EngineChoice | null {
+  if (!span || choices.length === 0) return null;
+
+  const normalizedSpan = normalizeForExactMatch(span);
+  const exactHits = choices.filter(c => normalizeForExactMatch(c.display) === normalizedSpan);
+  if (exactHits.length === 1) return exactHits[0];
+  if (exactHits.length > 1) return null; // two choices sharing a display name — genuinely ambiguous, never guess
+
+  const numericSignificant = groupNeedsNumericStems(choices);
+  const spanStems = significantStems(span, numericSignificant);
+  if (spanStems.size === 0) return null;
+  const spanKey = stemSetKey(spanStems);
+  const stemHits = choices.filter(c => stemSetKey(significantStems(c.display, numericSignificant)) === spanKey);
+  if (stemHits.length === 1) return stemHits[0];
+  return null; // 0 hits, or >1 choices sharing this exact stem set — never guess
+}
+
+/**
  * Fuzzy stem-subset match against a pre-computed set of available stems,
  * rather than raw text — the primitive matchChoiceInText's fuzzy tier is
  * built on, and reused directly by resolveAskPlan's modifier matching

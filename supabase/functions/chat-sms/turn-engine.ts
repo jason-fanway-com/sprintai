@@ -109,6 +109,7 @@ import {
   renderStepQuestion,
   renderChoiceList,
   matchChoiceInText,
+  matchChoiceAsWholeSpan,
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
@@ -1260,6 +1261,18 @@ function dropAddsSupersededByCorrection(adds: ResolvedAdd[], customerMessage: st
 // floor pass (unchanged, below) finds and applies the same match on its
 // own — this function's only job is to stop the SPURIOUS item line from
 // ever being created.
+//
+// P0 fix (2026-09-19, phantom-money): "a phrase that matches an option
+// CHOICE" means the candidate's WHOLE resolved span IS that choice's name
+// (matchChoiceAsWholeSpan — stem-set equality), never a substring/contains
+// check. "a chicken cheesesteak sandwich and a house salad" used to lose
+// the whole $11.99 sandwich here — no decline, no trace — because the bare
+// word "chicken" inside that span is also House's "Chicken" add-on choice,
+// and the old matchChoiceInText call only required the CHOICE's stems to
+// be a subset of the span's, not the other way. A resolved add whose span
+// is longer/more specific than the modifier text it merely contains is a
+// real second item, not a modifier mention — see matchChoiceAsWholeSpan's
+// own header for the "longest match wins" reasoning.
 function dropAddsThatAreReallyModifiersOfAnotherAdd(
   adds: ResolvedAdd[],
   menuById: Map<string, TurnEngineMenuItem>,
@@ -1274,7 +1287,7 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
       if (!otherMenuItem?.ask_plan) continue;
       for (const step of otherMenuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (matchChoiceInText(step.choices, span)) return true;
+        if (matchChoiceAsWholeSpan(step.choices, span)) return true;
       }
     }
     return false;
@@ -1297,6 +1310,14 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
 // customerMessage once the customer picks Wrap or Panini, letting that
 // item's own 00-BF modifier floor pick it up the same way a resolved
 // sibling already would have.
+//
+// P0 fix (2026-09-19, phantom-money): same substring-vs-whole-span hole as
+// dropAddsThatAreReallyModifiersOfAnotherAdd above — "a chicken cheesesteak
+// sandwich and a garden salad" (garden salad genuinely ambiguous) used to
+// HOLD the whole resolved sandwich as if it were a modifier of whichever
+// salad candidate the customer would pick, and it never came back. Now
+// uses matchChoiceAsWholeSpan (stem-set equality), so only a span that IS
+// the choice's name, not one that merely contains it, gets held.
 function holdAddsThatAreModifiersOfAnAmbiguousSibling(
   adds: ResolvedAdd[],
   ambiguousCandidateIds: string[] | null,
@@ -1313,7 +1334,7 @@ function holdAddsThatAreModifiersOfAnAmbiguousSibling(
       if (!menuItem?.ask_plan) continue;
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;
-        if (matchChoiceInText(step.choices, span)) return true;
+        if (matchChoiceAsWholeSpan(step.choices, span)) return true;
       }
     }
     return false;
