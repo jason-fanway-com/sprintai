@@ -139,6 +139,38 @@ Deno.test("P0 regression: explicit tip phrases still resolve to $5.00 exactly", 
   }
 });
 
+// ADDENDUM 1 (2026-09-19, live repro from the 50-run on v528): the SAME
+// any-dollar-figure-means-a-tip bug also fired at the CONFIRM stage, not
+// just the "tip" open-question step -- sim #19: at CONFIRM, "I think
+// there's a mistake on the prices. The Large Cheese pizza should be $16.50
+// ..." (a price-correction question, no mention of "tip" at all) got read
+// as "Driver tip: $16.50", inflating the total to $94.97. readTipReply's
+// own guards (decline-checked-first, "near the word tip" proximity, the
+// bare-whole-message case) already cover this shape by construction -- this
+// test exists so the CONFIRM-stage call site (turn-engine.ts's "confirm"
+// case, `tipAtConfirm`) is pinned against a live-repro regression the same
+// way the "tip" open-question step already is above.
+const CONFIRM_STATE: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+
+Deno.test("ADDENDUM 1: a price-correction question at CONFIRM naming a dollar figure must never be read as a tip", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must never be called — this resolves deterministically")),
+  };
+  const input = baseInput({
+    message: "I think there's a mistake on the prices. The Large Cheese pizza should be $16.50 not what you have.",
+    dialogueState: CONFIRM_STATE,
+    shopContext: { deliveryEnabled: true, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  });
+  const result = await runTurnEngineTurn(input, deps);
+
+  const lastUpdate = state.orderCartsUpdates.at(-1);
+  assertEquals(lastUpdate?.driver_tip_cents ?? 0, 0, `no phantom tip from a price question at confirm: ${JSON.stringify(lastUpdate)}`);
+  assert(!/tip:\s*\$16\.50/i.test(result.reply), `reply must not carry a phantom "Driver tip: $16.50" line: ${result.reply}`);
+});
+
 // Item 9 (2026-09-19, live repro, lower priority same run): a closure
 // message sent while a narrowing "what kind?" question is open used to be
 // silently ignored (impliesClosure's own cartHasItems gate treated the

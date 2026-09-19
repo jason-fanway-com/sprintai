@@ -2646,13 +2646,30 @@ function applyRemoveChoiceIds(
 //      topping that was only three letters of another item's name; its header
 //      asks a future resolver to reuse it rather than re-derive it. This is
 //      that resolver.
-//   3. whole-word match against THIS item's own compiled choices only
+//   3. every one of the choice's own words appears SOMEWHERE in the scoped
+//      text -- order-independent, so "half pepperoni" (the customer's own
+//      word order) still matches a choice literally displayed "Pepperoni
+//      (Half pizza)". Word-level, NOT stemmed: no plural/singular folding,
+//      so a bare "sausages" still does not match "Sausage" (P0 2026-09-19,
+//      addendum 2 -- the prior literal-substring version required the
+//      choice's exact display string to appear verbatim and in order, which
+//      "with half pepperoni" never does; the deterministic derived-row
+//      pizza item this floor was losing the race to is a REAL, separately
+//      resolvable menu row now that compile-menu.ts's derived rows carry
+//      lexicon terms, so a topping mentioned in the same clause as its host
+//      item must be recovered here or it silently becomes a second,
+//      wrongly-priced pizza line instead of a modifier of the one the
+//      customer actually asked for).
 //   4. exactly one choice matches -- a tie resolves nothing, never a guess
 //   5. no negation anywhere in the scoped text
 //
 // A false positive here ADDS A PAID TOPPING, which the customer cannot undo
 // after paying. So every ambiguity resolves to doing nothing.
 const MODIFIER_NEGATION_RE = /\b(?:no|not|without|hold|skip|minus|except|omit|leave off|lose the)\b/i;
+
+function modifierFloorTokens(text: string): Set<string> {
+  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
+}
 
 export function recoverAssertedChoiceFromText(
   scopedText: string,
@@ -2661,11 +2678,14 @@ export function recoverAssertedChoiceFromText(
   const text = (scopedText ?? "").trim();
   if (!text || choices.length === 0) return null;
   if (MODIFIER_NEGATION_RE.test(text)) return null;
-  const hay = text.toLowerCase();
+  const textTokens = modifierFloorTokens(text);
   const hits = choices.filter(c => {
-    const d = (c.display ?? "").trim().toLowerCase();
+    const d = (c.display ?? "").trim();
     if (d.length < 3) return false;
-    return new RegExp(`\\b${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}\\b`, "i").test(hay);
+    const choiceTokens = modifierFloorTokens(d);
+    if (choiceTokens.size === 0) return false;
+    for (const t of choiceTokens) if (!textTokens.has(t)) return false;
+    return true;
   });
   if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
   return hits[0].id;
