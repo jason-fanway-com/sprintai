@@ -1105,17 +1105,53 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       },
     );
 
+    let proposal: Proposal;
     if (!proposeResult.ok) {
-      // proposeTurn() has already persisted the error_log row itself (stage:
-      // "propose_call", raw response attached) — see propose.ts. Nothing
-      // changed this turn: cart and dialogue_state are left exactly as they
-      // were, and only the fallback reply is written to messages.
-      await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
-      return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState };
+      // 2026-09-18 PO dispatch (a model timeout must not lose the order):
+      // conv 7aa64038/998da1a9 — a plain "cheeseburger" as the very first
+      // message timed out twice (25s x2, no backoff) and got "Sorry, I ran
+      // into a problem. Please call us directly" on a design partner's
+      // FIRST text. Scoped narrowly to the one failure kind and the one
+      // dialogue state this dispatch is actually about: reason === "timeout"
+      // (schema_violation/malformed_json/network_error/non_200 are a
+      // different failure class, unchanged here — those 4 schema_violation
+      // rows are a separate question, answered in the reply file, not this
+      // code) and priorState.open === null (the "what do you want" /
+      // "anything else?" moment a fresh conversation's first message and
+      // every ordinary new-item message both arrive in — any OTHER open
+      // kind is a specific pending question: an address, a name, a slot
+      // choice — decide()'s add-resolution has no business reinterpreting
+      // an answer to one of those as a new item).
+      //
+      // Within that scope: synthesize a single-add Proposal straight from
+      // the raw message and let it fall through the SAME decide()/ask()/
+      // render() pipeline a real PROPOSE result would use — no new
+      // fallback logic, no new customer-facing copy. decide() already
+      // resolves item_span against the shop's own lexicon with no model
+      // involved (resolve-item.ts), so a plain, single-item message like
+      // "cheeseburger" lands as a real cart line exactly as it would have
+      // if the model had answered; a span that ties resolves to decide()'s
+      // normal disambiguation question; a span that matches nothing (a
+      // multi-item sentence the whole-message span can't parse, e.g. "I'd
+      // like a cheeseburger and a coke") surfaces decide()'s own existing
+      // 00-AX "Sorry, I didn't catch ... mind saying it again?" decline —
+      // never a guess, and never "call us." The model gets another try
+      // next turn either way, same as PROPOSE succeeding would have left it.
+      if (proposeResult.reason === "timeout" && priorState.open === null) {
+        proposal = { intent: "order", adds: [{ item_span: input.message, quantity: 1, choices: [] }], removes: [], modifies: [] };
+      } else {
+        // proposeTurn() has already persisted the error_log row itself
+        // (stage: "propose_call", raw response attached) — see propose.ts.
+        // Nothing changed this turn: cart and dialogue_state are left
+        // exactly as they were, and only the fallback reply is written to
+        // messages.
+        await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
+        return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState };
+      }
+    } else {
+      // ── STEP 4: DECIDE ─────────────────────────────────────────────────
+      proposal = proposeResult.proposal;
     }
-
-    // ── STEP 4: DECIDE ─────────────────────────────────────────────────────
-    const proposal = proposeResult.proposal;
     // 00-BI: ANSWER already ran and missed -- that is the only way execution
     // reaches here. If the model could read the message as one of the meanings
     // code offered, act on it now, before the proposal's cart changes are

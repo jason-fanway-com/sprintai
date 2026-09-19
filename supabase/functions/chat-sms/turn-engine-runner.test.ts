@@ -552,6 +552,103 @@ function assertExists_rawBody(row: Record<string, unknown>) {
   assert(metadata.attempts[0].raw_body.includes("bad gateway"));
 }
 
+// ── 2026-09-18 PO dispatch (a model timeout must not lose the order,
+// conv 7aa64038/998da1a9): a TIMEOUT while no specific question is open
+// falls back to decide()'s own deterministic resolve-item resolution
+// instead of the "call us" apology — see turn-engine-runner.ts's own doc
+// on this branch for the full reasoning and its scope boundary. ─────────
+
+function timedOutProposeResult(): Promise<ProposeResult> {
+  return Promise.resolve({
+    ok: false,
+    reason: "timeout",
+    detail: "no response within 25000ms",
+    attempts: [
+      { attempt: 1, reason: "timeout", detail: "no response within 25000ms", rawBody: null, ms: 25000 },
+      { attempt: 2, reason: "timeout", detail: "no response within 25000ms", rawBody: null, ms: 25000 },
+    ],
+  });
+}
+
+Deno.test("runTurnEngineTurn (model timeout fallback): a plain, single-item message still lands as a real cart line — never 'call us'", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: { ...INITIAL_DIALOGUE_STATE } });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, `the item must land deterministically, no model needed: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
+  assert(result.reply !== FALLBACK_REPLY, "must never fall back to the 'call us' apology when the item resolves cleanly");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+});
+
+Deno.test("runTurnEngineTurn (model timeout fallback): a message decide() can't resolve to any item gets the normal 'didn't catch that' decline, never 'call us', cart untouched", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "asdlkfjqwer", cart: [], dialogueState: { ...INITIAL_DIALOGUE_STATE } });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "nothing resolves — no guess, no cart line");
+  assert(result.reply !== FALLBACK_REPLY, "a genuine miss still gets decide()'s own decline, not the harsher apology");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assert(result.reply.includes("didn't catch"), `expected decide()'s own 00-AX decline wording: ${result.reply}`);
+});
+
+Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null — a timeout while a specific question (e.g. the customer's name) is open still falls back to 'call us', unchanged", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const priorCart: TurnEngineCartLine[] = [
+    { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
+  ];
+  // A bare single word like "cheeseburger" is itself name-shaped
+  // (looksLikeCustomerName) and would resolve as a (garbage) name — a
+  // separate, pre-existing quirk, not what this test is about. A real
+  // sentence forces extractCustomerName() to miss, so answer()'s "name"
+  // case genuinely returns UNRESOLVED and this reaches PROPOSE — unlike a
+  // "slot"/"disambiguation" open, which 00-AT already short-circuits
+  // before PROPOSE regardless of this dispatch's change.
+  const priorState: DialogueState = { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null };
+  // pickupName must genuinely be UNKNOWN here — otherwise ask()'s own
+  // priority ladder sees the name question is already satisfied and skips
+  // straight past it to confirm, never reaching PROPOSE at all regardless
+  // of this dispatch's change, which would make this test pass for the
+  // wrong reason.
+  const input = baseInput({
+    message: "I want a cheeseburger and fries please",
+    cart: priorCart,
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.reply, FALLBACK_REPLY, "a pending specific question is out of scope for the deterministic fallback — decide() has no business reinterpreting an answer to it as a new item");
+  assertEquals(result.cart, priorCart);
+  assertEquals(result.dialogueState, priorState);
+});
+
+Deno.test("runTurnEngineTurn (model timeout fallback): scoped to reason === 'timeout' — a schema_violation with open === null still falls back to 'call us', unchanged", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: false,
+      reason: "schema_violation",
+      detail: "response did not contain a schema-valid submit_proposal tool call",
+      attempts: [{ attempt: 1, reason: "schema_violation", detail: "response did not contain a schema-valid submit_proposal tool call", rawBody: "{}", ms: 900 }],
+    }),
+  };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: { ...INITIAL_DIALOGUE_STATE } });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.reply, FALLBACK_REPLY, "schema_violation is a different failure class — not what this dispatch's fallback covers");
+  assertEquals(result.cart, []);
+});
+
 // ── persistTurn must write subtotal_cents/total_cents, reusing the SAME
 // itemizer/money code the reply footer and Stripe checkout already use
 // (pricing.ts's computeCartSubtotalCents + connect.ts's SERVICE_FEE_CENTS) —
