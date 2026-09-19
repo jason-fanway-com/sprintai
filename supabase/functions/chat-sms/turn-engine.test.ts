@@ -3420,4 +3420,160 @@ Deno.test("ask (freeze-queue item 5, acceptance 2): order_type resolved on the s
   assert(!/PICKUP or DELIVERY/i.test(reply), `a resolved order_type must never show the repeat-cap escalation wording: ${reply}`);
   assert(reply.includes("Anything else?"), `must never re-ask order_type or show any escalation wording once it has resolved: ${reply}`);
   assert(!reply.includes("Pickup or delivery today?"), `must never re-ask the resolved order_type question: ${reply}`);
+// 2026-09-19 PO dispatch (question-clause-not-an-add, live money bug, real
+// customer conversation, sim #5 run right after 07adf9a8 deployed): "...
+// Also, can I get 2 Pepperoni pizzas? And do you have anything gluten
+// free?" added a $20.00 "One Size Gluten-Free Pizza (Toppings: Pepperoni
+// (Whole))" line nobody ordered — the customer asked a QUESTION about
+// gluten-free availability, never ordered a gluten-free pizza — AND the two
+// pepperoni pizzas actually requested never landed. PROPOSE fused the
+// question clause's own words ("gluten", "free") into an add's item_span;
+// decide() trusted that span exactly the way itemSpanNamedInMessage's own
+// header describes trusting any other span, because that guard only checks
+// whether a word appears SOMEWHERE in the message, with no notion that the
+// word's ONLY appearance is inside a question the customer asked, not an
+// order they placed. Fix lives in itemSpanNamedInMessage/
+// questionClauseOnlyTokens above.
+//
+// Scope note for the report: decide() only ever sees whatever adds PROPOSE
+// (the model) already split the message into. The live incident's model
+// output apparently fused both clauses into ONE add (quantity 1, "gluten
+// free" words and all) rather than proposing two separate adds — that
+// specific model-output shape is a propose.ts/prompt concern, not
+// decide()'s, and is out of scope here (propose.ts and index.ts are both
+// untouched). What decide() CAN and must guarantee, and what these tests
+// prove: given the model's two real, distinct adds for this message (one
+// for what the customer ordered, one for the phantom question-derived
+// span), the phantom add is refused — never added, never priced, never
+// silently retried — while the real add for the pepperoni pizzas is
+// unaffected and proceeds to its own normal (pre-existing) missing-size
+// question.
+// ============================================================
+
+const QC_PEPPERONI_PIZZA_ID = "item-qc-pepperoni-pizza";
+const QC_GLUTEN_FREE_PIZZA_ID = "item-qc-gluten-free-pizza";
+const QC_PIZZA_SIZE_GROUP_ID = "grp-qc-pizza-size";
+const QC_PIZZA_SMALL_CHOICE_ID = "choice-qc-pizza-small";
+const QC_PIZZA_LARGE_CHOICE_ID = "choice-qc-pizza-large";
+
+const QUESTION_CLAUSE_MENU: TurnEngineMenuItem[] = [
+  {
+    id: QC_PEPPERONI_PIZZA_ID, name: "Pepperoni Pizza", category: "Pizza", price_cents: 1600, bot_state: "orderable",
+    option_groups: [{ id: QC_PIZZA_SIZE_GROUP_ID, name: "Size", default_choice_id: null }],
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Pepperoni Pizza", base_price_cents: 1600,
+      recap_template: "{qty} {display_name}{, with {modifiers}}", ticket_template: "{name}{\n  + {choice.display} x{qty}}",
+      steps: [
+        {
+          kind: "slot", ask_mode: "ask", group_id: QC_PIZZA_SIZE_GROUP_ID, slot_key: "size", prompt_template: "size.ask",
+          choices: [
+            { id: QC_PIZZA_SMALL_CHOICE_ID, display: "Small", price_delta_cents: 0 },
+            { id: QC_PIZZA_LARGE_CHOICE_ID, display: "Large", price_delta_cents: 500 },
+          ],
+        },
+      ],
+    },
+  },
+  // The real repro's own phantom item — a genuinely resolvable menu item
+  // (this fix is NOT "gluten-free items can't be ordered"; see acceptance 2
+  // below), priced at the exact $20.00 the live incident charged.
+  {
+    id: QC_GLUTEN_FREE_PIZZA_ID, name: "Gluten-Free Pizza", category: "Pizza", price_cents: 2000, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Gluten-Free Pizza", base_price_cents: 2000, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+const QUESTION_CLAUSE_LEXICON: LexiconTerm[] = [
+  { term: "pepperoni pizza", target_id: QC_PEPPERONI_PIZZA_ID },
+  { term: "gluten free pizza", target_id: QC_GLUTEN_FREE_PIZZA_ID },
+  { term: "gluten free", target_id: QC_GLUTEN_FREE_PIZZA_ID },
+];
+
+const QC_REPRO_MESSAGE = "... Also, can I get 2 Pepperoni pizzas? And do you have anything gluten free?";
+
+// Acceptance 1: the phantom gluten-free add is refused outright — no line,
+// no price, ever — while the real pepperoni-pizza add still registers and
+// (Vito's pizzas need a size) surfaces the missing-size question instead of
+// being dropped or silently replaced.
+Deno.test("decide (question-clause-not-an-add, acceptance 1): a question-clause-only span is refused — the real pepperoni pizzas still register and ask for size", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "Pepperoni pizzas", quantity: 2, choices: [] },
+      { item_span: "gluten free", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, QC_REPRO_MESSAGE);
+
+  assert(
+    result.cart.every(l => l.menu_item_id !== QC_GLUTEN_FREE_PIZZA_ID),
+    `the $20.00 Gluten-Free Pizza must NEVER be added: ${JSON.stringify(result.cart)}`,
+  );
+  assertEquals(result.cart.length, 1, `only the real pepperoni-pizza add may land: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
+  assertEquals(result.cart[0].quantity, 2, "the customer's real quantity of 2 must not be dropped or replaced");
+  assertEquals(result.cart[0].pending_options, ["Size"], "no size was stated — the pizza must hold for the size question, not silently guess one");
+  assertEquals(result.declines, [], "a guard-dropped hallucinated span is silent, not a decline — matches itemSpanNamedInMessage's own existing convention");
+  assertEquals(result.disambiguationCandidateIds, null, "the phantom span must never surface as an ambiguous question either");
+
+  // End-to-end: ask()/render() actually produce the real size question, in
+  // the SAME turn, alongside the real add — never an empty reply, never a
+  // silent full turn.
+  const events: AskTurnEvents = { ...NO_TURN_EVENTS, qualifyingAddMenuItemId: result.qualifyingAddMenuItemId };
+  const state = ask(result.cart, INITIAL_STATE, events, SHOP_CONTEXT, QUESTION_CLAUSE_MENU);
+  const reply = render([], result.cart, state, result.declines, QUESTION_CLAUSE_MENU);
+  assert(reply.includes("Pepperoni Pizza"), `reply must confirm the real add: ${reply}`);
+  assert(reply.includes("What size Pepperoni Pizza?"), `reply must ask the missing size question: ${reply}`);
+  assert(!/gluten/i.test(reply), `reply must never mention the phantom gluten-free item: ${reply}`);
+});
+
+// Acceptance 2: this fix must not break a customer who genuinely orders a
+// gluten-free item — no question clause exists anywhere in this message, so
+// questionClauseOnlyTokens has nothing to exclude and the span resolves
+// exactly as it always has.
+Deno.test("decide (question-clause-not-an-add, acceptance 2): a direct gluten-free order (no question clause) still adds normally", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "a gluten free pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const message = "I'll get a gluten free pizza";
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, message);
+  assertEquals(result.cart.length, 1, `a genuine gluten-free order must still land: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, QC_GLUTEN_FREE_PIZZA_ID);
+  assertEquals(result.cart[0].quantity, 1);
+});
+
+// Nuance the PO's rule explicitly calls out: a word that ALSO appears
+// outside the question clause is never excluded — the customer really did
+// use it to name something they're ordering, not just to ask about it. "Do
+// you have pepperoni?" and "a pepperoni pizza" share the word "pepperoni",
+// but it is NOT exclusive to the question clause, so the real order must be
+// completely unaffected.
+Deno.test("decide (question-clause-not-an-add): a word shared between a question clause and a real order elsewhere in the SAME message is never stripped", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "a pepperoni pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const message = "Do you have pepperoni? I'll take a pepperoni pizza.";
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, message);
+  assertEquals(result.cart.length, 1, `"pepperoni" also appears in a real order clause, so the add must resolve: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
+});
+
+// Acceptance 3 (no question clause at all): completely unaffected — same
+// shape as the pre-existing token-based-guard test above ("medium Hawaiian
+// Pizza" for "a Hawaiian Pizza in medium size", conv 55c05b4c), proving this
+// fix changes nothing when there is no question clause anywhere to detect.
+Deno.test("decide (question-clause-not-an-add, acceptance 3): a message with no question clause at all is completely unaffected", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "medium Hawaiian Pizza", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], HAWAIIAN_MENU, HAWAIIAN_LEXICON, undefined, "a Hawaiian Pizza in medium size");
+  assertEquals(result.cart.length, 1, "pre-existing token-guard behavior must be completely unaffected by this fix");
+  assertEquals(result.cart[0].menu_item_id, HAWAIIAN_PIZZA_ID);
 });
