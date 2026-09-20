@@ -1694,6 +1694,25 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
         // AskTurnEvents.unitModifiedAtConfirmThisTurn's own doc.
         turnEvents = { ...turnEvents, unitModifiedAtConfirmThisTurn: true };
         break;
+      case "line_replacement_ambiguous":
+        // 2026-09-20 PO dispatch (read-back corrections, mechanism 2,
+        // ambiguous target hole, real conv 37700efe): X ("Chicken Parmesan")
+        // named two or more real menu items — nothing touched yet. Fed into
+        // the SAME pendingAmbiguous/replacementSourceLineKey channel a fresh
+        // ambiguous add uses (turn-engine.ts's ask(), priority 2, and
+        // DecideResult.replacementSourceLineKey's own header) so the
+        // resulting disambiguation is indistinguishable from any other, EXCEPT
+        // that answering it also removes Y's line (turn-engine.ts's
+        // "disambiguation" case, removeReplacementSourceLine) — never the
+        // plain add-only resolution the original bug produced.
+        turnEvents = {
+          ...turnEvents,
+          disambiguationCandidateIds: outcome.candidates,
+          disambiguationQuantity: outcome.quantity,
+          disambiguationSpanText: outcome.spanText,
+          replacementSourceLineKey: outcome.replacementSourceLineKey,
+        };
+        break;
       case "replacement_unavailable":
       case "unit_modification_unavailable":
         // 2026-09-18 PO dispatch (read-back corrections, mechanism 2) /

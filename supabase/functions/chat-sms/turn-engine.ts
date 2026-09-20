@@ -610,6 +610,35 @@ export type AnswerOutcome =
   // customer actually named). ask() reopens confirm with a fresh read-back,
   // same as quantity_corrected, since the cart changed.
   | { kind: "line_replaced" }
+  // 2026-09-20 PO dispatch (read-back corrections, mechanism 2, ambiguous
+  // target hole — real live money bug, conv 37700efe, $45.90 double-charge):
+  // "<X>, not <Y>" where X itself names two or more real menu items (here,
+  // "Chicken Parmesan" — an entree, a hot sandwich, and three stromboli
+  // sizes) used to fall all the way through this mechanism (findMenuItemByNamePhrase
+  // returning null for "ambiguous" identically to "doesn't exist") into
+  // PROPOSE's own ambiguous-add handling, which opens an ordinary
+  // disambiguation with no memory that Y was ever supposed to be replaced —
+  // answering it just ADDED X, leaving Y's line sitting in the cart
+  // untouched, both charged. This outcome instead opens the SAME
+  // "disambiguation" question a fresh ambiguous add would (same candidates,
+  // same numbered-list rendering), but carries `replacementSourceLineKey` —
+  // decide()'s own ambiguous-replacement-target mechanism (see
+  // DecideResult.replacementSourceLineKey's own header) already has a fully
+  // tested resolver for exactly this shape; this reuses it rather than
+  // inventing a second one. cartChanged is always false here — nothing is
+  // touched until the customer picks one.
+  | {
+    kind: "line_replacement_ambiguous";
+    candidates: string[];
+    quantity: number;
+    spanText: string;
+    // Optional only because TurnEngineCartLine.line_key itself is (every
+    // real line reaching this point via findCartLineByNamePhrase has one in
+    // practice) — mirrors DecideResult.replacementSourceLineKey's own
+    // optionality exactly, same graceful no-op contract if it's ever absent
+    // (removeReplacementSourceLine's own `if (!lineKey) return false`).
+    replacementSourceLineKey?: string;
+  }
   // Money bug fix (2026-09-19, live conv 0dcb02a7): a bare removal ("no
   // stromboli") while confirm is already open — no replacement target named,
   // just "take this off" — resolved directly against the cart's real lines
@@ -1298,7 +1327,14 @@ interface ReplacementCorrectionCandidate {
   wrongPhrase: string;  // Y — what's on the order that's wrong
 }
 
-const REPLACEMENT_NOT_SUFFIX_RE = /,?\s+not\s+(?:a\s+|an\s+|the\s+)?([a-zA-Z][a-zA-Z '"-]*?)[.,!?]?(?:\s|$)/i;
+// [*_]* around "not" (2026-09-20 PO dispatch, real conv 37700efe): a
+// customer's own SMS emphasis markup — "2 Chicken Parmesan *not* Stromboli"
+// — put "not" in italics/bold. The bare \s+not\s+ this regex used before
+// requires whitespace touching "not" on both sides; "*not*" never matches,
+// so the whole rule silently never fired, and the message fell through to
+// PROPOSE's own ambiguous-add handling with no replacement context at all —
+// see this rule's own header below for the rest of that chain.
+const REPLACEMENT_NOT_SUFFIX_RE = /,?\s+[*_]*not[*_]*\s+(?:a\s+|an\s+|the\s+)?([a-zA-Z][a-zA-Z '"-]*?)[.,!?]?(?:\s|$)/i;
 const REPLACEMENT_LIST_AND_RE = /\band\s+(?:a\s+|an\s+|the\s+)?/gi;
 const REPLACEMENT_LEADING_WANT_RE = /^.*?\bi\s+(?:still\s+)?(?:wanted|want|need)\s+(?:a\s+|an\s+|the\s+)?/i;
 
@@ -1337,19 +1373,33 @@ function parseReplacementCorrection(message: string): ReplacementCorrectionCandi
 // outside this file pass "" for excludeMenuItemId (there is no line to
 // exclude — a favorite item is never itself already in the cart before this
 // runs).
-export function findMenuItemByNamePhrase(
+// The full hit set behind findMenuItemByNamePhrase below — exported
+// separately (2026-09-20 PO dispatch, real conv 37700efe) so a caller that
+// needs to tell "genuinely doesn't exist" (0 hits) apart from "ambiguous"
+// (2+ hits) can, rather than the two being collapsed into the same null.
+// findMenuItemByNamePhrase's own single-match convention is unchanged for
+// every existing caller.
+export function findMenuItemMatchesByNamePhrase(
   menu: TurnEngineMenuItem[],
   phrase: string,
   excludeMenuItemId: string,
-): TurnEngineMenuItem | null {
+): TurnEngineMenuItem[] {
   const phraseStems = significantStems(phrase);
-  if (phraseStems.size === 0) return null;
-  const hits = menu.filter(m => {
+  if (phraseStems.size === 0) return [];
+  return menu.filter(m => {
     if (m.id === excludeMenuItemId) return false;
     const displayName = m.ask_plan?.display_name ?? m.name;
     const itemStems = significantStems(displayName);
     return [...phraseStems].every(s => itemStems.has(s));
   });
+}
+
+export function findMenuItemByNamePhrase(
+  menu: TurnEngineMenuItem[],
+  phrase: string,
+  excludeMenuItemId: string,
+): TurnEngineMenuItem | null {
+  const hits = findMenuItemMatchesByNamePhrase(menu, phrase, excludeMenuItemId);
   return hits.length === 1 ? hits[0] : null;
 }
 
@@ -3714,13 +3764,37 @@ export function answer(
         if (wrongLine) {
           const wrongMenuItem = menuById.get(wrongLine.menu_item_id);
           if (wrongMenuItem) {
-            const targetMenuItem = findMenuItemByNamePhrase(menu, replacement.targetPhrase, wrongLine.menu_item_id);
+            const targetMatches = findMenuItemMatchesByNamePhrase(menu, replacement.targetPhrase, wrongLine.menu_item_id);
+            const targetMenuItem = targetMatches.length === 1 ? targetMatches[0] : null;
             if (targetMenuItem?.ask_plan) {
+              const askPlan = targetMenuItem.ask_plan;
               const quantity = wrongLine.quantity;
               const idx = cart.indexOf(wrongLine);
               removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
-              applyCompiledAddItem(cart, toCompiledMenuItem(targetMenuItem, targetMenuItem.ask_plan), targetMenuItem.id, quantity, "", undefined, undefined, []);
+              applyCompiledAddItem(cart, toCompiledMenuItem(targetMenuItem, askPlan), targetMenuItem.id, quantity, "", undefined, undefined, []);
               return { resolved: true, outcome: { kind: "line_replaced" }, cartChanged: true };
+            }
+            // 2026-09-20 PO dispatch (ambiguous target hole, real conv
+            // 37700efe): X names two or more real menu items ("Chicken
+            // Parmesan" — entree, sandwich, three stromboli sizes) — never
+            // decline by name (that would read as "X doesn't exist", which
+            // is false) and never fall through to PROPOSE's own ambiguous-add
+            // handling (that's the original bug: it forgets Y was ever meant
+            // to be replaced). Opens the SAME disambiguation a fresh
+            // ambiguous add would, with replacementSourceLineKey set to Y's
+            // line — see AnswerOutcome's own "line_replacement_ambiguous" doc.
+            if (targetMatches.length > 1) {
+              return {
+                resolved: true,
+                outcome: {
+                  kind: "line_replacement_ambiguous",
+                  candidates: targetMatches.map(m => m.id),
+                  quantity: wrongLine.quantity,
+                  spanText: replacement.targetPhrase,
+                  replacementSourceLineKey: wrongLine.line_key,
+                },
+                cartChanged: false,
+              };
             }
             // X isn't its own menu item — never remove the line just
             // because the customer asked for something we don't have; say
