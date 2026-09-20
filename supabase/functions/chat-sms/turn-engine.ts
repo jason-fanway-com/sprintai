@@ -1101,6 +1101,26 @@ const QUANTITY_CORRECTION_ONLY_WANT_RE = new RegExp(
 // 2026-09-18 version of this rule never matched at all.
 const QUANTITY_CORRECTION_MAKE_IT_RE = /\bmake (?:it|that)\s+([^.!?]+)/i;
 
+// "asked for/wanted/want/ordered <item>, so <N>[, please]" — the mirror of
+// every pattern above: those all state the quantity BEFORE the item name
+// ("2 Thin Sicilian Pizzas, not one"); this is the one real shape where the
+// quantity trails the item instead. R2 reopen (2026-09-20 PO dispatch, live
+// conv 836bf473 #29): "can I get a Lobster Bisque - Cup please?" resolved
+// DIRECTLY to the Cup (M1's size-binding widening, fe917be2 — no
+// disambiguation ever opened), so by the time "I asked for the Cup, so 2
+// please. What's going on?" arrived, order_type was the open question, not
+// disambiguation — pending-disambiguation.ts's own "so N" trailing-quantity
+// tier (TRAILING_SO_QUANTITY_RE / extractDisambiguationAnswerQuantity) is
+// wired into ONLY the "disambiguation" case of answer()'s switch below and
+// never runs once the pick has already resolved. This is the same "so N"
+// signal, reused here as its own candidate shape feeding the identical
+// findCartLineByNamePhrase name-match mechanism 1 (the "confirm" case)
+// already trusts — see applyStandaloneQuantityCorrection below for where
+// this now also gets checked.
+const QUANTITY_CORRECTION_SO_TRAILING_RE = new RegExp(
+  `\\b(?:asked for|wanted|want|ordered)\\s+(?:the\\s+|a\\s+|an\\s+)?([a-zA-Z][a-zA-Z '"-]*?),?\\s+so\\s+${QUANTITY_WORD_RE}\\b`, "i",
+);
+
 interface QuantityCorrectionCandidate {
   quantity: number;
   itemPhrase: string;
@@ -1134,7 +1154,39 @@ function parseQuantityCorrectionPhrases(message: string): QuantityCorrectionCand
     const candidates = clauses.map(parseQtyItemClause).filter((c): c is QuantityCorrectionCandidate => c !== null);
     if (candidates.length > 0) return candidates;
   }
+  // "so N" trailing shape — reversed capture order (item first, quantity
+  // second) versus every pattern in the loop above.
+  const soTrailingMatch = message.match(QUANTITY_CORRECTION_SO_TRAILING_RE);
+  if (soTrailingMatch) {
+    const itemPhrase = soTrailingMatch[1]?.trim();
+    const quantity = parseQtyToken(soTrailingMatch[2]);
+    if (quantity && itemPhrase) return [{ quantity, itemPhrase }];
+  }
   return [];
+}
+
+// R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): a quantity
+// correction against a cart line that's ALREADY resolved can arrive while
+// some other, unrelated question is open (order_type here — Vito's asks
+// pickup/delivery immediately once an item resolves with no size left to
+// ask about) or with no question open at all ("ordering"). Mechanism 1
+// below (the "confirm" case) already applies parseQuantityCorrectionPhrases
+// + findCartLineByNamePhrase, but only at confirm/read-back time; this pulls
+// that same check into its own function so the "order_type" and "ordering"
+// cases — the two open kinds with no item-specific resolution machinery of
+// their own — can run it too, before ever falling through to PROPOSE.
+function applyStandaloneQuantityCorrection(cart: TurnEngineCartLine[], trimmed: string): AnswerResult | null {
+  const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
+  if (qtyCorrections.length === 0) return null;
+  let appliedAny = false;
+  for (const candidate of qtyCorrections) {
+    const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
+    if (line) {
+      line.quantity = candidate.quantity;
+      appliedAny = true;
+    }
+  }
+  return appliedAny ? { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true } : null;
 }
 
 // Matches itemPhrase against exactly one REAL cart line by stem subset —
@@ -3129,6 +3181,17 @@ export function answer(
         const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
         return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: removedSomething };
       }
+      // R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): see
+      // applyStandaloneQuantityCorrection's own header — a quantity
+      // correction against an already-resolved line ("I asked for the Cup,
+      // so 2 please") routinely arrives while order_type is the open
+      // question, since Vito's asks it immediately once an item resolves
+      // with nothing left to disambiguate. Checked ahead of the closure
+      // fallback for the same reason mechanism 1 is checked first at
+      // confirm: a real correction must never be silently swallowed as
+      // unrelated chatter and lost to a fresh PROPOSE call.
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -3245,18 +3308,8 @@ export function answer(
       // any that don't (an item mentioned but not actually in the cart) are
       // left alone rather than guessed at. `resolved:true` only once at
       // least one candidate actually landed.
-      const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
-      if (qtyCorrections.length > 0) {
-        let appliedAny = false;
-        for (const candidate of qtyCorrections) {
-          const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
-          if (line) {
-            line.quantity = candidate.quantity;
-            appliedAny = true;
-          }
-        }
-        if (appliedAny) return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
-      }
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): same
       // priority reasoning as mechanism 1 immediately above — "not a
       // stromboli" contains "not"/"actually"-adjacent language that
@@ -3410,6 +3463,11 @@ export function answer(
     // free text falls through UNRESOLVED to PROPOSE exactly as it always
     // has, regardless of which `open.kind` is on record).
     case "ordering": {
+      // R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): same gap
+      // as "order_type" above — a standalone quantity correction can arrive
+      // with no open question at all, not just while order_type is open.
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
   }
@@ -5814,13 +5872,55 @@ export function decide(
         scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
         otherSpansThisMessage,
       );
-      for (const step of menuItem.ask_plan.steps) {
-        if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
-        // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
-        // placed toppings in one clause ("half pepperoni half sausage") both
-        // land, instead of the singular floor's own tie-guard dropping both.
-        for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
-          effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+      // PO dispatch 2026-09-20 (real conv 6de8bd13, real Vito's data): "an
+      // Italian hoagie with shrimp and blackened salmon on wheat bread" --
+      // PROPOSE kept the add-ons in the SAME item_span as the host item
+      // (unlike the B2 fix's own repro, where PROPOSE split them into a
+      // separate `add`), so this add's own scoped text carries TWO plain
+      // (non-placement) Add-ons choices named together ("shrimp", "blackened
+      // salmon") with no trailing "added" word -- the per-step loop below,
+      // via recoverAssertedChoicesFromText's own plainHits.length===1
+      // tie-guard, drops both, silently, exactly the "sausage and onions"
+      // shape that guard exists to protect (confirmed RED against pre-fix
+      // code). But this span carries stronger evidence than a bare tie: it
+      // ALSO fully decomposes -- zero leftover, using the exact same
+      // connective-stripping/disjoint-tie-bail discipline the B2 fix already
+      // trusts for a sibling add's span -- against every one of this SAME
+      // item's own real ask_plan choices, including its bread slot ("wheat"
+      // accounts for the trailing "on wheat bread" the per-step loop below
+      // can't see, since slots are ASKED, never inferred and that loop only
+      // ever looks at modifier steps). A full decomposition with nothing
+      // left over is proof the customer named this item's own real choices,
+      // not a modifier plus an unrelated second item, so it's applied
+      // directly, bypassing the per-step loop's plural tie-guard for this
+      // add only -- the guard's own "sausage and onions" contract for a
+      // GENUINE tie (a leftover word that names no real choice) is
+      // untouched, since decomposeSpanIntoChoicesOfMenuItem returns null the
+      // moment anything fails to fully decompose and the per-step loop below
+      // still runs exactly as before.
+      // PROPOSE's OWN item_span for this add (not the raw customer message
+      // scopedModifierText falls back to) is the surgically-extracted text
+      // to decompose -- the same discipline the B2 fix's own span-fold
+      // already relies on for a SIBLING add's span. The raw message ("I
+      // want an Italian hoagie with...") carries filler words ("I", "want")
+      // that are never real choices and never will fully decompose; the
+      // model's own item_span for THIS add already strips that filler.
+      const itemSpanForDecompose = stripOtherItemSpansFromModifierText(
+        scopedModifierText([], null, menuItem.name, add.item_span ?? ""),
+        otherSpansThisMessage,
+      );
+      const decomposedAddOns = decomposeSpanIntoChoicesOfMenuItem(itemSpanForDecompose, menuItem);
+      if (decomposedAddOns && decomposedAddOns.length > 0) {
+        effectiveChoices = [...effectiveChoices, ...decomposedAddOns];
+      } else {
+        for (const step of menuItem.ask_plan.steps) {
+          if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
+          // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
+          // placed toppings in one clause ("half pepperoni half sausage") both
+          // land, instead of the singular floor's own tie-guard dropping both.
+          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
+            effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+          }
         }
       }
     }
