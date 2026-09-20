@@ -343,6 +343,23 @@ function pluralizeWord(singular: string): string {
   return `${singular}s`;
 }
 
+// Singularizes the LAST word of a (possibly multi-word) phrase, leaving
+// everything before it untouched — "mushrooms" -> "mushroom", "black
+// olives" -> "black olive". Returns the phrase unchanged when its last word
+// is already singular (e.g. "cheese"), so callers can compare the result
+// against the input to detect a real plural-to-singular change (N5,
+// 2026-09-19 PO addendum to the term-in dispatch, real conversation
+// af5bd5d5: "small mushroom pizza" (singular) came back ambiguous across
+// every pizza on the menu because the D1 derived-pizza-row below only ever
+// emits terms built from the topping's OWN stated plural form — "small
+// mushrooms pizza" resolved fine, the singular never had a term at all).
+function singularizePhrase(phrase: string): string {
+  const words = phrase.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return phrase;
+  words[words.length - 1] = singularizeWord(words[words.length - 1]);
+  return words.join(" ");
+}
+
 function categoryNoun(category: string): string {
   const cleaned = category.replace(/\([^)]*\)/g, " ").trim();
   const words = cleaned.split(/\s+/).filter(Boolean);
@@ -2219,6 +2236,21 @@ export function buildDerivedRows(
       // ever generated for a non-orderable row, so it can't surface as a
       // resolver candidate.
       const choiceLower = choiceDisplay.toLowerCase();
+      // N5 (2026-09-19 PO addendum, real conversation af5bd5d5: 2 small
+      // mushroom pizzas lost because the row is named from the topping's
+      // own stated PLURAL form ("Mushrooms"), so every term above is built
+      // off "mushrooms" — "small mushroom pizza" (singular) had no term at
+      // all and fell through to an ambiguous match across every pizza on
+      // the menu; "small mushrooms pizza" (plural) resolved fine). Same
+      // idea as Rule 2b's size-qualified bare name above, just on the
+      // plural/singular axis instead of the size axis: when the topping's
+      // own word is plural, also state its singular form as a term, so the
+      // singular and plural phrasings resolve identically. Skipped when
+      // singularizePhrase is a no-op (the topping word is already singular,
+      // e.g. "Cheese") — nothing to add, and dedupeLexicon would just
+      // discard the exact duplicate anyway.
+      const choiceSingular = singularizePhrase(choiceLower);
+      const isPluralChoiceWord = choiceSingular !== choiceLower;
       const lexiconTerms = isInferred ? [] : dedupeLexicon([
         {
           term: normaliseTerm(`${choiceLower} pizza`),
@@ -2249,6 +2281,25 @@ export function buildDerivedRows(
         ...(sizeWord
           ? [{
               term: normaliseTerm(`${sizeWord.toLowerCase()} ${choiceLower} pizza`),
+              target_type: "item" as LexiconTargetType,
+              target_id: entityKey,
+              provenance,
+            }]
+          : []),
+        // N5: singular-form mirror of the two terms above — "mushroom
+        // pizza" and, sized, "small mushroom pizza" — see comment at
+        // choiceSingular's declaration.
+        ...(isPluralChoiceWord
+          ? [{
+              term: normaliseTerm(`${choiceSingular} pizza`),
+              target_type: "item" as LexiconTargetType,
+              target_id: entityKey,
+              provenance,
+            }]
+          : []),
+        ...(isPluralChoiceWord && sizeWord
+          ? [{
+              term: normaliseTerm(`${sizeWord.toLowerCase()} ${choiceSingular} pizza`),
               target_type: "item" as LexiconTargetType,
               target_id: entityKey,
               provenance,
