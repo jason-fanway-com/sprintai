@@ -3053,3 +3053,163 @@ Vito's-specific patch, but that claim is untested on the other two shops. The ~1
 backlog and the `import-menu-csv` deployed-code mismatch flagged in yesterday's entry were
 not re-examined today; nothing found today changes either finding.
 
+
+## 2026-09-19
+
+A full day and night of work on the ordering bot (`chat-sms`) and the menu compiler
+(`compile-menu`) — roughly 60 commits, almost all fixes to real conversations pulled from
+production logs on Vito's Pizza (the demo shop, real Telnyx number, real Stripe test mode).
+Both functions are confirmed live: downloading the running code directly shows `chat-sms`
+carries every commit through tonight's last one (`3fee38f0`, 22:26) and `compile-menu`
+carries every commit through `fc6a8ae6` (18:18) — nothing touched the compiler again after
+that point tonight, so it's current too. Everything below is either live now or was live
+for some part of tonight before a later commit changed it again; I've flagged the exceptions.
+
+### Overcharges that reached a real cart total, fixed today
+
+These are the kind PO-BRIEF calls "not forgivable" — money wrong. All four below were
+reproduced against Vito's real menu data, not a toy test fixture, and all four are now fixed
+and live:
+
+- **A $83.83 bill for a $50.39 order** (conversation `0dcb02a7`). Every individual item price
+  was correct — the bug was three extra lines nobody asked for, stacked from three separate
+  gaps: declining a suggested item while naming two other real dishes was misread as accepting
+  the suggestion (added a $22.95 stromboli); an item repeated back by the customer after
+  answering a question could get added a second time; and "no stromboli, I'll do pickup" didn't
+  actually remove the stromboli. Fixed together (`cb37bda9`, cleanup `8d0cf147`).
+- **A $91.30 cart that still contained an item the customer explicitly asked to remove**
+  (conversation `d3539d12`). While the bot was asking "which size?", the customer wrote "Please
+  remove that small Pepperoni pizza. I want to stick with 2 Large Pepperoni pizzas..." — the
+  word "small" matched the size question and the bot quietly treated the whole message as a
+  size pick, never processing the removal. Fixed by checking for removal language before any
+  attempt to answer the open question (`b4c1d848`).
+- **$23.94 charged where $11.98 was owed** (conversation `9cf68285`). This is a second, deeper
+  layer of a bug the team believed it had already closed earlier the same day (`cb37bda9`
+  above) — it passed every offline test but was still reproducible against the live bot. Real
+  gaps the offline tests didn't have: Vito's data has no "med" size term (only "medium"), so
+  "2 med pepperoni pizzas" tied three ways instead of resolving; and a since-restored spell-
+  correction helper turned "stick" (as in "just stick with the greek salad") into "sticks"
+  (Mozzarella Sticks), adding a $22.95 item nobody asked for while dropping the two pepperoni
+  pizzas that were asked for. Fixed by teaching the size-matching code abbreviations like "med"
+  and "lg", and by removing the spell-correction pass that was manufacturing false matches
+  (`3b133f24`).
+- **A $107-ish overcharge, roughly $85 owed** (conversation `087abb8d`). A customer declining a
+  shrimp suggestion ("I didn't ask for any of those!") wasn't recognized as a decline at all
+  because the code only matched "don't," not "didn't" — the message fell through to a fallback
+  that (via the same spell-correction bug as above) added Mozzarella Sticks. Fixed alongside a
+  separate case where "take it off" was fed to an unrelated question instead of being read as a
+  removal (`2412c833`).
+
+### Phantom items and lost orders (no wrong money, but the wrong thing happened)
+
+- **A gluten-free pizza nobody ordered.** "Can I get 2 Pepperoni pizzas? And do you have
+  anything gluten free?" added a $20.00 Gluten-Free Pepperoni Pizza and dropped the two real
+  pepperoni pizzas — the bot was reading words inside a question as if they were part of the
+  order. Fixed by recognizing question phrasing and refusing to treat question-only words as an
+  order (`f20b9a5a`, with a same-night follow-up recovering the real order when a question and
+  a real order were fused in the same sentence, `bf81d96d`).
+- **A phantom $19.99 tip.** "I don't want a driver tip. Is it really $19.99 for that?" (a
+  question about the delivery fee) got charged as a $19.99 tip on an $8.49 order, because the
+  old code scanned the whole message for any dollar figure before checking whether the customer
+  had just declined a tip. Fixed to check the decline first, and to only read a number as a tip
+  when it's clearly phrased as one (`073210cc`).
+- **A stuck order that never got named.** One live conversation asked "Pickup or delivery?" 15
+  times in a row with no variation and no way out. The third repeat of the same question now
+  changes its wording and offers a way out instead of repeating verbatim forever (`4c2e46d2`).
+- **A slow AI reply cost a ready-to-pay customer.** Cart was correct, customer said "Looks good
+  to me!", and two model timeouts in a row got the customer told to call the store instead of
+  checking out. Fixed by recognizing plain "looks/sounds good" without needing the AI call at
+  all, and by re-asking on a timeout instead of giving up (`c436ad20`).
+- **"Chicken quesadilla" could never resolve.** The word "chicken" also matched ten pizza items
+  after some internal text-cleanup, so the bot saw an 11-way tie it could never narrow and kept
+  re-asking the same question forever — real customer #20 lost the order in 3 of the last 4
+  test runs. Fixed in the menu compiler by giving the quesadilla a term that resolves uniquely,
+  and in the bot by switching to a plain numbered list if an answer genuinely narrows nothing
+  (`efb05153`).
+- **The "welcome back" greeting was silently off for every shop.** The code that greets a
+  returning customer by name and offers "the same as last time" was built and tested weeks ago,
+  but was only ever wired into an older code path that Vito's current bot doesn't run through —
+  so it had no effect on any shop actually using the current engine. Reconnected tonight
+  (`0f9aa913`). This is the moat feature ("hey Christine, the usual?") coming back online.
+- **A cancelled wings order kept coming back.** Answering "It's under my name" to the
+  name-on-the-order question caused the AI to hallucinate a wings order out of nowhere, and four
+  separate attempts to cancel it ("No wings!", "cancel the wings") were each misread as answers
+  to an unrelated flavor question. Fixed by ignoring the AI's cart guesses while the bot is
+  specifically waiting on a name or address, and by recognizing a named cancellation while a
+  flavor/size question is open (`519e6e4b`, narrowed the same night by `7f40370f` after the
+  first version of the fix broke order-type and confirmation replies).
+
+### The narrowing-questions feature (biggest single change tonight)
+
+Before tonight, if a customer's wording matched too many menu items (one real case matched 62
+of Vito's pizzas), the bot tried to text back every option in one reply — one such reply hit
+3,378 characters, past what the carrier will deliver, so the customer got no reply at all and
+the order silently died. The bot now asks "What kind?" then "What size?" instead of listing
+everything, and only shows the full list if the customer explicitly asks what the options are
+(`51773f5e`, `60d84445`). A related bug in the same commits: a quantity named alongside an
+ambiguous item ("4 large pizzas") was being thrown away and defaulted to 1 once the item
+tied — it's now carried through correctly.
+
+### Toppings and add-ons
+
+A cluster of real live bugs, all now fixed: a topping named alongside a fresh item ("Chicken
+quesadilla with Black Diamond Steak and Chicken added") was silently dropping both named
+toppings (`331a6d15`); a topping whose word already appears in the dish's own name (bacon on a
+"Chicken Bacon Ranch" pizza) was being charged a second time as an extra modifier
+(`19dbb542`); two toppings named in one sentence ("half pepperoni half sausage") only one of
+them was landing (`a7266e41`); and a slot-answer reply that also contained an unrelated
+question ("Ranch for both, please? Also, is there a wait time for pickup?") was opening a
+spurious new-topping question, while a genuine topping swap on a different line ("keep the
+gyro meat for the small Margherita instead") was being misread as removing the whole pizza —
+both fixed by tightening what text the bot reads as the actual answer (`3c3d1746`, tonight's
+last commit).
+
+### Went in circles — worth knowing, not worth re-explaining each attempt
+
+The "pepperoni sometimes becomes a $9.99 stromboli line, sometimes vanishes entirely" bug was
+attempted, shipped, and reverted three separate times today (`a8be399a` → reverted, `129b5365`
+→ reverted, `350aec37` → reverted) before the crew wrote a working fix from different code
+later in the day (`b65c5bea`, `a7266e41`, `19dbb542`, described above). Net effect of those
+three earlier cycles: no lasting code change — they cancel out. Separately, an attempt to widen
+the bot's typo tolerance for misspelled item names (`a39d673b`) was fully reverted the same day
+(`cca34863`); a later commit with a similar-sounding message (`cff7a12d`, "restore
+fuzzyCorrectAgainstLexicon") is unrelated — it restores a different helper function that an
+earlier merge had deleted on the mistaken assumption nothing called it. The typo-tolerance
+widening itself did not end up live.
+
+### Menu compiler data fixes
+
+A cluster of items that had no reliable way to be recognized by name at all: Vito's derived
+pizza rows (the "Bacon Pizza" style items auto-generated from a topping) were completely
+unreachable in production since 2026-09-09 because their lookup terms pointed at a placeholder
+ID instead of the real database row (`e5df4e08`); a dish with a trailing count and a
+prepositional phrase in its name ("Sauteed Pierogies With Onions (5)") was losing its plain
+name and charging for the wrong thing (`e9f1d29b`); and a $0, non-orderable menu row ("Ranch
+[Pizza Finish]") could still tie against customer wording and get offered as a real choice,
+causing an infinite "what kind?" loop — both the compiler and the bot's lookup now exclude
+non-orderable rows (`67f4ee67`, `07adf9a8`).
+
+### Infrastructure
+
+Outbound text replies over roughly 1,500 characters were being silently dropped by the carrier
+with no record anywhere; replies are now split into ordered parts, and any failed carrier
+response is now logged with its full error instead of vanishing (`502724e3`).
+
+### Where the numbers actually stand
+
+The team's own 50-simulated-customer run — same instrument that showed 39 of 49 orders reaching
+payment two nights ago, 46 of 50 last night — was still landing in the 44-to-47-of-50 range as
+of the last checkpoint recorded tonight (21:00), after most of the fixes above had already
+shipped. In the team's own words: a fix that saves one customer's order tends to let a
+different customer's order fail instead — the overall pass rate has not moved much despite the
+volume of work. The last four commits of the night (an "option 1" pick recognized anywhere in a
+reply, a duplicate-restatement guard, and the two topping/slot-answer fixes above) landed after
+that 21:00 checkpoint, and I found no simulation run in the repo or team's own scratch files
+that covers them yet — whether they help or hurt the overall number is unverified.
+
+### Not checked today
+
+Every fix above was tested and described as a general rule, but verified primarily against
+Vito's real data — I found no evidence any of today's fixes were re-run against Zio's or Not
+Just Bagels. The `import-menu-csv` deployed-code mismatch and the migration backlog flagged in
+earlier entries were not re-examined; nothing found today changes either finding.

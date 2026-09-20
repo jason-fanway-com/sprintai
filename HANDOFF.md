@@ -1568,6 +1568,49 @@ simulation Vito's was — today's fixes are written as general rules, not Vito's
 but that's untested on the other two shops. The ~15-migration backlog and the
 `import-menu-csv` deployed-code mismatch (both flagged 2026-09-17) were not re-examined.
 
+## Update — 2026-09-19: a full day of live-money-bug fixes shipped and confirmed live; the aggregate pass rate did not move
+
+**LIVE right now**, confirmed by downloading the running code directly:
+- `chat-sms` — `DEPLOY_SHA: 3fee38f04f161a95aa376f4260130ae3a4e14469` (today's last commit,
+  22:26). Carries every one of today's ~60 commits.
+- `compile-menu` — `DEPLOY_SHA: fc6a8ae6d65691f9df483f091ece74a478a549bf` (18:18). Nothing
+  touched the compiler again today after that commit, so this is current too.
+
+**Four real overcharges, reproduced against live Vito's data and fixed today** (full detail
+in `docs/DAILY.md` under `## 2026-09-19`): a $83.83 charge for a $50.39 order (three stacked
+gaps in one conversation, `cb37bda9`); a $91.30 cart still containing an item the customer
+had explicitly asked to remove (`b4c1d848`); a second, deeper layer of an overcharge the
+team believed was already fixed earlier the same day — $23.94 charged where $11.98 was owed
+(`3b133f24`); and a roughly $107-vs-$85 overcharge from a decline that wasn't recognized as
+one (`2412c833`). None of these are money-amount-per-item bugs — every individual price was
+correct in all four; the defect was always extra or un-removed lines.
+
+**Also fixed and live**: a phantom $20 gluten-free pizza added from a customer's own
+question (`f20b9a5a`); a phantom $19.99 tip read out of an unrelated delivery-fee question
+(`073210cc`); a "welcome back" greeting that was fully built and tested but silently
+unreachable from the code path every shop on the newer engine actually runs, now reconnected
+(`0f9aa913`); a customer stuck answering "Pickup or delivery?" 15 times with no way out, now
+capped and rephrased on the third repeat (`4c2e46d2`); and a rewrite of how the bot handles
+an item matching too many menu candidates — it now asks "what kind, what size" instead of
+trying to text back a full list, which had gotten long enough (3,378 characters, real case)
+for the carrier to silently drop the reply (`51773f5e`, `60d84445`).
+
+**Went in circles, net no lasting change**: a pepperoni-topping mis-billing fix was written,
+shipped, and reverted three separate times today before a working version landed from
+different code later in the day. See `docs/DAILY.md` for which commits cancel out — don't
+re-read the reverted ones as still-live behavior.
+
+**The number that matters most did not move.** The team's own 50-simulated-customer run —
+39/49 paid two nights ago, 46/50 last night — was still landing 44–47 of 50 as of the last
+checkpoint tonight (21:00), after most of today's fixes had already shipped. By the team's
+own account, a fix that saves one customer's order tends to let a different customer's
+order fail instead. The last four commits of the night landed after that checkpoint and
+have no simulation run against them yet in anything I could find.
+
+**Not checked today**: same gap as yesterday — no evidence any of today's fixes were
+re-verified against Zio's or Not Just Bagels, only Vito's. The `import-menu-csv` mismatch
+and migration backlog were not re-examined.
+
 ## Quickstart for development
 
 ```bash
