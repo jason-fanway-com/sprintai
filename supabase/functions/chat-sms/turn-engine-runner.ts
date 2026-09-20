@@ -1677,12 +1677,24 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
         // AskTurnEvents.lineRemovedAtConfirmThisTurn's own doc.
         turnEvents = { ...turnEvents, lineRemovedAtConfirmThisTurn: true };
         break;
+      case "unit_modified_at_confirm":
+        // 2026-09-20 PO dispatch (confirm-path correction targets named
+        // line): one unit of a multi-quantity line was already split off
+        // and given a different topping, in place, by answer() (turn-
+        // engine.ts's "confirm" case). Same fresh-read-back handling as
+        // line_replaced/line_removed_at_confirm — see
+        // AskTurnEvents.unitModifiedAtConfirmThisTurn's own doc.
+        turnEvents = { ...turnEvents, unitModifiedAtConfirmThisTurn: true };
+        break;
       case "replacement_unavailable":
-        // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): X
-        // isn't its own menu item — nothing was touched. The explanation
-        // rides ahead of the normal re-ask via the SAME answerText hook
-        // intent:"question"'s answer_text already uses below, never a
-        // second reply-building path.
+      case "unit_modification_unavailable":
+        // 2026-09-18 PO dispatch (read-back corrections, mechanism 2) /
+        // 2026-09-20 PO dispatch (confirm-path correction targets named
+        // line): X isn't its own menu item, or the named topping isn't a
+        // real choice — nothing was touched. The explanation rides ahead of
+        // the normal re-ask via the SAME answerText hook intent:"question"'s
+        // answer_text already uses below, never a second reply-building
+        // path.
         answerText = outcome.message;
         break;
       // slot_resolved / address_declined / upsell_accepted / upsell_declined:
