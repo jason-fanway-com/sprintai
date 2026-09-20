@@ -3794,6 +3794,24 @@ function isQuestionPreambleClause(clause: string): boolean {
   return QUESTION_PREAMBLE_RE.test(clause) && !ORDER_SHAPED_CLAUSE_RE.test(clause);
 }
 
+// 2026-09-20 PO dispatch (real conv, "Tuna Hoagie on wheat, can you add
+// shrimp to that?" shape): a REQUEST question genuinely asks for something
+// to be DONE ("can you/could you/would you add/get/bring X", "can I/could
+// I/may I add/get/have X") -- distinct from an AVAILABILITY question ("do
+// you have X?", "is there X?") which only asks whether something EXISTS.
+// AVAILABILITY_QUESTION_MARKER_RE above already excludes the latter from
+// ever supporting an add; "can I get"/"could I"/"may I" already had to stay
+// OUT of that regex for the same reason (see its own header) -- this names
+// that same distinction explicitly so a REQUEST clause phrase-split.ts's
+// comma boundary strands away from the item it's asking to modify (see
+// this constant's own call site, the 00-BF modifier floor below) can be
+// recovered instead of silently dropped. "you"-phrased requests never take
+// "have" (that shape reads as a genuine question, "can you have X on
+// that?"), so it's scoped to first-person "I" only, matching real customer
+// phrasing ("can I have a coke").
+const REQUEST_QUESTION_MARKER_RE =
+  /\b(?:can|could|would) you (?:also )?(?:add|get|bring|include)\b|\b(?:can|could|may) i (?:also )?(?:add|get|have)\b/i;
+
 // SIZE_WORD_ALIASES (resolve-item.ts): the same "med" -> "medium" expansion
 // resolveItem's own tokenizer applies, reused here so a model item_span
 // abbreviation lines up with the customer's own fully-spelled word (or vice
@@ -6096,13 +6114,65 @@ export function decide(
       // this turn could plausibly be what a leftover word names instead, so
       // the FULL raw message is safe to scan directly instead of trusting
       // phrase-boundary attribution at all.
+      //
+      // Merge note (2026-09-20, landing fix/request-phrased-as-question-adds
+      // alongside the soleAddThisTurn fix above): the multi-add case (NOT
+      // soleAddThisTurn) still needs the orphan-request-phrase fold below --
+      // see its own header -- since phrase-boundary attribution is still
+      // trusted whenever another real item this turn means the full message
+      // can't be scanned blindly.
+      const orphanRequestPhrases = phrases.length > 1 && phraseIdx !== null
+        ? phrases.filter((phrase, idx) =>
+            idx !== phraseIdx &&
+            !AVAILABILITY_QUESTION_MARKER_RE.test(phrase) &&
+            (REQUEST_QUESTION_MARKER_RE.test(phrase) || idx === phraseIdx + 1) &&
+            !otherSpansThisMessage.some(otherSpan => resolveClaimedPhraseIndex(phrases, otherSpan) === idx))
+        : [];
+      // 2026-09-20 PO dispatch (real live money bug, "Tuna Hoagie on wheat,
+      // can you add shrimp to that?"): a comma-introduced trailing REQUEST
+      // question naming an add-on for THIS item splits into its OWN phrase
+      // (phrase-split.ts's comma boundary), so scopedModifierText's
+      // scope-to-the-host's-own-claimed-phrase rule -- built to stop ONE
+      // item's words leaking onto a DIFFERENT item -- also cuts this item
+      // off from its own add-on request sitting one phrase later, and the
+      // customer's real "shrimp" ask vanishes with no charge and no
+      // decline. Fold back in any OTHER phrase that (a) is REQUEST-shaped,
+      // (b) is not itself an AVAILABILITY question (never widen into that
+      // guard's own territory -- see REQUEST_QUESTION_MARKER_RE's own
+      // header), and (c) is not already claimed as some OTHER add's own
+      // phrase this turn (a genuinely different item's own request stays
+      // untouched, exactly as scopedModifierText already protects).
+      //
+      // 2026-09-20 PO dispatch (R4 reopened a third time, real live money
+      // bug, deployed v570, "Can I get a Chicken Bacon Ranch pizza, medium,
+      // with half anchovies on it?"): a DIFFERENT way to strand the SAME
+      // trailing topping phrase -- here PROPOSE's own item_span claim
+      // ("a Chicken Bacon Ranch pizza, medium") never included "with half
+      // anchovies on it" at all (the whole-message question shape appears to
+      // make PROPOSE truncate its own claim before the trailing clause), so
+      // resolveClaimedPhraseIndex has nothing REQUEST-shaped to match --
+      // worse, the truncated claim only word-matches the lone "medium"
+      // phrase (its OWN item-name words never appear in any single phrase,
+      // since "Can I get" fused onto phrase 0), scoping the modifier floor
+      // down to "medium" alone and erasing the topping phrase before the
+      // 00-BF floor / R4's own "half"-qualifier reader ever sees it. The
+      // one phrase directly AFTER the item's matched phrase is, in every
+      // real repro seen so far (this one and the shrimp case above), either
+      // this item's OWN trailing modifier clause or another add's own
+      // already-claimed phrase (excluded below same as the REQUEST-shaped
+      // case) -- so it is folded in unconditionally, and left to the
+      // per-step choice scan (which only ever matches a phrase's words
+      // against THIS item's real, known choices) to decide whether it
+      // actually names anything.
       const scoped = soleAddThisTurn
         ? stripOtherItemSpansFromModifierText(
             scopedModifierText([], null, menuItem.name, customerMessage),
             otherSpansThisMessage,
           )
         : stripOtherItemSpansFromModifierText(
-            scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
+            orphanRequestPhrases.length > 0
+              ? `${scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage)} ${orphanRequestPhrases.join(" ")}`
+              : scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
             otherSpansThisMessage,
           );
       // PO dispatch 2026-09-20 (real conv 6de8bd13, real Vito's data): "an
