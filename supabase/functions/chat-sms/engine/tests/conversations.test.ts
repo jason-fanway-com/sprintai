@@ -288,3 +288,26 @@ Deno.test("closure while pickup/delivery is open marks items done and re-asks th
   assertEquals(o.form.status, "confirming");
   assertStringIncludes(o.reply, "Reply YES");
 });
+
+Deno.test("a size word alone is not an item: no line is opened, the open question is re-asked", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "large", [{ kind: "add_line", item_span: "large", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines.length, 1);
+  assert(o.ledger.some((e) => e.event === "ignored_non_item_span"));
+  assertStringIncludes(o.reply, "Anything else");
+});
+
+Deno.test("closure while an unknown item is pending drops it and moves on", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots and a unicorn steak", [
+    { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "unicorn steak", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.open?.kind, "line_unresolved");
+  o = say(o.form, "thats it");
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.status, "confirming");
+});

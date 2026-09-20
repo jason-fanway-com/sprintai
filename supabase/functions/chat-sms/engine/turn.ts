@@ -9,6 +9,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
+import { contentWords } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -63,6 +64,11 @@ export function turn(input: TurnInput): TurnOutput {
         ledger.push({ turn: t, event: "add_reclassified_as_answer", data: { span: m.item_span } });
         continue;
       }
+    }
+    // an "item" with no item words in it ("large", "please") is not an item; never open a line for it
+    if (m.kind === "add_line" && contentWords(m.item_span).length === 0) {
+      ledger.push({ turn: t, event: "ignored_non_item_span", data: { span: m.item_span } });
+      continue;
     }
     moves.push(m);
   }

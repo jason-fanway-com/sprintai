@@ -44,7 +44,25 @@ Move kinds:
 A message may need several moves: "delivery to 12 Main St, 2 large pepperoni and knots" = answer fulfillment delivery; answer address "12 Main St"; add_line "pepperoni" qty 2 option_spans ["large"]; add_line "knots".
 If the open question is about an item and the message only answers it ("medium", "the large one", "ranch please"), return one answer_option.
 Quantity words: "a", "an", "one" = 1; "a couple" = 2; "a few" = 3.
-Never invent an item the customer did not name. Never drop one they did.`;
+Never invent an item the customer did not name. Never drop one they did.
+
+Examples (context -> customer -> moves):
+- open none; "2 large pepperoni and an order of garlic knots" -> add_line "pepperoni" qty 2 ["large"]; add_line "garlic knots" qty 1 []
+- open none; "cheeseburger, medium please" -> add_line "cheeseburger" qty 1 ["medium"]
+- open size question for Pepperoni Pizza; "large please" -> answer_option "large"
+- open cooked-temperature question for Cheese Burger; "medium" -> answer_option "medium"
+- order has Large Cheese Pizza and Garlic Knots; "actually pepperoni not cheese" -> remove_line ref_span "cheese"; add_line "pepperoni" qty 1 []
+- order has Garlic Knots; "make that 3 knots" -> change_line ref_span "knots" qty 3
+- order has one line; "make it 2" -> change_line ref_last true qty 2
+- order has Garlic Knots; "remove the knots" -> remove_line ref_span "knots"
+- open anything-else; "no that's it" -> answer items_done
+- open pickup-or-delivery; "delivery to 12 Main St" -> answer fulfillment "delivery"; answer address "12 Main St"
+- open tip; "20" -> answer tip "20"
+- open confirm; "yes" -> answer confirmed "yes"
+- "what sizes do the pizzas come in" -> ask_menu about_span "pizzas"
+- "can I get a large pepperoni" -> add_line "pepperoni" qty 1 ["large"]
+- "whats in my order" -> control show_cart
+- "asdf" -> control unclear`;
 
 const MOVE_SCHEMA = {
   type: "object",

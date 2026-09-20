@@ -72,7 +72,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
     if (NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
   }
   // "that's it" closes the item list whatever else is open (the open question is asked again after)
-  if (CLOSURE.has(n) && form.lines.length > 0 && open?.kind !== "line_slot" && open?.kind !== "line_ambiguous" && open?.kind !== "line_unresolved") return [{ kind: "answer", field: "items_done", value: true }];
+  if (CLOSURE.has(n) && open?.kind === "line_unresolved") return [{ kind: "remove_line", ref: { line_id: open.line_id } }, { kind: "answer", field: "items_done", value: true }];
+  if (CLOSURE.has(n) && form.lines.length > 0 && open?.kind !== "line_slot" && open?.kind !== "line_ambiguous") return [{ kind: "answer", field: "items_done", value: true }];
   if (!open && NO.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
 
   if (open?.kind === "line_ref" || (open?.kind === "line_ambiguous" && open.facet === "list")) {

@@ -1,13 +1,11 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { findWordRun, isDigits, isWordSubset, sameWords, words } from "./normalize.ts";
+import { contentWords, findWordRun, isDigits, isWordSubset, sameWords, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
 
-const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
-const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just"]);
 
 export type SpanResolution =
   | { kind: "item"; id: string }
@@ -36,7 +34,7 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   // Partial: every content word of the span appears inside some item term
   // ("cheese" -> every item with a "cheese …" term). Deterministic, and it
   // yields a question, never a pick.
-  const content = sw.filter((w) => !STOPWORDS.has(w) && !SIZE_WORDS.has(w));
+  const content = contentWords(span);
   if (content.length > 0) {
     const partial = new Set<string>();
     for (const t of menu.itemTerms) if (isWordSubset(content, t.words)) partial.add(t.target_id);
