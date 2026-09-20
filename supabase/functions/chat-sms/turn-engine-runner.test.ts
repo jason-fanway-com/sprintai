@@ -1940,7 +1940,20 @@ function addOnlyProposeFn(
   };
 }
 
-Deno.test("00-remainder conv 47: 'wheat bread' answers the open slot; 'also, boneless wings' is a separate add the primary answer never sees", async () => {
+Deno.test("00-remainder conv 47 (UPDATED 2026-09-20, slot-resolved blocks item search THIS TURN): 'wheat bread' answers the open slot; 'also, boneless wings' is no longer added this same turn", async () => {
+  // 2026-09-20 PO dispatch (slot-resolved blocks item search THIS TURN, real
+  // conv 6365b84d #16 money bug): this test used to prove the remainder
+  // mechanism could safely add a genuinely separate bonus item after a
+  // resolved slot answer. That mechanism is exactly what let a DIFFERENT
+  // phrasing ("Yes, please add ranch for both pizzas!") open a phantom
+  // disambiguation the same turn -- see turn-engine-runner.ts's own
+  // REMAINDER_ELIGIBLE_OUTCOME_KINDS doc for why "slot_resolved" no longer
+  // ever reaches the remainder call, unconditionally. The bonus-item case
+  // this test covered is a deliberate, known casualty: "also, boneless
+  // wings" no longer lands this same turn -- the customer can just say it
+  // next turn. Updated (not weakened) to prove the new, intentional
+  // invariant: proposeTurnFn must never be called at all once the bread slot
+  // resolves.
   const menu: TurnEngineMenuItem[] = [
     { id: "item-garlic-cheesesteak", name: "Garlic Cheesesteak", category: "Hot Sandwiches", price_cents: 999, bot_state: "orderable", ask_plan: breadSlotAskPlan("Garlic Cheesesteak", 999) },
     noSlotMenuItem("item-boneless-wings", "Boneless Wings", "Wings", 1299),
@@ -1950,14 +1963,12 @@ Deno.test("00-remainder conv 47: 'wheat bread' answers the open slot; 'also, bon
   ];
   const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
   const { supabase } = makeFakeSupabase({ lexicon: [{ term: "boneless wings", target_id: "item-boneless-wings" }] });
-  const captured = { calls: 0, messages: [] as string[] };
   const deps: RunTurnDeps = {
     supabase, apiKey: "test-key",
     newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
-    proposeTurnFn: addOnlyProposeFn(captured, () => ({
-      ok: true, attempts: 1,
-      proposal: { intent: "order", adds: [{ item_span: "boneless wings", quantity: 10, choices: [] }], removes: [], modifies: [] },
-    })),
+    proposeTurnFn: () => {
+      throw new Error("FORBIDDEN: proposeTurnFn must never be called this turn — a resolved slot answer blocks ALL fresh item search/PROPOSE processing, full stop");
+    },
   };
   const input = baseInput({
     message: "Oh, wheat bread for the Garlic Cheesesteak, please! Also, can I get an order of 10 boneless wings?",
@@ -1966,13 +1977,10 @@ Deno.test("00-remainder conv 47: 'wheat bread' answers the open slot; 'also, bon
 
   const result = await runTurnEngineTurn(input, deps);
 
-  assertEquals(captured.calls, 1, "the primary bread answer must resolve without a model call — only the remainder needs one");
-  assertEquals(captured.messages[0], "Also, can I get an order of 10 boneless wings?");
-  assertEquals(result.cart.length, 2);
+  assertEquals(result.cart.length, 1, "no fresh item search of any kind may run this turn — the boneless wings must not land");
   assertEquals(result.cart[0].ask_plan_selections?.["group-bread"], "choice-wheat", "the bread slot must still be resolved by the primary answer");
   const wings = result.cart.find(l => l.menu_item_id === "item-boneless-wings");
-  assert(wings, "the wings must reach the cart, not vanish silently");
-  assertEquals(wings!.quantity, 10);
+  assertEquals(wings, undefined, "the wings must not reach the cart this turn — customer can ask again next turn");
 });
 
 Deno.test("00-remainder conv 7: 'I'll do pickup' answers order_type; 'also, a Coke' is added", async () => {
@@ -2029,7 +2037,12 @@ Deno.test("00-remainder conv 14: 'I'll do pickup, please!' answers order_type; '
   assertEquals(result.cart[0].menu_item_id, "item-calzone");
 });
 
-Deno.test("00-remainder conv 52: 'white bread' answers the open slot; 'and also ... pasta w/ clam sauce' reaches DECIDE", async () => {
+Deno.test("00-remainder conv 52 (UPDATED 2026-09-20, slot-resolved blocks item search THIS TURN): 'white bread' answers the open slot; 'and also ... pasta w/ clam sauce' no longer reaches DECIDE this same turn", async () => {
+  // 2026-09-20 PO dispatch (slot-resolved blocks item search THIS TURN) —
+  // same deliberate, known casualty as conv 47 above. See that test's own
+  // updated header and turn-engine-runner.ts's REMAINDER_ELIGIBLE_OUTCOME_
+  // KINDS doc for why "slot_resolved" no longer ever reaches the remainder
+  // call, unconditionally.
   const menu: TurnEngineMenuItem[] = [
     { id: "item-cheesesteak", name: "Cheesesteak", category: "Hot Sandwiches", price_cents: 999, bot_state: "orderable", ask_plan: breadSlotAskPlan("Cheesesteak", 999) },
     noSlotMenuItem("item-pasta-clam-sauce", "Pasta With Clam Sauce", "Entrees", 1895),
@@ -2039,23 +2052,19 @@ Deno.test("00-remainder conv 52: 'white bread' answers the open slot; 'and also 
   ];
   const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-bread" }, upsell_offered: false, asked_message_id: null };
   const { supabase } = makeFakeSupabase({ lexicon: [{ term: "pasta w/ clam sauce", target_id: "item-pasta-clam-sauce" }] });
-  const captured = { calls: 0, messages: [] as string[] };
   const deps: RunTurnDeps = {
     supabase, apiKey: "test-key",
     newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
-    proposeTurnFn: addOnlyProposeFn(captured, () => ({
-      ok: true, attempts: 1,
-      proposal: { intent: "order", adds: [{ item_span: "pasta w/ clam sauce", quantity: 1, choices: [] }], removes: [], modifies: [] },
-    })),
+    proposeTurnFn: () => {
+      throw new Error("FORBIDDEN: proposeTurnFn must never be called this turn — a resolved slot answer blocks ALL fresh item search/PROPOSE processing, full stop");
+    },
   };
   const input = baseInput({ message: "white bread ... and also can i add a pasta w/ clam sauce", cart, menu, dialogueState: priorState });
 
   const result = await runTurnEngineTurn(input, deps);
 
-  assertEquals(captured.calls, 1);
-  assertEquals(captured.messages[0], "also can i add a pasta w/ clam sauce");
   assertEquals(result.cart[0].ask_plan_selections?.["group-bread"], "choice-white");
-  assertEquals(result.cart.length, 2);
+  assertEquals(result.cart.length, 1, "no fresh item search of any kind may run this turn — the pasta must not land");
 });
 
 Deno.test("00-remainder conv 84: disambiguation resolves to Side Salad; 'and add chicken fingers' reaches DECIDE", async () => {
