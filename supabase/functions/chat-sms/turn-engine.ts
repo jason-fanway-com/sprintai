@@ -1973,6 +1973,7 @@ function messageIsOrderShapedOutsideDisambiguation(
 ): { outsideMenuItemIds: string[]; sameFamily: boolean } | null {
   if (!lexicon || lexicon.length === 0) return null;
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const menuById = new Map(menu.map(m => [m.id, m]));
   const phrases = splitCustomerPhrases(message, menu.map(m => ({ name: m.name })));
   const clauses = phrases.length > 0 ? phrases : [message];
   const outsideIds = new Set<string>();
@@ -1983,7 +1984,7 @@ function messageIsOrderShapedOutsideDisambiguation(
     const result = resolveItem(text, lexicon, [], false);
     if (result.kind !== "resolved") continue;
     if (candidateIds.has(result.menu_item_id)) return null;
-    if (isAnswerRestatementOfCartLine(cart, { menuItemId: result.menu_item_id, matchedText: runningPrefix })) return null;
+    if (isAnswerRestatementOfCartLine(cart, { menuItemId: result.menu_item_id, matchedText: runningPrefix }, menuById)) return null;
     outsideIds.add(result.menu_item_id);
   }
   if (outsideIds.size === 0) return null;
