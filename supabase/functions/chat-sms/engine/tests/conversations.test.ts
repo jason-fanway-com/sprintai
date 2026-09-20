@@ -126,7 +126,7 @@ Deno.test("narrowing: pizza -> what kind -> pepperoni -> what size -> large", ()
   f = say(f, "pickup").form;
   let o = say(f, "I want a pizza", [{ kind: "add_line", item_span: "pizza", qty: 1, option_spans: [] }]);
   assertEquals(o.form.open?.kind, "line_ambiguous");
-  assertStringIncludes(o.reply, "What kind of pizza?");
+  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese, Hawaiian, Margherita, Meat Lover, Pepperoni.");
   o = say(o.form, "pepperoni");
   assertStringIncludes(o.reply, "What size");
   assertStringIncludes(o.reply, "Small, Medium, or Large");
@@ -320,7 +320,7 @@ Deno.test("bare pepperoni: which kind is asked with full names, then size", () =
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   let o = say(f, "pepperoni", [{ kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }]);
-  assertStringIncludes(o.reply, "Which pepperoni? Pepperoni Pizza or Pepperoni (Stromboli Rolls)?");
+  assertStringIncludes(o.reply, "What kind of pepperoni? We have Pepperoni Pizza, Pepperoni (Stromboli Rolls).");
   o = say(o.form, "pizza");
   assertStringIncludes(o.reply, "What size Pepperoni Pizza? Small, Medium, or Large?");
 });
@@ -336,7 +336,7 @@ Deno.test("an option the customer never typed is stripped; the size is asked ins
   assertEquals(o.form.lines.length, 1);
   assertEquals(o.form.lines[0].item_id, null);
   assertStringIncludes(o.reply, "Removed Large Cheese Pizza.");
-  assertStringIncludes(o.reply, "Which pepperoni?");
+  assertStringIncludes(o.reply, "What kind of pepperoni?");
 });
 
 Deno.test("'make that 3' with a vague reference resolves to the only line", () => {
@@ -573,7 +573,7 @@ Deno.test("Jason's phone test: four large pizzas, one of each kind, becomes four
   f = say(f, "delivery").form;
   f = say(f, "5620 cetronia rd", [addr("5620 Cetronia Rd, Allentown, PA 18106, USA")]).form;
   let o = say(f, "Four large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
-  assertStringIncludes(o.reply, "What kind of pizzas?");
+  assertStringIncludes(o.reply, "What kind of pizzas? We have ");
   o = say(o.form, "One plain one pepperoni one Hawaii one meat lovers", [
     { kind: "answer_option", value_span: "plain" }, { kind: "answer_option", value_span: "pepperoni" },
     { kind: "answer_option", value_span: "Hawaii" }, { kind: "answer_option", value_span: "meat lovers" },
@@ -597,13 +597,13 @@ Deno.test("Jason's fries: a non-narrowing answer lists what's left, 'options' li
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   let o = say(f, "some fries", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }]);
-  assertStringIncludes(o.reply, "What kind of fries?");
-  o = say(o.form, "Plain fries.", [{ kind: "answer_option", value_span: "Plain fries" }]);
-  assertStringIncludes(o.reply, "Which fries? ");
+  assertStringIncludes(o.reply, "What kind of fries? We have ");
   assertStringIncludes(o.reply, "French");
+  o = say(o.form, "Plain fries.", [{ kind: "answer_option", value_span: "Plain fries" }]);
+  assertStringIncludes(o.reply, "What kind of fries? We have ");
   o = say(o.form, "what are the options");
-  assertStringIncludes(o.reply, "Options: ");
-  assertStringIncludes(o.reply, "French Fries");
+  assert(o.reply.includes("We have ") || o.reply.includes("Which one?"), o.reply); // the question carries the list (numbered on the second re-ask)
+  assertEquals(o.reply.split("French").length, 2); // listed once, not twice
   assert(!o.reply.includes("Categories"));
   o = say(o.form, "french fries?", [{ kind: "answer_option", value_span: "french fries" }]);
   assertEquals(o.form.lines[0].item_id, IDS.fries);

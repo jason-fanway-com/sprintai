@@ -137,9 +137,9 @@ def fries(addr):
     # Jason's live test, 2026-09-20 15:15: a non-narrowing answer must list what's left; 'options' lists the question's choices; no note
     return [
         ("pickup", lambda c, r: []),
-        ("Yes some fries", lambda c, r: expect("fries" in r.lower(), f"expected fries question: {r!r}")),
+        ("Yes some fries", lambda c, r: expect("fries" in r.lower() and "we have" in r.lower(), f"expected fries question with options: {r!r}")),
         ("Plain fries.", lambda c, r: expect("French" in r, f"expected a list including French Fries: {r!r}")),
-        ("What are the options?", lambda c, r: expect("French Fries" in r and "Categories" not in r, f"expected the fries list: {r!r}")),
+        ("What are the options?", lambda c, r: expect("French" in r and "Categories" not in r and r.count("French") == 1, f"expected the fries list once: {r!r}")),
         ("French fries?", lambda c, r: expect(any("French Fries" in n for n in names(c)), f"lines {names(c)}") + expect("Noted" not in r, f"note leaked: {r!r}")),
     ]
 

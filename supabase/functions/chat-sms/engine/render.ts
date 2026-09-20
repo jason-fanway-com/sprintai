@@ -94,7 +94,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
           return k;
         };
         const kinds = [...new Set(kindsRaw.map(label))];
-        return T.whatKind(noun, asked, kinds.slice(0, 8)) + (kinds.length > 8 && asked >= 1 ? ` (${kinds.length - 8} more; say more of the name)` : "");
+        return T.whatKind(noun, asked, kinds);
       }
       if (facet === "size") {
         const sizes = sortSizes([...new Set(cands.map((c) => c.facets.size).filter((s): s is string => !!s))]);

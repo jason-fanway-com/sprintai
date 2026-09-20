@@ -82,9 +82,11 @@ export const T = {
     `Still nothing for "${span}". Name another item, or reply SKIP to leave it off.`,
     `Reply SKIP to leave "${span}" off, or name a menu item.`,
   ][Math.min(c, 2)],
-  whatKind: (noun: string, c: number, kinds: string[]) => {
-    if (kinds.length <= 4 || c >= 1) return `Which ${noun}? ${orList(kinds.map(title))}?`;
-    return `What kind of ${noun}?`;
+  // Jason, 2026-09-20: a kind question always says what the choices are.
+  whatKind: (noun: string, _c: number, kinds: string[]) => {
+    const shown = kinds.slice(0, 10).map(title);
+    const more = kinds.length - shown.length;
+    return `What kind of ${noun}? We have ${shown.join(", ")}${more > 0 ? `, and ${more} more` : ""}.`;
   },
   whatSize: (name: string, sizes: string[]) => `What size ${name}? ${orList(sizes.map(title))}?`,
   whichOne: (names: string[]) => `Which one?\n${numbered(names)}`,
