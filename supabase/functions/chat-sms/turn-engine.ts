@@ -3433,10 +3433,25 @@ export function answer(
       let heldChoices: Array<{ group_id: string; choice_id: string }> = [];
       const heldText = state.open.heldModifierText;
       if (heldText) {
+        // PO dispatch 2026-09-20 (fresh-add topping fold, real conv
+        // e5796b9f): the singular recoverAssertedChoiceFromText's own
+        // plural-tie guard ("sausage and onions") drops BOTH toppings
+        // whenever a held text names two plain (non-placement) choices
+        // together with no "added" cue — exactly "with steak and green
+        // peppers". A held modifier text, by construction, was already
+        // isolated as belonging solely to this winning item (either a
+        // sibling add matched as a whole modifier span, or the sole
+        // ambiguous add's own leftover raw-message text — see
+        // holdAddsThatAreModifiersOfAnAmbiguousSibling's and this file's
+        // "soleAmbiguousAddThisTurn" comment above) — there is never a
+        // competing second item it could instead belong to, so
+        // noCompetingItems=true unconditionally, same as the resolved-item
+        // 00-BF floor's own soleAddThisTurn call to this same function.
         for (const step of menuItem.ask_plan.steps) {
           if (step.kind !== "modifier") continue;
-          const recovered = recoverAssertedChoiceFromText(heldText, step.choices, menuItem.name);
-          if (recovered) heldChoices = [...heldChoices, { group_id: step.group_id, choice_id: recovered }];
+          for (const recovered of recoverAssertedChoicesFromText(heldText, step.choices, menuItem.name, true)) {
+            heldChoices = [...heldChoices, { group_id: step.group_id, choice_id: recovered }];
+          }
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
@@ -6558,11 +6573,35 @@ export function decide(
   // plain drop above can't — a topping choice named as its own resolved add
   // merges its choice directly onto the real host add instead of vanishing.
   const placementMergedAdds = mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(modifierDroppedAdds, menuById, menu, customerMessage);
-  const { survivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
+  const { survivingAdds, heldModifierText: siblingHeldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
     placementMergedAdds,
     disambiguationCandidateIds,
     menuById,
   );
+  // PO dispatch 2026-09-20 (fresh-add topping fold, real conv e5796b9f,
+  // "2 Chicken Bacon Ranch pizzas with steak and green peppers"): the hold
+  // above only ever recovers a modifier from a SEPARATE sibling add's own
+  // item_span (holdAddsThatAreModifiersOfAnAmbiguousSibling's own header,
+  // the "Italian wrap with chicken" shape) — it never fires when the
+  // topping words are glued into the SAME clause as the still-ambiguous
+  // item and PROPOSE's own item_span for that add never carried them.
+  // Confirmed against the real captured PROPOSE payload (error_log,
+  // propose_success): item_span "Chicken Bacon Ranch", choices: [] — "with
+  // steak and green peppers" only ever existed in customerMessage, with no
+  // sibling add for it to be held against. Scoped to the one shape this can
+  // be applied safely: exactly one ambiguous span this turn and no other
+  // resolved add competing for the leftover words — soleAddThisTurn's own
+  // "no competing item" reasoning (see its header below), applied to the
+  // not-yet-resolved case. Otherwise which item a leftover word belongs to
+  // is genuinely unknown and this stays null, same as before. The leftover
+  // text is recovered later against the WINNING candidate's own real
+  // choices (answer()'s "disambiguation" case, heldText loop) — never
+  // guessed at here, since which size/candidate the customer means isn't
+  // known yet.
+  const soleAmbiguousAddThisTurn = ambiguousSpansFiltered.length === 1 && survivingAdds.length === 0;
+  const heldModifierText = siblingHeldModifierText === null && soleAmbiguousAddThisTurn && customerMessage
+    ? (scopedModifierText([], null, ambiguousSpansFiltered[0].spanText, customerMessage).trim() || null)
+    : siblingHeldModifierText;
 
   // Two adds in one proposal with identical identity collapse to ONE line at
   // MAX quantity, never a sum (§3b step 4) — grouped here, before any of

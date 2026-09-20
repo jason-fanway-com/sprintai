@@ -202,8 +202,25 @@ export function renderActionConfirmation(
     }
   }
   switch (event.action) {
-    case "added":
-      return `${event.itemName} added.`;
+    case "added": {
+      // PO dispatch 2026-09-20 (real live conv 93559ccf: "I want two
+      // Chicken Noodle cups" -> the soup's own cart line lands with the
+      // correct quantity (2, confirmed via effectiveAddQuantity/
+      // disambiguationQuantity's own carry-through, and via
+      // extractDisambiguationAnswerQuantity when the customer restates it)
+      // -- but this terse, option-free branch always rendered bare
+      // ("Cup Chicken Noodle Soup added."), with no "2x" or count anywhere,
+      // regardless of event.qty. The PO's own reading of the transcript
+      // ("only 1x, not 2x") was this sentence, not the cart: the charge was
+      // always right, but nothing the customer was TOLD ever said 2. Same
+      // "a quantity word next to the item name is the quantity" rule
+      // already applied to qty_set just above and to index.ts's own
+      // qtyPrefixC2b for the legacy engine's equivalent confirmation —
+      // extended here so the itemized branch above and this bare branch
+      // never disagree about whether quantity gets stated.
+      const qty = event.qty ?? 1;
+      return `${qty > 1 ? `${qty}x ` : ""}${event.itemName} added.`;
+    }
     case "removed":
       return `${event.itemName} removed.`;
     case "qty_set":

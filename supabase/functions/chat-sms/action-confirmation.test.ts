@@ -205,6 +205,27 @@ Deno.test("renderActionConfirmation: added, plain item with no options -> stays 
   assertEquals(renderActionConfirmation(event), "French Fries added.");
 });
 
+// PO dispatch 2026-09-20 (real live conv 93559ccf, "I want two Chicken
+// Noodle cups"): the soup's own cart line always landed at the correct
+// quantity (2) -- confirmed against the real captured PROPOSE payload and
+// turn-engine.ts's own effectiveAddQuantity/disambiguationQuantity carry-
+// through -- but this plain, option-free branch ignored event.qty entirely,
+// so the customer was told "Cup Chicken Noodle Soup added." no matter how
+// many landed. The PO's own "only 1x, not 2x" reading of the transcript was
+// this sentence, not the cart: the charge was always right, nothing the
+// customer was TOLD ever said 2. Same "Nx " convention qty_set already uses
+// just below, and the one index.ts's own legacy-engine confirmation
+// (qtyPrefixC2b) already applies for its own equivalent case.
+Deno.test("renderActionConfirmation: added, quantity 2, no options -> states the count", () => {
+  const event = {
+    action: "added" as const,
+    itemName: "Chicken Noodle - Cup",
+    qty: 2,
+    line: { menu_item_id: "soup-cup", name: "Chicken Noodle - Cup", quantity: 2, price_cents: 499 },
+  };
+  assertEquals(renderActionConfirmation(event), "2x Chicken Noodle - Cup added.");
+});
+
 Deno.test("renderActionConfirmation: added, no line on the event (unknown shape) -> falls back to bare, never throws", () => {
   assertEquals(
     renderActionConfirmation({ action: "added", itemName: "French Fries", qty: 1 }),
