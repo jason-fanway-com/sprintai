@@ -102,6 +102,23 @@ function categoryNoun(category: string): string {
 const SIZE_WORD_TOKENS = new Set(["small", "medium", "large", "personal"]);
 const SIZE_DIGIT_TOKENS = new Set(["10", "14", "16"]);
 
+// 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+// money bug, reopens cb37bda9): real customer/model text routinely
+// abbreviates a size word ("2 med pepperoni pizzas") but the compiled
+// lexicon only ever carries the SIZE_WORD_TOKENS' own spelled-out forms
+// ("medium pepperoni pizza(s)") — an abbreviated span word matches neither
+// that 3-word term (occursAsWholeWordRun is exact, no stemming) nor
+// SIZE_WORD_TOKENS itself, so it ties across every size sharing the bare
+// "pepperoni" term instead of resolving to the one the customer named.
+// Expanded once, here, inside toWords() — the single chokepoint both span
+// words AND every lexicon term's own words already flow through — so a span
+// abbreviation and a fully-spelled lexicon term compare equal without
+// touching either side's matching logic. Exported so turn-engine.ts's own
+// item-span-in-message guard (itemSpanNamedInMessage) can apply the exact
+// same expansion before comparing a model's item_span against the
+// customer's raw words, instead of maintaining a second, driftable copy.
+export const SIZE_WORD_ALIASES: Record<string, string> = { med: "medium", lg: "large", sm: "small" };
+
 function detectSizeToken(spanWords: string[]): string | null {
   for (const w of spanWords) {
     if (SIZE_WORD_TOKENS.has(w) || SIZE_DIGIT_TOKENS.has(w)) return w;
@@ -237,7 +254,8 @@ function normalize(text: string): string {
 }
 
 function toWords(normalized: string): string[] {
-  return normalized.length > 0 ? normalized.split(" ") : [];
+  if (normalized.length === 0) return [];
+  return normalized.split(" ").map(w => SIZE_WORD_ALIASES[w] ?? w);
 }
 
 // Does `termWords` occur in `spanWords` as a contiguous, whole-word run?
