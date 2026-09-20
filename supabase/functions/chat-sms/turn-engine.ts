@@ -1449,11 +1449,35 @@ function applySingleUnitToppingSwap(
       });
     if (oldCandidates.length !== 1) continue;
     const oldChoice = oldCandidates[0];
-    const newCandidates = step.choices.filter(c => {
+    let newCandidates = step.choices.filter(c => {
       if (selectedIds.includes(c.id)) return false;
       const cStems = significantStems(c.display);
       return [...newStems].every(s => cStems.has(s));
     });
+    // Money bug fix (2026-09-20, live conv 70bc7d0b, real prod repro against
+    // the FULL Vito's menu -- the test fixture's own trimmed 2-choice ask_plan
+    // never exposed this): every pizza topping compiles as a Whole/Half PAIR
+    // ("Grilled Chicken (Whole pizza)" + "Grilled Chicken (Half pizza)"), so a
+    // bare newModifierPhrase ("grilled chicken", no placement word) stem-
+    // matches BOTH — newCandidates.length was 2, "genuinely ambiguous" here
+    // returned null, and the caller's own fallthrough (this function's call
+    // site in the "confirm" case) then ran applyNamedLineRemovals on the raw
+    // message next, which wiped the whole cart. groupChoicesByPlacement/the
+    // "half" word convention below is the SAME rule the modifier-floor path
+    // (recoverPlacementHits) already trusts for this exact Whole/Half pairing
+    // elsewhere in this file: no "half" anywhere in the phrase means Whole.
+    // Only collapses when every surviving candidate shares the SAME core name
+    // (placementGroups.length === 1) -- two candidates naming genuinely
+    // different toppings stay ambiguous, never guessed at.
+    if (newCandidates.length > 1) {
+      const { placementGroups } = groupChoicesByPlacement(newCandidates);
+      if (placementGroups.length === 1) {
+        const hasHalfWord = /\bhalf\b/i.test(newModifierPhrase);
+        const chosenId = (hasHalfWord ? placementGroups[0].half : placementGroups[0].whole)?.id;
+        const narrowed = chosenId ? newCandidates.filter(c => c.id === chosenId) : [];
+        if (narrowed.length === 1) newCandidates = narrowed;
+      }
+    }
     if (newCandidates.length === 0) {
       return {
         kind: "unavailable",
