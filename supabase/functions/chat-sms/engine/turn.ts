@@ -139,6 +139,10 @@ export function turn(input: TurnInput): TurnOutput {
       return out;
     }).map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; })
       .filter((p) => p.span && narrow(focus.status.kind === "ambiguous" ? focus.status.candidates : [], p.span, menu).length > 0);
+    // lines in the order the customer said them
+    const mwords = words(input.message);
+    const pos = (span: string) => { const i = mwords.indexOf(words(span)[0] ?? ""); return i < 0 ? 999 : i; };
+    parts.sort((a, b) => pos(a.span) - pos(b.span));
     if (parts.length >= 2) {
       // the model sometimes expresses the split as "remove the pizzas line, add four": the removal
       // of the very line being answered is that same intent, not a second instruction
