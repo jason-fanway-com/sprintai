@@ -3901,6 +3901,43 @@ function rawMessageSizeWordForSpan(
   return extractGlobalSizeWord(phrases[phraseIdx]);
 }
 
+// PO dispatch 2026-09-19 (M1 rule 2, reopened — conv d95306c8 #26 follow-up):
+// rawMessageSizeWordForSpan above fixed WHICH size word gets displayed once a
+// tie already opened a disambiguation question, but never used that word to
+// try closing the tie first. resolveItem's own tiebreak (resolve-item.ts)
+// narrows candidates only by the shop's LEXICON size_label — real, but null
+// for some items in live Vito's data (Sausage Pizza, mirrored by this file's
+// own M1 test fixture), so "Sausage Pizza - Small" ties its 3 sizes even
+// though the customer's own words state the size right next to the name.
+// filterCandidatesBySizeWord (pending-disambiguation.ts) already solves this
+// a different way — it derives each candidate's size from its own MENU ITEM
+// NAME text (candidateSizeValue/extractSizeAndKind), independent of the
+// lexicon size_label gap — but until now it only ever ran on the SECOND
+// turn, narrowing an already-open disambiguation's candidates once the
+// customer answered a "what size?" facet question. This applies the
+// identical name-derived narrowing to a FRESH tie, using the exact same
+// scoped size word rawMessageSizeWordForSpan recovers, so a stated size
+// closes the tie before any question opens — never merely corrects the
+// question's wording after the fact. Returns the single surviving
+// menu_item_id, or null when the size word doesn't narrow to exactly one
+// candidate (genuinely still ambiguous — never guessed).
+function narrowAmbiguousCandidatesBySpanSize(
+  candidateIds: string[],
+  spanText: string,
+  customerMessage: string | undefined,
+  menu: TurnEngineMenuItem[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): string | null {
+  const sizeWord = extractGlobalSizeWord(spanText) ?? rawMessageSizeWordForSpan(customerMessage, spanText, menu);
+  if (!sizeWord) return null;
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  const narrowed = filterCandidatesBySizeWord(candidates, sizeWord);
+  return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4147,7 +4184,22 @@ export function decide(
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
       if (!isReplacementDuplicate) {
-        ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
+        // header above): a size stated right next to THIS item's own name
+        // closes the tie here, before a "which one?" question ever opens —
+        // never merely corrects the question's wording after the fact.
+        const narrowedId = narrowAmbiguousCandidatesBySpanSize(
+          resolution.candidates,
+          (add.item_span ?? "").trim(),
+          customerMessage,
+          menu,
+          menuById,
+        );
+        if (narrowedId) {
+          resolvedAdds.push({ menu_item_id: narrowedId, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
+        } else {
+          ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        }
       }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
