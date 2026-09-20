@@ -1559,6 +1559,15 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       case "disambiguation_gave_up":
         answerText = "I'll leave that off.";
         break;
+      // 2026-09-20 PO dispatch: same drop-outright shape as
+      // disambiguation_gave_up immediately above (deliberately NOT setting
+      // disambiguationCandidateIds, so ask() has nothing to re-open), but
+      // with a real, message-driven terminal reply instead of the generic
+      // "I'll leave that off" — see AnswerOutcome's own
+      // "disambiguation_offmenu_declined" doc.
+      case "disambiguation_offmenu_declined":
+        answerText = outcome.message;
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the
