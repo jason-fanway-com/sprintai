@@ -121,9 +121,21 @@ def zio_narrow(addr):
         ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}")),
     ]
 
-SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections,
+def fourkinds(addr):
+    # Jason's live test, 2026-09-20 14:54: one quantity-4 line answered with four kinds must become four lines
+    return [
+        ("delivery to " + addr, lambda c, r: expect(c["order_type"] == "delivery", f"order_type {c['order_type']}")),
+        ("Four large pizzas", lambda c, r: expect("kind" in r.lower() or "which" in r.lower(), f"expected kind question: {r!r}") + expect(len(lines(c)) == 0, f"nothing priced yet: {names(c)}")),
+        ("One plain one pepperoni one Hawaii one meat lovers", lambda c, r: expect(len(lines(c)) == 4, f"expected 4 lines, got {names(c)}") + expect(all(q == 1 for _, q, _ in lines(c)), f"qty {lines(c)}") + expect("Noted" not in r, f"notes leaked: {r!r}")),
+        ("show full order", lambda c, r: expect(r.count("×") >= 4, f"readback missing lines: {r!r}")),
+        ("thats it", lambda c, r: expect("tip" in r.lower(), f"expected tip: {r!r}")),
+        ("0", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}") + expect(c["subtotal_cents"] == sum(q * p for _, q, p in lines(c)), "subtotal mismatch")),
+        ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session")),
+    ]
+
+SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections, "fourkinds": fourkinds,
         "njb_dozen": njb_dozen, "njb_simple": njb_simple, "zio_pizza": zio_pizza, "zio_narrow": zio_narrow}
-SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
+SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections", "fourkinds"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
 
 def run(shop, name, steps):
     session = str(uuid.uuid4()); fails = []; transcript = []; ms = []
