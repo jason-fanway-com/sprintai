@@ -33,6 +33,8 @@ export type Question =
 
 export interface ReplyPlan {
   greeting: boolean;
+  /** validated conversational sentence, shown before everything else */
+  talk?: string | null;
   acks: Ack[];
   declines: Decline[];
   info: Info | null;
@@ -139,6 +141,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
 export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voice): string {
   const parts: string[] = [];
   if (plan.greeting) parts.push(T.greeting(voice));
+  if (plan.talk) parts.push(plan.talk);
 
   const added = plan.acks.filter((a): a is Ack & { kind: "line_added" } => a.kind === "line_added");
   const changed = plan.acks.filter((a): a is Ack & { kind: "line_changed" } => a.kind === "line_changed");
@@ -184,7 +187,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
     else if (i.kind === "human") parts.push(T.human(voice));
     else if (i.kind === "cancelled") parts.push(T.cancelled());
     else if (i.kind === "started_over") parts.push(T.startedOver());
-    else if (i.kind === "unclear") parts.push(T.unclear());
+    else if (i.kind === "unclear") parts.push(T.unclear(plan.question?.kind === "open" ? plan.question.count : 0));
   }
 
   if (plan.question) {

@@ -143,9 +143,20 @@ def fries(addr):
         ("French fries?", lambda c, r: expect(any("French Fries" in n for n in names(c)), f"lines {names(c)}") + expect("Noted" not in r, f"note leaked: {r!r}")),
     ]
 
-SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections, "fourkinds": fourkinds, "fries": fries,
+def talk(addr):
+    # Jason's live test, 2026-09-20 17:58: a remark or question gets a real sentence, never "didn't catch that" on repeat
+    return [
+        ("pickup", lambda c, r: []),
+        ("Chicken parm sandwich and onion rings", lambda c, r: expect("Noted" not in r, f"note leaked: {r!r}") + expect(len(lines(c)) >= 1, f"lines {names(c)}")),
+        ("white", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}")),
+        ("what does that mean? weird thing for you to say", lambda c, r: expect("didn't catch" not in r, f"phone-tree reply: {r!r}") + expect(len(lines(c)) == 2, f"lines changed: {names(c)}")),
+        ("thanks", lambda c, r: expect("didn't catch" not in r, f"phone-tree reply: {r!r}")),
+        ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}")),
+    ]
+
+SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections, "fourkinds": fourkinds, "fries": fries, "talk": talk,
         "njb_dozen": njb_dozen, "njb_simple": njb_simple, "zio_pizza": zio_pizza, "zio_narrow": zio_narrow}
-SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections", "fourkinds", "fries"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
+SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections", "fourkinds", "fries", "talk"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
 
 def run(shop, name, steps):
     session = str(uuid.uuid4()); fails = []; transcript = []; ms = []

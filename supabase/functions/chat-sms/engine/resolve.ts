@@ -171,8 +171,10 @@ function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
   return consumed;
 }
 
+const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
+
 /** Apply one held span to a bound line. Returns true when it was consumed as a priced choice. */
-function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
+function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true): boolean {
   if (item.bundle) return applyBundleSpan(line, item, span) || isWordSubset(words(span), item.words);
   const removing = span.startsWith("-");
   const text = removing ? span.slice(1) : span;
@@ -204,7 +206,8 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
   if (sw.length === 1 && item.facets.size === sw[0]) return true;
   const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]);
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
-  line.notes.push(text);
+  if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
+  if (mayNote) line.notes.push(text);
   return false;
 }
 
@@ -274,7 +277,8 @@ export function bindLine(line: Line, menu: Menu): void {
     line.span_consumed = true;
     const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menu.termWordsByItem.get(item.id) ?? [])]);
     const leftover = words(line.span).filter((w) => !own.has(w) && !own.has(singular(w)) && !STOP_FOR_LEFTOVER.has(w));
-    if (leftover.length > 0) held.unshift(leftover.join(" "));
+    // words the customer used to NAME the item ("parm", "large") may pick options but are never kitchen notes
+    if (leftover.length > 0) applyHeldSpan(line, item, leftover.join(" "), false);
   }
   for (const h of held) applyHeldSpan(line, item, h);
   applyCanon(line, menu);

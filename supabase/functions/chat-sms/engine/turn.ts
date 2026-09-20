@@ -180,9 +180,11 @@ export function turn(input: TurnInput): TurnOutput {
   if (form.fulfillment === null && !menu.shop.delivery_enabled) { form.fulfillment = "pickup"; ledger.push({ turn: t, event: "fulfillment_default_pickup" }); }
   const stripNotes = (f: OrderForm) => JSON.stringify({ ...f, lines: f.lines.map((l) => ({ ...l, notes: [], held: [] })), open: null, asked: null, turn_no: 0 });
   const progress = res.ledger.some(isProgress) && stripNotes(form) !== stripNotes(input.form);
+  // a remark, a menu question or a cart read-back is a conversation, not a customer who is stuck
+  const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart;
   let q: OpenQuestion | null = next(form, menu, res.refAsk);
   let key = questionKey(q);
-  let count = key !== null && key === form.asked.key && !progress ? form.asked.count + 1 : 0;
+  let count = key !== null && key === form.asked.key && !progress ? (conversational ? form.asked.count : form.asked.count + 1) : 0;
   form.open = q; form.asked = { key, count };
   const declines: Decline[] = res.declines.map((d) => ({ code: d.code, span: d.span }));
   const note = escalate(form, menu);
@@ -241,7 +243,7 @@ export function turn(input: TurnInput): TurnOutput {
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
   const askedSomethingNew = q !== null && questionKey(q) !== questionKey(input.form.open);
-  if (res.control?.what === "unclear" && !progress && !askedSomethingNew) info = { kind: "unclear" };
+  if (res.control?.what === "unclear" && !progress && !askedSomethingNew && !res.talk) info = { kind: "unclear" };
   if (moves.length === 0 && rec.rejected.length === 0 && !progress && count > 0) info = info ?? { kind: "unclear" };
 
   let question: Question | null = null;
@@ -253,6 +255,7 @@ export function turn(input: TurnInput): TurnOutput {
   // a first-contact greeting only when nothing else was said and we are asking the opener
   const plan: ReplyPlan = {
     greeting: !!input.greet || (res.control?.what === "greeting" && form.turn_no === 1),
+    talk: res.talk,
     acks, declines, info, question,
   };
   const reply = render(plan, form, menu, voice);

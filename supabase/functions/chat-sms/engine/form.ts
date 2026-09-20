@@ -1,7 +1,7 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
-import { contentWords, optionKey } from "./normalize.ts";
+import { contentWords, optionKey, validTalk } from "./normalize.ts";
 
 export type Fulfillment = "pickup" | "delivery";
 
@@ -113,6 +113,7 @@ export type Move =
   | { kind: "answer_no" }
   | { kind: "split_line"; line_id: number; parts: Array<{ span: string; qty: number }> }
   | { kind: "ask_menu"; about_span: string | null }
+  | { kind: "talk"; text: string }
   | { kind: "control"; what: "cancel" | "start_over" | "human" | "greeting" | "unclear" | "show_cart" };
 
 export interface LedgerEntry { turn: number; event: string; data?: unknown }
@@ -131,6 +132,8 @@ export interface ApplyResult {
   showCart: boolean;
   askMenu: string | null | undefined; // undefined = not asked, null = general
   control: Move & { kind: "control" } | null;
+  /** a short conversational reply the model wrote for an off-order remark; validated before render */
+  talk: string | null;
 }
 
 export type DeclineCode =
@@ -151,6 +154,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
   let showCart = false;
   let askMenu: string | null | undefined = undefined;
   let control: ApplyResult["control"] = null;
+  let talk: string | null = null;
   const t = form.turn_no;
 
   const reopenIfConfirmed = () => {
@@ -334,6 +338,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         ledger.push({ turn: t, event: "split_line", data: { from: src.line_id, parts: m.parts, into: newLines.map((l) => l.line_id) } });
         break;
       }
+      case "talk": {
+        talk = validTalk(m.text); // defense in depth: the same gate the interpreter applies
+        ledger.push({ turn: t, event: talk ? "talk" : "talk_rejected", data: { text: m.text } });
+        break;
+      }
       case "ask_menu": {
         askMenu = m.about_span;
         ledger.push({ turn: t, event: "ask_menu", data: { about: m.about_span } });
@@ -354,7 +363,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     }
   }
 
-  return { form, ledger, touched: [...touched], removed, refAsk, declines, showCart, askMenu, control };
+  return { form, ledger, touched: [...touched], removed, refAsk, declines, showCart, askMenu, control, talk };
 }
 
 /**

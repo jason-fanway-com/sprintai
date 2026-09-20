@@ -114,7 +114,7 @@ export const T = {
   human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `Someone from the shop will follow up with you.`),
   cancelled: () => `Okay, I've cancelled that order. Text us anytime to start a new one.`,
   startedOver: () => `Okay, starting fresh.`,
-  unclear: () => `Sorry, I didn't catch that.`,
+  unclear: (c = 0) => [`Sorry, I didn't catch that.`, `I didn't follow that.`, `I can take your order here. Name an item, ask about the menu, or reply DONE when you're finished.`][Math.min(c, 2)],
   fallback: () => `Sorry, something went wrong on our end. Please text again in a moment.`,
 };
 

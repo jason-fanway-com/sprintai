@@ -92,3 +92,11 @@ export function impliedCount(text: string): number | null {
 
 /** Words of an option phrase: stopwords removed, size and placement words kept ("half anchovies on it" -> half anchovies). */
 export function optionWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w)); }
+
+/** A model-written conversational sentence is allowed only if it makes no money or action claims. */
+export function validTalk(raw: string): string | null {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (!text || text.length > 240) return null;
+  if (/\$|\d{1,3}\.\d\d|\b(added|removed|updated|changed|charged|free|discount|refund)\b/i.test(text)) return null;
+  return text;
+}

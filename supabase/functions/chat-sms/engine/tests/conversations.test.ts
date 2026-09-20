@@ -625,3 +625,34 @@ Deno.test("the model answers a kind question with an invented item word: the ver
   assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesePizzaL, 1], [IDS.pepPizzaL, 1], ["hawL", 1], ["mlL", 1]]);
   assertEquals(o.form.omissions, []);
 });
+
+Deno.test("Jason's fourth test: words that name the item are never kitchen notes; a size on a sizeless item is dropped", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "cheese steak, large cheese fries", [
+    { kind: "add_line", item_span: "cheese steak", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "large cheese fries", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.notes]), [[IDS.cheesesteak, []], [IDS.cheeseFries, []]]);
+  assert(!o.reply.includes("Noted"));
+});
+
+Deno.test("talk: a remark gets a short reply before the open question, and is not 'didn't catch that'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "what does that mean? weird thing to say", [{ kind: "talk", text: "Sorry about that, I worded it badly. Nothing changes on your order." }]);
+  assert(o.reply.startsWith("Sorry about that, I worded it badly."));
+  assert(!o.reply.includes("didn't catch"));
+  assertStringIncludes(o.reply, "Anything else");
+  assertEquals(o.form.asked.count, 0);
+  o = say(o.form, "so close. but now you failed", [{ kind: "talk", text: "I hear you. Tell me what's wrong and I'll fix the order." }]);
+  assert(!o.reply.includes("didn't catch"));
+});
+
+Deno.test("talk validator refuses money and action claims", () => {
+  const m = buildMenu({ version: "t", items: RAW_ITEMS, lexicon: RAW_LEXICON, shop: SHOP });
+  let f = newForm("vitos", "t"); f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  const o = turn({ form: f, menu: m, message: "hmm", moves: [{ kind: "talk", text: "I added a free pizza for $0.00!" }] });
+  assert(!o.reply.includes("free pizza"));
+});
