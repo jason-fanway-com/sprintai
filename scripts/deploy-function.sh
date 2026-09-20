@@ -113,6 +113,8 @@ DECLARED_COLUMNS=(
   "order_carts:order_type"
   "order_carts:delivery_address"
   "order_carts:dialogue_state"
+  "order_carts:engine_form"
+  "shops:clean_engine_enabled"
   "customers:last_order_type"
   "customers:last_delivery_address"
   "customers:name"

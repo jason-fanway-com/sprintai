@@ -122,6 +122,9 @@ import {
 } from "./intent-router.ts";
 import { isAskingForPickupName, impliesUpsellAcceptance, impliesUpsellDecline } from "./dialogue-signals.ts";
 import { runTurnEngineTurn } from "./turn-engine-runner.ts";
+import { runEngineTurn as runCleanEngineTurn } from "./engine/runner.ts";
+import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
+import { googleGeocoder } from "./engine/address.ts";
 import type { DialogueState, TurnEngineCartLine, TurnEngineMenuItem } from "./turn-engine.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 
@@ -454,6 +457,10 @@ interface Shop {
   // for every shop — this field being undefined/false means the legacy
   // path (unchanged, below) runs exactly as it always has.
   turn_engine_enabled?: boolean;
+  // Clean-sheet engine (supabase/functions/chat-sms/engine/, migration 147).
+  // Routes the ordering turn to engine/runner.ts. Default false per shop.
+  clean_engine_enabled?: boolean;
+  tax_rate_bps?: number | null;
 }
 
 // Instruction-layer rows (migration 124) — read-only inputs to
@@ -514,6 +521,8 @@ interface OrderCart {
   // conversation" (the runner treats that as the initial state) — never
   // read or written by the legacy path.
   dialogue_state:             DialogueState | null;
+  // Clean-sheet engine form (migration 147). Read/written only by engine/runner.ts.
+  engine_form:                EngineOrderForm | null;
 }
 
 interface ContentBlock {
@@ -6325,6 +6334,53 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // are bypassed — not modified, not deleted, just skipped. Off for every
   // shop today (shops.turn_engine_enabled defaults false, migration 141);
   // this branch does not run in production until the PO flips a shop's flag.
+  // ── Clean-sheet engine routing (migration 147, engine/runner.ts) ─────────
+  // One branch. Everything below it (turn engine, legacy loop, guards) is
+  // bypassed for a shop with clean_engine_enabled = true.
+  if (shop.clean_engine_enabled) {
+    const lastBot = [...history].reverse().find(h => h.role === "assistant")?.content ?? null;
+    const engineModel = Deno.env.get("ENGINE_MODEL") ?? "claude-haiku-4-5";
+    const engineProvider = (Deno.env.get("ENGINE_PROVIDER") ?? "anthropic") as "anthropic" | "openrouter";
+    const engineKey = engineProvider === "anthropic" ? (Deno.env.get("ANTHROPIC_API_KEY") ?? "") : (Deno.env.get("OPENROUTER_API_KEY") ?? "");
+    const engineOut = await runCleanEngineTurn(
+      {
+        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true, delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi },
+        conversationId: conversation.id as string,
+        cart: { id: cart.id, engine_form: cart.engine_form ?? null, test_mode: cart.test_mode, stripe_checkout_session_id: cart.stripe_checkout_session_id, notes: cart.notes },
+        message: userMessage,
+        lastBotMessage: lastBot,
+        isFirstContact: isLifetimeFirstContact,
+      },
+      {
+        supabase,
+        model: { provider: engineProvider, model: engineModel, apiKey: engineKey, timeoutMs: 20000 },
+        geocoder: googleGeocoder(Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "", { lat: shop.latitude, lng: shop.longitude, radius_mi: shop.delivery_radius_mi }),
+        serviceFeeCents: SERVICE_FEE_CENTS,
+        createCheckout: async (req) => {
+          const key = req.testMode ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
+          if (!key) return { ok: false, error: "payment system not configured" };
+          const stripe = new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+          const sessionInput = buildEngineCheckoutSessionInput({
+            cartId: req.cartId, shopName: req.shopName, testMode: req.testMode,
+            cartLines: req.cartLines as unknown as TurnEngineCartLine[], notes: req.notes,
+            orderType: req.orderType, deliveryFeeCents: req.deliveryFeeCents, tipCents: req.tipCents, taxCents: req.taxCents,
+          });
+          const r = await createCheckoutSession(sessionInput, { supabase, stripe });
+          return r.ok ? { ok: true, sessionId: r.sessionId, url: r.checkoutUrl } : { ok: false, error: r.error };
+        },
+        expireCheckout: async (sessionId) => {
+          const key = cart.test_mode ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
+          if (!key) return;
+          const stripe = new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+          try { await stripe.checkout.sessions.expire(sessionId); } catch (e) { console.error("[chat-sms] expire session failed", e); }
+        },
+      },
+    );
+    const cleanReply = appendComplianceDisclosureIfFirstContact(engineOut.reply, isLifetimeFirstContact);
+    if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, cleanReply, engineOut.assistantMessageId); return emptyTwiml(); }
+    return jsonResponse({ reply: cleanReply, cart: (cart.cart_json ?? []), phase: cart.phase, session_id: sessionId, engine: "clean", ms: engineOut.ms });
+  }
+
   if (shop.turn_engine_enabled) {
     const turnResult = await runTurnEngineTurn(
       {

@@ -2,7 +2,7 @@
 // WHOLE normalized message equal to an entry (or an anchored number). No
 // substring matching, no intent guessing. Anything else goes to interpret.ts.
 import { normalize } from "./normalize.ts";
-import type { Move, OrderForm } from "./form.ts";
+import type { Move, OrderForm, Tip } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { matchChoice, narrow } from "./resolve.ts";
 
@@ -21,6 +21,21 @@ export const HELLO = set("hi|hello|hey|yo|hi there|hello there|good morning|good
 
 const TIP_RE = /^\$?\s*(\d{1,4}(?:\.\d{1,2})?)\s*(%|percent|pct|dollars?|bucks|dollar tip|tip)?$/;
 const DIGIT_RE = /^(\d{1,2})$/;
+
+/** "20", "20%", "$5", "5 dollars", "no tip", "none" -> a Tip; null when it is not a tip answer. */
+export function parseTip(text: string): Tip | null {
+  const n = normalize(text);
+  if (!n) return null;
+  if (NO.has(n) || n === "no tip" || n === "skip" || n === "zero") return { kind: "cents", value: 0 };
+  const m = TIP_RE.exec(n.replace(/^(tip|add|make it|lets do|let us do|ill do|i will do)\s+/, ""));
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  const unit = m[2] ?? "";
+  const isDollars = text.includes("$") || /dollar|buck/.test(unit) || m[1].includes(".");
+  if (isDollars) return { kind: "cents", value: Math.round(num * 100) };
+  if (/%|percent|pct/.test(unit) || num <= 50) return { kind: "percent", value: num };
+  return { kind: "cents", value: Math.round(num * 100) };
+}
 
 export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move[] | null {
   const n = normalize(message);
@@ -41,16 +56,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   }
 
   if (open?.kind === "tip") {
-    if (NO.has(n) || n === "no tip" || n === "skip") return [{ kind: "answer", field: "tip", value: { kind: "cents", value: 0 } }];
-    const m = TIP_RE.exec(n);
-    if (m) {
-      const num = parseFloat(m[1]);
-      const unit = m[2] ?? "";
-      const isDollars = message.includes("$") || /dollar|buck/.test(unit) || m[1].includes(".");
-      if (isDollars) return [{ kind: "answer", field: "tip", value: { kind: "cents", value: Math.round(num * 100) } }];
-      if (/%|percent|pct/.test(unit) || num <= 50) return [{ kind: "answer", field: "tip", value: { kind: "percent", value: num } }];
-      return [{ kind: "answer", field: "tip", value: { kind: "cents", value: Math.round(num * 100) } }];
-    }
+    const tip = parseTip(message);
+    if (tip) return [{ kind: "answer", field: "tip", value: tip }];
   }
 
   if (open?.kind === "confirm" || open?.kind === "omission") {

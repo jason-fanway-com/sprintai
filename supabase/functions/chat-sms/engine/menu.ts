@@ -75,7 +75,7 @@ export interface RawMenuItem {
   size_label?: string | null;
   is_derived?: boolean | null;
   derived_from?: { base_item_id: string; choice_ids: string[] } | null;
-  ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[] } | null;
+  ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[]; compiled_at?: string } | null;
   option_groups?: Array<{ id: string; name: string; max_select?: number | null }> | null;
 }
 

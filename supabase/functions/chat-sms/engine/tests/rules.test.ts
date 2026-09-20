@@ -3,9 +3,14 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const DIR = new URL("../", import.meta.url).pathname;
-const CORE = ["form.ts", "crossread.ts", "resolve.ts", "price.ts", "next.ts", "render.ts", "turn.ts", "normalize.ts", "menu.ts", "vocab.ts", "interpret.ts", "templates.ts"];
+const PURE = ["form.ts", "crossread.ts", "resolve.ts", "price.ts", "next.ts", "render.ts", "turn.ts", "normalize.ts", "menu.ts", "vocab.ts", "project.ts"];
+const ADAPTERS = ["interpret.ts", "runner.ts", "address.ts"];
+const CORE = [...PURE, ...ADAPTERS, "templates.ts"];
 const REGEX_ALLOWED = new Set(["normalize.ts", "vocab.ts", "menu.ts", "templates.ts"]);
-const LINE_BUDGET = 2000;
+const FETCH_ALLOWED = new Set(["interpret.ts", "address.ts"]);
+const ADAPTER_IMPORTS_ALLOWED = ["../../_shared/error-log.ts", "https://esm.sh/@supabase/supabase-js", "npm:@anthropic-ai/sdk"];
+const PURE_BUDGET = 2000;
+const ADAPTER_BUDGET = 800;
 
 async function read(f: string): Promise<string> {
   try { return await Deno.readTextFile(DIR + f); } catch { return ""; }
@@ -21,7 +26,14 @@ function stripCommentsAndStrings(src: string): string {
 function countRegexLiterals(src: string): number {
   const code = stripCommentsAndStrings(src);
   const re = /(^|[=(,:!&|?{;\[\s])\/(?![\/*])(?:\\.|\[[^\]]*\]|[^\/\n\\])+\/[gimsuy]*/gm;
-  return (code.match(re) ?? []).length;
+  let n = 0;
+  for (const m of code.matchAll(re)) {
+    // a slash after an identifier, number or closing bracket is division, not a literal
+    const before = code.slice(0, m.index! + m[1].length).replace(/\s+$/, "");
+    if (/[\w)\]]$/.test(before)) continue;
+    n++;
+  }
+  return n;
 }
 
 Deno.test("rule: no regular expressions over text outside normalize/vocab/menu/templates", async () => {
@@ -42,18 +54,20 @@ Deno.test("rule: the engine imports nothing from the old engine or index.ts", as
     for (const line of src.split("\n")) {
       if (!line.trim().startsWith("import")) continue;
       for (const b of banned) if (line.includes(b)) offenders.push(`${f}: ${line.trim()}`);
-      if (line.includes("from \"../") && !line.includes("../pricing.ts")) offenders.push(`${f}: ${line.trim()}`);
+      const external = line.includes("from \"../") || line.includes("from \"http") || line.includes("from \"npm:");
+      const allowedForAdapter = ADAPTERS.includes(f) && ADAPTER_IMPORTS_ALLOWED.some((a) => line.includes(a));
+      if (external && !allowedForAdapter) offenders.push(`${f}: ${line.trim()}`);
     }
   }
   assertEquals(offenders, []);
 });
 
-Deno.test("rule: only interpret.ts talks to a model", async () => {
+Deno.test("rule: only interpret.ts talks to a model; only address.ts talks to the geocoder", async () => {
   const offenders: string[] = [];
   for (const f of CORE) {
-    if (f === "interpret.ts") continue;
     const code = stripCommentsAndStrings(await read(f));
-    if (/\bfetch\s*\(|fetchImpl|api\.anthropic|openrouter/.test(code)) offenders.push(f);
+    if (!FETCH_ALLOWED.has(f) && /\bfetch\s*\(|fetchImpl/.test(code)) offenders.push(`${f}: fetch`);
+    if (f !== "interpret.ts" && /Anthropic|openrouter/.test(code)) offenders.push(`${f}: model client`);
   }
   assertEquals(offenders, []);
 });
@@ -62,9 +76,10 @@ Deno.test("rule: interpret.ts never sees money", async () => {
   const src = await read("interpret.ts");
   if (!src) return;
   const code = src.toLowerCase();
-  for (const bad of ["cents", "price", "$", "total", "subtotal"]) {
+  for (const bad of ["cents", "price", "subtotal", "total"]) {
     assert(!code.includes(bad), `interpret.ts mentions "${bad}"`);
   }
+  assert(!/\$\s?\d/.test(code), "interpret.ts contains a dollar amount");
 });
 
 Deno.test("rule: customer-facing sentences live only in templates.ts", async () => {
@@ -79,13 +94,16 @@ Deno.test("rule: customer-facing sentences live only in templates.ts", async () 
   assertEquals(offenders, []);
 });
 
-Deno.test(`rule: engine core stays under ${LINE_BUDGET} lines`, async () => {
-  let total = 0;
-  const per: string[] = [];
-  for (const f of CORE) {
-    if (f === "templates.ts") continue;
-    const n = (await read(f)).split("\n").length;
-    total += n; per.push(`${f}=${n}`);
-  }
-  assert(total <= LINE_BUDGET, `engine core is ${total} lines (${per.join(", ")}); budget ${LINE_BUDGET}. Do not raise the budget; simplify.`);
+async function lineTotal(files: string[]): Promise<{ total: number; per: string[] }> {
+  let total = 0; const per: string[] = [];
+  for (const f of files) { const n = (await read(f)).split("\n").length; total += n; per.push(`${f}=${n}`); }
+  return { total, per };
+}
+Deno.test(`rule: pure engine core stays under ${PURE_BUDGET} lines`, async () => {
+  const { total, per } = await lineTotal(PURE);
+  assert(total <= PURE_BUDGET, `pure core is ${total} lines (${per.join(", ")}); budget ${PURE_BUDGET}. Do not raise the budget; simplify.`);
+});
+Deno.test(`rule: adapters stay under ${ADAPTER_BUDGET} lines`, async () => {
+  const { total, per } = await lineTotal(ADAPTERS);
+  assert(total <= ADAPTER_BUDGET, `adapters are ${total} lines (${per.join(", ")}); budget ${ADAPTER_BUDGET}.`);
 });

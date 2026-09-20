@@ -55,6 +55,8 @@ export interface CreateCheckoutSessionInput {
   serviceFeeCents:   number;
   deliveryFeeCents:  number;
   tipCents:          number;
+  /** sales tax in cents; 0 when the shop has no tax rate */
+  taxCents?:        number;
   orderType:         "pickup" | "delivery";
   notes?:            string;
 }
@@ -133,6 +135,18 @@ export async function createCheckoutSession(
     });
   }
 
+  const taxCents = input.taxCents ?? 0;
+  if (taxCents > 0) {
+    stripeLineItems.push({
+      price_data: {
+        currency:     "usd",
+        unit_amount:  taxCents,
+        product_data: { name: "Sales tax", description: undefined },
+      },
+      quantity: 1,
+    });
+  }
+
   stripeLineItems.push({
     price_data: {
       currency:     "usd",
@@ -142,7 +156,7 @@ export async function createCheckoutSession(
     quantity: 1,
   });
 
-  const totalCents = input.subtotalCents + input.serviceFeeCents + input.deliveryFeeCents + input.tipCents;
+  const totalCents = input.subtotalCents + input.serviceFeeCents + input.deliveryFeeCents + input.tipCents + taxCents;
 
   const session = await deps.stripe.checkout.sessions.create({
     mode:                 "payment",
@@ -162,6 +176,7 @@ export async function createCheckoutSession(
     total_cents:                 totalCents,
     delivery_fee_cents:          input.deliveryFeeCents,
     driver_tip_cents:            input.tipCents,
+    tax_cents:                   taxCents,
     stripe_checkout_session_id:  session.id,
     phase:                       "checkout",
   }).eq("id", input.cartId);
@@ -203,6 +218,7 @@ export function buildEngineCheckoutSessionInput(params: {
   orderType:         "pickup" | "delivery";
   deliveryFeeCents?: number | null;
   tipCents?:         number | null;
+  taxCents?:         number | null;
 }): CreateCheckoutSessionInput {
   const realLines = params.cartLines.filter(l => typeof l.menu_item_id === "string");
 
@@ -226,6 +242,7 @@ export function buildEngineCheckoutSessionInput(params: {
     serviceFeeCents:  SERVICE_FEE_CENTS,
     deliveryFeeCents: params.deliveryFeeCents ?? 0,
     tipCents:         params.tipCents ?? 0,
+    taxCents:         params.taxCents ?? 0,
     orderType:        params.orderType,
     notes:            params.notes ?? undefined,
   };
