@@ -85,6 +85,16 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
   const exact = pool.filter((c) => sameWords(c.words, sw));
   if (exact.length === 1) return { kind: "one", choice_id: exact[0].id };
+  // "steak" among Steak (Half), Steak (Whole), Chicken Steak (Half/Whole): the choices whose
+  // name, minus placement words, IS the span come first; then whole beats half
+  const core = (c: { words: string[] }) => c.words.filter((w) => !PLACEMENT.has(w));
+  const coreExact = pool.filter((c) => sameWords(core(c), sw.filter((w) => !PLACEMENT.has(w))));
+  if (coreExact.length === 1) return { kind: "one", choice_id: coreExact[0].id };
+  if (coreExact.length > 1) {
+    if (sw.includes("half")) { const h = coreExact.filter((c) => c.words.includes("half")); if (h.length === 1) return { kind: "one", choice_id: h[0].id }; }
+    const w = coreExact.filter((c) => c.words.includes("whole")); if (w.length === 1 && !sw.includes("half")) return { kind: "one", choice_id: w[0].id };
+    return { kind: "many", choice_ids: coreExact.map((c) => c.id) };
+  }
   const subset = pool.filter((c) => isWordSubset(sw, c.words));
   if (subset.length === 1) return { kind: "one", choice_id: subset[0].id };
   if (subset.length > 1) {
@@ -129,7 +139,10 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
+const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
+
+let menuTermWords: Map<string, Set<string>> = new Map();
 
 /** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
 function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
@@ -185,7 +198,8 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
   // 3. a size word that is already the item's own size (derived rows carry size in the name)
   const sw = words(text);
   if (sw.length === 1 && item.facets.size === sw[0]) return true;
-  if (isWordSubset(sw, item.words)) return true; // restating the item name
+  const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]);
+  if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   line.notes.push(text);
   return false;
 }
@@ -195,6 +209,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
  * Returns the item it ended on, if any.
  */
 export function bindLine(line: Line, menu: Menu): void {
+  menuTermWords = menu.termWordsByItem;
   // An unresolved line whose customer gave a replacement span: swap the span.
   if (line.item_id === null && line.status.kind === "unresolved" && line.held.length > 0 && !line.held[0].startsWith("-")) {
     const first = line.held[0];

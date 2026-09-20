@@ -554,3 +554,16 @@ Deno.test("a note-only answer does not count as progress; the ladder still escal
   assertEquals(o.form.lines.length, 0);
   assertStringIncludes(o.reply, "leave");
 });
+
+Deno.test("'steak' among steak and chicken-steak placements picks Steak (Whole); the size in the span is not a note", () => {
+  const m = buildMenu({ version: "t", items: [...RAW_ITEMS, { id: "cbrS", name: 'Chicken Bacon Ranch - Small (10")', display_name: "Small Chicken Bacon Ranch Pizza", category: "Pizza", price_cents: 1495, bot_state: "orderable",
+    ask_plan: { base_price_cents: 1495, steps: [{ group_id: "cbrTopS", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.ask",
+      choices: [{ id: "stH", display: "Steak (Half pizza)", price_delta_cents: 200 }, { id: "cstH", display: "Chicken Steak (Half pizza)", price_delta_cents: 200 }, { id: "cstW", display: "Chicken Steak (Whole pizza)", price_delta_cents: 200 }, { id: "stW", display: "Steak (Whole pizza)", price_delta_cents: 200 }] }] } }],
+    lexicon: [...RAW_LEXICON, { term: "chicken bacon ranch pizza", target_type: "item", target_id: "cbrS" }, { term: "chicken bacon ranch", target_type: "item", target_id: "cbrS" }], shop: SHOP });
+  let f = newForm("vitos", "t");
+  f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  const o = turn({ form: f, menu: m, message: 'Chicken Bacon Ranch - Small (10") with steak', moves: [{ kind: "add_line", item_span: "Chicken Bacon Ranch", qty: 1, option_spans: ['Small (10")', "steak"] }] });
+  assertEquals(o.form.lines[0].modifiers, ["stW"]);
+  assertEquals(o.form.lines[0].notes, []);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});

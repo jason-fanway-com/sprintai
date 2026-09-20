@@ -20,7 +20,9 @@ STOP = set("a an the of with and please some order side one two three for me get
 def cw(s): return [w for w in re.sub(r"[^a-z0-9 ]", " ", s.lower()).split() if w not in STOP]
 
 def answer_for(reply):
+    reply = reply.split("Msg & data rates")[0]
     r = reply.lower()
+    if "anything else" in r or "what can i get" in r or "what would you like" in r or "reply done" in r: return "thats it"
     if "reply yes" in r: return "yes"
     if "pickup or delivery" in r: return "pickup"
     if "delivery address" in r: return "3300 Hamilton Blvd, Allentown, PA 18103"
