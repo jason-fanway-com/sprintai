@@ -3129,3 +3129,131 @@ Deno.test('runTurnEngineTurn: "2 of the large" (partitive-of shape) resolves to 
   assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200);
   assertEquals(result.dialogueState.open, null);
 });
+
+// ============================================================
+// PO dispatch (2026-09-19), MONEY BUG (W1), real live conv 0db63161 (#28),
+// deploy v549, order never paid:
+//
+//   bot: "What's the name for the order?"
+//   customer: "It's under my name. Just put it in my name."
+//   bot: "10 Pieces Wings (Bone-In) added. What wing flavor would you like...?"
+//
+// answer()'s "name" case already correctly refuses to read a name out of
+// this message (NOT_NAME_TOKENS has both "my" and "name" -- see
+// name-step-empty-takeover-and-wing-slot-removal-20260919.test.ts's own
+// "rule 1" acceptance for that half, proven directly against answer()) and
+// returns UNRESOLVED, so the turn reaches PROPOSE. Nothing in PROPOSE's own
+// contract stops the MODEL from reading that same confusing reply as an
+// order anyway -- exactly like the order-shaped-message defect fixed
+// earlier tonight (Round 2, item 4/1b, just above), except here the model's
+// own adds/removes/modifies are the leak, not a code-side re-run. Fixed by
+// discarding a PROPOSE result's adds/removes/modifies outright whenever the
+// open question is name/address/order_type/confirm -- each has a narrow,
+// specific expected answer shape, so a reply to any of them is never a
+// license to add/remove/modify a cart line, no matter what the model
+// itself proposes. The model is still consulted (answer_value extraction
+// for name/address needs the call to happen); only its cart mutation is
+// discarded.
+// ============================================================
+
+const WINGS_MONEY_BUG_ID = "wings-10pc-bone-in";
+const WINGS_MONEY_BUG_MENU: TurnEngineMenuItem[] = [
+  ...MENU,
+  {
+    id: WINGS_MONEY_BUG_ID, name: "10 Pieces Wings (Bone-In)", category: "Wings", price_cents: 1699,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "10 Pieces Wings (Bone-In)", base_price_cents: 1699,
+      recap_template: "", ticket_template: "",
+      steps: [
+        {
+          kind: "slot", ask_mode: "ask", group_id: "wings-flavor-group", slot_key: "flavor", prompt_template: "flavor.ask",
+          choices: [
+            { id: "wings-mild", display: "Mild", price_delta_cents: 0 },
+            { id: "wings-hot", display: "Hot", price_delta_cents: 0 },
+          ],
+        },
+      ],
+    },
+  },
+];
+const LIVE_NAME_STEP_REPLY = "It's under my name. Just put it in my name.";
+const NAME_OPEN_STATE: DialogueState = { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null };
+
+Deno.test("runTurnEngineTurn (rule 1+2, PRIMARY ACCEPTANCE, real conv 0db63161 #28, MONEY BUG): with the name question open, even a model that hallucinates 'Wings' out of the name reply never lands it on the cart", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "wings", target_id: WINGS_MONEY_BUG_ID }] });
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    // The exact live outcome: the model reads the name-step reply as an
+    // order for the wings. Nothing in PROPOSE's contract forbids this --
+    // code must be the backstop, not a hope that the model behaves.
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "Wings", quantity: 10, choices: [] }], removes: [], modifies: [] },
+    }),
+  };
+  const input = baseInput({
+    message: LIVE_NAME_STEP_REPLY,
+    menu: WINGS_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: NAME_OPEN_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  // BEFORE this fix (verified directly against the pre-fix code path --
+  // the adds/removes/modifies sanitization step added to
+  // turn-engine-runner.ts did not exist, so decide() received the model's
+  // adds unchanged): this same call adds Wings and opens the flavor slot
+  // next -- the exact live defect, "10 Pieces Wings (Bone-In) added. What
+  // wing flavor would you like...?". AFTER: nothing lands on the cart.
+  assertEquals(result.cart.length, 0, `Wings must never be added from a name-question reply, even when the model itself proposes it: ${JSON.stringify(result.cart)}`);
+  assert(!result.reply.toLowerCase().includes("wing"), `reply must not mention Wings at all: ${result.reply}`);
+});
+
+// Rule 2, the code-side takeover specifically: an order-shaped message ("4
+// burgers please" -- leading quantity + real category word) with the model
+// returning EMPTY adds normally re-runs through the same order-add pipeline
+// (Round 2, item 4/1b, above) -- but only when open === null or a kind
+// without a narrow expected-answer shape. Verifies the gate for all four
+// blocked kinds, plus a regression check that the pre-existing behavior
+// (open === null) still fires, unaffected.
+const ORDER_SHAPED_MONEY_BUG_MESSAGE = "4 cheese burgers please";
+function emptyAddsProposeFn(): Promise<ProposeResult> {
+  return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "order", adds: [], removes: [], modifies: [] } });
+}
+const RULE2_BLOCKED_OPEN_STATES: Array<{ label: string; state: DialogueState }> = [
+  { label: "name", state: { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null } },
+  { label: "address", state: { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null } },
+  { label: "order_type", state: { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null } },
+  { label: "confirm", state: { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null } },
+];
+
+for (const { label, state } of RULE2_BLOCKED_OPEN_STATES) {
+  Deno.test(`runTurnEngineTurn (rule 2): the order-shaped empty-adds takeover never fires while open.kind === "${label}"`, async () => {
+    const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheese burger", target_id: "item-cheeseburger" }] });
+    const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+    const input = baseInput({
+      message: ORDER_SHAPED_MONEY_BUG_MESSAGE,
+      cart: [],
+      dialogueState: state,
+      shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: label === "name" ? null : "Jason", deliveryFeeCents: null },
+    });
+    const result = await runTurnEngineTurn(input, deps);
+    assertEquals(result.cart.length, 0, `"${ORDER_SHAPED_MONEY_BUG_MESSAGE}" while open.kind === "${label}" must never resolve as a fresh order: ${JSON.stringify(result.cart)}`);
+  });
+}
+
+Deno.test("runTurnEngineTurn (rule 2 regression): the order-shaped empty-adds takeover still fires normally when open === null (unaffected case, Round 2 item 4/1b)", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheese burger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+  const input = baseInput({
+    message: ORDER_SHAPED_MONEY_BUG_MESSAGE,
+    cart: [],
+    dialogueState: { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null },
+  });
+  const result = await runTurnEngineTurn(input, deps);
+  assertEquals(result.cart.length, 1, "a genuinely fresh order-shaped message with no open question must still resolve, unaffected by this gate");
+  assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
+});

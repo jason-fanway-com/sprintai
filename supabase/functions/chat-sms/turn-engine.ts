@@ -1963,6 +1963,38 @@ function removeReplacementSourceLine(cart: TurnEngineCartLine[], lineKey: string
 // and is deliberately left to applyCompiledModifyItem, unaffected.
 const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|that|this)\b)/i;
 
+// Rule 3 (2026-09-19, live conv 0db63161 #28, MONEY BUG — order never paid):
+// a slot's own line can also be declined BY NAME, not just by the bare
+// pronoun DECLINE_OPEN_ITEM_RE above covers. Four separate live attempts to
+// cancel the wings while the wing-flavor slot was open — "I didn't order
+// wings!", "No wings!", "cancel the wings", "Forget the wings" — all name
+// the item outright and were fed to matchChoiceInText as if each were a
+// flavor ("We don't have '...' for 10 Pieces Wings."), on all four tries,
+// so the order never completed. Deliberately its own small helper, not a
+// REMOVAL_VERBS/removeHasRemovalLanguage change — that shared list feeds
+// the order_type/confirm removal mechanism a separate fix is reopening at
+// the runner level tonight; this is scoped to the slot case only. Reuses
+// the exact decline-cue-plus-whole-word-stem shape pending-disambiguation.ts's
+// isPendingDisambiguationDeclined already proves for the disambiguation
+// case: a real decline verb is required AND the line's own name or category
+// must appear as a whole stemmed word — never a substring — so a short word
+// elsewhere in the message (e.g. "in" from an unrelated "put it in my name")
+// can never fire this by matching a fragment of a real item name like
+// "Bone-In".
+const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
+
+function isNamedSlotItemRejection(
+  message: string,
+  itemName: string,
+  itemCategory: string | null | undefined,
+): boolean {
+  if (!SLOT_ITEM_REJECTION_CUES.test(message)) return false;
+  const nameStems = significantStems(itemName ?? "");
+  const msgStems = significantStems(message);
+  for (const s of nameStems) if (msgStems.has(s)) return true;
+  return categoryWordMatches(itemCategory, message);
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -1998,14 +2030,17 @@ export function answer(
       const idx = findLineByKey(cart, state.open.line_key);
       if (idx < 0) return UNRESOLVED;
       const line = cart[idx];
+      const menuItem = menuById.get(line.menu_item_id);
       // Rule 3: checked BEFORE any slot-value matching runs (below), so
-      // "take it off"/"remove it" is never given a chance to be read as a
-      // literal choice for the open slot — see DECLINE_OPEN_ITEM_RE's header.
-      if (DECLINE_OPEN_ITEM_RE.test(trimmed)) {
+      // neither a bare pronoun decline ("take it off"/"remove it" — see
+      // DECLINE_OPEN_ITEM_RE's header) nor a named one ("no wings"/"cancel
+      // the wings"/"forget the wings"/"I didn't order wings" — see
+      // isNamedSlotItemRejection's own header) is ever given a chance to be
+      // read as a literal choice for the open slot.
+      if (DECLINE_OPEN_ITEM_RE.test(trimmed) || isNamedSlotItemRejection(trimmed, line.name, menuItem?.category)) {
         removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
         return { resolved: true, outcome: { kind: "slot_item_declined" }, cartChanged: true };
       }
-      const menuItem = menuById.get(line.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // suppressUnitSplit: true — see ask-plan-engine.ts's own doc on that
       // param. This call is always a required slot's FIRST-EVER answer (ASK

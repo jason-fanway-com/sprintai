@@ -1895,7 +1895,22 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // re-runs through this same path regardless of what intent the model
     // assigned it. One detector (orderShapedMessageQuantity), one re-run
     // path, covering both trigger shapes.
-    if ((proposal.adds?.length ?? 0) === 0) {
+    //
+    // Rule 2 (2026-09-19, live conv 0db63161 #28, MONEY BUG): gated OFF
+    // whenever priorState.open is name/address/order_type/confirm — those
+    // four questions each have a narrow, specific expected answer shape
+    // (a name, an address, pickup-or-delivery, yes-or-no), so treating a
+    // reply to any of them as "maybe the customer is ordering something" is
+    // categorically wrong, the same reasoning the slot/multi_size/
+    // disambiguation branch above already applies by skipping PROPOSE
+    // entirely. This takeover still needs PROPOSE to have actually run for
+    // these four kinds (00-BL/00-BM extract a name/address out of
+    // proposal.answer_value above), so it can't skip the call itself — only
+    // the empty-adds-as-a-fresh-order reinterpretation of its result.
+    const openKindBlocksOrderShapedTakeover = priorState.open?.kind === "name" ||
+      priorState.open?.kind === "address" || priorState.open?.kind === "order_type" ||
+      priorState.open?.kind === "confirm";
+    if (!openKindBlocksOrderShapedTakeover && (proposal.adds?.length ?? 0) === 0) {
       const orderShapedQuantity = orderShapedMessageQuantity(input.message, input.menu);
       if (orderShapedQuantity !== null) {
         proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
@@ -1937,6 +1952,21 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // the interpreter there needs an interpretation-ONLY call inside that
       // suppression branch -- the model reads the message, its cart changes
       // are discarded. Worth doing; not a two-line change.
+    }
+    // Rule 1/2 (2026-09-19, live conv 0db63161 #28, MONEY BUG, order never
+    // paid): name/address/order_type/confirm are each a narrow, specific
+    // expected-answer-shape question -- a reply to any of them must never be
+    // read as a fresh order, whether that reading would have come from the
+    // code-side takeover gated off above or straight from the model's OWN
+    // adds/removes/modifies (PROPOSE has no contract forcing it to recognize
+    // "the customer is answering the question asked, not ordering something"
+    // any more reliably here than it does on the order-shaped-message defect
+    // this same dispatch fixes above). The model is still consulted for these
+    // four kinds -- 00-BL/00-BM's answer_value extraction above needs the
+    // call to have actually happened -- only its cart-shaped output is ever
+    // discarded, never answer_value/answer_to_open_question.
+    if (openKindBlocksOrderShapedTakeover) {
+      proposal = { ...proposal, adds: [], removes: [], modifies: [] };
     }
     const decideResult = decide(
       proposal,
