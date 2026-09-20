@@ -2740,6 +2740,153 @@ Deno.test("runTurnEngineTurn (read-back corrections, mechanism 2): the real tran
 });
 
 // ============================================================
+// 2026-09-19 PO dispatch (P0, live money bug, conv 6fc39938, turn #13): the
+// read-back showed "2x Large Hawaiian Pizza". The customer replied "Actually,
+// I meant to say just one Hawaiian pizza, so it should be 1x Large Hawaiian
+// Pizza instead of 2." — the bot said "Anything else?" and left the cart at
+// 2x. The customer repeated the SAME correction five more times, worded five
+// different ways ("make that 1x Large Hawaiian Pizza and 1x Nonas Meatballs",
+// "I actually only want 1x ..."), and NONE of them applied — no propose_call
+// row was ever logged for this conversation after turn 1, confirmed against
+// error_log. Root cause: none of the three shapes matched the existing
+// 2026-09-18 quantity-correction patterns (a genuine gap, not a menu/cart
+// issue — see QTY_ITEM_SEP's own header on the "1x" glued-number spacing
+// bug, and QUANTITY_CORRECTION_ONLY_WANT_RE for the "only want" shape that
+// had no rule at all), so every attempt fell to impliesConfirmDecline's
+// broad "actually"/"instead"/"wrong" vocabulary and was silently read as a
+// bare "no" — an unmatched correction being WORSE than doing nothing, never
+// reaching the model even once.
+// ============================================================
+const CONV_HAWAIIAN_ID = "item-conv-hawaiian-pizza";
+const CONV_MEATBALLS_ID = "item-conv-nonas-meatballs";
+const CONV_MENU: TurnEngineMenuItem[] = [
+  { id: CONV_HAWAIIAN_ID, name: "Large Hawaiian Pizza", category: "Pizza", price_cents: 1899, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Large Hawaiian Pizza", base_price_cents: 1899, recap_template: "", ticket_template: "", steps: [] } },
+  { id: CONV_MEATBALLS_ID, name: "Nonas Meatballs", category: "Entrees", price_cents: 1099, bot_state: "orderable", ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Nonas Meatballs", base_price_cents: 1099, recap_template: "", ticket_template: "", steps: [] } },
+];
+function convHawaiianCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: CONV_HAWAIIAN_ID, name: "Large Hawaiian Pizza", quantity: 2, price_cents: 1899, modifiers: [] },
+  ];
+}
+function convHawaiianAndMeatballsCart(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: CONV_HAWAIIAN_ID, name: "Large Hawaiian Pizza", quantity: 2, price_cents: 1899, modifiers: [] },
+    { menu_item_id: CONV_MEATBALLS_ID, name: "Nonas Meatballs", quantity: 2, price_cents: 1099, modifiers: [] },
+  ];
+}
+const CONV_CONFIRM_STATE: DialogueState = { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null, openRepeatCount: 0 };
+
+// Acceptance 1: the real turn-#13 message, verbatim.
+Deno.test("answer (P0, conv 6fc39938, acceptance 1): 'Actually, I meant to say just one Hawaiian pizza, so it should be 1x Large Hawaiian Pizza instead of 2.' corrects 2x to 1x on the first attempt", () => {
+  const cart = convHawaiianCart();
+  const result = answer(
+    CONV_CONFIRM_STATE, cart,
+    "Actually, I meant to say just one Hawaiian pizza, so it should be 1x Large Hawaiian Pizza instead of 2.",
+    CONV_MENU,
+  );
+  assertEquals(result, { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true });
+  assertEquals(cart[0].quantity, 1);
+});
+
+Deno.test("runTurnEngineTurn (P0, conv 6fc39938, acceptance 1): the read-back reflects 1x, never 'Anything else?'", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — the correction resolves deterministically")),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-6fc39938", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "Actually, I meant to say just one Hawaiian pizza, so it should be 1x Large Hawaiian Pizza instead of 2.",
+    history: [], menu: CONV_MENU, cart: convHawaiianCart(), dialogueState: CONV_CONFIRM_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Alex", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("Anything else?"), `must never fall through to the swallow bug: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart[0].quantity, 1);
+});
+
+// Acceptance 2: BEFORE the fix, "make it" (never "make that") meant this
+// shape failed to match QUANTITY_CORRECTION_MAKE_IT_RE at all — "make that"
+// fell straight through to impliesConfirmDecline on "actually"-free wording
+// with no decline word in it either, landing on UNRESOLVED already by pure
+// accident in the old code (no decline word matched), NOT because the
+// correction was recognized — the cart was never touched. The two-item
+// compound is the real new shape: both quantities must land, not just one.
+Deno.test("answer (P0, conv 6fc39938, acceptance 2): 'make that 1x Large Hawaiian Pizza and 1x Nonas Meatballs' applies BOTH corrections", () => {
+  const cart = convHawaiianAndMeatballsCart();
+  const result = answer(CONV_CONFIRM_STATE, cart, "make that 1x Large Hawaiian Pizza and 1x Nonas Meatballs", CONV_MENU);
+  assertEquals(result, { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true });
+  assertEquals(cart[0].quantity, 1, "Hawaiian pizza must correct to 1x");
+  assertEquals(cart[1].quantity, 1, "Nonas Meatballs must correct to 1x");
+});
+
+// Acceptance 3: "only want" had no matching pattern at all before this fix —
+// contains "actually", which impliesConfirmDecline's ANYWHERE tier reads as
+// a bare decline, discarding the stated quantity entirely.
+Deno.test("answer (P0, conv 6fc39938, acceptance 3): 'I actually only want 1x Large Hawaiian Pizza.' corrects 2x to 1x", () => {
+  const cart = convHawaiianCart();
+  const result = answer(CONV_CONFIRM_STATE, cart, "I actually only want 1x Large Hawaiian Pizza.", CONV_MENU);
+  assertEquals(result, { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true });
+  assertEquals(cart[0].quantity, 1);
+});
+
+// Acceptance 4: the backstop. A confirm-state message that matches NONE of
+// the known correction shapes (no stated quantity, no "<X>, not <Y>" pair)
+// but contains decline-adjacent vocabulary ("wrong") must reach PROPOSE —
+// not be silently read as a bare "no" with the cart left untouched. This is
+// the actual defect this dispatch closes: an unmatched message was WORSE
+// than doing nothing, because it was actively told "Anything else?" as if
+// no correction had been attempted at all.
+Deno.test("answer (P0, conv 6fc39938, acceptance 4): a genuinely unparseable correction ('Wrong, can you fix the Large Hawaiian Pizza on my order please?') reaches PROPOSE, never a silent confirm_no", () => {
+  const cart = convHawaiianCart();
+  const result = answer(CONV_CONFIRM_STATE, cart, "Wrong, can you fix the Large Hawaiian Pizza on my order please?", CONV_MENU);
+  assertEquals(result, { resolved: false }, `must be UNRESOLVED so runTurnEngineTurn calls PROPOSE, not a silent confirm_no: ${JSON.stringify(result)}`);
+  assertEquals(cart[0].quantity, 2, "nothing is guessed at or mutated when the correction can't be parsed");
+});
+
+Deno.test("runTurnEngineTurn (P0, conv 6fc39938, acceptance 4): the unparseable correction reaches PROPOSE, whose own model-side reply lands instead of a silent 'Anything else?'", async () => {
+  const { supabase } = makeMinimalFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    proposeTurnFn: () => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: { intent: "question", adds: [], removes: [], modifies: [], answer_text: "Sorry, what would you like the pizza changed to?" },
+    }),
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-6fc39938", shopId: "shop-1", tenantId: "tenant-1", cartId: "cart-1",
+    message: "Wrong, can you fix the Large Hawaiian Pizza on my order please?",
+    history: [], menu: CONV_MENU, cart: convHawaiianCart(), dialogueState: CONV_CONFIRM_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Alex", deliveryFeeCents: null },
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.includes("Anything else?"), `must reach PROPOSE's own reply, not the silent swallow: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart[0].quantity, 2, "PROPOSE proposed no changes here — the cart is untouched, not guessed at");
+});
+
+// Acceptance 5 (regression): the 2026-09-18 patterns this dispatch widened
+// must still resolve exactly as before — same messages, same fixture shape
+// as the mechanism-1 block above, run again here against this conv's own
+// menu/cart to prove the widening didn't narrow anything.
+for (const msg of [
+  "I think you got the pizza wrong. I meant 2 Large Hawaiian Pizza, not one.",
+  "No, it's actually 2 x Large Hawaiian Pizza instead of one.",
+]) {
+  Deno.test(`answer (P0, conv 6fc39938, acceptance 5 — regression): "${msg}" still sets quantity to 2, unchanged by the widening`, () => {
+    const cart: TurnEngineCartLine[] = [
+      { menu_item_id: CONV_HAWAIIAN_ID, name: "Large Hawaiian Pizza", quantity: 1, price_cents: 1899, modifiers: [] },
+    ];
+    const result = answer(CONV_CONFIRM_STATE, cart, msg, CONV_MENU);
+    assertEquals(result, { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true });
+    assertEquals(cart[0].quantity, 2);
+  });
+}
+
+// ============================================================
 // 2026-09-19 PO dispatch (Commit 3): when a disambiguation answer explicitly
 // rejects the offered category ("not stromboli", "I meant pizza not X"),
 // respond with "We only have X as a Y. Keep it, or take it off?" and add the
