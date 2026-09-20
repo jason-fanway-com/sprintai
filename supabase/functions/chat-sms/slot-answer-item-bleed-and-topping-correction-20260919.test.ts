@@ -138,25 +138,31 @@ Deno.test("runTurnEngineTurn (S1, real conv e456bf93 #16): 'Can I get Ranch for 
   const priorState: DialogueState = { phase: "ordering", open: { kind: "slot", line_key: "line-1", group_id: "group-dressing" }, upsell_offered: false, asked_message_id: null };
   const { supabase } = makeFakeSupabase(S1_LEXICON);
 
+  // 2026-09-20 PO dispatch (slot-resolved blocks item search THIS TURN, V1's
+  // own generalization one night later, real conv 6365b84d #16 money bug):
+  // S1's own fix (this test, night of 2026-09-19) kept the remainder call
+  // ALIVE for a resolved slot and only scoped what text it could see
+  // (extractRemainderAfterAnswer's excludeBefore param) — proven, the same
+  // night after this one, to still let a DIFFERENT phrasing ("Yes, please
+  // add ranch for both pizzas!") slip a phantom disambiguation open. The
+  // generalized fix removes "slot_resolved" from turn-engine-runner.ts's own
+  // REMAINDER_ELIGIBLE_OUTCOME_KINDS entirely — see that dispatch's own doc
+  // there — so NO remainder PROPOSE call of any kind runs once a slot
+  // resolves, regardless of phrasing. This is a deliberate, known narrowing:
+  // the genuine "is there a wait time for pickup?" follow-up asked in the
+  // same breath as the slot answer no longer gets answered THIS turn either
+  // — proposeTurnFn is now never called at all. The customer can just ask
+  // again next turn; silence beats a phantom order every time, per the PO's
+  // own standing rule. This test is UPDATED (not weakened) to assert the new,
+  // intentional behavior — it still proves the load-bearing half of S1's own
+  // fix (the dressing slot resolves to Ranch, no phantom line/disambiguation
+  // ever opens), which the generalized fix only strengthens.
   const captured = { calls: 0, messages: [] as string[] };
   const deps: RunTurnDeps = {
     supabase, apiKey: "test-key",
     newLineKey: (() => { let n = 0; return () => `line-${++n}`; })(),
-    proposeTurnFn: (input): Promise<ProposeResult> => {
-      captured.calls++;
-      captured.messages.push(input.message);
-      // A faithful stand-in for what the model actually does with whatever
-      // text it's handed: if the (bugged) remainder still contains "Ranch",
-      // it proposes an add for it — which is exactly how the real live
-      // disambiguation got opened. If the remainder is the genuine leftover
-      // question about wait times, there is nothing here to add.
-      if (/ranch/i.test(input.message)) {
-        return Promise.resolve({
-          ok: true, attempts: 1,
-          proposal: { intent: "order", adds: [{ item_span: "ranch", quantity: 1, choices: [] }], removes: [], modifies: [] },
-        });
-      }
-      return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "question", adds: [], removes: [], modifies: [] } });
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      throw new Error("FORBIDDEN: proposeTurnFn must never be called this turn — a resolved slot answer blocks ALL fresh item search/PROPOSE processing, full stop");
     },
   };
   const input = baseInput({
@@ -166,12 +172,7 @@ Deno.test("runTurnEngineTurn (S1, real conv e456bf93 #16): 'Can I get Ranch for 
 
   const result = await runTurnEngineTurn(input, deps);
 
-  assertEquals(captured.calls, 1, "exactly one remainder PROPOSE call — the primary slot answer must resolve deterministically, no model call");
-  assertEquals(
-    captured.messages[0],
-    "Also, is there a wait time for pickup?",
-    `the remainder sent to PROPOSE must exclude the text that already answered the slot — got ${JSON.stringify(captured.messages[0])}`,
-  );
+  assertEquals(captured.calls, 0, "no remainder PROPOSE call at all — a resolved slot answer now blocks every fresh item search this same turn, full stop");
   assertEquals(result.cart[0].ask_plan_selections?.["group-dressing"], "choice-ranch", "the dressing slot must still resolve to Ranch");
   assertEquals(result.cart.length, 1, `no phantom second line / disambiguation add may ever land: ${JSON.stringify(result.cart)}`);
   assertEquals(result.dialogueState.open, null, `no disambiguation may ever open from the slot answer's own text: ${JSON.stringify(result.dialogueState.open)}`);

@@ -844,14 +844,43 @@ function extractRemainderAfterAnswer(message: string, excludeBefore: string | nu
   return remainder.length > 0 ? remainder : null;
 }
 
-// The seven open-question kinds a real ANSWER shape fully anticipates (see
-// turn-engine.ts's own ANSWER switch) -- the only ones where a RESOLVED
-// outcome can safely be followed by a remainder-only PROPOSE call. Every
-// other outcome (checkout_intent, closure, address_declined, upsell_*) is
-// either already a closing/declining signal or already fully consumes the
-// message on its own; none of them named in this dispatch.
+// The open-question kinds a real ANSWER shape fully anticipates (see
+// turn-engine.ts's own ANSWER switch) where a RESOLVED outcome can safely be
+// followed by a remainder-only PROPOSE call. Every other outcome
+// (checkout_intent, closure, address_declined, upsell_*) is either already a
+// closing/declining signal or already fully consumes the message on its own;
+// none of them named in this dispatch.
+//
+// 2026-09-20 PO dispatch (slot-resolved blocks item search THIS TURN, V1's
+// generalization, real conv 6365b84d #16 money bug, v572 50-run): "slot_
+// resolved" deliberately does NOT appear here, unlike every night-of-19th
+// dispatch before it (S1, then this fix's own V1 predecessor,
+// slot-value-narrowing-bleed-20260920.test.ts) — both of those tried to keep
+// the remainder call ALIVE for a resolved slot and instead scope/guard what
+// text it could see (extractRemainderAfterAnswer's excludeBefore param,
+// decide()'s slotAnswerConsumedText/isSlotAnswerBleed check). Real repro:
+// "Yes, please add ranch for both pizzas!" answers a "Ranch or Bleu Cheese?"
+// dressing slot correctly, but ALSO opened a phantom "which one?" (Chicken
+// Bacon Ranch Medium/Large/...) disambiguation the same turn — a
+// $91.96-for-a-$45.98-order money bug. Both prior guards key on the EXACT
+// consumed answer text appearing at an exact, findable position in the
+// message; a genuinely different sentence SHAPE (an affirmative "Yes" plus
+// an imperative "please add X" plus a scope phrase "for both pizzas") is
+// enough to slip past that text-matching, because the guard is fighting
+// phrasing instead of the actual invariant. PO's own rule, verbatim: "once a
+// turn sets a slot, no item search runs on that turn, full stop" — keyed on
+// the CHOICE having been applied, never on which words carried it. Excluding
+// "slot_resolved" here makes that unconditional: no remainder PROPOSE call of
+// any kind runs this same turn once a slot resolves, so there is no marker
+// text or consumed-text boundary left to get wrong. This is a deliberate,
+// known narrowing of that mechanism, not a bug: a genuine bonus item said in
+// the same breath as a slot answer ("wheat bread, also add wings") no longer
+// lands this turn (a real behavior change from S1/V1 — see this dispatch's
+// own updated tests in turn-engine-runner.test.ts and
+// slot-answer-item-bleed-and-topping-correction-20260919.test.ts) — the
+// customer can still just say it next turn. Silence beats a phantom order
+// every time, per the PO's own standing rule tonight.
 const REMAINDER_ELIGIBLE_OUTCOME_KINDS = new Set([
-  "slot_resolved",
   "disambiguation_resolved",
   "order_type_resolved",
   "name_resolved",
@@ -1674,13 +1703,15 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
     // sees it) -- a bonus item is additive, never a license to also mutate
     // or remove the line the primary answer just resolved.
     if (REMAINDER_ELIGIBLE_OUTCOME_KINDS.has(outcome.kind)) {
-      // 00-BM (S1): only ever set for a resolved "slot" outcome -- see
-      // findSlotAnswerConsumedText's own doc. null for every other eligible
-      // outcome kind, which leaves extractRemainderAfterAnswer's behavior
-      // exactly as it was for those (unscoped from index 0).
-      const slotAnswerConsumedText = outcome.kind === "slot_resolved"
-        ? findSlotAnswerConsumedText(priorState.open, workingCart, input.menu)
-        : null;
+      // 2026-09-20 PO dispatch (slot-resolved blocks item search THIS TURN):
+      // "slot_resolved" can never reach here now -- REMAINDER_ELIGIBLE_
+      // OUTCOME_KINDS's own doc above -- so findSlotAnswerConsumedText
+      // (00-BM/S1's own scoping helper) no longer has a live call site that
+      // needs its return value; every outcome kind still eligible here
+      // never set it (it was always null for them), so this stays null
+      // unconditionally and extractRemainderAfterAnswer's behavior for those
+      // kinds is unchanged (unscoped from index 0).
+      const slotAnswerConsumedText: string | null = null;
       const remainderMessage = extractRemainderAfterAnswer(input.message, slotAnswerConsumedText);
       if (remainderMessage) {
         // Reuse the lexicon already loaded above for answer()'s disambiguation
