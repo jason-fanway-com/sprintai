@@ -1360,37 +1360,9 @@ Deno.test("answer: tip decline resolves to zero", () => {
   assertEquals(result, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 0 }, cartChanged: false });
 });
 
-// ── Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6) ────
-// Same transcript as the multi-kind-answer money bug above -- in the same
-// conversation, "tip the driver $5" on the small ($4.99-subtotal) order
-// came back as a $4.99 tip. readTipReply used to clamp a stated tip down to
-// the cart's subtotal (rule 5b, "a tip can never exceed the order") -- that
-// premise is simply wrong for a delivery tip, which has nothing to do with
-// the food total, so the clamp is removed outright. Rule 5a (the
-// line-item-price guard, a DIFFERENT real reason a number gets rejected as
-// a tip) is untouched -- ACCEPTANCE 5 below proves it still fires.
-Deno.test("answer (money bug, tip clamp): a stated $5 tip on the real $4.99-subtotal shape is $5.00, never clamped down to the subtotal", () => {
-  const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
-  const cart: TurnEngineCartLine[] = [
-    { menu_item_id: "money-bug-fries", name: "French Fries", quantity: 1, price_cents: 499, modifiers: [], options: {}, ask_plan_selections: {} },
-  ];
-  const before = answer(state, cart, "tip the driver $5", VITOS_MENU);
-  assertEquals(before, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 500 }, cartChanged: false }, "before this fix this returned tipCents: 499 -- clamped down to the $4.99 subtotal");
-});
-
-Deno.test("answer (money bug, tip clamp): a large stated tip on a large order is also never clamped -- the removed guard applied at every order size", () => {
-  const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
-  const cart: TurnEngineCartLine[] = [
-    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
-  ];
-  const result = answer(state, cart, "tip the driver $50", VITOS_MENU);
-  assertEquals(result, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 5000 }, cartChanged: false }, "a generous tip on a small order must be respected as stated, not just the $4.99-shape case");
-});
-
-// ACCEPTANCE 5: rule 5a (a number that's really a menu price stated
-// elsewhere in the same message, not a real tip) is a DIFFERENT guard from
-// the removed subtotal clamp and must be completely unaffected.
-Deno.test("answer (money bug, tip clamp): rule 5a's line-item-price guard is unaffected -- a number that's really a menu price in the same message is still rejected as a tip", () => {
+// Rule 5a regression: a number that's really a menu price stated elsewhere
+// in the same message, not a real tip, must still be rejected as a tip.
+Deno.test("answer: rule 5a's line-item-price guard rejects a number that's really a menu price in the same message", () => {
   const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },

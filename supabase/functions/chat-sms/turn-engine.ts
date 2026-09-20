@@ -906,17 +906,14 @@ export function readTipReply(
   // bare whole-message case: there is no "elsewhere" in a message that IS
   // just the number.
   if (!isBareNumber && ctx.lineItemPricesCents?.includes(cents)) return null;
-  // Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6):
-  // "tip the driver $5" on a $4.99 subtotal came back as a $4.99 tip --
-  // rule 5b used to clamp the tip down to the subtotal on the theory that
-  // "a tip can never exceed the order", but nothing about a delivery tip
-  // is actually bounded by the food total, and a customer's explicit
-  // whole-dollar tip statement must be respected as stated. Removed
-  // outright, not narrowed -- there is no legitimate reason to cap a tip
-  // below what the customer said, on any order size. Rule 5a (the
-  // line-item-price guard above) is untouched; it catches a different
-  // shape (a number that's really a menu price, not a real tip amount).
-  return { kind: "amount", cents };
+  // Rule 5b: capped at the subtotal -- a tip can never exceed the order.
+  // 2026-09-19: a builder briefly removed this rule after misreading a test
+  // artifact ($5 tip on a $4.99 SYNTHETIC test order) as a live bug -- the
+  // PO confirmed rule 5b is intentional and reinstated it before merge; the
+  // $4.99 shape only ever shows up on a test order small enough to hit the
+  // cap by construction, never in real order sizes.
+  const cappedCents = ctx.subtotalCents != null ? Math.min(cents, ctx.subtotalCents) : cents;
+  return { kind: "amount", cents: cappedCents };
 }
 
 // CONFIRM: declining just reopens ordering -- it never charges anyone -- so
