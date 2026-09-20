@@ -5760,13 +5760,55 @@ export function decide(
         scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
         otherSpansThisMessage,
       );
-      for (const step of menuItem.ask_plan.steps) {
-        if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
-        // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
-        // placed toppings in one clause ("half pepperoni half sausage") both
-        // land, instead of the singular floor's own tie-guard dropping both.
-        for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
-          effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+      // PO dispatch 2026-09-20 (real conv 6de8bd13, real Vito's data): "an
+      // Italian hoagie with shrimp and blackened salmon on wheat bread" --
+      // PROPOSE kept the add-ons in the SAME item_span as the host item
+      // (unlike the B2 fix's own repro, where PROPOSE split them into a
+      // separate `add`), so this add's own scoped text carries TWO plain
+      // (non-placement) Add-ons choices named together ("shrimp", "blackened
+      // salmon") with no trailing "added" word -- the per-step loop below,
+      // via recoverAssertedChoicesFromText's own plainHits.length===1
+      // tie-guard, drops both, silently, exactly the "sausage and onions"
+      // shape that guard exists to protect (confirmed RED against pre-fix
+      // code). But this span carries stronger evidence than a bare tie: it
+      // ALSO fully decomposes -- zero leftover, using the exact same
+      // connective-stripping/disjoint-tie-bail discipline the B2 fix already
+      // trusts for a sibling add's span -- against every one of this SAME
+      // item's own real ask_plan choices, including its bread slot ("wheat"
+      // accounts for the trailing "on wheat bread" the per-step loop below
+      // can't see, since slots are ASKED, never inferred and that loop only
+      // ever looks at modifier steps). A full decomposition with nothing
+      // left over is proof the customer named this item's own real choices,
+      // not a modifier plus an unrelated second item, so it's applied
+      // directly, bypassing the per-step loop's plural tie-guard for this
+      // add only -- the guard's own "sausage and onions" contract for a
+      // GENUINE tie (a leftover word that names no real choice) is
+      // untouched, since decomposeSpanIntoChoicesOfMenuItem returns null the
+      // moment anything fails to fully decompose and the per-step loop below
+      // still runs exactly as before.
+      // PROPOSE's OWN item_span for this add (not the raw customer message
+      // scopedModifierText falls back to) is the surgically-extracted text
+      // to decompose -- the same discipline the B2 fix's own span-fold
+      // already relies on for a SIBLING add's span. The raw message ("I
+      // want an Italian hoagie with...") carries filler words ("I", "want")
+      // that are never real choices and never will fully decompose; the
+      // model's own item_span for THIS add already strips that filler.
+      const itemSpanForDecompose = stripOtherItemSpansFromModifierText(
+        scopedModifierText([], null, menuItem.name, add.item_span ?? ""),
+        otherSpansThisMessage,
+      );
+      const decomposedAddOns = decomposeSpanIntoChoicesOfMenuItem(itemSpanForDecompose, menuItem);
+      if (decomposedAddOns && decomposedAddOns.length > 0) {
+        effectiveChoices = [...effectiveChoices, ...decomposedAddOns];
+      } else {
+        for (const step of menuItem.ask_plan.steps) {
+          if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
+          // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
+          // placed toppings in one clause ("half pepperoni half sausage") both
+          // land, instead of the singular floor's own tie-guard dropping both.
+          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
+            effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
+          }
         }
       }
     }
