@@ -2213,20 +2213,22 @@ export function answer(
       // disambiguation at quantity 1; "I'll take 2 Large Pepperoni pizzas,
       // please." states 2) — see extractDisambiguationAnswerQuantity's own
       // header for the exact "quantity, never an index" distinction this
-      // relies on. Falls back to the open question's own quantity (the
-      // ordinary case — nothing new stated in the answer) when the answer
-      // names no such override.
-      const resolvedQuantity = extractDisambiguationAnswerQuantity(trimmed) ?? quantity;
+      // relies on.
+      // DEFECT 2 (2026-09-19 live QA, conv 009de656): the answer that just
+      // resolved `resolved` above may ALSO restate its own quantity in the
+      // shorter "2x Large (16") Pepperoni pizzas" shape — see
+      // extractAnswerQuantity's own doc for why this is scoped to the same
+      // answer clause the category+name tier resolved against, never the
+      // whole (possibly multi-item) restated order. Two independent
+      // extractors, two different answer shapes; try the qualifier-aware one
+      // first, then the clause-scoped one, then fall back to the open
+      // question's own quantity (the ordinary case — nothing new stated).
+      const resolvedQuantity =
+        extractDisambiguationAnswerQuantity(trimmed) ??
+        extractAnswerQuantity(extractAnswerClause(trimmed).clause) ??
+        quantity;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
-      // DEFECT 2 (2026-09-19 live QA, conv 009de656): the answer that just
-      // resolved `resolved` above may ALSO restate its own quantity ("2x
-      // Large (16") Pepperoni pizzas") — see extractAnswerQuantity's own doc
-      // for why this is scoped to the same answer clause the category+name
-      // tier resolved against, never the whole (possibly multi-item)
-      // restated order. Falls back to the disambiguation's original
-      // quantity, unchanged, when the clause states none.
-      const resolvedQuantity = extractAnswerQuantity(extractAnswerClause(trimmed).clause) ?? quantity;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
       // while this item's own name was still ambiguous (see
       // DecideResult.heldModifierText's own header) is recovered against the
