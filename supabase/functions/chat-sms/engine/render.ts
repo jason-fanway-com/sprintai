@@ -73,6 +73,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       if (!l || l.status.kind !== "ambiguous") return T.unclear();
       const cands = l.status.candidates.map((id) => menu.items.get(id)!).filter(Boolean);
       const facet = count >= 2 ? "list" : q.facet;
+      const asked = Math.max(count, l.asks ?? 0);
       if (facet === "kind") {
         const byKind = new Map<string, MenuItem>();
         for (const c of cands) { const k = c.facets.kind ?? c.display_name; if (!byKind.has(k)) byKind.set(k, c); }
@@ -93,7 +94,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
           return k;
         };
         const kinds = [...new Set(kindsRaw.map(label))];
-        return T.whatKind(noun, count, kinds.slice(0, 8));
+        return T.whatKind(noun, asked, kinds.slice(0, 8)) + (kinds.length > 8 && asked >= 1 ? ` (${kinds.length - 8} more; say more of the name)` : "");
       }
       if (facet === "size") {
         const sizes = sortSizes([...new Set(cands.map((c) => c.facets.size).filter((s): s is string => !!s))]);

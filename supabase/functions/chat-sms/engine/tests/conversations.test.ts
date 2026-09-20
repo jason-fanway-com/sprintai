@@ -592,3 +592,21 @@ Deno.test("the same answer as one string, with counts: 'two plain and two pepper
   o = say(o.form, "two plain and two pepperoni", [{ kind: "answer_option", value_span: "two plain and two pepperoni" }]);
   assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesePizzaL, 2], [IDS.pepPizzaL, 2]]);
 });
+
+Deno.test("Jason's fries: a non-narrowing answer lists what's left, 'options' lists the question's choices, and the answer is never a note", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "some fries", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of fries?");
+  o = say(o.form, "Plain fries.", [{ kind: "answer_option", value_span: "Plain fries" }]);
+  assertStringIncludes(o.reply, "Which fries? ");
+  assertStringIncludes(o.reply, "French");
+  o = say(o.form, "what are the options");
+  assertStringIncludes(o.reply, "Options: ");
+  assertStringIncludes(o.reply, "French Fries");
+  assert(!o.reply.includes("Categories"));
+  o = say(o.form, "french fries?", [{ kind: "answer_option", value_span: "french fries" }]);
+  assertEquals(o.form.lines[0].item_id, IDS.fries);
+  assertEquals(o.form.lines[0].notes, []);
+  assert(!o.reply.includes("Noted"));
+});

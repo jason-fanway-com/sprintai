@@ -106,7 +106,7 @@ export const T = {
   cartHeader: () => `Your order so far:`,
   itemInfo: (name: string, money: string, options: string[]) =>
     `${name} is ${money}.${options.length ? ` Options: ${options.join("; ")}.` : ""}`,
-  listInfo: (names: string[]) => `We have: ${names.join(", ")}.`,
+  listInfo: (names: string[]) => `Options: ${names.slice(0, 12).join(", ")}${names.length > 12 ? `, and ${names.length - 12} more` : ""}.`,
   menuCategories: (cats: string[]) => `Categories: ${cats.join(", ")}. Name an item or a category.`,
   unknownInfo: () => `I can help you order. Name an item or ask about one.`,
   human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `Someone from the shop will follow up with you.`),

@@ -159,6 +159,11 @@ export function turn(input: TurnInput): TurnOutput {
     q = next(form, menu, null); key = questionKey(q); count = 0;
     form.open = q; form.asked = { key, count };
   }
+  if (q && "line_id" in q) {
+    const l = form.lines.find((x) => x.line_id === q.line_id);
+    const same = input.form.open && "line_id" in input.form.open && input.form.open.line_id === q.line_id;
+    if (l) l.asks = same ? (l.asks ?? 0) + 1 : (l.asks ?? 0);
+  }
   if (q?.kind === "items" && form.items_done && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; }
   if (q?.kind === "confirm") form.status = "confirming";
   const handoff = q === null && form.confirmed && form.status === "awaiting_payment";
@@ -194,7 +199,7 @@ export function turn(input: TurnInput): TurnOutput {
 
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };
-  if (res.askMenu !== undefined) info = menuInfo(res.askMenu, menu, form);
+  if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, form);
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
@@ -231,4 +236,16 @@ function menuInfo(about: string | null, menu: Menu, _form: OrderForm): Info {
   }
   const cats = [...new Set([...menu.items.values()].filter((i) => i.orderable && i.category).map((i) => i.category!))];
   return { kind: "categories", names: cats.slice(0, 12) };
+}
+
+/** "what are the options?" while a line question is open lists that question's choices. */
+function questionOptions(form: OrderForm, menu: Menu): Info {
+  const open = form.open!;
+  const l = "line_id" in open ? form.lines.find((x) => x.line_id === open.line_id) : undefined;
+  if (!l) return menuInfo(null, menu, form);
+  if (l.status.kind === "ambiguous") return { kind: "list", names: l.status.candidates.map((id) => menu.items.get(id)?.display_name ?? id) };
+  const item = l.item_id ? menu.items.get(l.item_id) : null;
+  if (item && l.status.kind === "needs_slot") { const g = item.groups.find((x) => x.id === (l.status as { group_id: string }).group_id); if (g) return { kind: "list", names: g.choices.map((c) => c.name) }; }
+  if (item?.bundle) return { kind: "list", names: item.bundle.choices.map((c) => c.name) };
+  return menuInfo(null, menu, form);
 }

@@ -133,9 +133,19 @@ def fourkinds(addr):
         ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session")),
     ]
 
-SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections, "fourkinds": fourkinds,
+def fries(addr):
+    # Jason's live test, 2026-09-20 15:15: a non-narrowing answer must list what's left; 'options' lists the question's choices; no note
+    return [
+        ("pickup", lambda c, r: []),
+        ("Yes some fries", lambda c, r: expect("fries" in r.lower(), f"expected fries question: {r!r}")),
+        ("Plain fries.", lambda c, r: expect("French" in r, f"expected a list including French Fries: {r!r}")),
+        ("What are the options?", lambda c, r: expect("French Fries" in r and "Categories" not in r, f"expected the fries list: {r!r}")),
+        ("French fries?", lambda c, r: expect(any("French Fries" in n for n in names(c)), f"lines {names(c)}") + expect("Noted" not in r, f"note leaked: {r!r}")),
+    ]
+
+SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections, "fourkinds": fourkinds, "fries": fries,
         "njb_dozen": njb_dozen, "njb_simple": njb_simple, "zio_pizza": zio_pizza, "zio_narrow": zio_narrow}
-SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections", "fourkinds"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
+SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections", "fourkinds", "fries"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
 
 def run(shop, name, steps):
     session = str(uuid.uuid4()); fails = []; transcript = []; ms = []

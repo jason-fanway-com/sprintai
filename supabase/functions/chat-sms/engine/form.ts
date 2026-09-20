@@ -40,6 +40,10 @@ export interface Line {
   span_consumed?: boolean;
   /** bundle picks: choice_id -> count */
   selections?: Record<string, number>;
+  /** answers to "which kind?" questions: used to narrow, dropped if they match nothing */
+  answers?: string[];
+  /** how many times a question about this line has been asked */
+  asks?: number;
   status: LineStatus;
 }
 
@@ -248,7 +252,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         const open = form.open;
         if (open && (open.kind === "line_slot" || open.kind === "line_ambiguous" || open.kind === "line_unresolved" || open.kind === "line_picks")) {
           const line = form.lines.find((l) => l.line_id === open.line_id);
-          if (line) { line.held.push(m.value_span); touched.add(line.line_id); }
+          if (line) {
+            if (open.kind === "line_ambiguous" || open.kind === "line_unresolved") (line.answers ??= []).push(m.value_span);
+            else line.held.push(m.value_span);
+            touched.add(line.line_id);
+          }
           ledger.push({ turn: t, event: "answer_option", data: { line_id: open.line_id, span: m.value_span } });
         } else if (open && open.kind === "line_ref") {
           // a numbered pick for "which one?"
@@ -316,7 +324,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
           item_id: null,
           qty: Math.max(1, p.qty),
           choices: {}, modifiers: [],
-          held: [p.span, ...src.held.filter((h) => !h.startsWith("-"))],
+          held: [...src.held.filter((h) => !h.startsWith("-"))],
+          answers: [p.span],
           notes: [], slot_candidates: {},
           status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" },
         }));

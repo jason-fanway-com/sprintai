@@ -215,9 +215,9 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
 export function bindLine(line: Line, menu: Menu): void {
   menuTermWords = menu.termWordsByItem;
   // An unresolved line whose customer gave a replacement span: swap the span.
-  if (line.item_id === null && line.status.kind === "unresolved" && line.held.length > 0 && !line.held[0].startsWith("-")) {
-    const first = line.held[0];
-    if (resolveSpan(line.span, menu).kind === "none" && resolveSpan(first, menu).kind !== "none") { line.span = line.held.shift()!; }
+  if (line.item_id === null && line.status.kind === "unresolved" && (line.answers?.length ?? 0) > 0) {
+    const first = line.answers![0];
+    if (resolveSpan(line.span, menu).kind === "none" && resolveSpan(first, menu).kind !== "none") { line.span = line.answers!.shift()!; }
   }
   if (line.item_id === null) {
     let cands: string[];
@@ -244,6 +244,13 @@ export function bindLine(line: Line, menu: Menu): void {
         if (n.length >= 1 && n.length < cands.length) cands = n;
       }
     }
+    // answers to "which kind?" narrow and are then spent; one that narrows nothing is dropped, never noted
+    for (const a of line.answers ?? []) {
+      if (cands.length === 1) break;
+      const n = isDigits(a) ? (cands[parseInt(a, 10) - 1] ? [cands[parseInt(a, 10) - 1]] : []) : narrow(cands, a, menu);
+      if (n.length >= 1 && n.length < cands.length) cands = n;
+    }
+    line.answers = [];
     // narrow with every held span that narrows; keep the rest for options
     const rest: string[] = [];
     for (const h of line.held) {
