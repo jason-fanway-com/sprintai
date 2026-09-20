@@ -735,8 +735,8 @@ Deno.test("runTurnEngineTurn (model timeout fallback): a message decide() can't 
   assert(result.reply.includes("didn't catch"), `expected decide()'s own 00-AX decline wording: ${result.reply}`);
 });
 
-Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null — a timeout while a specific question (e.g. the customer's name) is open still falls back to 'call us', unchanged", async () => {
-  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null for the deterministic-add carve-out — a timeout while a specific question (e.g. the customer's name) is open instead RE-ASKS that question, never 'call us' (money bug, 2026-09-19, live conv 31f54c6b, item 2)", async () => {
+  const { supabase, state } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
   const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
   const priorCart: TurnEngineCartLine[] = [
     { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
@@ -763,9 +763,13 @@ Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null �
 
   const result = await runTurnEngineTurn(input, deps);
 
-  assertEquals(result.reply, FALLBACK_REPLY, "a pending specific question is out of scope for the deterministic fallback — decide() has no business reinterpreting an answer to it as a new item");
-  assertEquals(result.cart, priorCart);
-  assertEquals(result.dialogueState, priorState);
+  assert(result.reply !== FALLBACK_REPLY, "a pending specific question must be RE-ASKED on a genuine timeout, never answered with the apology");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assert(result.reply.includes("What's the name for the order?"), `expected the same open question re-asked verbatim: ${result.reply}`);
+  assertEquals(result.cart, priorCart, "a model timeout must never mutate the cart");
+  assertEquals(result.dialogueState.open, priorState.open, "the exact same open question must still be open, not resolved or dropped");
+  assertEquals(result.dialogueState.openRepeatCount, 1, "a re-ask is a real repeat of the same question, same escalation counter every other repeat goes through");
+  assertEquals(state.orderCartsUpdates.length, 1, "the bumped openRepeatCount must be persisted so a second timeout in a row escalates normally");
 });
 
 Deno.test("runTurnEngineTurn (model timeout fallback): scoped to reason === 'timeout' — a schema_violation with open === null still falls back to 'call us', unchanged", async () => {
@@ -2758,4 +2762,222 @@ Deno.test("ACCEPTANCE 5 (freeze-queue item 7): a brand-new customer with no prof
   assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
   assert(!result.reply.includes("welcome back"), `a brand-new customer must never be greeted as returning: ${JSON.stringify(result.reply)}`);
   assertEquals(result.dialogueState.returningCustomerOffer, undefined, "no offer state for a customer with no profile row");
+});
+
+// ── MONEY BUG (2026-09-19, live conv 31f54c6b, item 2 of tonight's 50-run):
+// cart correct at $39.98, confirm read-back shown correctly, customer typed
+// "Looks good to me!" ready to pay — PROPOSE (the model call) timed out
+// twice (25s x2) and the bot answered "Sorry, I ran into a problem. Please
+// call us directly to place your order," sending a customer who wanted to
+// pay to the phone instead. Root cause (PO): the 2026-09-18 timeout
+// carve-out above only ever covered `priorState.open === null` — it had no
+// answer for a timeout while a yes/no-shaped question (confirm,
+// category_confirm) was open. Two fixes, tested independently below:
+//   1. "Looks good to me" (and the rest of that bare-affirmation family) at
+//      confirm now resolves in ANSWER itself (turn-engine.ts's widened
+//      CONFIRM_AFFIRMATIVE_RE) — PROPOSE is never reached at all for this
+//      shape of reply, so there is no timeout to fall back from.
+//   2. A genuine timeout while ANY question is still open (confirm,
+//      category_confirm, name, ...) now re-asks that exact question
+//      (turn-engine-runner.ts's new `reason === "timeout" && priorState.open
+///     !== null` branch) instead of the apology. ──────────────────────────
+
+const CONFIRM_BUG_PIZZA_MENU: TurnEngineMenuItem[] = [
+  {
+    id: "item-cbr-pizza-medium", name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", price_cents: 1999,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Medium Chicken Bacon Ranch Pizza", base_price_cents: 1999, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+function pizzaConfirmCart(): TurnEngineCartLine[] {
+  // 2x Medium Chicken Bacon Ranch pizza @ $19.99 = $39.98 — the exact #3
+  // repro cart.
+  return [{ menu_item_id: "item-cbr-pizza-medium", name: "Medium Chicken Bacon Ranch Pizza", quantity: 2, price_cents: 1999, modifiers: [], line_key: "line-1" }];
+}
+
+function pizzaConfirmState(): DialogueState {
+  return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+}
+
+function pizzaConfirmShopContext(): RunTurnShopContext {
+  return { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null };
+}
+
+// ACCEPTANCE 1: the exact #3 repro resolves to checkout WITHOUT ever calling
+// the model.
+Deno.test("MONEY BUG fix 1: 'Looks good to me!' over the exact #3 repro cart ($39.98, confirm open) resolves straight to checkout — PROPOSE is never called", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("must not be called — 'Looks good to me!' at confirm must resolve code-side, with zero chance of a model timeout")),
+  };
+  const input = baseInput({
+    message: "Looks good to me!",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: pizzaConfirmState(),
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("problem"), `must never fall back to the apology: ${result.reply}`);
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.phase, "link_sent", "a clean affirmative at confirm must proceed straight to checkout");
+  assertEquals(result.dialogueState.open, null, "confirm is resolved, nothing left open");
+  assertEquals(result.cart, pizzaConfirmCart(), "confirming never mutates the cart");
+  assertEquals(state.messagesInserted.length, 1);
+});
+
+// ACCEPTANCE 2: a GENUINE timeout (the model call itself fails) while
+// confirm is open re-asks confirm, never the apology. Deliberately a
+// message fix 1 does NOT resolve ("banana" — no yes/no shape at all) so
+// this exercises the timeout branch specifically, not fix 1's shortcut.
+Deno.test("MONEY BUG fix 2: a genuine model timeout while confirm is open RE-ASKS confirm, never 'call us'", async () => {
+  // lexicon: [] — the default LEXICON fixture's non-UUID target_ids would
+  // otherwise also trip the unrelated dropped-non-UUID trip-wire log (see
+  // the "terminal PROPOSE failure" test's own comment above), adding a
+  // second error_log row this test isn't about.
+  const { supabase, state } = makeFakeSupabase({ lexicon: [] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const priorState = pizzaConfirmState();
+  const input = baseInput({
+    message: "banana",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: priorState,
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.open, priorState.open, "confirm must still be open — nothing was resolved, so nothing should have changed");
+  assertEquals(result.dialogueState.phase, "confirm");
+  assertEquals(result.dialogueState.openRepeatCount, 1, "a timeout re-ask is a real repeat of the same question");
+  assertEquals(result.cart, pizzaConfirmCart(), "a model timeout must never mutate the cart");
+  assert(result.reply.includes("confirm") || result.reply.includes("All good"), `expected the confirm question re-asked: ${result.reply}`);
+  // error_log is written by the REAL proposeTurn (propose.ts) on a genuine
+  // failure — the "terminal PROPOSE failure" test above already covers that
+  // write via the real implementation; this test's stubbed proposeTurnFn
+  // (timedOutProposeResult) never touches supabase at all, so there's
+  // nothing to assert on that front here.
+  assertEquals(state.orderCartsUpdates.length, 1, "the bumped openRepeatCount must be persisted so a second timeout in a row escalates normally");
+});
+
+// ACCEPTANCE 3 (regression): a genuine timeout with NO open question is
+// unchanged by this dispatch — still governed entirely by the pre-existing
+// 2026-09-18 carve-out (decide()'s own deterministic resolution, or that
+// same carve-out's own decline — never this dispatch's new re-ask branch,
+// since there is nothing open to re-ask). Non-timeout failures with an open
+// question are also unchanged: they must still fall to the literal apology,
+// proving the new branch is scoped to reason === "timeout" only.
+Deno.test("MONEY BUG regression: a genuine timeout with NO open question is untouched by this dispatch — never routes through the new re-ask branch", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: { ...INITIAL_DIALOGUE_STATE } });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, "unchanged 2026-09-18 behavior: the item still lands deterministically, no model needed");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+});
+
+Deno.test("MONEY BUG regression: a NON-timeout failure (schema_violation) while confirm is open still gets the literal apology, unchanged — proves the new re-ask branch is scoped to reason === 'timeout' only", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: false,
+      reason: "schema_violation",
+      detail: "response did not contain a schema-valid submit_proposal tool call",
+      attempts: [{ attempt: 1, reason: "schema_violation", detail: "response did not contain a schema-valid submit_proposal tool call", rawBody: "{}", ms: 900 }],
+    }),
+  };
+  const priorState = pizzaConfirmState();
+  const input = baseInput({
+    message: "banana",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: priorState,
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.reply, FALLBACK_REPLY, "a non-timeout failure class is out of scope for both the 2026-09-18 carve-out and this dispatch's re-ask branch");
+  assertEquals(result.cart, pizzaConfirmCart());
+  assertEquals(result.dialogueState, priorState, "nothing changed this turn");
+  assertEquals(state.orderCartsUpdates.length, 0, "nothing changed this turn — cart/dialogue_state must not be rewritten");
+});
+
+// ACCEPTANCE 4: a genuine timeout with category_confirm open (the OTHER
+// yes/no-shaped open kind, freeze-queue item 4) re-asks THAT question too —
+// this dispatch is not scoped to "confirm" specifically.
+Deno.test("MONEY BUG fix 2 (category_confirm): a genuine model timeout while category_confirm is open re-asks that exact question too", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const categoryConfirmMenu: TurnEngineMenuItem[] = [
+    {
+      id: "item-16-stromboli", name: "16\" Stromboli", category: "Stromboli", price_cents: 1499,
+      bot_state: "orderable",
+      ask_plan: { compiled_at: "", compiler_version: 1, display_name: "16\" Stromboli", base_price_cents: 1499, recap_template: "", ticket_template: "", steps: [] },
+    },
+  ];
+  const priorState: DialogueState = {
+    phase: "ordering",
+    open: { kind: "category_confirm", menu_item_id: "item-16-stromboli", quantity: 1, message: "We only have 16\" Stromboli as a stromboli. Want that, or skip it?" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+  const input = baseInput({
+    message: "banana",
+    menu: categoryConfirmMenu,
+    cart: [],
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.open?.kind, "category_confirm", "category_confirm must still be open — never dropped, never silently swapped for the apology");
+  assertEquals(result.dialogueState.openRepeatCount, 1);
+  assert(result.reply.includes("We only have 16\" Stromboli"), `expected the exact category_confirm question re-asked: ${result.reply}`);
+  assertEquals(result.cart, [], "a model timeout must never add the item on its own");
+});
+
+// ACCEPTANCE 5: a message that is NOT cleanly yes/no while confirm is open
+// must still go to the model as normal — fix 1 must not intercept genuinely
+// ambiguous replies, only unambiguous yes/no ones.
+Deno.test("MONEY BUG fix 1 guard rail: a genuine question at confirm ('What toppings does the everything pizza have?') is NOT intercepted — it still reaches PROPOSE", async () => {
+  const { supabase } = makeFakeSupabase();
+  let proposeCalled = false;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalled = true;
+      return Promise.resolve({
+        ok: true,
+        proposal: { intent: "question", answer_text: "We don't carry an everything pizza — want to pick a different one?", adds: [], removes: [], modifies: [] },
+        attempts: 1,
+      });
+    },
+  };
+  const input = baseInput({
+    message: "What toppings does the everything pizza have?",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: pizzaConfirmState(),
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(proposeCalled, "an ambiguous, non-yes/no message at confirm must still reach the model — fix 1 must only intercept clean yes/no replies");
+  assertEquals(result.cart, pizzaConfirmCart());
 });
