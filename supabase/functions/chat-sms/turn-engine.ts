@@ -944,38 +944,81 @@ function parseQtyToken(tok: string): number | null {
   if (Number.isFinite(n) && n > 0) return n;
   return NUMBER_WORDS[tok.toLowerCase()] ?? null;
 }
+// The separator between a quantity token and the item name that follows it
+// — "2 Thin Sicilian Pizzas" (bare number, a space), "2 x Thin Sicilian
+// Pizzas" (spelled-out "x"), or "1x Large Hawaiian Pizza" (the "x" GLUED
+// directly to the digit, no space at all). 2026-09-19 PO dispatch (P0, conv
+// 6fc39938, live money bug): the old `\s+(?:x\s+)?` fragment required at
+// least one space immediately after the quantity token, so "1x ..." never
+// matched ANY of the three patterns below at all — not "close but wrong
+// number", not matched even as an attempt. The customer repeated the exact
+// same correction five more times, worded five different ways, and every
+// one of them fell through this same gap or the "make it"/"only want" gaps
+// fixed alongside it.
+const QTY_ITEM_SEP = "(?:\\s*x\\s*|\\s+)";
 // "<N> <item>, not/instead of <M>" — covers "2 Thin Sicilian Pizzas, not
 // one" and "2 x Thin Sicilian Pizzas instead of one" (the "x" is optional).
 const QUANTITY_CORRECTION_NOT_RE = new RegExp(
-  `\\b${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?),?\\s+(?:not|instead of)\\s+${QUANTITY_WORD_RE}\\b`, "i",
+  `\\b${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?),?\\s+(?:not|instead of)\\s+${QUANTITY_WORD_RE}\\b`, "i",
 );
 // "I meant <N> <item>" — a correction that states the right number without
 // necessarily naming the wrong one too.
 const QUANTITY_CORRECTION_MEANT_RE = new RegExp(
-  `\\bi meant\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|$)`, "i",
+  `\\bi meant\\s+${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|$)`, "i",
 );
-// "make it <N> <item>" — stops the item-phrase capture at a trailing
-// "and <something else>" clause ("make it 2 Thin Sicilian Pizzas and the
-// Garlic Knots") so a second, unrelated item mentioned in the same breath
-// never gets folded into the corrected item's own name.
-const QUANTITY_CORRECTION_MAKE_IT_RE = new RegExp(
-  `\\bmake it\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|\\band\\b|$)`, "i",
+// "I (actually/really) only want <N> <item>" / "I just want <N> <item>" —
+// 2026-09-19 PO dispatch (P0, conv 6fc39938): a third real phrasing from
+// the same live conversation, never covered by any existing pattern at all
+// (not a spacing gap like the two above — this shape simply had no rule).
+const QUANTITY_CORRECTION_ONLY_WANT_RE = new RegExp(
+  `\\b(?:only|just)\\s+want\\s+${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|!|$)`, "i",
 );
+// "make it/that <N> <item>[, <N> <item>...][ and <N> <item>]" — captures
+// everything after "make it"/"make that" up to sentence end, then each
+// comma/"and"-joined clause is parsed on its own below (parseQtyItemClause)
+// so a compound correction naming TWO items each with their own quantity
+// ("make that 1x Large Hawaiian Pizza and 1x Nonas Meatballs") applies both,
+// while a clause that never states its own number (an item just mentioned
+// along for the ride, "and the Garlic Knots") is left alone rather than
+// guessed at. 2026-09-19 PO dispatch: widened from "make it" only to also
+// accept "make that" — the live transcript's exact wording — which the
+// 2026-09-18 version of this rule never matched at all.
+const QUANTITY_CORRECTION_MAKE_IT_RE = /\bmake (?:it|that)\s+([^.!?]+)/i;
 
 interface QuantityCorrectionCandidate {
   quantity: number;
   itemPhrase: string;
 }
 
-function parseQuantityCorrectionPhrase(message: string): QuantityCorrectionCandidate | null {
-  for (const re of [QUANTITY_CORRECTION_NOT_RE, QUANTITY_CORRECTION_MEANT_RE, QUANTITY_CORRECTION_MAKE_IT_RE]) {
+// A single "<N> <item>" clause, anchored to the whole (trimmed) clause —
+// used to validate each piece of a "make it/that" compound correction.
+function parseQtyItemClause(clause: string): QuantityCorrectionCandidate | null {
+  const re = new RegExp(`^${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*)$`, "i");
+  const m = clause.trim().match(re);
+  if (!m) return null;
+  const quantity = parseQtyToken(m[1]);
+  const itemPhrase = m[2]?.trim();
+  return quantity && itemPhrase ? { quantity, itemPhrase } : null;
+}
+
+// Returns every quantity correction stated in the message — almost always
+// exactly one, except a "make it/that X and Y" compound naming two or more
+// items each with their own explicit quantity.
+function parseQuantityCorrectionPhrases(message: string): QuantityCorrectionCandidate[] {
+  for (const re of [QUANTITY_CORRECTION_NOT_RE, QUANTITY_CORRECTION_MEANT_RE, QUANTITY_CORRECTION_ONLY_WANT_RE]) {
     const m = message.match(re);
     if (!m) continue;
     const quantity = parseQtyToken(m[1]);
     const itemPhrase = m[2]?.trim();
-    if (quantity && itemPhrase) return { quantity, itemPhrase };
+    if (quantity && itemPhrase) return [{ quantity, itemPhrase }];
   }
-  return null;
+  const makeItMatch = message.match(QUANTITY_CORRECTION_MAKE_IT_RE);
+  if (makeItMatch) {
+    const clauses = makeItMatch[1].split(/\s*,\s*|\s+and\s+/i);
+    const candidates = clauses.map(parseQtyItemClause).filter((c): c is QuantityCorrectionCandidate => c !== null);
+    if (candidates.length > 0) return candidates;
+  }
+  return [];
 }
 
 // Matches itemPhrase against exactly one REAL cart line by stem subset —
@@ -1001,6 +1044,24 @@ function findCartLineByNamePhrase(
     return [...phraseStems].every(s => lineStems.has(s));
   });
   return hits.length === 1 ? hits[0] : null;
+}
+
+// 2026-09-19 PO dispatch (P0, conv 6fc39938) — the mirror of
+// findCartLineByNamePhrase above: does the customer's WHOLE message name a
+// real cart line, rather than does a short extracted phrase match one? Every
+// significant stem of the line's own name must appear somewhere in the
+// message (order-independent, tolerant of everything else the message also
+// says) — used only to decide whether an unmatched confirm-state message is
+// confidently ABOUT a specific real item (forward to PROPOSE) or genuinely
+// unrelated chatter/complaint (safe to resolve as a plain decline, same as
+// before this dispatch).
+function messageNamesRealCartLine(message: string, cart: TurnEngineCartLine[]): boolean {
+  const messageStems = significantStems(message);
+  return cart.some(line => {
+    if (!isRealCartLine(line)) return false;
+    const lineStems = significantStems(line.name);
+    return lineStems.size > 0 && [...lineStems].every(s => messageStems.has(s));
+  });
 }
 
 // 2026-09-18 PO dispatch (read-back corrections, mechanism 2: replacement).
@@ -2333,14 +2394,23 @@ export function answer(
       // silently confirmed on the same turn it arrived. Applied directly to
       // the matched line (mutate-in-place, same convention as the slot/
       // disambiguation cases above) and resolved on the customer's FIRST
-      // attempt.
-      const qtyCorrection = parseQuantityCorrectionPhrase(trimmed);
-      if (qtyCorrection) {
-        const line = findCartLineByNamePhrase(cart, qtyCorrection.itemPhrase);
-        if (line) {
-          line.quantity = qtyCorrection.quantity;
-          return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
+      // attempt. 2026-09-19 PO dispatch (P0, conv 6fc39938): now plural —
+      // a compound "make it/that X and Y" can name two corrections in one
+      // message; every candidate that matches a real cart line is applied,
+      // any that don't (an item mentioned but not actually in the cart) are
+      // left alone rather than guessed at. `resolved:true` only once at
+      // least one candidate actually landed.
+      const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
+      if (qtyCorrections.length > 0) {
+        let appliedAny = false;
+        for (const candidate of qtyCorrections) {
+          const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
+          if (line) {
+            line.quantity = candidate.quantity;
+            appliedAny = true;
+          }
         }
+        if (appliedAny) return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
       }
       // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): same
       // priority reasoning as mechanism 1 immediately above — "not a
@@ -2399,7 +2469,35 @@ export function answer(
       const confirmShopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts);
       if (confirmShopFactsAnswer) return confirmShopFactsAnswer;
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
-      if (impliesConfirmDecline(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };   // 00-BH
+      // 00-BH, narrowed 2026-09-19 PO dispatch (P0, conv 6fc39938, live money
+      // bug): CONFIRM_DECLINE_ANYWHERE_RE fires on ordinary correction
+      // vocabulary ("actually", "instead", "wrong", "change") that also shows
+      // up in genuine corrections neither mechanism above recognized. Real
+      // transcript: the customer corrected the same order SIX different ways
+      // and every single one tripped this decline check and got "Anything
+      // else?" with the cart untouched — the actual defect, not any one
+      // regex miss. A short, whole-message decline ("no"/"nope"/"wait") has
+      // no other plausible reading and still declines immediately
+      // (CONFIRM_DECLINE_RE, the anchored tier). For anything longer, the
+      // deciding question is whether the customer is clearly talking about a
+      // REAL line already in the cart (every significant word of that line's
+      // own name shows up in the message — same stem-subset convention as
+      // findCartLineByNamePhrase, just checked in the other direction): if
+      // so, none of the correction patterns above matched, but the customer
+      // is still plainly trying to say something about a specific item we
+      // have, so fall through to UNRESOLVED and let PROPOSE take a shot
+      // rather than silently discarding it as a bare "no" — the actual
+      // defect this dispatch closes. Anything else (decline-adjacent
+      // language with no real cart item named at all, e.g. a general
+      // complaint about the total) keeps the pre-existing deterministic
+      // confirm_no — unchanged from before this dispatch, on purpose: it is
+      // NOT confidently a correction of anything specific, and this file's
+      // ADDENDUM 1 regression test (tip-step-p0-20260919.test.ts) already
+      // pins exactly this shape to resolve without ever reaching the model.
+      if (impliesConfirmDecline(trimmed)) {
+        if (!CONFIRM_DECLINE_RE.test(trimmed) && messageNamesRealCartLine(trimmed, cart)) return UNRESOLVED;
+        return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
+      }
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
       // the helper blocks "not yet"/"don't"/"wrong"/"change".
       if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
