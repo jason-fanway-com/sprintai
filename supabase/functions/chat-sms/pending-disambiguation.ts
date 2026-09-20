@@ -406,6 +406,39 @@ const LEADING_ORDINAL_TWO_WORD_QUALIFIERS: Array<[string, string]> = [
 ];
 const LEADING_ORDINAL_FOLLOW_WORDS = new Set(["please", "thanks", "pls", "one"]);
 
+// Money bug fix (2026-09-19, live conv 22b1a95a): matchLeadingOrdinal above
+// only ever scans the first 6 words of the message — right for a bare "2
+// please" or "option 1)" sitting at the front, but a real customer answering
+// a which-one question mid-sentence, deep into a longer message ("I said I
+// want 1 Cheesesteak homemade panini, that's option 1. I already told you
+// the full order! ..."), puts "option 1" past that window entirely, so it
+// was never seen at all — the pick was silently ignored and the rest of the
+// (restated) message got misread as fresh adds instead (see turn-engine.ts's
+// "disambiguation" case for the other half of that same fix).
+// "option"/"number"/"option number" are UNAMBIGUOUS framing words — nothing
+// else in ordinary English pairs either word directly with a bare digit —
+// so unlike the bare-digit/ordinal-word tiers above, this one is safe to
+// scan the ENTIRE message for, no leading-word-count limit and no trailing-
+// filler requirement. Deliberately narrower than
+// LEADING_ORDINAL_EXPLICIT_QUALIFIERS (drops "no"/"#"): "no" alone is too
+// common a word to trust unanchored anywhere in a long message, and a bare
+// "#" glued to a digit is already covered by matchLeadingOrdinal's own
+// front-of-message scan since customers don't bury "#3" mid-sentence.
+const EXPLICIT_OPTION_PICK_ANYWHERE_RE = /\b(?:option(?:\s+number)?|number)\s+(\d+)\b/i;
+
+/**
+ * "option 1", "that's option 1", "number 2", "option number 3" — anywhere in
+ * the message, not just near the front. Returns a 0-based index, or null if
+ * no such framing appears (or the number named isn't a real position in
+ * this list).
+ */
+export function matchExplicitOptionPickAnywhere(message: string, count: number): number | null {
+  const m = message.match(EXPLICIT_OPTION_PICK_ANYWHERE_RE);
+  if (!m) return null;
+  const idx = parseInt(m[1], 10) - 1;
+  return idx >= 0 && idx < count ? idx : null;
+}
+
 function splitLeadingWord(word: string): { core: string; punct: string; hadHash: boolean } {
   const hadHash = word.startsWith("#");
   const withoutHash = hadHash ? word.slice(1) : word;

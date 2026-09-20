@@ -118,6 +118,7 @@ import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-rec
 import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
+  matchExplicitOptionPickAnywhere,
   isPendingDisambiguationDeclined,
   isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
@@ -1676,7 +1677,7 @@ function messageNamesItemOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
   lexicon: LexiconTerm[] | undefined,
-): { menuItemId: string; quantity: number } | null {
+): { menuItemId: string; quantity: number; matchedText: string } | null {
   if (!lexicon || lexicon.length === 0) return null;
   const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
   const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
@@ -1686,7 +1687,37 @@ function messageNamesItemOutsideCandidates(
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
   if (candidateIds.has(result.menu_item_id)) return null;
   const explicitQuantity = extractAnswerQuantity(extractAnswerClause(scoped).clause);
-  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count };
+  // matchedText is `scoped` (the text this function actually resolved
+  // against), never the whole raw message — see
+  // isAnswerRestatementOfCartLine's own header for why the caller checks
+  // restatement markers against THIS text and not the full message.
+  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count, matchedText: scoped };
+}
+
+// Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd, money bug): the
+// PROPOSE/decide() path already refuses to re-add a line that's already in
+// the cart when the customer's own words carry a restatement marker (see
+// isRestatementOfExistingOrder's own header, and decide()'s `restating`
+// flag) — this exact same protection never existed on the ANSWER path
+// above, so "that's option 1 ... 2x Large Chicken Bacon Ranch ... 1 Medium
+// Sausage Pizza" (reciting the whole order mid-disambiguation-answer) and
+// "Just to recap: 1 Garlic Cheesesteak on wheat with blackened salmon..."
+// (reciting it while a fries disambiguation was open) both quietly re-added
+// a line that was already sitting in the cart, live, real overcharges.
+// Checked against `matchedText` (the exact clause messageNamesItemOutsideCandidates
+// resolved the outside item from), never the whole raw message: the whole
+// message can carry an ADDITION_MARKERS word (isRestatementOfExistingOrder's
+// own veto) purely because of unrelated trailing content the outside-item
+// resolver itself already scoped away (e.g. "...and a side of fries" —
+// OUTSIDE_ITEM_REMAINDER_MARKER_RE already cut the text there before ever
+// resolving "Garlic Cheesesteak"), which would wrongly suppress this check
+// on the one clause that's actually a clean restatement.
+function isAnswerRestatementOfCartLine(
+  cart: TurnEngineCartLine[],
+  outside: { menuItemId: string; matchedText: string },
+): boolean {
+  const alreadyInCart = cart.some(l => isRealCartLine(l) && l.menu_item_id === outside.menuItemId);
+  return alreadyInCart && isRestatementOfExistingOrder(outside.matchedText);
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -2207,6 +2238,15 @@ export function answer(
 
       const quantity = state.open.quantity ?? 1;
 
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a): "option N"/"number N"/
+      // "option number N" ANYWHERE in the message is an unambiguous pick —
+      // see matchExplicitOptionPickAnywhere's own header. Checked before
+      // every other tier below (the outside-item gate and the facet path
+      // both score words that happen to overlap; an explicit "that's option
+      // 1" must win over both, no matter what else — a restated whole
+      // order, in the real live repro — surrounds it).
+      const explicitOptionIdx = matchExplicitOptionPickAnywhere(trimmed, candidates.length);
+
       // Round 2, item 3 (2026-09-19, live repro): before letting either
       // resolver below (the facet path or resolvePendingDisambiguation)
       // score whatever words in this message happen to overlap the open
@@ -2216,8 +2256,17 @@ export function answer(
       // facet alike: both resolvers below share the same failure mode (a
       // stray size/category word winning a tiebreak while the actual
       // answer — a different dish's name — is discarded as noise).
-      const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
-      if (outsideItem) {
+      const outsideItem = explicitOptionIdx === null
+        ? messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon)
+        : null;
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd): an "outside"
+      // item that's actually already a real line in the cart, named while
+      // the customer's own words carry a restatement marker, is the
+      // customer reciting their order back — not a new add. See
+      // isAnswerRestatementOfCartLine's own header; same family as
+      // decide()'s `restating` guard on the PROPOSE path, never applied
+      // here before this fix.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -2258,6 +2307,7 @@ export function answer(
       // disambiguation is permanently routed to the numbered-list resolver
       // below instead — see DialogueState.open's own `noProgress` doc.
       if (
+        explicitOptionIdx === null &&
         (state.open.otherOneFollowUp || state.open.facetNarrowed || isNarrowingCandidateSet(candidates)) &&
         !state.open.noProgress &&
         !isDisambiguationOptionsRequest(trimmed)
@@ -2430,7 +2480,9 @@ export function answer(
         }
       }
 
-      const resolved = resolvePendingDisambiguation(trimmed, candidates);
+      const resolved = explicitOptionIdx !== null
+        ? candidates[explicitOptionIdx]
+        : resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
       // this which-one question can restate a quantity that was never part
@@ -2521,7 +2573,10 @@ export function answer(
       // group's own size facet gets a chance to score a stray word.
       const allGroupCandidates = groups.flatMap(g => g.candidates);
       const outsideItem = messageNamesItemOutsideCandidates(trimmed, allGroupCandidates, external.lexicon);
-      if (outsideItem) {
+      // Round 4 P0 (2026-09-19): same restatement guard as the sibling
+      // "disambiguation" case above — see isAnswerRestatementOfCartLine's
+      // own header.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -3859,10 +3914,54 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
 // hallucinated one. "instead" is added bare (not just "instead of") for
 // the same reason -- "switch that to a Cheesesteak instead" never says
 // "instead of".
-const REMOVAL_VERBS = [
-  "no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without",
-  "switch", "swap", "change", "replace", "drop", "instead",
+const HARD_REMOVAL_VERBS = [
+  "no", "remove", "take off", "scratch", "cancel", "not the", "without", "drop",
 ];
+// Soft correction verbs equally describe a REPLACEMENT of the whole item
+// ("switch that to a Cheesesteak instead") or a same-item topping
+// correction ("keep the gyro meat for the small Margherita instead") -- see
+// KEEP_RETENTION_RE and its call site in removeHasRemovalLanguage below for
+// how those two are told apart.
+const SOFT_CORRECTION_VERBS = [
+  "instead of", "switch", "swap", "change", "replace", "instead",
+];
+const REMOVAL_VERBS = [...HARD_REMOVAL_VERBS, ...SOFT_CORRECTION_VERBS];
+
+// 2026-09-19 PO dispatch (S2, live conv 36eff7b9 #39, money bug -- topping
+// correction misread as a whole-line remove): "I changed my mind about the
+// bacon on the small one. Just keep the gyro meat for the small Margherita
+// instead!" carries the line's own name ("Margherita") in the SAME clause as
+// a soft-correction verb ("instead") -- the exact shape a genuine whole-item
+// replacement ("switch that to a Cheesesteak instead") also produces, so the
+// original single-verb-list heuristic couldn't tell them apart and deleted
+// the whole line instead of swapping its toppings. The difference is "keep":
+// a genuine replacement never asks to KEEP something on the very line it's
+// supposedly replacing -- "keep <X> ... instead" states what stays on this
+// item, which makes it a topping-level MODIFY, never a whole-line REMOVE.
+// Scoped to the SOFT verbs only -- an explicit HARD verb ("scratch the small
+// Margherita, keep the medium") still removes the named line exactly as
+// before; "keep" appearing elsewhere in the message is never a license to
+// ignore a customer who also, unambiguously, said "remove"/"scratch"/etc.
+const KEEP_RETENTION_RE = /\bkeep\b/i;
+
+// S3 fix (2026-09-19, live money bug, real conv 22347973, "sticks are
+// back"): a customer declining the just-offered upsell -- "No thanks, I'm
+// good for drinks. Just stick with those two items for pickup!" -- got read
+// as removal language for the Pierogies line, and the line was deleted from
+// a real, already-placed order. The bare word "no" is REMOVAL_VERBS' own
+// entry, and it fires correctly for a genuine item negation ("no stromboli",
+// acceptance 5a/5b/5c above) -- but "no" inside a decline-of-offer idiom
+// ("no thanks", "I'm good", ...) is never negating a cart line, it is
+// declining whatever was just offered. Same vocabulary impliesUpsellDecline
+// (dialogue-signals.ts) already treats as an upsell decline, unanchored here
+// (a prefix/clause match, not the whole message) since a real decline is
+// routinely followed by more text in the same breath. Stripped ONLY from the
+// text `hasVerb` is computed against below -- nameStems/nameWords/
+// categoryWordMatches still see the real, unstripped message, so a genuine
+// removal verb named elsewhere in the same message ("no thanks, also remove
+// the fries") is completely unaffected.
+const UPSELL_DECLINE_IDIOM_RE =
+  /\b(?:no\s+thanks|no\s+thank\s+you|not\s+now|not\s+today|not\s+this\s+time|i'?m\s+good|im\s+good|we'?re\s+good|nope|nah|skip|pass)\b/gi;
 
 // Round 4 P0 (2026-09-19): which REAL cart line a bare pronoun ("it"/
 // "that"/"this") refers to, for both the remove guard below and the
@@ -3884,8 +3983,16 @@ function removeHasRemovalLanguage(
 ): boolean {
   const msg = (message ?? "").toLowerCase().trim();
   if (!msg) return false;
-  const hasVerb = REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msg));
-  if (!hasVerb) return false;
+  // Upsell-decline idioms ("no thanks", "i'm good") are stripped before the
+  // verb check only -- every check below (name stems, category words,
+  // pronoun target) still sees the real, unstripped message, so a genuine
+  // removal verb named elsewhere in the same message ("no thanks, also
+  // remove the fries") is completely unaffected.
+  const msgForVerbCheck = msg.replace(UPSELL_DECLINE_IDIOM_RE, " ");
+  const hasHardVerb = HARD_REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+  const hasSoftVerb = SOFT_CORRECTION_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+  if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
+  if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
   if (nameStems.size > 0) {
     const msgStems = significantStems(msg);
@@ -4395,10 +4502,26 @@ export function decide(
   // a guard-dropped add that resolves to nothing, or to an item NOT already
   // in the cart, is a hallucination, not staleness, and must stay silently
   // dropped with no fallback attempted.
+  // S3 fix (2026-09-19, live money bug, real conv 22347973, "sticks are
+  // back"): this recovery pass feeds the raw, unfiltered customer message
+  // into resolveItem, and its fuzzy fallback used to allow a bare, single
+  // fuzzy-matched word to resolve an entire add on its own (the same defect
+  // class as fuzzyCorrectAgainstLexicon, deleted earlier tonight for the
+  // identical "stick" -> "sticks" false positive at a different call site) --
+  // a decline like "...Just stick with those two items for pickup!" has no
+  // EXACT lexicon hit anywhere in it, so the fuzzy fallback took over and
+  // fuzzy-matched the lone word "stick" against the shop's real one-word
+  // term "sticks" (Mozzarella Sticks), silently adding $8.99 nobody ordered
+  // -- nothing else in that term corroborated the guess. `fuzzyMinTermWords:
+  // 2` (resolve-item.ts) still lets this block recover a genuine plural/typo
+  // of a MULTI-word term (e.g. "pizzas" completing an otherwise-exact
+  // "pepperoni pizza" match, same as the question-clause recovery below) --
+  // it only ever refuses a fuzzy guess standing on a single word with no
+  // corroborating exact neighbor, permanently, everywhere this block runs.
   if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
       genuinelyUnresolvedSpans.length === 0 && guardDroppedWasStale.length === proposal.adds.length &&
       guardDroppedWasStale.every(Boolean)) {
-    const rawResolution = resolveItem(customerMessage ?? "", lexicon, inactiveLexicon);
+    const rawResolution = resolveItem(customerMessage ?? "", lexicon, inactiveLexicon, true, 2);
     if (rawResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(rawResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: rawResolution.menu_item_id, quantity: 1, choices: [], item_span: (customerMessage ?? "").trim() });
     } else if (rawResolution.kind === "ambiguous") {
@@ -4424,12 +4547,20 @@ export function decide(
   // question clause's own words must stay excluded here exactly as they
   // were for the guard itself, or "gluten free" could resolve straight back
   // in on its own.
+  // S3 fix (2026-09-19, live money bug, real conv 22347973): same reasoning
+  // as the staleness recovery's own S3 fix immediately above -- this pass
+  // also feeds derived-from-customer-message text into resolveItem with no
+  // model participation, so a fuzzy match standing on a single, uncorroborated
+  // word (the "stick" -> "sticks" shape) must never resolve here either,
+  // permanently -- `fuzzyMinTermWords: 2` still allows the legitimate
+  // "pizzas" completing "pepperoni pizza" recovery this block's own
+  // acceptance test below requires.
   if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
       genuinelyUnresolvedSpans.length === 0 && guardDroppedWasQuestionTainted.length === proposal.adds.length &&
       guardDroppedWasQuestionTainted.every(Boolean)) {
     const recoveryText = nonQuestionClauseText(customerMessage);
     const recoveryQuantity = proposal.adds.length === 1 ? (proposal.adds[0].quantity ?? 1) : 1;
-    const recoveryResolution = resolveItem(recoveryText, lexicon, inactiveLexicon);
+    const recoveryResolution = resolveItem(recoveryText, lexicon, inactiveLexicon, true, 2);
     if (recoveryResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(recoveryResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: recoveryResolution.menu_item_id, quantity: recoveryQuantity, choices: [], item_span: recoveryText });
     } else if (recoveryResolution.kind === "ambiguous") {
