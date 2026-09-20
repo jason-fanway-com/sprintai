@@ -564,6 +564,28 @@ function matchLeadingOrdinal(message: string, count: number): number | null {
 // matchOrdinalPosition already treat as a genuine index pick.
 const DISAMBIGUATION_QUANTITY_SKIP_WORDS = new Set(["of", "the", "a", "an"]);
 
+// R2 fix (2026-09-19, live conv 836bf473 #29): "I asked for the Cup, so 2
+// please" restates the pick BEFORE stating the quantity, trailing "so" near
+// the very end of the message -- a shape the loop below never sees, for two
+// independent reasons: (1) the "2" sits past the leading 6-word scan window
+// deliberately used everywhere else in this file to keep a stray number in
+// an unrelated clause from ever qualifying; (2) even inside that window, a
+// number followed by nothing but filler ("2 please") is treated as an INDEX
+// shape by design (see the loop's own "nextCore" check and the "2"/"option
+// 2" tests this file already has) -- correct for a BARE answer where no
+// item has been named at all, but wrong once the item was already resolved
+// by name earlier in the very same sentence, at which point there is no
+// index interpretation left to protect. "so" is the disambiguating signal:
+// nobody restates a position pick with "so" ("so option 2" is not
+// idiomatic), while "so N" renaming a just-stated count is exactly the
+// customer talking about quantity. Deliberately its own separate, narrow
+// tier -- scanned across the WHOLE message (it exists specifically to catch
+// what the leading-window loop above cannot) but anchored tightly to the
+// literal word "so" so a stray trailing number elsewhere is never caught by
+// it.
+const TRAILING_SO_QUANTITY_RE =
+  /\bso\b[,:]?\s+(\d+|two|three|four|five)\b(?:[,\s]+(?:please|thanks|pls))*\s*[.!]?\s*$/i;
+
 export function extractDisambiguationAnswerQuantity(message: string): number | null {
   const words = message.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
@@ -591,6 +613,14 @@ export function extractDisambiguationAnswerQuantity(message: string): number | n
     if (LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore)) continue; // only filler follows -- still an index pick
 
     return value;
+  }
+
+  const trailingSo = message.match(TRAILING_SO_QUANTITY_RE);
+  if (trailingSo) {
+    const lower = trailingSo[1].toLowerCase();
+    const digitMatch = lower.match(/^(\d+)$/);
+    if (digitMatch) return parseInt(digitMatch[1], 10);
+    if (Object.prototype.hasOwnProperty.call(NUMBER_WORDS, lower)) return NUMBER_WORDS[lower];
   }
   return null;
 }
@@ -930,7 +960,19 @@ export function renderDisambiguationReask(
 // "Pepperoni Pizza - Large 18''" (compiler-derived rows: base name, dash,
 // size label) or "Large Pepperoni Pizza" (a plain imported row with the size
 // word folded into the name itself) — this handles both.
-const NARROWING_SIZE_WORD_RE = /\b(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular)\b/i;
+//
+// R2 fix (2026-09-19, live conv 836bf473 #29): "Cup"/"Bowl" are this menu's
+// own size labels for soups ("Lobster Bisque - Cup" vs "- Bowl"), exactly
+// the same dash-suffix shape a pizza's "- Large" wears — but neither word
+// was in this list, so a soup family's Cup/Bowl tie could never be closed by
+// M1's own name-derived narrowing (narrowAmbiguousCandidatesBySpanSize,
+// turn-engine.ts) the way a pizza's stated size already is, and a customer's
+// own "Cup" answer to a which-one question resolved only via the generic
+// name-word-match tier (nameWordMatches) — not the size-aware one — so nothing
+// downstream that specifically depends on knowing "this was a size pick"
+// (this file's own candidateSizeValue/filterCandidatesBySizeWord) ever saw it
+// as one for a soup.
+const NARROWING_SIZE_WORD_RE = /\b(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular|Cup|Bowl)\b/i;
 
 // 2026-09-19 PO dispatch (N3, probe-narrow2, live money bug: 16" added when
 // the customer said 14"): a menu item family sized ONLY by inches ("The
