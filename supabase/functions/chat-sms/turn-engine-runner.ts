@@ -89,6 +89,7 @@ import {
   extractSlotChoiceWords,
   orderShapedMessageQuantity,
   disambiguationDeclineNamesOutsideItem,
+  disambiguationMessageIsOrderShaped,
   readOrderTypeReply,
   isConfirmAffirmative,
   findMenuItemByNamePhrase,
@@ -1305,11 +1306,30 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   // wait out.
   const disambiguationMessageIsOrderLogistics = priorState.open?.kind === "disambiguation" &&
     (opportunisticOrderType != null || addressSpan != null);
+  // GAP (a) fix (2026-09-19 PO dispatch, real live conv 6e2d56f9 #33): a
+  // reply to an open disambiguation that abandons it outright and states a
+  // whole, different order ("oh my bad, can i get one chicken and one gyro
+  // calzone?" while "fries -- what kind?" was open) is neither a decline
+  // (disambiguationDeclineNamesOutside above requires DECLINE_CUES -- "no",
+  // "not", "don't" -- and this message has none) nor order logistics (no
+  // order-type/address words at all) -- see
+  // disambiguationMessageIsOrderShaped's own header in turn-engine.ts for why
+  // answer()'s own resolvers all miss this shape too. Only drops the pending
+  // list when the order-shaped reply names something OUTSIDE the current
+  // candidates' own family (differentFamily) -- a same-family order-shaped
+  // reply is left alone entirely so the pending narrowing can still resolve
+  // it normally (the secondary case the PO's own dispatch flagged; see that
+  // function's header for exactly what "family" means here).
+  const disambiguationOrderShaped = priorState.open?.kind === "disambiguation"
+    ? disambiguationMessageIsOrderShaped(input.message.trim(), priorState.open.candidates, input.menu, workingCart, answerLexicon)
+    : null;
+  const disambiguationMessageNamesDifferentFamilyOrder = disambiguationOrderShaped?.differentFamily === true;
   const dropDisambiguationList = priorState.open?.kind === "disambiguation" &&
     (
       ((priorState.openRepeatCount ?? 0) >= 1 && isDisambiguationListDropSignal(input.message)) ||
       disambiguationDeclineNamesOutside ||
-      disambiguationMessageIsOrderLogistics
+      disambiguationMessageIsOrderLogistics ||
+      disambiguationMessageNamesDifferentFamilyOrder
     );
   // "Okay, no Italian." — spanText is the customer's own words for the span
   // that opened THIS disambiguation (turn-engine.ts's DialogueState.open.
@@ -1527,6 +1547,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
             replacementSourceLineKey: priorState.open.replacementSourceLineKey,
           };
         }
+        break;
+      // 2026-09-19 PO dispatch (A(d), numbered-list fallback has no exit):
+      // the disambiguation is dropped outright — deliberately NOT setting
+      // disambiguationCandidateIds (unlike every other disambiguation_*
+      // case above), so ask()'s priority-2 branch has nothing to re-open and
+      // moves on to whatever's next (another open question, or "Anything
+      // else?"). Cart untouched — see AnswerOutcome's own
+      // "disambiguation_gave_up" doc for why guessing a candidate here would
+      // be worse than asking again next time the customer names it.
+      case "disambiguation_gave_up":
+        answerText = "I'll leave that off.";
         break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
