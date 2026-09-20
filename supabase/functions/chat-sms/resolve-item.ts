@@ -312,12 +312,28 @@ function occursAsWholeWordRunFuzzy(spanWords: string[], termWords: string[]): bo
 // Fuzzy sibling of longestMatch, used ONLY as a fallback once an exact scan
 // found nothing at all (resolveItem below) — never runs alongside, and
 // never overrides, an exact hit or an exact tie.
-function fuzzyLongestMatch(spanWords: string[], entries: LexiconTerm[]): { length: number; targetIds: Set<string> } {
+//
+// S3 fix (2026-09-19, live money bug, real conv 22347973, "sticks are
+// back"): a ONE-word term ("sticks", Mozzarella Sticks) fuzzy-matching a
+// single stray span word ("stick", from "...just stick with those two items
+// for pickup!") has no corroborating second word anywhere in the term to
+// confirm the guess — unlike "pepperoni pizzas" fuzzy-matching the term
+// "pepperoni pizza", where "pepperoni" already matched EXACTLY and only the
+// plural "s" on the second word is being tolerated. `minTermWords` lets a
+// caller feeding raw/derived customer text (no model-endorsed span) with no
+// other exact anchor require every fuzzy candidate to be a genuine multi-
+// word term — never a single fuzzy guess standing entirely on its own.
+// Defaulted to 1 (today's behavior, unchanged) for every pre-existing caller.
+function fuzzyLongestMatch(
+  spanWords: string[],
+  entries: LexiconTerm[],
+  minTermWords = 1,
+): { length: number; targetIds: Set<string> } {
   let longestMatchedLength = 0;
   const targetIdsAtLongest = new Set<string>();
   for (const entry of entries) {
     const termWords = toWords(normalize(entry.term));
-    if (termWords.length === 0) continue;
+    if (termWords.length === 0 || termWords.length < minTermWords) continue;
     if (!occursAsWholeWordRunFuzzy(spanWords, termWords)) continue;
 
     if (termWords.length > longestMatchedLength) {
@@ -510,11 +526,20 @@ function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconT
 // did not close — worth a follow-up that's scoped to when a filler word
 // contributes to a tie with NO OTHER corroborating span word, rather than a
 // blanket strip.
+//
+// S3 fix (2026-09-19, live money bug, real conv 22347973): `fuzzyMinTermWords`
+// (see fuzzyLongestMatch's own header) lets a caller feeding raw/derived
+// customer text — never a model-endorsed span — require every fuzzy
+// candidate to be a genuine multi-word term with a real corroborating exact
+// word, not a single fuzzy guess standing entirely on its own. Defaulted to
+// 1 (today's behavior, unchanged) for every pre-existing caller; the two
+// decide() recovery passes (turn-engine.ts) pass 2.
 export function resolveItem(
   span: string,
   lexicon: LexiconTerm[],
   inactiveLexicon: LexiconTerm[] = [],
   allowFuzzyFallback = true,
+  fuzzyMinTermWords = 1,
 ): ResolveItemResult {
   const spanWords = toWords(normalize(span));
   if (spanWords.length === 0) return { kind: "unresolved" };
@@ -561,8 +586,8 @@ export function resolveItem(
   // guessing or listing a fuzzy-derived candidate set.
   if (base.targetIds.size === 0) {
     if (!allowFuzzyFallback) return { kind: "unresolved" };
-    const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries);
-    const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon);
+    const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries, fuzzyMinTermWords);
+    const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon, fuzzyMinTermWords);
     if (fuzzyBase.targetIds.size === 1) {
       return { kind: "resolved", menu_item_id: [...fuzzyBase.targetIds][0] };
     }

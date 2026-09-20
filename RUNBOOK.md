@@ -2872,3 +2872,62 @@ included every one of those "not deployed" commits from earlier the same day. Re
 commit message's own "no deploy" note as still true later is a mistake — always re-check
 the currently-deployed `DEPLOY_SHA` against `git log`, don't rely on what any single commit
 said about itself at the time it was written.
+
+## A fix that passes its own offline test suite is not proven live — 2026-09-19
+
+`cb37bda9` fixed a real overcharge, backed it with tests in `turn-engine.test.ts`, and the
+suite passed. It was still reproducible against the live bot hours later (conversation
+`9cf68285`, a $23.94-vs-$11.98 overcharge — same three-turn shape, different underlying
+gaps). The offline tests called `decide()`/`answer()` directly with a hand-typed toy
+lexicon; the real bug needed Vito's actual menu data (no "med" size term, only "medium")
+and the actual `error_log`-captured model output to surface at all. `3b133f24`'s fix used a
+new runner-level test that drives the real `runTurnEngineTurn` end to end against Vito's
+real lexicon and real captured proposals — verified RED against the pre-fix code first.
+**Lesson: a unit test with synthetic data proves the logic works on that data, not that it
+works on the shop's real menu.** Before calling a live money bug closed, reproduce it
+against real menu/lexicon data or a real captured conversation, not just a fixture.
+
+## A spell-correction helper has now caused two separate live overcharges from two different call sites — 2026-09-19
+
+`fuzzyCorrectAgainstLexicon` treats any word as a "typo" of a lexicon term it happens to be
+a 4+ character prefix of. That rule turned "stick" (a real, complete, unrelated word, as in
+"just stick with the greek salad") into "sticks" (Mozzarella Sticks) — once from
+`messageNamesItemOutsideCandidates` (conversation `087abb8d`, part of a ~$107-vs-~$85
+overcharge, fixed in `2412c833` by dropping the fuzzy pass from that caller entirely) and
+again, the same day, from a second caller, `messageNamesMultipleItemsOutsideCandidates`
+(conversation `9cf68285`, part of the $23.94-vs-$11.98 overcharge above, fixed in
+`3b133f24` by dropping the fuzzy pass from that caller too — the helper itself has no
+remaining callers as of tonight). **Before trusting any fix that touches lexicon fuzzy-
+matching, grep every caller of `fuzzyCorrectAgainstLexicon`/`resolveItem`'s fuzzy fallback
+— this exact false-positive class has now shipped from two different call sites in one
+day.**
+
+## Narrowing questions are now the standing behavior for an ambiguous item — 2026-09-19
+
+When a customer's wording matches too many menu items (one real case tied against 62 of
+Vito's pizzas), the bot no longer tries to list every candidate in one text — a reply doing
+that hit 3,378 characters and the carrier silently dropped it, so the customer got no reply
+at all. It now asks "What kind?" then "What size?", narrowing against the answer, and only
+falls back to a full list if the customer explicitly asks what the options are (`51773f5e`,
+`60d84445`). If a customer's answer to a narrowing question doesn't actually rule anything
+out, the bot switches to a numbered list rather than re-asking the same question forever
+(`efb05153`) — that "asks forever with no progress" failure is called a narrowing stall.
+
+## A fully built and tested feature had no effect because its caller was never reachable — 2026-09-19
+
+The returning-customer greeting, "usual order" offer, and delivery-memory offer
+(`delivery-memory-offer.ts`, `customer-profile.ts`) were built and tested days earlier, but
+were only ever called from `index.ts`'s legacy path — which the turn-engine path Vito's now
+runs bypasses entirely. Every shop on the newer engine had this feature silently off with no
+code change of its own. Reconnected by having `turn-engine-runner.ts` look the customer up
+itself and reuse the same decision functions the legacy path already called (`0f9aa913`).
+**A feature living in a tested, committed file proves nothing about whether the live code
+path actually calls it — check the caller, not just the function.**
+
+## Outbound replies over ~1,500 characters are silently dropped by the carrier — 2026-09-19
+
+No error, no bounce — the message row just never gets a `message_sid` and the customer
+never receives anything. `chat-sms` now splits a long reply into ordered parts at that
+threshold and logs the full response body on any non-2xx carrier reply (`502724e3`). If a
+customer reports "the bot went silent," check for a reply that would have been long before
+assuming a logic bug.

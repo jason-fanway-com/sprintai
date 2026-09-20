@@ -17,6 +17,7 @@ import {
   computeDanglingLexiconTermInvariant,
   computeMenuInvariants,
   deriveLexiconSurfaceForms,
+  isSuppressedLexiconTerm,
   itemLexiconTerms,
   normaliseTermVariants,
   planOwnerQuestionsRefresh,
@@ -655,6 +656,65 @@ Deno.test("lexicon: modifier choices are NOT lexiconized (rule 5/step 4 explicit
   const it = item({ groups: [group({ kind: "modifier", ask_mode: "on_request", choices: [choice({ name: "Pepperoni" })] })] });
   const terms = compileItem(it, [], "t").lexicon_terms;
   assert(!terms.some(t => t.term === "pepperoni"));
+});
+
+// ============================================================
+// Stopword / short-term guard (00-PO-0919-term-in-addendum, real live bug:
+// resolveItem("in") resolved to Vito's "10 Pieces Wings (Bone-In)" because
+// the bare word "in" — a derived trailing-word-run off that item's own
+// name — had been emitted as an active item-target lexicon term).
+// ============================================================
+
+Deno.test("isSuppressedLexiconTerm: a stopword alone is dropped", () => {
+  assert(isSuppressedLexiconTerm("in"));
+  assert(isSuppressedLexiconTerm("with"));
+  assert(isSuppressedLexiconTerm("the"));
+});
+
+Deno.test("isSuppressedLexiconTerm: a <4-char non-stopword alone is dropped", () => {
+  assert(isSuppressedLexiconTerm("dip"));
+  assert(isSuppressedLexiconTerm("day"));
+});
+
+Deno.test("isSuppressedLexiconTerm: a <4-char term that IS the whole item name survives (whole-name exception)", () => {
+  assert(!isSuppressedLexiconTerm("blt", new Set(["blt"])), "must survive when it's this item's own whole/bare name");
+  assert(isSuppressedLexiconTerm("blt", new Set(["on"])), "must NOT survive against some OTHER item's whole-name set");
+});
+
+Deno.test("isSuppressedLexiconTerm: a normal 4+ char term is unaffected", () => {
+  assert(!isSuppressedLexiconTerm("burger"));
+  assert(!isSuppressedLexiconTerm("wing"));
+});
+
+Deno.test("stopword guard (real live bug repro): a trailing word-run reducing to the bare stopword 'in' off '... (Bone In)' is never emitted as an item term, and resolveItem('in') no longer resolves to it", () => {
+  const wings = item({ display_name: "10 Pieces Wings (Bone In)", category: "Wings" });
+  const { items: compiled } = compileMenu([wings], [], "t", false);
+  const terms = compiled[0].lexicon_terms;
+  assert(!terms.some(t => t.term === "in"), `must never emit bare "in": ${JSON.stringify(terms.map(t => t.term))}`);
+  assert(!terms.some(t => t.term === "ins"), `must never emit bare "ins": ${JSON.stringify(terms.map(t => t.term))}`);
+  assert(terms.some(t => t.term === "10 pieces wings bone in"), "the item's own stated Rule 1 full name is untouched");
+
+  const lexicon: LexiconTerm[] = terms;
+  const result = resolveItem("in", lexicon);
+  assert(result.kind !== "resolved", `bare "in" must never resolve to a menu item; got ${JSON.stringify(result)}`);
+});
+
+Deno.test("stopword guard: an item whose real, full, singular name IS a stopword-shaped short word keeps that term (whole-name exception, synthetic 'In')", () => {
+  const it = item({ display_name: "In", category: "Synthetic Test Category" });
+  const terms = compileItem(it, [], "t").lexicon_terms;
+  assert(terms.some(t => t.term === "in" && t.target_type === "item" && t.target_id === it.id),
+    `an item genuinely named "In" must still get "in" as its own stated term: ${JSON.stringify(terms.map(t => t.term))}`);
+});
+
+Deno.test("stopword guard: real Vito's 'BLT' shape — Rule 2's bare stated name 'blt' (3 chars) survives untouched, only derived-provenance terms are filtered", () => {
+  const panini = item({ display_name: "BLT Panini", category: "Homemade Paninis", product_key: "homemade-paninis:blt" });
+  const sandwich = item({ display_name: "BLT Sandwich", category: "Cold Sandwiches", product_key: "cold-sandwiches:blt" });
+  const { items: compiled } = compileMenu([panini, sandwich], [], "t", false);
+  const bltTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "blt").map(t => t.target_id)),
+  );
+  assertEquals(bltTargets, new Set([panini.id, sandwich.id]),
+    "'blt' is Rule 2's own stated bare name, not a derived guess — the stopword/short-term guard must not touch it");
 });
 
 // ---- Commit 2 (2026-09-19, real Vito's "Grandma's" pizza): apostrophe
@@ -2302,6 +2362,46 @@ Deno.test("buildDerivedRows: Vito's shape — lexicon carries a size-qualified t
   assert(terms.includes("large pepperoni pizza"), "size-qualified '{size} {topping} pizza' term — needed because derived rows carry no size_label of their own");
 });
 
+// N5 (2026-09-19 PO addendum to the term-in dispatch, real conversation
+// af5bd5d5: 2 small mushroom pizzas lost). The derived pizza row is named
+// from the topping's own stated PLURAL form ("Mushrooms"), so every term
+// above (itemLexiconTerms' probe4 sibling tests) is built off "mushrooms" —
+// "small mushroom pizza" (singular) had no term at all and fell through to
+// an ambiguous match; "small mushrooms pizza" (plural) resolved fine.
+Deno.test("N5: derived row lexicon carries the singular-topping mirror ('mushroom pizza', 'small mushroom pizza') alongside the topping's own stated plural terms", () => {
+  const { large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([large], compiled, new Map(), T_COMPILED_AT);
+  const largeMushrooms = rows.find(r => r.product_key === "pizza:mushrooms")!;
+  const terms = largeMushrooms.lexicon_terms.map(t => t.term);
+  assert(terms.includes("mushrooms pizza"), "the topping's own stated plural term must still be present");
+  assert(terms.includes("mushroom pizza"), "singular-topping mirror term is missing");
+  assert(terms.includes("large mushroom pizza"), "size-qualified singular-topping term is missing");
+});
+
+Deno.test("N5: derived row lexicon is unaffected for a topping whose word is already singular ('pepperoni') — no redundant duplicate term", () => {
+  const { large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([large], compiled, new Map(), T_COMPILED_AT);
+  const largePepp = rows.find(r => r.product_key === "pizza:pepperoni")!;
+  const terms = largePepp.lexicon_terms.map(t => t.term);
+  assertEquals(terms.filter(t => t === "pepperoni pizza").length, 1, "no duplicate emitted when the topping word is already singular");
+});
+
+Deno.test("N5 (acceptance, probe4): resolveItem('small mushroom pizza') resolves uniquely to the small Mushrooms derived row, exactly like the topping's own stated 'small mushrooms pizza' phrasing", () => {
+  const { small, medium, large, compiled } = buildVitosTestMenu();
+  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
+  const smallMushrooms = rows.find(r => r.product_key === "pizza:mushrooms" && r.entity_key.includes("small"))!;
+  assert(smallMushrooms, "sanity: a small Mushrooms derived row must exist");
+  const derivedIdByEntityKey = new Map(rows.map((r, i) => [r.entity_key, `real-derived-id-${i}`]));
+  const resolvedTerms = resolveDerivedLexiconTerms(rows, derivedIdByEntityKey);
+  const expectedId = derivedIdByEntityKey.get(smallMushrooms.entity_key)!;
+
+  const singular = resolveItem("small mushroom pizza", resolvedTerms);
+  assertEquals(singular, { kind: "resolved", menu_item_id: expectedId }, `singular phrasing must resolve uniquely, not ambiguous/unresolved: ${JSON.stringify(singular)}`);
+
+  const plural = resolveItem("small mushrooms pizza", resolvedTerms);
+  assertEquals(plural, { kind: "resolved", menu_item_id: expectedId }, "the topping's own stated plural phrasing must keep resolving exactly as before");
+});
+
 // PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): live
 // repro — "4 large pizzas" opens a "what kind?" disambiguation whose
 // candidate set is gathered off the BARE "pizza"/"pizzas" lexicon terms, and
@@ -2393,6 +2493,39 @@ Deno.test("resolveItem (acceptance-level proof): 'large pepperoni pizza' still r
   const expectedId = derivedIdByEntityKey.get(largePepp.entity_key)!;
   const result = resolveItem("large pepperoni pizza", fullLexicon);
   assertEquals(result, { kind: "resolved", menu_item_id: expectedId });
+});
+
+// N5 (2026-09-19 PO addendum to the term-in dispatch, real conversation af5bd5d5: 2 small
+// mushroom pizzas lost). A derived pizza row named from a plural topping word ("Mushrooms")
+// only ever got terms built off that plural form ("mushrooms pizza") -- the singular
+// ("mushroom pizza") had no term at all and fell through to an ambiguous match across every
+// pizza on the menu. singularizePhrase/isPluralChoiceWord in buildDerivedRows mirror the
+// plural term with a singular one whenever the topping's own word is plural.
+Deno.test("N5 (real conv af5bd5d5): 'small mushroom pizza' (singular) resolves to the derived Small Mushrooms row, same as the plural phrasing already did", () => {
+  const { compileResult, resolvedDerivedTerms, derivedSurfaceForms, derivedRows, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
+  const fullLexicon: LexiconTerm[] = [
+    ...compileResult.items.flatMap(c => c.lexicon_terms),
+    ...resolvedDerivedTerms,
+    ...derivedSurfaceForms,
+  ];
+  const smallMushrooms = derivedRows.find(r => r.entity_key.includes("mushroom") && r.entity_key.includes("small"))!;
+  assert(smallMushrooms, "fixture sanity: Vito's shape must include a derived Small Mushrooms row");
+  const expectedId = derivedIdByEntityKey.get(smallMushrooms.entity_key)!;
+
+  const pluralResult = resolveItem("small mushrooms pizza", fullLexicon);
+  assertEquals(pluralResult, { kind: "resolved", menu_item_id: expectedId }, "sanity: the plural phrasing must still resolve exactly as before this fix");
+
+  const singularResult = resolveItem("small mushroom pizza", fullLexicon);
+  assertEquals(singularResult, { kind: "resolved", menu_item_id: expectedId }, `the live bug: singular phrasing must resolve identically to the plural, not fall through to an ambiguous cross-menu match: ${JSON.stringify(singularResult)}`);
+});
+
+Deno.test("N5 regression: a topping whose word is already singular (e.g. 'pepperoni') gets no redundant singular-mirror term", () => {
+  const { derivedRows, resolvedDerivedTerms, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
+  const smallPepp = derivedRows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("small"))!;
+  const expectedId = derivedIdByEntityKey.get(smallPepp.entity_key)!;
+  const pepperoniOwnTerms = resolvedDerivedTerms.filter(t => t.target_id === expectedId).map(t => t.term);
+  const uniqueTerms = new Set(pepperoniOwnTerms);
+  assertEquals(pepperoniOwnTerms.length, uniqueTerms.size, `"pepperoni" is already singular -- N5's mirror must be a no-op here, not a duplicate term: ${JSON.stringify(pepperoniOwnTerms)}`);
 });
 
 // ---- Quesadilla fix: family-widening hazard detection + category-noun single-claimant widen
