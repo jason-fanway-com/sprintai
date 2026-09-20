@@ -155,7 +155,15 @@ export function displayGroupName(groupName: string): string {
 // what the customer said. Negation/abandonment must be checked BEFORE any
 // category/ordinal/price matching runs, not folded into it, so a decline is
 // never misread as a selection.
-const DECLINE_CUES = /\b(?:forget|never\s*mind|cancel|skip|drop|don'?t|not|no)\b/i;
+//
+// Rule 2 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug):
+// "I didn't ask for any of those! Just the order I gave you." never matched
+// this list at all — "don'?t" only matches the contraction "don't", and the
+// uncontracted "did not" would already match the bare "\bnot\b" alternative
+// below, but the CONTRACTED "didn't" is neither. The whole message fell
+// through to the free-text item resolver instead of being read as the plain
+// decline it is, and a stray word later in the same sentence got charged.
+const DECLINE_CUES = /\b(?:forget|never\s*mind|cancel|skip|drop|don'?t|didn'?t|not|no)\b/i;
 
 // Generic referents ("cancel THAT", "skip IT") don't name a candidate by
 // word, but during an open disambiguation they can only refer to the
@@ -197,6 +205,37 @@ export function isPendingDisambiguationDeclined(
   return false;
 }
 
+// M2 fix (2026-09-19, PO dispatch, live conv d3539d12 #5, real $91.30
+// overcharge including items the customer explicitly asked to have
+// removed): "Please remove that small Pepperoni pizza. I want to stick with
+// 2 Large Pepperoni pizzas, 2 Chicken Alfredo with linguine, and 1 Bleu
+// Cheese." was open against a which-one question for an entirely different,
+// unresolved item ("cheese pizza"'s sizes) — the word "small" in "remove
+// that SMALL Pepperoni pizza" stem-matched the Small candidate's own name
+// via the category+name-narrowing tier and got read as the customer's PICK,
+// silently ignoring that the sentence opens with a removal verb against
+// something already in the cart and goes on to restate an entirely
+// different order. isPendingDisambiguationDeclined's own DECLINE_CUES above
+// is the existing "checked first" escape hatch for a genuine decline, but
+// "remove"/"take off"/"don't want" were never decline cues (and even
+// "don't"/"not"/"no" there only fire when the declined text ALSO happens to
+// share a word with the open candidates — irrelevant here, since the
+// removal names a completely different item). This is that same "checked
+// first, before any candidate-name/size matching" discipline for a distinct
+// escape hatch: removal language is NEVER an answer to a which-one
+// question — it is a remove request against the cart, full stop. Verb set
+// deliberately narrow (does not reuse turn-engine.ts's broader
+// REMOVAL_VERBS, which also includes ordinary words like "no"/"change"/
+// "switch"/"drop"/"instead" that are too easily part of a genuine answer to
+// a which-one question, e.g. "the second one instead of the first") — only
+// the shapes that can never plausibly be a candidate pick.
+const DISAMBIGUATION_ANSWER_REMOVAL_RE =
+  /\b(?:remove|removing|removed|take\s+(?:that|this|it|them)?\s*off|took\s+(?:that|this|it|them)?\s*off|don'?t\s+want|do\s+not\s+want)\b/i;
+
+export function isDisambiguationAnswerRemovalRequest(message: string): boolean {
+  return DISAMBIGUATION_ANSWER_REMOVAL_RE.test(message ?? "");
+}
+
 // Round 2 addendum item A, rule 2 (2026-09-19, live sim persona, real
 // Vito's count-suffix collision — "3 small pizzas" -> a numbered list of
 // three unrelated items sharing a "(3)" portion suffix, then "I just want
@@ -217,10 +256,32 @@ export function isPendingDisambiguationDeclined(
 // must never be misread as abandonment; only the "just"/"only" framing
 // ("I just want X", not "I want X") signals the customer restating from
 // scratch rather than naming a candidate.
+//
+// LIVE BUG (2026-09-19, conv 009de656, item 4): the render() fallback that
+// re-asks a missed disambiguation literally tells the customer to "say
+// 'none of those'" as their way out — but "None of those." arrived
+// followed by the customer's actual restated order on the SAME line ("None
+// of those. 2x smothered fries...") and the old regex required the ENTIRE
+// trimmed message to be nothing but "none of those" (the trailing `$`
+// anchor), so it never matched and the identical list re-asked 8 times in a
+// row. "none of those"/"none of them" is now a PREFIX match — matched at
+// the start of the message, with optional trailing punctuation, then either
+// end-of-message or a word boundary before whatever the customer restated.
+// The restated text is not parsed here: this function only answers "did the
+// customer invoke the escape hatch," and turn-engine-runner.ts's existing
+// dropDisambiguationList handling already forwards the FULL input.message
+// (untouched) to PROPOSE once this returns true, exactly the same path a
+// bare "no"/"none" already takes — so the trailing order text is picked up
+// there, not here. Bare "no"/"none" (with nothing else) stays an EXACT
+// match, unchanged: a message starting with "no" that goes on to say
+// something else ("no I want pepperoni") is not obviously the escape hatch
+// and is out of scope for this fix.
+const NONE_OF_THOSE_PREFIX_RE = /^none(?:\s+of\s+(?:those|them))?[.,!]*(?:\s|$)/i;
 const DISAMBIGUATION_LIST_DROP_RE = /^(?:none(?:\s+of\s+(?:those|them))?|no)\.?!?$|\bi(?:'m| am)?\s+(?:just|only)\s+want\b/i;
 
 export function isDisambiguationListDropSignal(message: string): boolean {
-  return DISAMBIGUATION_LIST_DROP_RE.test((message ?? "").trim());
+  const trimmed = (message ?? "").trim();
+  return NONE_OF_THOSE_PREFIX_RE.test(trimmed) || DISAMBIGUATION_LIST_DROP_RE.test(trimmed);
 }
 
 // Dispatch 00-AT (conv 8b9636c9 live repro, and conv b65b60eb "Lobster
@@ -326,7 +387,17 @@ export function matchOrdinalPosition(message: string, count: number): number | n
 // large fries" — the exact LIVE MONEY BUG repros above this must keep
 // rejecting; "2 of those, please" — a quantity, not a position) stays
 // unresolved, same "never guess" discipline as every other tier.
-const LEADING_ORDINAL_ONE_WORD_QUALIFIERS = new Set(["option", "number", "no", "the"]);
+// P0 fix (2026-09-19, live money bug, conv 4c52298c): "option"/"number"/
+// "no."/"#" unambiguously FRAME a position — a customer who says "option 2"
+// means position 2 no matter what (if anything) trails it. "the" and the
+// natural-language two-word openers below carry no such framing on their
+// own ("I'll take 2 Large Pepperoni pizzas" is an ORDER, not "give me
+// candidate #2") — they only read as a position pick when nothing but
+// filler follows the number, exactly the same discipline the unqualified
+// lone-token tier below already applies. See hasOnlyFillerAfter and its use
+// in matchLeadingOrdinal.
+const LEADING_ORDINAL_EXPLICIT_QUALIFIERS = new Set(["option", "number", "no"]);
+const LEADING_ORDINAL_AMBIGUOUS_ONE_WORD_QUALIFIERS = new Set(["the"]);
 const LEADING_ORDINAL_TWO_WORD_QUALIFIERS: Array<[string, string]> = [
   ["i'll", "take"],
   ["i", "want"],
@@ -386,6 +457,20 @@ function isQuantityPartitive(words: string[], i: number): boolean {
   return splitLeadingWord(words[i + 1]).core.toLowerCase() === "of";
 }
 
+// True when position `i` in `words` is either the last word, or immediately
+// followed only by a filler word ("please", "thanks", "pls", "one") — the
+// only shapes a genuine position pick wears once an ambiguous qualifier
+// ("the", "I'll take", "I want", "I'd like", "go with") sits in front of it.
+// Anything else trailing (a size word, an item name, "of") means the number
+// is naming a QUANTITY for whatever the rest of the message names, not a
+// position — see LEADING_ORDINAL_EXPLICIT_QUALIFIERS's own header.
+function hasOnlyFillerAfter(words: string[], i: number): boolean {
+  const isLastWord = i === words.length - 1;
+  if (isLastWord) return true;
+  const nextCore = splitLeadingWord(words[i + 1]).core.toLowerCase();
+  return LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore);
+}
+
 function matchLeadingOrdinal(message: string, count: number): number | null {
   const words = message.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
@@ -397,27 +482,82 @@ function matchLeadingOrdinal(message: string, count: number): number | null {
     if (idx === null) continue;
     if (isQuantityPartitive(words, i)) continue;
 
-    let hasQualifier = hadHash;
-    if (!hasQualifier && i > 0) {
+    let hasExplicitQualifier = hadHash;
+    let hasAmbiguousQualifier = false;
+    if (!hasExplicitQualifier && i > 0) {
       const prevCore = splitLeadingWord(words[i - 1]).core.toLowerCase();
-      if (LEADING_ORDINAL_ONE_WORD_QUALIFIERS.has(prevCore)) hasQualifier = true;
-      if (!hasQualifier && i > 1) {
+      if (LEADING_ORDINAL_EXPLICIT_QUALIFIERS.has(prevCore)) hasExplicitQualifier = true;
+      else if (LEADING_ORDINAL_AMBIGUOUS_ONE_WORD_QUALIFIERS.has(prevCore)) hasAmbiguousQualifier = true;
+      if (!hasExplicitQualifier && !hasAmbiguousQualifier && i > 1) {
         const prev2Core = splitLeadingWord(words[i - 2]).core.toLowerCase();
         for (const [a, b] of LEADING_ORDINAL_TWO_WORD_QUALIFIERS) {
-          if (prev2Core === a && prevCore === b) hasQualifier = true;
+          if (prev2Core === a && prevCore === b) hasAmbiguousQualifier = true;
         }
       }
     }
-    if (hasQualifier) return idx;
+    if (hasExplicitQualifier) return idx;
+    if (hasAmbiguousQualifier && hasOnlyFillerAfter(words, i)) return idx;
 
     const gluedTerminator = punct === ")" || punct === ".";
     if (gluedTerminator) return idx;
 
-    if (i === 0) {
-      const isLastWord = i === words.length - 1;
-      const nextCore = isLastWord ? null : splitLeadingWord(words[i + 1]).core.toLowerCase();
-      if (isLastWord || (nextCore !== null && LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore))) return idx;
+    if (i === 0 && hasOnlyFillerAfter(words, i)) return idx;
+  }
+  return null;
+}
+
+// P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): "I'll take 2
+// Large Pepperoni pizzas, please." against a 3-size which-one list (option 2
+// = Small in that real transcript) had the leading "2" read as a position
+// pick — matchLeadingOrdinal's "I'll take" qualifier used to return idx
+// unconditionally, so it grabbed candidate #2 (Small, $17.45 each) and never
+// asked a clarifying question, ignoring the customer's own stated "Large".
+// The distinction, per the PO ruling this fixes: a number is a QUANTITY,
+// never a position index, whenever real content — a size word, an item/
+// family word, or a partitive "of" — follows it; an index is specifically a
+// BARE number ("2"), "option N"/"number N"/"#N"/"N)", or an ordinal word
+// ("the second one"). matchLeadingOrdinal above already refuses to read the
+// number as an index in every one of those quantity shapes (its own
+// isQuantityPartitive check plus this file's hasOnlyFillerAfter gating on
+// the ambiguous qualifiers) — this is the companion read: when a leading
+// digit/number-word is rejected as an index for exactly that reason, it IS
+// the quantity for whichever candidate the rest of resolvePendingDisambiguation's
+// tiers (category+name narrowing, in practice) pick out. Deliberately
+// narrow: skips only "of"/"the"/"a"/"an" (the shape "2 of the large" and "2
+// large" both take), scans the same first-6-words window as
+// matchLeadingOrdinal so a number buried later in an unrelated sentence
+// never qualifies, and returns null (no override — caller keeps whatever
+// quantity was already open) for every shape matchLeadingOrdinal or
+// matchOrdinalPosition already treat as a genuine index pick.
+const DISAMBIGUATION_QUANTITY_SKIP_WORDS = new Set(["of", "the", "a", "an"]);
+
+export function extractDisambiguationAnswerQuantity(message: string): number | null {
+  const words = message.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const scanLimit = Math.min(words.length, 6);
+
+  for (let i = 0; i < scanLimit; i++) {
+    const { core, punct, hadHash } = splitLeadingWord(words[i]);
+    const lower = core.toLowerCase();
+    const digitMatch = lower.match(/^(\d+)$/);
+    const value = digitMatch ? parseInt(digitMatch[1], 10)
+      : Object.prototype.hasOwnProperty.call(NUMBER_WORDS, lower) ? NUMBER_WORDS[lower]
+      : null;
+    if (value === null) continue;
+    // Explicit index framing ("#2", "2)", "2.") -- never a quantity, whatever follows.
+    if (hadHash || punct === ")" || punct === ".") continue;
+    if (i > 0) {
+      const prevCore = splitLeadingWord(words[i - 1]).core.toLowerCase();
+      if (LEADING_ORDINAL_EXPLICIT_QUALIFIERS.has(prevCore)) continue; // "option 2", "number 2", "no. 2"
     }
+
+    let j = i + 1;
+    while (j < words.length && DISAMBIGUATION_QUANTITY_SKIP_WORDS.has(splitLeadingWord(words[j]).core.toLowerCase())) j++;
+    if (j >= words.length) continue; // nothing but skip-words/end-of-message follows -- a bare index pick, not a quantity
+    const nextCore = splitLeadingWord(words[j]).core.toLowerCase();
+    if (LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore)) continue; // only filler follows -- still an index pick
+
+    return value;
   }
   return null;
 }
@@ -445,7 +585,7 @@ const RESTATEMENT_MARKERS = [
   "and also", "oh and",
 ];
 
-function extractAnswerClause(message: string): { clause: string; truncated: boolean } {
+export function extractAnswerClause(message: string): { clause: string; truncated: boolean } {
   const lower = message.toLowerCase();
   let cutIdx = message.length;
 
@@ -460,6 +600,31 @@ function extractAnswerClause(message: string): { clause: string; truncated: bool
   }
 
   return { clause: message.slice(0, cutIdx).trim(), truncated: cutIdx < message.length };
+}
+
+// DEFECT 2 (2026-09-19 live QA, conv 009de656, item 4): "I'll take 2x Large
+// (16\") Pepperoni pizzas for $21 each, please! So that's 2x Chicken
+// Alfredo..." resolved the right candidate (Large Pepperoni, via the
+// category+name-narrowing tier above) but the caller (turn-engine.ts's
+// "disambiguation" case) added it at `state.open.quantity` — whatever
+// quantity the disambiguation was ORIGINALLY opened with — never re-reading
+// the answer text itself, so the customer's own restated "2x" was silently
+// discarded ($21 charged instead of the $42 actually asked for). Scoped to
+// the SAME answer clause extractAnswerClause already isolates above (never
+// the whole restated order) so a LATER, unrelated item's own "2x" further
+// in the message ("2x Chicken Alfredo") can never be misread as this
+// candidate's count. "Nx" is deliberately the only shape recognized: a bare
+// leading digit ("2 Large...") is exactly the ordinal-position shape this
+// same resolver already claims elsewhere (picking option #2 from the list),
+// so treating it as a quantity here would collide with that; the "x" is
+// what marks it unambiguously as a count instead of a position.
+const ANSWER_QUANTITY_RE = /\b(\d+)\s*x\b/i;
+
+export function extractAnswerQuantity(clause: string): number | null {
+  const m = clause.match(ANSWER_QUANTITY_RE);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n > 0 ? n : null;
 }
 
 // The category+name-narrowing tier is terminal once it finds more than one

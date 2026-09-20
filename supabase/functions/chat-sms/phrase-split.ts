@@ -101,15 +101,47 @@ function splitOnBoundaries(text: string): string[] {
 // blindly, and it is never used to search for a plausible attachment; it
 // either maps to exactly one real phrase or it doesn't (missing beats
 // wrong, this codebase's standing principle — see ask-plan-engine.ts).
+// Word-level containment, not raw string substring containment — a raw
+// `.includes()` reads a short phrase's own letters as present INSIDE an
+// unrelated longer word purely by coincidence ("Hi" — the comma-split
+// artifact of "Hi, I'd like to order..." — is a literal substring of
+// "White", so claim.includes("hi") was true for a "Gourmet White Fiesta"
+// claim that has nothing to do with the greeting). That false match made two
+// phrases match the same claim, so this returned null (genuinely ambiguous
+// by its own contract) and every caller fell back to the UNSCOPED whole
+// message — see this file's own scopedModifierText, whose entire job is to
+// prevent exactly that. PO dispatch 2026-09-19 (M1, real live money bug,
+// conv d95306c8 #26): that fallback is what let "Sausage" (a separate,
+// pending pizza named earlier in the same message) get read as a topping
+// mention on the Gourmet White Fiesta line two phrases later. Comparing
+// word arrays for a contiguous run closes this without weakening the
+// legitimate case this function exists for (a claim that's a real prefix/
+// suffix/substring-of-words match against its own phrase, never a
+// coincidental in-word letter run).
+function containsWordRun(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let start = 0; start <= haystack.length - needle.length; start++) {
+    let matched = true;
+    for (let i = 0; i < needle.length; i++) {
+      if (haystack[start + i] !== needle[i]) { matched = false; break; }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
 export function resolveClaimedPhraseIndex(phrases: string[], claimedPhrase: string): number | null {
   if (phrases.length <= 1) return phrases.length === 1 ? 0 : null;
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   const claim = norm(claimedPhrase);
   if (!claim) return null;
+  const claimWords = claim.split(" ").filter(Boolean);
   const matches: number[] = [];
   phrases.forEach((p, i) => {
     const pn = norm(p);
-    if (pn && (pn.includes(claim) || claim.includes(pn))) matches.push(i);
+    if (!pn) return;
+    const pnWords = pn.split(" ").filter(Boolean);
+    if (containsWordRun(pnWords, claimWords) || containsWordRun(claimWords, pnWords)) matches.push(i);
   });
   return matches.length === 1 ? matches[0] : null;
 }
@@ -177,4 +209,33 @@ export function scopedModifierText(
   // phrase anyway).
   const nameRe = new RegExp(`\\b${escapeRegexPublic(itemName).replace(/\s+/g, "\\s+")}\\b`, "i");
   return scoped.replace(nameRe, " ");
+}
+
+// PO dispatch 2026-09-19 (M1 rule 1, real live money bug, conv d95306c8
+// #26): "a Sausage Pizza - Small and a Gourmet White Fiesta - Large" wrongly
+// billed a $4.50 Sausage topping onto the Gourmet White Fiesta line AND left
+// "Sausage Pizza" pending its own which-one question — the same word
+// double-counted as a topping on one line and a whole separate item on
+// another. scopedModifierText above is supposed to prevent the 00-BF
+// modifier floor from ever seeing another item's own words, but it can
+// still fall back to the UNSCOPED whole message (a single-phrase message,
+// or a claim that doesn't resolve to exactly one phrase — see
+// resolveClaimedPhraseIndex's own word-boundary fix for the specific way
+// that happened here). This is the backstop, applied regardless of how the
+// scoped text was derived: a span that is ALREADY spoken for in this
+// message — another add resolved to a real item, or a span still pending
+// its own which-one question — is stripped out before the topping scan
+// ever sees it, whole-word-boundary, contiguous-run removal (same
+// discipline as scopedModifierText's own item-name strip just above).
+// Spans under 3 characters are left alone; too short to safely remove as a
+// unit without risking a real word elsewhere in the text.
+export function stripOtherItemSpansFromModifierText(text: string, otherSpans: string[]): string {
+  let result = text;
+  for (const span of otherSpans) {
+    const trimmed = span.trim();
+    if (trimmed.length < 3) continue;
+    const escaped = escapeRegexPublic(trimmed).replace(/\s+/g, "\\s+");
+    result = result.replace(new RegExp(`\\b${escaped}\\b`, "i"), " ");
+  }
+  return result;
 }

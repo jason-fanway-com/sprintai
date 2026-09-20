@@ -10,6 +10,7 @@ import {
   candidateShortText,
   categoryWordMatches,
   displayGroupName,
+  extractDisambiguationAnswerQuantity,
   extractGlobalSizeWord,
   extractPartialSizeClause,
   extractPriceCentsFromMessage,
@@ -485,6 +486,81 @@ Deno.test("LIVE MONEY BUG: the same answer, with a full-order restatement append
   );
 });
 
+// ── TOP PRIORITY LIVE MONEY BUG (2026-09-19, live conv 4c52298c, turn #5): ──
+// a which-one list was open for "pepperoni pizza" with candidates in real
+// transcript list order where option 2 happened to be Small. The customer
+// answered "I'll take 2 Large Pepperoni pizzas, please." — matchLeadingOrdinal's
+// "I'll take" qualifier used to return idx unconditionally, so the leading
+// "2" was read as "pick candidate #2" (Small, $17.45) instead of "quantity 2"
+// — the customer's own stated "Large" was silently discarded, and the cart
+// ended up 2x Small Pepperoni Pizza ($17.45 each = $34.90) instead of 2x
+// Large ($21.00 each = $42.00). No clarifying question was ever asked, and
+// nothing flagged the wrong item/wrong money to anyone.
+//
+// The fix, in resolvePendingDisambiguation's own tiers: a leading number is a
+// QUANTITY, never a position index, whenever real content — a size word, an
+// item/family word, or a partitive "of" — follows it. An index is
+// specifically a BARE number ("2"), "option N"/"number N"/"#N"/"N)", or an
+// ordinal word ("the second one"). extractDisambiguationAnswerQuantity is the
+// companion read: it returns the stated quantity in exactly the cases
+// matchLeadingOrdinal now refuses to treat as an index, and null (no
+// override) in every case that still IS a genuine index pick — so callers
+// combine `extractDisambiguationAnswerQuantity(msg) ?? <the open question's
+// own quantity>` to get the right count without ever double-reading the
+// same number as both an index and a quantity.
+//
+// Candidate order intentionally mirrors the real transcript: option 2
+// (0-based index 1) is Small — an index-based misread of "2" would visibly
+// resolve to Small, exactly the live incident, if the fix were wrong.
+const PEPPERONI_PIZZA_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "pep-medium", name: "Pepperoni Pizza - Medium (14\")", category: "Pizza", price_cents: 1900 },
+  { menu_item_id: "pep-small",  name: "Pepperoni Pizza - Small (10\")",  category: "Pizza", price_cents: 1745 },
+  { menu_item_id: "pep-large",  name: "Pepperoni Pizza - Large (16\")",  category: "Pizza", price_cents: 2100 },
+];
+
+Deno.test("LIVE MONEY BUG (real repro, conv 4c52298c): \"I'll take 2 Large Pepperoni pizzas, please.\" resolves to LARGE, quantity 2 — never Small via index misread", () => {
+  assertEquals(resolvePendingDisambiguation("I'll take 2 Large Pepperoni pizzas, please.", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("I'll take 2 Large Pepperoni pizzas, please."), 2);
+});
+
+Deno.test("resolvePendingDisambiguation: \"2 large please\" resolves to LARGE, quantity 2", () => {
+  assertEquals(resolvePendingDisambiguation("2 large please", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("2 large please"), 2);
+});
+
+Deno.test("resolvePendingDisambiguation: \"option 2\" is a bare position pick (Small, this fixture's option 2) — quantity override stays null, unchanged from today's index-based behavior", () => {
+  assertEquals(resolvePendingDisambiguation("option 2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("option 2"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: bare \"2\" is the same position pick as \"option 2\" (Small) — quantity override stays null, unchanged from today's index-based behavior", () => {
+  assertEquals(resolvePendingDisambiguation("2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("2"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: \"the second one\" is the ordinal path to the same position (Small) — quantity override stays null", () => {
+  assertEquals(resolvePendingDisambiguation("the second one", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("the second one"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: \"2 of the large\" resolves to LARGE, quantity 2 (partitive-of shape)", () => {
+  assertEquals(resolvePendingDisambiguation("2 of the large", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("2 of the large"), 2);
+});
+
+// Regression baseline (acceptance point 3): "option 2" and bare "2" resolve
+// to the SAME candidate (pep-small, this fixture's position 2) as the
+// unmodified logic on this exact repo commit produced before this fix —
+// captured by running the original resolvePendingDisambiguation against
+// these two messages and this exact PEPPERONI_PIZZA_CANDIDATES fixture prior
+// to any change in this file. The fix must never move an index pick's
+// result, only stop a QUANTITY from being misread as one.
+Deno.test("resolvePendingDisambiguation: index-pick baseline unchanged — \"option 2\" and bare \"2\" both still resolve to the pre-fix candidate", () => {
+  const preFixBaseline = "pep-small"; // captured from HEAD~ (pre-fix) resolvePendingDisambiguation against this exact fixture
+  assertEquals(resolvePendingDisambiguation("option 2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, preFixBaseline);
+  assertEquals(resolvePendingDisambiguation("2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, preFixBaseline);
+});
+
 // ── P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md, live
 // conv b685494d-62e9-4a2d-b5c1-f761cd6d6c5b): pickNarrowingFacet/
 // isDisambiguationOptionsRequest unit coverage — turn-engine-runner.test.ts
@@ -609,6 +685,55 @@ Deno.test("isDisambiguationListDropSignal: an ordinary answer naming a candidate
   assert(!isDisambiguationListDropSignal("cheese pizza"));
   assert(!isDisambiguationListDropSignal("I want the large"), "'I want X' with no just/only is the single most ordinary way to answer — must not drop");
   assert(!isDisambiguationListDropSignal("nope that's not right, I want the large"), "embedded 'no' inside a real answer must not drop it");
+});
+
+// DEFECT 1 (2026-09-19 live QA, PO priority item 4, real transcript conv
+// 009de656 #5): the bot's own re-ask fallback ("I couldn't match that. Reply
+// with a number, or say "none of those".") tells the customer to use this
+// exact escape hatch — but the OLD regex required the ENTIRE trimmed message
+// to be nothing but "none of those" (a `$` anchor with no prefix support),
+// so "None of those." followed by the customer's own restated order never
+// matched at all. BEFORE this fix: the live conversation looped EIGHT
+// times, byte-identical fallback every turn, on these exact 8 real customer
+// messages (pulled directly from the conversation, never guessed) — the
+// customer said the bot's own suggested words, verbatim, capital N and
+// trailing period included, and the bot never recognized it once. AFTER
+// this fix: every one of these is recognized as the escape hatch, and
+// turn-engine-runner.ts's existing dropDisambiguationList handling (already
+// correct, untouched by this fix) forwards the whole message — restated
+// order included — to PROPOSE as a fresh message with nothing open, exactly
+// as it already does for a bare "no"/"none".
+const REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES = [
+  "None of those. I wanted 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can you confirm that for me?",
+  "None of those. I just want to confirm my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese.",
+  "None of those. I just want to place my order as is: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese on the side. Can we finalize that?",
+  "None of those. I just want to place my order, which is 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Please confirm this order.",
+  "None of those. I just want to place my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can we finalize that?",
+  "None of those. Can I just confirm my final order? It's 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Please finalize it!",
+  "None of those. I want to finalize my order for 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can you please confirm this?",
+  "None of those. I want to confirm my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can we finalize that?",
+];
+
+Deno.test("isDisambiguationListDropSignal: real conv 009de656 live loop — all 8 real 'None of those. <restated order>' messages now trip the drop signal (BEFORE this fix, none of them did)", () => {
+  assertEquals(REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES.length, 8, "sanity: this is the real 8-message loop, not a guessed count");
+  for (const msg of REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES) {
+    assert(isDisambiguationListDropSignal(msg), `real live message must trip the drop signal: "${msg}"`);
+  }
+});
+
+Deno.test("isDisambiguationListDropSignal: 'none of those' prefix match is case/punctuation insensitive, with or without restated text after it", () => {
+  const restated = "2x Large Pepperoni pizzas please";
+  for (const phrase of ["none of those", "NONE OF THOSE", "None Of Those", "None of those.", "NONE OF THOSE!", "None Of Those,"]) {
+    assert(isDisambiguationListDropSignal(phrase), `bare "${phrase}" must trip the drop signal`);
+    assert(isDisambiguationListDropSignal(`${phrase} ${restated}`), `"${phrase} ${restated}" must trip the drop signal — the escape hatch plus a restated order`);
+  }
+  // "none of them" is the sibling phrasing this same prefix rule covers.
+  assert(isDisambiguationListDropSignal("None of them. I'll take the large one instead."));
+});
+
+Deno.test("isDisambiguationListDropSignal: a word that merely STARTS WITH 'none' is never mistaken for the escape hatch", () => {
+  assert(!isDisambiguationListDropSignal("nonetheless I'll take the large one"), "'nonetheless' must not be read as 'none' + leftover text");
+  assert(!isDisambiguationListDropSignal("nonexistent items aside, give me the large one"));
 });
 
 Deno.test("facetDisplayValues: kind values keep original casing, deduped, no prices", () => {

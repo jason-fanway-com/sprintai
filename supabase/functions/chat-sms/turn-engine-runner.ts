@@ -90,6 +90,9 @@ import {
   orderShapedMessageQuantity,
   disambiguationDeclineNamesOutsideItem,
   readOrderTypeReply,
+  isConfirmAffirmative,
+  findMenuItemByNamePhrase,
+  addResolvedItemToCart,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -99,6 +102,14 @@ import {
   type Decline,
   type Proposal,
 } from "./turn-engine.ts";
+// Freeze-queue item 7 (2026-09-19): the returning-customer greeting/offer.
+// Both modules are pure decision cores already built and tested for the
+// legacy path (index.ts) — reused here unchanged, never reimplemented. See
+// this file's own maybeBuildReturningCustomerGreeting/
+// resolveReturningCustomerOfferAnswer below for the one place each is
+// called.
+import { lookupCustomerContext, regularEligibility } from "../_shared/customer-profile.ts";
+import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 
 type ProposeTurnFn = typeof defaultProposeTurn;
 
@@ -569,6 +580,41 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
   return { ok: true, rows };
 }
 
+// DEFECT 3 (2026-09-19 live QA, conv 009de656): loadItemLexicon above
+// deliberately excludes an inactive lexicon row (or one whose target has
+// gone non-orderable) from `rows` — correct, since neither should ever be a
+// resolver candidate. But resolve-item.ts's resolveItem had no way to tell
+// "no term at all names this" apart from "a term names it exactly, and was
+// correctly excluded" — so once the shop's own longer, more specific,
+// correctly-targeted term for a phrase was dropped, resolution silently
+// fell back to a SHORTER, unrelated term instead ("bleu cheese" -> the
+// single word "cheese" -> three Cheese pizzas, real live bug). This loads
+// exactly those excluded rows — term/target_id only, no category/size_label
+// join, since resolveItem's own use of this list (longerInactiveTermExists)
+// never resolves anything from it, only vetoes a guess when a real answer
+// was found and correctly excluded. Best-effort: a failure here degrades to
+// today's pre-existing behavior (the veto simply never fires), never fails
+// the turn — same discipline as loadLexiconItemMetadata's own category/
+// size_label join.
+async function loadExcludedItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconTerm[]> {
+  const rows: LexiconTerm[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("lexicon").select("term, target_id")
+      .eq("shop_id", shopId).eq("target_type", "item").eq("active", false)
+      .order("id", { ascending: true })
+      .range(from, from + ITEM_LEXICON_PAGE_SIZE - 1);
+    if (error || !data) break;
+    for (const r of data as Array<{ term: string; target_id: string }>) {
+      rows.push({ term: r.term, target_id: r.target_id });
+    }
+    if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
+    from += ITEM_LEXICON_PAGE_SIZE;
+  }
+  return rows;
+}
+
 function buildAskShopContext(shopContext: RunTurnShopContext, upsellEnabled: boolean): AskShopContext {
   return {
     deliveryEnabled: shopContext.deliveryEnabled,
@@ -770,8 +816,245 @@ const REMAINDER_ELIGIBLE_OUTCOME_KINDS = new Set([
   "confirm_no",
 ]);
 
+// ── Returning-customer greeting (freeze-queue item 7, 2026-09-19) ──────────
+// PO report: "Last week the bot recognised Jason by number, greeted him by
+// name, and offered 'the same as last time?' with the full order, delivery
+// and address. It no longer does." The legacy path (index.ts) has always had
+// this — delivery-memory-offer.ts and customer-profile.ts are the tested
+// decision cores it already calls — but the turn-engine path bypasses
+// index.ts entirely (this dispatch's own docs/specs/2026-09-14-turn-engine-
+// oversight.md §4 Phase 3 routing branch), so a shop on the engine path
+// (Vito's, turn_engine_enabled=true) never ran any of it. This is a
+// reconnection, not a new feature: every decision (who counts as a
+// "regular", when a delivery offer is still honest to make) is made by the
+// SAME two functions the legacy path already uses, unchanged.
+//
+// index.ts already computes all of this (customerRow, regularItem,
+// deliveryOffer) before its own turn-engine routing branch — but index.ts is
+// frozen for this dispatch, and its own object literal call into
+// runTurnEngineTurn (RunTurnInput) does not carry any of it through. Rather
+// than widen that frozen call site, this reads exactly what it needs (the
+// customer's phone off `conversations`, personalization/delivery flags off
+// `shops`, opt-out off `sms_opt_outs`) straight off deps.supabase using
+// input.conversationId/shopId/tenantId — already on hand, no new field
+// required from index.ts at all.
+
+interface ReturningCustomerGreeting {
+  reply: string;
+  // Non-null only when there is something worth remembering an answer to —
+  // a bare name-only greeting (no regular, no live delivery offer) has
+  // nothing to wait on, so the runner prepends it to this turn's own normal
+  // reply instead of swallowing the turn (see the call site below).
+  offerState: NonNullable<DialogueState["returningCustomerOffer"]> | null;
+}
+
+async function maybeBuildReturningCustomerGreeting(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+): Promise<ReturningCustomerGreeting | null> {
+  const { data: convRow } = await supabase
+    .from("conversations")
+    .select("customer_phone")
+    .eq("id", input.conversationId)
+    .maybeSingle();
+  const customerPhone = (convRow as { customer_phone?: string | null } | null)?.customer_phone;
+  if (!customerPhone) return null;
+
+  // Same gate as index.ts's own customer-CRM block (AC3/spec item 5): one
+  // flag for the whole feature, no separate on/off switch for the greeting
+  // vs. the delivery memory.
+  const { data: shopRow } = await supabase
+    .from("shops")
+    .select("customer_personalization_enabled, delivery_paused_until, delivery_radius_mi")
+    .eq("id", input.shopId)
+    .maybeSingle();
+  const shop = shopRow as {
+    customer_personalization_enabled?: boolean | null;
+    delivery_paused_until?: string | null;
+    delivery_radius_mi?: number | null;
+  } | null;
+  if (shop?.customer_personalization_enabled === false) return null;
+
+  // Same table/columns as index.ts's own isOptedOut — duplicated rather than
+  // imported since that function is local and unexported in a frozen file
+  // (see this file's header on the New-Files-Only discipline elsewhere).
+  const { data: optOutRow } = await supabase
+    .from("sms_opt_outs")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .eq("customer_phone", customerPhone)
+    .is("opted_back_at", null)
+    .maybeSingle();
+  if (optOutRow) return null;
+
+  const customerRow = await lookupCustomerContext(supabase, input.tenantId, customerPhone);
+  // AC4 parity (index.ts's own comment on customerContext): only greet by
+  // name on a genuinely returning customer with a stored name — never a
+  // first-ever contact, even if a profile row somehow exists with no name.
+  if (!customerRow?.name) return null;
+
+  const regularEligible = regularEligibility(customerRow.favorite_items ?? []);
+  const regularItem = regularEligible
+    ? (() => {
+        const menuItem = findMenuItemByNamePhrase(input.menu, regularEligible.name, "");
+        return menuItem ? { menu_item_id: menuItem.id, name: menuItem.ask_plan?.display_name ?? menuItem.name } : null;
+      })()
+    : null;
+
+  const deliveryOfferComputed = computeDeliveryOffer(
+    customerRow.last_order_type ?? null,
+    customerRow.last_delivery_address ?? null,
+    {
+      deliveryEnabled: input.shopContext.deliveryEnabled,
+      deliveryPausedNow: !!(shop?.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()),
+      deliveryRadiusMi: shop?.delivery_radius_mi ?? null,
+    },
+  );
+  // Conversation's first turn (this function only ever runs when
+  // input.dialogueState is null — see the call site) means order_type is
+  // always still unset and no offer has been made yet this cart, so
+  // isDeliveryOfferEligible's other two gates are trivially satisfied here;
+  // passed through anyway rather than skipped, so this stays honest if that
+  // ever stops being true.
+  const deliveryOfferEligible = isDeliveryOfferEligible(deliveryOfferComputed, input.shopContext.orderType, null);
+  // Mirrors index.ts's own "optional, low-stakes" treatment of a plain
+  // pickup-again offer (customerContextBlock's deliveryOfferClause, the
+  // final "pickup" branch) — only a DELIVERY offer, or an honest "delivery
+  // isn't available right now" downgrade, is worth a deterministic yes/no
+  // question here; a bare "pickup again?" is skipped exactly as the legacy
+  // prompt treats it as optional.
+  const offeredDeliveryOffer: DeliveryOffer =
+    deliveryOfferEligible && deliveryOfferComputed &&
+    (deliveryOfferComputed.type === "delivery" || (deliveryOfferComputed.type === "pickup" && !!deliveryOfferComputed.downgradeReason))
+      ? deliveryOfferComputed
+      : null;
+
+  const namePart = `Hey ${customerRow.name}, welcome back!`;
+  const combinedActive = !!regularItem && offeredDeliveryOffer?.type === "delivery";
+  const offerClause = combinedActive
+    ? ` Want your usual, the ${regularItem!.name}, delivered again to ${(offeredDeliveryOffer as { type: "delivery"; address: { formatted: string } }).address.formatted}?`
+    : regularItem
+      ? ` Want your usual, the ${regularItem.name}, or something else today?`
+      : offeredDeliveryOffer?.type === "delivery"
+        ? ` Delivery again to ${offeredDeliveryOffer.address.formatted}?`
+        : offeredDeliveryOffer?.type === "pickup" && offeredDeliveryOffer.downgradeReason
+          ? ` Your last order was delivery, but ${offeredDeliveryOffer.downgradeReason} — want this for pickup instead?`
+          : "";
+
+  const reply = `${namePart}${offerClause}`;
+  const offerState = (regularItem || offeredDeliveryOffer)
+    ? { regularItem, deliveryOffer: offeredDeliveryOffer }
+    : null;
+  return { reply, offerState };
+}
+
+async function persistReturningCustomerGreetingTurn(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+  reply: string,
+  offerState: NonNullable<DialogueState["returningCustomerOffer"]>,
+): Promise<RunTurnResult> {
+  const cart = input.cart.map(l => ({ ...l }));
+  const nextState: DialogueState = { ...INITIAL_DIALOGUE_STATE, returningCustomerOffer: offerState };
+  const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+  const driverTipCents = input.shopContext.driverTipCents ?? 0;
+  const saved = await persistTurn(supabase, input, cart, nextState, {}, reply, deliveryFeeCents, driverTipCents);
+  return { reply, cart, dialogueState: nextState, messageId: saved.id };
+}
+
+// The turn AFTER the greeting/offer above — the customer's answer to "want
+// your usual...?" / "delivery again to...?". Returns null (never touches the
+// DB) on anything that isn't a clear yes, so the caller can clear the
+// remembered offer and let this exact same message fall through to the
+// completely normal ANSWER/DECIDE/ASK/RENDER pipeline, satisfying AC5's "a
+// 'no' (or anything else) proceeds to a completely normal ... conversation,
+// unaffected" the same way a declined legacy offer just lets the LLM keep
+// going. Reuses ask()/render() — the SAME two steps every other turn ends
+// with — rather than hand-building a bespoke confirmation reply, so a
+// regular that still needs a required option (size, etc.) opens that slot
+// question exactly like any other fresh add.
+async function resolveReturningCustomerOfferAnswer(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+  offer: NonNullable<DialogueState["returningCustomerOffer"]>,
+): Promise<RunTurnResult | null> {
+  if (!isConfirmAffirmative(input.message)) return null;
+
+  const cartBefore = input.cart.map(l => ({ ...l }));
+  const workingCart: TurnEngineCartLine[] = input.cart.map(l => ({ ...l }));
+  if (offer.regularItem) {
+    addResolvedItemToCart(workingCart, input.menu, offer.regularItem.menu_item_id, 1);
+  }
+  const sideEffects: CartSideEffects = {};
+  if (offer.deliveryOffer?.type === "delivery") {
+    sideEffects.order_type = "delivery";
+    sideEffects.delivery_address = { formatted: offer.deliveryOffer.address.formatted };
+  } else if (offer.deliveryOffer?.type === "pickup") {
+    sideEffects.order_type = "pickup";
+  }
+
+  const effectiveShopContext: RunTurnShopContext = {
+    ...input.shopContext,
+    orderType: sideEffects.order_type ?? input.shopContext.orderType,
+    deliveryAddressKnown: sideEffects.delivery_address != null ? true : input.shopContext.deliveryAddressKnown,
+  };
+  const upsellEnabled = await loadUpsellEnabled(supabase, input.shopId);
+  const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
+  const turnEvents: AskTurnEvents = {
+    qualifyingAddMenuItemId: null,
+    disambiguationCandidateIds: null,
+    carriedDisambiguationCandidateIds: [],
+    disambiguationSettledThisTurn: false,
+    checkoutIntentThisTurn: false,
+    confirmYes: false,
+    confirmNo: false,
+  };
+  const nextState = ask(workingCart, { ...INITIAL_DIALOGUE_STATE, returningCustomerOffer: null }, turnEvents, shopContext, input.menu);
+  // ask() has no idea this field exists (deliberately — see
+  // DialogueState.returningCustomerOffer's own doc) and so never carries it
+  // forward on its own; set explicitly so the persisted row shows the offer
+  // was acted on, not merely omitted.
+  nextState.returningCustomerOffer = null;
+  const rendered = render(cartBefore, workingCart, nextState, [], input.menu, {
+    deliveryFeeCents: input.shopContext.deliveryFeeCents || undefined,
+    driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? undefined,
+    priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
+  });
+
+  const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+  const driverTipCents = sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? 0;
+  const saved = await persistTurn(supabase, input, workingCart, nextState, sideEffects, rendered, deliveryFeeCents, driverTipCents);
+  return { reply: rendered, cart: workingCart, dialogueState: nextState, messageId: saved.id };
+}
+
 export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
-  const priorState = input.dialogueState ?? INITIAL_DIALOGUE_STATE;
+  // ── Returning-customer greeting (freeze-queue item 7) ───────────────────
+  // See maybeBuildReturningCustomerGreeting/resolveReturningCustomerOfferAnswer
+  // above for the full reasoning. `effectiveDialogueState` is what the rest
+  // of this function actually runs on — `input.dialogueState` itself is
+  // never read again past this block, so clearing returningCustomerOffer
+  // here (the decline path) is enough to make every line below behave as
+  // though the offer had never been made.
+  let greetingPrefix: string | null = null;
+  let effectiveDialogueState = input.dialogueState;
+  if (input.dialogueState == null) {
+    const greeting = await maybeBuildReturningCustomerGreeting(deps.supabase, input);
+    if (greeting) {
+      if (greeting.offerState) {
+        return await persistReturningCustomerGreetingTurn(deps.supabase, input, greeting.reply, greeting.offerState);
+      }
+      greetingPrefix = greeting.reply;
+    }
+  } else if (input.dialogueState.returningCustomerOffer) {
+    const offerTurn = await resolveReturningCustomerOfferAnswer(deps.supabase, input, input.dialogueState.returningCustomerOffer);
+    if (offerTurn) return offerTurn; // customer accepted -- fully handled and persisted above
+    // Declined, or not understood as an answer to the offer at all -- clear
+    // it and fall through to the completely normal pipeline on this exact
+    // message (AC5: "proceeds to a completely normal ... conversation").
+    effectiveDialogueState = { ...input.dialogueState, returningCustomerOffer: null };
+  }
+
+  const priorState = effectiveDialogueState ?? INITIAL_DIALOGUE_STATE;
   const cartBefore = input.cart.map(l => ({ ...l }));
   // answer() mutates its cart argument in place (turn-engine.ts's own
   // contract); decide() below never does (it returns a new array) — this
@@ -1183,6 +1466,25 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           };
         }
         break;
+      // M2 fix (2026-09-19, live conv d3539d12 #5): the answer to "which
+      // one?" was removal language against the cart, not a pick — same
+      // "cart already mutated in place by answer(), original disambiguation
+      // stays open exactly as it was" carry-forward as disambiguation_new_item_added
+      // immediately above, minus qualifyingAddMenuItemId (nothing was added).
+      case "disambiguation_removal_applied":
+        if (priorState.open?.kind === "disambiguation") {
+          turnEvents = {
+            ...turnEvents,
+            disambiguationCandidateIds: priorState.open.candidates,
+            disambiguationQuantity: priorState.open.quantity,
+            disambiguationSpanText: priorState.open.spanText,
+            disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
+            disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            heldModifierText: priorState.open.heldModifierText,
+            replacementSourceLineKey: priorState.open.replacementSourceLineKey,
+          };
+        }
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the
@@ -1226,6 +1528,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // read-back handling as quantity_corrected — see
         // AskTurnEvents.lineReplacedThisTurn's own doc.
         turnEvents = { ...turnEvents, lineReplacedThisTurn: true };
+        break;
+      case "line_removed_at_confirm":
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): the line was
+        // already removed in place by answer() (turn-engine.ts's "confirm"
+        // case, mechanism 3). Same fresh-read-back handling as
+        // line_replaced/quantity_corrected — see
+        // AskTurnEvents.lineRemovedAtConfirmThisTurn's own doc.
+        turnEvents = { ...turnEvents, lineRemovedAtConfirmThisTurn: true };
         break;
       case "replacement_unavailable":
         // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): X
@@ -1305,6 +1615,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           // primary answer applied -- same as remainderMessage being null.
           if (remainderResult.ok && remainderResult.proposal.adds.length > 0) {
             const sanitizedProposal: Proposal = { ...remainderResult.proposal, removes: [], modifies: [] };
+            const remainderInactiveLexicon = await loadExcludedItemLexicon(deps.supabase, input.shopId);
             const remainderDecide = decide(
               sanitizedProposal,
               workingCart,
@@ -1312,6 +1623,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
               lexiconResult.rows,
               deps.newLineKey ?? (() => crypto.randomUUID()),
               remainderMessage,
+              remainderInactiveLexicon,
+              // Money bug fix (2026-09-19, live conv 0dcb02a7): this is by
+              // definition a remainder AFTER answer() already resolved the
+              // primary question this turn — see decide()'s own
+              // treatCartMatchAsRestatement doc.
+              true,
             );
             workingCart.splice(0, workingCart.length, ...remainderDecide.cart);
             declines = [...declines, ...remainderDecide.declines];
@@ -1435,6 +1752,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
     }
     const lexicon = lexiconResult.rows;
+    const inactiveLexicon = await loadExcludedItemLexicon(deps.supabase, input.shopId);
     const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
     const proposeResult: ProposeResult = await proposeFn(
       {
@@ -1514,12 +1832,47 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // next turn either way, same as PROPOSE succeeding would have left it.
       if (proposeResult.reason === "timeout" && priorState.open === null) {
         proposal = { intent: "order", adds: [{ item_span: input.message, quantity: 1, choices: [] }], removes: [], modifies: [] };
+      } else if (proposeResult.reason === "timeout" && priorState.open !== null) {
+        // MONEY BUG (2026-09-19, live conv 31f54c6b, item 2): the carve-out
+        // above only ever covered open === null. A specific question WAS
+        // open here (confirm, in the repro — but this is not scoped to
+        // confirm any more than the apology below was) and the customer's
+        // reply didn't resolve it (ANSWER already had first crack — see
+        // STEP 2 above — and returned UNRESOLVED, or we would never have
+        // reached PROPOSE at all). A cart reading correctly at $39.98,
+        // read back correctly, with the customer ready to confirm, got told
+        // "Sorry, I ran into a problem. Please call us" on a pure model
+        // timeout that had nothing to do with them. The model failing to
+        // answer is not the same fact as the customer's answer being
+        // unclear — re-ask the exact question that was already open,
+        // exactly as ASK/RENDER would if this turn had genuinely failed to
+        // resolve it (same openRepeatCount escalation every other repeat of
+        // this question already goes through — see render()'s per-kind
+        // wording), never the apology. `workingCart` is unmutated here
+        // (ANSWER only ever mutates on a RESOLVED outcome; this branch is
+        // the "else" of resolved — see STEP 2's `if (answerResult.resolved)`
+        // above), so cartBefore/workingCart are the same cart by content and
+        // render() correctly emits no action-confirmation line, only the
+        // re-asked question.
+        const reaskState: DialogueState = { ...priorState, openRepeatCount: (priorState.openRepeatCount ?? 0) + 1 };
+        const reaskDeliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+        const reaskDriverTipCents = input.shopContext.driverTipCents ?? 0;
+        const reply = render(cartBefore, workingCart, reaskState, declines, input.menu, {
+          deliveryFeeCents: reaskDeliveryFeeCents || undefined,
+          driverTipCents: reaskDriverTipCents || undefined,
+          priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
+        });
+        const saved = await persistTurn(deps.supabase, input, workingCart, reaskState, sideEffects, reply, reaskDeliveryFeeCents, reaskDriverTipCents);
+        return { reply, cart: workingCart, dialogueState: reaskState, messageId: saved.id };
       } else {
         // proposeTurn() has already persisted the error_log row itself
         // (stage: "propose_call", raw response attached) — see propose.ts.
         // Nothing changed this turn: cart and dialogue_state are left
         // exactly as they were, and only the fallback reply is written to
-        // messages.
+        // messages. Reached only when there is no open question to re-ask
+        // (the branch above owns every other case) or the failure wasn't a
+        // timeout at all (schema_violation/malformed_json/network_error/
+        // non_200 — a different failure class, unchanged here).
         const saved = await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
         return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
       }
@@ -1547,7 +1900,22 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // re-runs through this same path regardless of what intent the model
     // assigned it. One detector (orderShapedMessageQuantity), one re-run
     // path, covering both trigger shapes.
-    if ((proposal.adds?.length ?? 0) === 0) {
+    //
+    // Rule 2 (2026-09-19, live conv 0db63161 #28, MONEY BUG): gated OFF
+    // whenever priorState.open is name/address/order_type/confirm — those
+    // four questions each have a narrow, specific expected answer shape
+    // (a name, an address, pickup-or-delivery, yes-or-no), so treating a
+    // reply to any of them as "maybe the customer is ordering something" is
+    // categorically wrong, the same reasoning the slot/multi_size/
+    // disambiguation branch above already applies by skipping PROPOSE
+    // entirely. This takeover still needs PROPOSE to have actually run for
+    // these four kinds (00-BL/00-BM extract a name/address out of
+    // proposal.answer_value above), so it can't skip the call itself — only
+    // the empty-adds-as-a-fresh-order reinterpretation of its result.
+    const openKindBlocksOrderShapedTakeover = priorState.open?.kind === "name" ||
+      priorState.open?.kind === "address" || priorState.open?.kind === "order_type" ||
+      priorState.open?.kind === "confirm";
+    if (!openKindBlocksOrderShapedTakeover && (proposal.adds?.length ?? 0) === 0) {
       const orderShapedQuantity = orderShapedMessageQuantity(input.message, input.menu);
       if (orderShapedQuantity !== null) {
         proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
@@ -1590,6 +1958,31 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // suppression branch -- the model reads the message, its cart changes
       // are discarded. Worth doing; not a two-line change.
     }
+    // Rule 1/2 (2026-09-19, live conv 0db63161 #28, MONEY BUG, order never
+    // paid), NARROWED on merge (2026-09-19, conv 9cf68285 T3 regression):
+    // originally discarded the model's own adds/removes/modifies for all
+    // four of name/address/order_type/confirm. That broke a real, already-
+    // shipped fix (conv22-live-runner-gap-20260919, same night): order_type
+    // is EXACTLY the open kind a customer's decline-and-restated-order turn
+    // ("no stromboli, just the greek salad and 2 medium pepperonis") answers
+    // while order_type is still open, and that fix's own itemSpanNamedInMessage
+    // guard already independently verifies every add's words are genuinely
+    // present in the customer's message -- it does not need this blanket
+    // discard, and the discard was actively breaking it (deno test caught
+    // this on merge, not live). confirm has the identical shape from an
+    // earlier fix tonight (confirm-quantity-correction) -- forwarding an
+    // unmatched confirm-state correction to PROPOSE and trusting a genuinely
+    // correct result is that fix's whole point. name/address have no such
+    // exception anywhere in tonight's other work -- a name or address reply
+    // is never legitimately a food order, so the blanket discard is kept for
+    // just those two. The model is still consulted for all four kinds --
+    // 00-BL/00-BM's answer_value extraction above needs the call to have
+    // actually happened -- only name/address ever discard its cart-shaped
+    // output; order_type/confirm proposals flow to decide() as-is, same as
+    // before this dispatch, protected by their own existing guards.
+    if (priorState.open?.kind === "name" || priorState.open?.kind === "address") {
+      proposal = { ...proposal, adds: [], removes: [], modifies: [] };
+    }
     const decideResult = decide(
       proposal,
       workingCart,
@@ -1597,6 +1990,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       lexicon,
       deps.newLineKey ?? (() => crypto.randomUUID()),
       input.message,   // 00-BD: to tell a restatement from a new order
+      inactiveLexicon,
+      // Money bug fix (2026-09-19, live conv 0dcb02a7): this PROPOSE call
+      // only ever runs here because ANSWER couldn't resolve `priorState.open`
+      // deterministically (00-BI's own header, just above) -- a genuinely
+      // fresh, unprompted message always arrives with priorState.open null.
+      // See decide()'s own treatCartMatchAsRestatement doc.
+      priorState.open !== null,
     );
     workingCart.splice(0, workingCart.length, ...decideResult.cart);
     declines = decideResult.declines;
@@ -1680,6 +2080,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   };
   const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
   const nextState = ask(workingCart, priorState, turnEvents, shopContext, input.menu);
+  // Freeze-queue item 7: ask() doesn't carry this field forward (it has no
+  // idea it exists — see DialogueState.returningCustomerOffer's own doc).
+  // priorState.returningCustomerOffer is `null` here only on the one turn
+  // that just cleared a declined offer (see the top of this function); every
+  // ordinary turn leaves it undefined, so this never fires otherwise.
+  if (priorState.returningCustomerOffer === null) nextState.returningCustomerOffer = null;
   // 2026-09-18 PO dispatch (echo regression follow-up): record what got
   // echoed THIS turn (if anything) so NEXT turn's anti-repeat check (above)
   // can tell a genuine second identical miss from a fresh one. Kept outside
@@ -1718,7 +2124,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     unmatchedSlotChoiceText,
     enumerateDisambiguationCandidates,
   });
-  const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
+  const baseReply = answerText ? `${answerText}\n\n${rendered}` : rendered;
+  // Freeze-queue item 7: a name-only greeting (no regular, no live delivery
+  // offer -- see maybeBuildReturningCustomerGreeting) never swallows the
+  // turn, so it rides along ahead of whatever this turn's own message
+  // normally produces, same "prepend, don't replace" discipline as
+  // answerText itself just above.
+  const reply = greetingPrefix ? `${greetingPrefix} ${baseReply}` : baseReply;
 
   // ── STEP 7: PERSIST ────────────────────────────────────────────────────────
   const saved = await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply, deliveryFeeCents, driverTipCents);

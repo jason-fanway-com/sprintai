@@ -83,9 +83,31 @@ interface FakeState {
   // loadItemLexicon, the same fallback discipline already applied to a
   // failed/missing category or size_label lookup.
   menuItems: Array<{ id: string; category: string | null; size_label: string | null; bot_state?: string | null }>;
+  // Freeze-queue item 7 (returning-customer greeting): the four tables
+  // maybeBuildReturningCustomerGreeting reads directly, keyed by
+  // conversationId/shopId/(tenantId+phone) — see that function's own
+  // header for why these live outside RunTurnInput/RunTurnShopContext.
+  // null by default on every table, same "cold start, harmless" default the
+  // generic maybeSingle() fallback below already gives every OTHER table —
+  // so every pre-existing test in this file is unaffected.
+  conversationRow: { customer_phone: string | null } | null;
+  shopRow: { customer_personalization_enabled?: boolean; delivery_paused_until?: string | null; delivery_radius_mi?: number | null } | null;
+  optOutRow: { id: string } | null;
+  customerRow: {
+    tenant_id: string;
+    customer_phone: string;
+    name: string | null;
+    order_count: number;
+    total_spent_cents: number;
+    favorite_items: Array<{ name: string; count: number }>;
+    last_order_id: string | null;
+    last_order_at: string | null;
+    last_order_type: "pickup" | "delivery" | null;
+    last_delivery_address: Record<string, unknown> | null;
+  } | null;
 }
 
-interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems">> {
+interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems" | "conversationRow" | "shopRow" | "optOutRow" | "customerRow">> {
   // Makes the .range() call starting at this offset resolve as a PostgREST
   // error (data: null, error) instead of a page of rows — reproduces a real
   // fetch failure on page N>0, distinct from a clean short/empty-page finish.
@@ -106,6 +128,10 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
     shopSettings: null,
     lexicon: LEXICON,
     menuItems: [],
+    conversationRow: null,
+    shopRow: null,
+    optOutRow: null,
+    customerRow: null,
     ...stateOverrides,
   };
 
@@ -124,9 +150,14 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
         return b;
       },
       eq() { return b; },
+      is() { return b; },
       order() { return b; },
       maybeSingle() {
         if (table === "shop_settings") return Promise.resolve({ data: state.shopSettings, error: null });
+        if (table === "conversations") return Promise.resolve({ data: state.conversationRow, error: null });
+        if (table === "shops") return Promise.resolve({ data: state.shopRow, error: null });
+        if (table === "sms_opt_outs") return Promise.resolve({ data: state.optOutRow, error: null });
+        if (table === "customers") return Promise.resolve({ data: state.customerRow, error: null });
         return Promise.resolve({ data: null, error: null });
       },
       range(from: number, to: number) {
@@ -704,8 +735,8 @@ Deno.test("runTurnEngineTurn (model timeout fallback): a message decide() can't 
   assert(result.reply.includes("didn't catch"), `expected decide()'s own 00-AX decline wording: ${result.reply}`);
 });
 
-Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null — a timeout while a specific question (e.g. the customer's name) is open still falls back to 'call us', unchanged", async () => {
-  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null for the deterministic-add carve-out — a timeout while a specific question (e.g. the customer's name) is open instead RE-ASKS that question, never 'call us' (money bug, 2026-09-19, live conv 31f54c6b, item 2)", async () => {
+  const { supabase, state } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
   const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
   const priorCart: TurnEngineCartLine[] = [
     { menu_item_id: "item-cheeseburger", name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], line_key: "line-1" },
@@ -732,9 +763,13 @@ Deno.test("runTurnEngineTurn (model timeout fallback): scoped to open === null �
 
   const result = await runTurnEngineTurn(input, deps);
 
-  assertEquals(result.reply, FALLBACK_REPLY, "a pending specific question is out of scope for the deterministic fallback — decide() has no business reinterpreting an answer to it as a new item");
-  assertEquals(result.cart, priorCart);
-  assertEquals(result.dialogueState, priorState);
+  assert(result.reply !== FALLBACK_REPLY, "a pending specific question must be RE-ASKED on a genuine timeout, never answered with the apology");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assert(result.reply.includes("What's the name for the order?"), `expected the same open question re-asked verbatim: ${result.reply}`);
+  assertEquals(result.cart, priorCart, "a model timeout must never mutate the cart");
+  assertEquals(result.dialogueState.open, priorState.open, "the exact same open question must still be open, not resolved or dropped");
+  assertEquals(result.dialogueState.openRepeatCount, 1, "a re-ask is a real repeat of the same question, same escalation counter every other repeat goes through");
+  assertEquals(state.orderCartsUpdates.length, 1, "the bumped openRepeatCount must be persisted so a second timeout in a row escalates normally");
 });
 
 Deno.test("runTurnEngineTurn (model timeout fallback): scoped to reason === 'timeout' — a schema_violation with open === null still falls back to 'call us', unchanged", async () => {
@@ -2569,4 +2604,656 @@ Deno.test('runTurnEngineTurn P0 (round-2 item 1 root cause): the held size for a
   );
   for (const line of answerResult.cart) assertEquals(line.quantity, 1);
   assertEquals(answerResult.dialogueState.open, null, "fully resolved — size was recovered from the raw message, never re-asked");
+});
+
+// ── Freeze-queue item 7 (2026-09-19): returning-customer greeting ──────────
+// PO report: "Last week the bot recognised Jason by number, greeted him by
+// name, and offered 'the same as last time?' with the full order, delivery
+// and address. It no longer does" on the turn-engine path. Fixture below is
+// shaped exactly like the real `customers` row queried live for Vito's
+// (tenant_id/shop_id e0000000-0000-0000-0000-000000000001, customer_phone
+// "web:cq-1789437090-7304") — not invented field names or values — and
+// REGULAR_MENU's "Cheese - Large (16\")" / "Large Cheese Pizza" pairing is
+// the real menu_items.name/display_name for menu_item_id
+// 8857b40a-e53b-44fa-8bf0-6fdafb7efa45 on Vito's live menu.
+
+const REGULAR_MENU: TurnEngineMenuItem[] = [
+  {
+    id: "item-cheese-large-16",
+    name: 'Cheese - Large (16")',
+    category: "Pizza",
+    price_cents: 1650,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1,
+      display_name: "Large Cheese Pizza",
+      base_price_cents: 1650,
+      recap_template: "", ticket_template: "",
+      steps: [],
+    },
+  },
+];
+
+const REAL_VITOS_CUSTOMER_ROW = {
+  tenant_id: "e0000000-0000-0000-0000-000000000001",
+  customer_phone: "web:cq-1789437090-7304",
+  name: "Jason",
+  order_count: 9,
+  total_spent_cents: 0,
+  favorite_items: [{ name: 'Cheese - Large (16")', count: 6 }],
+  last_order_id: "4837ee2a-64bb-4b16-b81f-4b66ced1fa3f",
+  last_order_at: "2026-09-15T01:51:31.720894+00:00",
+  last_order_type: "delivery" as const,
+  last_delivery_address: {
+    zip: "18106", city: "Allentown", state: "PA", street: "5620 Cetronia Rd",
+    formatted: "5620 Cetronia Rd, Allentown, PA 18106",
+  },
+};
+
+// Real Vito's shops row values for the fields maybeBuildReturningCustomerGreeting reads.
+const REAL_VITOS_SHOP_ROW = {
+  customer_personalization_enabled: true,
+  delivery_paused_until: null,
+  delivery_radius_mi: 5.0,
+};
+
+function returningCustomerBaseInput(overrides: Partial<RunTurnInput> = {}): RunTurnInput {
+  return baseInput({
+    menu: REGULAR_MENU,
+    cart: [],
+    dialogueState: null,
+    shopContext: {
+      deliveryEnabled: true,
+      orderType: null,
+      deliveryAddressKnown: false,
+      driverTipCents: null,
+      pickupName: null,
+      deliveryFeeCents: 0,
+    },
+    ...overrides,
+  });
+}
+
+Deno.test("ACCEPTANCE 1+2 (freeze-queue item 7): a known returning customer's first message is greeted by name AND offered the remembered regular + delivery address together, never a generic welcome", async () => {
+  const { supabase } = makeFakeSupabase({
+    conversationRow: { customer_phone: REAL_VITOS_CUSTOMER_ROW.customer_phone },
+    shopRow: REAL_VITOS_SHOP_ROW,
+    customerRow: REAL_VITOS_CUSTOMER_ROW,
+  });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — turn 1 is fully swallowed by the offer, never reaches ANSWER/PROPOSE")),
+  };
+  const input = returningCustomerBaseInput({ message: "hi" });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(result.reply.startsWith("Hey Jason, welcome back!"), `must greet by the real stored name, not a generic welcome: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("Large Cheese Pizza"), `must describe the actual remembered regular item: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("5620 Cetronia Rd, Allentown, PA 18106"), `must describe the actual remembered delivery address: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.length, 0, "nothing is added to the cart on the offer turn itself — only on an explicit yes");
+  assertEquals(
+    result.dialogueState.returningCustomerOffer,
+    {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+    "the exact offer just made must be remembered so a 'yes' next turn knows what to place",
+  );
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test("ACCEPTANCE 3 (freeze-queue item 7): saying yes to the offer places the remembered order — item, order type, and delivery address all land correctly", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key" };
+  const priorState: DialogueState = {
+    ...INITIAL_DIALOGUE_STATE,
+    returningCustomerOffer: {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+  };
+  const input = returningCustomerBaseInput({ message: "yes please", dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, `the remembered item must land in the cart: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, "item-cheese-large-16");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.dialogueState.returningCustomerOffer, null, "the offer must be cleared once acted on — never re-applied on a later turn");
+
+  const lastUpdate = state.orderCartsUpdates.at(-1) as { order_type?: string; delivery_address?: { formatted: string } };
+  assertEquals(lastUpdate.order_type, "delivery", "order type must be set from the accepted offer, not left for the customer to state again");
+  assertEquals(lastUpdate.delivery_address?.formatted, "5620 Cetronia Rd, Allentown, PA 18106", "the remembered address must be persisted, not re-asked");
+});
+
+Deno.test("ACCEPTANCE 4 (freeze-queue item 7): saying no (or anything else) to the offer proceeds to a completely normal, unaffected conversation — nothing forced onto the cart", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const priorState: DialogueState = {
+    ...INITIAL_DIALOGUE_STATE,
+    returningCustomerOffer: {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+  };
+  const input = returningCustomerBaseInput({ message: "no thanks", dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "declining must never place the remembered regular");
+  assertEquals(result.dialogueState.returningCustomerOffer, null, "the offer must be cleared on a decline, so it is never re-offered or silently re-accepted later");
+  assert(!result.reply.includes("welcome back"), "a decline reply is an ordinary turn reply, not another greeting");
+  const lastUpdate = state.orderCartsUpdates.at(-1) as { order_type?: string } | undefined;
+  assertEquals(lastUpdate?.order_type, undefined, "order type must not be silently set from a declined offer");
+});
+
+Deno.test("ACCEPTANCE 5 (freeze-queue item 7): a brand-new customer with no profile row is completely unaffected — first-turn behavior is unchanged", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  // conversationRow/shopRow/customerRow are all null by default — the exact
+  // shape of a phone that has never contacted this shop before.
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: null });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, "the item must still land exactly as it does today for a first-ever contact");
+  assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
+  assert(!result.reply.includes("welcome back"), `a brand-new customer must never be greeted as returning: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.dialogueState.returningCustomerOffer, undefined, "no offer state for a customer with no profile row");
+});
+
+// ── MONEY BUG (2026-09-19, live conv 31f54c6b, item 2 of tonight's 50-run):
+// cart correct at $39.98, confirm read-back shown correctly, customer typed
+// "Looks good to me!" ready to pay — PROPOSE (the model call) timed out
+// twice (25s x2) and the bot answered "Sorry, I ran into a problem. Please
+// call us directly to place your order," sending a customer who wanted to
+// pay to the phone instead. Root cause (PO): the 2026-09-18 timeout
+// carve-out above only ever covered `priorState.open === null` — it had no
+// answer for a timeout while a yes/no-shaped question (confirm,
+// category_confirm) was open. Two fixes, tested independently below:
+//   1. "Looks good to me" (and the rest of that bare-affirmation family) at
+//      confirm now resolves in ANSWER itself (turn-engine.ts's widened
+//      CONFIRM_AFFIRMATIVE_RE) — PROPOSE is never reached at all for this
+//      shape of reply, so there is no timeout to fall back from.
+//   2. A genuine timeout while ANY question is still open (confirm,
+//      category_confirm, name, ...) now re-asks that exact question
+//      (turn-engine-runner.ts's new `reason === "timeout" && priorState.open
+///     !== null` branch) instead of the apology. ──────────────────────────
+
+const CONFIRM_BUG_PIZZA_MENU: TurnEngineMenuItem[] = [
+  {
+    id: "item-cbr-pizza-medium", name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", price_cents: 1999,
+    bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "Medium Chicken Bacon Ranch Pizza", base_price_cents: 1999, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+function pizzaConfirmCart(): TurnEngineCartLine[] {
+  // 2x Medium Chicken Bacon Ranch pizza @ $19.99 = $39.98 — the exact #3
+  // repro cart.
+  return [{ menu_item_id: "item-cbr-pizza-medium", name: "Medium Chicken Bacon Ranch Pizza", quantity: 2, price_cents: 1999, modifiers: [], line_key: "line-1" }];
+}
+
+function pizzaConfirmState(): DialogueState {
+  return { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null };
+}
+
+function pizzaConfirmShopContext(): RunTurnShopContext {
+  return { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null };
+}
+
+// ACCEPTANCE 1: the exact #3 repro resolves to checkout WITHOUT ever calling
+// the model.
+Deno.test("MONEY BUG fix 1: 'Looks good to me!' over the exact #3 repro cart ($39.98, confirm open) resolves straight to checkout — PROPOSE is never called", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("must not be called — 'Looks good to me!' at confirm must resolve code-side, with zero chance of a model timeout")),
+  };
+  const input = baseInput({
+    message: "Looks good to me!",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: pizzaConfirmState(),
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("problem"), `must never fall back to the apology: ${result.reply}`);
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.phase, "link_sent", "a clean affirmative at confirm must proceed straight to checkout");
+  assertEquals(result.dialogueState.open, null, "confirm is resolved, nothing left open");
+  assertEquals(result.cart, pizzaConfirmCart(), "confirming never mutates the cart");
+  assertEquals(state.messagesInserted.length, 1);
+});
+
+// ACCEPTANCE 2: a GENUINE timeout (the model call itself fails) while
+// confirm is open re-asks confirm, never the apology. Deliberately a
+// message fix 1 does NOT resolve ("banana" — no yes/no shape at all) so
+// this exercises the timeout branch specifically, not fix 1's shortcut.
+Deno.test("MONEY BUG fix 2: a genuine model timeout while confirm is open RE-ASKS confirm, never 'call us'", async () => {
+  // lexicon: [] — the default LEXICON fixture's non-UUID target_ids would
+  // otherwise also trip the unrelated dropped-non-UUID trip-wire log (see
+  // the "terminal PROPOSE failure" test's own comment above), adding a
+  // second error_log row this test isn't about.
+  const { supabase, state } = makeFakeSupabase({ lexicon: [] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const priorState = pizzaConfirmState();
+  const input = baseInput({
+    message: "banana",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: priorState,
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.open, priorState.open, "confirm must still be open — nothing was resolved, so nothing should have changed");
+  assertEquals(result.dialogueState.phase, "confirm");
+  assertEquals(result.dialogueState.openRepeatCount, 1, "a timeout re-ask is a real repeat of the same question");
+  assertEquals(result.cart, pizzaConfirmCart(), "a model timeout must never mutate the cart");
+  assert(result.reply.includes("confirm") || result.reply.includes("All good"), `expected the confirm question re-asked: ${result.reply}`);
+  // error_log is written by the REAL proposeTurn (propose.ts) on a genuine
+  // failure — the "terminal PROPOSE failure" test above already covers that
+  // write via the real implementation; this test's stubbed proposeTurnFn
+  // (timedOutProposeResult) never touches supabase at all, so there's
+  // nothing to assert on that front here.
+  assertEquals(state.orderCartsUpdates.length, 1, "the bumped openRepeatCount must be persisted so a second timeout in a row escalates normally");
+});
+
+// ACCEPTANCE 3 (regression): a genuine timeout with NO open question is
+// unchanged by this dispatch — still governed entirely by the pre-existing
+// 2026-09-18 carve-out (decide()'s own deterministic resolution, or that
+// same carve-out's own decline — never this dispatch's new re-ask branch,
+// since there is nothing open to re-ask). Non-timeout failures with an open
+// question are also unchanged: they must still fall to the literal apology,
+// proving the new branch is scoped to reason === "timeout" only.
+Deno.test("MONEY BUG regression: a genuine timeout with NO open question is untouched by this dispatch — never routes through the new re-ask branch", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: { ...INITIAL_DIALOGUE_STATE } });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, "unchanged 2026-09-18 behavior: the item still lands deterministically, no model needed");
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+});
+
+Deno.test("MONEY BUG regression: a NON-timeout failure (schema_violation) while confirm is open still gets the literal apology, unchanged — proves the new re-ask branch is scoped to reason === 'timeout' only", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: false,
+      reason: "schema_violation",
+      detail: "response did not contain a schema-valid submit_proposal tool call",
+      attempts: [{ attempt: 1, reason: "schema_violation", detail: "response did not contain a schema-valid submit_proposal tool call", rawBody: "{}", ms: 900 }],
+    }),
+  };
+  const priorState = pizzaConfirmState();
+  const input = baseInput({
+    message: "banana",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: priorState,
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.reply, FALLBACK_REPLY, "a non-timeout failure class is out of scope for both the 2026-09-18 carve-out and this dispatch's re-ask branch");
+  assertEquals(result.cart, pizzaConfirmCart());
+  assertEquals(result.dialogueState, priorState, "nothing changed this turn");
+  assertEquals(state.orderCartsUpdates.length, 0, "nothing changed this turn — cart/dialogue_state must not be rewritten");
+});
+
+// ACCEPTANCE 4: a genuine timeout with category_confirm open (the OTHER
+// yes/no-shaped open kind, freeze-queue item 4) re-asks THAT question too —
+// this dispatch is not scoped to "confirm" specifically.
+Deno.test("MONEY BUG fix 2 (category_confirm): a genuine model timeout while category_confirm is open re-asks that exact question too", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const categoryConfirmMenu: TurnEngineMenuItem[] = [
+    {
+      id: "item-16-stromboli", name: "16\" Stromboli", category: "Stromboli", price_cents: 1499,
+      bot_state: "orderable",
+      ask_plan: { compiled_at: "", compiler_version: 1, display_name: "16\" Stromboli", base_price_cents: 1499, recap_template: "", ticket_template: "", steps: [] },
+    },
+  ];
+  const priorState: DialogueState = {
+    phase: "ordering",
+    open: { kind: "category_confirm", menu_item_id: "item-16-stromboli", quantity: 1, message: "We only have 16\" Stromboli as a stromboli. Want that, or skip it?" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+  const input = baseInput({
+    message: "banana",
+    menu: categoryConfirmMenu,
+    cart: [],
+    dialogueState: priorState,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: "Jason", deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!result.reply.toLowerCase().includes("call us"), `reply must not tell the customer to call: ${result.reply}`);
+  assertEquals(result.dialogueState.open?.kind, "category_confirm", "category_confirm must still be open — never dropped, never silently swapped for the apology");
+  assertEquals(result.dialogueState.openRepeatCount, 1);
+  assert(result.reply.includes("We only have 16\" Stromboli"), `expected the exact category_confirm question re-asked: ${result.reply}`);
+  assertEquals(result.cart, [], "a model timeout must never add the item on its own");
+});
+
+// ACCEPTANCE 5: a message that is NOT cleanly yes/no while confirm is open
+// must still go to the model as normal — fix 1 must not intercept genuinely
+// ambiguous replies, only unambiguous yes/no ones.
+Deno.test("MONEY BUG fix 1 guard rail: a genuine question at confirm ('What toppings does the everything pizza have?') is NOT intercepted — it still reaches PROPOSE", async () => {
+  const { supabase } = makeFakeSupabase();
+  let proposeCalled = false;
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: (): Promise<ProposeResult> => {
+      proposeCalled = true;
+      return Promise.resolve({
+        ok: true,
+        proposal: { intent: "question", answer_text: "We don't carry an everything pizza — want to pick a different one?", adds: [], removes: [], modifies: [] },
+        attempts: 1,
+      });
+    },
+  };
+  const input = baseInput({
+    message: "What toppings does the everything pizza have?",
+    menu: CONFIRM_BUG_PIZZA_MENU,
+    cart: pizzaConfirmCart(),
+    dialogueState: pizzaConfirmState(),
+    shopContext: pizzaConfirmShopContext(),
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(proposeCalled, "an ambiguous, non-yes/no message at confirm must still reach the model — fix 1 must only intercept clean yes/no replies");
+  assertEquals(result.cart, pizzaConfirmCart());
+});
+
+// ── TOP PRIORITY LIVE MONEY BUG (2026-09-19, live conv 4c52298c, turn #5) ──
+// End-to-end proof, through runTurnEngineTurn, of the real transcript: a
+// which-one list was open for "pepperoni pizza" (quantity 1 — nothing was
+// stated in the ORIGINAL ambiguous request) with candidates in real
+// transcript list order where option 2 happened to be Small. The customer
+// answered "I'll take 2 Large Pepperoni pizzas, please." The leading "2" was
+// read as selecting OPTION NUMBER 2 (Small) instead of a QUANTITY of 2 —
+// cart ended up 2x Small Pepperoni Pizza ($17.45 each = $34.90) instead of
+// 2x Large ($21.00 each = $42.00), no clarifying question ever asked, and
+// the wrong item/wrong money reached checkout silently. See
+// pending-disambiguation.test.ts's own PEPPERONI_PIZZA_CANDIDATES block for
+// the pure-function-level proof this exercises end to end; propose is wired
+// to reject so a stray model call would fail these tests loudly instead of
+// silently masking a regression back to the LLM path.
+const PEPPERONI_MONEY_BUG_MENU: TurnEngineMenuItem[] = [
+  noSlotMenuItem("item-pep-medium", "Pepperoni Pizza - Medium (14\")", "Pizza", 1900),
+  noSlotMenuItem("item-pep-small",  "Pepperoni Pizza - Small (10\")",  "Pizza", 1745),
+  noSlotMenuItem("item-pep-large",  "Pepperoni Pizza - Large (16\")",  "Pizza", 2100),
+];
+
+function pepperoniMoneyBugPriorState(): DialogueState {
+  return {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates: PEPPERONI_MONEY_BUG_MENU.map(m => m.id), quantity: 1, spanText: "pepperoni pizza" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+}
+
+function pepperoniMoneyBugDeps(supabase: unknown): RunTurnDeps {
+  return {
+    supabase: supabase as RunTurnDeps["supabase"],
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+}
+
+Deno.test('runTurnEngineTurn LIVE MONEY BUG (real repro, conv 4c52298c): "I\'ll take 2 Large Pepperoni pizzas, please." resolves to 2x LARGE ($21.00 each = $42.00), never Small', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "I'll take 2 Large Pepperoni pizzas, please.",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1, `expected exactly one cart line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large", "must resolve to LARGE — the customer's own stated size — never Small via index misread");
+  assertEquals(result.cart[0].quantity, 2, "the customer's stated quantity (2) must carry through, not the disambiguation's original quantity (1)");
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200, "2x $21.00 Large = $42.00");
+  assertEquals(result.dialogueState.open, null, "fully resolved — no further question");
+});
+
+Deno.test('runTurnEngineTurn: "2 large please" resolves to 2x LARGE ($21.00 each = $42.00)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2 large please",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large");
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "option 2" is a bare position pick — resolves to 1x SMALL ($17.45), this fixture\'s option 2, unchanged from today\'s index-based behavior', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "option 2",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: bare "2" is the same position pick as "option 2" (1x SMALL, $17.45) — unchanged from today\'s index-based behavior', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "the second one" (ordinal path) resolves to the same position (1x SMALL, $17.45)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "the second one",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "2 of the large" (partitive-of shape) resolves to 2x LARGE ($21.00 each = $42.00)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2 of the large",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large");
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200);
+  assertEquals(result.dialogueState.open, null);
+});
+
+// ============================================================
+// PO dispatch (2026-09-19), MONEY BUG (W1), real live conv 0db63161 (#28),
+// deploy v549, order never paid:
+//
+//   bot: "What's the name for the order?"
+//   customer: "It's under my name. Just put it in my name."
+//   bot: "10 Pieces Wings (Bone-In) added. What wing flavor would you like...?"
+//
+// answer()'s "name" case already correctly refuses to read a name out of
+// this message (NOT_NAME_TOKENS has both "my" and "name" -- see
+// name-step-empty-takeover-and-wing-slot-removal-20260919.test.ts's own
+// "rule 1" acceptance for that half, proven directly against answer()) and
+// returns UNRESOLVED, so the turn reaches PROPOSE. Nothing in PROPOSE's own
+// contract stops the MODEL from reading that same confusing reply as an
+// order anyway -- exactly like the order-shaped-message defect fixed
+// earlier tonight (Round 2, item 4/1b, just above), except here the model's
+// own adds/removes/modifies are the leak, not a code-side re-run. Fixed by
+// discarding a PROPOSE result's adds/removes/modifies outright whenever the
+// open question is name/address/order_type/confirm -- each has a narrow,
+// specific expected answer shape, so a reply to any of them is never a
+// license to add/remove/modify a cart line, no matter what the model
+// itself proposes. The model is still consulted (answer_value extraction
+// for name/address needs the call to happen); only its cart mutation is
+// discarded.
+// ============================================================
+
+const WINGS_MONEY_BUG_ID = "wings-10pc-bone-in";
+const WINGS_MONEY_BUG_MENU: TurnEngineMenuItem[] = [
+  ...MENU,
+  {
+    id: WINGS_MONEY_BUG_ID, name: "10 Pieces Wings (Bone-In)", category: "Wings", price_cents: 1699,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "10 Pieces Wings (Bone-In)", base_price_cents: 1699,
+      recap_template: "", ticket_template: "",
+      steps: [
+        {
+          kind: "slot", ask_mode: "ask", group_id: "wings-flavor-group", slot_key: "flavor", prompt_template: "flavor.ask",
+          choices: [
+            { id: "wings-mild", display: "Mild", price_delta_cents: 0 },
+            { id: "wings-hot", display: "Hot", price_delta_cents: 0 },
+          ],
+        },
+      ],
+    },
+  },
+];
+const LIVE_NAME_STEP_REPLY = "It's under my name. Just put it in my name.";
+const NAME_OPEN_STATE: DialogueState = { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null };
+
+Deno.test("runTurnEngineTurn (rule 1+2, PRIMARY ACCEPTANCE, real conv 0db63161 #28, MONEY BUG): with the name question open, even a model that hallucinates 'Wings' out of the name reply never lands it on the cart", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "wings", target_id: WINGS_MONEY_BUG_ID }] });
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key",
+    // The exact live outcome: the model reads the name-step reply as an
+    // order for the wings. Nothing in PROPOSE's contract forbids this --
+    // code must be the backstop, not a hope that the model behaves.
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "Wings", quantity: 10, choices: [] }], removes: [], modifies: [] },
+    }),
+  };
+  const input = baseInput({
+    message: LIVE_NAME_STEP_REPLY,
+    menu: WINGS_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: NAME_OPEN_STATE,
+    shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+  });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  // BEFORE this fix (verified directly against the pre-fix code path --
+  // the adds/removes/modifies sanitization step added to
+  // turn-engine-runner.ts did not exist, so decide() received the model's
+  // adds unchanged): this same call adds Wings and opens the flavor slot
+  // next -- the exact live defect, "10 Pieces Wings (Bone-In) added. What
+  // wing flavor would you like...?". AFTER: nothing lands on the cart.
+  assertEquals(result.cart.length, 0, `Wings must never be added from a name-question reply, even when the model itself proposes it: ${JSON.stringify(result.cart)}`);
+  assert(!result.reply.toLowerCase().includes("wing"), `reply must not mention Wings at all: ${result.reply}`);
+});
+
+// Rule 2, the code-side takeover specifically: an order-shaped message ("4
+// burgers please" -- leading quantity + real category word) with the model
+// returning EMPTY adds normally re-runs through the same order-add pipeline
+// (Round 2, item 4/1b, above) -- but only when open === null or a kind
+// without a narrow expected-answer shape. Verifies the gate for all four
+// blocked kinds, plus a regression check that the pre-existing behavior
+// (open === null) still fires, unaffected.
+const ORDER_SHAPED_MONEY_BUG_MESSAGE = "4 cheese burgers please";
+function emptyAddsProposeFn(): Promise<ProposeResult> {
+  return Promise.resolve({ ok: true, attempts: 1, proposal: { intent: "order", adds: [], removes: [], modifies: [] } });
+}
+const RULE2_BLOCKED_OPEN_STATES: Array<{ label: string; state: DialogueState }> = [
+  { label: "name", state: { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null } },
+  { label: "address", state: { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null } },
+  { label: "order_type", state: { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null } },
+  { label: "confirm", state: { phase: "confirm", open: { kind: "confirm" }, upsell_offered: false, asked_message_id: null } },
+];
+
+for (const { label, state } of RULE2_BLOCKED_OPEN_STATES) {
+  Deno.test(`runTurnEngineTurn (rule 2): the order-shaped empty-adds takeover never fires while open.kind === "${label}"`, async () => {
+    const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheese burger", target_id: "item-cheeseburger" }] });
+    const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+    const input = baseInput({
+      message: ORDER_SHAPED_MONEY_BUG_MESSAGE,
+      cart: [],
+      dialogueState: state,
+      shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: label === "name" ? null : "Jason", deliveryFeeCents: null },
+    });
+    const result = await runTurnEngineTurn(input, deps);
+    assertEquals(result.cart.length, 0, `"${ORDER_SHAPED_MONEY_BUG_MESSAGE}" while open.kind === "${label}" must never resolve as a fresh order: ${JSON.stringify(result.cart)}`);
+  });
+}
+
+Deno.test("runTurnEngineTurn (rule 2 regression): the order-shaped empty-adds takeover still fires normally when open === null (unaffected case, Round 2 item 4/1b)", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheese burger", target_id: "item-cheeseburger" }] });
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+  const input = baseInput({
+    message: ORDER_SHAPED_MONEY_BUG_MESSAGE,
+    cart: [],
+    dialogueState: { phase: "ordering", open: null, upsell_offered: false, asked_message_id: null },
+  });
+  const result = await runTurnEngineTurn(input, deps);
+  assertEquals(result.cart.length, 1, "a genuinely fresh order-shaped message with no open question must still resolve, unaffected by this gate");
+  assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
 });

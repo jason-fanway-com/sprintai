@@ -94,13 +94,47 @@ function categoryNoun(category: string): string {
   return singularizeWord(words[words.length - 1].toLowerCase());
 }
 
-// Fixed vocabulary, per spec — never inferred from the lexicon (no SIZE
-// lexicon terms exist yet; compile-menu.ts's own header says folded
-// product/size terms are P1, not built). "14-inch"/"14\""/"14" all reduce to
-// the bare word "14" post-normalize (normalize() strips the hyphen and the
-// quote the same way it strips any other punctuation).
+// Fixed vocabulary, per spec — never inferred from the lexicon. "14-inch"/
+// "14\""/"14" all reduce to the bare word "14" post-normalize (normalize()
+// strips the hyphen and the quote the same way it strips any other
+// punctuation).
 const SIZE_WORD_TOKENS = new Set(["small", "medium", "large", "personal"]);
 const SIZE_DIGIT_TOKENS = new Set(["10", "14", "16"]);
+
+// 2026-09-19 PO dispatch (compiler priority item 2, size-qualified bare
+// name): compile-menu.ts's itemLexiconTerms Rule 2b now emits a size digit
+// PLUS the literal word "inch" as part of an item's own term text ("14
+// inch calzone", via canonicalizeSizeTokens' existing "<digits> inch"
+// convention) — the first time any lexicon term has ever carried that word.
+// Neither coreContentWords nor coreContentWordsForEntry below stripped it,
+// so widenIntoSizedFamily's own core-word comparison reduced "14 inch
+// calzone" to ["inch","calzone"] instead of ["calzone"] — "inch" survived
+// as if it were real dish vocabulary, uniting the 14" and 16" items as
+// "the same dish, different size" siblings purely because they share a
+// unit word that names nothing, and collapsed an already-unique,
+// maximally-specific match ("just a 14-inch calzone") back into a false
+// 2-way tie. Live regression this dispatch's own fix would otherwise have
+// introduced (caught by this file's existing test suite, not live) — same
+// treatment as SIZE_WORD_TOKENS/SIZE_DIGIT_TOKENS: a unit word that only
+// ever rides along a real size signal, never a dish word on its own.
+const SIZE_UNIT_WORDS = new Set(["inch"]);
+
+// 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+// money bug, reopens cb37bda9): real customer/model text routinely
+// abbreviates a size word ("2 med pepperoni pizzas") but the compiled
+// lexicon only ever carries the SIZE_WORD_TOKENS' own spelled-out forms
+// ("medium pepperoni pizza(s)") — an abbreviated span word matches neither
+// that 3-word term (occursAsWholeWordRun is exact, no stemming) nor
+// SIZE_WORD_TOKENS itself, so it ties across every size sharing the bare
+// "pepperoni" term instead of resolving to the one the customer named.
+// Expanded once, here, inside toWords() — the single chokepoint both span
+// words AND every lexicon term's own words already flow through — so a span
+// abbreviation and a fully-spelled lexicon term compare equal without
+// touching either side's matching logic. Exported so turn-engine.ts's own
+// item-span-in-message guard (itemSpanNamedInMessage) can apply the exact
+// same expansion before comparing a model's item_span against the
+// customer's raw words, instead of maintaining a second, driftable copy.
+export const SIZE_WORD_ALIASES: Record<string, string> = { med: "medium", lg: "large", sm: "small" };
 
 function detectSizeToken(spanWords: string[]): string | null {
   for (const w of spanWords) {
@@ -147,7 +181,7 @@ const FILLER_WORDS = new Set(["a", "an", "the"]);
 // the real 4-way tie.
 function coreContentWords(words: string[]): string[] {
   return words
-    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w))
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !SIZE_UNIT_WORDS.has(w))
     .map(singularizeWord);
 }
 
@@ -170,7 +204,7 @@ function coreContentWordsForEntry(entry: LexiconTerm): string[] {
     }
   }
   return words
-    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !categoryNounWords.has(w))
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !SIZE_UNIT_WORDS.has(w) && !categoryNounWords.has(w))
     .map(singularizeWord);
 }
 
@@ -237,7 +271,8 @@ function normalize(text: string): string {
 }
 
 function toWords(normalized: string): string[] {
-  return normalized.length > 0 ? normalized.split(" ") : [];
+  if (normalized.length === 0) return [];
+  return normalized.split(" ").map(w => SIZE_WORD_ALIASES[w] ?? w);
 }
 
 // Does `termWords` occur in `spanWords` as a contiguous, whole-word run?
@@ -360,6 +395,21 @@ function widenIntoSizedFamily(
 ): ResolveItemResult | null {
   const matchedWords = findMatchedTermWords(baseId, matchedLength, spanWords, lexicon);
   if (!matchedWords) return null;
+
+  // 2026-09-19 PO dispatch (compiler priority item 2, size-qualified bare
+  // name): this whole function exists to rescue a SIZE-BLIND base match
+  // ("meat lovers", no size word anywhere in the matched term itself) by
+  // checking whether the customer's span states a size elsewhere. It was
+  // never meant to run when the base match ALREADY carries its own size —
+  // compile-menu.ts's Rule 2b now emits terms like "14 inch calzone" that
+  // do exactly that, and coreContentWords' own stripping of the size
+  // digit/unit words (needed for the size-blind case) would otherwise throw
+  // that specificity away and go hunting for "same dish, different size"
+  // siblings that were never actually in question — collapsing an already-
+  // maximally-specific match back into a false tie with those siblings.
+  // A base match that already names its own size needs no widening at all.
+  if (matchedWords.some(w => SIZE_WORD_TOKENS.has(w) || SIZE_DIGIT_TOKENS.has(w))) return null;
+
   const wantedCore = coreContentWords(matchedWords);
   if (wantedCore.length === 0) return null;
 
@@ -395,7 +445,54 @@ function widenIntoSizedFamily(
   return { kind: "ambiguous", candidates: [...siblingIds].sort() };
 }
 
-export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemResult {
+// DEFECT 3 (2026-09-19 live QA, conv 009de656, item 4): "Can I also get a
+// side of bleu cheese?" tied 3 Cheese pizza SIZES — the only candidates the
+// single-word term "cheese" (a real, correct term for ordering a Cheese
+// pizza) resolves to, once the shop's own longer, more specific, correctly-
+// targeted term "bleu cheese" is excluded from `lexicon` for being
+// inactive/non-orderable (real Vito's data: "bleu cheese" -> the real
+// "Bleu Cheese" row, a display_only pizza-finish, never a standalone
+// orderable side — see loadItemLexicon's own header for why its term is
+// deliberately dropped before this function ever sees it). The bug was
+// falling all the way back to the unrelated single-word match instead of
+// recognizing that a MORE SPECIFIC, curated answer was found and correctly
+// excluded — the right response is "I don't know that item," never a guess
+// at three pizzas the customer never asked about.
+//
+// `inactiveLexicon` carries exactly those excluded rows (same shape as
+// `lexicon`, term/target_id only — category/size_label are irrelevant here,
+// this never resolves anything on its own, only vetoes a guess) purely so
+// this one check can see them. Optional and defaulted to `[]` so every
+// pre-existing call site and test fixture (which never had this concept)
+// is completely unaffected.
+function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconTerm[], matchedLength: number): boolean {
+  for (const entry of inactiveLexicon) {
+    const termWords = toWords(normalize(entry.term));
+    if (termWords.length > matchedLength && occursAsWholeWordRun(spanWords, termWords)) return true;
+  }
+  return false;
+}
+
+// 2026-09-19 PO dispatch (rule 1, real conv 087abb8d, live $107.43-vs-~$85
+// money bug): the fuzzy fallback below exists to absorb genuine typos
+// ("hawiaan" -> "hawaiian"), but fuzzyWordMatch's own prefix rule (a 4+ char
+// word that is a literal prefix of a longer one) treats ANY singular word as
+// a "typo" of a lexicon term that is just its plural — "stick" (a real,
+// complete, unrelated word — the customer was saying "let's stick to that,"
+// declining the open list) matched Vito's own active term "sticks"
+// (Mozzarella Sticks) this way and silently added an $8.99 item nobody
+// ordered. There is no lexical way to tell "stick" apart from a genuine
+// truncation like "pepp" using this same rule, so turn-engine.ts's answer-
+// turn new-item detector (messageNamesItemOutsideCandidates) passes `false`
+// here to require an exact, whole-word/whole-term match only — never a
+// fuzzy guess — while every other caller (fresh adds, replacements) keeps
+// today's typo tolerance unchanged.
+export function resolveItem(
+  span: string,
+  lexicon: LexiconTerm[],
+  inactiveLexicon: LexiconTerm[] = [],
+  allowFuzzyFallback = true,
+): ResolveItemResult {
   const spanWords = toWords(normalize(span));
   if (spanWords.length === 0) return { kind: "unresolved" };
 
@@ -422,6 +519,17 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   const usingItemNameSpan = primary.targetIds.size > 0;
   const base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
 
+  // See longerInactiveTermExists' own header (DEFECT 3, 2026-09-19): a real,
+  // more specific term was excluded from `lexicon` entirely (inactive/non-
+  // orderable target) and matches MORE of the span than anything we're
+  // about to guess with — never fall back to a shorter, unrelated match in
+  // that case. Checked once, before any downstream branch (resolved,
+  // ambiguous, or the fuzzy fallback below) gets a chance to guess with the
+  // shorter match instead.
+  if (longerInactiveTermExists(spanWords, inactiveLexicon, base.length)) {
+    return { kind: "unresolved" };
+  }
+
   // Round 2, item 1c: nothing matched EXACTLY at all — try the same scan
   // fuzzy (occursAsWholeWordRunFuzzy) before giving up. Resolves ONLY when
   // it narrows to a single target family (targetIds.size === 1), same
@@ -429,6 +537,7 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   // more fuzzy-matching families, or none, stays unresolved rather than
   // guessing or listing a fuzzy-derived candidate set.
   if (base.targetIds.size === 0) {
+    if (!allowFuzzyFallback) return { kind: "unresolved" };
     const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries);
     const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon);
     if (fuzzyBase.targetIds.size === 1) {

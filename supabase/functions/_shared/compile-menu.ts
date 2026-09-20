@@ -618,6 +618,32 @@ export function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
     }
   }
 
+  // Rule 2b (size-qualified bare name), 2026-09-19 PO dispatch (compiler
+  // priority item 2, real live fixtures: "a personal calzone and some crazy
+  // fries" and "a Medium Gyro with half sausage and half mushrooms" both
+  // came back "Sorry, I didn't catch that" — the model's own proposed
+  // item_span was exactly "personal calzone"/"Medium Gyro" and neither
+  // string was ever a lexicon term at all, active or otherwise, under the
+  // CURRENT rule set). Rule 2's bareName above always drops the size
+  // entirely ("calzone", "gyro"); Rule 1's full display_name always carries
+  // the shop's category-disambiguation suffix ("Personal Calzone Stromboli",
+  // "Medium Gyro Pizza") that a customer never says. trailingWordRuns below
+  // only ever drops LEADING words (keeps the trailing category noun) — it
+  // has no path to the reverse ("drop the trailing category noun, keep the
+  // leading size word"). No rule anywhere produced "<size> <bare name>"
+  // before this. General, not item-specific: every sized item that has a
+  // Rule-2 bare name gets one more stated term pairing its own size word
+  // with that bare name — the size word via derivedSizeWord (the same
+  // leading-word extraction buildDerivedRows already uses for pizza-family
+  // derivation below), so "Medium (14\")" contributes "medium", not the
+  // parenthetical dimension.
+  if (bareName && item.size_label) {
+    const sizeWord = derivedSizeWord(item.size_label);
+    for (const term of normaliseTermVariants(`${sizeWord} ${bareName}`)) {
+      terms.push({ term, target_type: "item", target_id: item.id, provenance: "stated" });
+    }
+  }
+
   // Data fix (a), 2026-09-19: "plain"/"plain cheese"/"regular" are standard
   // customer aliases for the Cheese pizza at ANY pizzeria, not a term any
   // shop's own menu data ever states literally — general rule, not

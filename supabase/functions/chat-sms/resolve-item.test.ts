@@ -389,6 +389,24 @@ Deno.test("resolveItem: 'small gyro pizza' resolves to exactly one (category + s
 });
 
 // ============================================================
+// 2026-09-19 PO dispatch (compiler priority item 2, real live incidents):
+// compile-menu.ts's new Rule 2b ("personal calzone"/"medium gyro" — see
+// that file's own test block) now feeds NARROWING_LEXICON a size digit
+// PLUS the word "inch" as literal term text for the 16"/14" family members
+// below. Both fixtures are the exact live customer messages, verbatim.
+// ============================================================
+
+Deno.test("resolveItem (real live incident, conv v546): 'Hi! I'd like to order a personal calzone and some crazy fries, please.' resolves the calzone span to Personal Calzone Stromboli", () => {
+  const result = resolveItem("Hi! I'd like to order a personal calzone and some crazy fries, please.", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Personal Calzone Stromboli") });
+});
+
+Deno.test("resolveItem (real live incident, conv ac4a1b65 #24): 'a Medium Gyro with half sausage and half mushrooms' resolves to Medium Gyro Pizza", () => {
+  const result = resolveItem("a Medium Gyro with half sausage and half mushrooms", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Medium Gyro Pizza") });
+});
+
+// ============================================================
 // 2026-09-18 PO follow-up dispatch: two edge cases found probing the live
 // Vito's lexicon once narrowing was actually wired into production.
 //
@@ -576,4 +594,63 @@ Deno.test("resolveItem (wart b, no regression): 'a pepperoni pizza' with no size
 Deno.test("resolveItem (wart b, no regression): a stated size still resolves the real Pepperoni Pizza directly, never the roll", () => {
   const result = resolveItem("a large pepperoni pizza", TIE_LEXICON);
   assertEquals(result, { kind: "resolved", menu_item_id: TIE_PEPPERONI_PIZZA_LARGE });
+});
+
+// DEFECT 3 (2026-09-19 live QA, PO priority item 4, real transcript conv
+// 009de656 #5): "Can I also get a side of bleu cheese?" resolved to a
+// 3-way tie of Cheese pizza SIZES instead of correctly saying there's no
+// orderable bleu cheese side. Fixture is REAL Vito's live data, queried
+// directly from the shop's own `lexicon` and `menu_items` tables
+// (shop_id e0000000-0000-0000-0000-000000000001) on 2026-09-19, not
+// invented: the single-word term "cheese" is a real, correct term for
+// ordering a Cheese pizza and ties across its 3 real active size rows at
+// their real ids/prices ($16.50/$12.95/$14.95, matching the live rendered
+// list byte-for-byte); the two-word term "bleu cheese" is ALSO real and
+// correctly curated (provenance "stated") pointing at the real "Bleu
+// Cheese" row (id 6074cba8-b25b-4be4-80ec-a8ce9816f19f) — but that row is
+// bot_state "display_only" (a Buffalo Chicken pizza finish, never a
+// standalone orderable side), so production's own loadItemLexicon
+// deliberately excludes its term from the active lexicon (see that
+// function's own header). BEFORE this fix, resolveItem had no way to see
+// the excluded term existed at all and fell all the way back to the
+// unrelated "cheese" match. AFTER this fix, resolveItem is also given the
+// excluded row (production wiring: turn-engine-runner.ts's new
+// loadExcludedItemLexicon) and refuses to guess.
+const REAL_VITOS_CHEESE_LARGE_ID = "8857b40a-e53b-44fa-8bf0-6fdafb7efa45";
+const REAL_VITOS_CHEESE_SMALL_ID = "c7e77443-c55f-4a81-bca1-999b61cc55d3";
+const REAL_VITOS_CHEESE_MEDIUM_ID = "fefa53d0-6ca0-4a9b-a507-a80801ae0ab2";
+const REAL_VITOS_BLEU_CHEESE_ID = "6074cba8-b25b-4be4-80ec-a8ce9816f19f";
+
+const REAL_VITOS_CHEESE_LEXICON: LexiconTerm[] = [
+  { term: "cheese", target_id: REAL_VITOS_CHEESE_LARGE_ID, category: "Pizza", size_label: 'Large (16")' },
+  { term: "cheese", target_id: REAL_VITOS_CHEESE_SMALL_ID, category: "Pizza", size_label: 'Small (10")' },
+  { term: "cheese", target_id: REAL_VITOS_CHEESE_MEDIUM_ID, category: "Pizza", size_label: 'Medium (14")' },
+];
+const REAL_VITOS_EXCLUDED_LEXICON: LexiconTerm[] = [
+  { term: "bleu cheese", target_id: REAL_VITOS_BLEU_CHEESE_ID },
+];
+
+Deno.test("resolveItem (DEFECT 3, real live Vito's data): 'bleu cheese' with no excluded-term visibility reproduces the bug — ties across 3 Cheese pizzas", () => {
+  const result = resolveItem("bleu cheese", REAL_VITOS_CHEESE_LEXICON);
+  assertEquals(
+    result,
+    { kind: "ambiguous", candidates: [REAL_VITOS_CHEESE_LARGE_ID, REAL_VITOS_CHEESE_MEDIUM_ID, REAL_VITOS_CHEESE_SMALL_ID].sort() },
+    "documents the pre-fix bug shape — this is what production returned live, wrongly offering 3 pizzas for a side request",
+  );
+});
+
+Deno.test("resolveItem (DEFECT 3 fix, real live Vito's data): 'bleu cheese' now returns unresolved (never a pizza candidate) once the excluded, more-specific term is visible", () => {
+  const result = resolveItem("bleu cheese", REAL_VITOS_CHEESE_LEXICON, REAL_VITOS_EXCLUDED_LEXICON);
+  assertEquals(result, { kind: "unresolved" }, "a side/dressing question for 'bleu cheese' must never offer a pizza as a candidate");
+});
+
+Deno.test("resolveItem (DEFECT 3, no regression): a genuine 'cheese pizza' order is completely unaffected by the excluded-term veto", () => {
+  const result = resolveItem("a cheese pizza", REAL_VITOS_CHEESE_LEXICON, REAL_VITOS_EXCLUDED_LEXICON);
+  assertEquals(result.kind, "ambiguous", "no size stated -> still an honest 3-way tie, exactly as before this fix");
+  assertEquals(
+    result.kind === "ambiguous" ? [...result.candidates].sort() : [],
+    [REAL_VITOS_CHEESE_LARGE_ID, REAL_VITOS_CHEESE_MEDIUM_ID, REAL_VITOS_CHEESE_SMALL_ID].sort(),
+  );
+  const sized = resolveItem("a large cheese pizza", REAL_VITOS_CHEESE_LEXICON, REAL_VITOS_EXCLUDED_LEXICON);
+  assertEquals(sized, { kind: "resolved", menu_item_id: REAL_VITOS_CHEESE_LARGE_ID }, "a stated size still resolves cleanly — the veto only fires when a longer EXCLUDED term also matches");
 });

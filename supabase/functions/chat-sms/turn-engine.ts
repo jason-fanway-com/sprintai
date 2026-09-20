@@ -101,7 +101,7 @@
 //    regression — flagged for a later phase.
 
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText, stripOtherItemSpansFromModifierText } from "./phrase-split.ts";
 import {
   applyCompiledAddItem,
   applyCompiledModifyItem,
@@ -119,6 +119,7 @@ import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
+  isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
   renderCappedAmbiguousItemQuestion,
@@ -129,7 +130,10 @@ import {
   candidateSizeValue,
   extractPartialSizeClause,
   extractGlobalSizeWord,
+  extractDisambiguationAnswerQuantity,
   filterCandidatesBySizeWord,
+  extractAnswerClause,
+  extractAnswerQuantity,
   significantStems,
   categoryWordMatches,
   extractSizeAndKind,
@@ -156,8 +160,15 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
-import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
+import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
+// Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
+// with zero dependency on this file, so importing its result TYPE here
+// (DialogueState.returningCustomerOffer's own shape, freeze-queue item 7)
+// creates no cycle and keeps this module's own "no Supabase client" rule
+// intact — only the shape is used, never the function calls themselves
+// (those stay in turn-engine-runner.ts, the I/O adapter).
+import type { DeliveryOffer } from "./delivery-memory-offer.ts";
 
 // ─── §3a: the state record — EXACT shape from the spec ─────────────────────
 
@@ -336,6 +347,33 @@ export interface DialogueState {
   // state persisted before this field existed still loads (missing = not yet
   // closed, the correct interpretation either way).
   checkoutClosed?: boolean;
+  // Freeze-queue item 7 (2026-09-19): the returning-customer greeting/offer
+  // turn-engine-runner.ts asks on a conversation's very first turn (delivery-
+  // memory-offer.ts + customer-profile.ts already built and tested this
+  // decision logic for the legacy path; this is the engine path's own
+  // memory of "we just asked, waiting on yes/no"). Deliberately a top-level
+  // field, NOT a variant of `open` above — `open` is consumed by exhaustive
+  // switches in ask()/render() that this feature has no business touching;
+  // the runner alone reads and clears this field, short-circuiting BEFORE
+  // ANSWER/DECIDE/ASK/RENDER ever run on the turn that answers it. `null`
+  // once cleared (customer declined, or the offer was accepted and applied)
+  // — never re-set later in the same conversation, so a "yes" two turns
+  // later (after the customer's message has already moved on) is correctly
+  // read as an ordinary confirmation, not a stale re-acceptance of this
+  // offer. Optional so state persisted before this field existed still
+  // loads (missing = no offer outstanding, the correct interpretation).
+  returningCustomerOffer?: {
+    // Null when the customer had no favorite_items regular (or it no longer
+    // resolves to a real menu item — see turn-engine-runner.ts's own
+    // findMenuItemByNamePhrase call) — a delivery-only offer still has a
+    // value worth remembering even with no regular item attached.
+    regularItem: { menu_item_id: string; name: string } | null;
+    // Null when there was no delivery/pickup-again offer worth asking about
+    // this turn (delivery-memory-offer.ts's own computeDeliveryOffer/
+    // isDeliveryOfferEligible contract — see that module's header for why a
+    // plain "pickup again?" is treated as optional and never reaches here).
+    deliveryOffer: DeliveryOffer;
+  } | null;
 }
 
 // ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
@@ -416,6 +454,29 @@ function addNarrowedCandidateToCart(
   return result.cartChanged;
 }
 
+// Freeze-queue item 7 (2026-09-19): adds a SPECIFIC, already-known menu item
+// straight to the cart — same applyCompiledAddItem call addNarrowedCandidateToCart
+// above already makes, just keyed by a bare menu_item_id (the returning-
+// customer offer already resolved to exactly one item via
+// findMenuItemByNamePhrase before this is ever called, so there is no
+// PendingCandidate list to thread through). Any required option group the
+// item still needs (size, etc.) is left unresolved here on purpose — the
+// normal ask()/render() cycle that runs immediately afterward opens that
+// slot question exactly as it would for any other fresh add, so a regular
+// with required options is never silently defaulted.
+export function addResolvedItemToCart(
+  cart: TurnEngineCartLine[],
+  menu: TurnEngineMenuItem[],
+  menuItemId: string,
+  quantity: number,
+): boolean {
+  const menuItem = menu.find(m => m.id === menuItemId);
+  if (!menuItem?.ask_plan) return false;
+  const { texts } = resolveChoiceDisplays(menuItem.ask_plan, []);
+  const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+  return result.cartChanged;
+}
+
 // Stale-line_key fix (2026-09-15, docs/specs/2026-09-14-turn-engine-
 // oversight.md Phase 1.5): a line's real identity is its own stable
 // `line_key` when it has one (minted once by decide(), see below — never
@@ -445,6 +506,14 @@ function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
 
 export type AnswerOutcome =
   | { kind: "slot_resolved" }
+  // Rule 3 (2026-09-19, real conv 087abb8d): "take it off" / "remove it"
+  // while a slot question is open (e.g. "what type of wrap?") declines the
+  // WHOLE item the slot belongs to, never a literal answer to the slot — the
+  // line is removed from the cart in place (same mutate-in-place convention
+  // as slot_resolved), and there is nothing else to persist; ask() picks the
+  // next question fresh off the now-shorter cart, same as any other resolved
+  // outcome that doesn't need special handling.
+  | { kind: "slot_item_declined" }
   | { kind: "disambiguation_resolved"; menuItemId: string }
   // PO amendment (2026-09-19, narrowing questions): a facet answer that
   // still leaves more than one candidate — the other facet (kind then size)
@@ -539,6 +608,15 @@ export type AnswerOutcome =
   // customer actually named). ask() reopens confirm with a fresh read-back,
   // same as quantity_corrected, since the cart changed.
   | { kind: "line_replaced" }
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): a bare removal ("no
+  // stromboli") while confirm is already open — no replacement target named,
+  // just "take this off" — resolved directly against the cart's real lines
+  // (see applyNamedLineRemovals's own header), checked ahead of
+  // impliesConfirmDecline below so "no" inside "no stromboli" is never read
+  // as declining the WHOLE order. ask() reopens confirm with a fresh
+  // read-back, same convention as quantity_corrected/line_replaced above,
+  // since the cart just changed.
+  | { kind: "line_removed_at_confirm" }
   // X doesn't exist as its own menu item ("there is no 16\" House pizza,
   // only the stromboli") — declined by name, nothing touched. `message` is
   // threaded through to the runner's existing answerText hook (the same
@@ -573,6 +651,16 @@ export type AnswerOutcome =
   // question next turn, same as a genuinely-failed answer would, so the
   // still-unresolved item is never silently dropped.
   | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number }
+  // M2 fix (2026-09-19, live conv d3539d12 #5): an answer to "which one?"
+  // that carries removal language ("remove that small Pepperoni pizza")
+  // instead — never a candidate pick. `removed` reports whether a matching
+  // real cart line was actually found and taken off (same "graceful no-op,
+  // never an error" contract applyNamedLineRemovals already has everywhere
+  // else it's called); the ORIGINAL disambiguation stays open exactly as it
+  // was, same convention as disambiguation_new_item_added just above —
+  // removing an unrelated cart line never answers what candidate the
+  // customer actually wants for the still-unresolved item.
+  | { kind: "disambiguation_removal_applied"; removed: boolean }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -873,6 +961,11 @@ export function readTipReply(
   // just the number.
   if (!isBareNumber && ctx.lineItemPricesCents?.includes(cents)) return null;
   // Rule 5b: capped at the subtotal -- a tip can never exceed the order.
+  // 2026-09-19: a builder briefly removed this rule after misreading a test
+  // artifact ($5 tip on a $4.99 SYNTHETIC test order) as a live bug -- the
+  // PO confirmed rule 5b is intentional and reinstated it before merge; the
+  // $4.99 shape only ever shows up on a test order small enough to hit the
+  // cap by construction, never in real order sizes.
   const cappedCents = ctx.subtotalCents != null ? Math.min(cents, ctx.subtotalCents) : cents;
   return { kind: "amount", cents: cappedCents };
 }
@@ -910,38 +1003,81 @@ function parseQtyToken(tok: string): number | null {
   if (Number.isFinite(n) && n > 0) return n;
   return NUMBER_WORDS[tok.toLowerCase()] ?? null;
 }
+// The separator between a quantity token and the item name that follows it
+// — "2 Thin Sicilian Pizzas" (bare number, a space), "2 x Thin Sicilian
+// Pizzas" (spelled-out "x"), or "1x Large Hawaiian Pizza" (the "x" GLUED
+// directly to the digit, no space at all). 2026-09-19 PO dispatch (P0, conv
+// 6fc39938, live money bug): the old `\s+(?:x\s+)?` fragment required at
+// least one space immediately after the quantity token, so "1x ..." never
+// matched ANY of the three patterns below at all — not "close but wrong
+// number", not matched even as an attempt. The customer repeated the exact
+// same correction five more times, worded five different ways, and every
+// one of them fell through this same gap or the "make it"/"only want" gaps
+// fixed alongside it.
+const QTY_ITEM_SEP = "(?:\\s*x\\s*|\\s+)";
 // "<N> <item>, not/instead of <M>" — covers "2 Thin Sicilian Pizzas, not
 // one" and "2 x Thin Sicilian Pizzas instead of one" (the "x" is optional).
 const QUANTITY_CORRECTION_NOT_RE = new RegExp(
-  `\\b${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?),?\\s+(?:not|instead of)\\s+${QUANTITY_WORD_RE}\\b`, "i",
+  `\\b${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?),?\\s+(?:not|instead of)\\s+${QUANTITY_WORD_RE}\\b`, "i",
 );
 // "I meant <N> <item>" — a correction that states the right number without
 // necessarily naming the wrong one too.
 const QUANTITY_CORRECTION_MEANT_RE = new RegExp(
-  `\\bi meant\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|$)`, "i",
+  `\\bi meant\\s+${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|$)`, "i",
 );
-// "make it <N> <item>" — stops the item-phrase capture at a trailing
-// "and <something else>" clause ("make it 2 Thin Sicilian Pizzas and the
-// Garlic Knots") so a second, unrelated item mentioned in the same breath
-// never gets folded into the corrected item's own name.
-const QUANTITY_CORRECTION_MAKE_IT_RE = new RegExp(
-  `\\bmake it\\s+${QUANTITY_WORD_RE}\\s+(?:x\\s+)?([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|\\band\\b|$)`, "i",
+// "I (actually/really) only want <N> <item>" / "I just want <N> <item>" —
+// 2026-09-19 PO dispatch (P0, conv 6fc39938): a third real phrasing from
+// the same live conversation, never covered by any existing pattern at all
+// (not a spacing gap like the two above — this shape simply had no rule).
+const QUANTITY_CORRECTION_ONLY_WANT_RE = new RegExp(
+  `\\b(?:only|just)\\s+want\\s+${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*?)(?:,|\\.|!|$)`, "i",
 );
+// "make it/that <N> <item>[, <N> <item>...][ and <N> <item>]" — captures
+// everything after "make it"/"make that" up to sentence end, then each
+// comma/"and"-joined clause is parsed on its own below (parseQtyItemClause)
+// so a compound correction naming TWO items each with their own quantity
+// ("make that 1x Large Hawaiian Pizza and 1x Nonas Meatballs") applies both,
+// while a clause that never states its own number (an item just mentioned
+// along for the ride, "and the Garlic Knots") is left alone rather than
+// guessed at. 2026-09-19 PO dispatch: widened from "make it" only to also
+// accept "make that" — the live transcript's exact wording — which the
+// 2026-09-18 version of this rule never matched at all.
+const QUANTITY_CORRECTION_MAKE_IT_RE = /\bmake (?:it|that)\s+([^.!?]+)/i;
 
 interface QuantityCorrectionCandidate {
   quantity: number;
   itemPhrase: string;
 }
 
-function parseQuantityCorrectionPhrase(message: string): QuantityCorrectionCandidate | null {
-  for (const re of [QUANTITY_CORRECTION_NOT_RE, QUANTITY_CORRECTION_MEANT_RE, QUANTITY_CORRECTION_MAKE_IT_RE]) {
+// A single "<N> <item>" clause, anchored to the whole (trimmed) clause —
+// used to validate each piece of a "make it/that" compound correction.
+function parseQtyItemClause(clause: string): QuantityCorrectionCandidate | null {
+  const re = new RegExp(`^${QUANTITY_WORD_RE}${QTY_ITEM_SEP}([a-zA-Z][a-zA-Z '"-]*)$`, "i");
+  const m = clause.trim().match(re);
+  if (!m) return null;
+  const quantity = parseQtyToken(m[1]);
+  const itemPhrase = m[2]?.trim();
+  return quantity && itemPhrase ? { quantity, itemPhrase } : null;
+}
+
+// Returns every quantity correction stated in the message — almost always
+// exactly one, except a "make it/that X and Y" compound naming two or more
+// items each with their own explicit quantity.
+function parseQuantityCorrectionPhrases(message: string): QuantityCorrectionCandidate[] {
+  for (const re of [QUANTITY_CORRECTION_NOT_RE, QUANTITY_CORRECTION_MEANT_RE, QUANTITY_CORRECTION_ONLY_WANT_RE]) {
     const m = message.match(re);
     if (!m) continue;
     const quantity = parseQtyToken(m[1]);
     const itemPhrase = m[2]?.trim();
-    if (quantity && itemPhrase) return { quantity, itemPhrase };
+    if (quantity && itemPhrase) return [{ quantity, itemPhrase }];
   }
-  return null;
+  const makeItMatch = message.match(QUANTITY_CORRECTION_MAKE_IT_RE);
+  if (makeItMatch) {
+    const clauses = makeItMatch[1].split(/\s*,\s*|\s+and\s+/i);
+    const candidates = clauses.map(parseQtyItemClause).filter((c): c is QuantityCorrectionCandidate => c !== null);
+    if (candidates.length > 0) return candidates;
+  }
+  return [];
 }
 
 // Matches itemPhrase against exactly one REAL cart line by stem subset —
@@ -967,6 +1103,24 @@ function findCartLineByNamePhrase(
     return [...phraseStems].every(s => lineStems.has(s));
   });
   return hits.length === 1 ? hits[0] : null;
+}
+
+// 2026-09-19 PO dispatch (P0, conv 6fc39938) — the mirror of
+// findCartLineByNamePhrase above: does the customer's WHOLE message name a
+// real cart line, rather than does a short extracted phrase match one? Every
+// significant stem of the line's own name must appear somewhere in the
+// message (order-independent, tolerant of everything else the message also
+// says) — used only to decide whether an unmatched confirm-state message is
+// confidently ABOUT a specific real item (forward to PROPOSE) or genuinely
+// unrelated chatter/complaint (safe to resolve as a plain decline, same as
+// before this dispatch).
+function messageNamesRealCartLine(message: string, cart: TurnEngineCartLine[]): boolean {
+  const messageStems = significantStems(message);
+  return cart.some(line => {
+    if (!isRealCartLine(line)) return false;
+    const lineStems = significantStems(line.name);
+    return lineStems.size > 0 && [...lineStems].every(s => messageStems.has(s));
+  });
 }
 
 // 2026-09-18 PO dispatch (read-back corrections, mechanism 2: replacement).
@@ -1032,7 +1186,14 @@ function parseReplacementCorrection(message: string): ReplacementCorrectionCandi
 // replacement. Two or more matches, or none, returns null — a genuine
 // ambiguity or a genuinely nonexistent item are handled identically by the
 // caller (never guess, never silently keep the wrong thing).
-function findMenuItemByNamePhrase(
+// Exported for freeze-queue item 7 (turn-engine-runner.ts's returning-
+// customer greeting): resolves a customer_profiles.favorite_items entry's
+// recorded name back to today's real menu item, the same stem-subset
+// matcher this file already trusts for replacement-target lookups. Callers
+// outside this file pass "" for excludeMenuItemId (there is no line to
+// exclude — a favorite item is never itself already in the cart before this
+// runs).
+export function findMenuItemByNamePhrase(
   menu: TurnEngineMenuItem[],
   phrase: string,
   excludeMenuItemId: string,
@@ -1309,6 +1470,39 @@ function extractLeadingClauseCount(clause: string): { count: number; text: strin
   return { count, text: rest || trimmed };
 }
 
+// Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6): "4
+// large pizzas" resolved to an add whose item_span carried the customer's
+// leading "4" but whose quantity field came back 1 -- a mismatch between
+// what the span literally says and what the model's own quantity field
+// claims. Same principle already applied to size (disambiguationSpanText's
+// own fix above, extractGlobalSizeWord(customerMessage) over the model's
+// span) -- extended here to quantity: when the span itself STILL carries a
+// leading numeral/count-word (unlike extractLeadingClauseCount, this
+// returns null rather than defaulting to 1 when there's no leading count
+// at all, so a genuinely sizeless "a pepperoni pizza" or a span with no
+// count word never overrides a real model-reported quantity), that number
+// is trusted over the model's separately-reported quantity whenever the two
+// disagree. Never fires when the span has no leading count of its own --
+// the model's quantity is the only signal in that case, exactly as before.
+function spanLeadingCount(itemSpan: string | undefined): number | null {
+  const trimmed = (itemSpan ?? "").trim();
+  const m = trimmed.match(CLAUSE_LEADING_COUNT_RE);
+  if (!m) return null;
+  const raw = m[1].toLowerCase();
+  return /^\d+$/.test(raw) ? parseInt(raw, 10) : (CLAUSE_COUNT_WORDS[raw] ?? null);
+}
+
+// Cross-checks an add's model-reported quantity against its own item_span's
+// leading count -- see spanLeadingCount's own header for the live bug this
+// closes. Called once per add, right where the model's proposal first
+// becomes this turn's resolvedAdds/ambiguousSpans, so every downstream
+// consumer (the cart mutation path AND the disambiguation-quantity path)
+// gets the corrected number without having to know this check happened.
+function effectiveAddQuantity(itemSpan: string | undefined, modelQuantity: number): number {
+  const spanCount = spanLeadingCount(itemSpan);
+  return spanCount !== null && spanCount !== modelQuantity ? spanCount : modelQuantity;
+}
+
 // Arrow form deliberately, not a plain named-function declaration with a
 // string return type — this file's own gate test asserts exactly one
 // function signature of that shape exists (render(), the sole reply-
@@ -1416,36 +1610,6 @@ function narrowCandidatesByKind(
     ?? narrowCandidatesByFacetAnswer(candidates, "kind", clauseText);
 }
 
-// Round 2, item 3 (2026-09-19, live repro): a typo'd word ("hawiaan") that
-// would name a real lexicon term ("hawaiian") if spelled correctly, but
-// resolveItem itself does only exact whole-word matching (no fuzzy
-// tolerance — that lives in narrowCandidatesByFacetAnswer's own fallback
-// tier and in itemSpanNamedInMessage's guard, neither of which this gate
-// reuses). Without this, "One large hawiaan pizza" would never resolve via
-// the lexicon at all and messageNamesItemOutsideCandidates below would
-// silently miss the exact case it exists for. Same tight, narrow tolerance
-// as itemSpanNamedInMessage's own ADDENDUM B fix (5+ letter words only,
-// fuzzyWordMatch's graduated distance) — this is a typo-correction pass,
-// not a general fuzzy search.
-// Arrow form deliberately, not a plain named-function declaration with a
-// string return type — this file's own gate test asserts exactly one
-// function signature of that shape exists (render(), the sole reply-
-// building function); see buildMultiClauseClarifyMessage's own note on the
-// same convention.
-const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
-  const lexiconWords = new Set<string>();
-  for (const entry of lexicon) {
-    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
-  }
-  if (lexiconWords.size === 0) return text;
-  return text.replace(/[a-zA-Z]+/g, word => {
-    const bare = word.toLowerCase();
-    if (bare.length < 5 || lexiconWords.has(bare)) return word;
-    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
-    return word;
-  });
-};
-
 // Round 2, item 3 (2026-09-19, live repro, real Meat-Lover size list —
 // stromboli / Medium / Large / Small): "One large hawiaan pizza" answered
 // that open disambiguation with "Large Meat Lover Pizza added" —
@@ -1481,6 +1645,33 @@ const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): strin
 // pizza" contains none of them).
 const OUTSIDE_ITEM_REMAINDER_MARKER_RE = /\balso\b|\band a\b|\bplus\b|\bcan i get\b|\bcan i add\b|\badd\b|\boh and\b/i;
 
+// Rule 1 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug): a
+// which-one list was open for "shrimp" and the customer declined it — "I
+// didn't ask for any of those! ... Let's stick to that, thanks!" — but this
+// gate used to run the text through a typo-correction pass before resolving
+// it (fuzzyCorrectAgainstLexicon, since removed), which treated "stick" (a
+// real, complete, unrelated word — the customer was saying "stick to [the
+// order]," not naming food) as a typo of Vito's own active term "sticks"
+// (Mozzarella Sticks) purely because "sticks" starts with "stick". resolveItem
+// itself has the identical fuzzy fallback for the same reason — see its own
+// header. `resolveItem`'s 4th param is `false` here specifically so this
+// gate only ever fires on a genuine, exact, whole-word/whole-term match —
+// never a fuzzy guess at what the customer might have meant. This does not
+// touch "sticks" as a real trigger: the standalone word "sticks" still
+// matches the term "sticks" exactly, whole-word; only a shorter, unrelated
+// word merely SHARING A PREFIX with a longer term ("stick" inside "stick to
+// that") no longer does.
+//
+// Rule 4 (2026-09-19, real conv 087abb8d follow-up, quantity dropped): the
+// EXACT same defect DEFECT 2 fixed for the which-one/resolved path
+// (extractAnswerQuantity's own header) exists here too — `count` below came
+// only from extractLeadingClauseCount, which requires the quantity to be the
+// very FIRST token ("2 Large Pepperoni pizzas"); "2x Large Pepperoni pizzas"
+// (the "Nx" shape the resolved path already handles) matched nothing there
+// and silently fell back to quantity 1. Same fix, same scoping: try the "Nx"
+// shape first, against the answer clause (never the whole, possibly
+// multi-item, restated order), before falling back to the leading-count
+// shape unchanged.
 function messageNamesItemOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
@@ -1490,12 +1681,12 @@ function messageNamesItemOutsideCandidates(
   const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
   const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
   const { count, text } = extractLeadingClauseCount(scoped);
-  const corrected = fuzzyCorrectAgainstLexicon(text, lexicon);
-  const result = resolveItem(corrected, lexicon);
+  const result = resolveItem(text, lexicon, [], false);
   if (result.kind !== "resolved") return null;
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
   if (candidateIds.has(result.menu_item_id)) return null;
-  return { menuItemId: result.menu_item_id, quantity: count };
+  const explicitQuantity = extractAnswerQuantity(extractAnswerClause(scoped).clause);
+  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count };
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -1506,6 +1697,79 @@ function messageNamesItemOutsideCandidates(
 // (isPendingDisambiguationDeclined, then messageNamesItemOutsideCandidates)
 // answer() itself runs, just callable from outside with raw candidate ids
 // instead of an already-open DialogueState.
+// Money bug fix (2026-09-19, live conv 0dcb02a7, real $83.83-vs-$50.39
+// overcharge): Round 2's messageNamesItemOutsideCandidates above only ever
+// resolves the message as ONE item — "I meant pizza, not stromboli" (a bare
+// category correction). "whoops, not a stromboli or house salad. just stick
+// w/ the greek salad, 2 med pepperoni pizzas." names TWO real, specific,
+// different dishes (Greek Salad, Pepperoni Pizza) while explicitly rejecting
+// BOTH offered categories by name — resolveItem never returns "resolved" for
+// the whole span at once (two distinct items in one span), so the
+// single-item check falsely reported "no outside item" and let
+// findDisambiguationCategoryRejectionCandidate's correction-add path fire,
+// adding a candidate NOBODY asked for (the live bot added a $22.95 16"
+// House Stromboli that never appears in the customer's own words at all).
+// A bare correction ("not stromboli, I meant pizza") only ever names ONE
+// alternative; a customer restating an entire order in their own words
+// names several. Splitting on the same everyday separators (comma, "and")
+// and resolving each clause independently via the identical resolveItem()
+// primitive, then requiring TWO OR MORE distinct real items outside the
+// candidates before treating this as "the customer is ordering something
+// else entirely" (never a single-alternative correction), keeps the
+// aae67b80/322e19ca genuine-correction shape (always exactly one
+// alternative) completely unaffected — see the "genuine correction is
+// UNAFFECTED" regression test.
+// 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+// money bug, reopens cb37bda9 a second time): this used to run each clause
+// through a typo-correction pass (fuzzyCorrectAgainstLexicon) before
+// resolving it — restored by the merge with fix/whole-term-match-and-
+// rejections-20260919 believing it was still required, but it is the EXACT
+// SAME false-positive class that same branch's own shrimp-stick-rejection
+// test already root-caused and removed from messageNamesItemOutsideCandidates:
+// a real, complete, unrelated word ("stick" in "just stick w/ the greek
+// salad" — the customer declining, not naming food) gets rewritten to a
+// same-shop active term it merely prefixes ("sticks", Mozzarella Sticks),
+// via fuzzyWordMatch's own >=4-char prefix rule. Corrupting the clause BEFORE
+// resolveItem ever sees it turned a clean, unique "greek" hit into a false
+// tie against Mozzarella Sticks (ambiguous, not resolved) — which silently
+// cost this function one of the two outside items it needs to recognize a
+// decline, live: T2 ("...just stick w/ the greek salad, 2 med pepperoni
+// pizzas.") only ever found ONE resolved outside item, never reached the
+// >=2 threshold, and fell into the category-reject-add path that charged for
+// a $22.95 stromboli nobody ordered. resolveItem is called directly on the
+// RAW clause text below — its own internal fuzzy fallback (Round 2, item 1c)
+// only ever engages when NO exact match exists anywhere in the clause, so a
+// clause that already contains one real, exact item word (as "greek" is
+// here) never reaches it, and never needs a pre-correction pass at all.
+function messageNamesMultipleItemsOutsideCandidates(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+): boolean {
+  if (!lexicon || lexicon.length === 0) return false;
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const clauses = message.split(/[,.]|\band\b/i).map(s => s.trim()).filter(Boolean);
+  if (clauses.length < 2) return false;
+  const resolvedOutsideIds = new Set<string>();
+  for (const clause of clauses) {
+    const { text } = extractLeadingClauseCount(clause);
+    const result = resolveItem(text, lexicon);
+    if (result.kind === "resolved" && !candidateIds.has(result.menu_item_id)) {
+      resolvedOutsideIds.add(result.menu_item_id);
+    }
+  }
+  return resolvedOutsideIds.size >= 2;
+}
+
+function messageDeclineNamesOutsideItems(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+): boolean {
+  return messageNamesItemOutsideCandidates(message, candidates, lexicon) !== null
+    || messageNamesMultipleItemsOutsideCandidates(message, candidates, lexicon);
+}
+
 export function disambiguationDeclineNamesOutsideItem(
   message: string,
   candidateIds: string[],
@@ -1519,7 +1783,7 @@ export function disambiguationDeclineNamesOutsideItem(
     .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
   if (candidates.length === 0) return false;
   if (!isPendingDisambiguationDeclined(message, candidates)) return false;
-  return messageNamesItemOutsideCandidates(message, candidates, lexicon) !== null;
+  return messageDeclineNamesOutsideItems(message, candidates, lexicon);
 }
 
 // The answer to "what kind?" can itself be a LIST ("one plain, one
@@ -1569,8 +1833,19 @@ function resolveMultiKindClauses(
   // Rule 3: every clause's own count must sum to the originally-open
   // quantity -- a mismatch means the split itself is untrustworthy, so
   // nothing is added and the customer is asked, rather than guessing which
-  // clause to shortchange.
-  if (parsedSum !== totalQuantity) {
+  // clause to shortchange. Money bug (2026-09-19, live: Jason's own v541
+  // test, conv 89e3a7b6): this used to be a bare `!==`, so a genuinely
+  // COMPLETE answer that named MORE resolvable lines than a wrong pending
+  // count expected (pending count 1 from the quantity bug above, customer
+  // named 4 real pizzas) fell into this same "what's the rest?" branch and
+  // dropped all four lines -- a backstop against exactly the shape rule 1
+  // above exists to fix, for whatever phrasing rule 1 doesn't catch. An
+  // answer with MORE lines than the pending count is strictly MORE
+  // specific than whatever count was open, never less trustworthy, so it
+  // is taken in full below instead of discarded here. Only a SHORTER
+  // answer than the pending count (parsedSum < totalQuantity) is a genuine
+  // partial answer worth asking "what's the rest?" about.
+  if (parsedSum < totalQuantity) {
     return {
       resolvedAdds: [],
       singleAmbiguous: null,
@@ -1700,6 +1975,50 @@ function removeReplacementSourceLine(cart: TurnEngineCartLine[], lineKey: string
   return true;
 }
 
+// Rule 3 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug):
+// "take it off, just the original order please! no extras!" arrived while a
+// slot question was open ("what type of wrap for the Southwest Shrimp?") and
+// was fed straight into the slot as a literal choice attempt, producing "We
+// don't have 'please! no extras' for Southwest Shrimp." "Take it off"/
+// "remove it" (and the "that"/"this" variants) is never a slot value — it's
+// the customer declining the item the slot question is even about, the exact
+// same intent a keep-or-drop "no" already carries. The object must be a bare
+// pronoun ("it"/"that"/"this"): "take the cheese off" names a real modifier
+// and is deliberately left to applyCompiledModifyItem, unaffected.
+const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|that|this)\b)/i;
+
+// Rule 3 (2026-09-19, live conv 0db63161 #28, MONEY BUG — order never paid):
+// a slot's own line can also be declined BY NAME, not just by the bare
+// pronoun DECLINE_OPEN_ITEM_RE above covers. Four separate live attempts to
+// cancel the wings while the wing-flavor slot was open — "I didn't order
+// wings!", "No wings!", "cancel the wings", "Forget the wings" — all name
+// the item outright and were fed to matchChoiceInText as if each were a
+// flavor ("We don't have '...' for 10 Pieces Wings."), on all four tries,
+// so the order never completed. Deliberately its own small helper, not a
+// REMOVAL_VERBS/removeHasRemovalLanguage change — that shared list feeds
+// the order_type/confirm removal mechanism a separate fix is reopening at
+// the runner level tonight; this is scoped to the slot case only. Reuses
+// the exact decline-cue-plus-whole-word-stem shape pending-disambiguation.ts's
+// isPendingDisambiguationDeclined already proves for the disambiguation
+// case: a real decline verb is required AND the line's own name or category
+// must appear as a whole stemmed word — never a substring — so a short word
+// elsewhere in the message (e.g. "in" from an unrelated "put it in my name")
+// can never fire this by matching a fragment of a real item name like
+// "Bone-In".
+const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
+
+function isNamedSlotItemRejection(
+  message: string,
+  itemName: string,
+  itemCategory: string | null | undefined,
+): boolean {
+  if (!SLOT_ITEM_REJECTION_CUES.test(message)) return false;
+  const nameStems = significantStems(itemName ?? "");
+  const msgStems = significantStems(message);
+  for (const s of nameStems) if (msgStems.has(s)) return true;
+  return categoryWordMatches(itemCategory, message);
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -1736,6 +2055,16 @@ export function answer(
       if (idx < 0) return UNRESOLVED;
       const line = cart[idx];
       const menuItem = menuById.get(line.menu_item_id);
+      // Rule 3: checked BEFORE any slot-value matching runs (below), so
+      // neither a bare pronoun decline ("take it off"/"remove it" — see
+      // DECLINE_OPEN_ITEM_RE's header) nor a named one ("no wings"/"cancel
+      // the wings"/"forget the wings"/"I didn't order wings" — see
+      // isNamedSlotItemRejection's own header) is ever given a chance to be
+      // read as a literal choice for the open slot.
+      if (DECLINE_OPEN_ITEM_RE.test(trimmed) || isNamedSlotItemRejection(trimmed, line.name, menuItem?.category)) {
+        removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
+        return { resolved: true, outcome: { kind: "slot_item_declined" }, cartChanged: true };
+      }
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // suppressUnitSplit: true — see ask-plan-engine.ts's own doc on that
       // param. This call is always a required slot's FIRST-EVER answer (ASK
@@ -1790,6 +2119,25 @@ export function answer(
         .filter((m): m is TurnEngineMenuItem => !!m)
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
+      // M2 fix (2026-09-19, live conv d3539d12 #5, real $91.30 overcharge):
+      // checked BEFORE isPendingDisambiguationDeclined and every candidate-
+      // name/size matching tier below — see isDisambiguationAnswerRemovalRequest's
+      // own header for why DECLINE_CUES doesn't already catch this. Applies
+      // the removal against the CURRENT cart via the exact same primitive
+      // the order_type/confirm cases already trust for the identical shape
+      // (applyNamedLineRemovals — a no-op, never an error, when nothing in
+      // the cart actually matches, same contract as everywhere else it's
+      // called) and leaves the pending disambiguation open exactly as it
+      // was: the removal targets a DIFFERENT item than the one still being
+      // asked about, so there is always still a real reason to ask it again.
+      if (isDisambiguationAnswerRemovalRequest(trimmed)) {
+        const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
+        return {
+          resolved: true,
+          outcome: { kind: "disambiguation_removal_applied", removed: removedSomething },
+          cartChanged: removedSomething,
+        };
+      }
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set
       // only when this open question is Y's own narrowing, opened by a
       // same-breath replacement whose target tied — see DialogueState.open's
@@ -1824,8 +2172,15 @@ export function answer(
         // salmon" the way plain `closure` below would (closure is
         // deliberately excluded from every remainder mechanism this engine
         // has).
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): see
+        // messageNamesMultipleItemsOutsideCandidates's own header — a decline
+        // naming TWO OR MORE distinct real items outside the candidates
+        // ("just the greek salad, 2 med pepperoni pizzas") is exactly as much
+        // a decline-not-a-correction as the single-outside-item case just
+        // above it, and must take the identical UNRESOLVED/drop-and-reprocess
+        // path rather than falling into the correction-add branch below.
         const quantity = state.open.quantity ?? 1;
-        const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
+        const outsideItem = messageDeclineNamesOutsideItems(trimmed, candidates, external.lexicon);
         if (!outsideItem) {
           const categoryRejectCandidate = findDisambiguationCategoryRejectionCandidate(
             trimmed, candidates, menu,
@@ -2077,6 +2432,26 @@ export function answer(
 
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+      // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
+      // this which-one question can restate a quantity that was never part
+      // of the original ambiguous span ("pepperoni pizza" opened this
+      // disambiguation at quantity 1; "I'll take 2 Large Pepperoni pizzas,
+      // please." states 2) — see extractDisambiguationAnswerQuantity's own
+      // header for the exact "quantity, never an index" distinction this
+      // relies on.
+      // DEFECT 2 (2026-09-19 live QA, conv 009de656): the answer that just
+      // resolved `resolved` above may ALSO restate its own quantity in the
+      // shorter "2x Large (16") Pepperoni pizzas" shape — see
+      // extractAnswerQuantity's own doc for why this is scoped to the same
+      // answer clause the category+name tier resolved against, never the
+      // whole (possibly multi-item) restated order. Two independent
+      // extractors, two different answer shapes; try the qualifier-aware one
+      // first, then the clause-scoped one, then fall back to the open
+      // question's own quantity (the ordinary case — nothing new stated).
+      const resolvedQuantity =
+        extractDisambiguationAnswerQuantity(trimmed) ??
+        extractAnswerQuantity(extractAnswerClause(trimmed).clause) ??
+        quantity;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
@@ -2099,7 +2474,7 @@ export function answer(
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
-      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, resolvedQuantity, "", undefined, undefined, texts);
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): Y just
       // resolved (the numbered-list path — the one a small candidate set
       // like a two-item Chicken Fingers tie actually takes, per
@@ -2205,7 +2580,15 @@ export function answer(
 
     case "order_type": {
       const orderType = readOrderTypeReply(trimmed);
-      if (orderType) return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: false };
+      if (orderType) {
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): see
+        // applyNamedLineRemovals's own header — "no stromboli" said in the
+        // same breath as the order-type answer must actually remove the
+        // line, not be silently dropped because this turn never reaches
+        // PROPOSE/decide() at all.
+        const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
+        return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: removedSomething };
+      }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -2316,14 +2699,23 @@ export function answer(
       // silently confirmed on the same turn it arrived. Applied directly to
       // the matched line (mutate-in-place, same convention as the slot/
       // disambiguation cases above) and resolved on the customer's FIRST
-      // attempt.
-      const qtyCorrection = parseQuantityCorrectionPhrase(trimmed);
-      if (qtyCorrection) {
-        const line = findCartLineByNamePhrase(cart, qtyCorrection.itemPhrase);
-        if (line) {
-          line.quantity = qtyCorrection.quantity;
-          return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
+      // attempt. 2026-09-19 PO dispatch (P0, conv 6fc39938): now plural —
+      // a compound "make it/that X and Y" can name two corrections in one
+      // message; every candidate that matches a real cart line is applied,
+      // any that don't (an item mentioned but not actually in the cart) are
+      // left alone rather than guessed at. `resolved:true` only once at
+      // least one candidate actually landed.
+      const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
+      if (qtyCorrections.length > 0) {
+        let appliedAny = false;
+        for (const candidate of qtyCorrections) {
+          const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
+          if (line) {
+            line.quantity = candidate.quantity;
+            appliedAny = true;
+          }
         }
+        if (appliedAny) return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
       }
       // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): same
       // priority reasoning as mechanism 1 immediately above — "not a
@@ -2356,6 +2748,16 @@ export function answer(
           }
         }
       }
+      // Money bug fix (2026-09-19, live conv 0dcb02a7): mechanism 3, same
+      // priority reasoning as mechanisms 1/2 above — "no stromboli" (a bare
+      // removal, no replacement target named) contains "no", which
+      // impliesConfirmDecline below would otherwise read as declining the
+      // WHOLE order. Checked ahead of it; see applyNamedLineRemovals's own
+      // header.
+      const removedAtConfirm = applyNamedLineRemovals(cart, trimmed, menu);
+      if (removedAtConfirm) {
+        return { resolved: true, outcome: { kind: "line_removed_at_confirm" }, cartChanged: true };
+      }
       // Round 3, item 2c(i) (2026-09-19, live repro): a tip amount stated
       // AT CONFIRM ("$5 tip", "I want to tip the driver $5") must set
       // driver_tip_cents even though PROPOSE reads this as intent:"order"
@@ -2382,7 +2784,35 @@ export function answer(
       const confirmShopFactsAnswer = answerConfirmShopFactsQuestion(trimmed, external.confirmShopFacts);
       if (confirmShopFactsAnswer) return confirmShopFactsAnswer;
       if (isExplicitCheckoutIntent(trimmed, "Confirm?", false)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
-      if (impliesConfirmDecline(trimmed)) return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };   // 00-BH
+      // 00-BH, narrowed 2026-09-19 PO dispatch (P0, conv 6fc39938, live money
+      // bug): CONFIRM_DECLINE_ANYWHERE_RE fires on ordinary correction
+      // vocabulary ("actually", "instead", "wrong", "change") that also shows
+      // up in genuine corrections neither mechanism above recognized. Real
+      // transcript: the customer corrected the same order SIX different ways
+      // and every single one tripped this decline check and got "Anything
+      // else?" with the cart untouched — the actual defect, not any one
+      // regex miss. A short, whole-message decline ("no"/"nope"/"wait") has
+      // no other plausible reading and still declines immediately
+      // (CONFIRM_DECLINE_RE, the anchored tier). For anything longer, the
+      // deciding question is whether the customer is clearly talking about a
+      // REAL line already in the cart (every significant word of that line's
+      // own name shows up in the message — same stem-subset convention as
+      // findCartLineByNamePhrase, just checked in the other direction): if
+      // so, none of the correction patterns above matched, but the customer
+      // is still plainly trying to say something about a specific item we
+      // have, so fall through to UNRESOLVED and let PROPOSE take a shot
+      // rather than silently discarding it as a bare "no" — the actual
+      // defect this dispatch closes. Anything else (decline-adjacent
+      // language with no real cart item named at all, e.g. a general
+      // complaint about the total) keeps the pre-existing deterministic
+      // confirm_no — unchanged from before this dispatch, on purpose: it is
+      // NOT confidently a correction of anything specific, and this file's
+      // ADDENDUM 1 regression test (tip-step-p0-20260919.test.ts) already
+      // pins exactly this shape to resolve without ever reaching the model.
+      if (impliesConfirmDecline(trimmed)) {
+        if (!CONFIRM_DECLINE_RE.test(trimmed) && messageNamesRealCartLine(trimmed, cart)) return UNRESOLVED;
+        return { resolved: true, outcome: { kind: "confirm_no" }, cartChanged: false };
+      }
       // 00-BE: see isConfirmAffirmative. Decline above wins; negation inside
       // the helper blocks "not yet"/"don't"/"wrong"/"change".
       if (isConfirmAffirmative(trimmed)) return { resolved: true, outcome: { kind: "confirm_yes" }, cartChanged: false };
@@ -2425,7 +2855,9 @@ export function answer(
         );
         return { resolved: true, outcome: { kind: "category_confirm_added", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
       }
-      if (impliesUpsellDecline(trimmed)) {
+      // Rule 3: "take it off" is this keep-or-drop question's own "drop"
+      // answer, same as a bare "no" — see DECLINE_OPEN_ITEM_RE's header.
+      if (impliesUpsellDecline(trimmed) || DECLINE_OPEN_ITEM_RE.test(trimmed)) {
         return { resolved: true, outcome: { kind: "category_confirm_declined" }, cartChanged: false };
       }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
@@ -2558,8 +2990,14 @@ const singularizeSpanToken = (word: string): string => {
 const AVAILABILITY_QUESTION_MARKER_RE =
   /\b(?:do you have|does\s+\S+(?:\s+\S+){0,3}\s+have|is there|are there|what about|you (?:have|got) any|have any|got any)\b/i;
 
+// SIZE_WORD_ALIASES (resolve-item.ts): the same "med" -> "medium" expansion
+// resolveItem's own tokenizer applies, reused here so a model item_span
+// abbreviation lines up with the customer's own fully-spelled word (or vice
+// versa) instead of failing this guard on a spelling difference alone — see
+// the conv22 money-bug dispatch on itemSpanNamedInMessage below.
 const tokenizeSpanText = (t: string): string[] =>
-  t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
+  t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean)
+    .map(singularizeSpanToken).map(w => SIZE_WORD_ALIASES[w] ?? w);
 
 // Sentence-ending punctuation splits first (a literal "?" closes the
 // question clause and starts fresh for whatever follows), then the
@@ -2636,6 +3074,26 @@ function itemSpanNamedInMessage(span: string, customerMessage: string | undefine
     // would otherwise pass the fuzzy fallback below.
     if (questionOnly.has(t)) return false;
     if (messageTokenSet.has(t)) return true;
+    // 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+    // money bug): a format/size word (GUARD19_GENERIC_WORDS — the exact
+    // vocabulary GUARD 19 already treats as carrying no identity signal of
+    // its own, see that file's own header) is never what makes a span real
+    // or hallucinated — the OTHER words in the span (the actual dish name)
+    // still have to clear this guard normally. Real live repro: PROPOSE
+    // paraphrased "2 medium pepperonis" (the customer's own words) as item_
+    // span "2 med pepperoni pizzas" — "pizzas" names the same dish the
+    // customer already did via "pepperonis" alone (this shop's bare
+    // "pepperoni" term ties pizza sizes against a Stromboli Roll of the same
+    // name; "pizza" is PROPOSE's own correct disambiguation, not new,
+    // unverified information), and nothing in the customer's message that
+    // turn contained the word "pizza" at all to support it literally or via
+    // the 5+-letter fuzzy fallback below. The guard silently dropped the
+    // whole add — the customer's 2 pepperoni pizzas simply vanished, no
+    // decline shown. Exempting only the generic word, never the dish-naming
+    // ones ("pepperoni" still has to appear, and does), keeps this guard's
+    // actual job — refusing a span naming a DISH the customer didn't say —
+    // completely intact.
+    if (GUARD19_GENERIC_WORDS.has(t)) return true;
     if (t.length < 5) return false;
     return messageTokens.some(mt => mt.length >= 5 && !questionOnly.has(mt) && fuzzyWordMatch(t, mt));
   });
@@ -3250,6 +3708,27 @@ export function recoverAssertedChoiceFromText(
 // plain (non-placement) choices keep the exact original single-recovery
 // behavior via recoverAssertedChoiceFromText itself, appended to the same
 // result set.
+//
+// Freeze-queue item W2 (2026-09-19 PO dispatch, live conv 01609954 #20,
+// money bug): "a Chicken quesadilla with Black Diamond Steak and Chicken
+// added" landed the plain $12.49 quesadilla with BOTH named, real, priced
+// Add-ons choices silently dropped — no question, no trace. This is the
+// wart-c tie-guard above hitting its OWN limit on a fresh-add turn: two
+// PLAIN (non-placement) choices named together tie at plainHits.length===2
+// and get thrown away, exactly the "sausage and onions" shape that guard
+// exists to protect — except here the customer's own trailing word "added"
+// (real text: "...and Chicken added") removes the ambiguity the guard was
+// built for. "sausage and onions" leaves it genuinely unclear whether the
+// customer is naming two modifiers or a modifier plus an unrelated second
+// item; "X and Y added" is a customer explicitly saying BOTH are being
+// added to the item just named — the same class of single-word disambiguator
+// as EXPLICIT_ADDITION_RE's "extra" above, just for the plural-tie case
+// instead of the name-collision case. When present, every plain choice the
+// text actually names (not a guess — each one's own tokens still have to
+// occur in the text, same as always) is recovered instead of the whole set
+// being discarded.
+const EXPLICIT_MULTI_ADDON_RE = /\badded\b/i;
+
 export function recoverAssertedChoicesFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
@@ -3261,10 +3740,12 @@ export function recoverAssertedChoicesFromText(
   const textTokens = modifierFloorTokens(text);
   const itemNameTokens = modifierFloorTokens(itemName ?? "");
   const explicitAddition = EXPLICIT_ADDITION_RE.test(text);
+  const explicitMultiAddon = EXPLICIT_MULTI_ADDON_RE.test(text);
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
   const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition);
   const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition);
-  return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
+  const allPlainHitsLand = plainHits.length === 1 || (explicitMultiAddon && plainHits.length > 1);
+  return [...placementHits, ...(allPlainHitsLand ? plainHits : [])];
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
@@ -3291,8 +3772,18 @@ export function recoverAssertedChoicesFromText(
 // would risk charging people early.
 //
 // Decline is still evaluated FIRST by the caller, so "no, change it" wins.
+//
+// MONEY BUG (2026-09-19, live conv 31f54c6b, item 2): "Looks good to me!"
+// over a correct $39.98 cart matched none of the above (no "yes", no
+// "correct", nothing here) and fell through to PROPOSE -- a model call that
+// timed out twice and told a customer ready to pay to call the restaurant
+// instead. "look(s) good"/"sound(s) good" added below: the same bare-
+// affirmation family guard9-unconsented-affirmation.ts's impliesOrderConfirmation
+// already trusts for this exact "confirm?" question elsewhere in this
+// codebase, extended (never reinvented) onto this anywhere-in-message regex
+// the same way "correct"/"confirm" already are.
 const CONFIRM_AFFIRMATIVE_RE =
-  /\b(?:yes|yeah|yea|yep|yup|sure|ok|okay|correct|confirm|confirmed|confirming|place (?:it|the order)|go ahead|do it|send it)\b/i;
+  /\b(?:yes|yeah|yea|yep|yup|sure|ok|okay|correct|confirm|confirmed|confirming|place (?:it|the order)|go ahead|do it|send it|looks? good|sounds? good)\b/i;
 const CONFIRM_NEGATION_RE =
   /\b(?:not|don'?t|do not|never|wait|hold on|hold off|cancel|stop|isn'?t|wrong|mistake|change|remove|instead)\b/i;
 
@@ -3418,6 +3909,54 @@ function removeHasRemovalLanguage(
   return false;
 }
 
+// Money bug fix (2026-09-19, live conv 0dcb02a7, real $83.83-vs-$50.39
+// overcharge): "wait, no stromboli, just the greek salad & 2 medium
+// pepperoni pizzas please. i'll do pickup." answered the open order_type
+// question ("pickup") but the removal language in the SAME breath ("no
+// stromboli") was silently dropped — order_type/confirm both resolve
+// deterministically in answer() below, and turn-engine-runner.ts's own
+// dispatch never calls PROPOSE (and therefore never runs decide()'s own
+// remove-guard, removeHasRemovalLanguage) once a deterministic answer
+// already resolved the turn. Reuses removeHasRemovalLanguage directly
+// against the cart's own real lines — the identical primitive decide()
+// already trusts for a model-proposed remove, just with no proposal to
+// gate here at all.
+function applyNamedLineRemovals(
+  cart: TurnEngineCartLine[],
+  message: string,
+  menu: TurnEngineMenuItem[],
+): boolean {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const pronounTargetLineKey = resolvePronounTargetLineKey(cart);
+  // Clause-scoped (same boundary set as ask-plan-engine.ts's own sibling,
+  // isRemovalRequested): removeHasRemovalLanguage's own hasVerb/name-match
+  // checks are unscoped across the WHOLE message it's given, which is safe
+  // at its original call site (a per-line CONFIRMATION of a target line_key
+  // the model already proposed) but not safe here, where every real cart
+  // line is checked cold, from scratch. Real repro: "no stromboli, just the
+  // greek salad & 2 medium pepperoni pizzas please" contains a removal verb
+  // ("no") AND the Greek Salad line's own name ("greek salad") somewhere in
+  // the SAME message — an unscoped check wrongly matched and removed the
+  // salad the customer was actively keeping, right alongside the stromboli
+  // they actually wanted gone. Scoping each check to the clause that
+  // actually carries the removal verb keeps a kept item's name, mentioned
+  // in an unrelated later clause, from ever being read as a removal target.
+  const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;]/i);
+  let changed = false;
+  for (let i = cart.length - 1; i >= 0; i--) {
+    const line = cart[i];
+    if (!isRealCartLine(line)) continue;
+    const category = menuById.get(line.menu_item_id)?.category;
+    const isPronounTargetLine = line.line_key === pronounTargetLineKey;
+    const removed = clauses.some(clause => removeHasRemovalLanguage(clause, line.name, category, isPronounTargetLine));
+    if (removed) {
+      removeCartLine(cart as unknown as ReconcilerCartLine[], i);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Round 4 P0 (2026-09-19, replacement parsing): "swap out the pizza for
 // Buffalo Chicken", "change my Grilled Cheese to Chicken Fingers", "switch
 // that to a Cheesesteak instead" are a REMOVE and an ADD spoken in the same
@@ -3493,6 +4032,74 @@ function resolveReplacementTargetLine(
   return realLines.length > 0 ? realLines[realLines.length - 1] : null;
 }
 
+// PO dispatch 2026-09-19 (M1 rule 2, real live money bug, conv d95306c8
+// #26): the size-recovery fallback just below this call site's own header
+// comment (round-2 item 1's "4 large pizzas" fix) scans the WHOLE raw
+// customerMessage for a size word whenever the ambiguous item's own
+// item_span dropped it — correct for the single-item message it was built
+// for, but "a Gourmet White Fiesta - Large and a Sausage Pizza - Small"
+// (Sausage Pizza's own item_span landing as bare "Sausage Pizza", no size)
+// let that same whole-message scan return "Large" — the OTHER item's size,
+// stated first in the raw text — as the held size for Sausage Pizza's own
+// disambiguation. A message naming two items assumes only one is ever in
+// play the exact way rule 1's topping bleed did. Scopes the same way
+// scopedModifierText already does for the modifier floor: split the message
+// into phrases, find the ambiguous span's OWN phrase, and search only that
+// phrase for a size word. Falls back to the old unscoped whole-message scan
+// exactly when phrase-scoping itself has nothing better to offer (a single-
+// phrase message, or a claim that doesn't resolve to exactly one phrase) —
+// never worse than before this fix, same contract scopedModifierText's own
+// header states for itself.
+function rawMessageSizeWordForSpan(
+  customerMessage: string | undefined,
+  spanText: string,
+  menu: TurnEngineMenuItem[],
+): string | null {
+  if (!customerMessage) return null;
+  const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
+  if (phrases.length <= 1) return extractGlobalSizeWord(customerMessage);
+  const phraseIdx = resolveClaimedPhraseIndex(phrases, spanText);
+  if (phraseIdx === null) return extractGlobalSizeWord(customerMessage);
+  return extractGlobalSizeWord(phrases[phraseIdx]);
+}
+
+// PO dispatch 2026-09-19 (M1 rule 2, reopened — conv d95306c8 #26 follow-up):
+// rawMessageSizeWordForSpan above fixed WHICH size word gets displayed once a
+// tie already opened a disambiguation question, but never used that word to
+// try closing the tie first. resolveItem's own tiebreak (resolve-item.ts)
+// narrows candidates only by the shop's LEXICON size_label — real, but null
+// for some items in live Vito's data (Sausage Pizza, mirrored by this file's
+// own M1 test fixture), so "Sausage Pizza - Small" ties its 3 sizes even
+// though the customer's own words state the size right next to the name.
+// filterCandidatesBySizeWord (pending-disambiguation.ts) already solves this
+// a different way — it derives each candidate's size from its own MENU ITEM
+// NAME text (candidateSizeValue/extractSizeAndKind), independent of the
+// lexicon size_label gap — but until now it only ever ran on the SECOND
+// turn, narrowing an already-open disambiguation's candidates once the
+// customer answered a "what size?" facet question. This applies the
+// identical name-derived narrowing to a FRESH tie, using the exact same
+// scoped size word rawMessageSizeWordForSpan recovers, so a stated size
+// closes the tie before any question opens — never merely corrects the
+// question's wording after the fact. Returns the single surviving
+// menu_item_id, or null when the size word doesn't narrow to exactly one
+// candidate (genuinely still ambiguous — never guessed).
+function narrowAmbiguousCandidatesBySpanSize(
+  candidateIds: string[],
+  spanText: string,
+  customerMessage: string | undefined,
+  menu: TurnEngineMenuItem[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): string | null {
+  const sizeWord = extractGlobalSizeWord(spanText) ?? rawMessageSizeWordForSpan(customerMessage, spanText, menu);
+  if (!sizeWord) return null;
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  const narrowed = filterCandidatesBySizeWord(candidates, sizeWord);
+  return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -3518,6 +4125,30 @@ export function decide(
   // stable keys existed.
   newLineKey?: () => string,
   customerMessage?: string,
+  // DEFECT 3 (2026-09-19 live QA): the shop's own item-lexicon rows that
+  // were excluded from `lexicon` above for being inactive/non-orderable —
+  // see resolve-item.ts's longerInactiveTermExists for why resolveItem
+  // needs to see them (never to resolve anything on its own, only to veto a
+  // wrong guess when a real, more specific answer was deliberately dropped).
+  // Optional and defaulted to `[]`, so every pre-existing call site and test
+  // is unaffected.
+  inactiveLexicon: LexiconTerm[] = [],
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): 00-BD's own restatement
+  // check (isRestatementOfExistingOrder below) is a PHRASE heuristic tuned
+  // for a genuinely fresh, unprompted message — it needs "just the"/"that's
+  // it"/etc. to tell "another burger" (a real second order) from "the
+  // burger" (restating). That heuristic is right for a fresh PROPOSE turn,
+  // but wrong for a message reprocessed off the back of an ANSWER to an
+  // open question (a dropped disambiguation, a remainder after answer()
+  // resolved) — being mid-question is ALREADY strong evidence any item
+  // named again is a restatement, regardless of exact phrasing; the real
+  // conv 0dcb02a7 repro's own words ("just stick w/ the greek salad") never
+  // contain "just the" verbatim and would otherwise double an already-
+  // ordered Greek Salad to 2x. Set true ONLY by turn-engine-runner.ts call
+  // sites that are reprocessing an answer/remainder, never by a fresh,
+  // unprompted message — see this file's own regression test proving a
+  // genuine fresh PROPOSE turn is completely unaffected (defaults false).
+  treatCartMatchAsRestatement = false,
 ): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
@@ -3578,7 +4209,7 @@ export function decide(
     if (!targetLine) {
       declines.push({ reason: "Which item did you want to replace?" });
     } else {
-      const yResolution = resolveItem(replacementIntent.yPhrase, lexicon);
+      const yResolution = resolveItem(replacementIntent.yPhrase, lexicon, inactiveLexicon);
       if (yResolution.kind === "resolved") {
         const newMenuItem = menuById.get(yResolution.menu_item_id);
         if (newMenuItem?.ask_plan) {
@@ -3684,7 +4315,7 @@ export function decide(
     const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
     // Always resolve (even on guard failure) so the guard-drop path can check
     // whether the resolved item is already in cart without a second pass.
-    const resolution = resolveItem(add.item_span, lexicon);
+    const resolution = resolveItem(add.item_span, lexicon, inactiveLexicon);
     if (!guardPassed) {
       // Guard-dropped: the span's tokens were not in the customer's CURRENT
       // message — the model referenced an item the customer didn't name
@@ -3696,7 +4327,7 @@ export function decide(
       guardDroppedWasStale.push(resolution.kind === "resolved" && menuItemIdsAlreadyInCart.has(resolution.menu_item_id));
       guardDroppedWasQuestionTainted.push(spanHasQuestionClauseOnlyToken(add.item_span, customerMessage));
     } else if (resolution.kind === "resolved") {
-      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
+      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
       // 2026-09-19 PO dispatch (ambiguous target hole): PROPOSE frequently
       // proposes its OWN add for the exact same span the replacement block
@@ -3715,7 +4346,22 @@ export function decide(
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
       if (!isReplacementDuplicate) {
-        ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity, spanText: (add.item_span ?? "").trim() });
+        // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
+        // header above): a size stated right next to THIS item's own name
+        // closes the tie here, before a "which one?" question ever opens —
+        // never merely corrects the question's wording after the fact.
+        const narrowedId = narrowAmbiguousCandidatesBySpanSize(
+          resolution.candidates,
+          (add.item_span ?? "").trim(),
+          customerMessage,
+          menu,
+          menuById,
+        );
+        if (narrowedId) {
+          resolvedAdds.push({ menu_item_id: narrowedId, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
+        } else {
+          ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        }
       }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
@@ -3752,7 +4398,7 @@ export function decide(
   if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
       genuinelyUnresolvedSpans.length === 0 && guardDroppedWasStale.length === proposal.adds.length &&
       guardDroppedWasStale.every(Boolean)) {
-    const rawResolution = resolveItem(customerMessage ?? "", lexicon);
+    const rawResolution = resolveItem(customerMessage ?? "", lexicon, inactiveLexicon);
     if (rawResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(rawResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: rawResolution.menu_item_id, quantity: 1, choices: [], item_span: (customerMessage ?? "").trim() });
     } else if (rawResolution.kind === "ambiguous") {
@@ -3783,7 +4429,7 @@ export function decide(
       guardDroppedWasQuestionTainted.every(Boolean)) {
     const recoveryText = nonQuestionClauseText(customerMessage);
     const recoveryQuantity = proposal.adds.length === 1 ? (proposal.adds[0].quantity ?? 1) : 1;
-    const recoveryResolution = resolveItem(recoveryText, lexicon);
+    const recoveryResolution = resolveItem(recoveryText, lexicon, inactiveLexicon);
     if (recoveryResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(recoveryResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: recoveryResolution.menu_item_id, quantity: recoveryQuantity, choices: [], item_span: recoveryText });
     } else if (recoveryResolution.kind === "ambiguous") {
@@ -3849,7 +4495,9 @@ export function decide(
     // one; only fall back to the model's span when the raw message has none
     // (a legitimately sizeless order like "a pepperoni pizza" answered later).
     const itemSpanSpanText = ambiguousSpansFiltered[0].spanText;
-    const rawMessageSizeWord = customerMessage ? extractGlobalSizeWord(customerMessage) : null;
+    // PO dispatch 2026-09-19 (M1 rule 2): scoped to this span's own phrase —
+    // see rawMessageSizeWordForSpan's own header, above decide().
+    const rawMessageSizeWord = rawMessageSizeWordForSpan(customerMessage, itemSpanSpanText, menu);
     disambiguationSpanText = (!extractGlobalSizeWord(itemSpanSpanText) && rawMessageSizeWord)
       ? `${rawMessageSizeWord} ${itemSpanSpanText}`.trim()
       : itemSpanSpanText;
@@ -3888,7 +4536,16 @@ export function decide(
   // distinct adds in one message still both land. menuItemIdsAlreadyInCart
   // is declared above (before the add-resolution loop) for the guard-drop
   // path; it's the same set used here.
-  const restating = isRestatementOfExistingOrder(customerMessage);
+  const restating = isRestatementOfExistingOrder(customerMessage) || treatCartMatchAsRestatement;
+
+  // See stripOtherItemSpansFromModifierText's own header (M1 rule 1): every
+  // OTHER item's own span this same message, whether it already resolved to
+  // a real add or is still pending its own which-one question — computed
+  // once, outside the loop, since it's the same set for every add in it.
+  const allOwnSpansThisMessage = [
+    ...[...addGroups.values()].map(a => (a.item_span ?? "").trim()),
+    ...ambiguousSpansFiltered.map(a => a.spanText.trim()),
+  ].filter(Boolean);
 
   for (const add of addGroups.values()) {
     if (restating && menuItemIdsAlreadyInCart.has(add.menu_item_id)) {
@@ -3931,7 +4588,12 @@ export function decide(
     if (effectiveChoices.length === 0 && customerMessage) {
       const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
-      const scoped = scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
+      const ownSpan = (add.item_span ?? "").trim();
+      const otherSpansThisMessage = allOwnSpansThisMessage.filter(s => s !== ownSpan);
+      const scoped = stripOtherItemSpansFromModifierText(
+        scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
+        otherSpansThisMessage,
+      );
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
         // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
@@ -4140,6 +4802,11 @@ export interface AskTurnEvents {
   // kept as a separate flag rather than folded into it so each
   // mechanism's own commit stays independently reviewable.
   lineReplacedThisTurn?: boolean;
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): true when THIS turn's
+  // ANSWER resolved to line_removed_at_confirm (mechanism 3, a bare removal
+  // with no replacement named). Same reasoning and same ask()-branch
+  // handling as quantityCorrectedThisTurn/lineReplacedThisTurn above.
+  lineRemovedAtConfirmThisTurn?: boolean;
   // Round 3, item 2c(i) (2026-09-19): true when THIS turn's ANSWER resolved
   // a tip amount stated WHILE confirm was already open ("$5 tip" — see the
   // "confirm" case's tip-amount check above). Same fresh-read-back handling
@@ -4488,7 +5155,7 @@ export function ask(
   // Round 3, item 2c(i): a tip stated at confirm is the same "cart just
   // changed" situation — the total now includes a Tip line — same
   // fresh-cycle reset as the two mechanisms above.
-  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn) {
+  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn || turnEvents.lineRemovedAtConfirmThisTurn) {
     return {
       phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered,
       asked_message_id: null, pendingAmbiguous, openRepeatCount: 0,

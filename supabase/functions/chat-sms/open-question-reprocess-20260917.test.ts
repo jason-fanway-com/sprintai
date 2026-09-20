@@ -96,12 +96,17 @@ const CHEESESTEAK_MENU: TurnEngineMenuItem[] = [
 const CHEESESTEAK_LEXICON = [
   { term: "california cheesesteak", target_id: CHEESESTEAK_ID },
   // Bare "jack s special" (resolve-item.ts's normalize() strips the
-  // apostrophe to a space, same as the real customer text below normalizes
-  // to "jack s special medium 14") ties all three sizes at the same
-  // longest match — the real Vito's shape: the size word alone is never
-  // enough to resolve the item_span itself (that's the whole reason the
-  // disambiguation opens in the first place); only the ANSWER to the
-  // disambiguation question needs to read the size word.
+  // apostrophe to a space) ties all three sizes at the same longest match —
+  // the real Vito's shape. PO dispatch 2026-09-19 (M1 rule 2, REOPENED,
+  // conv d95306c8 #26): turn 0's customer message below deliberately
+  // withholds the size ("2 Jack's Special", not "2 Jack's Special -
+  // Medium") — a message that DOES state the size right next to the item's
+  // own name now resolves it directly via narrowAmbiguousCandidatesBySpanSize
+  // (turn-engine.ts), the exact fix this dispatch shipped, so it would no
+  // longer reach this file's own disambiguation-open scenario at all. This
+  // fixture still needs a genuine, unresolvable-without-asking tie to
+  // exercise the ANSWER-priority-over-PROPOSE protection below, so the size
+  // is now supplied only in turn 1's answer, never in turn 0's proposal.
   { term: "jack s special", target_id: JACKS_MEDIUM_ID },
   { term: "jack s special", target_id: JACKS_LARGE_ID },
   { term: "jack s special", target_id: JACKS_SMALL_ID },
@@ -137,7 +142,9 @@ Deno.test("RED->GREEN (conv 8b9636c9): while the Jack's Special disambiguation i
           proposal: {
             intent: "order",
             adds: [
-              { item_span: "Jack's Special - Medium (14\")", quantity: 2, choices: [] },
+              // No size stated here — see CHEESESTEAK_LEXICON's own header
+              // (M1 rule 2, REOPENED) for why this fixture withholds it.
+              { item_span: "Jack's Special", quantity: 2, choices: [] },
               { item_span: "California Cheesesteak", quantity: 2, choices: [] },
             ],
             removes: [], modifies: [],
@@ -163,7 +170,7 @@ Deno.test("RED->GREEN (conv 8b9636c9): while the Jack's Special disambiguation i
   }
 
   // ── Turn 0: the full order, Jack's Special ties ambiguous, Cheesesteak resolves ──
-  const r0 = await turn("Hey! I'd like to order 2 Jack's Special - Medium (14\") with pepperoni on the whole pizza and onions on half. Also, 2 California Cheesesteaks. Thanks!", [], null);
+  const r0 = await turn("Hey! I'd like to order 2 Jack's Special with pepperoni on the whole pizza and onions on half. Also, 2 California Cheesesteaks. Thanks!", [], null);
   assertEquals(r0.cart.filter(l => l.menu_item_id === CHEESESTEAK_ID)[0]?.quantity, 2, "turn 0: Cheesesteak enters at exactly the quantity asked for");
   assertOneLinePerItem(r0.cart, "turn 0");
   assertEquals(r0.dialogueState.open?.kind, "disambiguation", `turn 0 must open the Jack's Special disambiguation, got: ${JSON.stringify(r0.dialogueState.open)}`);
