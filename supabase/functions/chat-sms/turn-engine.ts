@@ -118,6 +118,7 @@ import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-rec
 import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
+  matchExplicitOptionPickAnywhere,
   isPendingDisambiguationDeclined,
   isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
@@ -1653,7 +1654,7 @@ function messageNamesItemOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
   lexicon: LexiconTerm[] | undefined,
-): { menuItemId: string; quantity: number } | null {
+): { menuItemId: string; quantity: number; matchedText: string } | null {
   if (!lexicon || lexicon.length === 0) return null;
   const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
   const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
@@ -1663,7 +1664,37 @@ function messageNamesItemOutsideCandidates(
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
   if (candidateIds.has(result.menu_item_id)) return null;
   const explicitQuantity = extractAnswerQuantity(extractAnswerClause(scoped).clause);
-  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count };
+  // matchedText is `scoped` (the text this function actually resolved
+  // against), never the whole raw message — see
+  // isAnswerRestatementOfCartLine's own header for why the caller checks
+  // restatement markers against THIS text and not the full message.
+  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count, matchedText: scoped };
+}
+
+// Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd, money bug): the
+// PROPOSE/decide() path already refuses to re-add a line that's already in
+// the cart when the customer's own words carry a restatement marker (see
+// isRestatementOfExistingOrder's own header, and decide()'s `restating`
+// flag) — this exact same protection never existed on the ANSWER path
+// above, so "that's option 1 ... 2x Large Chicken Bacon Ranch ... 1 Medium
+// Sausage Pizza" (reciting the whole order mid-disambiguation-answer) and
+// "Just to recap: 1 Garlic Cheesesteak on wheat with blackened salmon..."
+// (reciting it while a fries disambiguation was open) both quietly re-added
+// a line that was already sitting in the cart, live, real overcharges.
+// Checked against `matchedText` (the exact clause messageNamesItemOutsideCandidates
+// resolved the outside item from), never the whole raw message: the whole
+// message can carry an ADDITION_MARKERS word (isRestatementOfExistingOrder's
+// own veto) purely because of unrelated trailing content the outside-item
+// resolver itself already scoped away (e.g. "...and a side of fries" —
+// OUTSIDE_ITEM_REMAINDER_MARKER_RE already cut the text there before ever
+// resolving "Garlic Cheesesteak"), which would wrongly suppress this check
+// on the one clause that's actually a clean restatement.
+function isAnswerRestatementOfCartLine(
+  cart: TurnEngineCartLine[],
+  outside: { menuItemId: string; matchedText: string },
+): boolean {
+  const alreadyInCart = cart.some(l => isRealCartLine(l) && l.menu_item_id === outside.menuItemId);
+  return alreadyInCart && isRestatementOfExistingOrder(outside.matchedText);
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -2184,6 +2215,15 @@ export function answer(
 
       const quantity = state.open.quantity ?? 1;
 
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a): "option N"/"number N"/
+      // "option number N" ANYWHERE in the message is an unambiguous pick —
+      // see matchExplicitOptionPickAnywhere's own header. Checked before
+      // every other tier below (the outside-item gate and the facet path
+      // both score words that happen to overlap; an explicit "that's option
+      // 1" must win over both, no matter what else — a restated whole
+      // order, in the real live repro — surrounds it).
+      const explicitOptionIdx = matchExplicitOptionPickAnywhere(trimmed, candidates.length);
+
       // Round 2, item 3 (2026-09-19, live repro): before letting either
       // resolver below (the facet path or resolvePendingDisambiguation)
       // score whatever words in this message happen to overlap the open
@@ -2193,8 +2233,17 @@ export function answer(
       // facet alike: both resolvers below share the same failure mode (a
       // stray size/category word winning a tiebreak while the actual
       // answer — a different dish's name — is discarded as noise).
-      const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
-      if (outsideItem) {
+      const outsideItem = explicitOptionIdx === null
+        ? messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon)
+        : null;
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd): an "outside"
+      // item that's actually already a real line in the cart, named while
+      // the customer's own words carry a restatement marker, is the
+      // customer reciting their order back — not a new add. See
+      // isAnswerRestatementOfCartLine's own header; same family as
+      // decide()'s `restating` guard on the PROPOSE path, never applied
+      // here before this fix.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -2227,6 +2276,7 @@ export function answer(
       // the numbered-list resolver just because the remainder happens to be
       // small. See DialogueState's own doc on `facetNarrowed`.
       if (
+        explicitOptionIdx === null &&
         (state.open.otherOneFollowUp || state.open.facetNarrowed || isNarrowingCandidateSet(candidates)) &&
         !isDisambiguationOptionsRequest(trimmed)
       ) {
@@ -2383,7 +2433,9 @@ export function answer(
         }
       }
 
-      const resolved = resolvePendingDisambiguation(trimmed, candidates);
+      const resolved = explicitOptionIdx !== null
+        ? candidates[explicitOptionIdx]
+        : resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
       // this which-one question can restate a quantity that was never part
@@ -2474,7 +2526,10 @@ export function answer(
       // group's own size facet gets a chance to score a stray word.
       const allGroupCandidates = groups.flatMap(g => g.candidates);
       const outsideItem = messageNamesItemOutsideCandidates(trimmed, allGroupCandidates, external.lexicon);
-      if (outsideItem) {
+      // Round 4 P0 (2026-09-19): same restatement guard as the sibling
+      // "disambiguation" case above — see isAnswerRestatementOfCartLine's
+      // own header.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
