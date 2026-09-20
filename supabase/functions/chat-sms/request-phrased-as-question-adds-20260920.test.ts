@@ -326,3 +326,177 @@ Deno.test("runTurnEngineTurn (RUNNER-LEVEL, real fresh-add repro): 'Tuna Hoagie 
     `the reply must never surface a phantom shrimp wrap/appetizer question — got ${JSON.stringify(t1.reply)}`);
   assert(/bread/i.test(t1.reply), `the bot must still ask for bread this turn — got ${JSON.stringify(t1.reply)}`);
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// PO addendum (2026-09-20, REAL LIVE BUG, deployed build v570, R4 reopened
+// a THIRD time): "Can I get a Chicken Bacon Ranch pizza, medium, with half
+// anchovies on it?" -- Medium CBR added at $19.99 flat, anchovies silently
+// dropped, no decline, no trace. Same OBSERVABLE shape as R4
+// (half-anchovies-fresh-add-not-dropped-20260920, merged ba1d45f4), but a
+// DIFFERENT trigger: R4's own fixtures (including its own single-item,
+// no-question repro, "a Chicken Bacon Ranch pizza, medium, with half
+// anchovies on it") never wrap the whole order in a "Can I get...?"
+// question. Confirmed via direct decide()/runner probe against real Vito's
+// CBR data (below, copied verbatim from R4's own merged test file) that a
+// full, untruncated item_span ("...with half anchovies on it", no "Can I
+// get", no "?") already resolves correctly by falling into
+// resolveClaimedPhraseIndex's own ambiguous->unscoped-whole-text fallback
+// (3 phrases each partially overlap the claim, so no single phraseIdx wins)
+// -- so the defect is NOT in AVAILABILITY_QUESTION_MARKER_RE /
+// isQuestionPreambleClause's own territory (neither ever matches this
+// message: no "do you have"/"is there", no literal word "question", and
+// "can I get" is deliberately excluded from both, same as always).
+//
+// ROOT CAUSE (confirmed RED against pre-fix code with this exact fixture):
+// PROPOSE's real item_span claim for the question-wrapped message truncates
+// BEFORE the topping clause ("a Chicken Bacon Ranch pizza, medium" -- no
+// "with half anchovies on it"). phrase-split.ts splits the full customer
+// message on its commas into THREE phrases regardless: ["Can I get a
+// Chicken Bacon Ranch pizza", "medium", "with half anchovies on it?"].
+// resolveClaimedPhraseIndex's word-run match against the TRUNCATED claim
+// then matches ONLY the lone "medium" phrase (the claim's own "a chicken
+// bacon ranch pizza" words never appear in phrase 0, since "Can I get"
+// fused onto it) -- a single, wrongly-unique match, not the ambiguous
+// multi-match the full-claim case above hits. scopedModifierText scopes
+// the 00-BF modifier floor down to just "medium", erasing "with half
+// anchovies on it" before R4's own "half"-qualifier reader
+// (recoverAssertedChoicesFromText/recoverPlacementHits) ever sees it. This
+// is the SAME class of gap this branch's own REQUEST_QUESTION_MARKER_RE fix
+// already closes for the shrimp case above (an orphaned trailing phrase cut
+// off from its host item's scoped text) -- but the orphaned phrase here is
+// plain topping text, not itself REQUEST-shaped, so the existing
+// REQUEST_QUESTION_MARKER_RE match alone can't recover it. Fix (same call
+// site, turn-engine.ts's orphanRequestPhrases): also fold in the phrase
+// immediately AFTER the item's own matched phrase when it isn't already
+// claimed by another add and isn't an availability question -- no new
+// qualifier-reading logic duplicated; once "half anchovies" is back in the
+// scoped text, R4's own already-merged "half" read applies unchanged.
+//
+// REQUIRED METHODOLOGY: runner-level (runTurnEngineTurn), real Vito's data,
+// same Medium CBR pizza ids/prices as R4's own merged fixture
+// (dca6fae3-2d94-4a18-b0a9-760474cec7c1, $19.99 base, real Anchovies
+// Half/Whole toppings at $3.50/$4.50). Confirmed RED against pre-fix code
+// (CBR line at $19.99 flat, no Anchovies option, no decline) before writing
+// this fix.
+
+const CBR_MEDIUM_ID = "dca6fae3-2d94-4a18-b0a9-760474cec7c1";
+const CBR_TOPPINGS_GROUP_ID = "4c31b9ef-a2c3-45f7-8a2c-5e70d8af899d";
+
+// Real ask_plan pulled live from Vito's menu_items.ask_plan (verbatim from
+// R4's own merged test file, half-anchovies-fresh-add-not-dropped-20260920,
+// trimmed to the choices this fixture exercises).
+const CBR_MEDIUM: TurnEngineMenuItem = {
+  id: CBR_MEDIUM_ID,
+  name: "Chicken Bacon Ranch - Medium (14\")",
+  category: "Pizza",
+  price_cents: 1999,
+  size_label: "Medium (14\")",
+  bot_state: "orderable",
+  ask_plan: {
+    compiled_at: "2026-09-20T03:45:32.014Z",
+    compiler_version: 1,
+    display_name: "Medium Chicken Bacon Ranch Pizza",
+    base_price_cents: 1999,
+    recap_template: "{qty} {display_name}{, with {modifiers}}",
+    ticket_template: "{name}{\n  + {choice.display} x{qty}}",
+    steps: [{
+      group_id: CBR_TOPPINGS_GROUP_ID,
+      slot_key: null,
+      kind: "modifier",
+      ask_mode: "on_request",
+      prompt_template: "toppings.on_request",
+      choices: [
+        { id: "6f9cefbb-fec7-4d9d-9b9c-b55984d60a77", display: "Anchovies (Half pizza)", price_delta_cents: 350 },
+        { id: "ebbb1eba-80e0-48e7-a5cb-5eb4ed7940e3", display: "Anchovies (Whole pizza)", price_delta_cents: 450 },
+      ],
+    }],
+  },
+  option_groups: [{ id: CBR_TOPPINGS_GROUP_ID, name: "Toppings" }],
+} as unknown as TurnEngineMenuItem;
+
+const CBR_MENU: TurnEngineMenuItem[] = [CBR_MEDIUM];
+
+const CBR_LEXICON = [
+  { term: "chicken bacon ranch", target_id: CBR_MEDIUM_ID, category: "Pizza", size_label: "Medium (14\")" },
+  { term: "chicken bacon ranch pizza", target_id: CBR_MEDIUM_ID, category: "Pizza", size_label: "Medium (14\")" },
+];
+
+function makeCbrFakeSupabase() {
+  function builder(table: string) {
+    // deno-lint-ignore no-explicit-any
+    const b: any = {
+      select() { return b; },
+      eq() { return b; },
+      is() { return b; },
+      order() { return b; },
+      maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+      range(from: number, to: number) {
+        const all = table === "lexicon" ? CBR_LEXICON : [];
+        return Promise.resolve({ data: all.slice(from, to + 1), error: null });
+      },
+      in(column: string, values: unknown[]) {
+        if (table !== "menu_items") return Promise.resolve({ data: [], error: null });
+        const matches = CBR_MENU
+          .filter(m => values.includes((m as unknown as Record<string, unknown>)[column]))
+          .map(m => ({ id: m.id, category: m.category, size_label: (m as unknown as { size_label?: string }).size_label ?? null, bot_state: m.bot_state }));
+        return Promise.resolve({ data: matches, error: null });
+      },
+      update(row: Record<string, unknown>) {
+        void row;
+        return { eq: () => Promise.resolve({ error: null }) };
+      },
+      insert() {
+        return {
+          select: () => ({ single: () => Promise.resolve({ data: { id: "msg-1" }, error: null }) }),
+          then(resolve: (v: { error: null }) => void) { return Promise.resolve({ error: null }).then(resolve); },
+        };
+      },
+      then(resolve: (v: { data: unknown; error: null }) => void) { return Promise.resolve({ data: null, error: null }).then(resolve); },
+    };
+    return b;
+  }
+  // deno-lint-ignore no-explicit-any
+  return { from: (table: string) => builder(table) } as any as SupabaseClient;
+}
+
+Deno.test("runTurnEngineTurn (RUNNER-LEVEL, real live money bug, deployed v570, R4 reopened a third time): 'Can I get a Chicken Bacon Ranch pizza, medium, with half anchovies on it?' applies Anchovies HALF, never silently drops it", async () => {
+  const supabase = makeCbrFakeSupabase();
+  const message = "Can I get a Chicken Bacon Ranch pizza, medium, with half anchovies on it?";
+
+  // PROPOSE's real (broken) shape for this question-wrapped message: the
+  // item_span claim truncates before the topping clause -- this is the
+  // actual trigger, not a bare text-matching artifact; a full, untruncated
+  // item_span for this same message was directly confirmed (probe, not
+  // committed here) to already resolve correctly via the unscoped-fallback
+  // path, so this shape is what must be fixed.
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key", newLineKey: newLineKeyCounter(),
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: {
+        intent: "order", removes: [], modifies: [],
+        adds: [{ item_span: "a Chicken Bacon Ranch pizza, medium", quantity: 1, choices: [] }],
+      },
+    }),
+  };
+
+  const t1 = await runTurnEngineTurn(
+    {
+      conversationId: "conv-cbr-question-repro", shopId: "e0000000-0000-0000-0000-000000000001",
+      tenantId: "e0000000-0000-0000-0000-000000000001", cartId: "cart-repro",
+      message, history: [], menu: CBR_MENU, cart: [], dialogueState: null,
+      shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+    },
+    deps,
+  );
+
+  const cbrLines = t1.cart.filter(l => l.menu_item_id === CBR_MEDIUM_ID);
+  assertEquals(cbrLines.length, 1, `expected exactly ONE Medium CBR line — got ${JSON.stringify(t1.cart)}`);
+  const cbr = cbrLines[0] as unknown as { price_cents: number; options?: Record<string, string[]> };
+  const optionsJson = JSON.stringify(cbr.options ?? {});
+  assert(optionsJson.includes("Anchovies (Half pizza)"), `Anchovies must be applied as HALF, matching the customer's own words, never silently dropped — got ${optionsJson}`);
+  assert(!optionsJson.includes("Anchovies (Whole pizza)"), `Anchovies must NOT be applied as whole — got ${optionsJson}`);
+  assertEquals(cbr.price_cents, 2349, `Medium CBR ($19.99) + Anchovies Half ($3.50) = $23.49 exactly — got ${JSON.stringify(cbr)}`);
+  assertEquals(t1.dialogueState.open?.kind === "disambiguation", false,
+    `no phantom item disambiguation may be left open — got ${JSON.stringify(t1.dialogueState.open)}`);
+});

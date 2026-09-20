@@ -5846,11 +5846,33 @@ export function decide(
       // header), and (c) is not already claimed as some OTHER add's own
       // phrase this turn (a genuinely different item's own request stays
       // untouched, exactly as scopedModifierText already protects).
+      //
+      // 2026-09-20 PO dispatch (R4 reopened a third time, real live money
+      // bug, deployed v570, "Can I get a Chicken Bacon Ranch pizza, medium,
+      // with half anchovies on it?"): a DIFFERENT way to strand the SAME
+      // trailing topping phrase -- here PROPOSE's own item_span claim
+      // ("a Chicken Bacon Ranch pizza, medium") never included "with half
+      // anchovies on it" at all (the whole-message question shape appears to
+      // make PROPOSE truncate its own claim before the trailing clause), so
+      // resolveClaimedPhraseIndex has nothing REQUEST-shaped to match --
+      // worse, the truncated claim only word-matches the lone "medium"
+      // phrase (its OWN item-name words never appear in any single phrase,
+      // since "Can I get" fused onto phrase 0), scoping the modifier floor
+      // down to "medium" alone and erasing the topping phrase before the
+      // 00-BF floor / R4's own "half"-qualifier reader ever sees it. The
+      // one phrase directly AFTER the item's matched phrase is, in every
+      // real repro seen so far (this one and the shrimp case above), either
+      // this item's OWN trailing modifier clause or another add's own
+      // already-claimed phrase (excluded below same as the REQUEST-shaped
+      // case) -- so it is folded in unconditionally, and left to the
+      // per-step choice scan (which only ever matches a phrase's words
+      // against THIS item's real, known choices) to decide whether it
+      // actually names anything.
       const orphanRequestPhrases = phrases.length > 1 && phraseIdx !== null
         ? phrases.filter((phrase, idx) =>
             idx !== phraseIdx &&
-            REQUEST_QUESTION_MARKER_RE.test(phrase) &&
             !AVAILABILITY_QUESTION_MARKER_RE.test(phrase) &&
+            (REQUEST_QUESTION_MARKER_RE.test(phrase) || idx === phraseIdx + 1) &&
             !otherSpansThisMessage.some(otherSpan => resolveClaimedPhraseIndex(phrases, otherSpan) === idx))
         : [];
       const scopedText = orphanRequestPhrases.length > 0
