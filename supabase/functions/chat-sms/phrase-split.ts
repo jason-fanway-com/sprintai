@@ -160,6 +160,21 @@ export function scopedModifierText(
     ? phrases[phraseIndex]
     : wholeText;
   if (!itemName) return scoped;
-  const nameRe = new RegExp(`\\b${escapeRegexPublic(itemName).replace(/\s+/g, "\\s+")}\\b`, "gi");
+  // Freeze-queue item 6, part C (2026-09-19 PO dispatch, real Vito's
+  // Quesadillas "Chicken" item): NOT global. This function's own header
+  // already establishes the rule a later, separate mention of the same
+  // word must survive ("Chicken Bacon Ranch with extra bacon" keeps
+  // "bacon" because the multi-word contiguous unit "chicken bacon ranch"
+  // never matches a later BARE "bacon") — but a `g` flag broke that same
+  // rule whenever the item's own name IS a single bare word ("Chicken"),
+  // since every standalone occurrence of that one word, including a
+  // genuinely separate later request for the identically-named add-on
+  // ("a Chicken quesadilla with grilled chicken"), matches the "contiguous
+  // unit" trivially and got erased. Stripping only the FIRST occurrence —
+  // the one that actually named the item — restores the header's own
+  // stated intent for a single-word name without changing anything for a
+  // multi-word name (which essentially never repeats verbatim in the same
+  // phrase anyway).
+  const nameRe = new RegExp(`\\b${escapeRegexPublic(itemName).replace(/\s+/g, "\\s+")}\\b`, "i");
   return scoped.replace(nameRe, " ");
 }

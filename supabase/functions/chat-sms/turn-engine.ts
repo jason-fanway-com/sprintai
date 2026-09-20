@@ -3006,34 +3006,68 @@ function placementGroupMentioned(group: PlacementGroup, textTokens: Set<string>)
 // substring. A topping with any word NOT in the item's name (e.g.
 // "Chicken Steak" on this same pizza -- "steak" isn't part of the name)
 // is untouched.
+// Freeze-queue item 6, part C (2026-09-19 PO dispatch, real Vito's
+// Quesadillas category): a quesadilla item is itself named after its own
+// protein ("Chicken", "Steak") and separately offers that identical word
+// as an optional $4 Add-ons modifier choice ("Chicken") — so for THIS
+// item, the candidate's tokens are not a FRAGMENT of a longer name (the
+// a7266e41 shape this guard exists for — "bacon" inside "Chicken Bacon
+// Ranch"), they are the item's ENTIRE name. Blocking on a proper subset is
+// right; blocking on an exact match means this exact choice could never be
+// recovered for this exact item through ANY phrasing ("with chicken",
+// "with grilled chicken") — a customer naming their own quesadilla's
+// listed protein add-on gets silently nothing, every time. Real query
+// (2026-09-19): Quesadillas category items "Chicken"/"Steak"/"Chicken
+// Fajita"/"Southwest Chicken"/"Veggie Quesadilla" each carry an "Add-ons"
+// modifier group with choices Chicken/Shrimp/Blackened Salmon/Black
+// Diamond Steak — there is no separate "Grilled Chicken" choice anywhere
+// on this menu, so a customer asking for "grilled chicken" means the
+// plain "Chicken" add-on by the closest real match, exactly the same as
+// "with chicken" would.
 function isSubsetOfItemName(candidateTokens: Set<string>, itemNameTokens: Set<string>): boolean {
   if (candidateTokens.size === 0 || itemNameTokens.size === 0) return false;
   for (const t of candidateTokens) if (!itemNameTokens.has(t)) return false;
-  return true;
+  return candidateTokens.size !== itemNameTokens.size;
 }
+
+// Freeze-queue item 6, part B (2026-09-19 PO dispatch, real Vito's "Medium
+// Chicken Bacon Ranch pizza, extra bacon"): the item-name-subset guard
+// above (a7266e41) is still correct for its own real bug — a customer who
+// only NAMES the item ("2 Medium Chicken Bacon Ranch pizzas") never gets
+// charged for a phantom "Bacon" topping just because that word is also part
+// of the item's own name. But the guard has no way to tell that case apart
+// from a customer who explicitly asks for MORE of that same word as a
+// topping — "extra bacon" — since the topping's own display name ("Bacon")
+// is a subset of the item's name either way. The word "extra" itself is the
+// disambiguator: it never appears in a bare item-naming phrase (nobody says
+// "2 extra Medium Chicken Bacon Ranch pizzas" to mean two pizzas), so its
+// presence in the SCOPED text is an unambiguous signal that whatever
+// follows is an addition request, not a restatement of the item's name —
+// safe to let the name-subset guard step aside for this one candidate.
+const EXPLICIT_ADDITION_RE = /\bextra\b/i;
 
 // Every core-name group the text mentions, resolved to the ONE choice id
 // that group's own placement signal (the presence/absence of the literal
 // word "half" anywhere in the text) selects — never both, never a guess
 // when the selected variant doesn't exist on this item.
-function recoverPlacementHits(groups: PlacementGroup[], textTokens: Set<string>, itemNameTokens: Set<string>): string[] {
+function recoverPlacementHits(groups: PlacementGroup[], textTokens: Set<string>, itemNameTokens: Set<string>, explicitAddition: boolean): string[] {
   const hasHalfWord = textTokens.has("half");
   const hits: string[] = [];
   for (const g of groups) {
     if (!placementGroupMentioned(g, textTokens)) continue;
-    if (isSubsetOfItemName(modifierFloorTokens(g.core), itemNameTokens)) continue;
+    if (!explicitAddition && isSubsetOfItemName(modifierFloorTokens(g.core), itemNameTokens)) continue;
     const chosen = hasHalfWord ? g.half : g.whole;
     if (chosen) hits.push(chosen.id);
   }
   return hits;
 }
 
-function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, textTokens: Set<string>, itemNameTokens: Set<string>): string[] {
+function recoverPlainHits(plainChoices: Array<{ id: string; display: string }>, textTokens: Set<string>, itemNameTokens: Set<string>, explicitAddition: boolean): string[] {
   const hits: string[] = [];
   for (const c of plainChoices) {
     const choiceTokens = modifierFloorTokens(c.display);
     if (choiceTokens.size === 0) continue;
-    if (isSubsetOfItemName(choiceTokens, itemNameTokens)) continue;
+    if (!explicitAddition && isSubsetOfItemName(choiceTokens, itemNameTokens)) continue;
     let ok = true;
     for (const t of choiceTokens) if (!textTokens.has(t)) { ok = false; break; }
     if (ok) hits.push(c.id);
@@ -3051,8 +3085,9 @@ export function recoverAssertedChoiceFromText(
   if (MODIFIER_NEGATION_RE.test(text)) return null;
   const textTokens = modifierFloorTokens(text);
   const itemNameTokens = modifierFloorTokens(itemName ?? "");
+  const explicitAddition = EXPLICIT_ADDITION_RE.test(text);
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
-  const hits = [...recoverPlacementHits(placementGroups, textTokens, itemNameTokens), ...recoverPlainHits(plainChoices, textTokens, itemNameTokens)];
+  const hits = [...recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition), ...recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition)];
   if (hits.length !== 1) return null;   // a tie, or nothing, resolves nothing
   return hits[0];
 }
@@ -3081,9 +3116,10 @@ export function recoverAssertedChoicesFromText(
   if (MODIFIER_NEGATION_RE.test(text)) return [];
   const textTokens = modifierFloorTokens(text);
   const itemNameTokens = modifierFloorTokens(itemName ?? "");
+  const explicitAddition = EXPLICIT_ADDITION_RE.test(text);
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
-  const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens);
-  const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens);
+  const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition);
+  const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition);
   return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
 }
 
