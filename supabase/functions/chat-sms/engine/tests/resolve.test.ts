@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { fixtureMenu, IDS } from "./fixture-menu.ts";
+import { fixtureMenu, IDS, zioFixtureMenu } from "./fixture-menu.ts";
 import { bindLine, narrow, pickFacet, resolveSpan } from "../resolve.ts";
 import { facetsFromName } from "../menu.ts";
 import type { Line } from "../form.ts";
@@ -69,4 +69,24 @@ Deno.test("modifier with price: margherita with bacon stays margherita (no canon
   bindLine(l, menu);
   assertEquals(l.item_id, IDS.margheritaS);
   assertEquals(l.modifiers, ["mgBacS"]);
+});
+
+Deno.test("leading size in the name is a facet (Zio's naming)", () => {
+  assertEquals(facetsFromName("Small 14'' Neapolitan Cheese Pizza"), { kind: "neapolitan cheese pizza", size: "small" });
+  assertEquals(facetsFromName("Large 18'' Neapolitan Cheese Pizza"), { kind: "neapolitan cheese pizza", size: "large" });
+});
+
+Deno.test("a single-choice slot is applied, not asked", () => {
+  const l = line("knots zio");
+  bindLine(l, zioFixtureMenu());
+  assertEquals(l.status.kind, "complete");
+  assertEquals(l.choices["zkSize"], "zk6");
+});
+
+Deno.test("leading-size names narrow by size: neapolitan + medium/large", () => {
+  const zm = zioFixtureMenu();
+  const l = line("neapolitan cheese pizza", ["large"]);
+  bindLine(l, zm);
+  assertEquals(l.item_id, "zpL");
+  assertEquals(l.status.kind, "complete");
 });

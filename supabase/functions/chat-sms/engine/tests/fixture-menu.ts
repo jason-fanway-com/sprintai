@@ -112,3 +112,16 @@ export const SHOP: ShopConfig = {
 export function fixtureMenu(overrides: Partial<ShopConfig> = {}) {
   return buildMenu({ version: "test-v1", items: RAW_ITEMS, lexicon: RAW_LEXICON, shop: { ...SHOP, ...overrides } });
 }
+
+/** Zio's-shaped extras: leading-size names and single-choice slots. Kept out of the Vito's fixture. */
+export const ZIO_EXTRA_ITEMS: RawMenuItem[] = [
+  item("zk", "Garlic Knots Zio", "Appetizers", 475, { display_name: "Garlic Knots Zio" }, [{ group_id: "zkSize", slot_key: null, kind: "slot", ask_mode: "auto_single", prompt_template: "size.ask", choices: [{ id: "zk6", display: "6 Pieces", price_delta_cents: 0 }] }]),
+  item("zpS", "Small 14'' Neapolitan Cheese Pizza", "Pizza", 1525),
+  item("zpL", "Large 18'' Neapolitan Cheese Pizza", "Pizza", 1799),
+];
+export const ZIO_EXTRA_LEXICON: LexiconEntry[] = [
+  ["knots zio", "zk"], ["neapolitan cheese pizza", "zpS"], ["neapolitan cheese pizza", "zpL"], ["neapolitan", "zpS"], ["neapolitan", "zpL"],
+].map(([term, id]) => ({ term, target_type: "item", target_id: id }));
+export function zioFixtureMenu() {
+  return buildMenu({ version: "zio-v1", items: [...RAW_ITEMS, ...ZIO_EXTRA_ITEMS], lexicon: [...RAW_LEXICON, ...ZIO_EXTRA_LEXICON], shop: { ...SHOP, name: "Zio's" } });
+}

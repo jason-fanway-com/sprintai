@@ -94,7 +94,13 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
 }
 
 function requiredGroupOpen(line: Line, item: MenuItem): MenuGroup | null {
-  for (const g of item.groups) if (g.kind === "slot" && !line.choices[g.id]) return g;
+  for (const g of item.groups) {
+    if (g.kind !== "slot" || line.choices[g.id]) continue;
+    // the compiler decided these are not questions: one possible choice, or a shop default
+    if (g.choices.length === 1) { line.choices[g.id] = g.choices[0].id; continue; }
+    if (g.ask_mode === "apply_default" && g.default_choice_id && g.choices.some((c) => c.id === g.default_choice_id)) { line.choices[g.id] = g.default_choice_id; continue; }
+    return g;
+  }
   return null;
 }
 
@@ -118,7 +124,7 @@ function applyCanon(line: Line, menu: Menu): void {
 /** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
 function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
   const b = item.bundle!;
-  const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices };
+  const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices, ask_mode: "ask", default_choice_id: null };
   const sel = (line.selections ??= {});
   const total = () => Object.values(sel).reduce((a, n) => a + n, 0);
   let consumed = false;
@@ -251,7 +257,7 @@ export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
 export function spanAnswersLine(line: Line, span: string, menu: Menu): boolean {
   if (line.status.kind === "needs_picks" && line.item_id) {
     const b = menu.items.get(line.item_id)!.bundle!;
-    const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices };
+    const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices, ask_mode: "ask", default_choice_id: null };
     return splitList(span).some((p) => matchChoice(leadingCount(p).rest, group).kind !== "none");
   }
   if (line.status.kind === "ambiguous") return narrow(line.status.candidates, span, menu).length < line.status.candidates.length && narrow(line.status.candidates, span, menu).length > 0;

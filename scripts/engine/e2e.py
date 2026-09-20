@@ -6,7 +6,8 @@ usage: e2e.py --shop <uuid> [--runs 5] [--scenario canary|delivery3|narrowing|co
 Reads SPRINTAI_CHAT_SUPABASE_URL / _SERVICE_ROLE_KEY from ~/.openclaw-sprintai/.secrets.
 Exit 0 only when every run of every scenario passes every assertion.
 """
-import argparse, json, os, sys, time, uuid, urllib.request
+import argparse, functools, json, os, sys, time, uuid, urllib.request
+print = functools.partial(print, flush=True)
 
 def load_secrets():
     p = os.path.expanduser("~/.openclaw-sprintai/.secrets")
@@ -81,7 +82,44 @@ def corrections(addr):
         ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}") + expect(c["subtotal_cents"] == lines(c)[0][2] * lines(c)[0][1], "subtotal mismatch")),
     ]
 
-SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections}
+def njb_dozen(addr):
+    return [
+        ("a dozen bagels", lambda c, r: expect("which bagels" in r.lower(), f"expected flavor question: {r!r}") + expect(len(lines(c)) == 0, f"nothing priced yet: {names(c)}")),
+        ("6 plain and 6 everything", lambda c, r: expect(len(lines(c)) == 1 and lines(c)[0][2] == 1500, f"lines {lines(c)}") + expect("Anything else" in r, f"expected anything else: {r!r}")),
+        ("and a bagel with plain cream cheese", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}")),
+        ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}") + expect(c["subtotal_cents"] == 1500 + 350, f"subtotal {c['subtotal_cents']}")),
+        ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session") + expect(c["total_cents"] == c["subtotal_cents"] + c["service_fee_cents"] + c["tax_cents"], "total mismatch")),
+    ]
+
+def njb_simple(addr):
+    return [
+        ("2 everything bagels and a bacon egg and cheese", lambda c, r: expect(len(lines(c)) >= 1, f"lines {names(c)}")),
+        ("whats in my cart", lambda c, r: expect("Your order so far" in r, f"cart readback: {r!r}")),
+        ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}")),
+        ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session")),
+    ]
+
+def zio_pizza(addr):
+    return [
+        ("pickup", lambda c, r: []),
+        ("a large pepperoni pizza and garlic knots", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}") + expect(any("Pepperoni" in n and "Large" in n for n in names(c)), f"names {names(c)}")),
+        ("make it 2 pizzas", lambda c, r: expect(any(q == 2 for _, q, _ in lines(c)), f"qty {lines(c)}")),
+        ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}") + expect(c["subtotal_cents"] == sum(q * p for _, q, p in lines(c)), "subtotal mismatch")),
+        ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session")),
+    ]
+
+def zio_narrow(addr):
+    return [
+        ("pickup", lambda c, r: []),
+        ("cheese pizza", lambda c, r: expect(len(lines(c)) == 0, f"should ask first: {names(c)}") + expect("which" in r.lower() or "what" in r.lower(), f"expected a question: {r!r}")),
+        ("neapolitan", lambda c, r: expect("size" in r.lower() or len(lines(c)) == 1, f"expected size question or bind: {r!r}")),
+        ("medium", lambda c, r: expect(len(lines(c)) == 1, f"lines {names(c)}")),
+        ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}")),
+    ]
+
+SCEN = {"canary": canary, "delivery3": delivery3, "narrowing": narrowing, "corrections": corrections,
+        "njb_dozen": njb_dozen, "njb_simple": njb_simple, "zio_pizza": zio_pizza, "zio_narrow": zio_narrow}
+SETS = {"vitos": ["canary", "delivery3", "narrowing", "corrections"], "njb": ["njb_dozen", "njb_simple"], "zio": ["zio_pizza", "zio_narrow"]}
 
 def run(shop, name, steps):
     session = str(uuid.uuid4()); fails = []; transcript = []; ms = []
@@ -95,9 +133,9 @@ def run(shop, name, steps):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--shop", required=True); ap.add_argument("--runs", type=int, default=5)
-    ap.add_argument("--scenario", default="all"); ap.add_argument("--address", default="3300 Hamilton Blvd, Allentown, PA 18103"); ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--scenario", default="vitos", help="a scenario name, or a set: vitos | njb | zio | all"); ap.add_argument("--address", default="3300 Hamilton Blvd, Allentown, PA 18103"); ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
-    which = list(SCEN) if a.scenario == "all" else [a.scenario]
+    which = SETS[a.scenario] if a.scenario in SETS else (list(SCEN) if a.scenario == "all" else [a.scenario])
     total = 0; passed = 0; all_ms = []
     for name in which:
         for i in range(a.runs):

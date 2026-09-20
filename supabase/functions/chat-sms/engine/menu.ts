@@ -12,6 +12,9 @@ export interface MenuGroup {
   kind: "slot" | "modifier";
   max_select: number;
   choices: MenuChoice[];
+  /** compiler's ask mode: ask | apply_default | auto_single | offer_once | on_request */
+  ask_mode: string;
+  default_choice_id: string | null;
 }
 export interface Facets { kind: string | null; size: string | null }
 export interface BundleDef { count: number; unit: string; choices: MenuChoice[] }
@@ -80,17 +83,24 @@ export interface RawMenuItem {
   derived_from?: { base_item_id: string; choice_ids: string[] } | null;
   ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[]; compiled_at?: string } | null;
   meta?: { bundle?: { count: number; category: string; unit?: string } } | null;
-  option_groups?: Array<{ id: string; name: string; max_select?: number | null }> | null;
+  option_groups?: Array<{ id: string; name: string; max_select?: number | null; default_choice_id?: string | null }> | null;
 }
 
 const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
 const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra large|personal|sheet|cup|bowl|regular)\b.*$/i;
+
+const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|sheet|regular)\b\s*(?:\d+\s*(?:''|"|”)?\s*)?(.+)$/i;
 
 export function facetsFromName(name: string, sizeLabel?: string | null): Facets {
   const m = NAME_SIZE_RE.exec(name);
   if (m) {
     const size = words(m[2])[0] ?? null;
     return { kind: normalize(m[1]) || null, size };
+  }
+  const lead = LEADING_SIZE_RE.exec(name);
+  if (lead) {
+    const size = words(lead[1])[0] ?? null;
+    return { kind: normalize(lead[2]) || null, size };
   }
   const label = sizeLabel ? words(sizeLabel)[0] : null;
   if (label && SIZE_WORDS.has(label)) {
@@ -108,8 +118,8 @@ export function buildMenu(input: {
 }): Menu {
   const items = new Map<string, MenuItem>();
   for (const r of input.items) {
-    const groupNames = new Map<string, { name: string; max: number }>();
-    for (const g of r.option_groups ?? []) groupNames.set(g.id, { name: g.name, max: g.max_select ?? 1 });
+    const groupNames = new Map<string, { name: string; max: number; def: string | null }>();
+    for (const g of r.option_groups ?? []) groupNames.set(g.id, { name: g.name, max: g.max_select ?? 1, def: g.default_choice_id ?? null });
     const steps = r.ask_plan?.steps ?? [];
     const groups: MenuGroup[] = steps.map((s) => {
       const meta = groupNames.get(s.group_id);
@@ -120,6 +130,8 @@ export function buildMenu(input: {
         kind: s.kind,
         max_select: s.kind === "modifier" ? Math.max(meta?.max ?? 99, 1) : 1,
         choices: s.choices.map((c) => ({ id: c.id, name: c.display, delta_cents: c.price_delta_cents, words: words(c.display) })),
+        ask_mode: s.ask_mode ?? "ask",
+        default_choice_id: meta?.def ?? null,
       };
     });
     const display = r.display_name ?? r.ask_plan?.display_name ?? r.name;

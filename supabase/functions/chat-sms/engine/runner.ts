@@ -83,13 +83,13 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
     .select("id, name, display_name, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
     .eq("menu_id", menuId).eq("active", true).order("id", { ascending: true }).range(a, b)) : [];
   const ids = items.map((i) => i.id);
-  const groups: Array<{ id: string; menu_item_id: string; name: string; max_select: number | null }> = [];
+  const groups: Array<{ id: string; menu_item_id: string; name: string; max_select: number | null; default_choice_id: string | null }> = [];
   for (let i = 0; i < ids.length; i += 100) {
-    const { data } = await supabase.from("option_groups").select("id, menu_item_id, name, max_select").in("menu_item_id", ids.slice(i, i + 100));
+    const { data } = await supabase.from("option_groups").select("id, menu_item_id, name, max_select, default_choice_id").in("menu_item_id", ids.slice(i, i + 100));
     groups.push(...((data ?? []) as typeof groups));
   }
-  const byItem = new Map<string, Array<{ id: string; name: string; max_select: number | null }>>();
-  for (const g of groups) { const arr = byItem.get(g.menu_item_id) ?? []; arr.push({ id: g.id, name: g.name, max_select: g.max_select }); byItem.set(g.menu_item_id, arr); }
+  const byItem = new Map<string, Array<{ id: string; name: string; max_select: number | null; default_choice_id: string | null }>>();
+  for (const g of groups) { const arr = byItem.get(g.menu_item_id) ?? []; arr.push({ id: g.id, name: g.name, max_select: g.max_select, default_choice_id: g.default_choice_id }); byItem.set(g.menu_item_id, arr); }
   for (const it of items) it.option_groups = byItem.get(it.id) ?? [];
   const lexicon = menuId ? await pageAll<LexiconEntry & { menu_id: string }>((a, b) => supabase.from("lexicon")
     .select("term, target_type, target_id, menu_id").eq("shop_id", shop.id).eq("menu_id", menuId).eq("active", true)
