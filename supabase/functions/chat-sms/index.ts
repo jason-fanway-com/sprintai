@@ -5934,7 +5934,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     return jsonResponse({ reply, cart: cart.cart_json, phase: cart.phase, session_id: sessionId });
   }
   let checkoutWantsChangeFired = false;
-  if (cart.phase === "checkout") {
+  // Clean-engine shops handle post-link edits inside engine/runner.ts (expire the
+  // session, reopen the form). This legacy block would write cart_json around the form.
+  if (cart.phase === "checkout" && !shop.clean_engine_enabled) {
     const upper = userMessage.toUpperCase().trim();
     const wantsRestart = /\b(RESTART|START OVER|NEW ORDER)\b/.test(upper);
     const wantsChange = /\b(WAIT|CHANGE|WRONG|FIX|MODIFY|UPDATE|REMOVE|ADD|NOT RIGHT|THAT'S NOT|THATS NOT|CHARGED.*WRONG|ONLY ORDERED|DIDN'T ORDER|DIDNT ORDER)\b/.test(upper);
