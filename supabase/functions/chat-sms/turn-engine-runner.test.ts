@@ -2981,3 +2981,151 @@ Deno.test("MONEY BUG fix 1 guard rail: a genuine question at confirm ('What topp
   assert(proposeCalled, "an ambiguous, non-yes/no message at confirm must still reach the model — fix 1 must only intercept clean yes/no replies");
   assertEquals(result.cart, pizzaConfirmCart());
 });
+
+// ── TOP PRIORITY LIVE MONEY BUG (2026-09-19, live conv 4c52298c, turn #5) ──
+// End-to-end proof, through runTurnEngineTurn, of the real transcript: a
+// which-one list was open for "pepperoni pizza" (quantity 1 — nothing was
+// stated in the ORIGINAL ambiguous request) with candidates in real
+// transcript list order where option 2 happened to be Small. The customer
+// answered "I'll take 2 Large Pepperoni pizzas, please." The leading "2" was
+// read as selecting OPTION NUMBER 2 (Small) instead of a QUANTITY of 2 —
+// cart ended up 2x Small Pepperoni Pizza ($17.45 each = $34.90) instead of
+// 2x Large ($21.00 each = $42.00), no clarifying question ever asked, and
+// the wrong item/wrong money reached checkout silently. See
+// pending-disambiguation.test.ts's own PEPPERONI_PIZZA_CANDIDATES block for
+// the pure-function-level proof this exercises end to end; propose is wired
+// to reject so a stray model call would fail these tests loudly instead of
+// silently masking a regression back to the LLM path.
+const PEPPERONI_MONEY_BUG_MENU: TurnEngineMenuItem[] = [
+  noSlotMenuItem("item-pep-medium", "Pepperoni Pizza - Medium (14\")", "Pizza", 1900),
+  noSlotMenuItem("item-pep-small",  "Pepperoni Pizza - Small (10\")",  "Pizza", 1745),
+  noSlotMenuItem("item-pep-large",  "Pepperoni Pizza - Large (16\")",  "Pizza", 2100),
+];
+
+function pepperoniMoneyBugPriorState(): DialogueState {
+  return {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates: PEPPERONI_MONEY_BUG_MENU.map(m => m.id), quantity: 1, spanText: "pepperoni pizza" },
+    upsell_offered: false,
+    asked_message_id: null,
+  };
+}
+
+function pepperoniMoneyBugDeps(supabase: unknown): RunTurnDeps {
+  return {
+    supabase: supabase as RunTurnDeps["supabase"],
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — a disambiguation answer resolves deterministically")),
+  };
+}
+
+Deno.test('runTurnEngineTurn LIVE MONEY BUG (real repro, conv 4c52298c): "I\'ll take 2 Large Pepperoni pizzas, please." resolves to 2x LARGE ($21.00 each = $42.00), never Small', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "I'll take 2 Large Pepperoni pizzas, please.",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1, `expected exactly one cart line: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large", "must resolve to LARGE — the customer's own stated size — never Small via index misread");
+  assertEquals(result.cart[0].quantity, 2, "the customer's stated quantity (2) must carry through, not the disambiguation's original quantity (1)");
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200, "2x $21.00 Large = $42.00");
+  assertEquals(result.dialogueState.open, null, "fully resolved — no further question");
+});
+
+Deno.test('runTurnEngineTurn: "2 large please" resolves to 2x LARGE ($21.00 each = $42.00)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2 large please",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large");
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "option 2" is a bare position pick — resolves to 1x SMALL ($17.45), this fixture\'s option 2, unchanged from today\'s index-based behavior', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "option 2",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: bare "2" is the same position pick as "option 2" (1x SMALL, $17.45) — unchanged from today\'s index-based behavior', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "the second one" (ordinal path) resolves to the same position (1x SMALL, $17.45)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "the second one",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-small");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.cart[0].price_cents, 1745);
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test('runTurnEngineTurn: "2 of the large" (partitive-of shape) resolves to 2x LARGE ($21.00 each = $42.00)', async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [] });
+  const input = baseInput({
+    message: "2 of the large",
+    menu: PEPPERONI_MONEY_BUG_MENU,
+    cart: [],
+    dialogueState: pepperoniMoneyBugPriorState(),
+  });
+
+  const result = await runTurnEngineTurn(input, pepperoniMoneyBugDeps(supabase));
+
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].menu_item_id, "item-pep-large");
+  assertEquals(result.cart[0].quantity, 2);
+  assertEquals(result.cart[0].price_cents, 2100);
+  assertEquals(result.cart[0].price_cents * result.cart[0].quantity, 4200);
+  assertEquals(result.dialogueState.open, null);
+});

@@ -128,6 +128,7 @@ import {
   candidateSizeValue,
   extractPartialSizeClause,
   extractGlobalSizeWord,
+  extractDisambiguationAnswerQuantity,
   filterCandidatesBySizeWord,
   extractAnswerClause,
   extractAnswerQuantity,
@@ -2206,6 +2207,16 @@ export function answer(
 
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+      // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
+      // this which-one question can restate a quantity that was never part
+      // of the original ambiguous span ("pepperoni pizza" opened this
+      // disambiguation at quantity 1; "I'll take 2 Large Pepperoni pizzas,
+      // please." states 2) — see extractDisambiguationAnswerQuantity's own
+      // header for the exact "quantity, never an index" distinction this
+      // relies on. Falls back to the open question's own quantity (the
+      // ordinary case — nothing new stated in the answer) when the answer
+      // names no such override.
+      const resolvedQuantity = extractDisambiguationAnswerQuantity(trimmed) ?? quantity;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // DEFECT 2 (2026-09-19 live QA, conv 009de656): the answer that just
