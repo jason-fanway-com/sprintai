@@ -1657,6 +1657,58 @@ function findFreshAddCategoryMismatch(
   return messageNamesCategoryOutsideStemSet(itemSpan, ownStems, menu);
 }
 
+// 2026-09-20 PO dispatch (X3 follow-up, live repro v575: "the House -
+// Personal calzone, please... a chicken add-on for that too"): the OTHER
+// gap the X3 builder flagged as separate from findFreshAddCategoryMismatch
+// above. That check catches a resolved item whose own CATEGORY doesn't
+// match a category word the customer used ("pizza" for a Stromboli) — it
+// has nothing to say when the collision is between two SIBLING items in the
+// SAME category that differ only by their own name's type qualifier
+// ("House" vs "Calzone", both real, separately-priced "... - Personal"
+// Stromboli items, confirmed against real menu_items rows). resolveItem's
+// own base-match-then-size-narrow contract picks exactly ONE of the two and
+// silently drops the customer's OTHER qualifier word — "House - Personal
+// calzone" always resolves to Calzone - Personal and "House" (a genuine,
+// different, real menu item at the identical size) vanishes with no
+// confirmation ever asked.
+//
+// Detection, scoped narrow on purpose (never a blanket "does this word
+// appear anywhere else on the menu" scan — that would false-positive on
+// every ordinary shared word, e.g. "cheese" or "chicken" naming a dozen
+// unrelated items): this shop's own sized items all follow the same
+// "<Type> - <Size>" name convention (confirmed against real data: "House -
+// Personal", "Calzone - Personal", "House - 16\"", etc.). Only a SIBLING in
+// the identical category with the identical size half, whose own TYPE half
+// is a word the customer actually used (and isn't already part of the
+// resolved item's own type half — the same "synonym for itself" exclusion
+// findFreshAddCategoryMismatch's own header explains), counts as a genuine
+// collision. Items that don't follow the "<Type> - <Size>" shape (no siblings
+// to collide with) are untouched.
+function findFreshAddSiblingNameMismatch(
+  itemSpan: string,
+  resolvedItem: TurnEngineMenuItem,
+  menu: TurnEngineMenuItem[],
+): TurnEngineMenuItem | null {
+  if (!resolvedItem.category) return null;
+  const ownParts = resolvedItem.name.split(" - ");
+  if (ownParts.length !== 2) return null;
+  const [ownType, ownSize] = ownParts;
+  const ownTypeStems = significantStems(ownType);
+  const spanStems = significantStems(itemSpan);
+  for (const sibling of menu) {
+    if (sibling.id === resolvedItem.id || sibling.category !== resolvedItem.category) continue;
+    const siblingParts = sibling.name.split(" - ");
+    if (siblingParts.length !== 2) continue;
+    const [siblingType, siblingSize] = siblingParts;
+    if (siblingSize.trim().toLowerCase() !== ownSize.trim().toLowerCase()) continue;
+    const siblingTypeStems = significantStems(siblingType);
+    if (siblingTypeStems.size === 0) continue;
+    if ([...siblingTypeStems].some(s => ownTypeStems.has(s))) continue; // shares its own qualifier word — not a distinct sibling
+    if ([...siblingTypeStems].every(s => spanStems.has(s))) return sibling;
+  }
+  return null;
+}
+
 // Wording for the FRESH-ADD category-mismatch question — deliberately
 // distinct from buildCategoryMismatchMessage's "Keep it, or take it off?"
 // (that wording presumes the item is ALREADY in the cart, which is true for
@@ -1674,6 +1726,24 @@ const buildFreshAddCategoryConfirmMessage = (displayName: string, category: stri
   core = core.replace(/\s+/g, " ").trim();
   const sizePart = sizeMatch ? ` in ${sizeMatch[0]}` : "";
   return `We only have ${core} as a ${cat.toLowerCase()}${sizePart}. Want that, or skip it?`;
+};
+
+// Wording for the FRESH-ADD sibling-name-collision question (X3 follow-up,
+// findFreshAddSiblingNameMismatch's own header) — reuses the identical
+// "held out, not yet added" framing and keep/skip answer contract as
+// buildFreshAddCategoryConfirmMessage just above (impliesCategoryConfirmYes
+// governs both), but names the SPECIFIC sibling the customer's own words
+// also matched, since "we only have X" (that function's wording) would be
+// false here — both items are real and on the menu.
+const buildFreshAddSiblingConfirmMessage = (
+  resolvedItem: TurnEngineMenuItem,
+  sibling: TurnEngineMenuItem,
+): string => {
+  const [ownType] = resolvedItem.name.split(" - ");
+  const [siblingType, sizeHalf] = sibling.name.split(" - ");
+  const size = (sizeHalf ?? "").trim().toLowerCase();
+  const category = (resolvedItem.category ?? "").trim().toLowerCase();
+  return `We have both ${siblingType.trim()} and ${ownType.trim()} as a ${size} ${category} — added the ${ownType.trim()} one. Keep it, or take it off?`;
 };
 
 // 2026-09-19 PO dispatch (freeze-queue item 4): the fresh-add
@@ -5586,6 +5656,55 @@ function findOffMenuChoiceAlternative(
   return null;
 }
 
+// 2026-09-20 PO dispatch (X3 follow-up, live repro v575: "I'd like to try
+// the House - Personal calzone, please... can I get a chicken add-on for
+// that too?"): item_span for an add-on phrase frequently comes back from
+// PROPOSE stripped down to a bare, itself-ambiguous noun ("chicken", ties
+// among 11+ real menu items on Vito's own menu — Cajun Chicken, Chicken
+// Parmesan, Buffalo Chicken, etc.) rather than folded into the host item's
+// own `choices` — the 00-BF modifier floor a few hundred lines below (its
+// own header, "item_span reliably does NOT carry the add-on words on real
+// live traffic") documents the identical PROPOSE behavior at a different
+// call site. When that happens here, resolveItem ties on real food words
+// exactly the same way a genuine fresh order would, and this add-on request
+// opens a menu-wide "which one?" question instead of ever reaching the
+// modifier floor's own X3 "doesn't take add-ons" decline (ff729ce4) — that
+// decline only ever runs for an add already scoped to ONE resolved item, and
+// a bare noun tying among many items never gets there.
+//
+// Narrow trigger on purpose (never widened to "any ambiguous span near an
+// item" — that would misfire on a genuine second, unrelated order): the
+// customer's own words must contain BOTH an explicit add-on word
+// ("add-on"/"add on"/"addon") AND an anaphoric pointer back to something
+// already discussed ("for/to/on that/it/this"). A standalone new order
+// essentially never takes this shape — "a chicken add-on" always means an
+// add-on FOR something, never a dish ordered on its own. Only fires when a
+// real target exists (the most recent real add resolved THIS turn, falling
+// back to the most recent real line already in the cart) and that target's
+// own ask_plan carries ZERO modifier groups — the exact same "no modifier
+// groups at all" condition ff729ce4 already gates its own decline on,
+// checked here from this earlier, span-still-ambiguous call site instead.
+const ANAPHORIC_ADD_ON_RE = /\badd[- ]?ons?\b/i;
+const ANAPHORIC_ADD_ON_REFERENT_RE = /\b(?:for|to|on)\s+(?:that|it|this)\b/i;
+
+function findAnaphoricAddOnTargetWithNoModifiers(
+  customerMessage: string | undefined,
+  resolvedAddsThisTurn: ResolvedAdd[],
+  cart: TurnEngineCartLine[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): TurnEngineMenuItem | null {
+  if (!customerMessage) return null;
+  if (!ANAPHORIC_ADD_ON_RE.test(customerMessage) || !ANAPHORIC_ADD_ON_REFERENT_RE.test(customerMessage)) return null;
+  const targetId = resolvedAddsThisTurn[resolvedAddsThisTurn.length - 1]?.menu_item_id
+    ?? [...cart].reverse().find(isRealCartLine)?.menu_item_id
+    ?? null;
+  if (!targetId) return null;
+  const targetItem = menuById.get(targetId);
+  if (!targetItem?.ask_plan) return null;
+  if ((targetItem.ask_plan.steps ?? []).length > 0) return null; // has real modifier groups -- not this gap
+  return targetItem;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -5922,7 +6041,17 @@ export function decide(
         if (narrowedId) {
           resolvedAdds.push({ menu_item_id: narrowedId, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
         } else {
-          ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+          // X3 follow-up (see findAnaphoricAddOnTargetWithNoModifiers's own
+          // header): checked here, before this tie ever becomes a menu-wide
+          // "which one?" question — an add-on phrased as pointing back at
+          // something already discussed, aimed at an item with zero
+          // modifier groups, is a clean decline, never a disambiguation.
+          const noModifierAddOnTarget = findAnaphoricAddOnTargetWithNoModifiers(customerMessage, resolvedAdds, nextCart, menuById);
+          if (noModifierAddOnTarget) {
+            declines.push({ reason: `The ${noModifierAddOnTarget.ask_plan?.display_name ?? noModifierAddOnTarget.name} doesn't take add-ons.` });
+          } else {
+            ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+          }
         }
       }
     } else {
@@ -6226,6 +6355,29 @@ export function decide(
         menu_item_id: menuItem.id,
         quantity: add.quantity,
         message: buildFreshAddCategoryConfirmMessage(displayName, menuItem.category ?? ""),
+      };
+      continue;
+    }
+    // 2026-09-20 PO dispatch (X3 follow-up, live repro v575): the customer's
+    // own words for THIS add name a SIBLING item's own type qualifier, not a
+    // wrong category — see findFreshAddSiblingNameMismatch's own header
+    // ("House - Personal calzone" -> Personal Calzone Stromboli, silently
+    // dropping "House", a real, different, separately-priced item at the
+    // same size). Reuses categoryMismatchPending verbatim (same "hold out,
+    // ask keep-or-skip, at most once per turn" contract as the category
+    // check just above — a genuine two-way "which one" answer flow doesn't
+    // exist for a fresh add and building one is out of scope here) rather
+    // than a parallel mechanism; a "skip" leaves both items unordered and
+    // free for the customer to restate clearly, which is a real question
+    // asked instead of today's silent, uncorrectable wrong charge.
+    const siblingMismatch: TurnEngineMenuItem | null = !categoryMismatchPending
+      ? findFreshAddSiblingNameMismatch(add.item_span ?? "", menuItem, menu)
+      : null;
+    if (siblingMismatch) {
+      categoryMismatchPending = {
+        menu_item_id: menuItem.id,
+        quantity: add.quantity,
+        message: buildFreshAddSiblingConfirmMessage(menuItem, siblingMismatch),
       };
       continue;
     }
