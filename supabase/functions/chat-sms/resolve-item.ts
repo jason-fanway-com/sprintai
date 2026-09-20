@@ -481,12 +481,61 @@ function widenIntoSizedFamily(
 // this one check can see them. Optional and defaulted to `[]` so every
 // pre-existing call site and test fixture (which never had this concept)
 // is completely unaffected.
-function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconTerm[], matchedLength: number): boolean {
+//
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up): returns the matched inactive LexiconTerm itself
+// (rather than a bare boolean) so findVetoedOffMenuTerm below can hand its
+// caller the actual excluded term text — resolveItem's own veto branch
+// below still only checks truthiness, so this is a pure signature widening
+// with byte-identical behavior for every existing caller/test.
+function findLongerInactiveTerm(spanWords: string[], inactiveLexicon: LexiconTerm[], matchedLength: number): LexiconTerm | null {
   for (const entry of inactiveLexicon) {
     const termWords = toWords(normalize(entry.term));
-    if (termWords.length > matchedLength && occursAsWholeWordRun(spanWords, termWords)) return true;
+    if (termWords.length > matchedLength && occursAsWholeWordRun(spanWords, termWords)) return entry;
   }
-  return false;
+  return null;
+}
+
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up, live: "can I add a side of Bleu Cheese" wrongly tied
+// 3 Cheese pizzas): the veto above correctly stops resolveItem from ever
+// guessing a wrong item once a real, more-specific, curated-but-excluded
+// term covers more of the span — but resolveItem's own `{ kind:
+// "unresolved" }` carries no information about WHY, so a caller has no way
+// to tell "the customer named something real that just isn't orderable
+// this way" apart from "nothing on the menu resembles this at all." That
+// distinction matters: real Vito's data has "Bleu Cheese" as a genuine,
+// orderable choice elsewhere (a salad Dressing option) even though it's
+// correctly excluded as a standalone item — the customer deserves to be
+// told that, not just "sorry, didn't catch that."
+//
+// Deliberately NOT folded into resolveItem's own return value: an existing
+// test (this file's own DEFECT 3 coverage) asserts the veto path returns
+// exactly `{ kind: "unresolved" }` via assertEquals, and widening that
+// object with extra fields would break that assertion for no behavioral
+// gain — resolveItem's contract (resolved/ambiguous/unresolved, nothing
+// more) is unchanged. This mirrors resolveItem's own base-match computation
+// (itemNameEntries filter, primary-then-fallback longestMatch) just far
+// enough to learn which excluded term the veto actually fired on, then
+// hands back that term (never anything from a call that wouldn't have
+// vetoed at all — same "only ever a veto, never a guess" discipline as
+// findLongerInactiveTerm itself).
+export function findVetoedOffMenuTerm(
+  span: string,
+  lexicon: LexiconTerm[],
+  inactiveLexicon: LexiconTerm[],
+): LexiconTerm | null {
+  if (inactiveLexicon.length === 0) return null;
+  const spanWords = toWords(normalize(span));
+  if (spanWords.length === 0) return null;
+  const categoryNounIndex = buildCategoryNounIndex(lexicon);
+  const itemNameEntries = lexicon.filter(entry => {
+    const termWords = toWords(normalize(entry.term));
+    return termWords.length > 0 && !(termWords.length === 1 && categoryNounIndex.has(termWords[0]));
+  });
+  const primary = longestMatch(spanWords, itemNameEntries);
+  const base = primary.targetIds.size > 0 ? primary : longestMatch(spanWords, lexicon);
+  return findLongerInactiveTerm(spanWords, inactiveLexicon, base.length);
 }
 
 // 2026-09-19 PO dispatch (rule 1, real conv 087abb8d, live $107.43-vs-~$85
@@ -567,14 +616,14 @@ export function resolveItem(
   const usingItemNameSpan = primary.targetIds.size > 0;
   const base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
 
-  // See longerInactiveTermExists' own header (DEFECT 3, 2026-09-19): a real,
+  // See findLongerInactiveTerm's own header (DEFECT 3, 2026-09-19): a real,
   // more specific term was excluded from `lexicon` entirely (inactive/non-
   // orderable target) and matches MORE of the span than anything we're
   // about to guess with — never fall back to a shorter, unrelated match in
   // that case. Checked once, before any downstream branch (resolved,
   // ambiguous, or the fuzzy fallback below) gets a chance to guess with the
   // shorter match instead.
-  if (longerInactiveTermExists(spanWords, inactiveLexicon, base.length)) {
+  if (findLongerInactiveTerm(spanWords, inactiveLexicon, base.length)) {
     return { kind: "unresolved" };
   }
 

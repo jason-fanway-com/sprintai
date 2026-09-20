@@ -161,7 +161,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -4663,6 +4663,38 @@ function narrowAmbiguousCandidatesBySpanSize(
   return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
 }
 
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up): once findVetoedOffMenuTerm (resolve-item.ts) says a
+// span named something real that was correctly excluded as a standalone
+// item, this looks for that SAME name as a genuine, orderable CHOICE inside
+// some OTHER item's ask_plan — a dressing, a dip, a topping — real Vito's
+// shape: "Bleu Cheese" isn't a standalone side, but it IS a real choice in
+// every Salads item's own "Dressing" slot. Exact, case-insensitive whole-
+// string match against the choice's own display text only — never a fuzzy
+// guess; offering the WRONG real alternative is worse than a plain decline,
+// so this returns null (never a guess) whenever nothing matches exactly.
+// Returns the FIRST match found scanning `menu` in the order given — every
+// real match this dispatch verified is equally correct to offer, so no
+// further tiebreak between multiple genuine matches is needed.
+function findOffMenuChoiceAlternative(
+  offMenuTerm: string,
+  menu: TurnEngineMenuItem[],
+): { choiceDisplay: string; category: string } | null {
+  const wanted = offMenuTerm.trim().toLowerCase();
+  if (!wanted) return null;
+  for (const item of menu) {
+    if (!item.category || !item.ask_plan) continue;
+    for (const step of item.ask_plan.steps ?? []) {
+      for (const choice of step.choices ?? []) {
+        if ((choice.display ?? "").trim().toLowerCase() === wanted) {
+          return { choiceDisplay: choice.display, category: item.category };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4927,6 +4959,32 @@ export function decide(
         }
       }
     } else {
+      // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+      // 009de656 follow-up): resolveItem's own veto (findVetoedOffMenuTerm's
+      // header, resolve-item.ts) already stopped this span from guessing a
+      // wrong item once a real, more-specific, curated term was found and
+      // correctly excluded — but a bare "unresolved" can't tell "nothing on
+      // the menu resembles this" apart from "the customer named something
+      // real that just isn't orderable this way," so the generic "didn't
+      // catch that" reply below would otherwise fire even when the shop's
+      // own data can name a real alternative (real Vito's shape: "Bleu
+      // Cheese" isn't a standalone side, but it IS a genuine salad Dressing
+      // choice). Checked here, before the span falls into the generic
+      // genuinelyUnresolvedSpans bucket, so this gets its own specific
+      // decline naming the real alternative when one exists — or a plain,
+      // honest "we don't have that" when it doesn't — instead of the
+      // misleading "I didn't catch that" (the customer's words were heard
+      // just fine; the item simply isn't on the menu that way).
+      const vetoedTerm = findVetoedOffMenuTerm(add.item_span ?? "", lexicon, inactiveLexicon);
+      if (vetoedTerm) {
+        const alternative = findOffMenuChoiceAlternative(vetoedTerm.term, menu);
+        declines.push({
+          reason: alternative
+            ? `We don't have a "${vetoedTerm.term}" side on its own, but it's a real option on our ${alternative.category} — want ${alternative.choiceDisplay} that way instead?`
+            : `We don't have a "${vetoedTerm.term}" side — sorry about that!`,
+        });
+        continue;
+      }
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
       // that was" is why a customer who ordered two things restates BOTH --
