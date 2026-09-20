@@ -487,6 +487,29 @@ function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconT
 // here to require an exact, whole-word/whole-term match only — never a
 // fuzzy guess — while every other caller (fresh adds, replacements) keeps
 // today's typo tolerance unchanged.
+// GAP (b) dispatch (2026-09-19 PO dispatch, live conv 040f91dd #47): "regular"
+// standing alone can tie two completely UNRELATED one-word lexicon terms at
+// the same length (this file's own longestMatch tie rule) — e.g. a shop
+// whose ONLY bare "regular" term is a Regular-labeled Cheese Pizza row ties
+// against "coke" in "regular coke", unioning Coke sizes with Cheese Pizza
+// sizes into one nonsensical ambiguous result. Confirmed via direct
+// resolveItem probing, but NOT stripped here: "regular" is also, on other
+// real shops, part of a genuine item's own name/term ("Regular Slice" —
+// see modifier-floor-20260917.test.ts's "00-BF END TO END" coverage, a real
+// live-bug regression test this stripping broke when tried). This function
+// is shared by every fresh-order add across the whole engine, with no
+// per-family fallback to fall back on if a strip goes wrong — unlike the
+// disambiguation-narrowing layer (pending-disambiguation.ts's own
+// NON_SEARCH_FILLER_WORD_RE / resolveDefaultCandidate), which scopes the
+// identical filler-word protection to an already-open candidate set and has
+// a safe default to land on. The live, confirmed fixture for this gap (conv
+// 040f91dd) is entirely mid-narrowing; fixed there. Flagged, not silently
+// applied here: a fresh "can I get a regular Coke" (first message, no
+// narrowing open yet) that happens to tie against an unrelated "Regular X"
+// item elsewhere in the SAME shop's menu remains an open risk this dispatch
+// did not close — worth a follow-up that's scoped to when a filler word
+// contributes to a tie with NO OTHER corroborating span word, rather than a
+// blanket strip.
 export function resolveItem(
   span: string,
   lexicon: LexiconTerm[],

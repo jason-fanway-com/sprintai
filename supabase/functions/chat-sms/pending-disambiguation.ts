@@ -1015,6 +1015,59 @@ export function isNarrowingCandidateSet(candidates: PendingCandidate[]): boolean
   return candidates.length > 5 || renderAmbiguousItemQuestion(candidates).length > 480;
 }
 
+// GAP (b) fix (2026-09-19 PO dispatch, live conv 040f91dd #47): "regular"
+// and "just (a)" are filler a customer uses to say "nothing special," never
+// a real facet word — but NARROWING_SIZE_WORD_RE above treats "Regular" as a
+// legitimate size token, and significantStems (its own 3-char-floor
+// stop-list) has no opinion on "regular"/"just" either. "Just a regular
+// Coke" against a Coke family tied only on SIZE (no candidate literally
+// labeled "Regular") matched "regular" as the wanted size, found zero hits,
+// and returned null — an outright dead end four times running (see
+// narrowCandidatesByFacetAnswer's own header on the fallback this enables).
+// Stripped here, once, before either facet branch ever sees the message, so
+// neither tier can be pulled toward an unrelated candidate (or a false
+// zero-hit dead end) by a word that was never naming anything.
+//
+// "plain" — named alongside these two in the PO's own dispatch — is
+// deliberately EXCLUDED here: resolveKindClauseViaLexicon (turn-engine.ts)
+// and this module's own pre-existing tests treat "plain" as a real,
+// intentional lexicon ALIAS for Cheese Pizza, not filler — stripping it
+// broke turn-engine.test.ts's "round 2 addendum" coverage of that alias
+// (a resolveItem-level regression, same root cause, see resolve-item.ts's
+// own NON_SEARCH_FILLER_WORDS header for the full reasoning). Flagged, not
+// silently dropped.
+const NON_SEARCH_FILLER_WORD_RE = /\b(?:regular|just)\b/gi;
+
+function hasNonSearchFillerWord(text: string): boolean {
+  return /\b(?:regular|just)\b/i.test(text);
+}
+
+export function stripNonSearchFillerWords(text: string): string {
+  return text.replace(NON_SEARCH_FILLER_WORD_RE, " ").replace(/\s+/g, " ").trim();
+}
+
+// GAP (b) fix, continued: once "regular"/"just" are stripped, "just
+// a regular Coke" narrowing a Coke-family size tie has literally nothing
+// left to distinguish by — and that IS the answer: the customer wants the
+// plain, ordinary version of this family, not a repeat of the question. This
+// codebase has no ITEM-level "is_default" concept to defer to (only
+// option_groups' own default_choice_id, a different layer entirely — see
+// PendingCandidate's own fields, which carry no default flag) — flagged
+// here rather than invented. Best-effort in its absence: a candidate whose
+// OWN derived kind/size is literally "regular" (the most literal reading of
+// what the customer said, and exactly right when the family really does
+// have a "Regular" row) if the CURRENT candidate set has one; otherwise the
+// cheapest of the current candidates, as the plainest available stand-in.
+function resolveDefaultCandidate(candidates: PendingCandidate[]): PendingCandidate | null {
+  if (candidates.length === 0) return null;
+  const regularMatch = candidates.find(c => {
+    const { kind, size } = extractSizeAndKind(candidateDisplayName(c));
+    return kind.trim().toLowerCase() === "regular" || (size ?? "").toLowerCase() === "regular";
+  });
+  if (regularMatch) return regularMatch;
+  return candidates.reduce((cheapest, c) => (c.price_cents < cheapest.price_cents ? c : cheapest));
+}
+
 /**
  * Which of `candidates` does `message` name, for the given facet? For
  * "size" this is a direct size-word match against the message. For "kind"
@@ -1022,9 +1075,29 @@ export function isNarrowingCandidateSet(candidates: PendingCandidate[]): boolean
  * single candidate — a kind can still span more than one size, which is
  * exactly the case that leaves the caller with another facet to ask).
  * Returns null on no match or a genuine tie — same "never guess" discipline
- * as resolvePendingDisambiguation's own tiers.
+ * as resolvePendingDisambiguation's own tiers. "regular"/"just" are
+ * stripped before either tier runs (see NON_SEARCH_FILLER_WORD_RE's own
+ * header) — when that stripping is what leaves the message with nothing to
+ * narrow by, falls back to resolveDefaultCandidate instead of the ordinary
+ * null (see that function's own header), so "just a regular Coke" resolves
+ * once instead of re-asking the identical question forever.
  */
 export function narrowCandidatesByFacetAnswer(
+  candidates: PendingCandidate[],
+  facet: "kind" | "size",
+  message: string,
+): PendingCandidate[] | null {
+  const stripped = stripNonSearchFillerWords(message);
+  const matched = narrowCandidatesByFacetAnswerCore(candidates, facet, stripped);
+  if (matched) return matched;
+  if (hasNonSearchFillerWord(message)) {
+    const fallback = resolveDefaultCandidate(candidates);
+    if (fallback) return [fallback];
+  }
+  return null;
+}
+
+function narrowCandidatesByFacetAnswerCore(
   candidates: PendingCandidate[],
   facet: "kind" | "size",
   message: string,

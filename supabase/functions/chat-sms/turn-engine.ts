@@ -1817,6 +1817,123 @@ export function disambiguationDeclineNamesOutsideItem(
   return messageDeclineNamesOutsideItems(message, candidates, lexicon);
 }
 
+// GAP (a) fix (2026-09-19 PO dispatch, real live conv 6e2d56f9 #33): a
+// "fries -- what kind?" disambiguation was open; the customer's actual reply
+// ("oh my bad, can i get one chicken and one gyro calzone?") never answered
+// it at all -- it abandons the fries question outright and states a whole,
+// different order. This returned UNRESOLVED and just re-asked the fries
+// question forever, because the ONE existing outside-item check
+// (messageNamesItemOutsideCandidates, immediately above in answer()'s own
+// "disambiguation" case) is scoped by OUTSIDE_ITEM_REMAINDER_MARKER_RE to
+// the text BEFORE a marker like "can i get" -- built for "answer the
+// question, THEN also add X" ("One large hawaiian pizza, also can I get a
+// coke"), where the real answer sits before the marker and the addendum
+// after it is deliberately left to the remainder mechanism
+// (extractRemainderAfterAnswer, turn-engine-runner.ts). Here the marker sits
+// in FRONT of the entire real order ("oh my bad, " resolves to nothing at
+// all), so that scoping silently discarded the one resolvable item in the
+// message ("gyro calzone") before it ever got a chance.
+//
+// This runs UNSCOPED -- splitCustomerPhrases across the WHOLE message, no
+// marker truncation -- looking for any clause that resolves (exact,
+// whole-word, resolveItem's own longest-match rule; no fuzzy guessing) to a
+// real item outside the currently open candidates. Deliberately requires the
+// OTHER direction to be clean too: if any clause ALSO resolves to one of the
+// CURRENT candidates, this returns null and leaves the message to the
+// ordinary facet/outside-item resolvers above -- a message naming both a
+// candidate and something new is a mixed signal this gate never guesses at.
+//
+// "same family, keep narrowing" (secondary case, per the PO's own framing):
+// determined by comparing the resolved outside item(s)' own category against
+// the currently open candidates' shared category. A different category is
+// treated as "this is a new order, not an answer" (drop the narrowing,
+// caller reprocesses the whole message via PROPOSE, see the runner's own
+// dropDisambiguationList). A SAME category is left alone entirely --
+// `sameFamily: true` tells the caller not to drop anything, so the pending
+// narrowing survives untouched and the existing facet/noProgress mechanisms
+// get the next turn at it, unchanged.
+//
+// Restatement guard (same defect class as option-pick-and-restatement-dup-
+// 20260919.test.ts's BUG 2, real conv 498f24dd): "Just to recap: 1 Garlic
+// Cheesesteak on wheat with blackened salmon and a side of fries" while a
+// fries disambiguation is open resolves "Garlic Cheesesteak" outside the
+// fries candidates too -- but it's ALREADY a real cart line, and the
+// customer's own words carry a restatement marker
+// (isRestatementOfExistingOrder), so this is the customer reciting their
+// existing order, never a new one. Checked against a RUNNING prefix (every
+// clause up to and including the one that resolved the outside item, joined
+// back together), never a single isolated clause or the whole raw message:
+// splitCustomerPhrases's own implicit-digit-repeat rule splits "recap: 1
+// Garlic Cheesesteak..." right before the "1", so the restatement marker
+// ("just to recap") and the item name land in two DIFFERENT clauses -- an
+// isolated-clause check would miss it entirely. The running prefix stops
+// growing at the clause that resolved the item, so a LATER clause's own
+// ADDITION_MARKERS word ("and a side of fries") never vetoes a restatement
+// marker that appeared earlier, before the item was even named — the same
+// "trailing content already scoped away" guarantee
+// isAnswerRestatementOfCartLine's own header describes for the single-clause
+// case above. Bails out to null entirely (never drops the pending
+// narrowing) the moment any resolved outside item trips this.
+function messageIsOrderShapedOutsideDisambiguation(
+  message: string,
+  candidates: PendingCandidate[],
+  menu: TurnEngineMenuItem[],
+  cart: TurnEngineCartLine[],
+  lexicon: LexiconTerm[] | undefined,
+): { outsideMenuItemIds: string[]; sameFamily: boolean } | null {
+  if (!lexicon || lexicon.length === 0) return null;
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const phrases = splitCustomerPhrases(message, menu.map(m => ({ name: m.name })));
+  const clauses = phrases.length > 0 ? phrases : [message];
+  const outsideIds = new Set<string>();
+  let runningPrefix = "";
+  for (const clause of clauses) {
+    runningPrefix = runningPrefix ? `${runningPrefix} ${clause}` : clause;
+    const { text } = extractLeadingClauseCount(clause);
+    const result = resolveItem(text, lexicon, [], false);
+    if (result.kind !== "resolved") continue;
+    if (candidateIds.has(result.menu_item_id)) return null;
+    if (isAnswerRestatementOfCartLine(cart, { menuItemId: result.menu_item_id, matchedText: runningPrefix })) return null;
+    outsideIds.add(result.menu_item_id);
+  }
+  if (outsideIds.size === 0) return null;
+
+  const candidateCategories = new Set(candidates.map(c => c.category).filter((c): c is string => !!c));
+  const outsideCategories = Array.from(outsideIds)
+    .map(id => menu.find(m => m.id === id)?.category)
+    .filter((c): c is string => !!c);
+  const sameFamily = outsideCategories.length > 0 && outsideCategories.every(c => candidateCategories.has(c));
+  return { outsideMenuItemIds: Array.from(outsideIds), sameFamily };
+}
+
+// Runner-facing wrapper -- same shape as disambiguationDeclineNamesOutsideItem
+// just above (raw candidate ids + menu, resolved to PendingCandidate[]
+// internally) so turn-engine-runner.ts can decide, BEFORE calling answer(),
+// whether an open disambiguation should be dropped and the whole message
+// reprocessed via a fresh PROPOSE call. Returns null when this message isn't
+// order-shaped at all (nothing to act on -- the caller's existing flow is
+// unaffected); returns `{ differentFamily }` when it is, so the caller only
+// drops the pending narrowing on `differentFamily === true` -- see
+// messageIsOrderShapedOutsideDisambiguation's own header on the "same
+// family, keep narrowing" case this preserves.
+export function disambiguationMessageIsOrderShaped(
+  message: string,
+  candidateIds: string[],
+  menu: TurnEngineMenuItem[],
+  cart: TurnEngineCartLine[],
+  lexicon: LexiconTerm[] | undefined,
+): { differentFamily: boolean } | null {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  if (candidates.length === 0) return null;
+  const result = messageIsOrderShapedOutsideDisambiguation(message, candidates, menu, cart, lexicon);
+  if (!result) return null;
+  return { differentFamily: !result.sameFamily };
+}
+
 // The answer to "what kind?" can itself be a LIST ("one plain, one
 // pepperoni, one meat lovers and one hawaiian") -- reuses phrase-split.ts's
 // shared boundary splitter (the same primitive the fresh-order path already
