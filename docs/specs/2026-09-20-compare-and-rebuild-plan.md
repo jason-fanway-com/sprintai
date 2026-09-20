@@ -302,3 +302,18 @@ webhook's expiry handler only closes a cart whose session it still points at.
 Open items: Phase 4 deletion (§4 and `2026-09-20-deletion-plan.md`); NJB menu data (no bagel-type
 slot on "Bagel With …" items; "bacon egg cheese" term points at the turkey sandwich); crew freeze
 still in force on chat-sms.
+
+**Late afternoon: the old engines are gone.** Commit 5c3900fa removed the legacy loop, the turn engine,
+the reconciler, every guard module, the stale `chat-sms-mtest` fork, the unused readiness harness and
+about 135 incident-named tests: 197 files, 77,511 lines deleted. `index.ts` went from 10,518 lines to
+2,513, all of it transport: carrier parsing, opt-out, conversation and cart lookup, the turn lock,
+hours and pause gates, sending, and one unconditional call into the engine. Every shop now routes to
+the clean engine regardless of flag. The remaining chat-sms tests are transport tests plus the engine's
+own 61. The counts the plan asked for, re-run rather than remembered: 4 mentions of the word GUARD
+(comments), 2 `reply =` sites (both in transport), 13 source files in the function root.
+
+The phrasing sweep (`scripts/engine/sweep.py`: every harvested opening message driven to a payment
+link by a scripted customer, graded from the database) found one real defect on its first six cases:
+an order with nothing priced could reach the readback and then loop on a payment link that could not
+be created. Fixed: an empty order is never confirmed, and a failed checkout reopens the confirm step
+with an honest sentence instead of a promise.
