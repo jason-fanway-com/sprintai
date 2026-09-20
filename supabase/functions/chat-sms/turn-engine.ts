@@ -714,6 +714,26 @@ export interface AnswerExternalInputs {
   confirmShopFacts?: { deliveryFeeCents: number | null; hoursLine: string | null };
 }
 
+// Live bug (2026-09-19, conv 8aa34668, v558 #40): "No, that's it for me.
+// Just the Calzone and Crazy Fries for pickup." — a closure immediately
+// followed by a restatement of items ALREADY in the cart — got "Anything
+// else?" three turns running. Both existing tiers below (BARE_CLOSURE_RE,
+// CLOSURE_ANYWHERE_RE) already match this message's TEXT correctly when
+// typed with a plain ASCII apostrophe; the live message never reached
+// either, because iOS autocorrects a typed straight `'` into a curly
+// U+2019 (’) before the SMS is sent, and `that'?s`/`don'?t`-style patterns
+// only ever anticipated the straight form or none at all. Runner-level
+// repro (curly apostrophe copied byte-for-byte from the live message)
+// confirmed: impliesClosure returned false, ANSWER fell through to
+// PROPOSE/decide(), and the deterministic closure path this whole function
+// exists for never engaged. Normalizing here — the one function this
+// dispatch is scoped to — rather than at answer()'s shared `trimmed`, keeps
+// the fix minimal; the same curly-apostrophe gap likely affects other
+// apostrophe-literal regexes in this file (TIP_DECLINE_ANYWHERE_RE,
+// CONFIRM_AFFIRMATIVE_RE/CONFIRM_NEGATION_RE, UPSELL_DECLINE_IDIOM_RE) and
+// is flagged, not silently fixed, for a follow-up dispatch.
+const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
+
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
 // 00-BG: the SAME defect as the name question and the confirm gate, a third
 // time. BARE_CLOSURE_RE is anchored to the whole message, so "nope" closes the
@@ -760,7 +780,7 @@ const CLOSURE_BLOCKED_BY_RE =
 // existing single-argument call and test is unaffected -- only answer()'s
 // two call sites below pass the real cart state.
 export function impliesClosure(message: string, cartHasItems = true): boolean {
-  const m = (message ?? "").trim();
+  const m = normalizeApostrophes((message ?? "").trim());
   if (!m) return false;
   if (BARE_CLOSURE_RE.test(m)) return true;
   if (!cartHasItems) return false;
@@ -2038,16 +2058,45 @@ const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|
 // "Bone-In".
 const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
 
+// 2026-09-19 PO dispatch (N1, live conv 624967ed #16, MONEY BUG — $55.48 ->
+// $15.50): "I'd like ranch with the Buffalo Chicken pizzas, please! Don't
+// forget the Medium Gluten-Free Pizza too." removed the whole Buffalo Chicken
+// line even though the customer never declined it. Two independent defects,
+// both fixed by scoping this check to the clause the cue actually appears in
+// (same discipline reactive-modifier-match.ts's isNegated already uses for a
+// different negation problem):
+//   1. A NEGATED decline verb -- "don't forget", "don't remove", "never mind
+//      removing", or a bare "keep" -- is never removal language, regardless
+//      of what follows it. It asks to KEEP something, the opposite of a
+//      decline. Checked per-clause so a genuine decline elsewhere in the
+//      SAME message ("no wings, don't forget the fries too") still fires for
+//      the item actually declined.
+//   2. Even setting negation aside, the bag-of-words match ran against the
+//      WHOLE message, so an unrelated item named earlier in an affirmative
+//      clause ("ranch with the Buffalo Chicken pizzas") could satisfy the
+//      name-stem check for a cue word that actually belongs to a LATER
+//      clause about a completely different item. A slot-answer turn must
+//      never remove a line that isn't the subject of the clause the decline
+//      cue itself is in.
+const NEGATED_DECLINE_VERB_RE =
+  /\b(?:don'?t|do\s+not|never|won'?t|will\s+not)\s+(?:\w+\s+){0,2}?(?:forget|remove|cancel|skip|drop)\b|\bnever\s*mind\s+(?:\w+\s+){0,2}?(?:remov|cancel|skip|drop)\w*\b|\bkeep\b/i;
+
 function isNamedSlotItemRejection(
   message: string,
   itemName: string,
   itemCategory: string | null | undefined,
 ): boolean {
-  if (!SLOT_ITEM_REJECTION_CUES.test(message)) return false;
-  const nameStems = significantStems(itemName ?? "");
-  const msgStems = significantStems(message);
-  for (const s of nameStems) if (msgStems.has(s)) return true;
-  return categoryWordMatches(itemCategory, message);
+  const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;!?]/i);
+  for (const clause of clauses) {
+    if (!SLOT_ITEM_REJECTION_CUES.test(clause)) continue;
+    if (NEGATED_DECLINE_VERB_RE.test(clause)) continue;
+    const nameStems = significantStems(itemName ?? "");
+    const msgStems = significantStems(clause);
+    let matched = false;
+    for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
+    if (matched || categoryWordMatches(itemCategory, clause)) return true;
+  }
+  return false;
 }
 
 export function answer(
@@ -3045,6 +3094,30 @@ const singularizeSpanToken = (word: string): string => {
 const AVAILABILITY_QUESTION_MARKER_RE =
   /\b(?:do you have|does\s+\S+(?:\s+\S+){0,3}\s+have|is there|are there|what about|you (?:have|got) any|have any|got any)\b/i;
 
+// 2026-09-19 PO dispatch (N2, probe-decide, MONEY BUG — phantom $15.50 add):
+// "...And about that gluten-free question... do you have any gluten-free
+// pizzas?" still added a Gluten-Free Pizza nobody ordered. "gluten-free" is
+// named TWICE — once in the harmless preamble ("about that gluten-free
+// question") that merely announces an upcoming question, and again inside
+// the actual question clause ("do you have any gluten-free pizzas?"). The
+// exclusivity check above only strips a word that shows up NOWHERE but a
+// question clause, so "gluten"/"free" surviving in the preamble clause
+// (which AVAILABILITY_QUESTION_MARKER_RE doesn't itself match — there's no
+// "do you have"/"is there"/etc. in it) defeated the exclusion entirely.
+// A preamble clause carries no order intent of its own — no quantity, no
+// order verb, nothing order-shaped — it only ever announces that a question
+// is coming ("that ___ question", "this ___ question"). Folding it into the
+// question side of the exclusivity check (never the non-question side) fixes
+// this without touching a clause that genuinely places an order alongside
+// the word "question" (ORDER_SHAPED_CLAUSE_RE always wins there).
+const ORDER_SHAPED_CLAUSE_RE =
+  /\d|\b(?:get|want|like|order|add|need|craving|give me|bring me|i'll|i will|can i|could i|may i)\b/i;
+const QUESTION_PREAMBLE_RE = /\bquestion\b/i;
+
+function isQuestionPreambleClause(clause: string): boolean {
+  return QUESTION_PREAMBLE_RE.test(clause) && !ORDER_SHAPED_CLAUSE_RE.test(clause);
+}
+
 // SIZE_WORD_ALIASES (resolve-item.ts): the same "med" -> "medium" expansion
 // resolveItem's own tokenizer applies, reused here so a model item_span
 // abbreviation lines up with the customer's own fully-spelled word (or vice
@@ -3071,7 +3144,7 @@ function questionClauseOnlyTokens(customerMessage: string | undefined): Set<stri
   const questionTokens = new Set<string>();
   const nonQuestionTokens = new Set<string>();
   for (const clause of clauses) {
-    const isQuestionClause = AVAILABILITY_QUESTION_MARKER_RE.test(clause);
+    const isQuestionClause = AVAILABILITY_QUESTION_MARKER_RE.test(clause) || isQuestionPreambleClause(clause);
     for (const t of tokenizeSpanText(clause)) (isQuestionClause ? questionTokens : nonQuestionTokens).add(t);
   }
   const exclusive = new Set<string>();
@@ -3097,7 +3170,7 @@ function questionClauseOnlyTokens(customerMessage: string | undefined): Set<stri
 function nonQuestionClauseText(customerMessage: string | undefined) {
   if (!customerMessage) return "";
   return splitIntoMessageClauses(customerMessage)
-    .filter(clause => !AVAILABILITY_QUESTION_MARKER_RE.test(clause))
+    .filter(clause => !AVAILABILITY_QUESTION_MARKER_RE.test(clause) && !isQuestionPreambleClause(clause))
     .map(clause => clause.trim())
     .filter(Boolean)
     .join(" ");

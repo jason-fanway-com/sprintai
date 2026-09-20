@@ -932,15 +932,39 @@ export function renderDisambiguationReask(
 // word folded into the name itself) — this handles both.
 const NARROWING_SIZE_WORD_RE = /\b(Small|Medium|Large|X-?Large|XL|Family|Personal|Jumbo|Mini|Regular)\b/i;
 
+// 2026-09-19 PO dispatch (N3, probe-narrow2, live money bug: 16" added when
+// the customer said 14"): a menu item family sized ONLY by inches ("The
+// Slice - 14\"", "The Slice - 16\"") carries no NARROWING_SIZE_WORD_RE word
+// at all, so extractSizeAndKind's `size` came back null for every candidate
+// — narrowCandidatesByFacetAnswer's "size" branch (below) then had nothing
+// to filter on and findDisambiguationCategoryRejectionCandidate
+// (turn-engine.ts) silently fell back to `candidates[0]`, an arbitrary array
+// order that has nothing to do with what the customer actually said. Same
+// suffix shape the named-size regex already reads ("Name - <size>"),
+// extended to also recognize a bare inch measurement when no named size
+// word is present, so a numeric-only size family narrows exactly the same
+// way a named-size one already did.
+const NUMERIC_SIZE_RE = /\b(\d{1,2})\s*(?:"|”|″|inch(?:es)?\b)/i;
+
 export function extractSizeAndKind(name: string): { kind: string; size: string | null } {
   const suffixMatch = name.match(/^(.*?)\s*-\s*([^-]+)$/);
   const base = suffixMatch ? suffixMatch[1].trim() : name;
   const sizeSource = suffixMatch ? suffixMatch[2].trim() : name;
 
   const sizeMatch = sizeSource.match(NARROWING_SIZE_WORD_RE);
-  const size = sizeMatch ? sizeMatch[1] : null;
+  const numericMatch = sizeMatch ? null : sizeSource.match(NUMERIC_SIZE_RE);
+  const size = sizeMatch ? sizeMatch[1] : (numericMatch ? `${numericMatch[1]}"` : null);
   const kind = base.replace(NARROWING_SIZE_WORD_RE, "").replace(/\s+/g, " ").trim();
   return { kind: kind || base, size };
+}
+
+// Extracts a bare inch measurement from customer text ("the 14\" pizza" ->
+// "14\""), normalized to the same `${n}"` shape extractSizeAndKind derives
+// for a numeric-only candidate size, so the two sides of the comparison in
+// narrowCandidatesByFacetAnswer always speak the same format.
+function extractNumericSizeWord(text: string): string | null {
+  const m = text.match(NUMERIC_SIZE_RE);
+  return m ? `${m[1]}"` : null;
 }
 
 // Strips the category's own singular word ("Pizza") out of a kind value
@@ -1031,8 +1055,8 @@ export function narrowCandidatesByFacetAnswer(
 ): PendingCandidate[] | null {
   if (facet === "size") {
     const m = message.match(NARROWING_SIZE_WORD_RE);
-    if (!m) return null;
-    const wanted = m[1].toLowerCase();
+    const wanted = m ? m[1].toLowerCase() : extractNumericSizeWord(message)?.toLowerCase();
+    if (!wanted) return null;
     const hits = candidates.filter(c => (candidateSizeValue(c) ?? "").toLowerCase() === wanted);
     return hits.length > 0 ? hits : null;
   }
@@ -1154,10 +1178,10 @@ export function extractPartialSizeClause(
   return { sizeWord: m[2], sizeQuantity: qty };
 }
 
-/** A size word naming the WHOLE stated quantity ("4 large pizzas" -> "large"). */
+/** A size word naming the WHOLE stated quantity ("4 large pizzas" -> "large", "the 14\" pizza" -> "14\""). */
 export function extractGlobalSizeWord(spanText: string): string | null {
   const m = spanText.match(NARROWING_SIZE_WORD_RE);
-  return m ? m[1] : null;
+  return m ? m[1] : extractNumericSizeWord(spanText);
 }
 
 /** Narrows to candidates whose own derived size matches `sizeWord`; falls back to the unfiltered set if none do (defensive — never produces an empty question). */
