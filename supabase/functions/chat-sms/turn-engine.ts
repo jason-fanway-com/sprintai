@@ -3599,6 +3599,27 @@ export function recoverAssertedChoiceFromText(
 // plain (non-placement) choices keep the exact original single-recovery
 // behavior via recoverAssertedChoiceFromText itself, appended to the same
 // result set.
+//
+// Freeze-queue item W2 (2026-09-19 PO dispatch, live conv 01609954 #20,
+// money bug): "a Chicken quesadilla with Black Diamond Steak and Chicken
+// added" landed the plain $12.49 quesadilla with BOTH named, real, priced
+// Add-ons choices silently dropped — no question, no trace. This is the
+// wart-c tie-guard above hitting its OWN limit on a fresh-add turn: two
+// PLAIN (non-placement) choices named together tie at plainHits.length===2
+// and get thrown away, exactly the "sausage and onions" shape that guard
+// exists to protect — except here the customer's own trailing word "added"
+// (real text: "...and Chicken added") removes the ambiguity the guard was
+// built for. "sausage and onions" leaves it genuinely unclear whether the
+// customer is naming two modifiers or a modifier plus an unrelated second
+// item; "X and Y added" is a customer explicitly saying BOTH are being
+// added to the item just named — the same class of single-word disambiguator
+// as EXPLICIT_ADDITION_RE's "extra" above, just for the plural-tie case
+// instead of the name-collision case. When present, every plain choice the
+// text actually names (not a guess — each one's own tokens still have to
+// occur in the text, same as always) is recovered instead of the whole set
+// being discarded.
+const EXPLICIT_MULTI_ADDON_RE = /\badded\b/i;
+
 export function recoverAssertedChoicesFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
@@ -3610,10 +3631,12 @@ export function recoverAssertedChoicesFromText(
   const textTokens = modifierFloorTokens(text);
   const itemNameTokens = modifierFloorTokens(itemName ?? "");
   const explicitAddition = EXPLICIT_ADDITION_RE.test(text);
+  const explicitMultiAddon = EXPLICIT_MULTI_ADDON_RE.test(text);
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
   const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition);
   const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition);
-  return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
+  const allPlainHitsLand = plainHits.length === 1 || (explicitMultiAddon && plainHits.length > 1);
+  return [...placementHits, ...(allPlainHitsLand ? plainHits : [])];
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
