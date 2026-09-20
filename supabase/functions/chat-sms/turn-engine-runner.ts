@@ -782,15 +782,58 @@ const REMAINDER_MARKERS: RegExp[] = [
   /\boh and\b/i,
 ];
 
-function extractRemainderAfterAnswer(message: string): string | null {
+// 2026-09-19 PO dispatch (S1, live conv e456bf93 #16, money bug -- a slot
+// answer bleeding into item-resolution): a dressing slot open on a
+// quantity-2 salad line, answered "Can I get Ranch for both, please? Also,
+// is there a wait time for pickup?" -- the marker scan below used to find
+// "can i get" at the very START of the message (one of REMAINDER_MARKERS)
+// and take the ENTIRE message as the remainder, re-feeding "Ranch" -- text
+// already consumed to answer the open slot -- into a fresh PROPOSE call as
+// if it were a brand-new request. "Ranch" is *also* a real menu item's
+// lexicon term elsewhere on the menu, so that second PROPOSE call opened a
+// spurious "which one?" disambiguation the customer never asked for. Same
+// root cause, different word, hit again earlier tonight with "house
+// balsamic" (#22). The fix: once a slot answer resolves, find the resolved
+// choice's own display text (e.g. "Ranch") in the raw message and start the
+// marker scan strictly AFTER it -- a marker that is itself part of the
+// answer clause can never be mistaken for the start of a fresh request.
+function findSlotAnswerConsumedText(
+  priorOpen: DialogueState["open"],
+  cart: TurnEngineCartLine[],
+  menu: TurnEngineMenuItem[],
+): string | null {
+  if (!priorOpen || priorOpen.kind !== "slot") return null;
+  const line = cart.find(l => effectiveLineKeyFor(l) === priorOpen.line_key);
+  if (!line) return null;
+  const menuItem = menu.find(m => m.id === line.menu_item_id);
+  const sel = line.ask_plan_selections?.[priorOpen.group_id];
+  const choiceId = Array.isArray(sel) ? sel[sel.length - 1] : sel;
+  if (!choiceId) return null;
+  const step = menuItem?.ask_plan?.steps.find(s => s.group_id === priorOpen.group_id);
+  return step?.choices.find(c => c.id === choiceId)?.display ?? null;
+}
+
+function extractRemainderAfterAnswer(message: string, excludeBefore: string | null = null): string | null {
   const trimmed = (message ?? "").trim();
   if (!trimmed) return null;
-  let cutStart: number | null = null;
 
+  // See findSlotAnswerConsumedText's own doc above: a marker match that
+  // falls inside (or before the end of) the text that just answered the
+  // open slot is part of the answer clause itself, never the start of a
+  // genuinely new request.
+  let searchFrom = 0;
+  if (excludeBefore) {
+    const consumedIdx = trimmed.toLowerCase().indexOf(excludeBefore.toLowerCase());
+    if (consumedIdx >= 0) searchFrom = consumedIdx + excludeBefore.length;
+  }
+
+  const scope = trimmed.slice(searchFrom);
+  let cutStart: number | null = null;
   for (const marker of REMAINDER_MARKERS) {
-    const m = trimmed.match(marker);
-    if (m && m.index !== undefined && (cutStart === null || m.index < cutStart)) {
-      cutStart = m.index;
+    const m = scope.match(marker);
+    if (m && m.index !== undefined) {
+      const absoluteIndex = searchFrom + m.index;
+      if (cutStart === null || absoluteIndex < cutStart) cutStart = absoluteIndex;
     }
   }
 
@@ -1559,7 +1602,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // sees it) -- a bonus item is additive, never a license to also mutate
     // or remove the line the primary answer just resolved.
     if (REMAINDER_ELIGIBLE_OUTCOME_KINDS.has(outcome.kind)) {
-      const remainderMessage = extractRemainderAfterAnswer(input.message);
+      // 00-BM (S1): only ever set for a resolved "slot" outcome -- see
+      // findSlotAnswerConsumedText's own doc. null for every other eligible
+      // outcome kind, which leaves extractRemainderAfterAnswer's behavior
+      // exactly as it was for those (unscoped from index 0).
+      const slotAnswerConsumedText = outcome.kind === "slot_resolved"
+        ? findSlotAnswerConsumedText(priorState.open, workingCart, input.menu)
+        : null;
+      const remainderMessage = extractRemainderAfterAnswer(input.message, slotAnswerConsumedText);
       if (remainderMessage) {
         // Reuse the lexicon already loaded above for answer()'s disambiguation
         // path when present — same shop, same turn, no reason to fetch it

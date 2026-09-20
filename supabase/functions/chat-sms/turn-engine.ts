@@ -3812,10 +3812,35 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
 // hallucinated one. "instead" is added bare (not just "instead of") for
 // the same reason -- "switch that to a Cheesesteak instead" never says
 // "instead of".
-const REMOVAL_VERBS = [
-  "no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without",
-  "switch", "swap", "change", "replace", "drop", "instead",
+const HARD_REMOVAL_VERBS = [
+  "no", "remove", "take off", "scratch", "cancel", "not the", "without", "drop",
 ];
+// Soft correction verbs equally describe a REPLACEMENT of the whole item
+// ("switch that to a Cheesesteak instead") or a same-item topping
+// correction ("keep the gyro meat for the small Margherita instead") -- see
+// KEEP_RETENTION_RE and its call site in removeHasRemovalLanguage below for
+// how those two are told apart.
+const SOFT_CORRECTION_VERBS = [
+  "instead of", "switch", "swap", "change", "replace", "instead",
+];
+const REMOVAL_VERBS = [...HARD_REMOVAL_VERBS, ...SOFT_CORRECTION_VERBS];
+
+// 2026-09-19 PO dispatch (S2, live conv 36eff7b9 #39, money bug -- topping
+// correction misread as a whole-line remove): "I changed my mind about the
+// bacon on the small one. Just keep the gyro meat for the small Margherita
+// instead!" carries the line's own name ("Margherita") in the SAME clause as
+// a soft-correction verb ("instead") -- the exact shape a genuine whole-item
+// replacement ("switch that to a Cheesesteak instead") also produces, so the
+// original single-verb-list heuristic couldn't tell them apart and deleted
+// the whole line instead of swapping its toppings. The difference is "keep":
+// a genuine replacement never asks to KEEP something on the very line it's
+// supposedly replacing -- "keep <X> ... instead" states what stays on this
+// item, which makes it a topping-level MODIFY, never a whole-line REMOVE.
+// Scoped to the SOFT verbs only -- an explicit HARD verb ("scratch the small
+// Margherita, keep the medium") still removes the named line exactly as
+// before; "keep" appearing elsewhere in the message is never a license to
+// ignore a customer who also, unambiguously, said "remove"/"scratch"/etc.
+const KEEP_RETENTION_RE = /\bkeep\b/i;
 
 // Round 4 P0 (2026-09-19): which REAL cart line a bare pronoun ("it"/
 // "that"/"this") refers to, for both the remove guard below and the
@@ -3837,8 +3862,10 @@ function removeHasRemovalLanguage(
 ): boolean {
   const msg = (message ?? "").toLowerCase().trim();
   if (!msg) return false;
-  const hasVerb = REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msg));
-  if (!hasVerb) return false;
+  const hasHardVerb = HARD_REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msg));
+  const hasSoftVerb = SOFT_CORRECTION_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msg));
+  if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
+  if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
   if (nameStems.size > 0) {
     const msgStems = significantStems(msg);
