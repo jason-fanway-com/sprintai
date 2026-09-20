@@ -114,7 +114,7 @@ import {
   type CompiledCartLine,
   type CompiledMenuItem,
 } from "./ask-plan-engine.ts";
-import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-reconciler.ts";
+import { identityKey, removeCartLine, writeSplitCartLine, type ReconcilerCartLine } from "./turn-reconciler.ts";
 import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
@@ -626,6 +626,29 @@ export type AnswerOutcome =
   // of the normal confirm re-ask, never inventing a second reply-building
   // path.
   | { kind: "replacement_unavailable"; message: string }
+  // 2026-09-20 PO dispatch (confirm-path correction targets named line,
+  // same class as fix/replacement-targets-named-line-and-holds-removal-
+  // 20260919's mechanism, applied at the confirm/read-back state): "I
+  // actually wanted one of the Gyro pizzas with grilled chicken instead of
+  // the other sausage one" names ONE unit of an already-multi-quantity
+  // line for a topping swap, leaving the other unit(s) on that line — and
+  // every other real cart line — untouched. Resolved directly (see
+  // parseSingleUnitToppingSwap/applySingleUnitToppingSwap below), never
+  // left to fall through to applyNamedLineRemovals (mechanism 3) below,
+  // whose whole-message stem-overlap check has no notion of "this is a
+  // same-item topping swap, not removal language for every pizza in the
+  // cart" — the real defect: "pizza"/"gyro"/"sausage" all coincidentally
+  // overlap BOTH the Gyro line's own name and, via the bare word "pizza",
+  // the unrelated White Pizza line too, so the guard let a soft-correction
+  // verb ("instead of") delete every pizza line in the cart. ask() reopens
+  // confirm with a fresh read-back, same convention as line_replaced.
+  | { kind: "unit_modified_at_confirm" }
+  // The new topping doesn't exist as a real choice on this item's own
+  // Toppings group, or the named "old" topping doesn't unambiguously match
+  // exactly one currently-selected choice — declined by name, nothing
+  // touched, same "missing beats wrong" convention as
+  // replacement_unavailable immediately above.
+  | { kind: "unit_modification_unavailable"; message: string }
   // 2026-09-18 PO dispatch (address loop, rule 2): "cancel"/"forget it"/
   // "never mind" while address is open must abandon the whole order, not be
   // treated as a failed address (which re-asks the exact same question the
@@ -1316,6 +1339,139 @@ export function findMenuItemByNamePhrase(
     return [...phraseStems].every(s => itemStems.has(s));
   });
   return hits.length === 1 ? hits[0] : null;
+}
+
+// 2026-09-20 PO dispatch (confirm-path correction targets named line, real
+// live money bug, v572 #36): "I actually wanted one of the Gyro pizzas with
+// grilled chicken instead of the other sausage one! Please update that." —
+// same class as fix/replacement-targets-named-line-and-holds-removal-
+// 20260919 (a correction names the line it changes; a line the customer
+// didn't name is never touched), but the correction here names only ONE
+// unit of an already-multi-quantity line, not a whole different line. "one
+// of the <base> <new-modifier> instead of the other <old-modifier> one"
+// isolates the three phrases parseSingleUnitToppingSwap/
+// applySingleUnitToppingSwap below need: which item family, what it should
+// become, and what it currently is.
+interface SingleUnitToppingSwapCandidate {
+  basePhrase: string;
+  newModifierPhrase: string;
+  oldModifierPhrase: string;
+}
+
+const SINGLE_UNIT_TOPPING_SWAP_RE =
+  /\bone\s+of\s+(?:the\s+|my\s+|those\s+)?(.+?)\s+(?:with|to have|as|to be)\s+(.+?)\s+instead\s+of\s+the\s+other\s+(.+?)(?:\s+one\b)?[.,!?]?(?:\s|$)/i;
+
+function parseSingleUnitToppingSwap(message: string): SingleUnitToppingSwapCandidate | null {
+  const m = message.match(SINGLE_UNIT_TOPPING_SWAP_RE);
+  if (!m) return null;
+  const basePhrase = m[1]?.trim();
+  const newModifierPhrase = m[2]?.trim();
+  const oldModifierPhrase = m[3]?.trim();
+  if (!basePhrase || !newModifierPhrase || !oldModifierPhrase) return null;
+  return { basePhrase, newModifierPhrase, oldModifierPhrase };
+}
+
+// Finds the ONE real cart line this correction is about: its own name (plus
+// any already-selected option/modifier text, so "the Gyro pizzas" matches
+// even though "Gyro" alone isn't in every line's bare `name`) must carry
+// every stem of BOTH basePhrase and oldModifierPhrase, and it must have
+// quantity >= 2 — "one of the ..." presupposes there's more than one unit
+// to differentiate. Two or more matches, or none, returns null (never
+// guess) — the caller falls through to whatever the confirm case would
+// otherwise do for an unmatched shape.
+function findMultiUnitLineForToppingSwap(
+  cart: TurnEngineCartLine[],
+  basePhrase: string,
+  oldModifierPhrase: string,
+): TurnEngineCartLine | null {
+  const baseStems = significantStems(basePhrase);
+  const oldStems = significantStems(oldModifierPhrase);
+  if (baseStems.size === 0 || oldStems.size === 0) return null;
+  const hits = cart.filter(line => {
+    if (!isRealCartLine(line)) return false;
+    if (line.quantity < 2) return false;
+    const flatText = [line.name, ...(line.modifiers ?? []), ...Object.values(line.options ?? {}).flat()].join(" ");
+    const lineStems = significantStems(flatText);
+    return [...baseStems].every(s => lineStems.has(s)) && [...oldStems].every(s => lineStems.has(s));
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+// Splits ONE unit off `target` (mutating its quantity in place, same
+// "N identical units on one line" convention as ask-plan-engine.ts's own
+// ALL_UNITS_RE split — see that file's header) into a new quantity-1 line
+// carrying the topping swap, leaving `target`'s remaining unit(s) and every
+// other cart line completely untouched. Resolves oldModifierPhrase against
+// exactly one of the line's OWN currently-selected choices (never a menu
+// item's full choice list — the customer is naming what's already on the
+// order) and newModifierPhrase against exactly one of that SAME group's
+// real, not-yet-selected choices — both within the SAME modifier step, so
+// this can never cross-wire a swap between two unrelated option groups.
+// Either side failing to resolve to exactly one choice declines by name,
+// touching nothing — the same "missing beats wrong" discipline
+// parseReplacementCorrection's own resolution already trusts.
+function applySingleUnitToppingSwap(
+  cart: TurnEngineCartLine[],
+  menuById: Map<string, TurnEngineMenuItem>,
+  target: TurnEngineCartLine,
+  newModifierPhrase: string,
+  oldModifierPhrase: string,
+): { kind: "applied" } | { kind: "unavailable"; message: string } | null {
+  const menuItem = menuById.get(target.menu_item_id);
+  if (!menuItem?.ask_plan) return null;
+  const oldStems = significantStems(oldModifierPhrase);
+  const newStems = significantStems(newModifierPhrase);
+  if (oldStems.size === 0 || newStems.size === 0) return null;
+
+  for (const step of menuItem.ask_plan.steps) {
+    if (step.kind !== "modifier") continue;
+    const sel = target.ask_plan_selections?.[step.group_id];
+    const selectedIds = Array.isArray(sel) ? sel : sel ? [sel] : [];
+    if (selectedIds.length === 0) continue;
+    const oldCandidates = selectedIds
+      .map(id => step.choices.find(c => c.id === id))
+      .filter((c): c is typeof step.choices[number] => !!c)
+      .filter(c => {
+        const cStems = significantStems(c.display);
+        return [...oldStems].every(s => cStems.has(s));
+      });
+    if (oldCandidates.length !== 1) continue;
+    const oldChoice = oldCandidates[0];
+    const newCandidates = step.choices.filter(c => {
+      if (selectedIds.includes(c.id)) return false;
+      const cStems = significantStems(c.display);
+      return [...newStems].every(s => cStems.has(s));
+    });
+    if (newCandidates.length === 0) {
+      return {
+        kind: "unavailable",
+        message: `We don't have ${newModifierPhrase} for the ${menuItem.ask_plan.display_name}.`,
+      };
+    }
+    if (newCandidates.length > 1) return null; // genuinely ambiguous -- never guess
+    const newChoice = newCandidates[0];
+
+    const remainingIds = selectedIds.filter(id => id !== oldChoice.id).concat(newChoice.id);
+    const newSelections = {
+      ...(target.ask_plan_selections ?? {}),
+      [step.group_id]: remainingIds.length === 1 ? remainingIds[0] : [...remainingIds].sort(),
+    };
+    const { resolvedOptions, priceCents } = priceSelections(menuItem.ask_plan, menuItem.option_groups ?? [], newSelections);
+    target.quantity -= 1;
+    const idx = cart.indexOf(target);
+    const splitLine: TurnEngineCartLine = {
+      menu_item_id: target.menu_item_id,
+      name: target.name,
+      quantity: 1,
+      price_cents: priceCents,
+      modifiers: [],
+      options: Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined,
+      ask_plan_selections: newSelections,
+    };
+    writeSplitCartLine(cart as unknown as ReconcilerCartLine[], idx, splitLine as unknown as ReconcilerCartLine);
+    return { kind: "applied" };
+  }
+  return null;
 }
 
 // Builds the PO's exact wanted wording ("We only have House as a stromboli
@@ -3338,6 +3494,32 @@ export function answer(
               outcome: { kind: "replacement_unavailable", message: describeExistingLineForReplacementDecline(wrongLine, wrongMenuItem) },
               cartChanged: false,
             };
+          }
+        }
+      }
+      // 2026-09-20 PO dispatch (confirm-path correction targets named line,
+      // real live money bug, v572 #36): same priority reasoning as
+      // mechanisms 1/2 above — checked BEFORE applyNamedLineRemovals
+      // (mechanism 3, immediately below) so a same-item topping swap on one
+      // unit of a multi-quantity line is never misread as removal language
+      // for every pizza in the cart. Real repro: "I actually wanted one of
+      // the Gyro pizzas with grilled chicken instead of the other sausage
+      // one! Please update that." — "pizza" is a bare word shared by every
+      // pizza line's own name (the Gyro's AND the unrelated White Pizza's),
+      // and mechanism 3's whole-message stem-overlap check has no notion of
+      // "this word belongs to a topping swap on ONE named line, not a
+      // second removal request" — see parseSingleUnitToppingSwap/
+      // applySingleUnitToppingSwap's own headers for the full mechanism.
+      const toppingSwap = parseSingleUnitToppingSwap(trimmed);
+      if (toppingSwap) {
+        const target = findMultiUnitLineForToppingSwap(cart, toppingSwap.basePhrase, toppingSwap.oldModifierPhrase);
+        if (target) {
+          const swapResult = applySingleUnitToppingSwap(cart, menuById, target, toppingSwap.newModifierPhrase, toppingSwap.oldModifierPhrase);
+          if (swapResult?.kind === "applied") {
+            return { resolved: true, outcome: { kind: "unit_modified_at_confirm" }, cartChanged: true };
+          }
+          if (swapResult?.kind === "unavailable") {
+            return { resolved: true, outcome: { kind: "unit_modification_unavailable", message: swapResult.message }, cartChanged: false };
           }
         }
       }
@@ -6191,6 +6373,13 @@ export interface AskTurnEvents {
   // with no replacement named). Same reasoning and same ask()-branch
   // handling as quantityCorrectedThisTurn/lineReplacedThisTurn above.
   lineRemovedAtConfirmThisTurn?: boolean;
+  // 2026-09-20 PO dispatch (confirm-path correction targets named line):
+  // true when THIS turn's ANSWER resolved to unit_modified_at_confirm — one
+  // unit of a multi-quantity line was split off and given a different
+  // topping. Same reasoning and same ask()-branch handling as
+  // quantityCorrectedThisTurn/lineReplacedThisTurn/
+  // lineRemovedAtConfirmThisTurn above.
+  unitModifiedAtConfirmThisTurn?: boolean;
   // Round 3, item 2c(i) (2026-09-19): true when THIS turn's ANSWER resolved
   // a tip amount stated WHILE confirm was already open ("$5 tip" — see the
   // "confirm" case's tip-amount check above). Same fresh-read-back handling
@@ -6561,7 +6750,7 @@ export function ask(
   // Round 3, item 2c(i): a tip stated at confirm is the same "cart just
   // changed" situation — the total now includes a Tip line — same
   // fresh-cycle reset as the two mechanisms above.
-  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn || turnEvents.lineRemovedAtConfirmThisTurn) {
+  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn || turnEvents.lineRemovedAtConfirmThisTurn || turnEvents.unitModifiedAtConfirmThisTurn) {
     return {
       phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered,
       asked_message_id: null, pendingAmbiguous, openRepeatCount: 0,
