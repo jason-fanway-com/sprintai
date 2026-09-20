@@ -3,13 +3,13 @@
 import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile, scan } from "./crossread.ts";
-import { bindLine, lineMatchesSpan, resolveSpan, spanAnswersLine } from "./resolve.ts";
+import { bindLine, lineMatchesSpan, narrow, resolveSpan, spanAnswersLine } from "./resolve.ts";
 import { escalate, next, questionKey } from "./next.ts";
 import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, words } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -96,6 +96,24 @@ export function turn(input: TurnInput): TurnOutput {
       continue;
     }
     moves.push(m);
+  }
+
+  // 2b. an ambiguous line of quantity N answered with several kinds ("one plain one pepperoni …")
+  if (focus && focus.status.kind === "ambiguous" && focus.qty > 1) {
+    const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option");
+    const parts = answers.flatMap((a) => splitList(a.value_span)).flatMap((p) => {
+      // "one plain one pepperoni" arrives as one string when the model does not split it
+      const ws = words(p); const out: string[] = []; let cur: string[] = [];
+      for (const w of ws) { if (cur.length && leadingCount(w + " x").count !== null) { out.push(cur.join(" ")); cur = []; } cur.push(w); }
+      if (cur.length) out.push(cur.join(" "));
+      return out;
+    }).map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; })
+      .filter((p) => p.span && narrow(focus.status.kind === "ambiguous" ? focus.status.candidates : [], p.span, menu).length > 0);
+    if (parts.length >= 2) {
+      const kept = moves.filter((m) => m.kind !== "answer_option");
+      moves.length = 0; moves.push(...kept, { kind: "split_line", line_id: focus.line_id, parts });
+      ledger.push({ turn: t, event: "quantity_split_by_kind", data: { line_id: focus.line_id, parts } });
+    }
   }
 
   // 3. apply

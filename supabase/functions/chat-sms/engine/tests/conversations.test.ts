@@ -126,7 +126,7 @@ Deno.test("narrowing: pizza -> what kind -> pepperoni -> what size -> large", ()
   f = say(f, "pickup").form;
   let o = say(f, "I want a pizza", [{ kind: "add_line", item_span: "pizza", qty: 1, option_spans: [] }]);
   assertEquals(o.form.open?.kind, "line_ambiguous");
-  assertStringIncludes(o.reply, "Which pizza? Cheese, Margherita, or Pepperoni?");
+  assertStringIncludes(o.reply, "What kind of pizza?");
   o = say(o.form, "pepperoni");
   assertStringIncludes(o.reply, "What size");
   assertStringIncludes(o.reply, "Small, Medium, or Large");
@@ -566,4 +566,29 @@ Deno.test("'steak' among steak and chicken-steak placements picks Steak (Whole);
   assertEquals(o.form.lines[0].modifiers, ["stW"]);
   assertEquals(o.form.lines[0].notes, []);
   assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("Jason's phone test: four large pizzas, one of each kind, becomes four lines", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "delivery").form;
+  f = say(f, "5620 cetronia rd", [addr("5620 Cetronia Rd, Allentown, PA 18106, USA")]).form;
+  let o = say(f, "Four large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  assertStringIncludes(o.reply, "What kind of pizzas?");
+  o = say(o.form, "One plain one pepperoni one Hawaii one meat lovers", [
+    { kind: "answer_option", value_span: "plain" }, { kind: "answer_option", value_span: "pepperoni" },
+    { kind: "answer_option", value_span: "Hawaii" }, { kind: "answer_option", value_span: "meat lovers" },
+  ]);
+  const got = o.form.lines.map((l) => [l.item_id, l.qty]);
+  assertEquals(got, [[IDS.cheesePizzaL, 1], [IDS.pepPizzaL, 1], ["hawL", 1], ["mlL", 1]]);
+  assertEquals(o.form.lines.every((l) => l.notes.length === 0), true);
+  assertEquals(totals(o.form, menu).subtotal_cents, 1800 + 2100 + 2100 + 2300);
+  assertStringIncludes(o.reply, "Anything else?");
+});
+
+Deno.test("the same answer as one string, with counts: 'two plain and two pepperoni'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "4 large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  o = say(o.form, "two plain and two pepperoni", [{ kind: "answer_option", value_span: "two plain and two pepperoni" }]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesePizzaL, 2], [IDS.pepPizzaL, 2]]);
 });

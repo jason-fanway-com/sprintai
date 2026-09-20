@@ -36,6 +36,7 @@ function spansOf(m: Move): string[] {
     case "remove_line": return "span" in m.ref ? [m.ref.span] : [];
     case "answer_option": return [m.value_span];
     case "ask_menu": return m.about_span ? [m.about_span] : [];
+    case "split_line": return m.parts.map((p) => p.span);
     case "answer": return m.field === "address" ? [m.value.text] : [];
     default: return [];
   }

@@ -49,18 +49,22 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
 
 /** Filter candidates by a customer span: word subset of the display name, or its size facet. */
 export function narrow(candidateIds: string[], span: string, menu: Menu): string[] {
-  const sw = words(span);
+  const sw = words(span).map(singular);
   if (sw.length === 0) return candidateIds;
-  const keep = candidateIds.filter((id) => {
-    const it = menu.items.get(id);
-    if (!it) return false;
-    if (isWordSubset(sw, it.words)) return true;
-    if (sw.length === 1 && it.facets.size === sw[0]) return true;
-    if (it.facets.kind && isWordSubset(sw, words(it.facets.kind))) return true;
-    if (it.category && isWordSubset(sw, words(it.category).map(singular))) return true;
-    return false;
-  });
-  return keep;
+  const pool = (id: string): Set<string> => {
+    const it = menu.items.get(id)!;
+    const set = new Set<string>([...it.words, ...words(it.name), ...words(it.facets.kind ?? ""), ...(menu.termWordsByItem.get(id) ?? []), ...words(it.category ?? "")].map(singular));
+    if (it.facets.size) set.add(it.facets.size);
+    return set;
+  };
+  const keep = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => pool(id).has(w)));
+  if (keep.length > 0) return keep;
+  // a stem the customer typed ("hawaii" for hawaiian): allowed only when it names exactly one candidate
+  if (sw.length === 1 && sw[0].length >= 4) {
+    const pre = candidateIds.filter((id) => menu.items.has(id) && [...pool(id)].some((w) => w.startsWith(sw[0])));
+    if (pre.length === 1) return pre;
+  }
+  return [];
 }
 
 export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" | "list" {

@@ -107,6 +107,7 @@ export type Move =
   | { kind: "answer_option"; value_span: string }
   | { kind: "answer_yes" }
   | { kind: "answer_no" }
+  | { kind: "split_line"; line_id: number; parts: Array<{ span: string; qty: number }> }
   | { kind: "ask_menu"; about_span: string | null }
   | { kind: "control"; what: "cancel" | "start_over" | "human" | "greeting" | "unclear" | "show_cart" };
 
@@ -302,6 +303,26 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         } else {
           ledger.push({ turn: t, event: "yes_no_without_question", data: { yes } });
         }
+        break;
+      }
+      case "split_line": {
+        const idx = form.lines.findIndex((l) => l.line_id === m.line_id);
+        if (idx < 0 || m.parts.length === 0) break;
+        const src = form.lines[idx];
+        const cands = src.status.kind === "ambiguous" ? src.status.candidates : null;
+        const newLines: Line[] = m.parts.map((p) => ({
+          line_id: form.next_line_id++,
+          span: src.span,
+          item_id: null,
+          qty: Math.max(1, p.qty),
+          choices: {}, modifiers: [],
+          held: [p.span, ...src.held.filter((h) => !h.startsWith("-"))],
+          notes: [], slot_candidates: {},
+          status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" },
+        }));
+        form.lines.splice(idx, 1, ...newLines);
+        for (const l of newLines) touched.add(l.line_id);
+        ledger.push({ turn: t, event: "split_line", data: { from: src.line_id, parts: m.parts, into: newLines.map((l) => l.line_id) } });
         break;
       }
       case "ask_menu": {

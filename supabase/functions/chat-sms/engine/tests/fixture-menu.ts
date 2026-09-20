@@ -55,6 +55,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
   item(IDS.pepPizzaS, "Pepperoni Pizza - Small (10\")", "Pizza", 1299, { display_name: "Small Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaS, choice_ids: [IDS.pepChoiceS] } }),
   item(IDS.pepPizzaM, "Pepperoni Pizza - Medium (14\")", "Pizza", 1749, { display_name: "Medium Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaM, choice_ids: [IDS.pepChoiceM] } }),
   item(IDS.pepPizzaL, "Pepperoni Pizza - Large (16\")", "Pizza", 2100, { display_name: "Large Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaL, choice_ids: [IDS.pepChoiceL] } }),
+  item("hawL", "Hawaiian - Large (16\")", "Pizza", 2100, { display_name: "Large Hawaiian Pizza" }),
+  item("mlL", "Meat Lover - Large (16\")", "Pizza", 2300, { display_name: "Large Meat Lover Pizza" }),
   item(IDS.margheritaS, "Margherita - Small (10\")", "Pizza", 1295, { display_name: "Small Margherita Pizza" }, [toppings("mgTopS", "mgPepS", "mgMushS", "mgBacS", 200)]),
   item(IDS.margheritaL, "Margherita - Large (16\")", "Pizza", 1895, { display_name: "Large Margherita Pizza" }, [toppings("mgTopL", "mgPepL", "mgMushL", "mgBacL", 300)]),
   item(IDS.houseSalad, "House Salad", "Salads", 799, {}, [
@@ -89,6 +91,8 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["pepperoni", IDS.pepPizzaS], ["pepperoni", IDS.pepPizzaM], ["pepperoni", IDS.pepPizzaL],
   ["small pepperoni pizza", IDS.pepPizzaS], ["medium pepperoni pizza", IDS.pepPizzaM], ["large pepperoni pizza", IDS.pepPizzaL],
   ["large pepperoni", IDS.pepPizzaL], ["medium pepperoni", IDS.pepPizzaM], ["small pepperoni", IDS.pepPizzaS],
+  ["hawaiian", "hawL"], ["hawaiian pizza", "hawL"], ["meat lover", "mlL"], ["meat lovers", "mlL"], ["meat lover pizza", "mlL"],
+  ["plain", IDS.cheesePizzaS], ["plain", IDS.cheesePizzaM], ["plain", IDS.cheesePizzaL],
   ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
   ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak],
