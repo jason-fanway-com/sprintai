@@ -125,7 +125,9 @@ export function turn(input: TurnInput): TurnOutput {
     }).map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; })
       .filter((p) => p.span && narrow(focus.status.kind === "ambiguous" ? focus.status.candidates : [], p.span, menu).length > 0);
     if (parts.length >= 2) {
-      const kept = moves.filter((m) => m.kind !== "answer_option");
+      // the model sometimes expresses the split as "remove the pizzas line, add four": the removal
+      // of the very line being answered is that same intent, not a second instruction
+      const kept = moves.filter((m) => m.kind !== "answer_option" && !(m.kind === "remove_line" && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref ? lineMatchesSpan(focus, m.ref.span, menu) : form0.lines.length === 1)));
       moves.length = 0; moves.push(...kept, { kind: "split_line", line_id: focus.line_id, parts });
       ledger.push({ turn: t, event: "quantity_split_by_kind", data: { line_id: focus.line_id, parts } });
     }
