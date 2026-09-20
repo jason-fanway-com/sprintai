@@ -5211,6 +5211,66 @@ export function decide(
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+
+    // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
+    // line naming a topping the customer's already-in-cart line of this SAME
+    // item doesn't have yet used to fall straight into the brand-new-line
+    // path below. Neither R1's own restatement guard
+    // (isAnswerRestatementOfCartLine/toppingsCompatibleWithCartLine, scoped
+    // to the disambiguation-ANSWER path only) nor this loop's own
+    // `restating` skip above (isRestatementOfExistingOrder's ADDITION_MARKERS
+    // veto, which "also" trips) ever recognized this shape — both were built
+    // to recognize ONLY an identical restatement (same toppings) or a fixed
+    // marker phrase, never "the same pizza, plus one more topping." "I also
+    // wanted the Chicken Bacon Ranch pizza, medium with half anchovies"
+    // against a cart that already has that exact Medium CBR pizza (no
+    // anchovies) used to push a SECOND, separately-priced line — a real
+    // overcharge (confirmed RED against pre-fix code, see this file's own
+    // regression test).
+    //
+    // Applies ONLY when: (a) exactly one real line already carries this
+    // menu_item_id — 2+ lines is a genuine ambiguity this fix does not
+    // touch, falls through unchanged; (b) at least one of this add's own
+    // resolved choices isn't already on that line — a bare restatement
+    // naming zero or only-already-present toppings never reaches this
+    // branch, untouched, same as before; (c) none of those new choices land
+    // in a modifier group the existing line has ALREADY resolved — a
+    // genuinely conflicting/replacing topping ("pepperoni instead of bacon")
+    // must still open a real second line, the same rule
+    // toppingsCompatibleWithCartLine already enforces on the ANSWER path.
+    // Quantity is required to be exactly 1: an explicit "2 medium CBR pizzas
+    // with anchovies" is a real request for more units, never silently
+    // folded into the existing single line.
+    let mergedIntoExistingLine = false;
+    if (add.quantity === 1 && effectiveChoices.length > 0) {
+      const existingLinesForItem = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === add.menu_item_id);
+      if (existingLinesForItem.length === 1) {
+        const targetLine = existingLinesForItem[0];
+        const existingSelections = targetLine.ask_plan_selections ?? {};
+        const newChoices = effectiveChoices.filter(c => {
+          const sel = existingSelections[c.group_id];
+          const selectedIds = sel === undefined ? [] : Array.isArray(sel) ? sel : [sel];
+          return !selectedIds.includes(c.choice_id);
+        });
+        const conflicts = newChoices.some(c => existingSelections[c.group_id] !== undefined);
+        if (newChoices.length > 0 && !conflicts) {
+          const { texts: newTexts } = resolveChoiceDisplays(menuItem.ask_plan, newChoices);
+          const modifyResult = applyCompiledModifyItem(
+            nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, undefined, "", newTexts,
+          );
+          if (modifyResult.ok) {
+            mergedIntoExistingLine = true;
+            if (modifyResult.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+          }
+          // A failed modify (should not happen -- newTexts were already
+          // validated real choices against this same ask_plan) falls
+          // through to the normal add path below rather than silently
+          // dropping the customer's words.
+        }
+      }
+    }
+    if (mergedIntoExistingLine) continue;
+
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
     if (!result.ok) {
