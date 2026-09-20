@@ -366,3 +366,24 @@ half-and-half pizzas (base row plus two half toppings, from `derived_from` data)
 item is a swap), silent intake of the other items while asking about one, and "do you have X" with no
 match answered with a category list. All fixed; 78 tests. Pure-core budget held by reclassifying the
 legacy cart_json projection as an adapter (persistence, not decisions); the decision core is 1,966 lines.
+
+**19:30, after rerunning my messy-text pass against each deploy (9d2e5f37 → 5fb5d5f8 → 2e914fcc → 592c6387).**
+Each pass was read reply by reply and every oddity traced in the ledger to its class before touching code:
+"2 chicken parm sandwiches one on white one on wheat" lost both sandwiches because the model split them into
+two singular lines and the verbatim check only tolerated a trailing "s" (fix: plural-tolerant word equality;
+"parm" for parmesan as a four-letter stem, a narrowing never a pick); "half pepperoni half mushroom" arriving as
+ONE option span never reached the base-pizza logic (fix: a span naming several toppings is segmented per topping,
+each keeping its placement word; without a size the size is asked); the canon swap to a derived row was dropping
+any other topping or slot pick from price and ticket (fix: swap only when the derived row can carry every pick);
+"actually pepperoni not cheese" arrived 1-in-5 as an empty change_line beside an add (fix: that shape is a
+replacement); the model quoted "15-20 minutes" for prep time (fix: durations are rejected and replaced by the
+honest "I can't see prep or delivery times from here" line, and the prompt says so); "boneless" typed while we
+asked about an unknown item replaced the unknown item instead of answering the wings line (fix: an answer that
+fits another pending line's question is routed to that line); "thats everything" asked "Did you also want
+everything?" because Vito's has an item named Everything (fix: a closed-vocabulary answer is the whole message,
+no omission scan). 91 tests; pure core 1,999 of 2,000 lines, held by removing duplication (one line constructor,
+one nested-reducer helper, one picks walk in price.ts, one answer branch) rather than by raising the budget.
+Known data facts, not engine defects: Vito's lexicon gives the bare word "cheesesteak" to four items (sandwich,
+panini, roll, flatbread), so a bare "cheesesteak" gets a which-one question; Vito's wing flavors have no
+"buffalo" (it is "Hot"/"Mild"), so "buffalo" becomes a kitchen note and the flavor is asked; the single-word
+term "chicken" points at the chicken quesadilla. Those belong to the lexicon compiler.
