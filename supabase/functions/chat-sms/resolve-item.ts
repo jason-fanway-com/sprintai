@@ -423,7 +423,26 @@ function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconT
   return false;
 }
 
-export function resolveItem(span: string, lexicon: LexiconTerm[], inactiveLexicon: LexiconTerm[] = []): ResolveItemResult {
+// 2026-09-19 PO dispatch (rule 1, real conv 087abb8d, live $107.43-vs-~$85
+// money bug): the fuzzy fallback below exists to absorb genuine typos
+// ("hawiaan" -> "hawaiian"), but fuzzyWordMatch's own prefix rule (a 4+ char
+// word that is a literal prefix of a longer one) treats ANY singular word as
+// a "typo" of a lexicon term that is just its plural — "stick" (a real,
+// complete, unrelated word — the customer was saying "let's stick to that,"
+// declining the open list) matched Vito's own active term "sticks"
+// (Mozzarella Sticks) this way and silently added an $8.99 item nobody
+// ordered. There is no lexical way to tell "stick" apart from a genuine
+// truncation like "pepp" using this same rule, so turn-engine.ts's answer-
+// turn new-item detector (messageNamesItemOutsideCandidates) passes `false`
+// here to require an exact, whole-word/whole-term match only — never a
+// fuzzy guess — while every other caller (fresh adds, replacements) keeps
+// today's typo tolerance unchanged.
+export function resolveItem(
+  span: string,
+  lexicon: LexiconTerm[],
+  inactiveLexicon: LexiconTerm[] = [],
+  allowFuzzyFallback = true,
+): ResolveItemResult {
   const spanWords = toWords(normalize(span));
   if (spanWords.length === 0) return { kind: "unresolved" };
 
@@ -468,6 +487,7 @@ export function resolveItem(span: string, lexicon: LexiconTerm[], inactiveLexico
   // more fuzzy-matching families, or none, stays unresolved rather than
   // guessing or listing a fuzzy-derived candidate set.
   if (base.targetIds.size === 0) {
+    if (!allowFuzzyFallback) return { kind: "unresolved" };
     const fuzzyPrimary = fuzzyLongestMatch(spanWords, itemNameEntries);
     const fuzzyBase = fuzzyPrimary.targetIds.size > 0 ? fuzzyPrimary : fuzzyLongestMatch(spanWords, lexicon);
     if (fuzzyBase.targetIds.size === 1) {
