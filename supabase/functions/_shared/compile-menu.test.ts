@@ -576,6 +576,94 @@ Deno.test("lexicon rule 2b: cross-shop, real Zio's shape — a sized Calzone-fam
 });
 
 // ============================================================
+// 2026-09-19 PO dispatch (canonical-name-terms-always-active, real live bug,
+// v564 50-run conv 646eb3b3 #5): a customer typed "2 Alfredo - Chicken
+// pasta" — Vito's own literal menu name — and got "Sorry, I didn't catch
+// 'Alfredo - Chicken'" three times in a row. Root cause: Rule 1 only ever
+// indexes item.display_name, and normalize.ts rewrites display_name into a
+// reordered, category-qualified form ("Chicken Alfredo Entree") the moment
+// two items share a " - "-folded base ("Alfredo - Chicken"/"Alfredo -
+// Shrimp"). Invariant 4 passed anyway (each item's own reordered
+// display_name term IS unique) — this is a coverage gap invariant 4 was
+// never designed to catch, not a uniqueness gap.
+// ============================================================
+
+Deno.test("lexicon rule 2c (canonical-name-terms-always-active): a dash-named item gets its exact/dash-stripped/reversed raw-name forms even though display_name is a completely different, already-unique, reordered+qualified string (real Vito's Alfredo shape)", () => {
+  const chicken = item({ name: "Alfredo - Chicken", display_name: "Chicken Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo" });
+  const terms = itemLexiconTerms(chicken).map(t => t.term);
+  assert(terms.includes("alfredo - chicken"), `exact raw name missing: ${JSON.stringify(terms)}`);
+  assert(terms.includes("alfredo chicken"), `dash-stripped form missing: ${JSON.stringify(terms)}`);
+  assert(terms.includes("chicken alfredo"), `reversed form missing: ${JSON.stringify(terms)}`);
+  // The already-unique reordered display_name term is untouched — this is
+  // additive, never a replacement for Rule 1's own emission.
+  assert(terms.includes("chicken alfredo entree"), `Rule 1's own display_name term must survive unchanged: ${JSON.stringify(terms)}`);
+});
+
+Deno.test("lexicon rule 2c: a name with no dash at all is completely unaffected — no spurious canonical-form rows", () => {
+  const plain = item({ name: "Cheeseburger", display_name: "Cheeseburger", category: "Entrees" });
+  const terms = itemLexiconTerms(plain).map(t => t.term);
+  assertEquals(terms.filter(t => t === "cheeseburger").length, 1);
+});
+
+Deno.test("lexicon rule 2c (acceptance, real Vito's Alfredo shape): resolveItem resolves the exact/dash-stripped/reversed forms of BOTH Alfredo items uniquely, never a 3-way tie against Southwest/Boom Boom Shrimp or Chicken quesadilla", () => {
+  const chicken = item({ name: "Alfredo - Chicken", display_name: "Chicken Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo", price_cents: 1995 });
+  const shrimp = item({ name: "Alfredo - Shrimp", display_name: "Shrimp Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo", price_cents: 2195 });
+  // Unrelated items sharing surface words with the reversed/dash-stripped
+  // forms — reproducing the PO's exact tie report (resolving "Alfredo -
+  // Chicken" offline against only the active lexicon used to tie 3-way
+  // against "Alfredo - Shrimp" and "Chicken quesadilla").
+  const southwestShrimp = item({ name: "Southwest Shrimp", display_name: "Southwest Shrimp", category: "Entrees", price_cents: 1495 });
+  const boomBoomShrimp = item({ name: "Boom Boom Shrimp", display_name: "Boom Boom Shrimp", category: "Entrees", price_cents: 1595 });
+  const chickenQuesadilla = item({ name: "Chicken Quesadilla", display_name: "Chicken Quesadilla", category: "Quesadillas", price_cents: 1295 });
+
+  const { items: compiled, invariants } = compileMenu(
+    [chicken, shrimp, southwestShrimp, boomBoomShrimp, chickenQuesadilla],
+    [],
+    "t",
+    false,
+  );
+  const lexicon: LexiconTerm[] = compiled.flatMap(c => c.lexicon_terms).filter(t => t.target_type === "item");
+
+  for (const [span, expectedId] of [
+    ["alfredo - chicken", chicken.id],
+    ["alfredo chicken", chicken.id],
+    ["chicken alfredo", chicken.id],
+    ["alfredo - shrimp", shrimp.id],
+    ["alfredo shrimp", shrimp.id],
+    ["shrimp alfredo", shrimp.id],
+  ] as const) {
+    const r = resolveItem(span, lexicon);
+    assertEquals(r.kind, "resolved", `${JSON.stringify(span)} must resolve, not ${r.kind}: ${JSON.stringify(r)}`);
+    if (r.kind === "resolved") assertEquals(r.menu_item_id, expectedId, `${JSON.stringify(span)} resolved to the wrong item`);
+  }
+
+  const inv4 = invariants.find(i => i.invariant === 4)!;
+  const inv10 = invariants.find(i => i.invariant === 10)!;
+  assert(inv4.pass, `invariant 4 must pass: ${JSON.stringify(inv4.violations)}`);
+  assert(inv10.pass, `invariant 10 must pass: ${JSON.stringify(inv10.violations)}`);
+});
+
+Deno.test("invariant 10 (regression guard): FAILS when a dash-named item's canonical raw-name forms are missing from its own lexicon_terms, even though invariant 4 already PASSES via a different, already-unique term — the exact shape that let the real Alfredo bug through undetected", () => {
+  const chicken = item({ name: "Alfredo - Chicken", display_name: "Chicken Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo" });
+  const compiledChicken = compileItem(chicken, [], "t");
+  // Simulate the pre-fix bug directly: strip every raw-name-derived term
+  // (Rule 2c's own emission), leaving only the reordered/qualified
+  // display_name term Rule 1 already provides — this is a real, literal-
+  // string-unique term, so invariant 4 has nothing to flag.
+  compiledChicken.lexicon_terms = compiledChicken.lexicon_terms.filter(
+    t => !["alfredo - chicken", "alfredo chicken", "chicken alfredo"].includes(t.term),
+  );
+  const compiledMap = new Map([[chicken.id, compiledChicken]]);
+
+  const invariants = computeMenuInvariants([chicken], compiledMap, false);
+  const inv4 = invariants.find(i => i.invariant === 4)!;
+  const inv10 = invariants.find(i => i.invariant === 10)!;
+  assert(inv4.pass, `invariant 4 should still pass (a different unique term exists): ${JSON.stringify(inv4.violations)}`);
+  assert(!inv10.pass, "invariant 10 must fail — the canonical raw-name forms are missing");
+  assert(inv10.violations[0].includes(chicken.id), `violation must name the item: ${JSON.stringify(inv10.violations)}`);
+});
+
+// ============================================================
 // 2026-09-18 PO decision, item 2 (real Vito's "sauce"/"onions"/"fries"
 // collisions — the choice/group-vocabulary rule originally proposed for
 // this was rejected: it collided with the 2026-09-15 fix that keeps
