@@ -2511,33 +2511,76 @@ const singularizeSpanToken = (word: string): string => {
 const AVAILABILITY_QUESTION_MARKER_RE =
   /\b(?:do you have|does\s+\S+(?:\s+\S+){0,3}\s+have|is there|are there|what about|you (?:have|got) any|have any|got any)\b/i;
 
+const tokenizeSpanText = (t: string): string[] =>
+  t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
+
+// Sentence-ending punctuation splits first (a literal "?" closes the
+// question clause and starts fresh for whatever follows), then the
+// conjunctions PROPOSE commonly runs an add and a question together across
+// within the SAME sentence. Shared by questionClauseOnlyTokens (which
+// tokens are question-exclusive) and nonQuestionClauseText below (the
+// actual surviving TEXT once the question clause is excluded) -- one
+// clause-boundary rule, two different things read off of it.
+function splitIntoMessageClauses(customerMessage: string): string[] {
+  return customerMessage.split(/[.!?]+/).flatMap(s => s.split(/\b(?:and|also|but|plus)\b/i));
+}
+
 function questionClauseOnlyTokens(customerMessage: string | undefined): Set<string> {
   if (!customerMessage) return new Set();
-  const tokenize = (t: string): string[] =>
-    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
-  // Sentence-ending punctuation splits first (a literal "?" closes the
-  // question clause and starts fresh for whatever follows), then the
-  // conjunctions PROPOSE commonly runs an add and a question together
-  // across within the SAME sentence.
-  const clauses = customerMessage.split(/[.!?]+/).flatMap(s => s.split(/\b(?:and|also|but|plus)\b/i));
+  const clauses = splitIntoMessageClauses(customerMessage);
   const questionTokens = new Set<string>();
   const nonQuestionTokens = new Set<string>();
   for (const clause of clauses) {
     const isQuestionClause = AVAILABILITY_QUESTION_MARKER_RE.test(clause);
-    for (const t of tokenize(clause)) (isQuestionClause ? questionTokens : nonQuestionTokens).add(t);
+    for (const t of tokenizeSpanText(clause)) (isQuestionClause ? questionTokens : nonQuestionTokens).add(t);
   }
   const exclusive = new Set<string>();
   for (const t of questionTokens) if (!nonQuestionTokens.has(t)) exclusive.add(t);
   return exclusive;
 }
 
+// PO follow-up (2026-09-19, non-blocking wart on the fix above, same live
+// conversation): when PROPOSE FUSES a real order and a question into the
+// SAME add's item_span ("gluten free pepperoni pizzas" for "can I get 2
+// Pepperoni pizzas? And do you have anything gluten free?"),
+// itemSpanNamedInMessage correctly refuses the whole span for its
+// question-clause taint -- the $20 phantom charge stays refused, exactly as
+// designed -- but that refusal also erases the two pepperoni pizzas the
+// customer actually ordered, since the model never proposed a separate span
+// for them. Recovering that real order means re-resolving against the
+// message's own words with the question clause's words removed -- NOT the
+// raw message verbatim, since "gluten free" would still be sitting right
+// there and could resolve on its own, reintroducing the exact charge this
+// guard exists to prevent. Returns the surviving non-question clause text,
+// joined back together in the message's own order. See the decide() add
+// loop below for where this feeds resolveItem.
+function nonQuestionClauseText(customerMessage: string | undefined) {
+  if (!customerMessage) return "";
+  return splitIntoMessageClauses(customerMessage)
+    .filter(clause => !AVAILABILITY_QUESTION_MARKER_RE.test(clause))
+    .map(clause => clause.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+// True when at least one of the span's own tokens is supported ONLY by a
+// question clause -- i.e. itemSpanNamedInMessage refused (or would refuse)
+// this span BECAUSE of question-clause taint, as distinct from a span
+// naming something absent from the message entirely (a stale re-proposal
+// or a flat hallucination -- ADDENDUM A/Round 3 item 2a's own territory,
+// not this one).
+function spanHasQuestionClauseOnlyToken(span: string, customerMessage: string | undefined): boolean {
+  if (!customerMessage) return false;
+  const questionOnly = questionClauseOnlyTokens(customerMessage);
+  if (questionOnly.size === 0) return false;
+  return tokenizeSpanText(span).some(t => questionOnly.has(t));
+}
+
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
-  const tokenize = (t: string): string[] =>
-    t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
-  const spanTokens = tokenize(span);
+  const spanTokens = tokenizeSpanText(span);
   if (spanTokens.length === 0) return false;
-  const messageTokens = tokenize(customerMessage);
+  const messageTokens = tokenizeSpanText(customerMessage);
   const questionOnly = questionClauseOnlyTokens(customerMessage);
   const messageTokenSet = new Set(messageTokens.filter(t => !questionOnly.has(t)));
   return spanTokens.every(t => {
@@ -3549,6 +3592,11 @@ export function decide(
   // after the loop, to gate the raw-message fallback precisely: it must
   // fire ONLY when every guard-dropped add is the former, never the latter.
   const guardDroppedWasStale: boolean[] = [];
+  // PO follow-up (2026-09-19): parallel to guardDroppedWasStale above, but
+  // for the OTHER reason a guard-drop happens -- see
+  // spanHasQuestionClauseOnlyToken's own header. Read after the loop by the
+  // recovery block that feeds nonQuestionClauseText through resolveItem.
+  const guardDroppedWasQuestionTainted: boolean[] = [];
   for (const add of proposal.adds ?? []) {
     const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
     // Always resolve (even on guard failure) so the guard-drop path can check
@@ -3563,6 +3611,7 @@ export function decide(
       const span = (add.item_span ?? "").trim();
       if (span) unresolvedSpans.push(span);
       guardDroppedWasStale.push(resolution.kind === "resolved" && menuItemIdsAlreadyInCart.has(resolution.menu_item_id));
+      guardDroppedWasQuestionTainted.push(spanHasQuestionClauseOnlyToken(add.item_span, customerMessage));
     } else if (resolution.kind === "resolved") {
       resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
@@ -3625,6 +3674,37 @@ export function decide(
       resolvedAdds.push({ menu_item_id: rawResolution.menu_item_id, quantity: 1, choices: [], item_span: (customerMessage ?? "").trim() });
     } else if (rawResolution.kind === "ambiguous") {
       ambiguousSpans.push({ candidates: rawResolution.candidates, quantity: 1, spanText: (customerMessage ?? "").trim() });
+    }
+  }
+  // PO follow-up (2026-09-19, non-blocking wart on question-clause-not-an-
+  // add, live gap: cart ends up empty, real order lost): same "trust the
+  // message over the model" principle as the staleness fallback just above,
+  // for the OTHER reason an add ends up guard-dropped -- the model FUSED a
+  // real order ("2 Pepperoni pizzas") and a question ("do you have anything
+  // gluten free?") into ONE span, so itemSpanNamedInMessage correctly
+  // refused the whole thing for its question-clause taint. That refusal
+  // must stand -- it's the exact money-safety guarantee
+  // question-clause-not-an-add exists for -- but it must not also erase the
+  // real order sitting right next to it in the same span, which the model
+  // never proposed a separate span for. Fires ONLY when every add this turn
+  // was guard-dropped AND every one of those was question-clause-tainted
+  // (never a bare hallucination or stale re-proposal -- those stay exactly
+  // as silently dropped as they always have), and only once the staleness
+  // fallback above has had its own chance to resolve things first.
+  // Resolves against nonQuestionClauseText, never the raw message -- the
+  // question clause's own words must stay excluded here exactly as they
+  // were for the guard itself, or "gluten free" could resolve straight back
+  // in on its own.
+  if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
+      genuinelyUnresolvedSpans.length === 0 && guardDroppedWasQuestionTainted.length === proposal.adds.length &&
+      guardDroppedWasQuestionTainted.every(Boolean)) {
+    const recoveryText = nonQuestionClauseText(customerMessage);
+    const recoveryQuantity = proposal.adds.length === 1 ? (proposal.adds[0].quantity ?? 1) : 1;
+    const recoveryResolution = resolveItem(recoveryText, lexicon);
+    if (recoveryResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(recoveryResolution.menu_item_id)) {
+      resolvedAdds.push({ menu_item_id: recoveryResolution.menu_item_id, quantity: recoveryQuantity, choices: [], item_span: recoveryText });
+    } else if (recoveryResolution.kind === "ambiguous") {
+      ambiguousSpans.push({ candidates: recoveryResolution.candidates, quantity: recoveryQuantity, spanText: recoveryText });
     }
   }
   // See dropAddsSupersededByCorrection's own header: "add a side salad...
