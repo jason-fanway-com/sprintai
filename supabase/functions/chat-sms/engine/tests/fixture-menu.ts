@@ -1,0 +1,104 @@
+// fixture-menu.ts — a Vito's-shaped test menu built through the real adapter.
+// Shapes mirror live rows pulled 2026-09-20: Cheese Burger (temp slot),
+// Garlic Knots (no options), derived Pepperoni Pizza rows (size in name,
+// derived_from -> Cheese base + Pepperoni topping), House Salad (dressing slot).
+import { buildMenu, type LexiconEntry, type RawMenuItem, type ShopConfig } from "../menu.ts";
+
+export const IDS = {
+  cheeseburger: "cb", baconCheeseburger: "bcb", knots: "knots", fries: "fries", cheeseFries: "cfries",
+  cheesePizzaS: "cpS", cheesePizzaM: "cpM", cheesePizzaL: "cpL",
+  pepPizzaS: "ppS", pepPizzaM: "ppM", pepPizzaL: "ppL",
+  margheritaS: "mgS", margheritaL: "mgL",
+  houseSalad: "hs", greekSalad: "gs", cheesesteak: "cs",
+  toppingsS: "topS", toppingsM: "topM", toppingsL: "topL",
+  pepChoiceS: "pepS", pepChoiceM: "pepM", pepChoiceL: "pepL",
+  mushChoiceS: "mushS", mushChoiceM: "mushM", mushChoiceL: "mushL",
+  baconChoiceS: "bacS", baconChoiceL: "bacL",
+  tempGroup: "tempG", tempMedium: "tMed", tempMedWell: "tMW", tempWell: "tWell", tempRare: "tRare", tempMedRare: "tMR",
+  dressingGroup: "dressG", ranch: "dRanch", italian: "dItal", bleu: "dBleu",
+  saladAddons: "saladAdd", grilledChicken: "aChk",
+  sizeFriesGroup: "friesSize", friesSmall: "fS", friesLarge: "fL",
+};
+
+const temp = { group_id: IDS.tempGroup, slot_key: null, kind: "slot" as const, ask_mode: "ask", prompt_template: "temp.ask",
+  choices: [
+    { id: IDS.tempWell, display: "Well Done", price_delta_cents: 0 },
+    { id: IDS.tempMedium, display: "Medium", price_delta_cents: 0 },
+    { id: IDS.tempRare, display: "Rare", price_delta_cents: 0 },
+    { id: IDS.tempMedWell, display: "Medium Well", price_delta_cents: 0 },
+    { id: IDS.tempMedRare, display: "Medium Rare", price_delta_cents: 0 },
+  ] };
+
+const toppings = (gid: string, pep: string, mush: string, bacon: string | null, delta: number) => ({
+  group_id: gid, slot_key: "toppings", kind: "modifier" as const, ask_mode: "on_request", prompt_template: "toppings.ask",
+  choices: [
+    { id: pep, display: "Pepperoni", price_delta_cents: delta },
+    { id: mush, display: "Mushroom", price_delta_cents: delta },
+    ...(bacon ? [{ id: bacon, display: "Bacon", price_delta_cents: delta + 150 }] : []),
+  ] });
+
+function item(id: string, name: string, category: string, price: number, extra: Partial<RawMenuItem> = {}, steps: RawMenuItem["ask_plan"] extends infer _ ? any[] : never = []): RawMenuItem {
+  return { id, name, display_name: extra.display_name ?? name, category, price_cents: price, bot_state: "orderable",
+    ask_plan: { base_price_cents: price, display_name: extra.display_name ?? name, steps }, ...extra };
+}
+
+export const RAW_ITEMS: RawMenuItem[] = [
+  item(IDS.cheeseburger, "Cheese Burger", "Angus Burgers & Specialty", 849, {}, [temp]),
+  item(IDS.baconCheeseburger, "Bacon Cheeseburger", "Angus Burgers & Specialty", 1099, {}, [temp]),
+  item(IDS.knots, "Garlic Knots (6)", "Appetizers", 599),
+  item(IDS.fries, "French Fries", "Sides", 399, {}, [{ group_id: IDS.sizeFriesGroup, slot_key: "size", kind: "slot", ask_mode: "ask", prompt_template: "size.ask",
+    choices: [{ id: IDS.friesSmall, display: "Small", price_delta_cents: 0 }, { id: IDS.friesLarge, display: "Large", price_delta_cents: 200 }] }]),
+  item(IDS.cheeseFries, "Cheese Fries", "Sides", 599),
+  item(IDS.cheesePizzaS, "Cheese - Small (10\")", "Pizza", 1099, { display_name: "Small Cheese Pizza" }, [toppings(IDS.toppingsS, IDS.pepChoiceS, IDS.mushChoiceS, IDS.baconChoiceS, 200)]),
+  item(IDS.cheesePizzaM, "Cheese - Medium (14\")", "Pizza", 1499, { display_name: "Medium Cheese Pizza" }, [toppings(IDS.toppingsM, IDS.pepChoiceM, IDS.mushChoiceM, null, 250)]),
+  item(IDS.cheesePizzaL, "Cheese - Large (16\")", "Pizza", 1800, { display_name: "Large Cheese Pizza" }, [toppings(IDS.toppingsL, IDS.pepChoiceL, IDS.mushChoiceL, IDS.baconChoiceL, 300)]),
+  item(IDS.pepPizzaS, "Pepperoni Pizza - Small (10\")", "Pizza", 1299, { display_name: "Small Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaS, choice_ids: [IDS.pepChoiceS] } }),
+  item(IDS.pepPizzaM, "Pepperoni Pizza - Medium (14\")", "Pizza", 1749, { display_name: "Medium Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaM, choice_ids: [IDS.pepChoiceM] } }),
+  item(IDS.pepPizzaL, "Pepperoni Pizza - Large (16\")", "Pizza", 2100, { display_name: "Large Pepperoni Pizza", is_derived: true, derived_from: { base_item_id: IDS.cheesePizzaL, choice_ids: [IDS.pepChoiceL] } }),
+  item(IDS.margheritaS, "Margherita - Small (10\")", "Pizza", 1295, { display_name: "Small Margherita Pizza" }, [toppings("mgTopS", "mgPepS", "mgMushS", "mgBacS", 200)]),
+  item(IDS.margheritaL, "Margherita - Large (16\")", "Pizza", 1895, { display_name: "Large Margherita Pizza" }, [toppings("mgTopL", "mgPepL", "mgMushL", "mgBacL", 300)]),
+  item(IDS.houseSalad, "House Salad", "Salads", 799, {}, [
+    { group_id: IDS.dressingGroup, slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
+      choices: [{ id: IDS.ranch, display: "Ranch", price_delta_cents: 0 }, { id: IDS.italian, display: "Italian", price_delta_cents: 0 }, { id: IDS.bleu, display: "Bleu Cheese", price_delta_cents: 0 }] },
+    { group_id: IDS.saladAddons, slot_key: "add_ons", kind: "modifier", ask_mode: "on_request", prompt_template: "addons.ask",
+      choices: [{ id: IDS.grilledChicken, display: "Grilled Chicken", price_delta_cents: 400 }] },
+  ]),
+  item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [
+    { group_id: "gsDress", slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
+      choices: [{ id: "gsRanch", display: "Ranch", price_delta_cents: 0 }, { id: "gsGreek", display: "Greek", price_delta_cents: 0 }] },
+  ]),
+  item(IDS.cheesesteak, "Cheesesteak", "Hoagies", 1049),
+];
+
+export const RAW_LEXICON: LexiconEntry[] = [
+  ["cheese burger", IDS.cheeseburger], ["cheeseburger", IDS.cheeseburger], ["cheeseburgers", IDS.cheeseburger], ["cheese burgers", IDS.cheeseburger],
+  ["bacon cheeseburger", IDS.baconCheeseburger], ["bacon cheeseburgers", IDS.baconCheeseburger],
+  ["garlic knots", IDS.knots], ["garlic knot", IDS.knots], ["knots", IDS.knots],
+  ["french fries", IDS.fries], ["fries", IDS.fries], ["fries", IDS.cheeseFries], ["cheese fries", IDS.cheeseFries],
+  ["cheese pizza", IDS.cheesePizzaS], ["cheese pizza", IDS.cheesePizzaM], ["cheese pizza", IDS.cheesePizzaL],
+  ["plain pizza", IDS.cheesePizzaS], ["plain pizza", IDS.cheesePizzaM], ["plain pizza", IDS.cheesePizzaL],
+  ["small cheese pizza", IDS.cheesePizzaS], ["medium cheese pizza", IDS.cheesePizzaM], ["large cheese pizza", IDS.cheesePizzaL],
+  ["pepperoni pizza", IDS.pepPizzaS], ["pepperoni pizza", IDS.pepPizzaM], ["pepperoni pizza", IDS.pepPizzaL],
+  ["pepperoni pizzas", IDS.pepPizzaS], ["pepperoni pizzas", IDS.pepPizzaM], ["pepperoni pizzas", IDS.pepPizzaL],
+  ["pepperoni", IDS.pepPizzaS], ["pepperoni", IDS.pepPizzaM], ["pepperoni", IDS.pepPizzaL],
+  ["small pepperoni pizza", IDS.pepPizzaS], ["medium pepperoni pizza", IDS.pepPizzaM], ["large pepperoni pizza", IDS.pepPizzaL],
+  ["large pepperoni", IDS.pepPizzaL], ["medium pepperoni", IDS.pepPizzaM], ["small pepperoni", IDS.pepPizzaS],
+  ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
+  ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
+  ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak],
+].map(([term, id]) => ({ term, target_type: "item", target_id: id })).concat([
+  { term: "pizza", target_type: "category", target_id: "Pizza" },
+  { term: "pizzas", target_type: "category", target_id: "Pizza" },
+  { term: "salad", target_type: "category", target_id: "Salads" },
+  { term: "salads", target_type: "category", target_id: "Salads" },
+]);
+
+export const SHOP: ShopConfig = {
+  shop_id: "vitos", name: "Vito's Pizza", delivery_enabled: true, delivery_fee_cents: 300, tax_rate_bps: 600,
+  service_fee_cents: 99, phone_display: "(610) 555-0100",
+  ask_order: ["fulfillment", "address", "items", "tip", "confirm"],
+};
+
+export function fixtureMenu(overrides: Partial<ShopConfig> = {}) {
+  return buildMenu({ version: "test-v1", items: RAW_ITEMS, lexicon: RAW_LEXICON, shop: { ...SHOP, ...overrides } });
+}

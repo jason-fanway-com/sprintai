@@ -1,0 +1,86 @@
+// crossread.ts — the second reader. A deterministic lexicon scan of the customer
+// message, reconciled against the model's moves. Disagreement becomes a question,
+// never a silent add or a silent drop.
+import { findWordRun, singular, words } from "./normalize.ts";
+import type { Menu } from "./menu.ts";
+import type { Move } from "./form.ts";
+
+export interface Hit { start: number; end: number; termWords: string[]; item_ids: string[] }
+
+/** Greedy longest-match, non-overlapping, item terms only. */
+export function scan(message: string, menu: Menu): { words: string[]; hits: Hit[] } {
+  const w = words(message);
+  const hits: Hit[] = [];
+  let i = 0;
+  while (i < w.length) {
+    let best: Hit | null = null;
+    for (const t of menu.itemTerms) {
+      if (best && t.words.length < best.termWords.length) break; // sorted longest first
+      if (t.words.length > w.length - i) continue;
+      let ok = true;
+      for (let j = 0; j < t.words.length; j++) if (w[i + j] !== t.words[j]) { ok = false; break; }
+      if (!ok) continue;
+      if (!best) best = { start: i, end: i + t.words.length, termWords: t.words, item_ids: [t.target_id] };
+      else if (!best.item_ids.includes(t.target_id)) best.item_ids.push(t.target_id);
+    }
+    if (best) { hits.push(best); i = best.end; } else i++;
+  }
+  return { words: w, hits };
+}
+
+function spansOf(m: Move): string[] {
+  switch (m.kind) {
+    case "add_line": return [m.item_span, ...(m.option_spans ?? []), ...(m.note ? [m.note] : [])];
+    case "change_line": return [...("span" in m.ref ? [m.ref.span] : []), ...(m.add_option_spans ?? []), ...(m.remove_option_spans ?? [])];
+    case "remove_line": return "span" in m.ref ? [m.ref.span] : [];
+    case "answer_option": return [m.value_span];
+    case "ask_menu": return m.about_span ? [m.about_span] : [];
+    case "answer": return m.field === "address" ? [m.value.text] : [];
+    default: return [];
+  }
+}
+
+export interface Reconciled {
+  /** moves whose spans were verbatim in the message */
+  accepted: Move[];
+  /** moves whose item_span is not in the message (invented) */
+  rejected: Array<{ move: Move; span: string }>;
+  /** lexicon hits no accepted move covers: candidates for "did you also want…?" */
+  omissions: Array<{ span: string; item_ids: string[] }>;
+}
+
+export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAskedSpans: Set<string>): Reconciled {
+  const { words: mw, hits } = scan(message, menu);
+  const covered = new Array<boolean>(mw.length).fill(false);
+  const accepted: Move[] = [];
+  const rejected: Reconciled["rejected"] = [];
+
+  for (const m of moves) {
+    let ok = true;
+    for (const s of spansOf(m)) {
+      const sw = words(s);
+      if (sw.length === 0) continue;
+      const at = findWordRun(mw, sw);
+      if (at < 0) {
+        // allow the span if every word of it appears somewhere (model may reorder or de-plural lightly)
+        const all = sw.every((x) => mw.includes(x) || mw.includes(x + "s") || mw.includes(singular(x)));
+        if (!all && (m.kind === "add_line" ? s === m.item_span : false)) { ok = false; rejected.push({ move: m, span: s }); break; }
+        if (all) for (const x of sw) { const k = mw.indexOf(x); if (k >= 0) covered[k] = true; }
+        continue;
+      }
+      for (let k = at; k < at + sw.length; k++) covered[k] = true;
+    }
+    if (ok) accepted.push(m);
+  }
+
+  const omissions: Reconciled["omissions"] = [];
+  for (const h of hits) {
+    let anyCovered = false;
+    for (let k = h.start; k < h.end; k++) if (covered[k]) { anyCovered = true; break; }
+    if (anyCovered) continue;
+    const span = mw.slice(h.start, h.end).join(" ");
+    if (alreadyAskedSpans.has(span)) continue;
+    omissions.push({ span, item_ids: h.item_ids });
+  }
+  return { accepted, rejected, omissions };
+}

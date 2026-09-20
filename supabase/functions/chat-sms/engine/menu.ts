@@ -1,0 +1,175 @@
+// menu.ts — the engine's read-only view of a compiled menu, and the adapter
+// that builds it from the rows the compiler already writes (menu_items.ask_plan,
+// lexicon). Facets are derived from item names here until the compiler emits
+// them as columns; that regex runs over MENU NAMES, never customer text.
+
+import { normalize, words } from "./normalize.ts";
+
+export interface MenuChoice { id: string; name: string; delta_cents: number; words: string[] }
+export interface MenuGroup {
+  id: string;
+  name: string;
+  kind: "slot" | "modifier";
+  max_select: number;
+  choices: MenuChoice[];
+}
+export interface Facets { kind: string | null; size: string | null }
+export interface MenuItem {
+  id: string;
+  name: string;
+  display_name: string;
+  category: string | null;
+  base_cents: number;
+  groups: MenuGroup[];
+  facets: Facets;
+  orderable: boolean;
+  derived_from: { base_item_id: string; choice_ids: string[] } | null;
+  words: string[];
+}
+export interface LexiconEntry {
+  term: string;
+  target_type: "item" | "choice" | "category" | string;
+  target_id: string;
+}
+export interface IndexedTerm { words: string[]; target_id: string; target_type: string }
+
+export interface Menu {
+  version: string;
+  items: Map<string, MenuItem>;
+  /** item terms, longest first */
+  itemTerms: IndexedTerm[];
+  categoryTerms: IndexedTerm[];
+  /** `${base_item_id}|${choice_id}` -> derived item id */
+  canon: Map<string, string>;
+  shop: ShopConfig;
+}
+
+export interface ShopConfig {
+  shop_id: string;
+  name: string;
+  delivery_enabled: boolean;
+  delivery_fee_cents: number;
+  tax_rate_bps: number;
+  service_fee_cents: number;
+  phone_display: string | null;
+  /** field order for asking; data, not code */
+  ask_order: Array<"fulfillment" | "address" | "items" | "tip" | "confirm">;
+}
+
+// ── Raw row shapes (what the DB / existing loaders hand us) ─────────────────
+export interface RawAskPlanStep {
+  group_id: string;
+  slot_key: string | null;
+  kind: "slot" | "modifier";
+  ask_mode?: string;
+  prompt_template?: string;
+  choices: Array<{ id: string; display: string; price_delta_cents: number }>;
+}
+export interface RawMenuItem {
+  id: string;
+  name: string;
+  display_name?: string | null;
+  category?: string | null;
+  price_cents: number;
+  bot_state?: string | null;
+  size_label?: string | null;
+  is_derived?: boolean | null;
+  derived_from?: { base_item_id: string; choice_ids: string[] } | null;
+  ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[] } | null;
+  option_groups?: Array<{ id: string; name: string; max_select?: number | null }> | null;
+}
+
+const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
+const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra large|personal|sheet|cup|bowl|regular)\b.*$/i;
+
+export function facetsFromName(name: string, sizeLabel?: string | null): Facets {
+  const m = NAME_SIZE_RE.exec(name);
+  if (m) {
+    const size = words(m[2])[0] ?? null;
+    return { kind: normalize(m[1]) || null, size };
+  }
+  const label = sizeLabel ? words(sizeLabel)[0] : null;
+  if (label && SIZE_WORDS.has(label)) {
+    const kindWords = words(name).filter((w) => w !== label);
+    return { kind: kindWords.join(" ") || null, size: label };
+  }
+  return { kind: normalize(name) || null, size: null };
+}
+
+export function buildMenu(input: {
+  version: string;
+  items: RawMenuItem[];
+  lexicon: LexiconEntry[];
+  shop: ShopConfig;
+}): Menu {
+  const items = new Map<string, MenuItem>();
+  for (const r of input.items) {
+    const groupNames = new Map<string, { name: string; max: number }>();
+    for (const g of r.option_groups ?? []) groupNames.set(g.id, { name: g.name, max: g.max_select ?? 1 });
+    const steps = r.ask_plan?.steps ?? [];
+    const groups: MenuGroup[] = steps.map((s) => {
+      const meta = groupNames.get(s.group_id);
+      const fallbackName = s.slot_key ?? (s.prompt_template ? s.prompt_template.replace(/\.ask$/, "") : "option");
+      return {
+        id: s.group_id,
+        name: meta?.name ?? fallbackName,
+        kind: s.kind,
+        max_select: s.kind === "modifier" ? Math.max(meta?.max ?? 99, 1) : 1,
+        choices: s.choices.map((c) => ({ id: c.id, name: c.display, delta_cents: c.price_delta_cents, words: words(c.display) })),
+      };
+    });
+    const display = r.display_name ?? r.ask_plan?.display_name ?? r.name;
+    items.set(r.id, {
+      id: r.id,
+      name: r.name,
+      display_name: display,
+      category: r.category ?? null,
+      base_cents: r.ask_plan?.base_price_cents ?? r.price_cents,
+      groups,
+      facets: facetsFromName(r.name, r.size_label),
+      orderable: (r.bot_state ?? "orderable") === "orderable",
+      derived_from: r.derived_from ?? null,
+      words: words(display),
+    });
+  }
+
+  const itemTerms: IndexedTerm[] = [];
+  const categoryTerms: IndexedTerm[] = [];
+  for (const e of input.lexicon) {
+    const w = words(e.term);
+    if (w.length === 0) continue;
+    if (e.target_type === "item") {
+      const it = items.get(e.target_id);
+      if (!it || !it.orderable) continue;
+      itemTerms.push({ words: w, target_id: e.target_id, target_type: "item" });
+    } else if (e.target_type === "category") {
+      categoryTerms.push({ words: w, target_id: e.target_id, target_type: "category" });
+    }
+  }
+  itemTerms.sort((a, b) => b.words.length - a.words.length);
+  categoryTerms.sort((a, b) => b.words.length - a.words.length);
+
+  const canon = new Map<string, string>();
+  for (const it of items.values()) {
+    if (it.derived_from && it.orderable && it.derived_from.choice_ids.length === 1) {
+      canon.set(`${it.derived_from.base_item_id}|${it.derived_from.choice_ids[0]}`, it.id);
+    }
+  }
+  return { version: input.version, items, itemTerms, categoryTerms, canon, shop: input.shop };
+}
+
+export function itemsInCategory(menu: Menu, category: string): MenuItem[] {
+  const c = normalize(category);
+  const out: MenuItem[] = [];
+  for (const it of menu.items.values()) {
+    if (!it.orderable) continue;
+    if (it.category && normalize(it.category) === c) out.push(it);
+  }
+  if (out.length === 0) {
+    const noun = c.replace(/s$/, "");
+    for (const it of menu.items.values()) {
+      if (it.orderable && it.words.some((w) => w === noun || w === noun + "s")) out.push(it);
+    }
+  }
+  return out;
+}

@@ -1,0 +1,126 @@
+{"message": "I'll get a bagel, wheat please", "source": "addon-clause-and-required-slot-20260912.test.ts", "via": "fixture"}
+{"message": "I'll get a bagel", "source": "addon-clause-and-required-slot-20260912.test.ts", "via": "fixture"}
+{"message": "I want an Italian hoagie with\n//   shrimp and blackened salmon on wheat bread.", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "I'd like a Tuna Hoagie on\n//   wheat bread, please. Can you add shrimp to that?", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "Can I get\n//   a Chicken Bacon Ranch pizza, medium, with half anchovies on it?", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "I want an Italian hoagie with shrimp and blackened salmon on wheat bread.", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "I'd like a Tuna Hoagie on wheat bread, please. Can you add shrimp to that?", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "Can I get a Chicken Bacon Ranch pizza, medium, with half anchovies on it?", "source": "addon-from-raw-message-not-itemspan-20260920.test.ts", "via": "fixture"}
+{"message": "can I add a side of Bleu Cheese", "source": "bleu-cheese-offmenu-not-pizza-list-20260919.test.ts", "via": "fixture"}
+{"message": "can I get a cheese pizza", "source": "bleu-cheese-offmenu-not-pizza-list-20260919.test.ts", "via": "fixture"}
+{"message": "a large pepperoni pizza and 1 Bleu Cheese", "source": "bleu-cheese-offmenu-not-pizza-list-20260919.test.ts", "via": "fixture"}
+{"message": "And I still want the 1 Bleu Cheese", "source": "bleu-cheese-offmenu-not-pizza-list-20260919.test.ts", "via": "fixture"}
+{"message": "I'll take the large one", "source": "category-reject-numeric-size-20260919.test.ts", "via": "fixture"}
+{"message": "I want the Spicy Chapo - Small (10\") with mushrooms, I already said! Let's just get that done. I can't think of anything else right now.", "source": "closure-anything-else-not-heard-20260920.test.ts", "via": "fixture"}
+{"message": "I want the Spicy Chapo - Small (10\") with mushrooms, I", "source": "closure-anything-else-not-heard-20260920.test.ts", "via": "header"}
+{"message": "No, thatâs it for me. Just the Calzone and Crazy Fries for pickup.", "source": "closure-curly-apostrophe-20260919.test.ts", "via": "fixture"}
+{"message": "1 house", "source": "conv22-live-runner-gap-20260919.test.ts", "via": "fixture"}
+{"message": "whoops, not a stromboli or house salad. just stick w/ the greek salad, 2 med pepperoni pizzas.", "source": "conv22-live-runner-gap-20260919.test.ts", "via": "fixture"}
+{"message": "no stromboli, just the greek salad and 2 medium pepperonis", "source": "conv22-live-runner-gap-20260919.test.ts", "via": "fixture"}
+{"message": "large cheese pizza\" -> added, 1 line", "source": "correction-buckets-20260906.test.ts", "via": "header"}
+{"message": "no thanks\"          -> \"Your cart is empty. What would you like to order?", "source": "correction-buckets-20260906.test.ts", "via": "header"}
+{"message": "I want a Spicy Chapo - Small (10\") with mushrooms on it. That's for pickup.", "source": "decline-wording-specific-20260920.test.ts", "via": "fixture"}
+{"message": "I want a Spicy Chapo - Small (10\") for pickup.", "source": "decline-wording-specific-20260920.test.ts", "via": "fixture"}
+{"message": "I want a Spicy Chapo - Small (10\") with mushrooms on it.", "source": "decline-wording-specific-20260920.test.ts", "via": "header"}
+{"message": "a side of fries", "source": "disambiguation-unresolved-answer-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "oh my bad, can i get one chicken and one gyro calzone?", "source": "disambiguation-unresolved-answer-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "the chicken calzone and the gyro calzone, pls", "source": "disambiguation-unresolved-answer-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "actually make it a large cheese pizza", "source": "disambiguation-unresolved-answer-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "I'd like ranch with the Buffalo Chicken pizzas, please! Don't forget the Medium Gluten-Free Pizza too.", "source": "dont-forget-slot-answer-20260919.test.ts", "via": "fixture"}
+{"message": "No, forget the buffalo chicken pizza", "source": "dont-forget-slot-answer-20260919.test.ts", "via": "fixture"}
+{"message": "Hey, I want to place an order for pickup. I need a small Green Peppers Pizza, a Fish and Chips, and two Chicken Noodle cups.\n\nCan you get that for me?", "source": "fresh-add-quantity-confirmation-text-20260920.test.ts", "via": "fixture"}
+{"message": "Cup", "source": "fresh-add-quantity-confirmation-text-20260920.test.ts", "via": "fixture"}
+{"message": "two Chicken Noodle cups please", "source": "fresh-add-quantity-confirmation-text-20260920.test.ts", "via": "fixture"}
+{"message": "I want two Chicken Noodle cups, like I said. So that's 2 of the Chicken Noodle - Cup, $4.99 each. Can you update that?", "source": "fresh-add-quantity-confirmation-text-20260920.test.ts", "via": "fixture"}
+{"message": "a large cheese pizza with half pepperoni", "source": "gyro-guard-qualifier-and-sibling-topping-20260919.test.ts", "via": "fixture"}
+{"message": "a small Margherita pizza with gyro meat and bacon", "source": "gyro-guard-qualifier-and-sibling-topping-20260919.test.ts", "via": "fixture"}
+{"message": "Hey! Can I get a Chicken Bacon Ranch pizza, medium size, with half anchovies? Also, a Veggie wrap on wheat tortilla. Thanks!", "source": "half-anchovies-fresh-add-not-dropped-20260920.test.ts", "via": "fixture"}
+{"message": "a Chicken Bacon Ranch pizza, medium, with half anchovies on it", "source": "half-anchovies-fresh-add-not-dropped-20260920.test.ts", "via": "fixture"}
+{"message": "I can put the Personal Calzone on, or the House stromboli â which?", "source": "house-calzone-naming-and-invalid-addon-decline-20260920.test.ts", "via": "fixture"}
+{"message": "I'd like to try the House - Personal calzone, please. Oh, and", "source": "house-calzone-naming-and-invalid-addon-decline-20260920.test.ts", "via": "header"}
+{"message": "I already told you, it's Alex! Can we finalize the order now?", "source": "name-extraction-20260917.test.ts", "via": "header"}
+{"message": "My name is Alex! Can we please just complete the order now?", "source": "name-extraction-20260917.test.ts", "via": "header"}
+{"message": "It's under my name. Just put it in my name.", "source": "name-step-empty-takeover-and-wing-slot-removal-20260919.test.ts", "via": "header"}
+{"message": "Just a regular Coke", "source": "narrowing-exit-default-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "just a regular soda", "source": "narrowing-exit-default-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "large coke please", "source": "narrowing-exit-default-fallback-20260919.test.ts", "via": "fixture"}
+{"message": "chicken quesadilla", "source": "narrowing-exit-order-shaped-answer-20260919.test.ts", "via": "fixture"}
+{"message": "${input.message}", "source": "narrowing-exit-order-shaped-answer-20260919.test.ts", "via": "fixture"}
+{"message": "...Served with\n// home fries or hash brown and choice of bagel or toast.", "source": "njb-slot-key-anchor-20260915.test.ts", "via": "fixture"}
+{"message": "I don't want either of those. Just the hoagie, cheeseburgers, and cheesesteak.", "source": "none-of-those-widen-and-shrimp-addon-compound-span-20260919.test.ts", "via": "fixture"}
+{"message": "Also, can I get a side of buffalo chicken fries?", "source": "offmenu-category-mismatch-generalized-20260920.test.ts", "via": "fixture"}
+{"message": "plus a side of buffalo chicken fries", "source": "offmenu-category-mismatch-generalized-20260920.test.ts", "via": "fixture"}
+{"message": "can I get an order of crab fries", "source": "offmenu-category-mismatch-generalized-20260920.test.ts", "via": "fixture"}
+{"message": "can I get a large buffalo chicken pizza", "source": "offmenu-category-mismatch-generalized-20260920.test.ts", "via": "fixture"}
+{"message": "Hi, I'd like to order a cup of Lobster Bisque, please.", "source": "offmenu-category-mismatch-preposition-lobster-bisque-20260920.test.ts", "via": "fixture"}
+{"message": "can I get a bowl of lobster bisque", "source": "offmenu-category-mismatch-preposition-lobster-bisque-20260920.test.ts", "via": "fixture"}
+{"message": "a cup of chicken noodle soup please", "source": "offmenu-category-mismatch-preposition-lobster-bisque-20260920.test.ts", "via": "fixture"}
+{"message": "What? I just want a cup of lobster bisque. Is that not on the menu?", "source": "offmenu-category-mismatch-preposition-lobster-bisque-20260920.test.ts", "via": "header"}
+{"message": "can I get a small chicken pizza", "source": "offmenu-category-mismatch-reverse-bbq-chicken-pizza-20260920.test.ts", "via": "fixture"}
+{"message": "can I get the BBQ chicken", "source": "offmenu-category-mismatch-reverse-bbq-chicken-pizza-20260920.test.ts", "via": "fixture"}
+{"message": "can I get a side of buffalo chicken fries?", "source": "offmenu-category-mismatch-reverse-bbq-chicken-pizza-20260920.test.ts", "via": "header"}
+{"message": "can I change that to a small BBQ Chicken pizza instead?", "source": "offmenu-category-mismatch-reverse-bbq-chicken-pizza-20260920.test.ts", "via": "header"}
+{"message": "hey! i wanna place an order. lemme get 2 house salads w/ bleu cheese dressing and can i add shrimp and black diamond steak to those?", "source": "offmenu-veto-choice-of-same-message-item-20260920.test.ts", "via": "fixture"}
+{"message": "Can I also get a side of Bleu Cheese?", "source": "offmenu-veto-choice-of-same-message-item-20260920.test.ts", "via": "fixture"}
+{"message": "Bleu Cheese, Beef", "source": "open-question-reprocess-20260917.test.ts", "via": "fixture"}
+{"message": "2 regular slices with gyro meat", "source": "open-question-reprocess-20260917.test.ts", "via": "fixture"}
+{"message": "why do I have 6", "source": "open-question-reprocess-20260917.test.ts", "via": "fixture"}
+{"message": "I said I want 1 Cheesesteak homemade panini, that's option 1. I already told you the full order! It's 2x Large Chicken Bacon Ranch with onions, 1 Cheesesteak panini, 1 Medium Sausage Pizza.", "source": "option-pick-and-restatement-dup-20260919.test.ts", "via": "fixture"}
+{"message": "Can you confirm my order? Just to recap: 1 Garlic Cheesesteak on wheat with blackened salmon and a side of fries", "source": "option-pick-and-restatement-dup-20260919.test.ts", "via": "fixture"}
+{"message": "Hi, I want to place an order for 2 Chicken Bacon Ranch pizzas with steak and green peppers. Can you help me with that?", "source": "pizza-ambiguous-fresh-add-topping-fold-20260920.test.ts", "via": "fixture"}
+{"message": "I meant the Chicken Bacon Ranch pizza, I want 2 of the Large (16\") please!", "source": "pizza-ambiguous-fresh-add-topping-fold-20260920.test.ts", "via": "fixture"}
+{"message": "Hi, I want to place an order for 2 Chicken Bacon Ranch", "source": "pizza-ambiguous-fresh-add-topping-fold-20260920.test.ts", "via": "header"}
+{"message": "I meant the Chicken Bacon Ranch pizza, I want 2 of the", "source": "pizza-ambiguous-fresh-add-topping-fold-20260920.test.ts", "via": "header"}
+{"message": "...And about that gluten-free question... do you have any gluten-free pizzas?", "source": "question-preamble-no-add-20260919.test.ts", "via": "fixture"}
+{"message": "Also, can I get 2 Pepperoni pizzas? And do you have anything gluten free?", "source": "question-preamble-no-add-20260919.test.ts", "via": "fixture"}
+{"message": "I have a question, can I get a pepperoni pizza?", "source": "question-preamble-no-add-20260919.test.ts", "via": "fixture"}
+{"message": "Actually, can I change that pizza to a small BBQ Chicken pizza instead?", "source": "replacement-named-line-and-hold-20260919.test.ts", "via": "fixture"}
+{"message": "Actually, can I change that pizza to a small Roma pizza instead?", "source": "replacement-named-line-and-hold-20260919.test.ts", "via": "fixture"}
+{"message": "I meant to say BBQ Chicken - Small (10\") pizza, not Buffalo or Thai. Can we do that instead?", "source": "replacement-named-line-and-hold-20260919.test.ts", "via": "fixture"}
+{"message": "Buffalo Chicken", "source": "replacement-named-line-and-hold-20260919.test.ts", "via": "fixture"}
+{"message": "That's Ranch dressing for both. Thanks!", "source": "restated-choice-value-not-item-search-20260920.test.ts", "via": "fixture"}
+{"message": "Also can I get a ranch flatbread", "source": "restated-choice-value-not-item-search-20260920.test.ts", "via": "fixture"}
+{"message": "I'll get a medium chicken bacon ranch pizza and an italian wrap", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "I also wanted the Chicken Bacon Ranch pizza, medium with half anchovies", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "a medium chicken bacon ranch pizza with pepperoni and an italian wrap", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "I also wanted the chicken bacon ranch pizza medium with half pepperoni instead", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "a medium chicken bacon ranch pizza and an italian wrap", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "I also wanted 2 more medium chicken bacon ranch pizzas with anchovies", "source": "restated-topping-after-skip-not-duplicate-20260919.test.ts", "via": "fixture"}
+{"message": "No, just the Spicy Chapo - Small (10\") with mushrooms for pickup!", "source": "restatement-quantity-bump-20260920.test.ts", "via": "fixture"}
+{"message": "I already told you, just the Spicy Chapo - Small (10\") with mushrooms for pickup!", "source": "restatement-quantity-bump-20260920.test.ts", "via": "fixture"}
+{"message": "I want 2 Spicy Chapo - Small (10\") for pickup.", "source": "restatement-quantity-bump-20260920.test.ts", "via": "fixture"}
+{"message": "I only wanted one Spicy Chapo - Small (10\"), not two! Just confirm that one, okay?", "source": "restatement-quantity-bump-20260920.test.ts", "via": "fixture"}
+{"message": "Actually, can I change that to 1 large Roma pizza and add 1 large Buffalo Chicken pizza instead?", "source": "roma-quantity-modify-and-sauce-slot-decline-20260920.test.ts", "via": "fixture"}
+{"message": "Can I just get it without any sauce instead?", "source": "roma-quantity-modify-and-sauce-slot-decline-20260920.test.ts", "via": "fixture"}
+{"message": "2 house salads and a unicorn glitter dust please", "source": "salad-choices-applied-not-skipped-20260920.test.ts", "via": "fixture"}
+{"message": "We only have Mozzarella Sticks as an appetizer. Keep it, or take it off?", "source": "shrimp-stick-rejection-20260919.test.ts", "via": "fixture"}
+{"message": "Can I get Ranch for both, please? Also, is there a wait time for pickup?", "source": "slot-answer-item-bleed-and-topping-correction-20260919.test.ts", "via": "fixture"}
+{"message": "add house balsamic please", "source": "slot-answer-item-bleed-and-topping-correction-20260919.test.ts", "via": "fixture"}
+{"message": "I changed my mind about the bacon on the small one. Just keep the gyro meat for the small Margherita instead!", "source": "slot-answer-item-bleed-and-topping-correction-20260919.test.ts", "via": "fixture"}
+{"message": "scratch the small Margherita, keep everything else the same", "source": "slot-answer-item-bleed-and-topping-correction-20260919.test.ts", "via": "fixture"}
+{"message": "The ranch is good, no bleu cheese, just the ranch on both.", "source": "slot-quantifier-both-strip-20260920.test.ts", "via": "fixture"}
+{"message": "both", "source": "slot-quantifier-both-strip-20260920.test.ts", "via": "fixture"}
+{"message": "Yes, please add ranch for both pizzas!", "source": "slot-resolved-blocks-item-search-20260920.test.ts", "via": "fixture"}
+{"message": "I'll go with the Ranch for both, please!", "source": "slot-resolved-blocks-item-search-20260920.test.ts", "via": "fixture"}
+{"message": "2 small buffalo chicken pizzas with ranch dressing please", "source": "slot-value-narrowing-bleed-20260920.test.ts", "via": "fixture"}
+{"message": "I'll go with the Ranch for both, please! Also, can I get a side of ranch?", "source": "slot-value-narrowing-bleed-20260920.test.ts", "via": "fixture"}
+{"message": "The 'To' number is not a valid phone number.", "source": "sms-outbound-p0-20260919.test.ts", "via": "fixture"}
+{"message": "can I get a Lobster Bisque - Cup please?", "source": "soup-qty-after-size-pick-20260920.test.ts", "via": "fixture"}
+{"message": "I asked for the Cup, so 2 please. What's going on?", "source": "soup-qty-after-size-pick-20260920.test.ts", "via": "fixture"}
+{"message": "I asked for the Cup, so 2 please", "source": "soup-size-cup-bowl-20260919.test.ts", "via": "fixture"}
+{"message": "Just the Lobster Bisque - Cup for pickup", "source": "soup-size-cup-bowl-20260919.test.ts", "via": "fixture"}
+{"message": "can I get a Lobster Bisque please?", "source": "soup-size-cup-bowl-20260919.test.ts", "via": "fixture"}
+{"message": "let's switch that to the BBQ Chicken instead, but I want Mild sauce this time", "source": "switch-item-while-slot-open-is-replace-20260920.test.ts", "via": "fixture"}
+{"message": "let's switch that to the small Buffalo Chicken pizza instead, but I want Mild sauce this time", "source": "switch-item-while-slot-open-is-replace-20260920.test.ts", "via": "fixture"}
+{"message": "let's switch that to the BBQ Chicken flatbread instead, but I", "source": "switch-item-while-slot-open-is-replace-20260920.test.ts", "via": "header"}
+{"message": "I don't want a driver tip. Is it really $19.99 for that?", "source": "tip-step-p0-20260919.test.ts", "via": "fixture"}
+{"message": "I don't want a driver tip. Can you just do the two pizzas for pickup?", "source": "tip-step-p0-20260919.test.ts", "via": "fixture"}
+{"message": "I think there's a mistake on the prices. The Large Cheese pizza should be $16.50 not what you have.", "source": "tip-step-p0-20260919.test.ts", "via": "fixture"}
+{"message": "Nope, that's it for now", "source": "tip-step-p0-20260919.test.ts", "via": "fixture"}
+{"message": "can I also get some fries", "source": "upsell-skip-cart-item-20260919.test.ts", "via": "fixture"}
+{"message": "can I get some fries", "source": "upsell-skip-cart-item-20260919.test.ts", "via": "fixture"}
+{"message": "can I also get some loaded fries", "source": "upsell-skip-cart-item-20260919.test.ts", "via": "fixture"}
+{"message": "I meant option 1) the Chicken Parmesan entree for $17.95. Sorry for the confusion!", "source": "x-not-y-readback-ambiguous-target-20260920.test.ts", "via": "fixture"}
+{"message": "Looks good, but I wanted 2 Chicken Parmesan *not* Stromboli!", "source": "x-not-y-readback-ambiguous-target-20260920.test.ts", "via": "header"}
+{"message": "I meant option 1) the Chicken Parmesan entree for $17.95.", "source": "x-not-y-readback-ambiguous-target-20260920.test.ts", "via": "header"}
+{"message": "House - Personal calzone ... can I get a chicken add-on for", "source": "x3-addon-decline-followup-20260920.test.ts", "via": "header"}

@@ -1,0 +1,319 @@
+// form.ts — the order form (state), the moves that may change it, the ledger,
+// and the pure reducer `apply`. Code owns everything in here. No text matching.
+
+export type Fulfillment = "pickup" | "delivery";
+
+export interface Address {
+  text: string;
+  formatted: string | null;
+  validated: boolean;
+  zone_ok: boolean;
+}
+
+export type Tip = { kind: "percent"; value: number } | { kind: "cents"; value: number };
+
+export type LineStatus =
+  | { kind: "unresolved" }
+  | { kind: "ambiguous"; candidates: string[]; facet: "kind" | "size" | "list" | null }
+  | { kind: "needs_slot"; group_id: string }
+  | { kind: "complete" };
+
+export interface Line {
+  line_id: number;
+  span: string;
+  item_id: string | null;
+  qty: number;
+  /** required slot group_id -> choice_id */
+  choices: Record<string, string>;
+  /** modifier choice ids (priced add-ons) */
+  modifiers: string[];
+  /** option spans waiting to be applied (before the item binds) */
+  held: string[];
+  /** unpriced kitchen note; each entry was a span we could not price */
+  notes: string[];
+  /** when a slot answer matched several choices: group_id -> the matching choice ids */
+  slot_candidates: Record<string, string[]>;
+  status: LineStatus;
+}
+
+export type OpenQuestion =
+  | { kind: "fulfillment" }
+  | { kind: "address" }
+  | { kind: "items" }
+  | { kind: "tip" }
+  | { kind: "confirm" }
+  | { kind: "line_unresolved"; line_id: number }
+  | { kind: "line_ambiguous"; line_id: number; facet: "kind" | "size" | "list" }
+  | { kind: "line_slot"; line_id: number; group_id: string }
+  | { kind: "omission"; span: string }
+  | { kind: "line_ref"; candidates: number[]; pending: Move };
+
+export type OrderStatus = "open" | "confirming" | "awaiting_payment" | "paid" | "abandoned";
+
+export interface OrderForm {
+  v: 1;
+  shop_id: string;
+  menu_version: string | null;
+  status: OrderStatus;
+  fulfillment: Fulfillment | null;
+  address: Address | null;
+  tip: Tip | null;
+  items_done: boolean;
+  confirmed: boolean;
+  lines: Line[];
+  next_line_id: number;
+  open: OpenQuestion | null;
+  /** how many consecutive turns the same question has been open without progress */
+  asked: { key: string | null; count: number };
+  omissions: Array<{ span: string; declined: boolean }>;
+  turn_no: number;
+  /** set by the runner when a checkout session exists for the confirmed form */
+  checkout_session_id: string | null;
+}
+
+export function newForm(shop_id: string, menu_version: string | null): OrderForm {
+  return {
+    v: 1, shop_id, menu_version, status: "open",
+    fulfillment: null, address: null, tip: null, items_done: false, confirmed: false,
+    lines: [], next_line_id: 1, open: null, asked: { key: null, count: 0 },
+    omissions: [], turn_no: 0, checkout_session_id: null,
+  };
+}
+
+// ── Moves: the only way the form changes ────────────────────────────────────
+export type LineRef =
+  | { line_id: number }
+  | { ordinal: number }
+  | { span: string }
+  | { last: true };
+
+export type Move =
+  | { kind: "answer"; field: "fulfillment"; value: Fulfillment }
+  | { kind: "answer"; field: "address"; value: Address }
+  | { kind: "answer"; field: "tip"; value: Tip }
+  | { kind: "answer"; field: "items_done"; value: true }
+  | { kind: "answer"; field: "confirmed"; value: boolean }
+  | { kind: "add_line"; item_span: string; qty: number; option_spans: string[]; note?: string | null }
+  | { kind: "change_line"; ref: LineRef; qty?: number | null; add_option_spans?: string[]; remove_option_spans?: string[] }
+  | { kind: "remove_line"; ref: LineRef }
+  | { kind: "answer_option"; value_span: string }
+  | { kind: "answer_yes" }
+  | { kind: "answer_no" }
+  | { kind: "ask_menu"; about_span: string | null }
+  | { kind: "control"; what: "cancel" | "start_over" | "human" | "greeting" | "unclear" | "show_cart" };
+
+export interface LedgerEntry { turn: number; event: string; data?: unknown }
+
+// ── Reducer ─────────────────────────────────────────────────────────────────
+export interface ApplyResult {
+  form: OrderForm;
+  ledger: LedgerEntry[];
+  /** lines created or changed this turn (for acknowledgement) */
+  touched: number[];
+  removed: Array<{ line_id: number; item_id: string | null; span: string }>;
+  /** a move needing a "which one?" question */
+  refAsk: { candidates: number[]; pending: Move } | null;
+  /** moves that could not be applied and why (rendered as declines) */
+  declines: Array<{ code: DeclineCode; span?: string }>;
+  showCart: boolean;
+  askMenu: string | null | undefined; // undefined = not asked, null = general
+  control: Move & { kind: "control" } | null;
+}
+
+export type DeclineCode =
+  | "no_such_line"
+  | "nothing_to_remove"
+  | "not_delivery_shop"
+  | "address_not_found"
+  | "address_out_of_zone"
+  | "tip_out_of_range";
+
+export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: Line, span: string) => boolean): ApplyResult {
+  const form: OrderForm = structuredClone(input);
+  const ledger: LedgerEntry[] = [];
+  const touched = new Set<number>();
+  const removed: ApplyResult["removed"] = [];
+  const declines: ApplyResult["declines"] = [];
+  let refAsk: ApplyResult["refAsk"] = null;
+  let showCart = false;
+  let askMenu: string | null | undefined = undefined;
+  let control: ApplyResult["control"] = null;
+  const t = form.turn_no;
+
+  const reopenIfConfirmed = () => {
+    if (form.status === "confirming" || form.status === "awaiting_payment") {
+      form.status = "open";
+      form.confirmed = false;
+      form.checkout_session_id = null;
+      ledger.push({ turn: t, event: "reopened_after_confirm" });
+    }
+  };
+
+  const resolveRef = (ref: LineRef): number[] => {
+    const live = form.lines;
+    if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
+    if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
+    if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
+    const hits = live.filter((l) => lineSpanMatcher(l, ref.span)).map((l) => l.line_id);
+    return hits;
+  };
+
+  for (const m of moves) {
+    switch (m.kind) {
+      case "answer": {
+        if (m.field === "fulfillment") {
+          form.fulfillment = m.value;
+          if (m.value === "pickup") { form.address = null; form.tip = form.tip ?? null; }
+          ledger.push({ turn: t, event: "answer", data: { field: "fulfillment", value: m.value } });
+        } else if (m.field === "address") {
+          const ok = m.value.validated && m.value.zone_ok;
+          if (!m.value.validated) declines.push({ code: "address_not_found", span: m.value.text });
+          else if (!m.value.zone_ok) declines.push({ code: "address_out_of_zone", span: m.value.text });
+          form.address = { ...m.value };
+          if (ok && form.fulfillment === null) form.fulfillment = "delivery";
+          ledger.push({ turn: t, event: "answer", data: { field: "address", value: m.value, accepted: ok } });
+        } else if (m.field === "tip") {
+          const v = m.value;
+          const bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));
+          if (bad) declines.push({ code: "tip_out_of_range" });
+          else form.tip = v;
+          ledger.push({ turn: t, event: "answer", data: { field: "tip", value: v, accepted: !bad } });
+        } else if (m.field === "items_done") {
+          form.items_done = true;
+          ledger.push({ turn: t, event: "answer", data: { field: "items_done" } });
+        } else if (m.field === "confirmed") {
+          if (m.value) { form.confirmed = true; form.status = "awaiting_payment"; }
+          else { form.confirmed = false; form.status = "open"; }
+          ledger.push({ turn: t, event: "answer", data: { field: "confirmed", value: m.value } });
+        }
+        break;
+      }
+      case "add_line": {
+        const wasPlainOpen = form.status === "open";
+        reopenIfConfirmed();
+        const line: Line = {
+          line_id: form.next_line_id++,
+          span: m.item_span,
+          item_id: null,
+          qty: Math.max(1, Math.floor(m.qty || 1)),
+          choices: {},
+          modifiers: [],
+          held: [...(m.option_spans ?? [])],
+          notes: m.note ? [m.note] : [],
+          slot_candidates: {},
+          status: { kind: "unresolved" },
+        };
+        form.lines.push(line);
+        touched.add(line.line_id);
+        if (wasPlainOpen && form.items_done) form.items_done = false;
+        ledger.push({ turn: t, event: "add_line", data: { line_id: line.line_id, span: m.item_span, qty: line.qty, options: line.held } });
+        break;
+      }
+      case "change_line": {
+        const ids = resolveRef(m.ref);
+        if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); break; }
+        if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; break; }
+        reopenIfConfirmed();
+        const line = form.lines.find((l) => l.line_id === ids[0])!;
+        if (m.qty !== undefined && m.qty !== null) line.qty = Math.max(1, Math.floor(m.qty));
+        if (m.add_option_spans?.length) { line.held.push(...m.add_option_spans); if (line.status.kind === "complete") line.status = { kind: "needs_slot", group_id: "" }; }
+        if (m.remove_option_spans?.length) { line.held.push(...m.remove_option_spans.map((s) => `-${s}`)); if (line.status.kind === "complete") line.status = { kind: "needs_slot", group_id: "" }; }
+        touched.add(line.line_id);
+        ledger.push({ turn: t, event: "change_line", data: { line_id: line.line_id, qty: m.qty, add: m.add_option_spans, remove: m.remove_option_spans } });
+        break;
+      }
+      case "remove_line": {
+        if (form.lines.length === 0) { declines.push({ code: "nothing_to_remove" }); break; }
+        const ids = resolveRef(m.ref);
+        if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); break; }
+        if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; break; }
+        reopenIfConfirmed();
+        const idx = form.lines.findIndex((l) => l.line_id === ids[0]);
+        const [gone] = form.lines.splice(idx, 1);
+        removed.push({ line_id: gone.line_id, item_id: gone.item_id, span: gone.span });
+        ledger.push({ turn: t, event: "remove_line", data: { line_id: gone.line_id } });
+        break;
+      }
+      case "answer_option": {
+        const open = form.open;
+        if (open && (open.kind === "line_slot" || open.kind === "line_ambiguous" || open.kind === "line_unresolved")) {
+          const line = form.lines.find((l) => l.line_id === open.line_id);
+          if (line) { line.held.push(m.value_span); touched.add(line.line_id); }
+          ledger.push({ turn: t, event: "answer_option", data: { line_id: open.line_id, span: m.value_span } });
+        } else if (open && open.kind === "line_ref") {
+          // a numbered pick for "which one?"
+          const n = parseInt(m.value_span, 10);
+          const pick = Number.isFinite(n) ? open.candidates[n - 1] : undefined;
+          if (pick !== undefined) {
+            const pending = open.pending;
+            if (pending.kind === "change_line" || pending.kind === "remove_line") {
+              const redo: Move = { ...pending, ref: { line_id: pick } } as Move;
+              const sub = apply({ ...form, open: null }, [redo], lineSpanMatcher);
+              Object.assign(form, sub.form);
+              sub.touched.forEach((x) => touched.add(x));
+              removed.push(...sub.removed);
+              ledger.push(...sub.ledger);
+            }
+          } else {
+            ledger.push({ turn: t, event: "answer_option_unmatched", data: { span: m.value_span } });
+          }
+        } else {
+          // no line question open: treat as an add attempt of that span
+          const sub = apply({ ...form }, [{ kind: "add_line", item_span: m.value_span, qty: 1, option_spans: [] }], lineSpanMatcher);
+          Object.assign(form, sub.form);
+          sub.touched.forEach((x) => touched.add(x));
+          ledger.push(...sub.ledger);
+        }
+        break;
+      }
+      case "answer_yes":
+      case "answer_no": {
+        const open = form.open;
+        const yes = m.kind === "answer_yes";
+        if (open?.kind === "omission") {
+          const om = form.omissions.find((o) => o.span === open.span);
+          if (yes) {
+            const sub = apply({ ...form }, [{ kind: "add_line", item_span: open.span, qty: 1, option_spans: [] }], lineSpanMatcher);
+            Object.assign(form, sub.form);
+            sub.touched.forEach((x) => touched.add(x));
+            ledger.push(...sub.ledger);
+          }
+          if (om) om.declined = true; // asked once; never re-ask either way
+          form.omissions = form.omissions.filter((o) => o.span !== open.span || yes === false);
+          ledger.push({ turn: t, event: yes ? "omission_accepted" : "omission_declined", data: { span: open.span } });
+        } else if (open?.kind === "confirm") {
+          if (yes) { form.confirmed = true; form.status = "awaiting_payment"; }
+          else { form.confirmed = false; form.status = "open"; }
+          ledger.push({ turn: t, event: "answer", data: { field: "confirmed", value: yes } });
+        } else if (open?.kind === "items") {
+          if (!yes) { form.items_done = true; ledger.push({ turn: t, event: "answer", data: { field: "items_done" } }); }
+        } else if (open?.kind === "tip" && !yes) {
+          form.tip = { kind: "cents", value: 0 };
+          ledger.push({ turn: t, event: "answer", data: { field: "tip", value: form.tip } });
+        } else {
+          ledger.push({ turn: t, event: "yes_no_without_question", data: { yes } });
+        }
+        break;
+      }
+      case "ask_menu": {
+        askMenu = m.about_span;
+        ledger.push({ turn: t, event: "ask_menu", data: { about: m.about_span } });
+        break;
+      }
+      case "control": {
+        control = m;
+        if (m.what === "cancel" || m.what === "start_over") {
+          const keep = newForm(form.shop_id, form.menu_version);
+          keep.turn_no = form.turn_no;
+          if (m.what === "cancel") keep.status = "abandoned";
+          Object.assign(form, keep);
+        }
+        if (m.what === "show_cart") showCart = true;
+        ledger.push({ turn: t, event: "control", data: { what: m.what } });
+        break;
+      }
+    }
+  }
+
+  return { form, ledger, touched: [...touched], removed, refAsk, declines, showCart, askMenu, control };
+}
