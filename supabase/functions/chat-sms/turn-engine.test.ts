@@ -3821,3 +3821,72 @@ Deno.test("decide (question-clause-not-an-add, fused-span recovery): recovery do
   assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
   assertEquals(result.cart[0].quantity, 2);
 });
+
+// DEFECT 2 (2026-09-19 live QA, PO priority item 4, real transcript conv
+// 009de656 #5): a which-one answer that ALSO restates its own explicit
+// quantity ("2x") landed in the cart at quantity 1 — the disambiguation
+// resolver used only `state.open.quantity` (whatever quantity the question
+// was originally opened with), never re-reading the answer text itself.
+// Real ids/prices, read directly from Vito's live menu (2026-09-19): the
+// three Pepperoni Pizza sizes rendered in the live "Which one would you
+// like" list — Medium $19.45, Small $17.45, Large $21.00 — and the
+// customer's own real reply, verbatim.
+const QTY_PEPPERONI_MEDIUM_ID = "pep-medium-1445c1f8";
+const QTY_PEPPERONI_SMALL_ID = "pep-small-1445c1f8";
+const QTY_PEPPERONI_LARGE_ID = "pep-large-1445c1f8";
+
+function qtyPepperoniMenuItem(id: string, sizeLabel: string, priceCents: number): TurnEngineMenuItem {
+  return {
+    id,
+    name: `Pepperoni Pizza - ${sizeLabel}`,
+    category: "Pizza",
+    price_cents: priceCents,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1,
+      display_name: `Pepperoni Pizza - ${sizeLabel}`,
+      base_price_cents: priceCents, recap_template: "", ticket_template: "", steps: [],
+    },
+  };
+}
+
+const QTY_PEPPERONI_MENU: TurnEngineMenuItem[] = [
+  qtyPepperoniMenuItem(QTY_PEPPERONI_MEDIUM_ID, 'Medium (14")', 1945),
+  qtyPepperoniMenuItem(QTY_PEPPERONI_SMALL_ID, 'Small (10")', 1745),
+  qtyPepperoniMenuItem(QTY_PEPPERONI_LARGE_ID, 'Large (16")', 2100),
+];
+
+// state.open.quantity is 1 here on purpose — it mirrors the real live state
+// (the disambiguation had been opened at quantity 1) which is exactly why an
+// unread explicit "2x" in the ANSWER previously silently won out at 1, not 2.
+const QTY_PEPPERONI_OPEN_STATE: DialogueState = {
+  phase: "ordering",
+  open: { kind: "disambiguation", candidates: [QTY_PEPPERONI_MEDIUM_ID, QTY_PEPPERONI_SMALL_ID, QTY_PEPPERONI_LARGE_ID], quantity: 1 },
+  upsell_offered: false,
+  asked_message_id: null,
+};
+
+const QTY_REAL_ANSWER_MESSAGE =
+  "I'll take 2x Large (16\") Pepperoni pizzas for $21 each, please! So that's 2x Chicken Alfredo Linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can you confirm that for me?";
+
+Deno.test("answer (DEFECT 2, real live conv 009de656): a which-one answer that ALSO restates its own quantity ('2x Large ... pizzas') is honored, not silently dropped to 1", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(QTY_PEPPERONI_OPEN_STATE, cart, QTY_REAL_ANSWER_MESSAGE, QTY_PEPPERONI_MENU);
+  assert(result.resolved && result.outcome.kind === "disambiguation_resolved", `expected disambiguation_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, QTY_PEPPERONI_LARGE_ID);
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].quantity, 2, "BEFORE this fix: quantity 1 landed ($21.00, a real live $21 undercharge) instead of the 2 the customer explicitly restated ($42.00)");
+  assertEquals(cart[0].price_cents, 2100);
+  assertEquals(cart[0].quantity * cart[0].price_cents, 4200, "the real live numbers: 2 x $21.00 = $42.00, not $21.00");
+});
+
+Deno.test("answer (DEFECT 2, no regression): a which-one answer with NO stated quantity still uses the disambiguation's own opened quantity, unchanged", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const openStateQtyTwo: DialogueState = {
+    ...QTY_PEPPERONI_OPEN_STATE,
+    open: { kind: "disambiguation", candidates: [QTY_PEPPERONI_MEDIUM_ID, QTY_PEPPERONI_SMALL_ID, QTY_PEPPERONI_LARGE_ID], quantity: 2 },
+  };
+  const result = answer(openStateQtyTwo, cart, "the large one please", QTY_PEPPERONI_MENU);
+  assert(result.resolved && result.outcome.kind === "disambiguation_resolved");
+  assertEquals(cart[0].quantity, 2, "no explicit quantity in the answer -> falls back to state.open.quantity, exactly as before this fix");
+});

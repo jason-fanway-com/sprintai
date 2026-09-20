@@ -129,6 +129,8 @@ import {
   extractPartialSizeClause,
   extractGlobalSizeWord,
   filterCandidatesBySizeWord,
+  extractAnswerClause,
+  extractAnswerQuantity,
   significantStems,
   categoryWordMatches,
   extractSizeAndKind,
@@ -2157,6 +2159,14 @@ export function answer(
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
+      // DEFECT 2 (2026-09-19 live QA, conv 009de656): the answer that just
+      // resolved `resolved` above may ALSO restate its own quantity ("2x
+      // Large (16") Pepperoni pizzas") — see extractAnswerQuantity's own doc
+      // for why this is scoped to the same answer clause the category+name
+      // tier resolved against, never the whole (possibly multi-item)
+      // restated order. Falls back to the disambiguation's original
+      // quantity, unchanged, when the clause states none.
+      const resolvedQuantity = extractAnswerQuantity(extractAnswerClause(trimmed).clause) ?? quantity;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
       // while this item's own name was still ambiguous (see
       // DecideResult.heldModifierText's own header) is recovered against the
@@ -2177,7 +2187,7 @@ export function answer(
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
-      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, resolvedQuantity, "", undefined, undefined, texts);
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): Y just
       // resolved (the numbered-list path — the one a small candidate set
       // like a two-item Chicken Fingers tie actually takes, per
@@ -3643,6 +3653,14 @@ export function decide(
   // stable keys existed.
   newLineKey?: () => string,
   customerMessage?: string,
+  // DEFECT 3 (2026-09-19 live QA): the shop's own item-lexicon rows that
+  // were excluded from `lexicon` above for being inactive/non-orderable —
+  // see resolve-item.ts's longerInactiveTermExists for why resolveItem
+  // needs to see them (never to resolve anything on its own, only to veto a
+  // wrong guess when a real, more specific answer was deliberately dropped).
+  // Optional and defaulted to `[]`, so every pre-existing call site and test
+  // is unaffected.
+  inactiveLexicon: LexiconTerm[] = [],
 ): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
@@ -3703,7 +3721,7 @@ export function decide(
     if (!targetLine) {
       declines.push({ reason: "Which item did you want to replace?" });
     } else {
-      const yResolution = resolveItem(replacementIntent.yPhrase, lexicon);
+      const yResolution = resolveItem(replacementIntent.yPhrase, lexicon, inactiveLexicon);
       if (yResolution.kind === "resolved") {
         const newMenuItem = menuById.get(yResolution.menu_item_id);
         if (newMenuItem?.ask_plan) {
@@ -3809,7 +3827,7 @@ export function decide(
     const guardPassed = itemSpanNamedInMessage(add.item_span, customerMessage);
     // Always resolve (even on guard failure) so the guard-drop path can check
     // whether the resolved item is already in cart without a second pass.
-    const resolution = resolveItem(add.item_span, lexicon);
+    const resolution = resolveItem(add.item_span, lexicon, inactiveLexicon);
     if (!guardPassed) {
       // Guard-dropped: the span's tokens were not in the customer's CURRENT
       // message — the model referenced an item the customer didn't name
@@ -3877,7 +3895,7 @@ export function decide(
   if (proposal.adds && proposal.adds.length > 0 && resolvedAdds.length === 0 && ambiguousSpans.length === 0 &&
       genuinelyUnresolvedSpans.length === 0 && guardDroppedWasStale.length === proposal.adds.length &&
       guardDroppedWasStale.every(Boolean)) {
-    const rawResolution = resolveItem(customerMessage ?? "", lexicon);
+    const rawResolution = resolveItem(customerMessage ?? "", lexicon, inactiveLexicon);
     if (rawResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(rawResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: rawResolution.menu_item_id, quantity: 1, choices: [], item_span: (customerMessage ?? "").trim() });
     } else if (rawResolution.kind === "ambiguous") {
@@ -3908,7 +3926,7 @@ export function decide(
       guardDroppedWasQuestionTainted.every(Boolean)) {
     const recoveryText = nonQuestionClauseText(customerMessage);
     const recoveryQuantity = proposal.adds.length === 1 ? (proposal.adds[0].quantity ?? 1) : 1;
-    const recoveryResolution = resolveItem(recoveryText, lexicon);
+    const recoveryResolution = resolveItem(recoveryText, lexicon, inactiveLexicon);
     if (recoveryResolution.kind === "resolved" && !menuItemIdsAlreadyInCart.has(recoveryResolution.menu_item_id)) {
       resolvedAdds.push({ menu_item_id: recoveryResolution.menu_item_id, quantity: recoveryQuantity, choices: [], item_span: recoveryText });
     } else if (recoveryResolution.kind === "ambiguous") {

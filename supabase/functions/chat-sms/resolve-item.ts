@@ -395,7 +395,35 @@ function widenIntoSizedFamily(
   return { kind: "ambiguous", candidates: [...siblingIds].sort() };
 }
 
-export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemResult {
+// DEFECT 3 (2026-09-19 live QA, conv 009de656, item 4): "Can I also get a
+// side of bleu cheese?" tied 3 Cheese pizza SIZES — the only candidates the
+// single-word term "cheese" (a real, correct term for ordering a Cheese
+// pizza) resolves to, once the shop's own longer, more specific, correctly-
+// targeted term "bleu cheese" is excluded from `lexicon` for being
+// inactive/non-orderable (real Vito's data: "bleu cheese" -> the real
+// "Bleu Cheese" row, a display_only pizza-finish, never a standalone
+// orderable side — see loadItemLexicon's own header for why its term is
+// deliberately dropped before this function ever sees it). The bug was
+// falling all the way back to the unrelated single-word match instead of
+// recognizing that a MORE SPECIFIC, curated answer was found and correctly
+// excluded — the right response is "I don't know that item," never a guess
+// at three pizzas the customer never asked about.
+//
+// `inactiveLexicon` carries exactly those excluded rows (same shape as
+// `lexicon`, term/target_id only — category/size_label are irrelevant here,
+// this never resolves anything on its own, only vetoes a guess) purely so
+// this one check can see them. Optional and defaulted to `[]` so every
+// pre-existing call site and test fixture (which never had this concept)
+// is completely unaffected.
+function longerInactiveTermExists(spanWords: string[], inactiveLexicon: LexiconTerm[], matchedLength: number): boolean {
+  for (const entry of inactiveLexicon) {
+    const termWords = toWords(normalize(entry.term));
+    if (termWords.length > matchedLength && occursAsWholeWordRun(spanWords, termWords)) return true;
+  }
+  return false;
+}
+
+export function resolveItem(span: string, lexicon: LexiconTerm[], inactiveLexicon: LexiconTerm[] = []): ResolveItemResult {
   const spanWords = toWords(normalize(span));
   if (spanWords.length === 0) return { kind: "unresolved" };
 
@@ -421,6 +449,17 @@ export function resolveItem(span: string, lexicon: LexiconTerm[]): ResolveItemRe
   const primary = longestMatch(spanWords, itemNameEntries);
   const usingItemNameSpan = primary.targetIds.size > 0;
   const base = usingItemNameSpan ? primary : longestMatch(spanWords, lexicon);
+
+  // See longerInactiveTermExists' own header (DEFECT 3, 2026-09-19): a real,
+  // more specific term was excluded from `lexicon` entirely (inactive/non-
+  // orderable target) and matches MORE of the span than anything we're
+  // about to guess with — never fall back to a shorter, unrelated match in
+  // that case. Checked once, before any downstream branch (resolved,
+  // ambiguous, or the fuzzy fallback below) gets a chance to guess with the
+  // shorter match instead.
+  if (longerInactiveTermExists(spanWords, inactiveLexicon, base.length)) {
+    return { kind: "unresolved" };
+  }
 
   // Round 2, item 1c: nothing matched EXACTLY at all — try the same scan
   // fuzzy (occursAsWholeWordRunFuzzy) before giving up. Resolves ONLY when

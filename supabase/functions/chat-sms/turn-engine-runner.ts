@@ -580,6 +580,41 @@ async function loadItemLexicon(supabase: SupabaseClient, shopId: string): Promis
   return { ok: true, rows };
 }
 
+// DEFECT 3 (2026-09-19 live QA, conv 009de656): loadItemLexicon above
+// deliberately excludes an inactive lexicon row (or one whose target has
+// gone non-orderable) from `rows` — correct, since neither should ever be a
+// resolver candidate. But resolve-item.ts's resolveItem had no way to tell
+// "no term at all names this" apart from "a term names it exactly, and was
+// correctly excluded" — so once the shop's own longer, more specific,
+// correctly-targeted term for a phrase was dropped, resolution silently
+// fell back to a SHORTER, unrelated term instead ("bleu cheese" -> the
+// single word "cheese" -> three Cheese pizzas, real live bug). This loads
+// exactly those excluded rows — term/target_id only, no category/size_label
+// join, since resolveItem's own use of this list (longerInactiveTermExists)
+// never resolves anything from it, only vetoes a guess when a real answer
+// was found and correctly excluded. Best-effort: a failure here degrades to
+// today's pre-existing behavior (the veto simply never fires), never fails
+// the turn — same discipline as loadLexiconItemMetadata's own category/
+// size_label join.
+async function loadExcludedItemLexicon(supabase: SupabaseClient, shopId: string): Promise<LexiconTerm[]> {
+  const rows: LexiconTerm[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("lexicon").select("term, target_id")
+      .eq("shop_id", shopId).eq("target_type", "item").eq("active", false)
+      .order("id", { ascending: true })
+      .range(from, from + ITEM_LEXICON_PAGE_SIZE - 1);
+    if (error || !data) break;
+    for (const r of data as Array<{ term: string; target_id: string }>) {
+      rows.push({ term: r.term, target_id: r.target_id });
+    }
+    if (data.length < ITEM_LEXICON_PAGE_SIZE) break;
+    from += ITEM_LEXICON_PAGE_SIZE;
+  }
+  return rows;
+}
+
 function buildAskShopContext(shopContext: RunTurnShopContext, upsellEnabled: boolean): AskShopContext {
   return {
     deliveryEnabled: shopContext.deliveryEnabled,
@@ -1549,6 +1584,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           // primary answer applied -- same as remainderMessage being null.
           if (remainderResult.ok && remainderResult.proposal.adds.length > 0) {
             const sanitizedProposal: Proposal = { ...remainderResult.proposal, removes: [], modifies: [] };
+            const remainderInactiveLexicon = await loadExcludedItemLexicon(deps.supabase, input.shopId);
             const remainderDecide = decide(
               sanitizedProposal,
               workingCart,
@@ -1556,6 +1592,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
               lexiconResult.rows,
               deps.newLineKey ?? (() => crypto.randomUUID()),
               remainderMessage,
+              remainderInactiveLexicon,
             );
             workingCart.splice(0, workingCart.length, ...remainderDecide.cart);
             declines = [...declines, ...remainderDecide.declines];
@@ -1678,6 +1715,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
     }
     const lexicon = lexiconResult.rows;
+    const inactiveLexicon = await loadExcludedItemLexicon(deps.supabase, input.shopId);
     const proposeFn: ProposeTurnFn = deps.proposeTurnFn ?? defaultProposeTurn;
     const proposeResult: ProposeResult = await proposeFn(
       {
@@ -1875,6 +1913,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       lexicon,
       deps.newLineKey ?? (() => crypto.randomUUID()),
       input.message,   // 00-BD: to tell a restatement from a new order
+      inactiveLexicon,
     );
     workingCart.splice(0, workingCart.length, ...decideResult.cart);
     declines = decideResult.declines;

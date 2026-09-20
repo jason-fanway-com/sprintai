@@ -611,6 +611,55 @@ Deno.test("isDisambiguationListDropSignal: an ordinary answer naming a candidate
   assert(!isDisambiguationListDropSignal("nope that's not right, I want the large"), "embedded 'no' inside a real answer must not drop it");
 });
 
+// DEFECT 1 (2026-09-19 live QA, PO priority item 4, real transcript conv
+// 009de656 #5): the bot's own re-ask fallback ("I couldn't match that. Reply
+// with a number, or say "none of those".") tells the customer to use this
+// exact escape hatch — but the OLD regex required the ENTIRE trimmed message
+// to be nothing but "none of those" (a `$` anchor with no prefix support),
+// so "None of those." followed by the customer's own restated order never
+// matched at all. BEFORE this fix: the live conversation looped EIGHT
+// times, byte-identical fallback every turn, on these exact 8 real customer
+// messages (pulled directly from the conversation, never guessed) — the
+// customer said the bot's own suggested words, verbatim, capital N and
+// trailing period included, and the bot never recognized it once. AFTER
+// this fix: every one of these is recognized as the escape hatch, and
+// turn-engine-runner.ts's existing dropDisambiguationList handling (already
+// correct, untouched by this fix) forwards the whole message — restated
+// order included — to PROPOSE as a fresh message with nothing open, exactly
+// as it already does for a bare "no"/"none".
+const REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES = [
+  "None of those. I wanted 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can you confirm that for me?",
+  "None of those. I just want to confirm my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese.",
+  "None of those. I just want to place my order as is: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese on the side. Can we finalize that?",
+  "None of those. I just want to place my order, which is 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Please confirm this order.",
+  "None of those. I just want to place my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can we finalize that?",
+  "None of those. Can I just confirm my final order? It's 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Please finalize it!",
+  "None of those. I want to finalize my order for 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can you please confirm this?",
+  "None of those. I want to confirm my order: 2x Chicken Alfredo with linguine, 2x Large Pepperoni pizzas, and 1x bleu cheese. Can we finalize that?",
+];
+
+Deno.test("isDisambiguationListDropSignal: real conv 009de656 live loop — all 8 real 'None of those. <restated order>' messages now trip the drop signal (BEFORE this fix, none of them did)", () => {
+  assertEquals(REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES.length, 8, "sanity: this is the real 8-message loop, not a guessed count");
+  for (const msg of REAL_CONV_009DE656_NONE_OF_THOSE_MESSAGES) {
+    assert(isDisambiguationListDropSignal(msg), `real live message must trip the drop signal: "${msg}"`);
+  }
+});
+
+Deno.test("isDisambiguationListDropSignal: 'none of those' prefix match is case/punctuation insensitive, with or without restated text after it", () => {
+  const restated = "2x Large Pepperoni pizzas please";
+  for (const phrase of ["none of those", "NONE OF THOSE", "None Of Those", "None of those.", "NONE OF THOSE!", "None Of Those,"]) {
+    assert(isDisambiguationListDropSignal(phrase), `bare "${phrase}" must trip the drop signal`);
+    assert(isDisambiguationListDropSignal(`${phrase} ${restated}`), `"${phrase} ${restated}" must trip the drop signal — the escape hatch plus a restated order`);
+  }
+  // "none of them" is the sibling phrasing this same prefix rule covers.
+  assert(isDisambiguationListDropSignal("None of them. I'll take the large one instead."));
+});
+
+Deno.test("isDisambiguationListDropSignal: a word that merely STARTS WITH 'none' is never mistaken for the escape hatch", () => {
+  assert(!isDisambiguationListDropSignal("nonetheless I'll take the large one"), "'nonetheless' must not be read as 'none' + leftover text");
+  assert(!isDisambiguationListDropSignal("nonexistent items aside, give me the large one"));
+});
+
 Deno.test("facetDisplayValues: kind values keep original casing, deduped, no prices", () => {
   const values = facetDisplayValues(SEVEN_LARGE_PIZZAS, "kind");
   assertEquals(values, ["Pepperoni", "Cheese", "Sausage", "Buffalo Chicken", "Meat Lovers", "Veggie", "Hawaiian"]);
