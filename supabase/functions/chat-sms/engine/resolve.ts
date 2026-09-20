@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, isDigits, isWordSubset, sameWords, singular, words } from "./normalize.ts";
+import { contentWords, findWordRun, isDigits, isWordSubset, leadingCount, sameWords, singular, splitList, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -115,8 +115,30 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
+/** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
+function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
+  const b = item.bundle!;
+  const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices };
+  const sel = (line.selections ??= {});
+  const total = () => Object.values(sel).reduce((a, n) => a + n, 0);
+  let consumed = false;
+  for (const part of splitList(span)) {
+    const { count, rest } = leadingCount(part);
+    if (!rest) continue;
+    const m = matchChoice(rest, group);
+    if (m.kind !== "one") continue;
+    const remaining = Math.max(0, b.count - total());
+    const n = Math.min(count ?? remaining, remaining);
+    if (n <= 0) continue;
+    sel[m.choice_id] = (sel[m.choice_id] ?? 0) + n;
+    consumed = true;
+  }
+  return consumed;
+}
+
 /** Apply one held span to a bound line. Returns true when it was consumed as a priced choice. */
 function applyHeldSpan(line: Line, item: MenuItem, span: string): boolean {
+  if (item.bundle) return applyBundleSpan(line, item, span) || isWordSubset(words(span), item.words);
   const removing = span.startsWith("-");
   const text = removing ? span.slice(1) : span;
   if (removing) {
@@ -196,6 +218,11 @@ export function bindLine(line: Line, menu: Menu): void {
   for (const h of held) applyHeldSpan(line, item, h);
   applyCanon(line, menu);
   item = menu.items.get(line.item_id!)!;
+  if (item.bundle) {
+    const picked = Object.values(line.selections ?? {}).reduce((a, n) => a + n, 0);
+    if (picked < item.bundle.count) { line.status = { kind: "needs_picks", remaining: item.bundle.count - picked }; return; }
+    line.status = { kind: "complete" }; return;
+  }
   const open = requiredGroupOpen(line, item);
   if (open) { line.status = { kind: "needs_slot", group_id: open.id }; return; }
   const pendingModifierGroup = Object.keys(line.slot_candidates).find((gid) => item.groups.some((g) => g.id === gid));
@@ -222,6 +249,11 @@ export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
 
 /** Is the span a plausible answer to the line's open question (a choice or a facet), not a new item? */
 export function spanAnswersLine(line: Line, span: string, menu: Menu): boolean {
+  if (line.status.kind === "needs_picks" && line.item_id) {
+    const b = menu.items.get(line.item_id)!.bundle!;
+    const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices };
+    return splitList(span).some((p) => matchChoice(leadingCount(p).rest, group).kind !== "none");
+  }
   if (line.status.kind === "ambiguous") return narrow(line.status.candidates, span, menu).length < line.status.candidates.length && narrow(line.status.candidates, span, menu).length > 0;
   if (line.status.kind === "needs_slot" && line.item_id) {
     const item = menu.items.get(line.item_id)!;

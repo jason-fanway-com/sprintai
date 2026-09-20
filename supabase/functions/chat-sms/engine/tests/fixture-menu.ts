@@ -69,6 +69,11 @@ export const RAW_ITEMS: RawMenuItem[] = [
   ]),
   item(IDS.cheesesteak, "Cheesesteak", "Hoagies", 1049),
   item("roll", "Pepperoni", "Stromboli Rolls", 999),
+  item("bg-plain", "Plain Bagel", "Bagels", 150),
+  item("bg-every", "Everything Bagel", "Bagels", 150),
+  item("bg-sesame", "Sesame Bagel", "Bagels", 150),
+  item("bg-dozen", "One Dozen Bagels", "Bagels", 1500, { meta: { bundle: { count: 12, category: "Bagels", unit: "bagel" } } }),
+  item("bg-half", "Half Dozen Bagels", "Bagels", 750, { meta: { bundle: { count: 6, category: "Bagels", unit: "bagel" } } }),
 ];
 
 export const RAW_LEXICON: LexiconEntry[] = [
@@ -88,6 +93,9 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak],
   ["pepperoni stromboli", "roll"], ["pepperoni", "roll"], ["pepperoni roll", "roll"],
+  ["plain bagel", "bg-plain"], ["everything bagel", "bg-every"], ["sesame bagel", "bg-sesame"],
+  ["dozen bagels", "bg-dozen"], ["one dozen bagels", "bg-dozen"], ["a dozen bagels", "bg-dozen"], ["dozen", "bg-dozen"],
+  ["half dozen bagels", "bg-half"], ["half dozen", "bg-half"],
 ].map(([term, id]) => ({ term, target_type: "item", target_id: id })).concat([
   { term: "pizza", target_type: "category", target_id: "Pizza" },
   { term: "pizzas", target_type: "category", target_id: "Pizza" },

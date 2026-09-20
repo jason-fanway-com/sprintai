@@ -14,6 +14,7 @@ export interface MenuGroup {
   choices: MenuChoice[];
 }
 export interface Facets { kind: string | null; size: string | null }
+export interface BundleDef { count: number; unit: string; choices: MenuChoice[] }
 export interface MenuItem {
   id: string;
   name: string;
@@ -25,6 +26,8 @@ export interface MenuItem {
   orderable: boolean;
   derived_from: { base_item_id: string; choice_ids: string[] } | null;
   words: string[];
+  /** a fixed-price assortment: `count` picks from `choices` ("one dozen bagels") */
+  bundle: BundleDef | null;
 }
 export interface LexiconEntry {
   term: string;
@@ -76,6 +79,7 @@ export interface RawMenuItem {
   is_derived?: boolean | null;
   derived_from?: { base_item_id: string; choice_ids: string[] } | null;
   ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[]; compiled_at?: string } | null;
+  meta?: { bundle?: { count: number; category: string; unit?: string } } | null;
   option_groups?: Array<{ id: string; name: string; max_select?: number | null }> | null;
 }
 
@@ -130,7 +134,16 @@ export function buildMenu(input: {
       orderable: (r.bot_state ?? "orderable") === "orderable",
       derived_from: r.derived_from ?? null,
       words: words(display),
+      bundle: null,
     });
+  }
+  // bundles: choices are the orderable items of the named category, excluding other bundles
+  for (const r of input.items) {
+    const b = r.meta?.bundle;
+    if (!b || !b.count) continue;
+    const it = items.get(r.id)!;
+    const flavors = [...items.values()].filter((x) => x.orderable && x.id !== r.id && !x.name.toLowerCase().includes("dozen") && x.category && normalize(x.category) === normalize(b.category) && !(input.items.find((y) => y.id === x.id)?.meta?.bundle));
+    it.bundle = { count: b.count, unit: b.unit ?? "item", choices: flavors.map((f) => ({ id: f.id, name: f.display_name, delta_cents: 0, words: f.words })) };
   }
 
   const itemTerms: IndexedTerm[] = [];

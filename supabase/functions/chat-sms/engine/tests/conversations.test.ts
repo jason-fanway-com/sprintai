@@ -376,3 +376,28 @@ Deno.test("an add that duplicates another add's option is folded, not a second l
   assertEquals(o.form.lines[0].item_id, IDS.margheritaS);
   assertEquals(o.form.lines[0].modifiers.sort(), ["mgBacS", "mgMushS"]);
 });
+
+Deno.test("bundle: a dozen bagels asks for flavors, takes counts across turns, prices flat", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a dozen bagels", [{ kind: "add_line", item_span: "dozen bagels", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.open?.kind, "line_picks");
+  assertStringIncludes(o.reply, "One Dozen Bagels: which bagels?");
+  assertStringIncludes(o.reply, "Plain, Everything, Sesame");
+  o = say(o.form, "6 plain and 4 everything", [{ kind: "answer_option", value_span: "6 plain and 4 everything" }]);
+  assertEquals(o.form.open?.kind, "line_picks");
+  assertStringIncludes(o.reply, "10 of 12 picked. Which 2 more?");
+  o = say(o.form, "sesame", [{ kind: "answer_option", value_span: "sesame" }]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assertEquals(o.form.lines[0].selections, { "bg-plain": 6, "bg-every": 4, "bg-sesame": 2 });
+  assertStringIncludes(o.reply, "1 × One Dozen Bagels (6 Plain Bagel, 4 Everything Bagel, 2 Sesame Bagel)  $15.00");
+  assertEquals(totals(o.form, menu).subtotal_cents, 1500);
+});
+
+Deno.test("bundle: flavors given in the same message bind immediately", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "half dozen bagels, 3 plain 3 sesame", [{ kind: "add_line", item_span: "half dozen bagels", qty: 1, option_spans: ["3 plain", "3 sesame"] }]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assertEquals(o.form.lines[0].selections, { "bg-plain": 3, "bg-sesame": 3 });
+});

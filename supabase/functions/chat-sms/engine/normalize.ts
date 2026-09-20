@@ -64,3 +64,18 @@ export function optionKey(text: string): string {
   while (w.length > 1 && OPTION_LEAD.has(w[0])) w.shift();
   return w.join(" ");
 }
+
+const NUMBER_WORDS: Record<string, number> = { one: 1, a: 1, an: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, dozen: 12, half: 0 };
+/** "6 plain" -> {count: 6, rest: "plain"}; "plain" -> {count: null, rest: "plain"} */
+export function leadingCount(text: string): { count: number | null; rest: string } {
+  const w = words(text);
+  if (w.length === 0) return { count: null, rest: "" };
+  if (isDigits(w[0])) return { count: parseInt(w[0], 10), rest: w.slice(1).join(" ") };
+  if (w[0] in NUMBER_WORDS && NUMBER_WORDS[w[0]] > 0 && w.length > 1) return { count: NUMBER_WORDS[w[0]], rest: w.slice(1).join(" ") };
+  return { count: null, rest: w.join(" ") };
+}
+
+/** Split "6 plain, 6 everything and 2 sesame" into its parts. */
+export function splitList(text: string): string[] {
+  return text.split(/\s*(?:,|\band\b|\+|;|\bplus\b)\s*/i).map((x) => x.trim()).filter(Boolean);
+}

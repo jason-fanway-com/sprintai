@@ -8,6 +8,7 @@ export function questionKey(q: OpenQuestion | null): string | null {
     case "line_unresolved": return `line_unresolved:${q.line_id}`;
     case "line_ambiguous": return `line_ambiguous:${q.line_id}`;
     case "line_slot": return `line_slot:${q.line_id}:${q.group_id}`;
+    case "line_picks": return `line_picks:${q.line_id}`;
     case "omission": return `omission:${q.span}`;
     case "line_ref": return `line_ref`;
     default: return q.kind;
@@ -24,6 +25,7 @@ export function next(form: OrderForm, menu: Menu, refAsk: { candidates: number[]
   for (const l of form.lines) {
     if (l.status.kind === "ambiguous") return { kind: "line_ambiguous", line_id: l.line_id, facet: l.status.facet ?? "list" };
     if (l.status.kind === "needs_slot") return { kind: "line_slot", line_id: l.line_id, group_id: l.status.group_id };
+    if (l.status.kind === "needs_picks") return { kind: "line_picks", line_id: l.line_id, remaining: l.status.remaining };
   }
   const om = form.omissions.find((o) => !o.declined);
   if (om) return { kind: "omission", span: om.span };
@@ -51,6 +53,7 @@ export function escalate(form: OrderForm, menu: Menu): string | null {
   switch (q.kind) {
     case "line_unresolved":
     case "line_ambiguous":
+    case "line_picks":
     case "line_slot": {
       const idx = form.lines.findIndex((l) => l.line_id === q.line_id);
       if (idx >= 0) { const [gone] = form.lines.splice(idx, 1); return `dropped_line:${gone.span}`; }

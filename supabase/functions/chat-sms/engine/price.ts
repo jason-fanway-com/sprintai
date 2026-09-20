@@ -10,6 +10,7 @@ export interface PricedLine {
   total_cents: number;
   choice_names: string[];
   modifier_names: string[];
+  picks: string[];
   notes: string[];
 }
 
@@ -45,7 +46,9 @@ export function priceLine(line: Line, menu: Menu): PricedLine | null {
     if (chosen) { const c = g.choices.find((x) => x.id === chosen); if (c) choice_names.push(c.name); }
     for (const modId of line.modifiers) { const c = g.choices.find((x) => x.id === modId); if (c) modifier_names.push(c.name); }
   }
-  return { line_id: line.line_id, item, qty: line.qty, unit_cents: unit, total_cents: unit * line.qty, choice_names, modifier_names, notes: line.notes };
+  const picks: string[] = [];
+  if (item.bundle && line.selections) for (const [cid, n] of Object.entries(line.selections)) { const c = item.bundle.choices.find((x) => x.id === cid); if (c) picks.push(`${n} ${c.name}`); }
+  return { line_id: line.line_id, item, qty: line.qty, unit_cents: unit, total_cents: unit * line.qty, choice_names, modifier_names, picks, notes: line.notes };
 }
 
 export function totals(form: OrderForm, menu: Menu): Totals {

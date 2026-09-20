@@ -40,7 +40,7 @@ export interface ReplyPlan {
 }
 
 function lineRow(l: PricedLine): string {
-  return T.ackLine(l.qty, l.item.display_name, dollars(l.total_cents), [...l.choice_names, ...l.modifier_names]);
+  return T.ackLine(l.qty, l.item.display_name, dollars(l.total_cents), [...l.choice_names, ...l.modifier_names, ...l.picks]);
 }
 
 function receiptRows(t: Totals): string[] { return t.lines.map((l) => `${lineRow(l)}`); }
@@ -104,6 +104,15 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const within = l.slot_candidates[g.id];
       const choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name);
       return T.slot(item.display_name, groupPrompt(g.name), choices, count);
+    }
+    case "line_picks": {
+      const l = form.lines.find((x) => x.line_id === q.line_id);
+      const item = l?.item_id ? menu.items.get(l.item_id) : null;
+      if (!l || !item?.bundle) return T.unclear();
+      const unit = item.bundle.unit.toLowerCase();
+      const strip = (n: string) => { const l = n.toLowerCase(); for (const suf of [` ${unit}s`, ` ${unit}`]) if (l.endsWith(suf)) return n.slice(0, n.length - suf.length); return n; };
+      const flavors = item.bundle.choices.map((c) => strip(c.name));
+      return T.picks(item.display_name, q.remaining, item.bundle.count, item.bundle.unit, flavors, count);
     }
     case "line_ref": {
       const names = q.candidates.map((id) => {

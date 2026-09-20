@@ -5,6 +5,9 @@ import type { Menu } from "./menu.ts";
 import { priceLine } from "./price.ts";
 
 export interface CartJsonLine {
+  type?: "bundle";
+  complete?: boolean;
+  selections?: Array<{ flavor: string; quantity: number }>;
   menu_item_id: string;
   name: string;
   quantity: number;
@@ -30,6 +33,14 @@ export function toCartJson(form: OrderForm, menu: Menu): CartJsonLine[] {
       }
       const mods = line.modifiers.filter((m) => g.choices.some((c) => c.id === m));
       if (mods.length) { options[g.name] = [...(options[g.name] ?? []), ...mods.map((m) => g.choices.find((c) => c.id === m)!.name)]; selections[g.id] = mods; }
+    }
+    if (priced.item.bundle) {
+      out.push({
+        type: "bundle", complete: true,
+        selections: Object.entries(line.selections ?? {}).map(([cid, n]) => ({ flavor: priced.item.bundle!.choices.find((c) => c.id === cid)?.name ?? cid, quantity: n })),
+        menu_item_id: priced.item.id, name: priced.item.display_name, quantity: line.qty, price_cents: priced.unit_cents, modifiers: [...line.notes], line_key: `L${line.line_id}`,
+      });
+      continue;
     }
     out.push({
       menu_item_id: priced.item.id,

@@ -18,6 +18,7 @@ export type LineStatus =
   | { kind: "unresolved" }
   | { kind: "ambiguous"; candidates: string[]; facet: "kind" | "size" | "list" | null }
   | { kind: "needs_slot"; group_id: string }
+  | { kind: "needs_picks"; remaining: number }
   | { kind: "complete" };
 
 export interface Line {
@@ -37,6 +38,8 @@ export interface Line {
   slot_candidates: Record<string, string[]>;
   /** set once the span's leftover words have been applied as options */
   span_consumed?: boolean;
+  /** bundle picks: choice_id -> count */
+  selections?: Record<string, number>;
   status: LineStatus;
 }
 
@@ -49,6 +52,7 @@ export type OpenQuestion =
   | { kind: "line_unresolved"; line_id: number }
   | { kind: "line_ambiguous"; line_id: number; facet: "kind" | "size" | "list" }
   | { kind: "line_slot"; line_id: number; group_id: string }
+  | { kind: "line_picks"; line_id: number; remaining: number }
   | { kind: "omission"; span: string }
   | { kind: "line_ref"; candidates: number[]; pending: Move };
 
@@ -241,7 +245,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
       }
       case "answer_option": {
         const open = form.open;
-        if (open && (open.kind === "line_slot" || open.kind === "line_ambiguous" || open.kind === "line_unresolved")) {
+        if (open && (open.kind === "line_slot" || open.kind === "line_ambiguous" || open.kind === "line_unresolved" || open.kind === "line_picks")) {
           const line = form.lines.find((l) => l.line_id === open.line_id);
           if (line) { line.held.push(m.value_span); touched.add(line.line_id); }
           ledger.push({ turn: t, event: "answer_option", data: { line_id: open.line_id, span: m.value_span } });

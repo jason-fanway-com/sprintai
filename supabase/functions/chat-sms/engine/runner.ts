@@ -80,7 +80,7 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
     .order("created_at", { ascending: false }).limit(1).maybeSingle();
   const menuId = (menuRow as { id: string } | null)?.id;
   const items = menuId ? await pageAll<RawMenuItem>((a, b) => supabase.from("menu_items")
-    .select("id, name, display_name, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label")
+    .select("id, name, display_name, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
     .eq("menu_id", menuId).eq("active", true).order("id", { ascending: true }).range(a, b)) : [];
   const ids = items.map((i) => i.id);
   const groups: Array<{ id: string; menu_item_id: string; name: string; max_select: number | null }> = [];
@@ -116,6 +116,11 @@ function choicesFor(menu: Menu, form: OrderForm) {
       if (!g) return null;
       const within = l!.slot_candidates[g.id];
       return (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name).slice(0, 12);
+    }
+    if (q.kind === "line_picks") {
+      const l = form.lines.find((x) => x.line_id === q.line_id);
+      const it = l?.item_id ? menu.items.get(l.item_id) : null;
+      return it?.bundle ? it.bundle.choices.map((c) => c.name).slice(0, 30) : null;
     }
     if (q.kind === "line_ambiguous") {
       const l = form.lines.find((x) => x.line_id === q.line_id);
