@@ -34,7 +34,6 @@ import {
   type PendingQuestion,
 } from "./compile-menu.ts";
 import type { OwnerQuestionDraft } from "./archetypes.ts";
-import { resolveItem } from "../chat-sms/resolve-item.ts";
 
 function inferSourceItem(overrides: Partial<InferSourceItem> = {}): InferSourceItem {
   return {
@@ -605,43 +604,6 @@ Deno.test("lexicon rule 2c: a name with no dash at all is completely unaffected 
   assertEquals(terms.filter(t => t === "cheeseburger").length, 1);
 });
 
-Deno.test("lexicon rule 2c (acceptance, real Vito's Alfredo shape): resolveItem resolves the exact/dash-stripped/reversed forms of BOTH Alfredo items uniquely, never a 3-way tie against Southwest/Boom Boom Shrimp or Chicken quesadilla", () => {
-  const chicken = item({ name: "Alfredo - Chicken", display_name: "Chicken Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo", price_cents: 1995 });
-  const shrimp = item({ name: "Alfredo - Shrimp", display_name: "Shrimp Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo", price_cents: 2195 });
-  // Unrelated items sharing surface words with the reversed/dash-stripped
-  // forms — reproducing the PO's exact tie report (resolving "Alfredo -
-  // Chicken" offline against only the active lexicon used to tie 3-way
-  // against "Alfredo - Shrimp" and "Chicken quesadilla").
-  const southwestShrimp = item({ name: "Southwest Shrimp", display_name: "Southwest Shrimp", category: "Entrees", price_cents: 1495 });
-  const boomBoomShrimp = item({ name: "Boom Boom Shrimp", display_name: "Boom Boom Shrimp", category: "Entrees", price_cents: 1595 });
-  const chickenQuesadilla = item({ name: "Chicken Quesadilla", display_name: "Chicken Quesadilla", category: "Quesadillas", price_cents: 1295 });
-
-  const { items: compiled, invariants } = compileMenu(
-    [chicken, shrimp, southwestShrimp, boomBoomShrimp, chickenQuesadilla],
-    [],
-    "t",
-    false,
-  );
-  const lexicon: LexiconTerm[] = compiled.flatMap(c => c.lexicon_terms).filter(t => t.target_type === "item");
-
-  for (const [span, expectedId] of [
-    ["alfredo - chicken", chicken.id],
-    ["alfredo chicken", chicken.id],
-    ["chicken alfredo", chicken.id],
-    ["alfredo - shrimp", shrimp.id],
-    ["alfredo shrimp", shrimp.id],
-    ["shrimp alfredo", shrimp.id],
-  ] as const) {
-    const r = resolveItem(span, lexicon);
-    assertEquals(r.kind, "resolved", `${JSON.stringify(span)} must resolve, not ${r.kind}: ${JSON.stringify(r)}`);
-    if (r.kind === "resolved") assertEquals(r.menu_item_id, expectedId, `${JSON.stringify(span)} resolved to the wrong item`);
-  }
-
-  const inv4 = invariants.find(i => i.invariant === 4)!;
-  const inv10 = invariants.find(i => i.invariant === 10)!;
-  assert(inv4.pass, `invariant 4 must pass: ${JSON.stringify(inv4.violations)}`);
-  assert(inv10.pass, `invariant 10 must pass: ${JSON.stringify(inv10.violations)}`);
-});
 
 Deno.test("invariant 10 (regression guard): FAILS when a dash-named item's canonical raw-name forms are missing from its own lexicon_terms, even though invariant 4 already PASSES via a different, already-unique term — the exact shape that let the real Alfredo bug through undetected", () => {
   const chicken = item({ name: "Alfredo - Chicken", display_name: "Chicken Alfredo Entree", category: "Entrees", product_key: "entrees:alfredo" });
@@ -774,18 +736,6 @@ Deno.test("isSuppressedLexiconTerm: a normal 4+ char term is unaffected", () => 
   assert(!isSuppressedLexiconTerm("wing"));
 });
 
-Deno.test("stopword guard (real live bug repro): a trailing word-run reducing to the bare stopword 'in' off '... (Bone In)' is never emitted as an item term, and resolveItem('in') no longer resolves to it", () => {
-  const wings = item({ display_name: "10 Pieces Wings (Bone In)", category: "Wings" });
-  const { items: compiled } = compileMenu([wings], [], "t", false);
-  const terms = compiled[0].lexicon_terms;
-  assert(!terms.some(t => t.term === "in"), `must never emit bare "in": ${JSON.stringify(terms.map(t => t.term))}`);
-  assert(!terms.some(t => t.term === "ins"), `must never emit bare "ins": ${JSON.stringify(terms.map(t => t.term))}`);
-  assert(terms.some(t => t.term === "10 pieces wings bone in"), "the item's own stated Rule 1 full name is untouched");
-
-  const lexicon: LexiconTerm[] = terms;
-  const result = resolveItem("in", lexicon);
-  assert(result.kind !== "resolved", `bare "in" must never resolve to a menu item; got ${JSON.stringify(result)}`);
-});
 
 Deno.test("stopword guard: an item whose real, full, singular name IS a stopword-shaped short word keeps that term (whole-name exception, synthetic 'In')", () => {
   const it = item({ display_name: "In", category: "Synthetic Test Category" });
@@ -2206,31 +2156,7 @@ Deno.test("buildDerivedRows: family tie (two single-size families, same priority
 // in production (compileMenu's own lexicon output fed straight into
 // resolveItem), not just at the unit level.
 
-Deno.test("freeze-queue item 3, acceptance 1: 'ranch' resolves straight to the orderable wrap alone — the display_only 'Ranch' row is never offered, never part of a disambiguation", () => {
-  const wrap = item({ display_name: "Grilled Chicken Bacon & Ranch", category: "Wraps", product_key: "wraps:ranch" });
-  const ranchFinish = item({ display_name: "Ranch", category: "Pizza Finish", price_cents: 0 }); // display_only: source lacks a price
-  const { items: compiled } = compileMenu([wrap, ranchFinish], [], "t", false);
 
-  const ranchCompiled = compiled.find(c => c.item_id === ranchFinish.id)!;
-  assertEquals(ranchCompiled.bot_state, "display_only");
-  assertEquals(ranchCompiled.lexicon_terms, [], "the display_only row must contribute zero lexicon terms");
-
-  const lexicon = compiled.flatMap(c => c.lexicon_terms);
-  const result = resolveItem("ranch", lexicon);
-  assertEquals(result, { kind: "resolved", menu_item_id: wrap.id },
-    "must resolve straight to the wrap — never ambiguous, never the display_only row");
-});
-
-Deno.test("freeze-queue item 3, acceptance 2: a search term matching ONLY a display_only row is unresolved, never a false success", () => {
-  const ranchFinish = item({ display_name: "Ranch", category: "Pizza Finish", price_cents: 0 }); // display_only: source lacks a price
-  const { items: compiled } = compileMenu([ranchFinish], [], "t", false);
-  const lexicon = compiled.flatMap(c => c.lexicon_terms);
-  assertEquals(lexicon, []);
-
-  const result = resolveItem("ranch", lexicon);
-  assertEquals(result, { kind: "unresolved" },
-    "a term that only ever matched a non-orderable row must behave exactly like no menu match at all, never silently resolve to that row");
-});
 
 Deno.test("buildDerivedRows: base item not orderable → skipped (no derived rows for that size)", () => {
   const { small, medium, large, compiled } = buildTestMenu();
@@ -2474,21 +2400,6 @@ Deno.test("N5: derived row lexicon is unaffected for a topping whose word is alr
   assertEquals(terms.filter(t => t === "pepperoni pizza").length, 1, "no duplicate emitted when the topping word is already singular");
 });
 
-Deno.test("N5 (acceptance, probe4): resolveItem('small mushroom pizza') resolves uniquely to the small Mushrooms derived row, exactly like the topping's own stated 'small mushrooms pizza' phrasing", () => {
-  const { small, medium, large, compiled } = buildVitosTestMenu();
-  const rows = buildDerivedRows([small, medium, large], compiled, new Map(), T_COMPILED_AT);
-  const smallMushrooms = rows.find(r => r.product_key === "pizza:mushrooms" && r.entity_key.includes("small"))!;
-  assert(smallMushrooms, "sanity: a small Mushrooms derived row must exist");
-  const derivedIdByEntityKey = new Map(rows.map((r, i) => [r.entity_key, `real-derived-id-${i}`]));
-  const resolvedTerms = resolveDerivedLexiconTerms(rows, derivedIdByEntityKey);
-  const expectedId = derivedIdByEntityKey.get(smallMushrooms.entity_key)!;
-
-  const singular = resolveItem("small mushroom pizza", resolvedTerms);
-  assertEquals(singular, { kind: "resolved", menu_item_id: expectedId }, `singular phrasing must resolve uniquely, not ambiguous/unresolved: ${JSON.stringify(singular)}`);
-
-  const plural = resolveItem("small mushrooms pizza", resolvedTerms);
-  assertEquals(plural, { kind: "resolved", menu_item_id: expectedId }, "the topping's own stated plural phrasing must keep resolving exactly as before");
-});
 
 // PO dispatch (2026-09-19, derived-rows-missing-category-terms P0): live
 // repro — "4 large pizzas" opens a "what kind?" disambiguation whose
@@ -2557,31 +2468,7 @@ Deno.test("derived-row category terms: no stated item's real id leaks into the d
   assert(derivedSurfaceForms.every(t => !statedIds.has(t.target_id)), "a stated item's own id must never appear in the derived-row-only surface form output");
 });
 
-Deno.test("resolveItem (acceptance-level proof): a bare category query ('pizza') now ties across BOTH stated AND derived pizza rows — the exact candidate-set gap this dispatch closes", () => {
-  const { derivedRows, derivedRealIds, compileResult, resolvedDerivedTerms, derivedSurfaceForms } = buildDerivedRowsSurfaceFormFixture();
-  const fullLexicon: LexiconTerm[] = [
-    ...compileResult.items.flatMap(c => c.lexicon_terms),
-    ...resolvedDerivedTerms,
-    ...derivedSurfaceForms,
-  ];
-  const result = resolveItem("pizza", fullLexicon);
-  assert(result.kind === "ambiguous", `a bare 'pizza' query with 4 stated pizzas + ${derivedRows.length} derived pizzas open must tie, not resolve/unresolve: ${JSON.stringify(result)}`);
-  const derivedInResult = result.kind === "ambiguous" ? result.candidates.filter(id => derivedRealIds.has(id)) : [];
-  assertEquals(derivedInResult.length, derivedRows.length, `every derived row must be among the 'pizza' candidates — live bug had ZERO`);
-});
 
-Deno.test("resolveItem (acceptance-level proof): 'large pepperoni pizza' still resolves cleanly to the one derived Large Pepperoni row, unaffected by the new bare-category terms", () => {
-  const { compileResult, resolvedDerivedTerms, derivedSurfaceForms, derivedRows, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
-  const fullLexicon: LexiconTerm[] = [
-    ...compileResult.items.flatMap(c => c.lexicon_terms),
-    ...resolvedDerivedTerms,
-    ...derivedSurfaceForms,
-  ];
-  const largePepp = derivedRows.find(r => r.entity_key.includes("pepperoni") && r.entity_key.includes("large"))!;
-  const expectedId = derivedIdByEntityKey.get(largePepp.entity_key)!;
-  const result = resolveItem("large pepperoni pizza", fullLexicon);
-  assertEquals(result, { kind: "resolved", menu_item_id: expectedId });
-});
 
 // N5 (2026-09-19 PO addendum to the term-in dispatch, real conversation af5bd5d5: 2 small
 // mushroom pizzas lost). A derived pizza row named from a plural topping word ("Mushrooms")
@@ -2589,23 +2476,6 @@ Deno.test("resolveItem (acceptance-level proof): 'large pepperoni pizza' still r
 // ("mushroom pizza") had no term at all and fell through to an ambiguous match across every
 // pizza on the menu. singularizePhrase/isPluralChoiceWord in buildDerivedRows mirror the
 // plural term with a singular one whenever the topping's own word is plural.
-Deno.test("N5 (real conv af5bd5d5): 'small mushroom pizza' (singular) resolves to the derived Small Mushrooms row, same as the plural phrasing already did", () => {
-  const { compileResult, resolvedDerivedTerms, derivedSurfaceForms, derivedRows, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
-  const fullLexicon: LexiconTerm[] = [
-    ...compileResult.items.flatMap(c => c.lexicon_terms),
-    ...resolvedDerivedTerms,
-    ...derivedSurfaceForms,
-  ];
-  const smallMushrooms = derivedRows.find(r => r.entity_key.includes("mushroom") && r.entity_key.includes("small"))!;
-  assert(smallMushrooms, "fixture sanity: Vito's shape must include a derived Small Mushrooms row");
-  const expectedId = derivedIdByEntityKey.get(smallMushrooms.entity_key)!;
-
-  const pluralResult = resolveItem("small mushrooms pizza", fullLexicon);
-  assertEquals(pluralResult, { kind: "resolved", menu_item_id: expectedId }, "sanity: the plural phrasing must still resolve exactly as before this fix");
-
-  const singularResult = resolveItem("small mushroom pizza", fullLexicon);
-  assertEquals(singularResult, { kind: "resolved", menu_item_id: expectedId }, `the live bug: singular phrasing must resolve identically to the plural, not fall through to an ambiguous cross-menu match: ${JSON.stringify(singularResult)}`);
-});
 
 Deno.test("N5 regression: a topping whose word is already singular (e.g. 'pepperoni') gets no redundant singular-mirror term", () => {
   const { derivedRows, resolvedDerivedTerms, derivedIdByEntityKey } = buildDerivedRowsSurfaceFormFixture();
@@ -2652,20 +2522,8 @@ function buildQuesadillaFixture() {
 }
 
 // Acceptance point 1: "chicken quesadilla" resolves uniquely to the Chicken item.
-Deno.test("quesadilla fix (AP 1): resolveItem('chicken quesadilla') resolves uniquely to the Chicken quesadilla item", () => {
-  const { chickenQ, lexicon } = buildQuesadillaFixture();
-  assertEquals(resolveItem("chicken quesadilla", lexicon), { kind: "resolved", menu_item_id: chickenQ.id });
-});
 
 // Acceptance point 2: "quesadilla" is ambiguous across all 5 items, not silently resolved to Veggie.
-Deno.test("quesadilla fix (AP 2): resolveItem('quesadilla') is ambiguous across exactly 5 quesadilla items", () => {
-  const { chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ, lexicon } = buildQuesadillaFixture();
-  const r = resolveItem("quesadilla", lexicon);
-  assert(r.kind === "ambiguous", `expected ambiguous, got ${JSON.stringify(r)}`);
-  assertEquals(r.candidates.length, 5, `expected 5 candidates, got: ${JSON.stringify(r.candidates)}`);
-  const qIds = new Set([chickenQ.id, steakQ.id, veggieQ.id, chickenFajitaQ.id, southwestQ.id]);
-  for (const id of r.candidates) assert(qIds.has(id), `unexpected candidate id ${id}`);
-});
 
 // Acceptance point 4 (before fix): invariant 4 correctly flags the Chicken item when the new
 // passes are NOT run — "chicken" has exactly 1 literal owner (chickenQ), but hasFamilyWideningHazard
@@ -2737,13 +2595,6 @@ Deno.test("quesadilla fix (AP 5b): the 4 non-Veggie quesadilla items gain 'quesa
 // "pizza small" has 2 claimants (cheesePizzaSm + chickenPizzaSm) — the single-claimant widen
 // pass correctly leaves it alone (not a single-claimant case), and the fallback pass does not
 // add degenerate cross-category terms to quesadilla items.
-Deno.test("quesadilla fix (AP 6 regression): multi-claimant 'pizza small' remains ambiguous — existing pizza ties not collapsed", () => {
-  const { cheesePizzaSm, chickenPizzaSm, lexicon } = buildQuesadillaFixture();
-  const r = resolveItem("pizza small", lexicon);
-  assert(r.kind === "ambiguous", `expected ambiguous for 'pizza small', got ${JSON.stringify(r)}`);
-  assert(r.candidates.includes(cheesePizzaSm.id), "cheesePizzaSm must be a 'pizza small' candidate");
-  assert(r.candidates.includes(chickenPizzaSm.id), "chickenPizzaSm must be a 'pizza small' candidate");
-});
 
 Deno.test("quesadilla fix (AP 6 regression): no quesadilla item gains a pizza-category term — no cross-category contamination from the new passes", () => {
   const { chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ, compiledMap } = buildQuesadillaFixture();

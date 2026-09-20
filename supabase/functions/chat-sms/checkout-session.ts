@@ -34,7 +34,21 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import type Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
-import type { TurnEngineCartLine } from "./turn-engine.ts";
+/** The cart_json line shape (was TurnEngineCartLine / CompiledCartLine in the old engines). */
+export interface CartLine {
+  menu_item_id: string;
+  name: string;
+  quantity: number;
+  price_cents: number;
+  modifiers?: string[];
+  options?: Record<string, string[]>;
+  ask_plan_selections?: Record<string, string | string[]>;
+  line_key?: string;
+  type?: "bundle";
+  complete?: boolean;
+  selections?: Array<{ flavor: string; quantity: number }>;
+}
+type TurnEngineCartLine = CartLine;
 
 export interface CheckoutLineItemInput {
   name:             string;
