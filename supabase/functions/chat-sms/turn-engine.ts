@@ -1732,12 +1732,70 @@ function messageNamesItemOutsideCandidates(
 // OUTSIDE_ITEM_REMAINDER_MARKER_RE already cut the text there before ever
 // resolving "Garlic Cheesesteak"), which would wrongly suppress this check
 // on the one clause that's actually a clean restatement.
+//
+// Round 5 P0 (2026-09-19, PO dispatch, live conv 8c64d701 #12, money bug):
+// the check above ONLY recognized a restatement when the customer's exact
+// words happened to contain one of isRestatementOfExistingOrder's dozen
+// fixed marker phrases ("so that's", "just the", "to recap", ...). A
+// customer restating the SAME already-in-cart pizza any other way people
+// actually talk ("The small Chicken Bacon Ranch pizza with bacon and
+// broccoli stays on the order") carries none of them, so the guard read it
+// as a brand-new add: a second, PLAIN line (addNarrowedCandidateToCart below
+// never carries topping text into the add — it always passes an empty
+// string) for a pizza already sitting in the cart WITH its toppings — and
+// because this whole branch returns immediately with a resolved outcome,
+// the disambiguation actually open that turn (a soup pick, in the live
+// repro) was never even reached: not merely re-shown, but silently skipped,
+// left open, and re-asked next turn exactly as before.
+//
+// PO's own fix, applied here: match on the RESOLVED item, never on surface
+// text. The question was never "did the customer say a magic phrase" — it's
+// "does this resolve to a line already in the cart, with toppings the
+// customer isn't actually changing" (see toppingsCompatibleWithCartLine
+// below). ADDITION_MARKERS is kept as the one veto that still matters —
+// "another"/"add"/"also"/"one more"/etc. names a second, deliberate item,
+// and must never be swallowed as a restatement no matter how identical it
+// is to a line already in the cart.
 function isAnswerRestatementOfCartLine(
   cart: TurnEngineCartLine[],
   outside: { menuItemId: string; matchedText: string },
+  menuById: Map<string, TurnEngineMenuItem>,
 ): boolean {
-  const alreadyInCart = cart.some(l => isRealCartLine(l) && l.menu_item_id === outside.menuItemId);
-  return alreadyInCart && isRestatementOfExistingOrder(outside.matchedText);
+  const cartLine = cart.find(l => isRealCartLine(l) && l.menu_item_id === outside.menuItemId);
+  if (!cartLine) return false;
+  const m = outside.matchedText.toLowerCase();
+  if (ADDITION_MARKERS.some(a => m.includes(a))) return false;
+  return toppingsCompatibleWithCartLine(cartLine, menuById.get(outside.menuItemId), outside.matchedText);
+}
+
+// A restated line's toppings are "compatible" with an existing cart line —
+// never a genuinely different order — as long as the customer's words don't
+// name a modifier choice (a topping) that ISN'T already on that line. Naming
+// zero specific toppings (a bare item name) or naming exactly the ones
+// already there is always compatible; naming one that's missing from the
+// line ("...with pepperoni instead") means this really is a change, not a
+// restatement, and must fall through to being treated as a new/different
+// add — see this function's own caller for why a genuinely different pizza
+// (different toppings, or a different size — a different menu_item_id
+// entirely, never reaching this function at all) must never be swallowed.
+function toppingsCompatibleWithCartLine(
+  cartLine: TurnEngineCartLine,
+  menuItem: TurnEngineMenuItem | undefined,
+  matchedText: string,
+): boolean {
+  const modifierSteps = menuItem?.ask_plan?.steps.filter(s => s.kind === "modifier") ?? [];
+  if (modifierSteps.length === 0) return true;
+  const existing = new Set((cartLine.modifiers ?? []).map(t => t.toLowerCase().trim()));
+  const textLower = matchedText.toLowerCase();
+  for (const step of modifierSteps) {
+    for (const choice of step.choices) {
+      const display = (choice.display ?? "").trim();
+      if (!display) continue;
+      const re = new RegExp(`\\b${escapeRegexLiteral(display.toLowerCase())}\\b`, "i");
+      if (re.test(textLower) && !existing.has(display.toLowerCase())) return false;
+    }
+  }
+  return true;
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -2315,7 +2373,7 @@ export function answer(
       // isAnswerRestatementOfCartLine's own header; same family as
       // decide()'s `restating` guard on the PROPOSE path, never applied
       // here before this fix.
-      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem, menuById)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -2625,7 +2683,7 @@ export function answer(
       // Round 4 P0 (2026-09-19): same restatement guard as the sibling
       // "disambiguation" case above — see isAnswerRestatementOfCartLine's
       // own header.
-      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem, menuById)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
