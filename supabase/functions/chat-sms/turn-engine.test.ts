@@ -4568,3 +4568,112 @@ Deno.test({
     // never surfacing "Sorry, I ran into a problem."
   },
 });
+
+// ============================================================
+// S3 (2026-09-19), REAL LIVE MONEY BUG, real conv 22347973, "sticks are
+// back". Customer ordered Pierogies + Onion Rings, the bot offered a Coke
+// upsell, and the customer declined it: "No thanks, I'm good for drinks.
+// Just stick with those two items for pickup!" PROPOSE's own proposal
+// hallucinated adds:[Onion Rings] (a duplicate) and removes:[Pierogies] —
+// two SEPARATE decide()-level defects, tested in isolation here (the full
+// end-to-end reproduction, through the real upsell-open DialogueState and
+// runTurnEngineTurn, lives in
+// s3-upsell-decline-sticks-recovery-20260919.test.ts, per the PO's own
+// "offline probes never reach the upsell state, acceptance is runner-level"
+// methodology note).
+//
+// RULE 1: removeHasRemovalLanguage (turn-engine.ts) strips a recognized
+// decline-of-offer idiom ("no thanks"/"i'm good"/...) before checking for a
+// removal verb — the bare "no" inside "No thanks" was firing REMOVAL_VERBS'
+// own "no" entry as if it negated a specific cart line, when it was
+// declining the drink offer, not the pierogies.
+// ============================================================
+const S3_PIEROGIES_ID = "s3-pierogies-decide";
+const S3_ONION_RINGS_ID = "s3-onion-rings-decide";
+const S3_MOZZARELLA_STICKS_DECIDE_ID = "s3-mozzarella-sticks-decide";
+const S3_DECLINE_MENU: TurnEngineMenuItem[] = [
+  mbMenuItem(S3_PIEROGIES_ID, "Pierogies", "Appetizers", 899),
+  mbMenuItem(S3_ONION_RINGS_ID, "Onion Rings", "Appetizers", 599),
+  mbMenuItem(S3_MOZZARELLA_STICKS_DECIDE_ID, "Mozzarella Sticks (6)", "Appetizers", 899),
+];
+const S3_DECLINE_LEXICON: LexiconTerm[] = [
+  { term: "pierogies", target_id: S3_PIEROGIES_ID, category: "Appetizers" },
+  { term: "onion rings", target_id: S3_ONION_RINGS_ID, category: "Appetizers" },
+  { term: "mozzarella sticks", target_id: S3_MOZZARELLA_STICKS_DECIDE_ID, category: "Appetizers" },
+  { term: "sticks", target_id: S3_MOZZARELLA_STICKS_DECIDE_ID, category: "Appetizers" },
+];
+const S3_DECLINE_MESSAGE = "No thanks, I'm good for drinks. Just stick with those two items for pickup!";
+
+function s3CartBeforeDecline(): TurnEngineCartLine[] {
+  return [
+    { menu_item_id: S3_PIEROGIES_ID, name: "Pierogies", quantity: 1, price_cents: 899, modifiers: [], line_key: "s3-line-pierogies" },
+    { menu_item_id: S3_ONION_RINGS_ID, name: "Onion Rings", quantity: 1, price_cents: 599, modifiers: [], line_key: "s3-line-onion-rings" },
+  ];
+}
+
+Deno.test("decide (S3, rule 1, real conv 22347973): a hallucinated remove of the Pierogies line is guard-dropped when the message is a decline of an open offer, not a real removal", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [],
+    removes: [{ line_key: "s3-line-pierogies" }],
+    modifies: [],
+  };
+  const result = decide(proposal, s3CartBeforeDecline(), S3_DECLINE_MENU, S3_DECLINE_LEXICON, undefined, S3_DECLINE_MESSAGE);
+  assertEquals(result.cart.length, 2, `Pierogies must survive — this was never a real removal request: ${JSON.stringify(result.cart)}`);
+  assert(result.cart.some(l => l.menu_item_id === S3_PIEROGIES_ID), `Pierogies must still be in the cart: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.guardDroppedRemoves, [{ line_key: "s3-line-pierogies", item_name: "Pierogies" }], "the remove must be silently guard-dropped, exactly like any other unauthorized remove");
+  assertEquals(result.declines, [], "a guard-dropped remove is silent, never a customer-facing decline line");
+});
+
+Deno.test("decide (S3, rule 1, no regression): 'no pierogies, just the onion rings' still removes the named line — the decline-idiom strip never blocks a genuine negation", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [],
+    removes: [{ line_key: "s3-line-pierogies" }],
+    modifies: [],
+  };
+  const result = decide(proposal, s3CartBeforeDecline(), S3_DECLINE_MENU, S3_DECLINE_LEXICON, undefined, "no pierogies, just the onion rings");
+  assertEquals(result.cart.length, 1, `Pierogies must actually be removed when genuinely negated by name: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, S3_ONION_RINGS_ID);
+  assertEquals(result.guardDroppedRemoves, []);
+});
+
+Deno.test("decide (S3, rule 1, no regression): a decline idiom alongside a SEPARATE, genuine removal verb still removes the named line — 'no thanks, also remove the onion rings'", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [],
+    removes: [{ line_key: "s3-line-onion-rings" }],
+    modifies: [],
+  };
+  const result = decide(proposal, s3CartBeforeDecline(), S3_DECLINE_MENU, S3_DECLINE_LEXICON, undefined, "no thanks, also remove the onion rings");
+  assertEquals(result.cart.length, 1, `Onion Rings must still be removable when a real removal verb names it, even alongside a decline idiom: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, S3_PIEROGIES_ID);
+  assertEquals(result.guardDroppedRemoves, []);
+});
+
+// ============================================================
+// RULE 2: decide()'s two recovery passes that feed raw/derived customer text
+// into resolveItem with no model participation (the staleness fallback and
+// the nonQuestionClauseText fallback, both turn-engine.ts) now require
+// fuzzyMinTermWords: 2 — a fuzzy guess must be corroborated by another exact
+// word in the SAME multi-word term. The lone word "stick" fuzzy-matching the
+// shop's real ONE-word term "sticks" has nothing to corroborate it and must
+// never resolve.
+// ============================================================
+Deno.test("decide (S3, rule 2, real conv 22347973): a duplicate Onion Rings add (already in cart, guard-dropped as stale) never recovers phantom Mozzarella Sticks from 'stick' in the same decline message", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    // Already in the cart -- itemSpanNamedInMessage guard-drops this as
+    // stale (its own words, "onion"/"ring", aren't in THIS turn's message),
+    // which is exactly what triggers the raw-message recovery pass below.
+    adds: [{ item_span: "Onion Rings", quantity: 1, choices: [] }],
+    removes: [],
+    modifies: [],
+  };
+  const result = decide(proposal, s3CartBeforeDecline(), S3_DECLINE_MENU, S3_DECLINE_LEXICON, undefined, S3_DECLINE_MESSAGE);
+  assertEquals(result.cart.length, 2, `no third line may appear: ${JSON.stringify(result.cart)}`);
+  assert(
+    !result.cart.some(l => l.menu_item_id === S3_MOZZARELLA_STICKS_DECIDE_ID),
+    `Mozzarella Sticks must never be phantom-added from the word "stick": ${JSON.stringify(result.cart)}`,
+  );
+});
