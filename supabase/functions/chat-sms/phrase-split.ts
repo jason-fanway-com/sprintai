@@ -5,9 +5,11 @@
 // boundary was a comma; "and" was invisible as a separator anywhere a
 // consumer of this module split customer text).
 //
-// A phrase boundary is a comma, the word "and", or "&" — plus the implicit
-// boundary a REPEATED leading digit quantity creates with no explicit
-// separator at all ("1 cheese 1 pepperoni 1 meat lover 1 hawaiian").
+// A phrase boundary is a comma, the word "and", "&", or a trailing
+// multi-item connector word ("also"/"additionally"/"plus") sitting right
+// before its own comma — plus the implicit boundary a REPEATED leading
+// digit quantity creates with no explicit separator at all ("1 cheese 1
+// pepperoni 1 meat lover 1 hawaiian").
 //
 // "and" only counts as a boundary when what immediately follows is itself a
 // quantity or article (a digit, a number word, or "a"/"an"/"the"). This is
@@ -19,6 +21,21 @@
 // only, not word-numbers) — a bare number word ("one") appearing mid-phrase
 // for an unrelated reason is a real risk; a bare digit essentially never is.
 //
+// PO dispatch 2026-09-20 (real live bug, conv 3ea2d604 #14, half-anchovies
+// silently dropped on a fresh add): "...with half anchovies? Also, a Veggie
+// wrap..." split on the comma AFTER "Also" the same as every other comma —
+// which glues "Also" onto the END of the topping phrase ("with half
+// anchovies? Also") instead of letting it start the NEXT item's phrase.
+// That corrupted phrase then failed resolveClaimedPhraseIndex's own
+// word-run match against the model's item_span claim (which never says
+// "also"), while the neighboring bare "medium size" phrase matched
+// perfectly and won as the (wrongly) unique claimed phrase — scoping the
+// 00-BF modifier floor down to just "medium size" and erasing "half
+// anchovies" before the floor ever saw it. Splitting BEFORE a connector
+// word immediately followed by its own comma keeps that word from ever
+// fusing onto the preceding phrase, the same way "and" is kept from fusing
+// onto a following item name.
+//
 // Used by:
 //   - pizza-topping-compose.ts's splitIntoSegments (deterministic bare-
 //     topping/plain compose — one base-pizza item + choice per segment).
@@ -27,7 +44,8 @@
 //     to a DIFFERENT item resolved from a different phrase in the same
 //     message).
 const QTY_LEAD = "\\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|the";
-const PHRASE_SEPARATOR_RE = new RegExp(`,|&|\\band\\s+(?=(?:${QTY_LEAD})\\b)`, "i");
+const TRAILING_CONNECTOR_RE = "\\b(?:also|additionally|plus)\\b\\s*(?=,)";
+const PHRASE_SEPARATOR_RE = new RegExp(`,|&|\\band\\s+(?=(?:${QTY_LEAD})\\b)|${TRAILING_CONNECTOR_RE}`, "i");
 const IMPLICIT_DIGIT_REPEAT_RE = /\s+(?=\d+\s)/;
 
 function escapeRegex(s: string): string {

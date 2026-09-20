@@ -1101,6 +1101,26 @@ const QUANTITY_CORRECTION_ONLY_WANT_RE = new RegExp(
 // 2026-09-18 version of this rule never matched at all.
 const QUANTITY_CORRECTION_MAKE_IT_RE = /\bmake (?:it|that)\s+([^.!?]+)/i;
 
+// "asked for/wanted/want/ordered <item>, so <N>[, please]" — the mirror of
+// every pattern above: those all state the quantity BEFORE the item name
+// ("2 Thin Sicilian Pizzas, not one"); this is the one real shape where the
+// quantity trails the item instead. R2 reopen (2026-09-20 PO dispatch, live
+// conv 836bf473 #29): "can I get a Lobster Bisque - Cup please?" resolved
+// DIRECTLY to the Cup (M1's size-binding widening, fe917be2 — no
+// disambiguation ever opened), so by the time "I asked for the Cup, so 2
+// please. What's going on?" arrived, order_type was the open question, not
+// disambiguation — pending-disambiguation.ts's own "so N" trailing-quantity
+// tier (TRAILING_SO_QUANTITY_RE / extractDisambiguationAnswerQuantity) is
+// wired into ONLY the "disambiguation" case of answer()'s switch below and
+// never runs once the pick has already resolved. This is the same "so N"
+// signal, reused here as its own candidate shape feeding the identical
+// findCartLineByNamePhrase name-match mechanism 1 (the "confirm" case)
+// already trusts — see applyStandaloneQuantityCorrection below for where
+// this now also gets checked.
+const QUANTITY_CORRECTION_SO_TRAILING_RE = new RegExp(
+  `\\b(?:asked for|wanted|want|ordered)\\s+(?:the\\s+|a\\s+|an\\s+)?([a-zA-Z][a-zA-Z '"-]*?),?\\s+so\\s+${QUANTITY_WORD_RE}\\b`, "i",
+);
+
 interface QuantityCorrectionCandidate {
   quantity: number;
   itemPhrase: string;
@@ -1134,7 +1154,39 @@ function parseQuantityCorrectionPhrases(message: string): QuantityCorrectionCand
     const candidates = clauses.map(parseQtyItemClause).filter((c): c is QuantityCorrectionCandidate => c !== null);
     if (candidates.length > 0) return candidates;
   }
+  // "so N" trailing shape — reversed capture order (item first, quantity
+  // second) versus every pattern in the loop above.
+  const soTrailingMatch = message.match(QUANTITY_CORRECTION_SO_TRAILING_RE);
+  if (soTrailingMatch) {
+    const itemPhrase = soTrailingMatch[1]?.trim();
+    const quantity = parseQtyToken(soTrailingMatch[2]);
+    if (quantity && itemPhrase) return [{ quantity, itemPhrase }];
+  }
   return [];
+}
+
+// R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): a quantity
+// correction against a cart line that's ALREADY resolved can arrive while
+// some other, unrelated question is open (order_type here — Vito's asks
+// pickup/delivery immediately once an item resolves with no size left to
+// ask about) or with no question open at all ("ordering"). Mechanism 1
+// below (the "confirm" case) already applies parseQuantityCorrectionPhrases
+// + findCartLineByNamePhrase, but only at confirm/read-back time; this pulls
+// that same check into its own function so the "order_type" and "ordering"
+// cases — the two open kinds with no item-specific resolution machinery of
+// their own — can run it too, before ever falling through to PROPOSE.
+function applyStandaloneQuantityCorrection(cart: TurnEngineCartLine[], trimmed: string): AnswerResult | null {
+  const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
+  if (qtyCorrections.length === 0) return null;
+  let appliedAny = false;
+  for (const candidate of qtyCorrections) {
+    const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
+    if (line) {
+      line.quantity = candidate.quantity;
+      appliedAny = true;
+    }
+  }
+  return appliedAny ? { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true } : null;
 }
 
 // Matches itemPhrase against exactly one REAL cart line by stem subset —
@@ -3129,6 +3181,17 @@ export function answer(
         const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
         return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: removedSomething };
       }
+      // R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): see
+      // applyStandaloneQuantityCorrection's own header — a quantity
+      // correction against an already-resolved line ("I asked for the Cup,
+      // so 2 please") routinely arrives while order_type is the open
+      // question, since Vito's asks it immediately once an item resolves
+      // with nothing left to disambiguate. Checked ahead of the closure
+      // fallback for the same reason mechanism 1 is checked first at
+      // confirm: a real correction must never be silently swallowed as
+      // unrelated chatter and lost to a fresh PROPOSE call.
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -3245,18 +3308,8 @@ export function answer(
       // any that don't (an item mentioned but not actually in the cart) are
       // left alone rather than guessed at. `resolved:true` only once at
       // least one candidate actually landed.
-      const qtyCorrections = parseQuantityCorrectionPhrases(trimmed);
-      if (qtyCorrections.length > 0) {
-        let appliedAny = false;
-        for (const candidate of qtyCorrections) {
-          const line = findCartLineByNamePhrase(cart, candidate.itemPhrase);
-          if (line) {
-            line.quantity = candidate.quantity;
-            appliedAny = true;
-          }
-        }
-        if (appliedAny) return { resolved: true, outcome: { kind: "quantity_corrected" }, cartChanged: true };
-      }
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): same
       // priority reasoning as mechanism 1 immediately above — "not a
       // stromboli" contains "not"/"actually"-adjacent language that
@@ -3410,6 +3463,11 @@ export function answer(
     // free text falls through UNRESOLVED to PROPOSE exactly as it always
     // has, regardless of which `open.kind` is on record).
     case "ordering": {
+      // R2 reopen (2026-09-20 PO dispatch, live conv 836bf473 #29): same gap
+      // as "order_type" above — a standalone quantity correction can arrive
+      // with no open question at all, not just while order_type is open.
+      const qtyCorrected = applyStandaloneQuantityCorrection(cart, trimmed);
+      if (qtyCorrected) return qtyCorrected;
       return closureOrAffirmationFallback(trimmed, cart) ?? UNRESOLVED;
     }
   }
