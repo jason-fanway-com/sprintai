@@ -83,9 +83,31 @@ interface FakeState {
   // loadItemLexicon, the same fallback discipline already applied to a
   // failed/missing category or size_label lookup.
   menuItems: Array<{ id: string; category: string | null; size_label: string | null; bot_state?: string | null }>;
+  // Freeze-queue item 7 (returning-customer greeting): the four tables
+  // maybeBuildReturningCustomerGreeting reads directly, keyed by
+  // conversationId/shopId/(tenantId+phone) — see that function's own
+  // header for why these live outside RunTurnInput/RunTurnShopContext.
+  // null by default on every table, same "cold start, harmless" default the
+  // generic maybeSingle() fallback below already gives every OTHER table —
+  // so every pre-existing test in this file is unaffected.
+  conversationRow: { customer_phone: string | null } | null;
+  shopRow: { customer_personalization_enabled?: boolean; delivery_paused_until?: string | null; delivery_radius_mi?: number | null } | null;
+  optOutRow: { id: string } | null;
+  customerRow: {
+    tenant_id: string;
+    customer_phone: string;
+    name: string | null;
+    order_count: number;
+    total_spent_cents: number;
+    favorite_items: Array<{ name: string; count: number }>;
+    last_order_id: string | null;
+    last_order_at: string | null;
+    last_order_type: "pickup" | "delivery" | null;
+    last_delivery_address: Record<string, unknown> | null;
+  } | null;
 }
 
-interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems">> {
+interface FakeSupabaseOverrides extends Partial<Pick<FakeState, "shopSettings" | "lexicon" | "menuItems" | "conversationRow" | "shopRow" | "optOutRow" | "customerRow">> {
   // Makes the .range() call starting at this offset resolve as a PostgREST
   // error (data: null, error) instead of a page of rows — reproduces a real
   // fetch failure on page N>0, distinct from a clean short/empty-page finish.
@@ -106,6 +128,10 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
     shopSettings: null,
     lexicon: LEXICON,
     menuItems: [],
+    conversationRow: null,
+    shopRow: null,
+    optOutRow: null,
+    customerRow: null,
     ...stateOverrides,
   };
 
@@ -124,9 +150,14 @@ function makeFakeSupabase(overrides: FakeSupabaseOverrides = {}) {
         return b;
       },
       eq() { return b; },
+      is() { return b; },
       order() { return b; },
       maybeSingle() {
         if (table === "shop_settings") return Promise.resolve({ data: state.shopSettings, error: null });
+        if (table === "conversations") return Promise.resolve({ data: state.conversationRow, error: null });
+        if (table === "shops") return Promise.resolve({ data: state.shopRow, error: null });
+        if (table === "sms_opt_outs") return Promise.resolve({ data: state.optOutRow, error: null });
+        if (table === "customers") return Promise.resolve({ data: state.customerRow, error: null });
         return Promise.resolve({ data: null, error: null });
       },
       range(from: number, to: number) {
@@ -2569,4 +2600,162 @@ Deno.test('runTurnEngineTurn P0 (round-2 item 1 root cause): the held size for a
   );
   for (const line of answerResult.cart) assertEquals(line.quantity, 1);
   assertEquals(answerResult.dialogueState.open, null, "fully resolved — size was recovered from the raw message, never re-asked");
+});
+
+// ── Freeze-queue item 7 (2026-09-19): returning-customer greeting ──────────
+// PO report: "Last week the bot recognised Jason by number, greeted him by
+// name, and offered 'the same as last time?' with the full order, delivery
+// and address. It no longer does" on the turn-engine path. Fixture below is
+// shaped exactly like the real `customers` row queried live for Vito's
+// (tenant_id/shop_id e0000000-0000-0000-0000-000000000001, customer_phone
+// "web:cq-1789437090-7304") — not invented field names or values — and
+// REGULAR_MENU's "Cheese - Large (16\")" / "Large Cheese Pizza" pairing is
+// the real menu_items.name/display_name for menu_item_id
+// 8857b40a-e53b-44fa-8bf0-6fdafb7efa45 on Vito's live menu.
+
+const REGULAR_MENU: TurnEngineMenuItem[] = [
+  {
+    id: "item-cheese-large-16",
+    name: 'Cheese - Large (16")',
+    category: "Pizza",
+    price_cents: 1650,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1,
+      display_name: "Large Cheese Pizza",
+      base_price_cents: 1650,
+      recap_template: "", ticket_template: "",
+      steps: [],
+    },
+  },
+];
+
+const REAL_VITOS_CUSTOMER_ROW = {
+  tenant_id: "e0000000-0000-0000-0000-000000000001",
+  customer_phone: "web:cq-1789437090-7304",
+  name: "Jason",
+  order_count: 9,
+  total_spent_cents: 0,
+  favorite_items: [{ name: 'Cheese - Large (16")', count: 6 }],
+  last_order_id: "4837ee2a-64bb-4b16-b81f-4b66ced1fa3f",
+  last_order_at: "2026-09-15T01:51:31.720894+00:00",
+  last_order_type: "delivery" as const,
+  last_delivery_address: {
+    zip: "18106", city: "Allentown", state: "PA", street: "5620 Cetronia Rd",
+    formatted: "5620 Cetronia Rd, Allentown, PA 18106",
+  },
+};
+
+// Real Vito's shops row values for the fields maybeBuildReturningCustomerGreeting reads.
+const REAL_VITOS_SHOP_ROW = {
+  customer_personalization_enabled: true,
+  delivery_paused_until: null,
+  delivery_radius_mi: 5.0,
+};
+
+function returningCustomerBaseInput(overrides: Partial<RunTurnInput> = {}): RunTurnInput {
+  return baseInput({
+    menu: REGULAR_MENU,
+    cart: [],
+    dialogueState: null,
+    shopContext: {
+      deliveryEnabled: true,
+      orderType: null,
+      deliveryAddressKnown: false,
+      driverTipCents: null,
+      pickupName: null,
+      deliveryFeeCents: 0,
+    },
+    ...overrides,
+  });
+}
+
+Deno.test("ACCEPTANCE 1+2 (freeze-queue item 7): a known returning customer's first message is greeted by name AND offered the remembered regular + delivery address together, never a generic welcome", async () => {
+  const { supabase } = makeFakeSupabase({
+    conversationRow: { customer_phone: REAL_VITOS_CUSTOMER_ROW.customer_phone },
+    shopRow: REAL_VITOS_SHOP_ROW,
+    customerRow: REAL_VITOS_CUSTOMER_ROW,
+  });
+  const deps: RunTurnDeps = {
+    supabase,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("PROPOSE must not be called — turn 1 is fully swallowed by the offer, never reaches ANSWER/PROPOSE")),
+  };
+  const input = returningCustomerBaseInput({ message: "hi" });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(result.reply.startsWith("Hey Jason, welcome back!"), `must greet by the real stored name, not a generic welcome: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("Large Cheese Pizza"), `must describe the actual remembered regular item: ${JSON.stringify(result.reply)}`);
+  assert(result.reply.includes("5620 Cetronia Rd, Allentown, PA 18106"), `must describe the actual remembered delivery address: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.cart.length, 0, "nothing is added to the cart on the offer turn itself — only on an explicit yes");
+  assertEquals(
+    result.dialogueState.returningCustomerOffer,
+    {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+    "the exact offer just made must be remembered so a 'yes' next turn knows what to place",
+  );
+  assertEquals(result.dialogueState.open, null);
+});
+
+Deno.test("ACCEPTANCE 3 (freeze-queue item 7): saying yes to the offer places the remembered order — item, order type, and delivery address all land correctly", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key" };
+  const priorState: DialogueState = {
+    ...INITIAL_DIALOGUE_STATE,
+    returningCustomerOffer: {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+  };
+  const input = returningCustomerBaseInput({ message: "yes please", dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, `the remembered item must land in the cart: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, "item-cheese-large-16");
+  assertEquals(result.cart[0].quantity, 1);
+  assertEquals(result.dialogueState.returningCustomerOffer, null, "the offer must be cleared once acted on — never re-applied on a later turn");
+
+  const lastUpdate = state.orderCartsUpdates.at(-1) as { order_type?: string; delivery_address?: { formatted: string } };
+  assertEquals(lastUpdate.order_type, "delivery", "order type must be set from the accepted offer, not left for the customer to state again");
+  assertEquals(lastUpdate.delivery_address?.formatted, "5620 Cetronia Rd, Allentown, PA 18106", "the remembered address must be persisted, not re-asked");
+});
+
+Deno.test("ACCEPTANCE 4 (freeze-queue item 7): saying no (or anything else) to the offer proceeds to a completely normal, unaffected conversation — nothing forced onto the cart", async () => {
+  const { supabase, state } = makeFakeSupabase();
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const priorState: DialogueState = {
+    ...INITIAL_DIALOGUE_STATE,
+    returningCustomerOffer: {
+      regularItem: { menu_item_id: "item-cheese-large-16", name: "Large Cheese Pizza" },
+      deliveryOffer: { type: "delivery", address: REAL_VITOS_CUSTOMER_ROW.last_delivery_address },
+    },
+  };
+  const input = returningCustomerBaseInput({ message: "no thanks", dialogueState: priorState });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 0, "declining must never place the remembered regular");
+  assertEquals(result.dialogueState.returningCustomerOffer, null, "the offer must be cleared on a decline, so it is never re-offered or silently re-accepted later");
+  assert(!result.reply.includes("welcome back"), "a decline reply is an ordinary turn reply, not another greeting");
+  const lastUpdate = state.orderCartsUpdates.at(-1) as { order_type?: string } | undefined;
+  assertEquals(lastUpdate?.order_type, undefined, "order type must not be silently set from a declined offer");
+});
+
+Deno.test("ACCEPTANCE 5 (freeze-queue item 7): a brand-new customer with no profile row is completely unaffected — first-turn behavior is unchanged", async () => {
+  const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+  // conversationRow/shopRow/customerRow are all null by default — the exact
+  // shape of a phone that has never contacted this shop before.
+  const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: timedOutProposeResult };
+  const input = baseInput({ message: "cheeseburger", cart: [], dialogueState: null });
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assertEquals(result.cart.length, 1, "the item must still land exactly as it does today for a first-ever contact");
+  assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
+  assert(!result.reply.includes("welcome back"), `a brand-new customer must never be greeted as returning: ${JSON.stringify(result.reply)}`);
+  assertEquals(result.dialogueState.returningCustomerOffer, undefined, "no offer state for a customer with no profile row");
 });
