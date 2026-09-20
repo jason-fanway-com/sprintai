@@ -155,7 +155,15 @@ export function displayGroupName(groupName: string): string {
 // what the customer said. Negation/abandonment must be checked BEFORE any
 // category/ordinal/price matching runs, not folded into it, so a decline is
 // never misread as a selection.
-const DECLINE_CUES = /\b(?:forget|never\s*mind|cancel|skip|drop|don'?t|not|no)\b/i;
+//
+// Rule 2 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug):
+// "I didn't ask for any of those! Just the order I gave you." never matched
+// this list at all — "don'?t" only matches the contraction "don't", and the
+// uncontracted "did not" would already match the bare "\bnot\b" alternative
+// below, but the CONTRACTED "didn't" is neither. The whole message fell
+// through to the free-text item resolver instead of being read as the plain
+// decline it is, and a stray word later in the same sentence got charged.
+const DECLINE_CUES = /\b(?:forget|never\s*mind|cancel|skip|drop|don'?t|didn'?t|not|no)\b/i;
 
 // Generic referents ("cancel THAT", "skip IT") don't name a candidate by
 // word, but during an open disambiguation they can only refer to the

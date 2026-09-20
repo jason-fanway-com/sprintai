@@ -491,6 +491,14 @@ function findLineByKey(cart: TurnEngineCartLine[], lineKey: string): number {
 
 export type AnswerOutcome =
   | { kind: "slot_resolved" }
+  // Rule 3 (2026-09-19, real conv 087abb8d): "take it off" / "remove it"
+  // while a slot question is open (e.g. "what type of wrap?") declines the
+  // WHOLE item the slot belongs to, never a literal answer to the slot — the
+  // line is removed from the cart in place (same mutate-in-place convention
+  // as slot_resolved), and there is nothing else to persist; ask() picks the
+  // next question fresh off the now-shorter cart, same as any other resolved
+  // outcome that doesn't need special handling.
+  | { kind: "slot_item_declined" }
   | { kind: "disambiguation_resolved"; menuItemId: string }
   // PO amendment (2026-09-19, narrowing questions): a facet answer that
   // still leaves more than one candidate — the other facet (kind then size)
@@ -1579,36 +1587,6 @@ function narrowCandidatesByKind(
     ?? narrowCandidatesByFacetAnswer(candidates, "kind", clauseText);
 }
 
-// Round 2, item 3 (2026-09-19, live repro): a typo'd word ("hawiaan") that
-// would name a real lexicon term ("hawaiian") if spelled correctly, but
-// resolveItem itself does only exact whole-word matching (no fuzzy
-// tolerance — that lives in narrowCandidatesByFacetAnswer's own fallback
-// tier and in itemSpanNamedInMessage's guard, neither of which this gate
-// reuses). Without this, "One large hawiaan pizza" would never resolve via
-// the lexicon at all and messageNamesItemOutsideCandidates below would
-// silently miss the exact case it exists for. Same tight, narrow tolerance
-// as itemSpanNamedInMessage's own ADDENDUM B fix (5+ letter words only,
-// fuzzyWordMatch's graduated distance) — this is a typo-correction pass,
-// not a general fuzzy search.
-// Arrow form deliberately, not a plain named-function declaration with a
-// string return type — this file's own gate test asserts exactly one
-// function signature of that shape exists (render(), the sole reply-
-// building function); see buildMultiClauseClarifyMessage's own note on the
-// same convention.
-const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
-  const lexiconWords = new Set<string>();
-  for (const entry of lexicon) {
-    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
-  }
-  if (lexiconWords.size === 0) return text;
-  return text.replace(/[a-zA-Z]+/g, word => {
-    const bare = word.toLowerCase();
-    if (bare.length < 5 || lexiconWords.has(bare)) return word;
-    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
-    return word;
-  });
-};
-
 // Round 2, item 3 (2026-09-19, live repro, real Meat-Lover size list —
 // stromboli / Medium / Large / Small): "One large hawiaan pizza" answered
 // that open disambiguation with "Large Meat Lover Pizza added" —
@@ -1644,6 +1622,33 @@ const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): strin
 // pizza" contains none of them).
 const OUTSIDE_ITEM_REMAINDER_MARKER_RE = /\balso\b|\band a\b|\bplus\b|\bcan i get\b|\bcan i add\b|\badd\b|\boh and\b/i;
 
+// Rule 1 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug): a
+// which-one list was open for "shrimp" and the customer declined it — "I
+// didn't ask for any of those! ... Let's stick to that, thanks!" — but this
+// gate used to run the text through a typo-correction pass before resolving
+// it (fuzzyCorrectAgainstLexicon, since removed), which treated "stick" (a
+// real, complete, unrelated word — the customer was saying "stick to [the
+// order]," not naming food) as a typo of Vito's own active term "sticks"
+// (Mozzarella Sticks) purely because "sticks" starts with "stick". resolveItem
+// itself has the identical fuzzy fallback for the same reason — see its own
+// header. `resolveItem`'s 4th param is `false` here specifically so this
+// gate only ever fires on a genuine, exact, whole-word/whole-term match —
+// never a fuzzy guess at what the customer might have meant. This does not
+// touch "sticks" as a real trigger: the standalone word "sticks" still
+// matches the term "sticks" exactly, whole-word; only a shorter, unrelated
+// word merely SHARING A PREFIX with a longer term ("stick" inside "stick to
+// that") no longer does.
+//
+// Rule 4 (2026-09-19, real conv 087abb8d follow-up, quantity dropped): the
+// EXACT same defect DEFECT 2 fixed for the which-one/resolved path
+// (extractAnswerQuantity's own header) exists here too — `count` below came
+// only from extractLeadingClauseCount, which requires the quantity to be the
+// very FIRST token ("2 Large Pepperoni pizzas"); "2x Large Pepperoni pizzas"
+// (the "Nx" shape the resolved path already handles) matched nothing there
+// and silently fell back to quantity 1. Same fix, same scoping: try the "Nx"
+// shape first, against the answer clause (never the whole, possibly
+// multi-item, restated order), before falling back to the leading-count
+// shape unchanged.
 function messageNamesItemOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
@@ -1653,12 +1658,12 @@ function messageNamesItemOutsideCandidates(
   const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
   const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
   const { count, text } = extractLeadingClauseCount(scoped);
-  const corrected = fuzzyCorrectAgainstLexicon(text, lexicon);
-  const result = resolveItem(corrected, lexicon);
+  const result = resolveItem(text, lexicon, [], false);
   if (result.kind !== "resolved") return null;
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
   if (candidateIds.has(result.menu_item_id)) return null;
-  return { menuItemId: result.menu_item_id, quantity: count };
+  const explicitQuantity = extractAnswerQuantity(extractAnswerClause(scoped).clause);
+  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count };
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -1691,6 +1696,26 @@ function messageNamesItemOutsideCandidates(
 // aae67b80/322e19ca genuine-correction shape (always exactly one
 // alternative) completely unaffected — see the "genuine correction is
 // UNAFFECTED" regression test.
+// Restored after the merge with fix/whole-term-match-and-rejections-20260919:
+// that branch removed this function believing nothing still called it, but
+// messageNamesMultipleItemsOutsideCandidates below (merged in from main,
+// cb37bda9) still does. A typo-correction pass, not a general fuzzy search —
+// same tight, narrow tolerance as itemSpanNamedInMessage's own ADDENDUM B
+// fix (5+ letter words only, fuzzyWordMatch's graduated distance).
+const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
+  const lexiconWords = new Set<string>();
+  for (const entry of lexicon) {
+    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
+  }
+  if (lexiconWords.size === 0) return text;
+  return text.replace(/[a-zA-Z]+/g, word => {
+    const bare = word.toLowerCase();
+    if (bare.length < 5 || lexiconWords.has(bare)) return word;
+    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
+    return word;
+  });
+};
+
 function messageNamesMultipleItemsOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
@@ -1926,6 +1951,18 @@ function removeReplacementSourceLine(cart: TurnEngineCartLine[], lineKey: string
   return true;
 }
 
+// Rule 3 (2026-09-19, real conv 087abb8d, live $107.43-vs-~$85 money bug):
+// "take it off, just the original order please! no extras!" arrived while a
+// slot question was open ("what type of wrap for the Southwest Shrimp?") and
+// was fed straight into the slot as a literal choice attempt, producing "We
+// don't have 'please! no extras' for Southwest Shrimp." "Take it off"/
+// "remove it" (and the "that"/"this" variants) is never a slot value — it's
+// the customer declining the item the slot question is even about, the exact
+// same intent a keep-or-drop "no" already carries. The object must be a bare
+// pronoun ("it"/"that"/"this"): "take the cheese off" names a real modifier
+// and is deliberately left to applyCompiledModifyItem, unaffected.
+const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|that|this)\b)/i;
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -1961,6 +1998,13 @@ export function answer(
       const idx = findLineByKey(cart, state.open.line_key);
       if (idx < 0) return UNRESOLVED;
       const line = cart[idx];
+      // Rule 3: checked BEFORE any slot-value matching runs (below), so
+      // "take it off"/"remove it" is never given a chance to be read as a
+      // literal choice for the open slot — see DECLINE_OPEN_ITEM_RE's header.
+      if (DECLINE_OPEN_ITEM_RE.test(trimmed)) {
+        removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
+        return { resolved: true, outcome: { kind: "slot_item_declined" }, cartChanged: true };
+      }
       const menuItem = menuById.get(line.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // suppressUnitSplit: true — see ask-plan-engine.ts's own doc on that
@@ -2728,7 +2772,9 @@ export function answer(
         );
         return { resolved: true, outcome: { kind: "category_confirm_added", menuItemId: menuItem.id }, cartChanged: result.cartChanged };
       }
-      if (impliesUpsellDecline(trimmed)) {
+      // Rule 3: "take it off" is this keep-or-drop question's own "drop"
+      // answer, same as a bare "no" — see DECLINE_OPEN_ITEM_RE's header.
+      if (impliesUpsellDecline(trimmed) || DECLINE_OPEN_ITEM_RE.test(trimmed)) {
         return { resolved: true, outcome: { kind: "category_confirm_declined" }, cartChanged: false };
       }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
