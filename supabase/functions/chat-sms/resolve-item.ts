@@ -101,6 +101,25 @@ function categoryNoun(category: string): string {
 const SIZE_WORD_TOKENS = new Set(["small", "medium", "large", "personal"]);
 const SIZE_DIGIT_TOKENS = new Set(["10", "14", "16"]);
 
+// 2026-09-20 PO dispatch (off-menu category-mismatch, preposition/quantity
+// false-positive, real conv befc0c6a, live lost-item bug): "a cup of Lobster
+// Bisque" -- the customer's own real, resolvable $4.99 item -- was vetoed as
+// off-menu because offMenuCategoryMismatchWord's head-noun scan landed on
+// "of" (Vito's own "Soup Of The Day" items literally carry the word "of" in
+// their stated name, so nameWordIndex has real "owners" for it that aren't
+// among the tied Lobster Bisque candidates -- exactly the shape the veto
+// exists to catch, just aimed at a preposition instead of a real dish word).
+// These words are never a dish's own distinguishing head noun in normal
+// English ordering phrasing ("a cup of X", "a bowl of X", "a side of X", "an
+// order of X") -- "bowl" included alongside "cup" for the same reason: real
+// Vito's data has a "Bowl Soup Of The Day" item whose own stated name
+// contains the literal word "bowl", so nameWordIndex has a real, unrelated
+// "owner" for it exactly like it does for "cup" via "Cup Soup Of The Day" --
+// same false-positive shape, must be exempted the same way. Exported so both
+// the extractor below AND turn-engine.ts's own last-resort message guard
+// (DEFECT 3 below) share one list and can never drift apart.
+export const OFF_MENU_HEAD_NOUN_STOPWORDS = new Set(["of", "a", "an", "the", "side", "cup", "bowl", "order"]);
+
 // 2026-09-19 PO dispatch (compiler priority item 2, size-qualified bare
 // name): compile-menu.ts's itemLexiconTerms Rule 2b now emits a size digit
 // PLUS the literal word "inch" as part of an item's own term text ("14
@@ -593,6 +612,12 @@ function offMenuCategoryMismatchWord(
     const word = spanWords[i];
     if (matchedWordsAcrossCandidates.has(word)) continue;
     if (categoryNounIndex.has(word)) continue;
+    // 2026-09-20 PO dispatch: a preposition or bare quantity word ("of",
+    // "a", "side", "cup", "order") is never itself a dish's head noun --
+    // skip it rather than letting it stand in as "the category word to
+    // check against" just because some OTHER real item's own name happens
+    // to also contain it (see OFF_MENU_HEAD_NOUN_STOPWORDS's own header).
+    if (OFF_MENU_HEAD_NOUN_STOPWORDS.has(word)) continue;
     const owners = nameWordIndex.get(word);
     if (!owners || owners.size === 0) continue;
     // The word already belongs to (at least) one of the tied candidates
@@ -786,20 +811,6 @@ export function resolveItem(
     return { kind: "unresolved" };
   }
 
-  // 2026-09-20 PO dispatch (off-menu category-mismatch, real conv 75b6e542,
-  // live $22.99 money bug): see offMenuCategoryMismatchWord's own header —
-  // a genuine TIE (base.targetIds.size > 1) whose span carries a real,
-  // separate dish-family word ("fries") that NONE of the tied candidates
-  // themselves carry must never fall through to the unfiltered ambiguous
-  // list below; the customer asked for something none of these items are.
-  // Scoped to `usingItemNameSpan` — a bare category-word-only span (no
-  // qualifier to conflict with) was never this dispatch's territory. Checked
-  // once, exactly like the inactive-term veto just above, before any
-  // downstream narrowing gets a chance to guess or list with the wrong tie.
-  if (usingItemNameSpan && offMenuCategoryMismatchWord(spanWords, base.targetIds, base.length, itemNameEntries, buildNameWordIndex(itemNameEntries), categoryNounIndex)) {
-    return { kind: "unresolved" };
-  }
-
   // Round 2, item 1c: nothing matched EXACTLY at all — try the same scan
   // fuzzy (occursAsWholeWordRunFuzzy) before giving up. Resolves ONLY when
   // it narrows to a single target family (targetIds.size === 1), same
@@ -937,6 +948,24 @@ export function resolveItem(
   if (sizeToken && candidates.some(id => targetInfo.get(id)?.size_label != null)) {
     const filteredBySize = candidates.filter(id => sizeLabelMatchesToken(targetInfo.get(id)?.size_label, sizeToken));
     if (filteredBySize.length > 0) candidates = filteredBySize;
+  }
+
+  // 2026-09-20 PO dispatch (off-menu category-mismatch, real conv 75b6e542
+  // originally, real REGRESSION conv befc0c6a — "a cup of Lobster Bisque"):
+  // moved here, AFTER named-category and size narrowing have had their own
+  // chance to collapse a real tie down to one candidate, precisely so this
+  // veto can never override a span that DOES resolve — the same guarantee
+  // 4e0ad853 already gives the original off-menu veto (a real resolution/tie
+  // always wins). Checking against the narrowed `candidates` (not raw
+  // `base.targetIds`) means: if size/category narrowing already reduced the
+  // tie to a single real item, offMenuCategoryMismatchWord's own
+  // `candidateIds.size < 2` guard makes it a no-op below and normal
+  // resolution proceeds untouched. Only a tie that SURVIVES narrowing (e.g.
+  // "buffalo chicken fries" — "fries" narrows nothing, all 5 Buffalo Chicken
+  // items still tied) reaches this check, exactly preserving the original
+  // f1a9e154/d9fa1d6d regression coverage.
+  if (offMenuCategoryMismatchWord(spanWords, new Set(candidates), base.length, itemNameEntries, buildNameWordIndex(itemNameEntries), categoryNounIndex)) {
+    return { kind: "unresolved" };
   }
 
   if (candidates.length === 1) {

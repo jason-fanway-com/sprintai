@@ -162,7 +162,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, findVetoedOffMenuTerm, findOffMenuCategoryMismatch, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, findOffMenuCategoryMismatch, findCategoryFilterDiscardedRealItem, SIZE_WORD_ALIASES, OFF_MENU_HEAD_NOUN_STOPWORDS, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -6284,8 +6284,16 @@ export function decide(
       // name what was actually asked for, name the real head-noun word that
       // doesn't apply, and offer the shop's own real items for that word
       // instead of a misleading "didn't catch that."
+      // 2026-09-20 PO dispatch (last-resort safety net, real conv befc0c6a):
+      // resolve-item.ts's own extractor already skips OFF_MENU_HEAD_NOUN_STOPWORDS
+      // before ever returning a headNoun, so this should never trip in
+      // practice — but a bare preposition/quantity word ("of", "a", "cup")
+      // is never a real category name a customer would recognize, so this
+      // template must never render one even as defense in depth. Falls
+      // through to the generic genuinelyUnresolvedSpans path exactly like a
+      // non-vetoed "unresolved" already does just below.
       const categoryMismatch = findOffMenuCategoryMismatch(add.item_span ?? "", lexicon);
-      if (categoryMismatch) {
+      if (categoryMismatch && !OFF_MENU_HEAD_NOUN_STOPWORDS.has(categoryMismatch.headNoun)) {
         const alternativeNames = categoryMismatch.alternativeMenuItemIds
           .map(id => menuById.get(id))
           .filter((m): m is TurnEngineMenuItem => !!m)
