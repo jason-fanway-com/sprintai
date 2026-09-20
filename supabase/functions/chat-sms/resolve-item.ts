@@ -520,6 +520,141 @@ function findLongerInactiveTerm(
   return null;
 }
 
+// 2026-09-20 PO dispatch (off-menu category-mismatch, real conv 75b6e542,
+// live $22.99 money bug): generalizes the SAME class of defect
+// uniqueBaseCategoryConflict already solves for a UNIQUE base match
+// (below) to a genuine TIE. Real Vito's shape: "buffalo chicken fries" ties
+// resolveItem's own real, correct 2-word term "buffalo chicken" across
+// Buffalo Chicken Pizza (S/M/L)/Flatbread/Wrap — a real word-pair — but the
+// span's own trailing/head word "fries" names a real, separate dish family
+// (French Fries, Crab Fries, Sweet Potato Fries, ...) that NONE of those
+// tied candidates belong to. Vito's has no menu_items.category literally
+// named "Fries" (they're filed under "Appetizers" alongside a dozen
+// unrelated items), so the existing categoryNounIndex (built from the
+// shop's own DB `category` strings, see buildCategoryNounIndex) can never
+// recognize "fries" as a category word the way it recognizes "salad" or
+// "pizza". Real menu items that ARE fries state so directly in their OWN
+// name/lexicon term ("French Fries", "Crab Fries", ...) — this builds a
+// second, item-NAME-derived word index (buildNameWordIndex) purely to
+// catch that shape: a word the customer used, not already part of what
+// matched THIS tie, that is some OTHER real item's own stated word and
+// NONE of the tied candidates'. That is "off-menu for this tie" regardless
+// of whether the shop's DB category taxonomy happens to have a matching
+// name for it.
+//
+// Scanned trailing-word-first (spanWords in reverse) on purpose, mirroring
+// categoryNoun's own "last word of the phrase is the head noun" convention
+// elsewhere in this file: "side of buffalo chicken fries" must flag on
+// "fries" (the real head noun), not "side" (an incidental filler word that
+// happens to also be part of the real "Side Salad" item's own name) --
+// checking from the end of the span finds the head noun first and returns
+// on the first genuine hit, exactly like categoryNoun always takes the
+// LAST word of a category name.
+//
+// Only ever a veto: returns the single word that doesn't belong, never
+// picks a "best" candidate itself. `matchedWordsAcrossCandidates` is the
+// union of every tied candidate's own matched term words (not just one),
+// so a word genuinely part of what ANY tied candidate is actually named
+// ("chicken" inside "Buffalo Chicken Pizza") is never treated as an
+// outside qualifier — the same "already inside the candidate's own
+// name/category" exemption uniqueBaseCategoryConflict already applies for
+// the unique case.
+//
+// `categoryNounIndex` words are ALSO exempt here, deliberately: a word that
+// IS one of the shop's own real DB category nouns ("pizza", "sandwich",
+// "salad") already has its own dedicated, heavily-tested mechanism just
+// below (the `namedCategories` filter + its edge-1 "never wipe a real tie
+// to zero" fallback) — including real, correct cases this function must
+// never re-decide differently, e.g. "cheese pizza" (all 3 tied Cheese
+// candidates genuinely ARE Pizza — "pizza" just isn't the word that
+// disambiguates the size) and "a House Personal pizza" (House ties across
+// two Stromboli sizes; "pizza" is the customer's own mistaken category
+// guess for a real, specific item that DOES exist — freeze-queue item 4's
+// category-confirm hold-and-ask exists precisely to recover that case by
+// resolving it normally, not declining it here). This function's own job
+// starts exactly where that mechanism's vocabulary runs out: a head noun
+// like "fries" that names a real dish family with no DB category of its
+// own at all.
+function offMenuCategoryMismatchWord(
+  spanWords: string[],
+  candidateIds: ReadonlySet<string>,
+  matchedLength: number,
+  itemNameEntries: LexiconTerm[],
+  nameWordIndex: Map<string, Set<string>>,
+  categoryNounIndex: Map<string, Set<string>>,
+): string | null {
+  if (candidateIds.size < 2) return null;
+  const matchedWordsAcrossCandidates = new Set<string>();
+  for (const id of candidateIds) {
+    const words = findMatchedTermWords(id, matchedLength, spanWords, itemNameEntries);
+    if (words) for (const w of words) matchedWordsAcrossCandidates.add(w);
+  }
+  for (let i = spanWords.length - 1; i >= 0; i--) {
+    const word = spanWords[i];
+    if (matchedWordsAcrossCandidates.has(word)) continue;
+    if (categoryNounIndex.has(word)) continue;
+    const owners = nameWordIndex.get(word);
+    if (!owners || owners.size === 0) continue;
+    // The word already belongs to (at least) one of the tied candidates
+    // themselves — not an outside qualifier, even if it didn't happen to be
+    // part of the specific term that WON the length tie for that candidate
+    // (e.g. a shorter, alternate term for the same item also carries it).
+    if ([...owners].some(id => candidateIds.has(id))) continue;
+    return word;
+  }
+  return null;
+}
+
+// word -> every OTHER real item's own target_id whose active item-name
+// lexicon term (filler/size stripped, never singularized — this must match
+// occursAsWholeWordRun's own literal, unstemmed comparison, the same
+// discipline buildCategoryNounIndex already follows for `entry.category`)
+// contains that word. Deliberately scoped to `itemNameEntries` (STATED/
+// item-own terms, category-noun-only single-word terms already excluded by
+// the caller) so a wide, shared, DERIVED trailing-word-run term can never
+// inflate this into a false "outside" owner.
+function buildNameWordIndex(itemNameEntries: LexiconTerm[]): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const entry of itemNameEntries) {
+    const words = toWords(normalize(entry.term))
+      .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !SIZE_UNIT_WORDS.has(w));
+    for (const w of words) {
+      const set = index.get(w) ?? new Set<string>();
+      set.add(entry.target_id);
+      index.set(w, set);
+    }
+  }
+  return index;
+}
+
+// 2026-09-20 PO dispatch (off-menu category-mismatch): resolveItem's own
+// veto above (offMenuCategoryMismatchWord) only returns unresolved — same
+// "no info about why" gap DEFECT 3's findVetoedOffMenuTerm already
+// documents for the bleu-cheese veto, same fix shape: a caller-facing
+// function that redoes resolveItem's own base-tie computation far enough to
+// learn which word tripped the veto and what real items DO carry it, so
+// turn-engine.ts can decline by NAME and offer the real alternative
+// (French Fries, Crab Fries, ...) instead of a bare "didn't catch that."
+export function findOffMenuCategoryMismatch(
+  span: string,
+  lexicon: LexiconTerm[],
+): { headNoun: string; alternativeMenuItemIds: string[] } | null {
+  const spanWords = toWords(normalize(span));
+  if (spanWords.length === 0) return null;
+  const categoryNounIndex = buildCategoryNounIndex(lexicon);
+  const itemNameEntries = lexicon.filter(entry => {
+    const termWords = toWords(normalize(entry.term));
+    return termWords.length > 0 && !(termWords.length === 1 && categoryNounIndex.has(termWords[0]));
+  });
+  const base = longestMatch(spanWords, itemNameEntries);
+  if (base.targetIds.size < 2) return null;
+  const nameWordIndex = buildNameWordIndex(itemNameEntries);
+  const word = offMenuCategoryMismatchWord(spanWords, base.targetIds, base.length, itemNameEntries, nameWordIndex, categoryNounIndex);
+  if (!word) return null;
+  const owners = nameWordIndex.get(word) ?? new Set<string>();
+  return { headNoun: word, alternativeMenuItemIds: [...owners].sort() };
+}
+
 // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
 // 009de656 follow-up, live: "can I add a side of Bleu Cheese" wrongly tied
 // 3 Cheese pizzas): the veto above correctly stops resolveItem from ever
@@ -648,6 +783,20 @@ export function resolveItem(
   // ambiguous, or the fuzzy fallback below) gets a chance to guess with the
   // shorter match instead.
   if (findLongerInactiveTerm(spanWords, inactiveLexicon, base.length, base.targetIds)) {
+    return { kind: "unresolved" };
+  }
+
+  // 2026-09-20 PO dispatch (off-menu category-mismatch, real conv 75b6e542,
+  // live $22.99 money bug): see offMenuCategoryMismatchWord's own header —
+  // a genuine TIE (base.targetIds.size > 1) whose span carries a real,
+  // separate dish-family word ("fries") that NONE of the tied candidates
+  // themselves carry must never fall through to the unfiltered ambiguous
+  // list below; the customer asked for something none of these items are.
+  // Scoped to `usingItemNameSpan` — a bare category-word-only span (no
+  // qualifier to conflict with) was never this dispatch's territory. Checked
+  // once, exactly like the inactive-term veto just above, before any
+  // downstream narrowing gets a chance to guess or list with the wrong tie.
+  if (usingItemNameSpan && offMenuCategoryMismatchWord(spanWords, base.targetIds, base.length, itemNameEntries, buildNameWordIndex(itemNameEntries), categoryNounIndex)) {
     return { kind: "unresolved" };
   }
 
