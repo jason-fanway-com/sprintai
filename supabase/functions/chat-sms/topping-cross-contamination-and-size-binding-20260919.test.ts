@@ -99,14 +99,17 @@ Deno.test("stripOtherItemSpansFromModifierText: never strips a span shorter than
 // 2026-09-19): Gourmet White Fiesta's three sizes each carry a real
 // size_label ("Small (10\")" etc.), so resolveItem's size-token filter
 // narrows the bare shared "gourmet white fiesta" term down to one target —
-// this is what makes it resolve cleanly. Sausage Pizza's three sizes carry
-// NO size_label in real Vito's data (a separate, pre-existing menu-data gap
-// unrelated to this dispatch — the Small/Medium/Large-prefixed lexicon terms
-// are also word-order "small sausage pizza" vs. the span's own trailing
-// "sausage pizza small", so they never win the longest-match either), so it
-// genuinely ties 3-way exactly as it does live — the correct acceptance
-// shape here is "resolves to its own which-one list", never merged into the
-// other item, never silently guessed.
+// this is what makes it resolve cleanly via the LEXICON. Sausage Pizza's
+// three sizes carry NO size_label in real Vito's data (a separate,
+// pre-existing menu-data gap unrelated to this dispatch), so resolveItem's
+// own lexicon-based tiebreak genuinely ties it 3-way, exactly as it does
+// live. Originally (rule 2's first half) that tie was left open as its own
+// which-one question — since REOPENED: narrowAmbiguousCandidatesBySpanSize
+// (turn-engine.ts) closes this same tie a different way, deriving each
+// candidate's size from its own MENU ITEM NAME text instead of the missing
+// lexicon size_label, so a customer-stated size resolves it outright. The
+// correct acceptance shape is now "resolves directly when a size is stated,
+// asks only when genuinely nothing narrows it" — see the tests below.
 
 const GWF_SMALL = "gwf-small";
 const GWF_MEDIUM = "gwf-medium";
@@ -133,13 +136,29 @@ const GWF_LARGE_MENU_ITEM: TurnEngineMenuItem = {
   option_groups: [{ id: TOPPING_GROUP, name: "Toppings" }],
 };
 
+// PO dispatch 2026-09-19 (rule 2 REOPENED): a minimal, no-modifier-steps
+// ask_plan — real enough to pass the "isn't available to order this way
+// yet" ask_plan gate (turn-engine.ts's add-application loop) that a resolved
+// add must clear, without dragging in unrelated topping-step fixtures. Real
+// Vito's Sausage Pizza items DO carry ask_plan in live data (confirmed via
+// the probe-decide harness this fix was verified against) — this test never
+// needed one before because Sausage always stayed pending its own
+// disambiguation; now that it resolves outright, it needs one too.
+function basicAskPlan(displayName: string, priceCents: number) {
+  return {
+    compiled_at: "", compiler_version: 1, display_name: displayName,
+    base_price_cents: priceCents, recap_template: "", ticket_template: "",
+    steps: [],
+  };
+}
+
 const M1_MENU: TurnEngineMenuItem[] = [
   { id: GWF_SMALL, name: 'Gourmet White Fiesta - Small (10")', category: "Pizza", price_cents: 1295, bot_state: "orderable" },
   { id: GWF_MEDIUM, name: 'Gourmet White Fiesta - Medium (14")', category: "Pizza", price_cents: 2199, bot_state: "orderable" },
   GWF_LARGE_MENU_ITEM,
-  { id: SAUSAGE_SMALL, name: 'Sausage Pizza - Small (10")', category: "Pizza", price_cents: 1745, bot_state: "orderable" },
-  { id: SAUSAGE_MEDIUM, name: 'Sausage Pizza - Medium (14")', category: "Pizza", price_cents: 1945, bot_state: "orderable" },
-  { id: SAUSAGE_LARGE, name: 'Sausage Pizza - Large (16")', category: "Pizza", price_cents: 2100, bot_state: "orderable" },
+  { id: SAUSAGE_SMALL, name: 'Sausage Pizza - Small (10")', category: "Pizza", price_cents: 1745, bot_state: "orderable", ask_plan: basicAskPlan("Small Sausage Pizza", 1745) },
+  { id: SAUSAGE_MEDIUM, name: 'Sausage Pizza - Medium (14")', category: "Pizza", price_cents: 1945, bot_state: "orderable", ask_plan: basicAskPlan("Medium Sausage Pizza", 1945) },
+  { id: SAUSAGE_LARGE, name: 'Sausage Pizza - Large (16")', category: "Pizza", price_cents: 2100, bot_state: "orderable", ask_plan: basicAskPlan("Large Sausage Pizza", 2100) },
 ];
 
 const M1_LEXICON = [
@@ -168,30 +187,51 @@ const M1_PROPOSAL: Proposal = {
   ],
 };
 
-Deno.test("decide() (M1 END TO END, acceptance 1+2, real #26 message): Gourmet White Fiesta prices at its real $23.99 base, NO phantom Sausage topping, and Sausage Pizza resolves as its own separate which-one list — never merged", () => {
+// PO dispatch 2026-09-19 (M1 rule 2, REOPENED — same conv d95306c8 #26): the
+// two tests below originally asserted that Sausage Pizza stays pending its
+// own 3-way which-one question, on the theory that resolveItem's LEXICON
+// size_label gap (Sausage Pizza's size_label is null in real Vito's data,
+// unlike Gourmet White Fiesta's) made that tie unbreakable without asking.
+// It doesn't: the customer's own words state "Small" right next to "Sausage
+// Pizza", and narrowAmbiguousCandidatesBySpanSize (turn-engine.ts, beside
+// rawMessageSizeWordForSpan) now derives each candidate's size from its own
+// MENU ITEM NAME text — the same way filterCandidatesBySizeWord already
+// narrows an answered disambiguation — closing the tie before a question
+// ever opens. Verified against real Vito's live menu/lexicon data via the
+// probe-decide harness (scripts/tmp-m1-topping-crosscontam-probe-20260919.ts
+// plus an ad hoc extension covering this exact message): real propose.ts
+// output for this message resolves to "1x Small Sausage Pizza $17.45" and
+// "1x Large Gourmet White Fiesta Pizza $23.99", total $41.44, no
+// disambiguation — the fixture prices below match those real figures.
+Deno.test("decide() (M1 END TO END, acceptance 1+2, real #26 message, rule 2 completed): Sausage Pizza and Gourmet White Fiesta BOTH resolve immediately — Small Sausage Pizza and Large Gourmet White Fiesta, no which-one question for either, no phantom topping", () => {
   const out = decide(M1_PROPOSAL, [] as TurnEngineCartLine[], M1_MENU, M1_LEXICON, undefined, M1_MESSAGE);
   const realLines = out.cart.filter(l => typeof l.menu_item_id === "string");
 
-  assertEquals(realLines.length, 1, `expected exactly one resolved cart line (Gourmet White Fiesta), got ${JSON.stringify(out.cart)}`);
-  const gwfLine = realLines[0];
-  assertEquals(gwfLine.menu_item_id, GWF_LARGE, "the resolved line must be the Large Gourmet White Fiesta");
-  assertEquals(gwfLine.price_cents, 2399, `Gourmet White Fiesta must price at its real $23.99 base, got $${(gwfLine.price_cents / 100).toFixed(2)}`);
-  const optionsJson = JSON.stringify(gwfLine.options ?? {});
+  assertEquals(realLines.length, 2, `expected exactly two resolved cart lines, got ${JSON.stringify(out.cart)}`);
+  assertEquals(out.disambiguationCandidateIds, null,
+    `no which-one question must open for either item — got ${JSON.stringify(out.disambiguationCandidateIds)}`);
+
+  const sausageLine = realLines.find(l => l.menu_item_id === SAUSAGE_SMALL);
+  assert(sausageLine, `expected a resolved Small Sausage Pizza line — got ${JSON.stringify(out.cart)}`);
+  assertEquals(sausageLine!.price_cents, 1745, `Small Sausage Pizza must price at its real $17.45, got $${(sausageLine!.price_cents / 100).toFixed(2)}`);
+
+  const gwfLine = realLines.find(l => l.menu_item_id === GWF_LARGE);
+  assert(gwfLine, `expected a resolved Large Gourmet White Fiesta line — got ${JSON.stringify(out.cart)}`);
+  assertEquals(gwfLine!.price_cents, 2399, `Gourmet White Fiesta must price at its real $23.99 base, got $${(gwfLine!.price_cents / 100).toFixed(2)}`);
+  const optionsJson = JSON.stringify(gwfLine!.options ?? {});
   assertEquals(optionsJson.includes("Sausage"), false, `no Sausage topping must ever land on the Gourmet White Fiesta line — got ${optionsJson}`);
 
-  // Sausage Pizza must be genuinely pending its own which-one question —
-  // never silently dropped, never merged into the Gourmet line.
-  assertEquals(
-    (out.disambiguationCandidateIds ?? []).slice().sort(),
-    [SAUSAGE_LARGE, SAUSAGE_MEDIUM, SAUSAGE_SMALL].sort(),
-    `Sausage Pizza must tie its own 3 sizes as a pending which-one list — got ${JSON.stringify(out.disambiguationCandidateIds)}`,
-  );
+  const total = realLines.reduce((s, l) => s + l.price_cents * (l.quantity ?? 1), 0);
+  assertEquals(total, 4144, `total must be the real $41.44 ($17.45 + $23.99), got $${(total / 100).toFixed(2)}`);
 });
 
-Deno.test("decide() (M1 END TO END, acceptance 2, sizes never cross): the Sausage Pizza disambiguation's own held size is 'Small', never 'Large' bled in from the Gourmet White Fiesta clause", () => {
+Deno.test("decide() (M1 END TO END, acceptance 2, sizes never cross): Sausage Pizza resolves to Small, never Large bled in from the Gourmet White Fiesta clause", () => {
   const out = decide(M1_PROPOSAL, [] as TurnEngineCartLine[], M1_MENU, M1_LEXICON, undefined, M1_MESSAGE);
-  assertEquals(out.disambiguationSpanText, "Sausage Pizza - Small",
-    `the held span text for the Sausage Pizza question must carry ITS OWN size, never the Gourmet White Fiesta's — got ${JSON.stringify(out.disambiguationSpanText)}`);
+  const realLines = out.cart.filter(l => typeof l.menu_item_id === "string");
+  const sausageIds = new Set([SAUSAGE_SMALL, SAUSAGE_MEDIUM, SAUSAGE_LARGE]);
+  const sausageLine = realLines.find(l => sausageIds.has(l.menu_item_id as string));
+  assertEquals(sausageLine?.menu_item_id, SAUSAGE_SMALL,
+    `Sausage Pizza must resolve to Small, its OWN stated size, never a size bled in from the Gourmet White Fiesta clause — got ${JSON.stringify(out.cart)}`);
 });
 
 // ── Acceptance point 3: a legitimate single-item + shared-vocabulary-topping
@@ -221,7 +261,16 @@ Deno.test("decide() (M1 acceptance 3, no false negative): naming ONLY Gourmet Wh
 // message so a naive first-match-in-string scan would grab the WRONG item's
 // size.
 
-Deno.test("decide() (M1 root cause 2, reversed order): the ambiguous Sausage Pizza's held size is scoped to its OWN phrase even when its item_span drops the size and the OTHER item's size word appears earlier in the raw message", () => {
+// PO dispatch 2026-09-19 (rule 2 REOPENED): originally this test forced the
+// phrase-scoped fallback and asserted only that the eventual QUESTION's held
+// size text was correct ("Small", never "Large"). Now that a correctly
+// recovered size closes the tie outright (narrowAmbiguousCandidatesBySpanSize
+// reuses the identical rawMessageSizeWordForSpan recovery this test exists
+// to prove, just one step earlier), the same recovery resolves Sausage Pizza
+// directly — no question, no held span text at all. The regression this test
+// guards — the OTHER item's size never bleeding onto Sausage Pizza — is now
+// asserted against the resolved cart line instead of the question's text.
+Deno.test("decide() (M1 root cause 2, reversed order): Sausage Pizza's OWN phrase resolves it to Small even when its item_span drops the size and the OTHER item's size word appears earlier in the raw message", () => {
   const proposal: Proposal = {
     intent: "order", removes: [], modifies: [],
     adds: [
@@ -235,17 +284,50 @@ Deno.test("decide() (M1 root cause 2, reversed order): the ambiguous Sausage Piz
   const message = "a Gourmet White Fiesta - Large and a Sausage Pizza - Small, please.";
   const out = decide(proposal, [] as TurnEngineCartLine[], M1_MENU, M1_LEXICON, undefined, message);
 
+  assertEquals(out.disambiguationCandidateIds, null,
+    `expected Sausage Pizza to resolve outright, no pending tie — got ${JSON.stringify(out.disambiguationCandidateIds)}`);
+  const realLines = out.cart.filter(l => typeof l.menu_item_id === "string");
+  const sausageIds = new Set([SAUSAGE_SMALL, SAUSAGE_MEDIUM, SAUSAGE_LARGE]);
+  const sausageLine = realLines.find(l => sausageIds.has(l.menu_item_id as string));
+  assertEquals(sausageLine?.menu_item_id, SAUSAGE_SMALL,
+    `Sausage Pizza's own phrase must resolve it to Small, never the Gourmet White Fiesta's "Large" bled in from earlier in the raw message — got ${JSON.stringify(out.cart)}`);
+  const gwfLine = realLines.find(l => l.menu_item_id === GWF_LARGE);
+  assert(gwfLine, `expected the Gourmet White Fiesta to still resolve to Large — got ${JSON.stringify(out.cart)}`);
+});
+
+// ── New (rule 2 completion): a single-item message with a stated size that
+// ties must resolve immediately too — the same narrowing, not a multi-item-
+// only special case. ─────────────────────────────────────────────────────
+
+Deno.test("decide() (M1 rule 2 completion, single item): 'Sausage Pizza - Small' alone (no second item) resolves to Small directly, no which-one question, confirming the size-binding mechanism this fix reuses works standalone", () => {
+  const proposal: Proposal = {
+    intent: "order", removes: [], modifies: [],
+    adds: [{ item_span: "Sausage Pizza - Small", quantity: 1, choices: [] }],
+  };
+  const message = "Hi, I'd like a Sausage Pizza - Small, please.";
+  const out = decide(proposal, [] as TurnEngineCartLine[], M1_MENU, M1_LEXICON, undefined, message);
+
+  assertEquals(out.disambiguationCandidateIds, null,
+    `expected Sausage Pizza to resolve outright — got ${JSON.stringify(out.disambiguationCandidateIds)}`);
+  const realLines = out.cart.filter(l => typeof l.menu_item_id === "string");
+  assertEquals(realLines.length, 1, `expected exactly one resolved cart line, got ${JSON.stringify(out.cart)}`);
+  assertEquals(realLines[0].menu_item_id, SAUSAGE_SMALL, `expected the Small Sausage Pizza — got ${JSON.stringify(out.cart)}`);
+  assertEquals(realLines[0].price_cents, 1745, `Small Sausage Pizza must price at its real $17.45, got $${(realLines[0].price_cents / 100).toFixed(2)}`);
+});
+
+Deno.test("decide() (M1 rule 2 completion, no size stated at all): 'Sausage Pizza' with NO size anywhere in the message still opens its genuine 3-way which-one question — the new narrowing never guesses when there is nothing to narrow with", () => {
+  const proposal: Proposal = {
+    intent: "order", removes: [], modifies: [],
+    adds: [{ item_span: "Sausage Pizza", quantity: 1, choices: [] }],
+  };
+  const message = "Hi, I'd like a Sausage Pizza, please.";
+  const out = decide(proposal, [] as TurnEngineCartLine[], M1_MENU, M1_LEXICON, undefined, message);
+
+  const realLines = out.cart.filter(l => typeof l.menu_item_id === "string");
+  assertEquals(realLines.length, 0, `expected no cart line — a genuine tie with no stated size must still ask, got ${JSON.stringify(out.cart)}`);
   assertEquals(
     (out.disambiguationCandidateIds ?? []).slice().sort(),
     [SAUSAGE_LARGE, SAUSAGE_MEDIUM, SAUSAGE_SMALL].sort(),
-    `expected the Sausage Pizza tie pending — got ${JSON.stringify(out.disambiguationCandidateIds)}`,
-  );
-  assert(
-    /small/i.test(out.disambiguationSpanText ?? ""),
-    `held size must be recovered from Sausage Pizza's OWN phrase ("Small"), never the Gourmet White Fiesta's ("Large") — got ${JSON.stringify(out.disambiguationSpanText)}`,
-  );
-  assert(
-    !/large/i.test(out.disambiguationSpanText ?? ""),
-    `the OTHER item's size ("Large") must never bleed into this held span — got ${JSON.stringify(out.disambiguationSpanText)}`,
+    `expected the genuine 3-way tie pending — got ${JSON.stringify(out.disambiguationCandidateIds)}`,
   );
 });
