@@ -2258,6 +2258,13 @@ const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|
 // can never fire this by matching a fragment of a real item name like
 // "Bone-In".
 const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
+// 2026-09-20 PO dispatch (rule 3): the subset of SLOT_ITEM_REJECTION_CUES
+// that is never ambiguous the way bare "no" is (see bareNoAttachesAsRemoval's
+// own header) -- when one of THESE fires, the original unscoped clause match
+// below still applies unchanged. Bare "no" alone gets the extra word-level
+// attachment check instead of being retired outright, since "no wings"/"no
+// pierogies" (naming the item directly) must still fire exactly as before.
+const SLOT_ITEM_REJECTION_CUES_EXCEPT_NO = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not)\b/i;
 
 // 2026-09-19 PO dispatch (N1, live conv 624967ed #16, MONEY BUG — $55.48 ->
 // $15.50): "I'd like ranch with the Buffalo Chicken pizzas, please! Don't
@@ -2288,14 +2295,22 @@ function isNamedSlotItemRejection(
   itemCategory: string | null | undefined,
 ): boolean {
   const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;!?]/i);
+  const nameStems = significantStems(itemName ?? "");
+  const nameWords = (itemName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
   for (const clause of clauses) {
     if (!SLOT_ITEM_REJECTION_CUES.test(clause)) continue;
     if (NEGATED_DECLINE_VERB_RE.test(clause)) continue;
-    const nameStems = significantStems(itemName ?? "");
-    const msgStems = significantStems(clause);
-    let matched = false;
-    for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
-    if (matched || categoryWordMatches(itemCategory, clause)) return true;
+    if (SLOT_ITEM_REJECTION_CUES_EXCEPT_NO.test(clause)) {
+      const msgStems = significantStems(clause);
+      let matched = false;
+      for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
+      if (matched || categoryWordMatches(itemCategory, clause)) return true;
+      continue;
+    }
+    // Only bare "no" fired as the cue in this clause -- see
+    // bareNoAttachesAsRemoval's own header (shared with
+    // removeHasRemovalLanguage, same 2026-09-20 PO dispatch, rule 3).
+    if (bareNoAttachesAsRemoval(clause, nameStems, nameWords, itemCategory)) return true;
   }
   return false;
 }
@@ -4378,6 +4393,51 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
   return RESTATEMENT_MARKERS.some(r => m.includes(r));
 }
 
+// 2026-09-20 PO dispatch (rule 3, real live money bug, "House removed." full
+// deletion of both House Salad lines): a bare "no" is the one decline cue
+// ambiguous enough to attach to a NON-item word spoken in the same breath as
+// the item's own name -- "just the house salads no dressing" -- "no" negates
+// DRESSING, a modifier choice, never the salads themselves, even though
+// "house"/"salads" appear moments earlier in the identical clause. Same
+// class of bug N1 (isNamedSlotItemRejection) already fixed for a different
+// cue word ("forget") by scoping the cue+name match to one clause; this
+// narrows one step further, to the words "no" actually governs, since here
+// the false match survives even inside a single clause.
+//
+// Two independent failure shapes share this one fix:
+//   (a) "no <choice>" -- the word(s) right after "no" don't name the item at
+//       all (they name a modifier/choice instead), so "no" never attaches to
+//       this line as removal language in the first place.
+//   (b) "no, just the <item>" -- the word(s) right after "no" DO name the
+//       item, but only because the customer is RESTATING it ("just the
+//       house salads" == "just get me the house salads"), not negating it.
+//       Reuses isRestatementOfExistingOrder (the same marker list already
+//       trusted on the adds side) rather than inventing a second phrase list.
+//
+// Window is bounded to the text up to the next clause-ending punctuation
+// (not a fixed word count) so a later, unrelated sentence in a multi-sentence
+// message ("...no dressing. sry! so just 2x house salads. thx!") can never
+// bleed into what "no" is checked against.
+function bareNoAttachesAsRemoval(
+  text: string,
+  nameStems: Set<string>,
+  nameWords: string[],
+  lineCategory: string | null | undefined,
+): boolean {
+  const re = /\bno\b([^.,;!?]{0,40})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const after = m[1] ?? "";
+    if (isRestatementOfExistingOrder(after)) continue;
+    const afterStems = significantStems(after);
+    if (nameStems.size > 0 && [...afterStems].some(s => nameStems.has(s))) return true;
+    const afterFlat = after.replace(/[^a-z0-9]/g, "");
+    if (nameWords.some(w => afterFlat.includes(w))) return true;
+    if (categoryWordMatches(lineCategory, after)) return true;
+  }
+  return false;
+}
+
 // Round 3 P0 (2026-09-19, hallucinated-remove): same "model proposes, code
 // validates" principle as the stale-add guard above -- a proposed remove's
 // line_key is model output and is never, on its own, authorization to
@@ -4483,10 +4543,8 @@ function removeHasRemovalLanguage(
   if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
   if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
-  if (nameStems.size > 0) {
-    const msgStems = significantStems(msg);
-    for (const s of msgStems) if (nameStems.has(s)) return true;
-  }
+  const msgStems = significantStems(msg);
+  const nameStemHit = nameStems.size > 0 && [...msgStems].some(s => nameStems.has(s));
   // Merged/compound wording ("the cheeseburger" for a line named "Cheese
   // Burger") tokenizes to a single word on the message side, so it can
   // never land in msgStems' set-intersection above -- fall back to a
@@ -4494,8 +4552,22 @@ function removeHasRemovalLanguage(
   // words, same >= 3 char significance floor as significantStems.
   const msgFlat = msg.replace(/[^a-z0-9]/g, "");
   const nameWords = (lineName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
-  if (nameWords.some(w => msgFlat.includes(w))) return true;
-  if (categoryWordMatches(lineCategory, msg)) return true;
+  const nameWordHit = nameWords.some(w => msgFlat.includes(w));
+  const categoryHit = categoryWordMatches(lineCategory, msg);
+  if (nameStemHit || nameWordHit || categoryHit) {
+    // PO dispatch (rule 3): see bareNoAttachesAsRemoval's own header. Only
+    // when bare "no" is the SOLE reason this counts as a hard-verb match
+    // (no other hard verb, no soft verb) does the match require a real
+    // word-level attachment -- every other verb (remove/scratch/cancel/
+    // switch/instead/...) keeps the exact original unscoped behavior.
+    const otherHardVerbPresent = HARD_REMOVAL_VERBS
+      .filter(v => v !== "no")
+      .some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+    const onlyBareNo = /\bno\b/i.test(msgForVerbCheck) && !otherHardVerbPresent && !hasSoftVerb;
+    if (!onlyBareNo || bareNoAttachesAsRemoval(msgForVerbCheck, nameStems, nameWords, lineCategory)) {
+      return true;
+    }
+  }
   // Round 4 P0: this now passes for the resolved pronoun TARGET line even
   // in a 2+-line cart (resolvePronounTargetLineKey above), not only when
   // it's the sole real line -- "switch that to X" with several lines in
