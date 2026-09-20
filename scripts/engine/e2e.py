@@ -98,6 +98,7 @@ def njb_simple(addr):
     return [
         ("2 everything bagels and a bacon egg and cheese", lambda c, r: expect(len(lines(c)) >= 1, f"lines {names(c)}")),
         ("whats in my cart", lambda c, r: expect("Your order so far" in r, f"cart readback: {r!r}")),
+        ("on a bagel", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}")),
         ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback: {r!r}")),
         ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session")),
     ]

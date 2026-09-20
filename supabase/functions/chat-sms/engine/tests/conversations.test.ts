@@ -479,3 +479,25 @@ Deno.test("'everything bagels' over the bagel category narrows by the span's own
   assertEquals(o.form.lines[0].item_id, "bg-every");
   assertEquals(o.form.lines[0].qty, 2);
 });
+
+Deno.test("second reader upgrades 'bagel' + 'plain cream cheese' to the unique longer term", () => {
+  const m = buildMenu({ version: "t", items: [...RAW_ITEMS, { id: "bwpcc", name: "Bagel With Plain Cream Cheese", display_name: "Bagel With Plain Cream Cheese", category: "Bagel With", price_cents: 350, bot_state: "orderable", ask_plan: { base_price_cents: 350, steps: [] } }],
+    lexicon: [...RAW_LEXICON, { term: "bagel with plain cream cheese", target_type: "item", target_id: "bwpcc" }, { term: "plain cream cheese", target_type: "item", target_id: "bwpcc" }], shop: SHOP });
+  let f = newForm("njb", "test-v1");
+  f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  const o = turn({ form: f, menu: m, message: "and a bagel with plain cream cheese", moves: [{ kind: "add_line", item_span: "bagel", qty: 1, option_spans: ["plain cream cheese"] }] });
+  assertEquals(o.form.lines[0].item_id, "bwpcc");
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("'that's it' while a slot is open is remembered: once answered, straight to the readback", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it");
+  assert(o.form.items_done);
+  assertEquals(o.form.open?.kind, "line_slot");
+  o = say(o.form, "medium");
+  assertEquals(o.form.status, "confirming");
+  assertStringIncludes(o.reply, "Reply YES");
+});

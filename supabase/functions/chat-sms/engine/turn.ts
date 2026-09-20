@@ -2,14 +2,14 @@
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm } from "./form.ts";
 import type { Menu } from "./menu.ts";
-import { reconcile } from "./crossread.ts";
+import { reconcile, scan } from "./crossread.ts";
 import { bindLine, lineMatchesSpan, resolveSpan, spanAnswersLine } from "./resolve.ts";
 import { escalate, next, questionKey } from "./next.ts";
 import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords } from "./normalize.ts";
+import { contentWords, words } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -52,9 +52,22 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 2. a new-item move that really answers the open line question becomes an answer
   const moves: Move[] = [];
+  const hits = scan(input.message, menu).hits;
+  const upgradeSpan = (m: Move & { kind: "add_line" }): Move & { kind: "add_line" } => {
+    // "bagel" + ["plain cream cheese"] when the message contains the unique term
+    // "bagel with plain cream cheese": the longer term names the item
+    const sw = words(m.item_span);
+    const h = hits.find((x) => x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
+    if (!h) return m;
+    const covered = new Set(h.termWords);
+    const options = m.option_spans.filter((o) => !words(o).every((w) => covered.has(w)));
+    ledger.push({ turn: t, event: "span_upgraded", data: { from: m.item_span, to: h.termWords.join(" ") } });
+    return { ...m, item_span: h.termWords.join(" "), option_spans: options };
+  };
   const open = form0.open;
   const focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined;
-  for (const m of rec.accepted) {
+  for (const m0 of rec.accepted) {
+    const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
     if (focus && m.kind === "add_line") {
       const answers = spanAnswersLine(focus, m.item_span, menu) ||
         (focus.status.kind === "unresolved" && resolveSpan(m.item_span, menu).kind !== "none");
