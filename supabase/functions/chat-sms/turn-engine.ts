@@ -3955,11 +3955,21 @@ function spanHasQuestionClauseOnlyToken(span: string, customerMessage: string | 
   return tokenizeSpanText(span).some(t => questionOnly.has(t));
 }
 
+// Strip a trailing item-count suffix like "(6)" or "- 6 pc" from a span or
+// message before comparing tokens — the menu's own display name carries this
+// suffix (e.g. "Garlic Knots (6)"), but the customer never says the count out
+// loud ("Garlic Knots"), and a bare orphaned digit token would otherwise fail
+// itemSpanNamedInMessage's per-token guard and silently drop the whole add.
+const COUNT_SUFFIX_RE = /\s*[\(\-]\s*\d+\s*(?:pc|pcs|piece|pieces)?\s*\)?\s*$/i;
+function stripTrailingCountSuffix(text: string) {
+  return text.replace(COUNT_SUFFIX_RE, "").trim();
+}
+
 function itemSpanNamedInMessage(span: string, customerMessage: string | undefined): boolean {
   if (customerMessage === undefined) return true;
-  const spanTokens = tokenizeSpanText(span);
+  const spanTokens = tokenizeSpanText(stripTrailingCountSuffix(span));
   if (spanTokens.length === 0) return false;
-  const messageTokens = tokenizeSpanText(customerMessage);
+  const messageTokens = tokenizeSpanText(stripTrailingCountSuffix(customerMessage));
   const questionOnly = questionClauseOnlyTokens(customerMessage);
   const messageTokenSet = new Set(messageTokens.filter(t => !questionOnly.has(t)));
   return spanTokens.every(t => {
