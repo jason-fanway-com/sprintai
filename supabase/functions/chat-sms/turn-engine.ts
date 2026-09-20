@@ -119,6 +119,7 @@ import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
+  isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
   pickNarrowingFacet,
@@ -627,6 +628,16 @@ export type AnswerOutcome =
   // question next turn, same as a genuinely-failed answer would, so the
   // still-unresolved item is never silently dropped.
   | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number }
+  // M2 fix (2026-09-19, live conv d3539d12 #5): an answer to "which one?"
+  // that carries removal language ("remove that small Pepperoni pizza")
+  // instead — never a candidate pick. `removed` reports whether a matching
+  // real cart line was actually found and taken off (same "graceful no-op,
+  // never an error" contract applyNamedLineRemovals already has everywhere
+  // else it's called); the ORIGINAL disambiguation stays open exactly as it
+  // was, same convention as disambiguation_new_item_added just above —
+  // removing an unrelated cart line never answers what candidate the
+  // customer actually wants for the still-unresolved item.
+  | { kind: "disambiguation_removal_applied"; removed: boolean }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -2050,6 +2061,25 @@ export function answer(
         .filter((m): m is TurnEngineMenuItem => !!m)
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
+      // M2 fix (2026-09-19, live conv d3539d12 #5, real $91.30 overcharge):
+      // checked BEFORE isPendingDisambiguationDeclined and every candidate-
+      // name/size matching tier below — see isDisambiguationAnswerRemovalRequest's
+      // own header for why DECLINE_CUES doesn't already catch this. Applies
+      // the removal against the CURRENT cart via the exact same primitive
+      // the order_type/confirm cases already trust for the identical shape
+      // (applyNamedLineRemovals — a no-op, never an error, when nothing in
+      // the cart actually matches, same contract as everywhere else it's
+      // called) and leaves the pending disambiguation open exactly as it
+      // was: the removal targets a DIFFERENT item than the one still being
+      // asked about, so there is always still a real reason to ask it again.
+      if (isDisambiguationAnswerRemovalRequest(trimmed)) {
+        const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
+        return {
+          resolved: true,
+          outcome: { kind: "disambiguation_removal_applied", removed: removedSomething },
+          cartChanged: removedSomething,
+        };
+      }
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set
       // only when this open question is Y's own narrowing, opened by a
       // same-breath replacement whose target tied — see DialogueState.open's
@@ -3928,6 +3958,43 @@ function rawMessageSizeWordForSpan(
   return extractGlobalSizeWord(phrases[phraseIdx]);
 }
 
+// PO dispatch 2026-09-19 (M1 rule 2, reopened — conv d95306c8 #26 follow-up):
+// rawMessageSizeWordForSpan above fixed WHICH size word gets displayed once a
+// tie already opened a disambiguation question, but never used that word to
+// try closing the tie first. resolveItem's own tiebreak (resolve-item.ts)
+// narrows candidates only by the shop's LEXICON size_label — real, but null
+// for some items in live Vito's data (Sausage Pizza, mirrored by this file's
+// own M1 test fixture), so "Sausage Pizza - Small" ties its 3 sizes even
+// though the customer's own words state the size right next to the name.
+// filterCandidatesBySizeWord (pending-disambiguation.ts) already solves this
+// a different way — it derives each candidate's size from its own MENU ITEM
+// NAME text (candidateSizeValue/extractSizeAndKind), independent of the
+// lexicon size_label gap — but until now it only ever ran on the SECOND
+// turn, narrowing an already-open disambiguation's candidates once the
+// customer answered a "what size?" facet question. This applies the
+// identical name-derived narrowing to a FRESH tie, using the exact same
+// scoped size word rawMessageSizeWordForSpan recovers, so a stated size
+// closes the tie before any question opens — never merely corrects the
+// question's wording after the fact. Returns the single surviving
+// menu_item_id, or null when the size word doesn't narrow to exactly one
+// candidate (genuinely still ambiguous — never guessed).
+function narrowAmbiguousCandidatesBySpanSize(
+  candidateIds: string[],
+  spanText: string,
+  customerMessage: string | undefined,
+  menu: TurnEngineMenuItem[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): string | null {
+  const sizeWord = extractGlobalSizeWord(spanText) ?? rawMessageSizeWordForSpan(customerMessage, spanText, menu);
+  if (!sizeWord) return null;
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  const narrowed = filterCandidatesBySizeWord(candidates, sizeWord);
+  return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4174,7 +4241,22 @@ export function decide(
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
       if (!isReplacementDuplicate) {
-        ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
+        // header above): a size stated right next to THIS item's own name
+        // closes the tie here, before a "which one?" question ever opens —
+        // never merely corrects the question's wording after the fact.
+        const narrowedId = narrowAmbiguousCandidatesBySpanSize(
+          resolution.candidates,
+          (add.item_span ?? "").trim(),
+          customerMessage,
+          menu,
+          menuById,
+        );
+        if (narrowedId) {
+          resolvedAdds.push({ menu_item_id: narrowedId, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
+        } else {
+          ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        }
       }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
