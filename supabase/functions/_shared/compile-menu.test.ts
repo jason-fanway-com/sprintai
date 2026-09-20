@@ -1245,6 +1245,111 @@ Deno.test("invariant 4 (defense in depth): two orderable items whose only lexico
 // Zio's/Shrimp Parmigiana/Eggplant Parmigiana collisions resolve and both
 // items keep a unique term".
 
+// ============================================================
+// Freeze-queue item 6, part A (2026-09-19 PO dispatch, real Vito's
+// "Bruschetta"/"House" gap): the 2026-09-18 "shared base key ties ALL
+// claimants, ambiguous, no guess" rule (tested above at line 442 and 464)
+// is correct and must stay — but it left an unsized item with genuinely
+// NO term anywhere that resolves uniquely to it, since every one of its
+// derived surface forms inherits the exact same collision as the plain
+// word. deriveCategoryQualifiedFallbackTerms adds exactly one more term —
+// the item's own stated name plus its category noun — so invariant 4 has
+// something to point at, without touching the ambiguous plain term at all.
+// ============================================================
+
+Deno.test("category-qualified fallback (freeze-queue item 6, part A): real Vito's 'Bruschetta' appetizer vs 3 pizza sizes — the appetizer gets 'bruschetta appetizer', invariant 4 now passes, and the plain 'bruschetta' term still ties all 4", () => {
+  const appetizer = item({ display_name: "Bruschetta", category: "Appetizers", product_key: "appetizers:bruschetta" });
+  const small = item({ display_name: "Small Bruschetta Pizza", category: "Pizza", size_label: "Small (10\")", product_key: "pizza:bruschetta" });
+  const medium = item({ display_name: "Medium Bruschetta Pizza", category: "Pizza", size_label: "Medium (14\")", product_key: "pizza:bruschetta" });
+  const large = item({ display_name: "Large Bruschetta Pizza", category: "Pizza", size_label: "Large (16\")", product_key: "pizza:bruschetta" });
+  const { items: compiled, invariants } = compileMenu([appetizer, small, medium, large], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const qualified = byId.get(appetizer.id)!.lexicon_terms.filter(t => t.term === "bruschetta appetizer");
+  assertEquals(qualified.length, 1);
+  assertEquals(qualified[0].target_type, "item");
+  assertEquals(qualified[0].target_id, appetizer.id);
+  assertEquals(qualified[0].provenance, "derived");
+  assert(!byId.get(small.id)!.lexicon_terms.some(t => t.term === "bruschetta appetizer"), "only the appetizer gets the qualified term, never a pizza sibling");
+
+  const bruschettaTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "bruschetta").map(t => t.target_id)),
+  );
+  assertEquals(bruschettaTargets, new Set([appetizer.id, small.id, medium.id, large.id]),
+    "the plain bare term must still tie all 4 — the fallback adds a term, it never removes or weakens the existing ambiguous one");
+
+  const inv4 = invariants.find(i => i.invariant === 4)!;
+  assert(inv4.pass, `invariant 4 should now pass, violations: ${inv4.violations.join(", ")}`);
+});
+
+Deno.test("category-qualified fallback (freeze-queue item 6, part A): real Vito's 'House' salad vs 3 Stromboli sizes — the salad gets 'house salad', invariant 4 now passes", () => {
+  const salad = item({ display_name: "House", category: "Salads", product_key: "salads:house" });
+  const stromboli16 = item({ display_name: "16\" House Stromboli", category: "Stromboli", size_label: "16\"", product_key: "stromboli:house" });
+  const strombPersonal = item({ display_name: "Personal House Stromboli", category: "Stromboli", size_label: "Personal", product_key: "stromboli:house" });
+  const stromboli14 = item({ display_name: "14\" House Stromboli", category: "Stromboli", size_label: "14\"", product_key: "stromboli:house" });
+  const { items: compiled, invariants } = compileMenu([salad, stromboli16, strombPersonal, stromboli14], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(byId.get(salad.id)!.lexicon_terms.some(t => t.term === "house salad" && t.target_id === salad.id && t.provenance === "derived"));
+
+  const houseTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "house").map(t => t.target_id)),
+  );
+  assertEquals(houseTargets, new Set([salad.id, stromboli16.id, strombPersonal.id, stromboli14.id]),
+    "the plain bare 'house' term must still tie all 4, unchanged");
+
+  const inv4 = invariants.find(i => i.invariant === 4)!;
+  assert(inv4.pass, `invariant 4 should now pass, violations: ${inv4.violations.join(", ")}`);
+});
+
+Deno.test("category-qualified fallback: a multi-word category noun is singularized correctly (real Vito's 'Chicken Bacon Ranch' flatbread vs pizza sizes -> 'chicken bacon ranch flatbread', not 'chicken bacon ranch flatbreads')", () => {
+  const flatbread = item({ display_name: "Chicken Bacon Ranch", category: "Flatbreads", product_key: "flatbreads:chicken-bacon-ranch" });
+  const pizza = item({ display_name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", size_label: "Medium (14\")", product_key: "pizza:chicken-bacon-ranch" });
+  const { items: compiled, invariants } = compileMenu([flatbread, pizza], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  assert(byId.get(flatbread.id)!.lexicon_terms.some(t => t.term === "chicken bacon ranch flatbread"));
+  assert(!byId.get(flatbread.id)!.lexicon_terms.some(t => t.term === "chicken bacon ranch flatbreads"));
+
+  const inv4 = invariants.find(i => i.invariant === 4)!;
+  assert(inv4.pass, `invariant 4 should now pass, violations: ${inv4.violations.join(", ")}`);
+});
+
+Deno.test("category-qualified fallback: never fires for an item that already has a genuinely unique term (real Zio's 'Zio's Salad' vs 'Zio's' entree — already fixed by product_key rule)", () => {
+  const entree = item({ display_name: "Zio's", category: "Chicken or Veal", product_key: "chicken-or-veal:zios" });
+  const salad = item({ display_name: "Zio's Salad", category: "Salads", product_key: "salads:zios-salad" });
+  const { items: compiled } = compileMenu([entree, salad], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  // Both items already resolve uniquely (Rule 1's stated "zios salad" /
+  // "zios" own the word outright — see the Zio's/Shrimp Parmigiana test
+  // above), so the fallback must add NOTHING: no double-qualified term
+  // ("zios salad salad") and no spurious category-noun suffix on the
+  // entree's own name.
+  assert(!byId.get(salad.id)!.lexicon_terms.some(t => t.term === "zios salad salad"),
+    "the salad already resolves uniquely via its own stated name — no qualified fallback term should ever be added");
+  assert(!byId.get(entree.id)!.lexicon_terms.some(t => t.term === "zios veal" || t.term === "zios chicken or veal" || t.term.startsWith("zios ")),
+    "the entree already resolves uniquely too — no fallback for it either");
+});
+
+Deno.test("category-qualified fallback: never proposes a qualified term that would itself collide with a real, distinct existing term", () => {
+  // Contrived: an item whose collision-triggered candidate term happens to
+  // already be claimed by a THIRD, unrelated item — the fallback must skip
+  // rather than create a brand-new false collision.
+  const bruschettaApp = item({ display_name: "Bruschetta", category: "Appetizers", product_key: "appetizers:bruschetta" });
+  const bruschettaPizza = item({ display_name: "Bruschetta Pizza", category: "Pizza", product_key: "pizza:bruschetta" });
+  const decoy = item({ display_name: "Bruschetta Appetizer", category: "Sides", product_key: "sides:bruschetta-appetizer" });
+  const { items: compiled } = compileMenu([bruschettaApp, bruschettaPizza, decoy], [], "t", false);
+  const byId = new Map(compiled.map(c => [c.item_id, c]));
+
+  const qualifiedOwners = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "bruschetta appetizer").map(t => t.target_id)),
+  );
+  assertEquals(qualifiedOwners, new Set([decoy.id]),
+    "the real item's own stated name already owns 'bruschetta appetizer' — the fallback must not add a second, colliding owner");
+  assert(!byId.get(bruschettaApp.id)!.lexicon_terms.some(t => t.term === "bruschetta appetizer"));
+});
+
 Deno.test("invariant 5 (defense in depth): an orderable item's slot group with zero active choices fails; a well-formed group passes", () => {
   const badGroup = group({ kind: "slot", choices: [] });
   const badItem = item({ groups: [badGroup] });

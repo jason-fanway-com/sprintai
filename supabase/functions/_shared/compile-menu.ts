@@ -987,6 +987,75 @@ export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string
 }
 
 // ============================================================
+// Category-qualified fallback term (freeze-queue item 6, part A, 2026-09-19
+// PO dispatch): an item whose stated name has NO term anywhere that
+// resolves uniquely to it — even after every pass above — gets one more
+// term: its own stated name plus its category noun ("bruschetta" +
+// "Appetizers" -> "bruschetta appetizer").
+//
+// Real Vito's shape this covers: an unsized item (Bruschetta the Appetizer,
+// House the Salad) whose bare display name is identical to a SIZED pizza
+// family's own bare product-key term in an unrelated category — and per
+// itemLexiconTerms' Rule 2 comment above, a sized family emits that bare
+// term unconditionally, on every size row, regardless of collisions. The
+// unsized item's own Rule 1 term (its full display name, which for these
+// items IS the bare word) then has 4 owners — itself plus every pizza
+// size — and every derived surface form of that same word inherits the
+// identical collision, so invariant 4 ("every orderable item has ≥1 term
+// resolving uniquely to it") fails with no rescue anywhere upstream.
+//
+// Deliberately narrow: only fires for an item that has already exhausted
+// every earlier pass and still has zero unique terms, and only qualifies a
+// STATED (rule 1/2) term — never a derived surface form — so the new term
+// reads like a real customer phrase ("bruschetta appetizer", "house
+// salad"), not a truncated fragment ("ranch flatbread"). Never touches an
+// item that already resolves fine, and never removes the plain colliding
+// term for anyone — a customer who says just "bruschetta" is still
+// ambiguous across the pizza sizes and the appetizer, exactly as before;
+// this only adds the ONE additional phrase that lets a customer who does
+// say "appetizer"/"salad" resolve unambiguously.
+function deriveCategoryQualifiedFallbackTerms(
+  items: CompileItem[],
+  compiledItems: CompiledItem[],
+): LexiconTerm[] {
+  const categoryById = new Map(items.map(i => [i.id, i.category]));
+
+  const termOwners = new Map<string, Set<string>>();
+  for (const c of compiledItems) {
+    for (const t of c.lexicon_terms) {
+      if (t.target_type !== "item") continue;
+      const owners = termOwners.get(t.term) ?? new Set<string>();
+      owners.add(t.target_id);
+      termOwners.set(t.term, owners);
+    }
+  }
+  const existingTerms = new Set(termOwners.keys());
+
+  const out: LexiconTerm[] = [];
+  for (const c of compiledItems) {
+    if (c.bot_state !== "orderable") continue;
+    const hasUniqueTerm = c.lexicon_terms.some(
+      t => t.target_type === "item" && termOwners.get(t.term)?.size === 1,
+    );
+    if (hasUniqueTerm) continue;
+
+    const category = categoryById.get(c.item_id);
+    if (!category) continue;
+    const noun = categoryNoun(category);
+    if (!noun) continue;
+
+    for (const t of c.lexicon_terms) {
+      if (t.target_type !== "item" || t.provenance !== "stated") continue;
+      if ((termOwners.get(t.term)?.size ?? 0) <= 1) continue;
+      const qualified = `${t.term} ${noun}`;
+      if (existingTerms.has(qualified)) continue; // never shadow a real, distinct term
+      out.push({ term: qualified, target_type: "item", target_id: c.item_id, provenance: "derived" });
+    }
+  }
+  return out;
+}
+
+// ============================================================
 // Overrides — snapshot ⊕ overrides, applied before compiling. Empty
 // overrides is the identity case (§11 item 4 P0 requirement): with no rows,
 // applyOverrides returns its input unchanged.
@@ -1922,6 +1991,23 @@ export function compileMenu(
   if (surfaceForms.length > 0) {
     const byItem = new Map<string, LexiconTerm[]>();
     for (const t of surfaceForms) {
+      const list = byItem.get(t.target_id) ?? [];
+      list.push(t);
+      byItem.set(t.target_id, list);
+    }
+    for (const c of compiledItems) {
+      const extra = byItem.get(c.item_id);
+      if (extra) c.lexicon_terms = dedupeLexicon([...c.lexicon_terms, ...extra]);
+    }
+  }
+
+  // Category-qualified fallback — computed after surface forms are merged
+  // in, so it only fires for an item genuinely still without a unique term
+  // (see deriveCategoryQualifiedFallbackTerms' own header).
+  const categoryFallbackTerms = deriveCategoryQualifiedFallbackTerms(items, compiledItems);
+  if (categoryFallbackTerms.length > 0) {
+    const byItem = new Map<string, LexiconTerm[]>();
+    for (const t of categoryFallbackTerms) {
       const list = byItem.get(t.target_id) ?? [];
       list.push(t);
       byItem.set(t.target_id, list);
