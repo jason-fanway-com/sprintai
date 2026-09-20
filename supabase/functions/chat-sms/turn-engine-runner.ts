@@ -1954,18 +1954,28 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // are discarded. Worth doing; not a two-line change.
     }
     // Rule 1/2 (2026-09-19, live conv 0db63161 #28, MONEY BUG, order never
-    // paid): name/address/order_type/confirm are each a narrow, specific
-    // expected-answer-shape question -- a reply to any of them must never be
-    // read as a fresh order, whether that reading would have come from the
-    // code-side takeover gated off above or straight from the model's OWN
-    // adds/removes/modifies (PROPOSE has no contract forcing it to recognize
-    // "the customer is answering the question asked, not ordering something"
-    // any more reliably here than it does on the order-shaped-message defect
-    // this same dispatch fixes above). The model is still consulted for these
-    // four kinds -- 00-BL/00-BM's answer_value extraction above needs the
-    // call to have actually happened -- only its cart-shaped output is ever
-    // discarded, never answer_value/answer_to_open_question.
-    if (openKindBlocksOrderShapedTakeover) {
+    // paid), NARROWED on merge (2026-09-19, conv 9cf68285 T3 regression):
+    // originally discarded the model's own adds/removes/modifies for all
+    // four of name/address/order_type/confirm. That broke a real, already-
+    // shipped fix (conv22-live-runner-gap-20260919, same night): order_type
+    // is EXACTLY the open kind a customer's decline-and-restated-order turn
+    // ("no stromboli, just the greek salad and 2 medium pepperonis") answers
+    // while order_type is still open, and that fix's own itemSpanNamedInMessage
+    // guard already independently verifies every add's words are genuinely
+    // present in the customer's message -- it does not need this blanket
+    // discard, and the discard was actively breaking it (deno test caught
+    // this on merge, not live). confirm has the identical shape from an
+    // earlier fix tonight (confirm-quantity-correction) -- forwarding an
+    // unmatched confirm-state correction to PROPOSE and trusting a genuinely
+    // correct result is that fix's whole point. name/address have no such
+    // exception anywhere in tonight's other work -- a name or address reply
+    // is never legitimately a food order, so the blanket discard is kept for
+    // just those two. The model is still consulted for all four kinds --
+    // 00-BL/00-BM's answer_value extraction above needs the call to have
+    // actually happened -- only name/address ever discard its cart-shaped
+    // output; order_type/confirm proposals flow to decide() as-is, same as
+    // before this dispatch, protected by their own existing guards.
+    if (priorState.open?.kind === "name" || priorState.open?.kind === "address") {
       proposal = { ...proposal, adds: [], removes: [], modifies: [] };
     }
     const decideResult = decide(
