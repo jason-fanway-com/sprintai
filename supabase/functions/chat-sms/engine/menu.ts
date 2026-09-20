@@ -29,6 +29,8 @@ export interface MenuItem {
   orderable: boolean;
   derived_from: { base_item_id: string; choice_ids: string[] } | null;
   words: string[];
+  /** "Garlic Knots (6)", "Wings Bone-In - 10 Pieces": how many units one order holds */
+  piece_count: number | null;
   /** a fixed-price assortment: `count` picks from `choices` ("one dozen bagels") */
   bundle: BundleDef | null;
 }
@@ -93,6 +95,14 @@ const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra larg
 
 const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|sheet|regular)\b\s*(?:\d+\s*(?:''|"|”)?\s*)?(.+)$/i;
 
+const PIECES_RE = /\((\d+)\)|\b(\d+)\s*(?:pieces?|pcs?|ct|count|wings)\b/i;
+export function pieceCountFromName(name: string): number | null {
+  const m = PIECES_RE.exec(name);
+  if (!m) return null;
+  const n = parseInt(m[1] ?? m[2], 10);
+  return n >= 2 && n <= 100 ? n : null;
+}
+
 export function facetsFromName(name: string, sizeLabel?: string | null): Facets {
   const m = NAME_SIZE_RE.exec(name);
   if (m) {
@@ -149,6 +159,7 @@ export function buildMenu(input: {
       derived_from: r.derived_from ?? null,
       words: words(display),
       bundle: null,
+      piece_count: pieceCountFromName(r.name) ?? pieceCountFromName(display),
     });
   }
 

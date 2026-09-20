@@ -128,6 +128,27 @@ export function turn(input: TurnInput): TurnOutput {
     moves.push(m);
   }
 
+  // 2a. "make the coke a diet": an option word that names a different item is a swap, not a note
+  for (let i = 0; i < moves.length; i++) {
+    const m = moves[i];
+    if (m.kind !== "change_line" || !m.add_option_spans?.length) continue;
+    const ref = m.ref;
+    const target = "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id)
+      : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu))
+      : form0.lines.length === 1 ? form0.lines[0] : undefined;
+    if (!target?.item_id) continue;
+    const cur = menu.items.get(target.item_id);
+    for (const o of m.add_option_spans) {
+      const r = resolveSpan(`${o} ${cur?.display_name ?? target.span}`, menu);
+      if (r.kind === "item" && r.id !== target.item_id) {
+        moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } }, { kind: "add_line", item_span: menu.items.get(r.id)!.display_name, qty: m.qty ?? target.qty, option_spans: [] });
+        ledger.push({ turn: t, event: "option_names_other_item_swap", data: { from: target.item_id, to: r.id, option: o } });
+        i++;
+        break;
+      }
+    }
+  }
+
   // 2b. an ambiguous line of quantity N answered with several kinds ("one plain one pepperoni …")
   if (focus && focus.status.kind === "ambiguous" && focus.qty > 1) {
     const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option");
@@ -229,6 +250,9 @@ export function turn(input: TurnInput): TurnOutput {
     if (l.notes.length > prevNotes) notes.push(...l.notes.slice(prevNotes));
   }
   if (notes.length) acks.push({ kind: "noted", notes });
+  // lines taken this turn that still need a question: say so, so the customer knows they were heard
+  const pending = form.lines.filter((l) => newIds.has(l.line_id) && l.status.kind !== "complete" && l.line_id !== focusId);
+  if (pending.length) acks.push({ kind: "pending", items: pending.map((l) => ({ qty: l.qty, span: l.span })) });
   for (const r of res.removed) {
     const it = r.item_id ? menu.items.get(r.item_id) : null;
     if (it) acks.push({ kind: "line_removed", name: it.display_name });
@@ -273,6 +297,7 @@ function menuInfo(about: string | null, menu: Menu, _form: OrderForm): Info {
     if (r.kind === "ambiguous") return { kind: "list", names: r.ids.map((id) => menu.items.get(id)!.display_name) };
     const cat = itemsInCategory(menu, about);
     if (cat.length) return { kind: "list", names: cat.map((i) => i.display_name) };
+    return { kind: "not_found", about };
   }
   const cats = [...new Set([...menu.items.values()].filter((i) => i.orderable && i.category).map((i) => i.category!))];
   return { kind: "categories", names: cats.slice(0, 12) };

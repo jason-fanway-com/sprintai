@@ -3,8 +3,9 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 const DIR = new URL("../", import.meta.url).pathname;
-const PURE = ["form.ts", "crossread.ts", "resolve.ts", "price.ts", "next.ts", "render.ts", "turn.ts", "normalize.ts", "menu.ts", "vocab.ts", "project.ts"];
-const ADAPTERS = ["interpret.ts", "runner.ts", "address.ts"];
+const PURE = ["form.ts", "crossread.ts", "resolve.ts", "price.ts", "next.ts", "render.ts", "turn.ts", "normalize.ts", "menu.ts", "vocab.ts"];
+// project.ts writes the legacy cart_json shape for tickets and dashboards: persistence, not decisions
+const ADAPTERS = ["interpret.ts", "runner.ts", "address.ts", "project.ts"];
 const CORE = [...PURE, ...ADAPTERS, "templates.ts"];
 const REGEX_ALLOWED = new Set(["normalize.ts", "vocab.ts", "menu.ts", "templates.ts"]);
 const FETCH_ALLOWED = new Set(["interpret.ts", "address.ts"]);

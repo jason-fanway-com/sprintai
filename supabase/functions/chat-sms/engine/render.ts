@@ -12,7 +12,8 @@ export type Ack =
   | { kind: "fulfillment"; value: Fulfillment }
   | { kind: "address"; text: string }
   | { kind: "tip"; cents: number }
-  | { kind: "noted"; notes: string[] };
+  | { kind: "noted"; notes: string[] }
+  | { kind: "pending"; items: Array<{ qty: number; span: string }> };
 
 export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
 
@@ -21,6 +22,7 @@ export type Info =
   | { kind: "item"; item: MenuItem; unit_cents: number }
   | { kind: "list"; names: string[] }
   | { kind: "categories"; names: string[] }
+  | { kind: "not_found"; about: string }
   | { kind: "human" }
   | { kind: "cancelled" }
   | { kind: "started_over" }
@@ -158,6 +160,8 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   if (removed.length) parts.push(T.ackRemoved(removed.map((a) => a.name)));
   const noted = plan.acks.find((a): a is Ack & { kind: "noted" } => a.kind === "noted");
   if (noted) parts.push(T.ackNoted(noted.notes));
+  const pend = plan.acks.find((a): a is Ack & { kind: "pending" } => a.kind === "pending");
+  if (pend) parts.push(T.ackPending(pend.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
 
   for (const d of plan.declines) {
     switch (d.code) {
@@ -184,6 +188,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       parts.push(T.itemInfo(i.item.display_name, dollars(i.unit_cents), opts));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names.slice(0, 10)));
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
+    else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));
     else if (i.kind === "human") parts.push(T.human(voice));
     else if (i.kind === "cancelled") parts.push(T.cancelled());
     else if (i.kind === "started_over") parts.push(T.startedOver());

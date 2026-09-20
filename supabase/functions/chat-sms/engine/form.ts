@@ -44,6 +44,8 @@ export interface Line {
   answers?: string[];
   /** how many times a question about this line has been asked */
   asks?: number;
+  /** piece-count quantity normalization already done */
+  pieces_applied?: boolean;
   status: LineStatus;
 }
 

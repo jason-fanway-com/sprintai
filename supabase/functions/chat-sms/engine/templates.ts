@@ -28,6 +28,8 @@ export const T = {
   ackAddress: (text: string) => `Delivery to ${text}.`,
   ackTip: (money: string) => `Tip: ${money}.`,
   ackNoted: (notes: string[]) => `Noted for the kitchen: ${notes.join(", ")}.`,
+  ackPending: (items: string[]) => `Got the ${orList(items).replace(" or ", " and ")} too. One question about ${items.length > 1 ? "those" : "it"} next.`,
+  notOnMenu: (about: string) => `I don't see ${about} on the menu.`,
 
   // declines and automatic resolutions
   noSuchLine: (span?: string) => (span ? `I don't see "${span}" in your order.` : `I don't see that in your order.`),

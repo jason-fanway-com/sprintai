@@ -144,6 +144,7 @@ function applyCanon(line: Line, menu: Menu): void {
 }
 
 const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]);
+const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
 let menuTermWords: Map<string, Set<string>> = new Map();
@@ -170,8 +171,6 @@ function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
   }
   return consumed;
 }
-
-const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 
 /** Apply one held span to a bound line. Returns true when it was consumed as a priced choice. */
 function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true): boolean {
@@ -254,6 +253,27 @@ export function bindLine(line: Line, menu: Menu): void {
       if (n.length >= 1 && n.length < cands.length) cands = n;
     }
     line.answers = [];
+    // "half pepperoni half mushroom" over derived single-topping rows: two spans that narrow to
+    // different rows describe toppings on the shared base pizza, not two kinds
+    if (cands.length > 1) {
+      const topicOf = (h: string) => words(h).filter((w) => !PLACEMENT.has(w)).join(" ");
+      const props = line.held.filter((h) => !h.startsWith("-")).map((h) => ({ h, half: words(h).includes("half"), n: narrow(cands, topicOf(h), menu) })).filter((x) => x.n.length > 0 && x.n.length < cands.length);
+      let inter = cands; for (const x of props) inter = inter.filter((id) => x.n.includes(id));
+      const sizeProps = props.filter((x) => words(x.h).length === 1 && SIZE_ONLY.has(words(x.h)[0]));
+      const topicProps = props.filter((x) => !sizeProps.includes(x));
+      // two toppings that point at different derived rows, or any "half" topping: the base pizza plus modifiers
+      if (topicProps.length >= 1 && (inter.length === 0 || topicProps.some((x) => x.half))) {
+        let pool = cands; for (const x of sizeProps) pool = pool.filter((id) => x.n.includes(id));
+        const baseOf = (id: string) => menu.items.get(id)?.derived_from?.base_item_id ?? id;
+        const baseHits = new Map<string, number>();
+        for (const x of topicProps) for (const b of new Set(x.n.filter((id) => pool.includes(id)).map(baseOf))) baseHits.set(b, (baseHits.get(b) ?? 0) + 1);
+        const common = [...baseHits.entries()].filter(([b, n]) => n === topicProps.length && menu.items.has(b)).map(([b]) => b);
+        if (common.length === 1) {
+          cands = common;
+          line.held = line.held.filter((h) => !sizeProps.some((x) => x.h === h)); // size is implied by the base row
+        }
+      }
+    }
     // narrow with every held span that narrows; keep the rest for options
     const rest: string[] = [];
     for (const h of line.held) {
@@ -271,6 +291,11 @@ export function bindLine(line: Line, menu: Menu): void {
     line.item_id = cands[0];
   }
   let item = menu.items.get(line.item_id)!;
+  // "20 wings" against a 10-piece row is two orders, not twenty
+  if (item.piece_count && !line.pieces_applied && line.qty >= item.piece_count && line.qty % item.piece_count === 0) {
+    line.qty = line.qty / item.piece_count;
+  }
+  line.pieces_applied = true;
   const held = line.held; line.held = [];
   // words in the item span that are not the item's own name ("chicken noodle cups", "house personal calzone")
   if (!line.span_consumed) {

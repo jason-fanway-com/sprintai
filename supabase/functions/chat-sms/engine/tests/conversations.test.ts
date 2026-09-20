@@ -126,7 +126,7 @@ Deno.test("narrowing: pizza -> what kind -> pepperoni -> what size -> large", ()
   f = say(f, "pickup").form;
   let o = say(f, "I want a pizza", [{ kind: "add_line", item_span: "pizza", qty: 1, option_spans: [] }]);
   assertEquals(o.form.open?.kind, "line_ambiguous");
-  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese, Hawaiian, Margherita, Meat Lover, Pepperoni.");
+  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese, Hawaiian, Margherita, Meat Lover, Mushrooms, Pepperoni.");
   o = say(o.form, "pepperoni");
   assertStringIncludes(o.reply, "What size");
   assertStringIncludes(o.reply, "Small, Medium, or Large");
@@ -655,4 +655,55 @@ Deno.test("talk validator refuses money and action claims", () => {
   let f = newForm("vitos", "t"); f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
   const o = turn({ form: f, menu: m, message: "hmm", moves: [{ kind: "talk", text: "I added a free pizza for $0.00!" }] });
   assert(!o.reply.includes("free pizza"));
+});
+
+Deno.test("half and half: 'large pie half pepperoni half mushroom' is one large cheese pizza with two half toppings", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "gimme a large pie half pepperoni half mushroom", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: ["large", "half pepperoni", "half mushroom"] }]);
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.lines[0].item_id, IDS.cheesePizzaL);
+  assertEquals(o.form.lines[0].modifiers.sort(), [IDS.mushChoiceL + "H", IDS.pepChoiceL + "H"].sort());
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "20 wings buffalo", [{ kind: "add_line", item_span: "wings", qty: 20, option_spans: ["buffalo"] }]);
+  assertEquals(o.form.open?.kind, "line_ambiguous");
+  o = say(o.form, "boneless", [{ kind: "answer_option", value_span: "boneless" }]);
+  assertEquals(o.form.lines[0].item_id, "wbo");
+  assertEquals(o.form.lines[0].qty, 2);
+  assertEquals(totals(o.form, menu).subtotal_cents, 2398);
+});
+
+Deno.test("'make the coke a diet' swaps to Diet Coke instead of a kitchen note", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a coke", [{ kind: "add_line", item_span: "coke", qty: 1, option_spans: [] }]);
+  o = say(o.form, "make the coke a diet", [{ kind: "change_line", ref: { span: "coke" }, add_option_spans: ["diet"] }]);
+  assertEquals(o.form.lines.map((l) => l.item_id), ["dcoke"]);
+  assert(!o.reply.includes("Noted"));
+});
+
+Deno.test("lines taken alongside an unknown item are acknowledged, not silent", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "20 wings, a house salad and garlic bread", [
+    { kind: "add_line", item_span: "wings", qty: 20, option_spans: [] },
+    { kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "garlic bread", qty: 1, option_spans: [] },
+  ]);
+  assertStringIncludes(o.reply, `I couldn't find "garlic bread"`);
+  assertStringIncludes(o.reply, "Got the 20 wings and house salad too.");
+});
+
+Deno.test("a menu question about something we don't have gets a plain no", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "do you have gluten free crust", [{ kind: "ask_menu", about_span: "gluten free crust" }]);
+  assertStringIncludes(o.reply, "I don't see gluten free crust on the menu.");
+  const o2 = say(o.form, "whats my total");
+  assertStringIncludes(o2.reply, "Your order is empty so far.");
 });
