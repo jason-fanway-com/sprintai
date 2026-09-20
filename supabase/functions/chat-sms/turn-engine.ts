@@ -3612,6 +3612,24 @@ function isQuestionPreambleClause(clause: string): boolean {
   return QUESTION_PREAMBLE_RE.test(clause) && !ORDER_SHAPED_CLAUSE_RE.test(clause);
 }
 
+// 2026-09-20 PO dispatch (real conv, "Tuna Hoagie on wheat, can you add
+// shrimp to that?" shape): a REQUEST question genuinely asks for something
+// to be DONE ("can you/could you/would you add/get/bring X", "can I/could
+// I/may I add/get/have X") -- distinct from an AVAILABILITY question ("do
+// you have X?", "is there X?") which only asks whether something EXISTS.
+// AVAILABILITY_QUESTION_MARKER_RE above already excludes the latter from
+// ever supporting an add; "can I get"/"could I"/"may I" already had to stay
+// OUT of that regex for the same reason (see its own header) -- this names
+// that same distinction explicitly so a REQUEST clause phrase-split.ts's
+// comma boundary strands away from the item it's asking to modify (see
+// this constant's own call site, the 00-BF modifier floor below) can be
+// recovered instead of silently dropped. "you"-phrased requests never take
+// "have" (that shape reads as a genuine question, "can you have X on
+// that?"), so it's scoped to first-person "I" only, matching real customer
+// phrasing ("can I have a coke").
+const REQUEST_QUESTION_MARKER_RE =
+  /\b(?:can|could|would) you (?:also )?(?:add|get|bring|include)\b|\b(?:can|could|may) i (?:also )?(?:add|get|have)\b/i;
+
 // SIZE_WORD_ALIASES (resolve-item.ts): the same "med" -> "medium" expansion
 // resolveItem's own tokenizer applies, reused here so a model item_span
 // abbreviation lines up with the customer's own fully-spelled word (or vice
@@ -5814,8 +5832,32 @@ export function decide(
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
       const ownSpan = (add.item_span ?? "").trim();
       const otherSpansThisMessage = allOwnSpansThisMessage.filter(s => s !== ownSpan);
+      // 2026-09-20 PO dispatch (real live money bug, "Tuna Hoagie on wheat,
+      // can you add shrimp to that?"): a comma-introduced trailing REQUEST
+      // question naming an add-on for THIS item splits into its OWN phrase
+      // (phrase-split.ts's comma boundary), so scopedModifierText's
+      // scope-to-the-host's-own-claimed-phrase rule -- built to stop ONE
+      // item's words leaking onto a DIFFERENT item -- also cuts this item
+      // off from its own add-on request sitting one phrase later, and the
+      // customer's real "shrimp" ask vanishes with no charge and no
+      // decline. Fold back in any OTHER phrase that (a) is REQUEST-shaped,
+      // (b) is not itself an AVAILABILITY question (never widen into that
+      // guard's own territory -- see REQUEST_QUESTION_MARKER_RE's own
+      // header), and (c) is not already claimed as some OTHER add's own
+      // phrase this turn (a genuinely different item's own request stays
+      // untouched, exactly as scopedModifierText already protects).
+      const orphanRequestPhrases = phrases.length > 1 && phraseIdx !== null
+        ? phrases.filter((phrase, idx) =>
+            idx !== phraseIdx &&
+            REQUEST_QUESTION_MARKER_RE.test(phrase) &&
+            !AVAILABILITY_QUESTION_MARKER_RE.test(phrase) &&
+            !otherSpansThisMessage.some(otherSpan => resolveClaimedPhraseIndex(phrases, otherSpan) === idx))
+        : [];
+      const scopedText = orphanRequestPhrases.length > 0
+        ? `${scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage)} ${orphanRequestPhrases.join(" ")}`
+        : scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
       const scoped = stripOtherItemSpansFromModifierText(
-        scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
+        scopedText,
         otherSpansThisMessage,
       );
       // PO dispatch 2026-09-20 (real conv 6de8bd13, real Vito's data): "an
