@@ -267,6 +267,70 @@ function normaliseTerm(raw: string): string {
     .trim();
 }
 
+// ============================================================
+// Lexicon term guard — a bare, common English word must never single-
+// handedly resolve a customer message to a menu item (00-PO-0919-term-in-
+// addendum, real live bug: resolveItem("in") resolved to Vito's "10 Pieces
+// Wings (Bone-In)" because the two-letter word "in" — lifted verbatim out
+// of the trailing word-run of that item's own name, "... (Bone In)" — had
+// been emitted as an active item-target lexicon term. "in" appears in most
+// English sentences, so this was a live, system-wide false-positive trap:
+// any customer message containing that word, anywhere in the conversation,
+// risked silently adding wings nobody asked for.
+//
+// The rule (either condition alone suppresses): a common stopword, or
+// shorter than MIN_LEXICON_TERM_LENGTH characters — unless the term is
+// literally the item's own whole/bare name AS STATED by this file's own
+// Rule 1/2/2b (never a further-derived guess). Real Vito's data makes the
+// distinction concrete: "in"/"ins"/"day"/"dip"/"ale"/"tea"/"dog" are all
+// short, ALL DERIVED (trailing-word-run or pluralized-count guesses off a
+// longer name) and must be suppressed; "blt" is also 3 characters, but it
+// is Rule 2's own STATED bare product name for "BLT Panini"/"BLT Sandwich"
+// — the dish's real, whole, unqualified name — and must survive. So this
+// guard is applied to every DERIVED-provenance item-target term-emission
+// site below (deriveLexiconSurfaceForms' own level 1/2 passes including
+// trailingWordRuns, the Cheese-pizza aliases, the category-qualified
+// fallback, the category-noun widen pass, and the D1 derived-pizza-row
+// terms), and deliberately left OFF Rule 1/2/2b's own stated-term emission
+// — those already ARE this file's authoritative statement of the item's
+// real name, so there is nothing left to "except" there; filtering them
+// too would have dropped "blt" outright; see compile-menu.test.ts's
+// pre-existing "blt" coverage. One shared function, so this class of bug
+// can't reappear from yet another rule inventing its own one-off short-
+// term check. Deliberately scoped to target_type "item" terms only — Rule
+// 6's choice-target terms are resolved through a different path entirely
+// (ANSWER's own direct slot match; resolve-item.ts's item-resolution
+// fallback never reads choice-type rows at all — see
+// deriveLexiconSurfaceForms' own header) and carry no equivalent
+// false-positive risk.
+const LEXICON_STOPWORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "nor", "so", "yet",
+  "in", "on", "at", "to", "of", "for", "with", "by", "from", "as",
+  "is", "it", "its", "am", "are", "was", "were", "be", "been", "being",
+  "this", "that", "these", "those", "i", "you", "he", "she", "we", "they",
+  "his", "her", "our", "your", "their", "them",
+  "not", "no", "do", "did", "does", "have", "has", "had",
+  "will", "would", "can", "could", "shall", "should", "may", "might", "must",
+  "up", "out", "off", "over", "under", "than", "then", "too", "via", "per",
+  "all", "any", "each", "few", "more", "most", "other", "some", "such",
+  "only", "own", "same", "very", "just", "also", "into", "onto", "about",
+]);
+
+const MIN_LEXICON_TERM_LENGTH = 4;
+
+const EMPTY_WHOLE_NAME_FORMS: ReadonlySet<string> = new Set();
+
+// Returns true when `term` must be SUPPRESSED (not emitted as a lexicon
+// term): a stopword, or shorter than MIN_LEXICON_TERM_LENGTH — unless
+// `itemWholeNameForms` (the caller's set of this term's owning item's own
+// stated whole/bare name forms) contains it exactly, in which case it is
+// always kept regardless of length or stopword status.
+export function isSuppressedLexiconTerm(term: string, itemWholeNameForms: ReadonlySet<string> = EMPTY_WHOLE_NAME_FORMS): boolean {
+  if (itemWholeNameForms.has(term)) return false;
+  if (LEXICON_STOPWORDS.has(term)) return true;
+  return term.length < MIN_LEXICON_TERM_LENGTH;
+}
+
 function singularizeWord(word: string): string {
   if (word.length > 4 && /ies$/i.test(word)) return word.slice(0, -3) + "y";
   if (/(?:ches|shes|xes|ses|zes)$/i.test(word)) return word.slice(0, -2);
@@ -657,7 +721,9 @@ export function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
     const baseName = baseNameBeforeSize(item.name, item.size_label);
     if (CHEESE_BASE_NAME_RE.test(baseName)) {
       for (const alias of CHEESE_PIZZA_ALIASES) {
-        terms.push({ term: normaliseTerm(alias), target_type: "item", target_id: item.id, provenance: "derived" });
+        const term = normaliseTerm(alias);
+        if (isSuppressedLexiconTerm(term)) continue;
+        terms.push({ term, target_type: "item", target_id: item.id, provenance: "derived" });
       }
     }
   }
@@ -887,6 +953,10 @@ function trailingWordRuns(term: string): string[] {
   for (let i = 1; i < words.length; i++) {
     const run = words.slice(i).join(" ");
     if (/^\d+$/.test(run)) continue;
+    // Stopword-or-short guard (00-PO-0919-term-in-addendum, real live bug):
+    // a trailing run this short/generic ("in" off "... (Bone In)") is never
+    // a dish name on its own — see isSuppressedLexiconTerm's own header.
+    if (isSuppressedLexiconTerm(run)) continue;
     runs.push(run);
   }
   return runs;
@@ -1004,12 +1074,21 @@ export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string
   }
   const countStrippedBareNames = gateSurfaceFormCandidates(prepositionalCountStripped, existing, t => [t]);
 
-  return [...level1, ...level2, ...countStrippedBareNames].map(({ term, itemId }) => ({
-    term,
-    target_type: "item" as const,
-    target_id: itemId,
-    provenance: "derived" as const,
-  }));
+  // Final stopword-or-short guard (00-PO-0919-term-in-addendum): every
+  // candidate here is DERIVED (a guessed transformation of a stated term —
+  // collapse, pluralize, strip-count, or trailing-word-run), never an
+  // item's own stated whole/bare name, so no whole-name exception applies —
+  // see isSuppressedLexiconTerm's own header. trailingWordRuns already
+  // drops most of these at the source; this catches anything level1SurfaceForms'
+  // own collapse/pluralize/stripTrailingCount passes produce independently.
+  return [...level1, ...level2, ...countStrippedBareNames]
+    .filter(({ term }) => !isSuppressedLexiconTerm(term))
+    .map(({ term, itemId }) => ({
+      term,
+      target_type: "item" as const,
+      target_id: itemId,
+      provenance: "derived" as const,
+    }));
 }
 
 // ============================================================
@@ -1220,6 +1299,12 @@ function deriveCategoryNounSingleClaimantWidenTerms(
     if (!category) continue; // not a category-noun collision at all
     const [soleOwnerId] = [...owners];
     if (categoryById.get(soleOwnerId) !== category) continue; // sole owner isn't even in that category
+    // Stopword-or-short guard (00-PO-0919-term-in-addendum): a category
+    // noun this short/generic should not even be widened onto siblings —
+    // see isSuppressedLexiconTerm's own header. In practice a category
+    // noun is essentially never stopword-shaped, but the same shared guard
+    // is applied uniformly regardless.
+    if (isSuppressedLexiconTerm(term)) continue;
     const siblingIds = (activeOrderableByCategory.get(category) ?? []).filter(id => id !== soleOwnerId);
     for (const id of siblingIds) {
       out.push({ term, target_type: "item", target_id: id, provenance: "derived" });
@@ -1296,6 +1381,13 @@ function deriveCategoryQualifiedFallbackTerms(
       if (literalOwners <= 1 && !hasFamilyWideningHazard(c.item_id, t.term, items, compiledMap)) continue;
       const qualified = `${t.term} ${noun}`;
       if (existingTerms.has(qualified)) continue; // never shadow a real, distinct term
+      // Stopword-or-short guard (00-PO-0919-term-in-addendum): this is a
+      // DERIVED (term + category-noun) composite, never the item's own
+      // stated whole name, so no exception applies here either — see
+      // isSuppressedLexiconTerm's own header. In practice a qualified
+      // composite is essentially never this short, but the same shared
+      // guard is applied uniformly regardless.
+      if (isSuppressedLexiconTerm(qualified)) continue;
       out.push({ term: qualified, target_type: "item", target_id: c.item_id, provenance: "derived" });
     }
   }
@@ -2140,12 +2232,20 @@ export function buildDerivedRows(
           target_id: entityKey,
           provenance,
         },
-        {
-          term: normaliseTerm(choiceLower),
-          target_type: "item" as LexiconTargetType,
-          target_id: entityKey,
-          provenance,
-        },
+        // Stopword-or-short guard (00-PO-0919-term-in-addendum): the bare
+        // topping word alone, same rule as every other derived term above —
+        // see isSuppressedLexiconTerm's own header. STANDARD_SINGLE_TOPPING_
+        // ALIASES is a fixed, code-defined list (never a live shop's raw
+        // vocabulary), so this never fires today, but the same shared guard
+        // applies uniformly to every item-target term-emission path.
+        ...(!isSuppressedLexiconTerm(normaliseTerm(choiceLower))
+          ? [{
+              term: normaliseTerm(choiceLower),
+              target_type: "item" as LexiconTargetType,
+              target_id: entityKey,
+              provenance,
+            }]
+          : []),
         ...(sizeWord
           ? [{
               term: normaliseTerm(`${sizeWord.toLowerCase()} ${choiceLower} pizza`),

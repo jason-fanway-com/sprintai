@@ -17,6 +17,7 @@ import {
   computeDanglingLexiconTermInvariant,
   computeMenuInvariants,
   deriveLexiconSurfaceForms,
+  isSuppressedLexiconTerm,
   itemLexiconTerms,
   normaliseTermVariants,
   planOwnerQuestionsRefresh,
@@ -655,6 +656,65 @@ Deno.test("lexicon: modifier choices are NOT lexiconized (rule 5/step 4 explicit
   const it = item({ groups: [group({ kind: "modifier", ask_mode: "on_request", choices: [choice({ name: "Pepperoni" })] })] });
   const terms = compileItem(it, [], "t").lexicon_terms;
   assert(!terms.some(t => t.term === "pepperoni"));
+});
+
+// ============================================================
+// Stopword / short-term guard (00-PO-0919-term-in-addendum, real live bug:
+// resolveItem("in") resolved to Vito's "10 Pieces Wings (Bone-In)" because
+// the bare word "in" — a derived trailing-word-run off that item's own
+// name — had been emitted as an active item-target lexicon term).
+// ============================================================
+
+Deno.test("isSuppressedLexiconTerm: a stopword alone is dropped", () => {
+  assert(isSuppressedLexiconTerm("in"));
+  assert(isSuppressedLexiconTerm("with"));
+  assert(isSuppressedLexiconTerm("the"));
+});
+
+Deno.test("isSuppressedLexiconTerm: a <4-char non-stopword alone is dropped", () => {
+  assert(isSuppressedLexiconTerm("dip"));
+  assert(isSuppressedLexiconTerm("day"));
+});
+
+Deno.test("isSuppressedLexiconTerm: a <4-char term that IS the whole item name survives (whole-name exception)", () => {
+  assert(!isSuppressedLexiconTerm("blt", new Set(["blt"])), "must survive when it's this item's own whole/bare name");
+  assert(isSuppressedLexiconTerm("blt", new Set(["on"])), "must NOT survive against some OTHER item's whole-name set");
+});
+
+Deno.test("isSuppressedLexiconTerm: a normal 4+ char term is unaffected", () => {
+  assert(!isSuppressedLexiconTerm("burger"));
+  assert(!isSuppressedLexiconTerm("wing"));
+});
+
+Deno.test("stopword guard (real live bug repro): a trailing word-run reducing to the bare stopword 'in' off '... (Bone In)' is never emitted as an item term, and resolveItem('in') no longer resolves to it", () => {
+  const wings = item({ display_name: "10 Pieces Wings (Bone In)", category: "Wings" });
+  const { items: compiled } = compileMenu([wings], [], "t", false);
+  const terms = compiled[0].lexicon_terms;
+  assert(!terms.some(t => t.term === "in"), `must never emit bare "in": ${JSON.stringify(terms.map(t => t.term))}`);
+  assert(!terms.some(t => t.term === "ins"), `must never emit bare "ins": ${JSON.stringify(terms.map(t => t.term))}`);
+  assert(terms.some(t => t.term === "10 pieces wings bone in"), "the item's own stated Rule 1 full name is untouched");
+
+  const lexicon: LexiconTerm[] = terms;
+  const result = resolveItem("in", lexicon);
+  assert(result.kind !== "resolved", `bare "in" must never resolve to a menu item; got ${JSON.stringify(result)}`);
+});
+
+Deno.test("stopword guard: an item whose real, full, singular name IS a stopword-shaped short word keeps that term (whole-name exception, synthetic 'In')", () => {
+  const it = item({ display_name: "In", category: "Synthetic Test Category" });
+  const terms = compileItem(it, [], "t").lexicon_terms;
+  assert(terms.some(t => t.term === "in" && t.target_type === "item" && t.target_id === it.id),
+    `an item genuinely named "In" must still get "in" as its own stated term: ${JSON.stringify(terms.map(t => t.term))}`);
+});
+
+Deno.test("stopword guard: real Vito's 'BLT' shape — Rule 2's bare stated name 'blt' (3 chars) survives untouched, only derived-provenance terms are filtered", () => {
+  const panini = item({ display_name: "BLT Panini", category: "Homemade Paninis", product_key: "homemade-paninis:blt" });
+  const sandwich = item({ display_name: "BLT Sandwich", category: "Cold Sandwiches", product_key: "cold-sandwiches:blt" });
+  const { items: compiled } = compileMenu([panini, sandwich], [], "t", false);
+  const bltTargets = new Set(
+    compiled.flatMap(c => c.lexicon_terms.filter(t => t.term === "blt").map(t => t.target_id)),
+  );
+  assertEquals(bltTargets, new Set([panini.id, sandwich.id]),
+    "'blt' is Rule 2's own stated bare name, not a derived guess — the stopword/short-term guard must not touch it");
 });
 
 // ---- Commit 2 (2026-09-19, real Vito's "Grandma's" pizza): apostrophe
