@@ -1509,12 +1509,47 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // next turn either way, same as PROPOSE succeeding would have left it.
       if (proposeResult.reason === "timeout" && priorState.open === null) {
         proposal = { intent: "order", adds: [{ item_span: input.message, quantity: 1, choices: [] }], removes: [], modifies: [] };
+      } else if (proposeResult.reason === "timeout" && priorState.open !== null) {
+        // MONEY BUG (2026-09-19, live conv 31f54c6b, item 2): the carve-out
+        // above only ever covered open === null. A specific question WAS
+        // open here (confirm, in the repro — but this is not scoped to
+        // confirm any more than the apology below was) and the customer's
+        // reply didn't resolve it (ANSWER already had first crack — see
+        // STEP 2 above — and returned UNRESOLVED, or we would never have
+        // reached PROPOSE at all). A cart reading correctly at $39.98,
+        // read back correctly, with the customer ready to confirm, got told
+        // "Sorry, I ran into a problem. Please call us" on a pure model
+        // timeout that had nothing to do with them. The model failing to
+        // answer is not the same fact as the customer's answer being
+        // unclear — re-ask the exact question that was already open,
+        // exactly as ASK/RENDER would if this turn had genuinely failed to
+        // resolve it (same openRepeatCount escalation every other repeat of
+        // this question already goes through — see render()'s per-kind
+        // wording), never the apology. `workingCart` is unmutated here
+        // (ANSWER only ever mutates on a RESOLVED outcome; this branch is
+        // the "else" of resolved — see STEP 2's `if (answerResult.resolved)`
+        // above), so cartBefore/workingCart are the same cart by content and
+        // render() correctly emits no action-confirmation line, only the
+        // re-asked question.
+        const reaskState: DialogueState = { ...priorState, openRepeatCount: (priorState.openRepeatCount ?? 0) + 1 };
+        const reaskDeliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+        const reaskDriverTipCents = input.shopContext.driverTipCents ?? 0;
+        const reply = render(cartBefore, workingCart, reaskState, declines, input.menu, {
+          deliveryFeeCents: reaskDeliveryFeeCents || undefined,
+          driverTipCents: reaskDriverTipCents || undefined,
+          priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
+        });
+        const saved = await persistTurn(deps.supabase, input, workingCart, reaskState, sideEffects, reply, reaskDeliveryFeeCents, reaskDriverTipCents);
+        return { reply, cart: workingCart, dialogueState: reaskState, messageId: saved.id };
       } else {
         // proposeTurn() has already persisted the error_log row itself
         // (stage: "propose_call", raw response attached) — see propose.ts.
         // Nothing changed this turn: cart and dialogue_state are left
         // exactly as they were, and only the fallback reply is written to
-        // messages.
+        // messages. Reached only when there is no open question to re-ask
+        // (the branch above owns every other case) or the failure wasn't a
+        // timeout at all (schema_violation/malformed_json/network_error/
+        // non_200 — a different failure class, unchanged here).
         const saved = await persistOutboundOnly(deps.supabase, input, FALLBACK_REPLY);
         return { reply: FALLBACK_REPLY, cart: input.cart, dialogueState: priorState, messageId: saved.id };
       }

@@ -3244,8 +3244,18 @@ export function recoverAssertedChoicesFromText(
 // would risk charging people early.
 //
 // Decline is still evaluated FIRST by the caller, so "no, change it" wins.
+//
+// MONEY BUG (2026-09-19, live conv 31f54c6b, item 2): "Looks good to me!"
+// over a correct $39.98 cart matched none of the above (no "yes", no
+// "correct", nothing here) and fell through to PROPOSE -- a model call that
+// timed out twice and told a customer ready to pay to call the restaurant
+// instead. "look(s) good"/"sound(s) good" added below: the same bare-
+// affirmation family guard9-unconsented-affirmation.ts's impliesOrderConfirmation
+// already trusts for this exact "confirm?" question elsewhere in this
+// codebase, extended (never reinvented) onto this anywhere-in-message regex
+// the same way "correct"/"confirm" already are.
 const CONFIRM_AFFIRMATIVE_RE =
-  /\b(?:yes|yeah|yea|yep|yup|sure|ok|okay|correct|confirm|confirmed|confirming|place (?:it|the order)|go ahead|do it|send it)\b/i;
+  /\b(?:yes|yeah|yea|yep|yup|sure|ok|okay|correct|confirm|confirmed|confirming|place (?:it|the order)|go ahead|do it|send it|looks? good|sounds? good)\b/i;
 const CONFIRM_NEGATION_RE =
   /\b(?:not|don'?t|do not|never|wait|hold on|hold off|cancel|stop|isn'?t|wrong|mistake|change|remove|instead)\b/i;
 
