@@ -1,0 +1,226 @@
+# OrderFare: Clean-Sheet Design vs. What Exists, and the Rebuild Plan
+
+2026-09-20 · Fable · companion to `2026-09-20-clean-sheet-ordering-engine.md`
+
+Evidence base: a full copy of `~/sprintai-ordering` at commit `0090094f` (09:58 today), four
+code audits with file:line citations, git history on the Air, and one live probe of Vito's
+through the public tester at 10:50 today.
+
+---
+
+## 1. Verdict first
+
+**The system does not work, and the reason is not one bug. It is that every layer of the
+current build lets the model or a regex decide something the design says only the form may
+decide.** The September 14 spec named this exact root cause and prescribed a code-owned turn
+engine. Six days later the turn engine exists, is switched on for all three shops, and is a
+second copy of the same disease: 8,312 lines, roughly 230 regular expressions over the
+customer's message, and 64 incident-named fixes merged in a single day.
+
+The live probe this morning, Vito's, public tester:
+
+```
+C: hi
+B: Pickup or delivery today?                              ok
+C: delivery, 2 large pepperoni pizzas and an order of garlic knots
+B: What's the delivery address?                           cart_json = []   no ack, no question about the items
+C: thats it
+B: What's the delivery address?                           openRepeatCount = 0
+C: 123 Main St Allentown PA
+B: I couldn't find "123 Main St" ...
+C: whats in my cart
+B: What's the delivery address?                           third time
+```
+
+Three items silently dropped. That is your failure #2, and the mechanism is known exactly:
+`itemSpanNamedInMessage` (turn-engine.ts:4231) drops any model add whose words it cannot
+fuzzy-match in the message, **with no decline rendered**, and the recovery scan only runs
+when the model produced nothing at all. A partial or guard-dropped add is unrecoverable by
+construction.
+
+## 2. Scorecard against the clean-sheet design
+
+| Design element | What exists | Grade |
+|---|---|---|
+| **Form (state) owned by code** | `order_carts.dialogue_state`: one open question, 12 kinds, repeat count for the current question only. No per-line status, no candidate set tied to a line, no ledger, `asked_message_id` written as `null` at all three sites. Legacy state columns still coexist. | Partial |
+| **One small model call, no prices, no menu, no transcript** | Up to 2 calls per turn, each with a retry (worst case 100 s). Prompt carries the **full menu with `price_cents` on every item**, cart prices, last 6 turns, 8 behavioural rules. | Fails |
+| **Model emits spans and kinds only** | Items are spans (good, 09-15 amendment). Choices are ids (fine). But `quantity` is overridden by a regex on the span; `intent` is reclassified by three regexes; slot and disambiguation answer enums are sent to the model and then ignored. | Partial |
+| **Schema-enforced output** | Forced tool call plus hand validator, failures logged. | Meets |
+| **Cross-read: two readers must agree, disagreement becomes a question** | Absent. The negative half exists as a silent-drop guard; the positive half runs only when the model returned nothing. Partial drops are undetectable. | Fails |
+| **Resolver: longest match, 0/1/>1, ambiguous means ask** | `resolve-item.ts` core is exactly this. Fuzzy resolves only when unique. But: a cheapest-wins pick exists (`pending-disambiguation.ts:1160`), and three vetoes can turn a unique hit into a silent `unresolved`. | Mostly meets |
+| **Narrowing by facet, list only on request** | Implemented, but enumerates whenever candidates ≤ 5, and "kind" is regex-extracted from item names each turn because the menu has no facet column. | Partial |
+| **Canon: base + topping = derived row** | Derived rows are compiled (pizza only, 6 hardcoded toppings). No forward map; nothing at runtime consults `derived_from`. | Partial |
+| **Price: one pure function, integer cents, never in a prompt** | Integer cents throughout, model never emits a price. But **four independent subtotal implementations**, no tax anywhere, prices in the prompt, and no currency lint on the engine path so a model `answer_text` with a dollar figure ships verbatim. | Partial |
+| **Next: single function over state, one question, repeat escalation as state** | `ask()` is genuinely one function with 8 priorities. Repeat detection exists. Escalation is missing for tip, name, upsell, multi-size; `name` is the documented top repeater. | Mostly meets |
+| **Render: one template function, model prose never reaches the customer** | `render()` exists. But model `answer_text` is prepended verbatim and unfiltered, and seven message builders were written in arrow form specifically to evade the "one reply function" gate test. Their comment says so. | Fails |
+| **Menu contract** | Strongest layer. Typed slot/modifier groups, lexicon with space-collapsed/plural/trailing-run variants, LLM-free invariant gate, a menu walk. Missing: facets, forward canon, menu version pinned per order, alias walk, and the gate is not wired into go-live. Runtime loads the lexicon by shop across all menus. | Mostly meets |
+| **Transport, dedup, payment** | Carrier parsing, opt-out, message-sid dedup, conversation lock, sending: reusable, about 3,100 lines. Checkout recomputes the total from lines (good). **Cart is not frozen at checkout and the old Stripe session is never expired**, so an edited order leaves a payable link at the old amount. | Mostly meets |
+| **Tests: invariants + offline move-extraction eval** | 158 test files, 122 named after a dated incident. No labelled message-to-moves dataset. The harnesses that assert DB state live outside the repo in `~/po-scratch`. | Fails |
+
+## 3. Why the September 14 plan produced this
+
+You should know this so the next plan does not repeat it. Five causes, two of them mine.
+
+1. **The spec let the model see prices and the menu, and asked for ids.** Both were reversed
+   a day later when 10 of 20 live calls billed the wrong item. The correction came as an
+   amendment on top of a running build instead of a design constraint from line one.
+2. **The spec said "reuse" a list of existing modules.** That imported the regex culture into
+   the new files on day one. `pending-disambiguation.ts` alone is 1,356 lines and 36 regexes.
+3. **No cross-read and no ledger.** So a dropped item had nowhere to become a question, and
+   every drop became a new regex. The fix cadence was 12, 7, 1, 14, 23, 64, 40 per day.
+4. **The only structural gate was syntactic, and the crew evaded it deliberately** (arrow
+   functions to slip a regex that counts function signatures). A team that does this will
+   convert any spec into patches. This is the decisive finding for staffing.
+5. **Nobody stopped the stream.** 399 commits in seven days, 40 fix branches merged in
+   "unified relanding windows", each fix validated against the one sentence that broke it.
+   The product-owner layer, which was me and the threads that followed my brief, measured
+   canaries and did not halt the process when the line count doubled.
+
+## 4. What survives, what is discarded
+
+**Keep, as is or with small additions**
+
+| Module | Use | Change |
+|---|---|---|
+| `_shared/compile-menu.ts`, `compile-menu/` | Menu contract | Add: facet columns (`kind`, `size`) written by the compiler, which already computes both; forward canon table `(base_item_id, choice_id) -> derived_item_id`; `menu_version` snapshot id; alias walk in the gate; gate wired to go-live |
+| `lexicon` table | Resolver input | Load by `menu_version`, not by shop |
+| `resolve-item.ts` lines 279–395 | Longest match + 0/1/>1 | Fork the core, leave the vetoes and fuzzy fallback behind |
+| `pricing.ts` | The one price function | Becomes the only implementation; delete the other three |
+| `checkout-session.ts` | Payment handoff | Add: freeze the form at confirmation; `sessions.expire` on any edit after a link |
+| `propose.ts` transport | HTTP, forced tool call, timeout, `error_log` | Keep the transport, replace the prompt and schema entirely |
+| `index.ts` lines 1–528, 3969–6327 | Carrier parse, opt-out, dedup, lock, cart row, send | Reuse; the engine is reached through the one existing branch at line 6328 |
+| `stripe-webhook`, `public-tester` | Ticket, test kitchen | Unchanged |
+
+**Discard**
+
+| Module | Lines | Why |
+|---|---|---|
+| `turn-engine.ts` | 8,312 | The regex pile; `answer()` and `decide()` are 1,290 lines each |
+| `turn-engine-runner.ts` | 2,425 | Second model call, prose leak, state fabrication |
+| `pending-disambiguation.ts` | 1,356 | Cheapest-wins, name-regex facets; replaced by compiled facets |
+| `turn-reconciler.ts`, `phrase-split.ts`, `dialogue-signals.ts`, `intent-router.ts`, guard modules | ~3,000 | Prose inference |
+| `index.ts` legacy engine (tools, prompts, `executeTool`, `runOrderingLoop`, guard gauntlet) | ~7,300 | Superseded |
+| `chat-sms-mtest/` | 4,452 | Stale fork |
+| 122 incident-named test files | — | Their customer phrasings are harvested into the eval set first, then the files go |
+
+About 27,000 lines discarded. About 1,800 written. The compiled menu, the resolver core, the
+pricer, the checkout module and the transport shell carry over.
+
+## 5. The rebuild plan
+
+### 5.0 Rules that are enforced by machine, not by review
+
+These go into CI as tests on the first commit and a failing one blocks merge. They exist
+because §3 item 4 showed that a rule enforced by reading is not a rule.
+
+| Rule | Enforcement |
+|---|---|
+| Engine directory imports nothing from `turn-engine*`, `pending-disambiguation`, `index.ts`, `turn-reconciler`, `phrase-split`, `dialogue-signals`, `intent-router`, any `guard*` | Import-graph test |
+| The only regular expressions over customer text live in two files: `normalize.ts` (lexicon normalization) and `vocab.ts` (closed answer vocabularies: yes/no, pickup/delivery, digits, STOP). Every other engine file has zero regex literals. | Regex-count test per file, budget 0 |
+| Every string that can reach the customer lives in `templates.ts`. No other engine file contains a string literal ending in `?` or `.` longer than 20 characters. | Literal scan |
+| Exactly one file, `interpret.ts`, contains `fetch`. | Grep test |
+| Engine core ≤ 2,000 lines excluding tests and templates. Exceeding it fails CI. | Line count test |
+| No `price`, `cents`, `$` in `interpret.ts` or its prompt fixture. | Grep test |
+| `price.ts` is the only file that multiplies or sums cents. | Grep for `_cents *\*` and `reduce` over cents outside it |
+
+And one rule for people:
+
+> **A live defect becomes an eval case or a unit fixture before any code changes.** The fix
+> must pass the class (the phrasing matrix, five runs), not the instance. A fix that adds a
+> regex over the customer message is rejected at review regardless of what it repairs.
+
+### 5.1 Phase 0: stop the bleeding (day 0)
+
+- Freeze all fix work on `chat-sms`. No shop has customers; nothing is protected by continuing.
+- Harvest: script the 122 incident tests for their quoted customer messages and expected
+  cart outcomes. That is the seed of the eval set and the only durable value in those files.
+- Decide staffing (§6).
+
+### 5.2 Phase 1: the pure core (days 1–5)
+
+New directory `supabase/functions/chat-sms/engine/` (so the existing routing branch and the
+deploy tooling still work). Files and budgets:
+
+| File | Contents | Budget |
+|---|---|---|
+| `form.ts` | `OrderForm`, `Line`, `Move`, `LedgerEntry` types; `apply(form, move)` reducer | 350 |
+| `crossread.ts` | Lexicon scan of the message; reconcile against moves; emits `possible_omission` | 120 |
+| `resolve.ts` | Forked longest-match core; canon rewrite; slot binding; facet narrowing against a stored candidate set | 300 |
+| `price.ts` | Wraps `pricing.ts`; fees, tax hook, tip, total | 80 |
+| `next.ts` | Priority walk over the form; repeat escalation ladder for every question kind | 150 |
+| `templates.ts` + `render.ts` | Reply plan to text; per-shop voice rows | 250 |
+| `turn.ts` | `turn(form, menu, message, moves) -> {form, ledger, replyPlan}` | 60 |
+
+Fixtures that must pass before Phase 2 starts, each as `(form, menu, message, moves) -> (form', replyPlan)`:
+
+1. The worked conversation in the design doc, all eight turns.
+2. The three September 14 transcripts (cheeseburger / medium / that's it).
+3. Today's live probe: three items in one message with fulfillment and address.
+4. Partial drop: model returns 1 of 2 named items; cross-read produces a question, not silence.
+5. Invented item: model returns a span not in the message; cross-read rejects it.
+6. Ambiguous "pizza" then "pepperoni" then "large" narrowing to one row; "small cheese" with the size held until the item binds.
+7. "X not Y" correction; "make that 3"; "remove the knots" with one line and with two.
+8. Same question answered with noise three times: the escalation ladder runs and stops.
+9. Property test for I1 through I6 over random menus and move sequences.
+
+### 5.3 Phase 2: the interpreter and its eval (days 3–7, overlaps)
+
+- `interpret.ts`: one call, the move schema from the design (§5), the prompt fixture,
+  12 s timeout, one retry, every failure to `error_log`. Input is the message, the last
+  bot message, the open question, the lines by name and quantity, the focus. Nothing else.
+- Eval set: 300 to 500 cases in `tests/eval/moves.jsonl`, seeded from the harvest plus the
+  six-phrasing matrix crossed with the three menus. Each case is context + message +
+  expected moves.
+- Run the eval on the current model and two alternatives. Pick on the numbers. Thresholds
+  to ship: item recall ≥ 97 %, invented items ≤ 1 %, scalar field accuracy ≥ 98 %.
+  The status doc records the current model returning an empty proposal for a bare
+  "cheeseburger" 5 to 15 % of the time; that alone fails the recall bar, so expect to switch.
+
+### 5.4 Phase 3: wire it (days 6–9)
+
+- Runner: load form, call interpret, cross-read, `turn()`, persist, send. Replaces the
+  branch body at `index.ts:6328`. Idempotency and the conversation lock are reused as is.
+- Menu additions listed in §4. Compiler already computes family and size for derived rows;
+  writing them to columns is small. Pin `menu_version` on the form at first turn.
+- Checkout: form becomes immutable at `confirmed`; any later edit expires the Stripe session
+  and reopens the form. Tax: decide whether it is charged (today it is not computed
+  anywhere); the price function has the line either way.
+- End-to-end harness **in the repo**, asserting the DB: line ids, quantities, subtotal and
+  total two-sided, `stripe_checkout_session_id` present, zero extra lines. Five runs per
+  scenario. It replaces `canary20.sh`, `simcustomer.py` and `convogate.py`.
+
+### 5.5 Phase 4: shops on, old code off (days 9–14)
+
+- Vito's first. Bar: 50 simulated orders, 50 landed, 0 phantom lines, 0 questions asked three
+  times, 0 money wrong in either direction, then Jason's manual session. Then NJB, then Zio's.
+- Delete the discard list in §4 the same day the third shop passes. Report line, regex and
+  reply-site counts by re-running the greps.
+
+### 5.6 Milestone that tells you early whether this is working
+
+End of day 5: fixtures 1 through 9 pass, the engine directory is under 2,000 lines, the CI
+rules are green, and there has been no model call in any test. If that day arrives with a
+regex over the customer message inside `next.ts` or `form.ts`, or with a fixture "deferred",
+stop and replace the builder. Do not extend the budget.
+
+## 6. Staffing recommendation
+
+The pure core is the whole ballgame and it is about 1,300 lines. It should be written by
+**one author, serially, in one sitting per file**, with the CI rules in place before the
+first line. The current crew workflow, many parallel branches merged in batches with a fix
+per live incident, is itself a cause of the state described in §2, and its members have
+shown they will route around a gate rather than satisfy it.
+
+Concretely: one senior engineer or one agent session builds Phases 1 and 2 with the rules
+above as the definition of done. The crew can take Phase 3 plumbing and the menu additions,
+which are ordinary work with clear interfaces, once the core exists and its tests are the
+contract. The product-owner role changes from measuring canaries to enforcing §5.0 and the
+incident rule; that is a review job, not a monitoring job.
+
+## 7. Open decisions for Jason
+
+1. **Tax.** Not computed anywhere today. Charge it or not for the design partners?
+2. **Model.** Approve running the eval on two alternatives and switching on the numbers.
+3. **Staffing** per §6.
+4. **Tip placement.** Design puts it after the cart; your list had it after the address.
+   Data setting either way; pick one.

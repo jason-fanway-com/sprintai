@@ -51,6 +51,8 @@ export interface RunnerDeps {
   createCheckout: (req: CheckoutRequest) => Promise<{ ok: true; sessionId: string; url: string } | { ok: false; error: string }>;
   expireCheckout: (sessionId: string) => Promise<void>;
   serviceFeeCents: number;
+  /** test seam; defaults to the real model call */
+  interpretImpl?: typeof interpret;
 }
 export interface RunnerOutput { reply: string; form: OrderForm; assistantMessageId: string | null; ms: { model: number | null; total: number } }
 
@@ -137,7 +139,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   let moves: Move[] | null = closedAnswer(form0, input.message, menu);
   let modelMs: number | null = null;
   if (!moves) {
-    const r = await interpret({
+    const r = await (deps.interpretImpl ?? interpret)({
       shop_name: input.shop.name, message: input.message, last_bot: input.lastBotMessage,
       open: form0.open, open_summary: summarizeOpen(form0.open, lines, choicesFor(menu, form0)), lines,
     }, deps.model);
