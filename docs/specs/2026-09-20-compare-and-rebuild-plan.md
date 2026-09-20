@@ -326,3 +326,9 @@ among steak and chicken-steak variants was not resolved; a plural item name ("ho
 its singular term; a digit answer only worked on one kind of list; a note-only answer reset the repeat
 ladder; a single-candidate item swallowed its own option words. The rest of the misses were the
 scripted customer misreading the compliance footer, or a bagel ordered from a pizza shop.
+
+**14:48, done for the day.** Deploy aa86e4ac (chat-sms v601). Acceptance 40/40 across the three shops
+(Vito's 20, Not Just Bagels 10, Zio's 10), turn p50 1.5 s, p95 about 4 s. Phrasing sweep: 40 of 42
+real openers landed a payment link with zero invented lines and zero money mismatches; the two that
+did not were a bagel ordered from a pizza shop, handled correctly. Remaining: Jason's own phone test,
+the bagel shop's two menu-data gaps, and lifting the crew freeze once the branch merges to main.
