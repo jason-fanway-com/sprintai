@@ -86,7 +86,9 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
           const names = cands.slice(0, 8).map((c) => c.display_name);
           return T.whichOne(names) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
         }
-        const noun = sharedTail ?? spanNoun;
+        // prefer the customer's own words for the noun when every candidate carries them ("chicken pizza", not "chicken")
+        const spanShared = contentWords(l.span).filter((w) => cands.every((c) => c.words.includes(w) || c.words.includes(singular(w)) || (c.facets.kind ?? "").split(" ").includes(w)));
+        const noun = spanShared.length ? spanShared.join(" ") : (sharedTail ?? spanNoun);
         const label = (k: string) => {
           const parts = k.split(" ");
           if (parts.length > 1 && (parts[parts.length - 1] === noun || parts[parts.length - 1] === noun + "s")) return parts.slice(0, -1).join(" ");

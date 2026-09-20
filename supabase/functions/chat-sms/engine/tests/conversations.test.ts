@@ -617,7 +617,7 @@ Deno.test("the model answers a kind question with an invented item word: the ver
   let o = say(f, "Four large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
   o = say(o.form, "One plain one pepperoni one Hawaii one meat lovers", [
     { kind: "remove_line", ref: { span: "pizzas" } },
-    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["plain"] },
+    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["cheese"] },
     { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["pepperoni"] },
     { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["Hawaii"] },
     { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["meat lovers"] },

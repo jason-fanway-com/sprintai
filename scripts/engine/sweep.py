@@ -31,6 +31,10 @@ def answer_for(reply):
     if "what size" in r:
         m = re.search(r"\? ([A-Za-z]+),? ", reply.split("What size")[1]); return m.group(1).lower() if m else "large"
     if re.search(r"\n1\) ", reply): return "1"
+    m = re.search(r"We have ([^.?]+)", reply)
+    if m:
+        first = re.split(r",\s*|\s+and\s+", m.group(1))[0].strip().lower()
+        if first and "more" not in first: return first
     if "which" in r or "what kind" in r or "how would you like" in r or "options:" in r or " or " in r:
         # take the last question's option list ("A, B, or C?") and answer with the first option
         qs = [q for q in re.split(r"\?", reply) if " or " in q]

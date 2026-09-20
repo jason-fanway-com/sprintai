@@ -72,14 +72,29 @@ export function turn(input: TurnInput): TurnOutput {
     for (const r of rec.rejected) {
       if (r.move.kind !== "add_line") continue;
       const mw = words(input.message);
-      for (const o of r.move.option_spans) {
+      // the item span's own verbatim words ("plain" out of "plain pizza") count too
+      const itemVerbatim = words(r.move.item_span).filter((w) => mw.includes(w)).join(" ");
+      const candidates = [...(itemVerbatim ? [itemVerbatim] : []), ...r.move.option_spans];
+      for (const o of candidates) {
         const ow = words(o);
         if (ow.length && ow.every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu)) {
           rec.accepted.push({ kind: "answer_option", value_span: o });
           ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } });
+          break;
         }
       }
     }
+  }
+  // uncovered customer words that answer the open line question are answers, not omissions
+  if (focus) {
+    const keep: typeof rec.omissions = [];
+    for (const om of rec.omissions) {
+      if (spanAnswersLine(focus, om.span, menu) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
+        rec.accepted.push({ kind: "answer_option", value_span: om.span });
+        ledger.push({ turn: t, event: "uncovered_word_answers_question", data: { span: om.span } });
+      } else keep.push(om);
+    }
+    rec.omissions.length = 0; rec.omissions.push(...keep);
   }
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
