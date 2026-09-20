@@ -128,6 +128,7 @@ import {
   candidateSizeValue,
   extractPartialSizeClause,
   extractGlobalSizeWord,
+  extractDisambiguationAnswerQuantity,
   filterCandidatesBySizeWord,
   significantStems,
   categoryWordMatches,
@@ -2155,6 +2156,16 @@ export function answer(
 
       const resolved = resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+      // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
+      // this which-one question can restate a quantity that was never part
+      // of the original ambiguous span ("pepperoni pizza" opened this
+      // disambiguation at quantity 1; "I'll take 2 Large Pepperoni pizzas,
+      // please." states 2) — see extractDisambiguationAnswerQuantity's own
+      // header for the exact "quantity, never an index" distinction this
+      // relies on. Falls back to the open question's own quantity (the
+      // ordinary case — nothing new stated in the answer) when the answer
+      // names no such override.
+      const resolvedQuantity = extractDisambiguationAnswerQuantity(trimmed) ?? quantity;
       const menuItem = menuById.get(resolved.menu_item_id);
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // 2026-09-18 PO dispatch (add-on rule edge): a modifier held back
@@ -2177,7 +2188,7 @@ export function answer(
         }
       }
       const { texts } = resolveChoiceDisplays(menuItem.ask_plan, heldChoices);
-      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+      const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, resolvedQuantity, "", undefined, undefined, texts);
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): Y just
       // resolved (the numbered-list path — the one a small candidate set
       // like a two-item Chicken Fingers tie actually takes, per

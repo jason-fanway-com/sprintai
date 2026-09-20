@@ -10,6 +10,7 @@ import {
   candidateShortText,
   categoryWordMatches,
   displayGroupName,
+  extractDisambiguationAnswerQuantity,
   extractGlobalSizeWord,
   extractPartialSizeClause,
   extractPriceCentsFromMessage,
@@ -483,6 +484,81 @@ Deno.test("LIVE MONEY BUG: the same answer, with a full-order restatement append
     )?.menu_item_id,
     "gyro-hot-sandwich",
   );
+});
+
+// ── TOP PRIORITY LIVE MONEY BUG (2026-09-19, live conv 4c52298c, turn #5): ──
+// a which-one list was open for "pepperoni pizza" with candidates in real
+// transcript list order where option 2 happened to be Small. The customer
+// answered "I'll take 2 Large Pepperoni pizzas, please." — matchLeadingOrdinal's
+// "I'll take" qualifier used to return idx unconditionally, so the leading
+// "2" was read as "pick candidate #2" (Small, $17.45) instead of "quantity 2"
+// — the customer's own stated "Large" was silently discarded, and the cart
+// ended up 2x Small Pepperoni Pizza ($17.45 each = $34.90) instead of 2x
+// Large ($21.00 each = $42.00). No clarifying question was ever asked, and
+// nothing flagged the wrong item/wrong money to anyone.
+//
+// The fix, in resolvePendingDisambiguation's own tiers: a leading number is a
+// QUANTITY, never a position index, whenever real content — a size word, an
+// item/family word, or a partitive "of" — follows it. An index is
+// specifically a BARE number ("2"), "option N"/"number N"/"#N"/"N)", or an
+// ordinal word ("the second one"). extractDisambiguationAnswerQuantity is the
+// companion read: it returns the stated quantity in exactly the cases
+// matchLeadingOrdinal now refuses to treat as an index, and null (no
+// override) in every case that still IS a genuine index pick — so callers
+// combine `extractDisambiguationAnswerQuantity(msg) ?? <the open question's
+// own quantity>` to get the right count without ever double-reading the
+// same number as both an index and a quantity.
+//
+// Candidate order intentionally mirrors the real transcript: option 2
+// (0-based index 1) is Small — an index-based misread of "2" would visibly
+// resolve to Small, exactly the live incident, if the fix were wrong.
+const PEPPERONI_PIZZA_CANDIDATES: PendingCandidate[] = [
+  { menu_item_id: "pep-medium", name: "Pepperoni Pizza - Medium (14\")", category: "Pizza", price_cents: 1900 },
+  { menu_item_id: "pep-small",  name: "Pepperoni Pizza - Small (10\")",  category: "Pizza", price_cents: 1745 },
+  { menu_item_id: "pep-large",  name: "Pepperoni Pizza - Large (16\")",  category: "Pizza", price_cents: 2100 },
+];
+
+Deno.test("LIVE MONEY BUG (real repro, conv 4c52298c): \"I'll take 2 Large Pepperoni pizzas, please.\" resolves to LARGE, quantity 2 — never Small via index misread", () => {
+  assertEquals(resolvePendingDisambiguation("I'll take 2 Large Pepperoni pizzas, please.", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("I'll take 2 Large Pepperoni pizzas, please."), 2);
+});
+
+Deno.test("resolvePendingDisambiguation: \"2 large please\" resolves to LARGE, quantity 2", () => {
+  assertEquals(resolvePendingDisambiguation("2 large please", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("2 large please"), 2);
+});
+
+Deno.test("resolvePendingDisambiguation: \"option 2\" is a bare position pick (Small, this fixture's option 2) — quantity override stays null, unchanged from today's index-based behavior", () => {
+  assertEquals(resolvePendingDisambiguation("option 2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("option 2"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: bare \"2\" is the same position pick as \"option 2\" (Small) — quantity override stays null, unchanged from today's index-based behavior", () => {
+  assertEquals(resolvePendingDisambiguation("2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("2"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: \"the second one\" is the ordinal path to the same position (Small) — quantity override stays null", () => {
+  assertEquals(resolvePendingDisambiguation("the second one", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-small");
+  assertEquals(extractDisambiguationAnswerQuantity("the second one"), null);
+});
+
+Deno.test("resolvePendingDisambiguation: \"2 of the large\" resolves to LARGE, quantity 2 (partitive-of shape)", () => {
+  assertEquals(resolvePendingDisambiguation("2 of the large", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, "pep-large");
+  assertEquals(extractDisambiguationAnswerQuantity("2 of the large"), 2);
+});
+
+// Regression baseline (acceptance point 3): "option 2" and bare "2" resolve
+// to the SAME candidate (pep-small, this fixture's position 2) as the
+// unmodified logic on this exact repo commit produced before this fix —
+// captured by running the original resolvePendingDisambiguation against
+// these two messages and this exact PEPPERONI_PIZZA_CANDIDATES fixture prior
+// to any change in this file. The fix must never move an index pick's
+// result, only stop a QUANTITY from being misread as one.
+Deno.test("resolvePendingDisambiguation: index-pick baseline unchanged — \"option 2\" and bare \"2\" both still resolve to the pre-fix candidate", () => {
+  const preFixBaseline = "pep-small"; // captured from HEAD~ (pre-fix) resolvePendingDisambiguation against this exact fixture
+  assertEquals(resolvePendingDisambiguation("option 2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, preFixBaseline);
+  assertEquals(resolvePendingDisambiguation("2", PEPPERONI_PIZZA_CANDIDATES)?.menu_item_id, preFixBaseline);
 });
 
 // ── P0 fix (2026-09-19, docs/specs/2026-09-15-narrowing-questions.md, live

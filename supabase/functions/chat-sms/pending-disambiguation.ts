@@ -326,7 +326,17 @@ export function matchOrdinalPosition(message: string, count: number): number | n
 // large fries" — the exact LIVE MONEY BUG repros above this must keep
 // rejecting; "2 of those, please" — a quantity, not a position) stays
 // unresolved, same "never guess" discipline as every other tier.
-const LEADING_ORDINAL_ONE_WORD_QUALIFIERS = new Set(["option", "number", "no", "the"]);
+// P0 fix (2026-09-19, live money bug, conv 4c52298c): "option"/"number"/
+// "no."/"#" unambiguously FRAME a position — a customer who says "option 2"
+// means position 2 no matter what (if anything) trails it. "the" and the
+// natural-language two-word openers below carry no such framing on their
+// own ("I'll take 2 Large Pepperoni pizzas" is an ORDER, not "give me
+// candidate #2") — they only read as a position pick when nothing but
+// filler follows the number, exactly the same discipline the unqualified
+// lone-token tier below already applies. See hasOnlyFillerAfter and its use
+// in matchLeadingOrdinal.
+const LEADING_ORDINAL_EXPLICIT_QUALIFIERS = new Set(["option", "number", "no"]);
+const LEADING_ORDINAL_AMBIGUOUS_ONE_WORD_QUALIFIERS = new Set(["the"]);
 const LEADING_ORDINAL_TWO_WORD_QUALIFIERS: Array<[string, string]> = [
   ["i'll", "take"],
   ["i", "want"],
@@ -386,6 +396,20 @@ function isQuantityPartitive(words: string[], i: number): boolean {
   return splitLeadingWord(words[i + 1]).core.toLowerCase() === "of";
 }
 
+// True when position `i` in `words` is either the last word, or immediately
+// followed only by a filler word ("please", "thanks", "pls", "one") — the
+// only shapes a genuine position pick wears once an ambiguous qualifier
+// ("the", "I'll take", "I want", "I'd like", "go with") sits in front of it.
+// Anything else trailing (a size word, an item name, "of") means the number
+// is naming a QUANTITY for whatever the rest of the message names, not a
+// position — see LEADING_ORDINAL_EXPLICIT_QUALIFIERS's own header.
+function hasOnlyFillerAfter(words: string[], i: number): boolean {
+  const isLastWord = i === words.length - 1;
+  if (isLastWord) return true;
+  const nextCore = splitLeadingWord(words[i + 1]).core.toLowerCase();
+  return LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore);
+}
+
 function matchLeadingOrdinal(message: string, count: number): number | null {
   const words = message.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
@@ -397,27 +421,82 @@ function matchLeadingOrdinal(message: string, count: number): number | null {
     if (idx === null) continue;
     if (isQuantityPartitive(words, i)) continue;
 
-    let hasQualifier = hadHash;
-    if (!hasQualifier && i > 0) {
+    let hasExplicitQualifier = hadHash;
+    let hasAmbiguousQualifier = false;
+    if (!hasExplicitQualifier && i > 0) {
       const prevCore = splitLeadingWord(words[i - 1]).core.toLowerCase();
-      if (LEADING_ORDINAL_ONE_WORD_QUALIFIERS.has(prevCore)) hasQualifier = true;
-      if (!hasQualifier && i > 1) {
+      if (LEADING_ORDINAL_EXPLICIT_QUALIFIERS.has(prevCore)) hasExplicitQualifier = true;
+      else if (LEADING_ORDINAL_AMBIGUOUS_ONE_WORD_QUALIFIERS.has(prevCore)) hasAmbiguousQualifier = true;
+      if (!hasExplicitQualifier && !hasAmbiguousQualifier && i > 1) {
         const prev2Core = splitLeadingWord(words[i - 2]).core.toLowerCase();
         for (const [a, b] of LEADING_ORDINAL_TWO_WORD_QUALIFIERS) {
-          if (prev2Core === a && prevCore === b) hasQualifier = true;
+          if (prev2Core === a && prevCore === b) hasAmbiguousQualifier = true;
         }
       }
     }
-    if (hasQualifier) return idx;
+    if (hasExplicitQualifier) return idx;
+    if (hasAmbiguousQualifier && hasOnlyFillerAfter(words, i)) return idx;
 
     const gluedTerminator = punct === ")" || punct === ".";
     if (gluedTerminator) return idx;
 
-    if (i === 0) {
-      const isLastWord = i === words.length - 1;
-      const nextCore = isLastWord ? null : splitLeadingWord(words[i + 1]).core.toLowerCase();
-      if (isLastWord || (nextCore !== null && LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore))) return idx;
+    if (i === 0 && hasOnlyFillerAfter(words, i)) return idx;
+  }
+  return null;
+}
+
+// P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): "I'll take 2
+// Large Pepperoni pizzas, please." against a 3-size which-one list (option 2
+// = Small in that real transcript) had the leading "2" read as a position
+// pick — matchLeadingOrdinal's "I'll take" qualifier used to return idx
+// unconditionally, so it grabbed candidate #2 (Small, $17.45 each) and never
+// asked a clarifying question, ignoring the customer's own stated "Large".
+// The distinction, per the PO ruling this fixes: a number is a QUANTITY,
+// never a position index, whenever real content — a size word, an item/
+// family word, or a partitive "of" — follows it; an index is specifically a
+// BARE number ("2"), "option N"/"number N"/"#N"/"N)", or an ordinal word
+// ("the second one"). matchLeadingOrdinal above already refuses to read the
+// number as an index in every one of those quantity shapes (its own
+// isQuantityPartitive check plus this file's hasOnlyFillerAfter gating on
+// the ambiguous qualifiers) — this is the companion read: when a leading
+// digit/number-word is rejected as an index for exactly that reason, it IS
+// the quantity for whichever candidate the rest of resolvePendingDisambiguation's
+// tiers (category+name narrowing, in practice) pick out. Deliberately
+// narrow: skips only "of"/"the"/"a"/"an" (the shape "2 of the large" and "2
+// large" both take), scans the same first-6-words window as
+// matchLeadingOrdinal so a number buried later in an unrelated sentence
+// never qualifies, and returns null (no override — caller keeps whatever
+// quantity was already open) for every shape matchLeadingOrdinal or
+// matchOrdinalPosition already treat as a genuine index pick.
+const DISAMBIGUATION_QUANTITY_SKIP_WORDS = new Set(["of", "the", "a", "an"]);
+
+export function extractDisambiguationAnswerQuantity(message: string): number | null {
+  const words = message.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const scanLimit = Math.min(words.length, 6);
+
+  for (let i = 0; i < scanLimit; i++) {
+    const { core, punct, hadHash } = splitLeadingWord(words[i]);
+    const lower = core.toLowerCase();
+    const digitMatch = lower.match(/^(\d+)$/);
+    const value = digitMatch ? parseInt(digitMatch[1], 10)
+      : Object.prototype.hasOwnProperty.call(NUMBER_WORDS, lower) ? NUMBER_WORDS[lower]
+      : null;
+    if (value === null) continue;
+    // Explicit index framing ("#2", "2)", "2.") -- never a quantity, whatever follows.
+    if (hadHash || punct === ")" || punct === ".") continue;
+    if (i > 0) {
+      const prevCore = splitLeadingWord(words[i - 1]).core.toLowerCase();
+      if (LEADING_ORDINAL_EXPLICIT_QUALIFIERS.has(prevCore)) continue; // "option 2", "number 2", "no. 2"
     }
+
+    let j = i + 1;
+    while (j < words.length && DISAMBIGUATION_QUANTITY_SKIP_WORDS.has(splitLeadingWord(words[j]).core.toLowerCase())) j++;
+    if (j >= words.length) continue; // nothing but skip-words/end-of-message follows -- a bare index pick, not a quantity
+    const nextCore = splitLeadingWord(words[j]).core.toLowerCase();
+    if (LEADING_ORDINAL_FOLLOW_WORDS.has(nextCore)) continue; // only filler follows -- still an index pick
+
+    return value;
   }
   return null;
 }
