@@ -4569,6 +4569,41 @@ function spanMatchesPlacementCoreAsWholeSpan(
   return false;
 }
 
+// 2026-09-20 PO dispatch (salad-choices-applied-not-skipped, real live conv
+// 561f161f, v582): FIX 2 helper. recoverAssertedChoicesFromText's own
+// plainHits tie-guard drops ALL plain hits the moment more than one matches --
+// deliberately, to protect against a bare word that could equally name a
+// modifier on THIS item OR a standalone second item that's also being ordered
+// this turn (the "sausage and onions" false-positive family). soleAddThisTurn
+// (the existing guard lift) is all-or-nothing: if ANY other item is being
+// added this turn, the guard fires for EVERY step, even when that other item
+// shares NO choice names with this step at all. This helper scopes the check
+// to the STEP: returns true only when at least one other resolved add this
+// turn carries an ask_plan with at least one choice whose display name exactly
+// matches at least one choice in `step`. An exact display-name match is the
+// same comparison already trusted throughout this file (no fuzzy matching
+// introduced). When this returns false for a step, it is safe to lift the
+// tie-guard for that step alone -- the other item cannot name any collision.
+function stepChoicesCollideWithAnySibling(
+  step: NonNullable<NonNullable<TurnEngineMenuItem["ask_plan"]>["steps"]>[number],
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+  excludeMenuItemId: string,
+): boolean {
+  const stepDisplays = new Set(step.choices.map(c => c.display.trim().toLowerCase()));
+  for (const add of adds) {
+    if (add.menu_item_id === excludeMenuItemId) continue;
+    const sibling = menuById.get(add.menu_item_id);
+    if (!sibling?.ask_plan) continue;
+    for (const sibStep of sibling.ask_plan.steps) {
+      for (const c of sibStep.choices) {
+        if (stepDisplays.has(c.display.trim().toLowerCase())) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function spanIsWholeChoiceOfAnyAdd(
   span: string,
   adds: ResolvedAdd[],
@@ -4939,6 +4974,37 @@ function describeDroppedChoiceForDecline(
   const candidateId = recoverAssertedChoiceFromText(customerMessage ?? "", allChoices, menuItem.name);
   const candidateDisplay = candidateId ? allChoices.find(c => c.id === candidateId)?.display : undefined;
   if (candidateDisplay) return `${candidateDisplay} couldn't be applied to ${displayName} — skipped.`;
+  // 2026-09-20 PO dispatch (salad-choices-applied-not-skipped, real live
+  // conv 561f161f-9d7b-4675-8b62-b69718660762, v582, error_log row
+  // d3759350-e719-415f-8311-72caa7f68fbb): "2x house salads w/ black diamond
+  // steak, shrimp, and bleu cheese dressing" -- the customer plainly named
+  // TWO real, spelled-correctly, valid Add-ons choices for the SAME dropped
+  // group (Black Diamond Steak, Shrimp), but recoverAssertedChoiceFromText
+  // just above is deliberately SINGULAR (its own "hits.length !== 1" tie
+  // guard, by design -- see its own header) and bails the moment more than
+  // one real candidate ties, falling all the way through to the bare,
+  // useless generic fallback below ("A requested option for House wasn't
+  // recognized") even though the shop's own data can name exactly what
+  // didn't apply. This function is wording-only -- see its own header, "the
+  // only honest way to name 'which thing'... never to silently apply a
+  // choice the model didn't actually assert" -- so unlike the singular
+  // recovery above, naming every one of several genuinely tied candidates
+  // here is strictly more honest than the generic fallback and carries none
+  // of the singular guard's own money risk, since nothing here is ever
+  // applied either way (recoverAssertedChoicesFromText's own noCompetingItems
+  // arg is forced true purely to let every real, plainly-named candidate
+  // land in this LIST for wording; it does not relax anything about what
+  // actually gets charged).
+  const pluralCandidateIds = recoverAssertedChoicesFromText(customerMessage ?? "", allChoices, menuItem.name, true);
+  if (pluralCandidateIds.length > 1) {
+    const names = pluralCandidateIds
+      .map(id => allChoices.find(c => c.id === id)?.display)
+      .filter((n): n is string => !!n);
+    if (names.length > 1) {
+      const joined = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+      return `${joined} couldn't be applied to ${displayName} — skipped.`;
+    }
+  }
   const groupName = droppedGroupIds
     .map(gid => menuItem.option_groups?.find(g => g.id === gid)?.name)
     .find((n): n is string => !!n);
@@ -6625,6 +6691,33 @@ export function decide(
     // 00-BF: the modifier floor. Only when the model asserted NOTHING for this
     // add -- we never override or second-guess a choice it did make.
     let effectiveChoices = add.choices ?? [];
+    // FIX 1 (2026-09-20 PO dispatch, real conv 561f161f, v582): a choices
+    // array holding ONLY entries whose group_id matches NO step at all on
+    // THIS item's ask_plan is a model hallucination targeting a completely
+    // wrong item -- it carries exactly as much information as an empty array
+    // and must fall through to the 00-BF floor so the customer's own
+    // plainly-named add-ons can be recovered from text.
+    //
+    // Contrast with a real group_id + wrong choice_id: that IS a meaningful
+    // signal -- the model correctly identified the modifier group, just got
+    // the id wrong -- so resolveChoiceDisplays still handles it with a
+    // named decline. Only entries with a group_id that matches NO step on
+    // this item are stripped (a completely foreign group_id can only be a
+    // hallucination). If even ONE entry's group_id IS a real step on this
+    // item, effectiveChoices is left entirely unchanged.
+    //
+    // hadOnlyBogusGroupChoices is used post-floor (below) to fire the
+    // correct decline when the floor runs but recovers nothing -- e.g. an
+    // item that genuinely has no add-on support, where the old droppedCount
+    // path can no longer fire once the bogus choices are stripped.
+    let hadOnlyBogusGroupChoices = false;
+    if (effectiveChoices.length > 0) {
+      const realGroupIds = new Set((menuItem.ask_plan?.steps ?? []).map(s => s.group_id));
+      if (!effectiveChoices.some(c => realGroupIds.has(c.group_id))) {
+        effectiveChoices = []; // every group_id is foreign → treat as empty
+        hadOnlyBogusGroupChoices = true;
+      }
+    }
     if (effectiveChoices.length === 0 && customerMessage) {
       const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
@@ -6758,7 +6851,15 @@ export function decide(
           // real captured shape, "Italian hoagie with shrimp and blackened
           // salmon" -- since with no other item in the turn, both can only
           // ever mean "add both," never a modifier-plus-second-item tie.
-          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name, soleAddThisTurn)) {
+          // FIX 2 (2026-09-20 PO dispatch, real conv 561f161f, v582):
+          // soleAddThisTurn is all-or-nothing -- if ANY other item is being
+          // added this turn, the tie-guard fires for every step even when the
+          // other item shares NO choice names with this step. Generalize to
+          // per-step: if no sibling add's item has ANY choice with the same
+          // display name as a choice in THIS step, there is no real collision
+          // risk and the guard can be lifted for this step alone.
+          const noStepCollision = soleAddThisTurn || !stepChoicesCollideWithAnySibling(step, resolvedAdds, menuById, menuItem.id);
+          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name, noStepCollision)) {
             effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
           }
         }
@@ -6777,6 +6878,21 @@ export function decide(
         declines.push({ reason: `The ${menuItem.ask_plan?.display_name ?? menuItem.name} doesn't take add-ons.` });
       } else {
         declines.push({ reason: describeDroppedChoiceForDecline(menuItem, droppedGroupIds, customerMessage) });
+      }
+    } else if (hadOnlyBogusGroupChoices && effectiveChoices.length === 0) {
+      // FIX 1 post-floor fallback (2026-09-20 PO dispatch, real conv 561f161f,
+      // v582): the original choices were all foreign-group hallucinations (FIX
+      // 1 stripped them so the floor could run), but the floor recovered
+      // nothing from the customer's own text. The old droppedCount path can no
+      // longer fire, so fire the same "doesn't take add-ons" decline here for
+      // items with no modifier steps -- the customer clearly tried to add
+      // something to an item that doesn't support it. Items WITH modifier
+      // steps but where the floor found nothing are silently skipped (the
+      // customer's words simply didn't match any real choice; if relevant,
+      // a subsequent turn will surface it naturally).
+      const hasModifierSteps = (menuItem.ask_plan?.steps ?? []).some(s => s.kind === "modifier");
+      if (!hasModifierSteps) {
+        declines.push({ reason: `The ${menuItem.ask_plan?.display_name ?? menuItem.name} doesn't take add-ons.` });
       }
     }
 

@@ -155,7 +155,16 @@ function baseInput(overrides: Partial<RunTurnInput> = {}): RunTurnInput {
   } as any;
 }
 
-Deno.test("ACCEPTANCE (conv a37c43f8 #43, turn 1): the real live hallucinated-id decline names the specific topping, not a generic 'some of what was asked for' message", async () => {
+// 2026-09-20 update (salad-choices-applied-not-skipped fix): when the model
+// sends a COMPLETELY foreign group_id (one that matches no step at all on
+// this item), FIX 1 now strips the bogus choice and lets the 00-BF modifier
+// floor recover the real topping from the customer's own text. For this exact
+// fixture the floor correctly recovers "Mushrooms (Whole pizza)" from "with
+// mushrooms on it" -- the garbled IDs are never applied, but the real, named
+// choice IS, satisfying the PO's rule "choices named with the item apply."
+// The old assertion "must land plain, wording fix only" is updated to reflect
+// that the real topping now lands (which is strictly better than a decline).
+Deno.test("ACCEPTANCE (conv a37c43f8 #43, turn 1): foreign-group hallucinated-id never applied; real named topping recovered from text and applied instead", async () => {
   const supabase = makeFakeSupabase();
   const newLineKey = newLineKeyCounter();
 
@@ -182,13 +191,17 @@ Deno.test("ACCEPTANCE (conv a37c43f8 #43, turn 1): the real live hallucinated-id
     },
   );
 
-  assert(!/some of what was asked for/i.test(result.reply), `decline must never use the generic "some of what was asked for" wording, got: ${JSON.stringify(result.reply)}`);
-  assert(/mushroom/i.test(result.reply), `decline must name the specific topping the customer actually asked for ("Mushrooms"), got: ${JSON.stringify(result.reply)}`);
-  assert(!/isn'?t available/i.test(result.reply), `must never falsely claim mushrooms "isn't available" -- it IS a real, correctly priced choice on this item: ${JSON.stringify(result.reply)}`);
+  assert(!/some of what was asked for/i.test(result.reply), `must never use the old generic wording, got: ${JSON.stringify(result.reply)}`);
+  assert(!/isn'?t available/i.test(result.reply), `must never falsely claim mushrooms "isn't available", got: ${JSON.stringify(result.reply)}`);
 
   const line = result.cart.find(l => l.menu_item_id === SPICY_CHAPO_SMALL_ID);
-  assert(line, "the plain item must still land even though its topping choice was unresolvable");
-  assertEquals(Object.keys(line?.ask_plan_selections ?? {}).length, 0, "the hallucinated choice must never be silently applied, wording fix only");
+  assert(line, "the item must land in the cart");
+  // The hallucinated {group_id, choice_id} pair is never applied. Instead the
+  // real "Mushrooms (Whole pizza)" choice is recovered from text by the 00-BF
+  // floor and applied correctly. This is strictly better than a decline.
+  assertEquals(line?.ask_plan_selections?.[TOPPINGS_GROUP_ID], MUSHROOMS_WHOLE_ID,
+    `the real Mushrooms (Whole pizza) choice must be recovered from text and applied, not the hallucinated ids: ${JSON.stringify(line)}`);
+  assert(/mushroom/i.test(result.reply), `the reply recap must mention mushrooms since the choice landed: ${JSON.stringify(result.reply)}`);
 });
 
 Deno.test("when no candidate can be identified from the customer's own words, the decline still names the item and the modifier category, never the bare generic message", async () => {
