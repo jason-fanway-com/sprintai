@@ -119,6 +119,7 @@ import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
   isPendingDisambiguationDeclined,
+  isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
   pickNarrowingFacet,
@@ -619,6 +620,16 @@ export type AnswerOutcome =
   // question next turn, same as a genuinely-failed answer would, so the
   // still-unresolved item is never silently dropped.
   | { kind: "disambiguation_new_item_added"; menuItemId: string; quantity: number }
+  // M2 fix (2026-09-19, live conv d3539d12 #5): an answer to "which one?"
+  // that carries removal language ("remove that small Pepperoni pizza")
+  // instead — never a candidate pick. `removed` reports whether a matching
+  // real cart line was actually found and taken off (same "graceful no-op,
+  // never an error" contract applyNamedLineRemovals already has everywhere
+  // else it's called); the ORIGINAL disambiguation stays open exactly as it
+  // was, same convention as disambiguation_new_item_added just above —
+  // removing an unrelated cart line never answers what candidate the
+  // customer actually wants for the still-unresolved item.
+  | { kind: "disambiguation_removal_applied"; removed: boolean }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -2005,6 +2016,25 @@ export function answer(
         .filter((m): m is TurnEngineMenuItem => !!m)
         .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
       if (candidates.length === 0) return UNRESOLVED;
+      // M2 fix (2026-09-19, live conv d3539d12 #5, real $91.30 overcharge):
+      // checked BEFORE isPendingDisambiguationDeclined and every candidate-
+      // name/size matching tier below — see isDisambiguationAnswerRemovalRequest's
+      // own header for why DECLINE_CUES doesn't already catch this. Applies
+      // the removal against the CURRENT cart via the exact same primitive
+      // the order_type/confirm cases already trust for the identical shape
+      // (applyNamedLineRemovals — a no-op, never an error, when nothing in
+      // the cart actually matches, same contract as everywhere else it's
+      // called) and leaves the pending disambiguation open exactly as it
+      // was: the removal targets a DIFFERENT item than the one still being
+      // asked about, so there is always still a real reason to ask it again.
+      if (isDisambiguationAnswerRemovalRequest(trimmed)) {
+        const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
+        return {
+          resolved: true,
+          outcome: { kind: "disambiguation_removal_applied", removed: removedSomething },
+          cartChanged: removedSomething,
+        };
+      }
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): set
       // only when this open question is Y's own narrowing, opened by a
       // same-breath replacement whose target tied — see DialogueState.open's

@@ -197,6 +197,37 @@ export function isPendingDisambiguationDeclined(
   return false;
 }
 
+// M2 fix (2026-09-19, PO dispatch, live conv d3539d12 #5, real $91.30
+// overcharge including items the customer explicitly asked to have
+// removed): "Please remove that small Pepperoni pizza. I want to stick with
+// 2 Large Pepperoni pizzas, 2 Chicken Alfredo with linguine, and 1 Bleu
+// Cheese." was open against a which-one question for an entirely different,
+// unresolved item ("cheese pizza"'s sizes) — the word "small" in "remove
+// that SMALL Pepperoni pizza" stem-matched the Small candidate's own name
+// via the category+name-narrowing tier and got read as the customer's PICK,
+// silently ignoring that the sentence opens with a removal verb against
+// something already in the cart and goes on to restate an entirely
+// different order. isPendingDisambiguationDeclined's own DECLINE_CUES above
+// is the existing "checked first" escape hatch for a genuine decline, but
+// "remove"/"take off"/"don't want" were never decline cues (and even
+// "don't"/"not"/"no" there only fire when the declined text ALSO happens to
+// share a word with the open candidates — irrelevant here, since the
+// removal names a completely different item). This is that same "checked
+// first, before any candidate-name/size matching" discipline for a distinct
+// escape hatch: removal language is NEVER an answer to a which-one
+// question — it is a remove request against the cart, full stop. Verb set
+// deliberately narrow (does not reuse turn-engine.ts's broader
+// REMOVAL_VERBS, which also includes ordinary words like "no"/"change"/
+// "switch"/"drop"/"instead" that are too easily part of a genuine answer to
+// a which-one question, e.g. "the second one instead of the first") — only
+// the shapes that can never plausibly be a candidate pick.
+const DISAMBIGUATION_ANSWER_REMOVAL_RE =
+  /\b(?:remove|removing|removed|take\s+(?:that|this|it|them)?\s*off|took\s+(?:that|this|it|them)?\s*off|don'?t\s+want|do\s+not\s+want)\b/i;
+
+export function isDisambiguationAnswerRemovalRequest(message: string): boolean {
+  return DISAMBIGUATION_ANSWER_REMOVAL_RE.test(message ?? "");
+}
+
 // Round 2 addendum item A, rule 2 (2026-09-19, live sim persona, real
 // Vito's count-suffix collision — "3 small pizzas" -> a numbered list of
 // three unrelated items sharing a "(3)" portion suffix, then "I just want
