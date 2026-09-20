@@ -317,3 +317,12 @@ link by a scripted customer, graded from the database) found one real defect on 
 an order with nothing priced could reach the readback and then loop on a payment link that could not
 be created. Fixed: an empty order is never confirmed, and a failed checkout reopens the confirm step
 with an honest sentence instead of a promise.
+
+**14:30, phrasing sweep.** 42 real customer openers from the incident files, each driven to a payment
+link by a scripted customer and graded from the database: first pass 27 landed, second pass 35, with
+every miss read and classified. Real defects found and fixed: an empty order could reach the readback;
+a topping named without "half" was asked half-or-whole instead of going on the whole pizza; "steak"
+among steak and chicken-steak variants was not resolved; a plural item name ("house salads") missed
+its singular term; a digit answer only worked on one kind of list; a note-only answer reset the repeat
+ladder; a single-candidate item swallowed its own option words. The rest of the misses were the
+scripted customer misreading the compliance footer, or a bagel ordered from a pizza shop.
