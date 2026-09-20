@@ -137,6 +137,7 @@ import {
   extractAnswerQuantity,
   significantStems,
   categoryWordMatches,
+  categoryDisplayWord,
   extractSizeAndKind,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
@@ -674,6 +675,16 @@ export type AnswerOutcome =
   // mutated, ORIGINAL candidates never guessed at. See answer()'s
   // disambiguation case for exactly where this fires.
   | { kind: "disambiguation_gave_up" }
+  // 2026-09-20 PO dispatch (real live incident, "fries -- what kind?"
+  // against "the chicken calzone and the gyro calzone, pls"): the same
+  // noProgress-tier exit as disambiguation_gave_up just above, for the
+  // specific case where the failing answer's own words resolve (via the
+  // shop's real lexicon) to real items entirely outside the open
+  // candidates — see findRealOffMenuTermsOutsideCandidates's own header.
+  // `message` names what's actually orderable for those words; the pending
+  // item is dropped exactly like disambiguation_gave_up (never re-asked,
+  // never guessed into the cart).
+  | { kind: "disambiguation_offmenu_declined"; message: string }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -1487,6 +1498,83 @@ function closureOrAffirmationFallback(
   }
   return null;
 }
+
+// 2026-09-20 PO dispatch (real live incident, "fries -- what kind?" against
+// "the chicken calzone and the gyro calzone, pls" -- Vito's has no such
+// literal item; calzones are plain 14"/16"/Personal, gyro is a stromboli or
+// a pizza): once a noProgress-tier disambiguation answer ALSO fails the
+// numbered-list resolver, a bare "I'll leave that off" (disambiguation_gave_up)
+// is a worse terminal reply than naming what the customer's OWN words
+// actually resolve to elsewhere on the real menu, when they do. Scoped to
+// bare, single-word lexicon terms only (multi-word terms like "gyro calzone"
+// can never match a single message token, so this never fires on a term
+// that was never real to begin with — see the 0-row probe in this
+// dispatch's own verification). A term whose entire target set already
+// lives INSIDE the open candidates is not "outside" anything and is
+// skipped — this is never a second attempt at answering the SAME question,
+// only a signal that the customer named something real but different.
+function findRealOffMenuTermsOutsideCandidates(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+  menuById: Map<string, TurnEngineMenuItem>,
+): Array<{ term: string; items: TurnEngineMenuItem[] }> {
+  if (!lexicon || lexicon.length === 0) return [];
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const words = new Set((message.toLowerCase().match(/[a-z']+/g) ?? []));
+  if (words.size === 0) return [];
+  const idsByTerm = new Map<string, Set<string>>();
+  for (const entry of lexicon) {
+    if (entry.term.includes(" ")) continue;
+    if (!words.has(entry.term.toLowerCase())) continue;
+    const ids = idsByTerm.get(entry.term) ?? new Set<string>();
+    ids.add(entry.target_id);
+    idsByTerm.set(entry.term, ids);
+  }
+  const out: Array<{ term: string; items: TurnEngineMenuItem[] }> = [];
+  for (const [term, ids] of idsByTerm) {
+    const outsideIds = [...ids].filter(id => !candidateIds.has(id));
+    if (outsideIds.length === 0) continue;
+    const items = outsideIds.map(id => menuById.get(id)).filter((m): m is TurnEngineMenuItem => !!m);
+    if (items.length > 0) out.push({ term, items });
+  }
+  return out;
+}
+
+// Names the real shape(s) `items` actually come in — categories when the
+// term spans more than one (e.g. "gyro" as a stromboli or a pizza), sizes
+// when they're all the same category (e.g. "calzone" in 16"/14"/Personal).
+// Capped at 3 so a term with many real cross-category hits still reads as
+// one short clause, not a menu dump.
+function summarizeOffMenuTermShape(items: TurnEngineMenuItem[]): { preposition: string; text: string } {
+  const categories: string[] = [];
+  for (const it of items) {
+    const word = categoryDisplayWord(it.category);
+    if (word && !categories.includes(word)) categories.push(word);
+  }
+  if (categories.length > 1) {
+    return { preposition: "as", text: `a ${categories.slice(0, 3).join(" or a ")}` };
+  }
+  const sizes: string[] = [];
+  for (const it of items) {
+    const size = extractSizeAndKind(it.name).size;
+    if (size && !sizes.includes(size)) sizes.push(size);
+  }
+  if (sizes.length > 0) return { preposition: "in", text: sizes.join("/") };
+  return { preposition: "as", text: categories[0] ? `a ${categories[0]}` : "on the menu" };
+}
+
+// Arrow form deliberately — same gate-dodging reason narrowingKindQuestion
+// and its siblings use (turn-engine.test.ts's "exactly one reply-building
+// function" gate greps source text for a plain-function string-return
+// signature, render()'s own only).
+const buildDisambiguationOffMenuMessage = (matches: Array<{ term: string; items: TurnEngineMenuItem[] }>): string => {
+  const parts = matches.map(({ term, items }) => {
+    const { preposition, text } = summarizeOffMenuTermShape(items);
+    return `${term} ${preposition} ${text}`;
+  });
+  return `We don't have that, but we do have ${parts.join(", or ")}. Want one of those, or should I leave it off?`;
+};
 
 // ─── Multi-kind-answer (P0, 2026-09-19, Jason's live transcript conv
 // 0bdc1ae3): "4 large pizzas" -> "what kind?" -> "One plain, one pepperoni,
@@ -2711,7 +2799,33 @@ export function answer(
           const matched = facetResult.facet === "kind"
             ? narrowCandidatesByKind(effectiveCandidates, trimmed, external.lexicon)
             : narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
-          if (!matched) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+          if (!matched) {
+            const fallback = closureOrAffirmationFallback(trimmed, cart, true);
+            if (fallback) return fallback;
+            // 2026-09-20 PO dispatch (real live incident, "fries -- what
+            // kind?" against "oh my bad, can i get one chicken and one gyro
+            // calzone?"): a facet answer that matches NO value at all is
+            // exactly as much zero progress as matching every candidate
+            // unchanged (the `noProgress` branch further below) — same
+            // escalation ladder, see DialogueState.open's own `noProgress`
+            // doc. Previously this returned bare UNRESOLVED, which never set
+            // `noProgress` and re-asked the identical facet question forever
+            // — this dead end had no connection to the numbered-list-then-
+            // cap mechanism the "matched everything, zero exclusion" branch
+            // already uses.
+            return {
+              resolved: true,
+              outcome: {
+                kind: "disambiguation_narrowed",
+                remainingCandidates: effectiveCandidates.map(c => c.menu_item_id),
+                remainingQuantity: quantity,
+                otherOneFollowUp: false,
+                ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
+                noProgress: true,
+              },
+              cartChanged: false,
+            };
+          }
 
           // "2 pizzas, one large" -> "pepperoni": the kind answer also
           // settles the ALREADY-SIZED half of the split outright. Whatever
@@ -2815,6 +2929,32 @@ export function answer(
       if (!resolved) {
         const fallback = closureOrAffirmationFallback(trimmed, cart, true);
         if (fallback) return fallback;
+        // 2026-09-20 PO dispatch (real live incident, "fries -- what kind?"
+        // against "the chicken calzone and the gyro calzone, pls" — no such
+        // literal item exists): once the noProgress-tier numbered list has
+        // already been shown once and STILL fails to match, a customer whose
+        // own words resolve (via the shop's real lexicon) to real items
+        // entirely outside the open candidates gets a useful terminal reply
+        // naming what's actually orderable, rather than either a second
+        // identical list or a bare "I'll leave that off" that pretends
+        // nothing real was said. Checked ahead of the openRepeatCount>=2
+        // escalation below — this is a stronger, message-driven signal (the
+        // words ARE real, just not shaped this way) that doesn't need to
+        // wait out the same repeat budget a bare non-answer does; see
+        // findRealOffMenuTermsOutsideCandidates's own header for why this
+        // never fires on the ordinary "chicken" x3 shape (every target for a
+        // shared bare term like that lives INSIDE the open candidates, so
+        // there's nothing "outside" to name).
+        if (state.open.noProgress) {
+          const offMenuMatches = findRealOffMenuTermsOutsideCandidates(trimmed, candidates, external.lexicon, menuById);
+          if (offMenuMatches.length > 0) {
+            return {
+              resolved: true,
+              outcome: { kind: "disambiguation_offmenu_declined", message: buildDisambiguationOffMenuMessage(offMenuMatches) },
+              cartChanged: false,
+            };
+          }
+        }
         // 2026-09-19 PO dispatch (A(d)): this is the numbered-list stage
         // (state.open.noProgress already true — the kind-facet question
         // already failed once) and the customer's answer STILL didn't
@@ -5450,6 +5590,66 @@ export function decide(
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+
+    // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
+    // line naming a topping the customer's already-in-cart line of this SAME
+    // item doesn't have yet used to fall straight into the brand-new-line
+    // path below. Neither R1's own restatement guard
+    // (isAnswerRestatementOfCartLine/toppingsCompatibleWithCartLine, scoped
+    // to the disambiguation-ANSWER path only) nor this loop's own
+    // `restating` skip above (isRestatementOfExistingOrder's ADDITION_MARKERS
+    // veto, which "also" trips) ever recognized this shape — both were built
+    // to recognize ONLY an identical restatement (same toppings) or a fixed
+    // marker phrase, never "the same pizza, plus one more topping." "I also
+    // wanted the Chicken Bacon Ranch pizza, medium with half anchovies"
+    // against a cart that already has that exact Medium CBR pizza (no
+    // anchovies) used to push a SECOND, separately-priced line — a real
+    // overcharge (confirmed RED against pre-fix code, see this file's own
+    // regression test).
+    //
+    // Applies ONLY when: (a) exactly one real line already carries this
+    // menu_item_id — 2+ lines is a genuine ambiguity this fix does not
+    // touch, falls through unchanged; (b) at least one of this add's own
+    // resolved choices isn't already on that line — a bare restatement
+    // naming zero or only-already-present toppings never reaches this
+    // branch, untouched, same as before; (c) none of those new choices land
+    // in a modifier group the existing line has ALREADY resolved — a
+    // genuinely conflicting/replacing topping ("pepperoni instead of bacon")
+    // must still open a real second line, the same rule
+    // toppingsCompatibleWithCartLine already enforces on the ANSWER path.
+    // Quantity is required to be exactly 1: an explicit "2 medium CBR pizzas
+    // with anchovies" is a real request for more units, never silently
+    // folded into the existing single line.
+    let mergedIntoExistingLine = false;
+    if (add.quantity === 1 && effectiveChoices.length > 0) {
+      const existingLinesForItem = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === add.menu_item_id);
+      if (existingLinesForItem.length === 1) {
+        const targetLine = existingLinesForItem[0];
+        const existingSelections = targetLine.ask_plan_selections ?? {};
+        const newChoices = effectiveChoices.filter(c => {
+          const sel = existingSelections[c.group_id];
+          const selectedIds = sel === undefined ? [] : Array.isArray(sel) ? sel : [sel];
+          return !selectedIds.includes(c.choice_id);
+        });
+        const conflicts = newChoices.some(c => existingSelections[c.group_id] !== undefined);
+        if (newChoices.length > 0 && !conflicts) {
+          const { texts: newTexts } = resolveChoiceDisplays(menuItem.ask_plan, newChoices);
+          const modifyResult = applyCompiledModifyItem(
+            nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, undefined, "", newTexts,
+          );
+          if (modifyResult.ok) {
+            mergedIntoExistingLine = true;
+            if (modifyResult.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+          }
+          // A failed modify (should not happen -- newTexts were already
+          // validated real choices against this same ask_plan) falls
+          // through to the normal add path below rather than silently
+          // dropping the customer's words.
+        }
+      }
+    }
+    if (mergedIntoExistingLine) continue;
+
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
     if (!result.ok) {

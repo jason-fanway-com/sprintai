@@ -581,6 +581,29 @@ function baseNameBeforeSize(name: string, sizeLabel: string | null | undefined):
   return name.replace(/\s*-\s*[^-]*$/, "").trim();
 }
 
+// 2026-09-19 PO dispatch (canonical-name-terms-always-active, real live bug,
+// v564 50-run conv 646eb3b3 #5): a customer typed "2 Alfredo - Chicken
+// pasta" — Vito's own literal menu name for menu_item_id 96547aec, real
+// name $19.95 — and the bot answered "Sorry, I didn't catch 'Alfredo -
+// Chicken'" three times in a row. Same regexp shape normalize.ts's own
+// genericSuffixSplit uses (a two-part name folded on " - "), duplicated
+// here rather than imported — this file and that one are deliberately
+// decoupled, same discipline as familyCoreWords/categoryNoun above.
+// Deliberately independent of whether normalize.ts actually folded this
+// name into a family (genericSuffixSplit there requires ≥2 same-category
+// siblings before it fires) — this fires off the item's own raw `name`
+// unconditionally, singleton or not.
+const RAW_NAME_DASH_SPLIT_RE = /^(.+?)\s+-\s+(.+)$/;
+
+function splitDashName(name: string): { base: string; suffix: string } | null {
+  const m = name.match(RAW_NAME_DASH_SPLIT_RE);
+  if (!m) return null;
+  const base = m[1].trim();
+  const suffix = m[2].replace(/\s*\([^)]*\)/g, "").trim();
+  if (!base || !suffix) return null;
+  return { base, suffix };
+}
+
 function bareProductName(item: CompileItem): string | null {
   if (!item.product_key) return null;
   const colonIdx = item.product_key.indexOf(":");
@@ -725,6 +748,44 @@ export function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
     }
   }
 
+  // Rule 2c (raw-name exact / dash-stripped / reversed forms), 2026-09-19 PO
+  // dispatch (canonical-name-terms-always-active, real live bug, v564 50-run
+  // conv 646eb3b3 #5: "2 Alfredo - Chicken pasta" — Vito's own literal menu
+  // name — got "Sorry, I didn't catch 'Alfredo - Chicken'" three times).
+  // Rule 1 above indexes item.display_name, which normalize.ts can rewrite
+  // into a reordered, category-qualified form completely unlike the item's
+  // own raw stated name the moment two items share a " - "-folded base
+  // ("Alfredo - Chicken"/"Alfredo - Shrimp" -> display_name "Chicken Alfredo
+  // Entree"/"Shrimp Alfredo Entree") — the raw name a customer actually
+  // reads off the menu and types back then has NO lexicon term at all,
+  // active or otherwise, once display_name diverges this way. Both real
+  // items had some OTHER active unique term (their own reordered
+  // display_name), so invariant 4 ("every orderable item has ≥1 unique
+  // active term") passed anyway — this is a coverage gap invariant 4 was
+  // never designed to catch, not a uniqueness gap; see invariant 10 below.
+  //
+  // Whenever item.name itself is shaped "<X> - <Y>", unconditionally emit
+  // three stated terms straight off the RAW name: the exact name (dash
+  // intact, e.g. "alfredo - chicken"), the dash-stripped form ("alfredo
+  // chicken"), and the reversed/word-swapped form ("chicken alfredo") — a
+  // real customer might naturally say any of the three. Unconditional, like
+  // Rule 1/2/2b above: never gated on uniqueness (a colliding claimant still
+  // gets its own row, same "ask, don't guess" tie-not-drop principle as
+  // Rule 2's own header) and never run through isSuppressedLexiconTerm
+  // (these ARE the item's own stated name, not a derived guess) — so
+  // whichever one of the three IS unique for this item is guaranteed active
+  // on every compile, regardless of what other active terms this item
+  // already carries.
+  const rawNameSplit = splitDashName(item.name);
+  if (rawNameSplit) {
+    const { base, suffix } = rawNameSplit;
+    for (const form of [item.name, `${base} ${suffix}`, `${suffix} ${base}`]) {
+      for (const term of normaliseTermVariants(form)) {
+        terms.push({ term, target_type: "item", target_id: item.id, provenance: "stated" });
+      }
+    }
+  }
+
   // Data fix (a), 2026-09-19: "plain"/"plain cheese"/"regular" are standard
   // customer aliases for the Cheese pizza at ANY pizzeria, not a term any
   // shop's own menu data ever states literally — general rule, not
@@ -757,7 +818,7 @@ export function itemLexiconTerms(item: CompileItem): LexiconTerm[] {
     }
   }
 
-  return terms;
+  return dedupeLexicon(terms);
 }
 
 // Rule 3: category noun singular + plural → category target. Computed once
@@ -1691,6 +1752,39 @@ export function computeMenuInvariants(
     description: `orderable/active ratio ≥ 0.9 or owner-acknowledged (actual: ${(ratio * 100).toFixed(1)}%, acknowledged: ${acknowledgedDisplayOnly})`,
     pass: ratio >= 0.9 || acknowledgedDisplayOnly,
     violations: ratio >= 0.9 || acknowledgedDisplayOnly ? [] : [`ratio ${(ratio * 100).toFixed(1)}% < 90%, not acknowledged`],
+  });
+
+  // 10. Every dash-named item ("<X> - <Y>", e.g. "Alfredo - Chicken") carries
+  //     its own exact/dash-stripped/reversed raw-name forms as stated
+  //     item-target lexicon terms (itemLexiconTerms' Rule 2c). A coverage
+  //     check, deliberately separate from invariant 4's uniqueness check —
+  //     2026-09-19 PO dispatch: invariant 4 already PASSED for both real
+  //     Vito's Alfredo items (each had some other active unique term, its
+  //     own reordered/qualified display_name) while the literal menu name a
+  //     real customer types back had no term at all, active or otherwise.
+  //     This exists so that specific coverage gap can never again hide
+  //     behind invariant 4's own, narrower, still-correct PASS.
+  const dashNamedMissingForms: string[] = [];
+  for (const i of activeItems) {
+    if (!orderable(i.id)) continue;
+    const split = splitDashName(i.name);
+    if (!split) continue;
+    const c = compiled.get(i.id);
+    if (!c) continue;
+    const ownTerms = new Set(
+      c.lexicon_terms.filter(t => t.target_type === "item" && t.target_id === i.id).map(t => t.term),
+    );
+    const wantForms = [i.name, `${split.base} ${split.suffix}`, `${split.suffix} ${split.base}`];
+    const missing = wantForms.filter(f => !normaliseTermVariants(f).some(v => ownTerms.has(v)));
+    if (missing.length > 0) {
+      dashNamedMissingForms.push(`${i.id}: missing ${missing.map(f => `"${f}"`).join(", ")}`);
+    }
+  }
+  results.push({
+    invariant: 10,
+    description: "Every dash-named item (\"<X> - <Y>\") carries its exact/dash-stripped/reversed raw-name forms as stated lexicon terms",
+    pass: dashNamedMissingForms.length === 0,
+    violations: dashNamedMissingForms,
   });
 
   return results;
