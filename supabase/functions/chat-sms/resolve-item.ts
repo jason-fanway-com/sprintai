@@ -488,8 +488,32 @@ function widenIntoSizedFamily(
 // caller the actual excluded term text — resolveItem's own veto branch
 // below still only checks truthiness, so this is a pure signature widening
 // with byte-identical behavior for every existing caller/test.
-function findLongerInactiveTerm(spanWords: string[], inactiveLexicon: LexiconTerm[], matchedLength: number): LexiconTerm | null {
+//
+// 2026-09-20 PO dispatch (live money regression, v567 conv 7ecc60e6 #30:
+// "Chicken Noodle - Cup"/"- Bowl" wrongly refused): real Vito's compiler
+// emits BOTH an active, shorter alias ("chicken noodle", 2 words, tied
+// across the Cup AND Bowl items) AND an inactive, longer, full-name term
+// for the SAME orderable item ("chicken noodle - cup", 3 words, target_id
+// = the Cup item itself) — the longer-inactive-term check below existed to
+// catch a span that resolves to NOTHING real once a more specific excluded
+// term is found (bleu cheese: the excluded term's target is a display-only
+// item, never one of the tied Cheese pizzas), but it fired here too, even
+// though the "more specific" excluded term is just the SAME real item's own
+// fuller name — the shorter active match had already tied it in. `resolvedTargetIds`
+// (the caller's own `base.targetIds`, i.e. what the normal resolution path
+// already resolved or tied to before this veto runs) lets this tell the two
+// cases apart: an inactive term whose target is already among the real
+// candidates names something that DOES resolve, so it can never be the
+// "this doesn't exist" case the veto exists for — skip it and keep looking
+// (a later, genuinely-unmatched inactive entry can still veto).
+function findLongerInactiveTerm(
+  spanWords: string[],
+  inactiveLexicon: LexiconTerm[],
+  matchedLength: number,
+  resolvedTargetIds: ReadonlySet<string>,
+): LexiconTerm | null {
   for (const entry of inactiveLexicon) {
+    if (resolvedTargetIds.has(entry.target_id)) continue;
     const termWords = toWords(normalize(entry.term));
     if (termWords.length > matchedLength && occursAsWholeWordRun(spanWords, termWords)) return entry;
   }
@@ -535,7 +559,7 @@ export function findVetoedOffMenuTerm(
   });
   const primary = longestMatch(spanWords, itemNameEntries);
   const base = primary.targetIds.size > 0 ? primary : longestMatch(spanWords, lexicon);
-  return findLongerInactiveTerm(spanWords, inactiveLexicon, base.length);
+  return findLongerInactiveTerm(spanWords, inactiveLexicon, base.length, base.targetIds);
 }
 
 // 2026-09-19 PO dispatch (rule 1, real conv 087abb8d, live $107.43-vs-~$85
@@ -623,7 +647,7 @@ export function resolveItem(
   // that case. Checked once, before any downstream branch (resolved,
   // ambiguous, or the fuzzy fallback below) gets a chance to guess with the
   // shorter match instead.
-  if (findLongerInactiveTerm(spanWords, inactiveLexicon, base.length)) {
+  if (findLongerInactiveTerm(spanWords, inactiveLexicon, base.length, base.targetIds)) {
     return { kind: "unresolved" };
   }
 
