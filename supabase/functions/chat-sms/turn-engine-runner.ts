@@ -1747,6 +1747,13 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
               // primary question this turn — see decide()'s own
               // treatCartMatchAsRestatement doc.
               true,
+              // 2026-09-20 PO dispatch (narrowing bleed, S1's sibling, real
+              // conv 090a3864 #16 money bug): same value S1 already computed
+              // just above to scope extractRemainderAfterAnswer — see
+              // decide()'s own slotAnswerConsumedText doc for why the
+              // remainder call also needs it directly, not just the
+              // remainder TEXT already being scoped past it.
+              slotAnswerConsumedText,
             );
             workingCart.splice(0, workingCart.length, ...remainderDecide.cart);
             declines = [...declines, ...remainderDecide.declines];

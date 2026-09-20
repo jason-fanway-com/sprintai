@@ -4897,6 +4897,17 @@ export function decide(
   // unprompted message — see this file's own regression test proving a
   // genuine fresh PROPOSE turn is completely unaffected (defaults false).
   treatCartMatchAsRestatement = false,
+  // 2026-09-20 PO dispatch (narrowing bleed, S1's sibling — real conv
+  // 090a3864 #16 money bug): the exact display text that JUST answered a
+  // still-OPEN ask-plan slot on an EXISTING cart line this same turn — set
+  // ONLY by the runner's remainder-only decide() call, mirroring
+  // findSlotAnswerConsumedText's own value (turn-engine-runner.ts). Null
+  // everywhere else (every pre-existing call site/test: unchanged
+  // behavior). See the "ambiguous" add-resolution branch below for why this
+  // has to be checked THERE, before narrowAmbiguousCandidatesBySpanSize —
+  // spanIsWholeChoiceOfAnyAdd only ever knows about THIS turn's own fresh
+  // adds, never an existing cart line's already-open slot.
+  slotAnswerConsumedText: string | null = null,
 ): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
@@ -5093,7 +5104,34 @@ export function decide(
       const isReplacementDuplicate = replacementPendingCandidateIds !== null &&
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
-      if (!isReplacementDuplicate) {
+      // 2026-09-20 PO dispatch (narrowing bleed, S1's sibling — real conv
+      // 090a3864 #16 money bug): S1 (turn-engine-runner.ts,
+      // findSlotAnswerConsumedText) stops a slot's own answer text from
+      // being handed to a fresh PROPOSE call as new-item text in the first
+      // place; this is the same rule applied to what that call can still
+      // hand BACK — a span that IS the slot answer's own text
+      // (slotAnswerConsumedText) or that whole-span-matches a slot/modifier
+      // choice of one of THIS turn's own earlier adds
+      // (spanIsWholeChoiceOfAnyAdd, its existing post-loop use further
+      // below) must never be resolved as a second, unrelated item here.
+      // Checked BEFORE narrowAmbiguousCandidatesBySpanSize deliberately: a
+      // real live repro ("2 small buffalo chicken pizzas with ranch
+      // dressing") had "ranch" ambiguous among 5 real menu items, but ALSO
+      // the Buffalo Chicken pizza's own about-to-be-asked dressing choice —
+      // narrowAmbiguousCandidatesBySpanSize doesn't know that and picked up
+      // the UNRELATED word "small" (describing the pizza's own size,
+      // sitting elsewhere in the same message) to auto-resolve the tie,
+      // silently adding a phantom $12.95 "Chicken Bacon Ranch - Small"
+      // pizza nobody ordered — spanIsWholeChoiceOfAnyAdd's own filter
+      // further below only ever runs AFTER an add already committed here,
+      // too late to stop it. Dropped silently, same "words stay in
+      // customerMessage, nothing pushed to any bucket" contract as a
+      // guard-dropped span above.
+      const isSlotAnswerBleed =
+        (!!slotAnswerConsumedText &&
+          (add.item_span ?? "").trim().toLowerCase() === slotAnswerConsumedText.trim().toLowerCase()) ||
+        spanIsWholeChoiceOfAnyAdd((add.item_span ?? "").trim(), resolvedAdds, menuById);
+      if (!isReplacementDuplicate && !isSlotAnswerBleed) {
         // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
         // header above): a size stated right next to THIS item's own name
         // closes the tie here, before a "which one?" question ever opens —
