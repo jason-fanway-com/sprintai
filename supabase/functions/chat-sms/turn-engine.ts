@@ -3253,6 +3253,109 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
   return adds.filter(add => !isReallyAModifierOfAnother(add));
 }
 
+// PO dispatch 2026-09-19 (Gyro Meat phantom item, live money bug, conv
+// s2-v557): "a small Margherita pizza with gyro meat and bacon" — Vito's
+// own Margherita has "Gyro Meat" as one of its own Toppings choices (like
+// every pizza topping, compiled as a Whole/Half placement pair — see
+// PLACEMENT_SUFFIX_RE below), but the model sometimes proposes it as a
+// SECOND, wholly separate add that resolves to the real "Gyro Pizza" menu
+// item, with both toppings already filled in by the model on BOTH lines —
+// the customer was billed for a Small Margherita AND a Small Gyro Pizza,
+// nearly double one pizza's worth of food.
+//
+// dropAddsThatAreReallyModifiersOfAnotherAdd above already encodes the
+// right general rule ("a phrase that matches an option CHOICE of an item
+// named in the SAME message is a modifier, consumed there — it never
+// reaches the cart as its own item line"), but its own matchChoiceAsWholeSpan
+// check requires the span's token set to equal a choice's FULL display
+// token set exactly — a bare "gyro meat" mention never contains the
+// placement suffix ("Gyro Meat (Whole pizza)"), so it never matched and the
+// phantom add survived. Same gap spanMatchesPlacementCoreAsWholeSpan
+// (pepperoni wart a, below) already closed for the ambiguous/unresolved-span
+// path — extended here for a SECOND, fully-resolved add naming its own real
+// item.
+//
+// Unlike the plain drop above (which leaves the customer's own words sitting
+// in customerMessage for the survivor's own 00-BF modifier floor to pick up
+// on its own), this merge attaches the matched choice to the survivor's
+// `choices` DIRECTLY: 00-BF only ever runs "when the model asserted NOTHING
+// for this add" (see its own comment below), and the real incident's
+// survivor already carries its OTHER topping (Bacon) from the model —
+// relying on 00-BF here would silently drop the Gyro Meat charge instead of
+// the Gyro Pizza line, trading one money bug for another. Runs on
+// modifierDroppedAdds (the plain-drop pass's own output), so it only ever
+// sees phantoms that pass ALREADY survived that pass — no double-processing,
+// no interaction with that function's own existing tests.
+//
+// Tries both the phantom's own item_span (the customer's literal words) and
+// its resolved item's own display name/name, and checks every OTHER add in
+// the batch as a potential host — "consider both orderings" per the PO's own
+// dispatch: whichever add's span turns out to name a real topping CHOICE of
+// some OTHER add in the same turn is the one that merges away, regardless of
+// which one PROPOSE happened to list first.
+function mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): ResolvedAdd[] {
+  if (adds.length < 2) return adds;
+  const working = adds.map(a => ({ ...a, choices: [...(a.choices ?? [])] }));
+  const removeIdx = new Set<number>();
+  for (let i = 0; i < working.length; i++) {
+    const candidateMenuItem = menuById.get(working[i].menu_item_id);
+    const candidateTexts = [
+      (working[i].item_span ?? "").trim(),
+      candidateMenuItem?.ask_plan?.display_name ?? candidateMenuItem?.name ?? "",
+    ].filter(Boolean);
+    if (candidateTexts.length === 0) continue;
+    for (let j = 0; j < working.length; j++) {
+      if (i === j || removeIdx.has(j)) continue;
+      const otherMenuItem = menuById.get(working[j].menu_item_id);
+      if (!otherMenuItem?.ask_plan) continue;
+      let matched: { group_id: string; choice_id: string } | null = null;
+      for (const step of otherMenuItem.ask_plan.steps) {
+        if (step.kind !== "modifier") continue;
+        for (const text of candidateTexts) {
+          const choiceId = matchPlacementCoreChoiceId(step.choices, text);
+          if (choiceId) { matched = { group_id: step.group_id, choice_id: choiceId }; break; }
+        }
+        if (matched) break;
+      }
+      if (matched) {
+        const m = matched;
+        const already = working[j].choices.some(c => c.group_id === m.group_id && c.choice_id === m.choice_id);
+        if (!already) working[j].choices.push(m);
+        removeIdx.add(i);
+        break;
+      }
+    }
+  }
+  return working.filter((_, idx) => !removeIdx.has(idx));
+}
+
+// Same whole/half selection rule as recoverPlacementHits below (the ABSENCE
+// of the literal word "half" means Whole — see PLACEMENT_SUFFIX_RE's own
+// header), but matched against a fully-resolved add's own item_span/name
+// rather than free customer text, and returning the specific choice id so
+// the caller can attach it directly instead of just a boolean.
+function matchPlacementCoreChoiceId(
+  choices: Array<{ id: string; display: string }>,
+  span: string,
+): string | null {
+  const spanTokens = new Set([...modifierFloorTokens(span)].filter(t => !SPAN_PLACEMENT_WORDS_RE.test(t)));
+  if (spanTokens.size === 0) return null;
+  const hasHalfWord = modifierFloorTokens(span).has("half");
+  const { placementGroups } = groupChoicesByPlacement(choices);
+  for (const g of placementGroups) {
+    const coreTokens = modifierFloorTokens(g.core);
+    if (coreTokens.size === 0) continue;
+    if (coreTokens.size === spanTokens.size && [...coreTokens].every(t => spanTokens.has(t))) {
+      const chosen = hasHalfWord ? g.half : g.whole;
+      return chosen ? chosen.id : null;
+    }
+  }
+  return null;
+}
+
 // 2026-09-18 PO dispatch (add-on rule edge, real conv 9fc0fad9): "I want an
 // Italian wrap with chicken, please. Wheat tortilla." split into two adds,
 // "Italian" and "chicken" — "chicken" became its own $12.49 line instead of
@@ -4645,8 +4748,13 @@ export function decide(
   // is really a modifier choice of the OTHER item in the same message,
   // before either ever reaches grouping.
   const modifierDroppedAdds = dropAddsThatAreReallyModifiersOfAnotherAdd(correctedAdds, menuById);
+  // See mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd's own header (Gyro
+  // Meat phantom item, conv s2-v557): closes the placement-suffix gap the
+  // plain drop above can't — a topping choice named as its own resolved add
+  // merges its choice directly onto the real host add instead of vanishing.
+  const placementMergedAdds = mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(modifierDroppedAdds, menuById);
   const { survivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
-    modifierDroppedAdds,
+    placementMergedAdds,
     disambiguationCandidateIds,
     menuById,
   );
