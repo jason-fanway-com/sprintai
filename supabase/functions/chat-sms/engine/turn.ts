@@ -66,6 +66,21 @@ export function turn(input: TurnInput): TurnOutput {
   };
   const open = form0.open;
   const focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined;
+  // a rejected add whose item word was invented ("pizza") but whose option words are the customer's
+  // own answers to the open line question keeps those answers
+  if (focus) {
+    for (const r of rec.rejected) {
+      if (r.move.kind !== "add_line") continue;
+      const mw = words(input.message);
+      for (const o of r.move.option_spans) {
+        const ow = words(o);
+        if (ow.length && ow.every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu)) {
+          rec.accepted.push({ kind: "answer_option", value_span: o });
+          ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } });
+        }
+      }
+    }
+  }
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
     if (focus && m.kind === "add_line") {

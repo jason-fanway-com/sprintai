@@ -610,3 +610,17 @@ Deno.test("Jason's fries: a non-narrowing answer lists what's left, 'options' li
   assertEquals(o.form.lines[0].notes, []);
   assert(!o.reply.includes("Noted"));
 });
+
+Deno.test("the model answers a kind question with an invented item word: the verbatim kinds still split the line", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "Four large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  o = say(o.form, "One plain one pepperoni one Hawaii one meat lovers", [
+    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["plain"] },
+    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["pepperoni"] },
+    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["Hawaii"] },
+    { kind: "add_line", item_span: "pizza", qty: 1, option_spans: ["meat lovers"] },
+  ]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesePizzaL, 1], [IDS.pepPizzaL, 1], ["hawL", 1], ["mlL", 1]]);
+  assertEquals(o.form.omissions, []);
+});
