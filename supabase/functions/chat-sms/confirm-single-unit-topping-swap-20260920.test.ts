@@ -43,22 +43,6 @@ const WHITE_LARGE_ID = "e0c4018f-ae3f-4898-a511-cde01ebe4014";
 const GYRO_TOPPINGS_GROUP_ID = "29bd83e0-a3e3-4fed-a075-4b4f78368173";
 const SAUSAGE_CHOICE_ID = "7e888e14-40df-4477-89cf-7306d3d5028e";
 const GRILLED_CHICKEN_CHOICE_ID = "42869158-63da-406b-a2c7-3e9f223eb250";
-// 2026-09-20 PO dispatch (money bug, real live conv 70bc7d0b, v575): the two
-// Half-pizza ids below were MISSING from this fixture's original version —
-// every real topping on this item compiles as a Whole/Half PAIR (confirmed
-// live via the full 236-item Vito's menu pull), but this file only ever
-// declared the Whole variant. That gap is exactly why this fixture's own
-// tests passed while the identical scenario wiped a real customer's cart:
-// "grilled chicken" (no placement word) stem-matched ONLY ONE choice here,
-// never revealing that it matches BOTH "Grilled Chicken (Whole pizza)" AND
-// "Grilled Chicken (Half pizza)" against the real menu — the genuine
-// ambiguity applySingleUnitToppingSwap's newCandidates check hit, returned
-// null for, and fell through to applyNamedLineRemovals for. See
-// applySingleUnitToppingSwap's own header for the fix (defaults to Whole
-// when the customer's phrase never says "half", same convention
-// recoverPlacementHits already uses for a fresh add).
-const SAUSAGE_HALF_CHOICE_ID = "ab195ee9-b43a-4c31-ac30-89737130bcb9";
-const GRILLED_CHICKEN_HALF_CHOICE_ID = "85c7dd13-9921-4daf-9478-d6d735d76694";
 
 const MENU: TurnEngineMenuItem[] = [
   {
@@ -72,9 +56,7 @@ const MENU: TurnEngineMenuItem[] = [
           ask_mode: "on_request", prompt_template: "",
           choices: [
             { id: SAUSAGE_CHOICE_ID, display: "Sausage (Whole pizza)", price_delta_cents: 450 },
-            { id: SAUSAGE_HALF_CHOICE_ID, display: "Sausage (Half pizza)", price_delta_cents: 350 },
             { id: GRILLED_CHICKEN_CHOICE_ID, display: "Grilled Chicken (Whole pizza)", price_delta_cents: 500 },
-            { id: GRILLED_CHICKEN_HALF_CHOICE_ID, display: "Grilled Chicken (Half pizza)", price_delta_cents: 400 },
           ],
         },
       ],
