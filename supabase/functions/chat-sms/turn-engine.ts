@@ -3855,6 +3855,134 @@ function spanIsWholeChoiceOfAnyAdd(
   return false;
 }
 
+// Freeze-queue item W2 follow-up (2026-09-19 night, PO dispatch, live conv
+// 6de8bd13, real Vito's #4): "Italian hoagie with shrimp and blackened
+// salmon on wheat bread" -- PROPOSE split this into TWO separate `adds`,
+// one for "Italian hoagie" and a SECOND, independent one whose own
+// item_span was "shrimp and blackened salmon on wheat bread" (real
+// error_log capture, propose_success row 25af74fb). resolveItem ties that
+// second span across Vito's two real active "shrimp"-lexicon items
+// (Southwest Shrimp / Boom Boom Shrimp -- the exact wrap/appetizer
+// disambiguation the live report describes), so it never even reaches
+// decide()'s add-resolution loop as a modifier candidate -- it opens as its
+// own phantom ambiguous ITEM. spanIsWholeChoiceOfAnyAdd above already
+// exists to catch exactly this FAMILY of bug (a span that's really naming a
+// sibling add's own choice, not a separate item) but only when the span IS,
+// in full, ONE choice's own name -- a compound span naming SEVERAL choices
+// at once (Shrimp + Blackened Salmon, both real Add-ons on this exact
+// Italian Hoagie, confirmed live against the real menu_items row) never
+// equals any single choice's token set and fell straight through.
+//
+// This generalizes the SAME rule (dropAddsThatAreReallyModifiersOfAnother-
+// Add's own header: "a phrase that matches an option CHOICE of an item
+// named in the SAME message is a modifier, consumed there") from one choice
+// to several: repeatedly peels the LARGEST remaining real choice (any
+// modifier/slot step of ONE candidate sibling item, its own group noun
+// stripped exactly as matchChoiceAsWholeSpan already does for "wheat
+// bread" -> "Wheat") off the span's own token pool. The span is fully
+// accounted for only when every one of its tokens -- barring a small fixed
+// set of pure connectives ("and"/"with"/"on"/"in"/"a"/"an"/"the"/"&"/"+"/
+// "plus"/"also"/"of"/"for") -- is eventually claimed; a leftover token means
+// some part of the span names something that is NOT a real choice of that
+// item (a genuine second item, or a genuine hallucination), so nothing here
+// fires and the span is left exactly as before.
+//
+// Unlike spanIsWholeChoiceOfAnyAdd (which drops its match silently and
+// trusts the sibling's own 00-BF modifier floor, below, to re-find a SINGLE
+// choice on its own), the plural floor's own tie-guard (recoverAsserted-
+// ChoicesFromText's plainHits.length===1 contract, preserved deliberately
+// for the genuinely-ambiguous "sausage and onions" shape -- see that
+// function's own header) would otherwise still drop BOTH real add-ons here,
+// silently, a second time. A full decomposition with zero leftover is a
+// stronger, more specific proof of non-ambiguity than that per-choice
+// subset check can offer on its own, so the caller attaches the matched
+// MODIFIER choices directly onto the sibling add's own `choices` -- SLOT
+// choices (the bread step) are matched too, so their tokens don't count as
+// leftover, but deliberately never attached: 00-BF's own "slots are ASKED,
+// never inferred" rule (unchanged, see that call site) still applies, so
+// the bread question is still asked normally.
+const SPAN_DECOMPOSE_CONNECTIVE_WORDS = new Set([
+  "and", "with", "on", "in", "the", "a", "an", "plus", "also", "for", "of", "&",
+]);
+
+function decomposeSpanIntoChoicesOfMenuItem(
+  span: string,
+  menuItem: TurnEngineMenuItem,
+): Array<{ group_id: string; choice_id: string }> | null {
+  if (!menuItem.ask_plan) return null;
+  const remaining = new Set(
+    [...modifierFloorTokens(span)].filter(t => !SPAN_DECOMPOSE_CONNECTIVE_WORDS.has(t)),
+  );
+  if (remaining.size === 0) return null;
+  // `groupNounTokens`: kept separately from `tokens` (matchChoiceAsWholeSpan's
+  // own "wheat bread" -> "Wheat" trick, generalized) — the customer's own
+  // mention of the group's generic noun ("bread") must count as accounted
+  // for once a choice from THAT group is claimed, or it survives in
+  // `remaining` forever as a false leftover and the whole span wrongly
+  // fails to decompose even though every real choice was matched.
+  const candidates: Array<{ groupId: string; choiceId: string; tokens: Set<string>; groupNounTokens: Set<string>; kind: "modifier" | "slot" }> = [];
+  for (const step of menuItem.ask_plan.steps) {
+    if (step.kind !== "modifier" && step.kind !== "slot") continue;
+    const groupNounTokens = modifierFloorTokens(step.prompt_template.split(".")[0]);
+    for (const choice of step.choices) {
+      const tokens = new Set(
+        [...modifierFloorTokens(choice.display)].filter(t => !groupNounTokens.has(t)),
+      );
+      if (tokens.size > 0) candidates.push({ groupId: step.group_id, choiceId: choice.id, tokens, groupNounTokens, kind: step.kind });
+    }
+  }
+  if (candidates.length === 0) return null;
+  const picked: typeof candidates = [];
+  let progress = true;
+  while (progress && remaining.size > 0) {
+    progress = false;
+    const available = candidates.filter(c => !picked.includes(c) && [...c.tokens].every(t => remaining.has(t)));
+    if (available.length === 0) break;
+    const maxSize = Math.max(...available.map(c => c.tokens.size));
+    const top = available.filter(c => c.tokens.size === maxSize);
+    // Two DIFFERENT top-tier candidates that are disjoint (name no token in
+    // common) can both be claimed safely in the same pass -- neither steals
+    // the other's evidence. Two that overlap are a genuine, unresolved tie
+    // (two real choices competing for the same word) -- bail rather than
+    // guess, same "never guess" discipline as matchChoiceAsWholeSpan itself.
+    const disjoint = top.every((c, i) => top.every((o, j) => i === j || [...c.tokens].every(t => !o.tokens.has(t))));
+    if (!disjoint) return null;
+    for (const c of top) {
+      for (const t of c.tokens) remaining.delete(t);
+      for (const t of c.groupNounTokens) remaining.delete(t);
+      picked.push(c);
+    }
+    progress = true;
+  }
+  if (remaining.size > 0) return null; // a leftover token — not a full decomposition, leave the span alone
+  const modifierPicks = picked.filter(c => c.kind === "modifier");
+  if (modifierPicks.length === 0) return null; // span decomposed entirely into SLOT answers — nothing to attach, ask normally
+  return modifierPicks.map(c => ({ group_id: c.groupId, choice_id: c.choiceId }));
+}
+
+// Tries every candidate add in turn; a span that fully decomposes against
+// MORE than one of them is genuinely ambiguous (which item's add-ons did
+// the customer mean?) and is left alone, same "never guess" discipline as
+// everywhere else in this file.
+function spanFoldTargetForAmbiguousOrUnresolvedSpan(
+  span: string,
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): { add: ResolvedAdd; pairs: Array<{ group_id: string; choice_id: string }> } | null {
+  const trimmed = span.trim();
+  if (!trimmed) return null;
+  let found: { add: ResolvedAdd; pairs: Array<{ group_id: string; choice_id: string }> } | null = null;
+  for (const add of adds) {
+    const menuItem = menuById.get(add.menu_item_id);
+    if (!menuItem) continue;
+    const pairs = decomposeSpanIntoChoicesOfMenuItem(trimmed, menuItem);
+    if (!pairs) continue;
+    if (found) return null;
+    found = { add, pairs };
+  }
+  return found;
+}
+
 export interface Decline {
   reason: string;
 }
@@ -5048,13 +5176,29 @@ export function decide(
   // Round 2, items 1/2 (2026-09-19, live sim): before either bucket becomes
   // a decline or reopens a disambiguation, drop any span that's really just
   // naming a slot/modifier choice of one of THIS turn's own resolved adds —
-  // see spanIsWholeChoiceOfAnyAdd's own header.
-  const genuinelyUnresolvedSpansFiltered = genuinelyUnresolvedSpans.filter(
-    span => !spanIsWholeChoiceOfAnyAdd(span, correctedAdds, menuById),
-  );
-  const ambiguousSpansFiltered = ambiguousSpans.filter(
-    a => !spanIsWholeChoiceOfAnyAdd(a.spanText, correctedAdds, menuById),
-  );
+  // see spanIsWholeChoiceOfAnyAdd's own header. W2 follow-up (same night,
+  // live conv 6de8bd13): a span naming SEVERAL of a sibling add's own
+  // choices at once (never caught by spanIsWholeChoiceOfAnyAdd's single-
+  // choice check) is also dropped here — and, unlike a single-choice match,
+  // its matched MODIFIER choices are attached directly onto that sibling
+  // add's own `choices` (mutates the shared ResolvedAdd object, so every
+  // later stage — grouping, 00-BF, pricing — sees it) since the plural
+  // modifier floor's own tie-guard would otherwise still drop them a second
+  // time — see spanFoldTargetForAmbiguousOrUnresolvedSpan's own header.
+  const genuinelyUnresolvedSpansFiltered: string[] = [];
+  for (const span of genuinelyUnresolvedSpans) {
+    if (spanIsWholeChoiceOfAnyAdd(span, correctedAdds, menuById)) continue;
+    const folded = spanFoldTargetForAmbiguousOrUnresolvedSpan(span, correctedAdds, menuById);
+    if (folded) { folded.add.choices = [...folded.add.choices, ...folded.pairs]; continue; }
+    genuinelyUnresolvedSpansFiltered.push(span);
+  }
+  const ambiguousSpansFiltered: typeof ambiguousSpans = [];
+  for (const a of ambiguousSpans) {
+    if (spanIsWholeChoiceOfAnyAdd(a.spanText, correctedAdds, menuById)) continue;
+    const folded = spanFoldTargetForAmbiguousOrUnresolvedSpan(a.spanText, correctedAdds, menuById);
+    if (folded) { folded.add.choices = [...folded.add.choices, ...folded.pairs]; continue; }
+    ambiguousSpansFiltered.push(a);
+  }
 
   // ADDENDUM A: exactly the pre-existing 035a2bd3 wording, unchanged, for
   // the single-span case; two or more combine into ONE line rather than
