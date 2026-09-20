@@ -1685,6 +1685,26 @@ function messageNamesItemOutsideCandidates(
 // aae67b80/322e19ca genuine-correction shape (always exactly one
 // alternative) completely unaffected — see the "genuine correction is
 // UNAFFECTED" regression test.
+// Restored after the merge with fix/whole-term-match-and-rejections-20260919:
+// that branch removed this function believing nothing still called it, but
+// messageNamesMultipleItemsOutsideCandidates below (merged in from main,
+// cb37bda9) still does. A typo-correction pass, not a general fuzzy search —
+// same tight, narrow tolerance as itemSpanNamedInMessage's own ADDENDUM B
+// fix (5+ letter words only, fuzzyWordMatch's graduated distance).
+const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
+  const lexiconWords = new Set<string>();
+  for (const entry of lexicon) {
+    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
+  }
+  if (lexiconWords.size === 0) return text;
+  return text.replace(/[a-zA-Z]+/g, word => {
+    const bare = word.toLowerCase();
+    if (bare.length < 5 || lexiconWords.has(bare)) return word;
+    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
+    return word;
+  });
+};
+
 function messageNamesMultipleItemsOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
