@@ -332,3 +332,15 @@ scripted customer misreading the compliance footer, or a bagel ordered from a pi
 real openers landed a payment link with zero invented lines and zero money mismatches; the two that
 did not were a bagel ordered from a pizza shop, handled correctly. Remaining: Jason's own phone test,
 the bagel shop's two menu-data gaps, and lifting the crew freeze once the branch merges to main.
+
+**15:40, after Jason's two phone tests.** Both found defects the 40/40 harness had never asked for.
+Test one: "Four large pizzas" then "One plain one pepperoni one Hawaii one meat lovers" billed 4 × pepperoni.
+Root cause: the form had no operation for one line of quantity N resolving to N kinds. Added `split_line`
+as a reducer move. Test two: "Plain fries" narrowed ten fries kinds without showing it, so the same
+question repeated; "what are the options?" answered with categories; the answer became a kitchen note.
+Root causes: kind answers shared storage with option words, and re-asks did not enumerate. Kind answers
+are now their own field, spent after narrowing; every re-ask lists what is left; an options request
+during a question lists that question's choices. Both conversations are permanent live scenarios
+(`fourkinds`, `fries`). Deploy 70868d52: Vito's 30/30, Not Just Bagels 10/10, Zio's 10/10, sweep 40/42
+(the two are bagels at a pizza shop). Regex count over customer text outside the two allowed files: 0.
+Pure core: 1,9xx of the 2,000-line budget; the next day's work should be simplification, not addition.
