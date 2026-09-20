@@ -162,7 +162,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, findVetoedOffMenuTerm, findOffMenuCategoryMismatch, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, findOffMenuCategoryMismatch, findCategoryFilterDiscardedRealItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -4768,6 +4768,27 @@ export interface Decline {
   reason: string;
 }
 
+// 2026-09-20 PO dispatch (off-menu category-mismatch, REVERSE direction):
+// shared by both call sites that can hit findCategoryFilterDiscardedRealItem
+// -- the top-level proposal.adds loop below, and the "change X to Y instead"
+// replacement branch (Y is resolved the identical way, via the same
+// resolveItem call) -- so the decline wording can never drift between them.
+function categoryFilterDiscardDecline(
+  span: string,
+  lexicon: LexiconTerm[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): Decline | null {
+  const discard = findCategoryFilterDiscardedRealItem(span, lexicon);
+  if (!discard) return null;
+  const realItem = menuById.get(discard.realItemMenuId);
+  const realItemName = realItem?.ask_plan?.display_name ?? realItem?.name ?? "that";
+  return {
+    reason: realItem
+      ? `We don't have ${realItemName} as a ${discard.headNoun} — it's on our ${discard.realItemCategory} menu, want that instead?`
+      : `We don't have that as ${discard.headNoun} — sorry about that!`,
+  };
+}
+
 export interface DecideResult {
   cart: TurnEngineCartLine[];
   declines: Decline[];
@@ -6048,6 +6069,19 @@ export function decide(
             spanText: replacementIntent.yPhrase,
             replacementSourceLineKey: targetLine.line_key,
           });
+        } else {
+          // 2026-09-20 PO dispatch (off-menu category-mismatch, REVERSE
+          // direction, real live repro this file's own line ~5966 comment
+          // documents: "change that pizza to a small BBQ Chicken pizza
+          // instead"): before this, a plain "unresolved" Y here held X and
+          // pushed NO decline at all -- a silent turn, the customer's real
+          // message just disappearing. resolveItem's own veto
+          // (categoryFilterDiscardedRealItemId, resolve-item.ts) already
+          // stopped this from silently tying two unrelated pizzas instead;
+          // this names the real item that DOES exist, by name and its real
+          // category, the same wording as the add-path veto below.
+          const discardDecline = categoryFilterDiscardDecline(replacementIntent.yPhrase, lexicon, menuById);
+          if (discardDecline) declines.push(discardDecline);
         }
       }
     }
@@ -6295,6 +6329,24 @@ export function decide(
             ? `We don't have ${categoryMismatch.headNoun} like "${(add.item_span ?? "").trim()}" — real ${categoryMismatch.headNoun} options: ${alternativeNames.join(", ")}.`
             : `We don't have that as ${categoryMismatch.headNoun} — sorry about that!`,
         });
+        continue;
+      }
+      // 2026-09-20 PO dispatch (off-menu category-mismatch, REVERSE
+      // direction, real PO probe "can I change that to a small BBQ Chicken
+      // pizza instead?"): findCategoryFilterDiscardedRealItem's own veto
+      // (resolve-item.ts, categoryFilterDiscardedRealItemId) already stopped
+      // resolveItem from silently opening a which-one question between two
+      // UNRELATED items (Buffalo Chicken / Thai Sweet Chili Chicken pizzas)
+      // once the customer's own real, distinguishing word ("bbq") turned out
+      // to name a real item that just isn't in the category word's own
+      // family ("pizza") at all — BBQ Chicken exists, only as a Flatbread.
+      // Same "bare unresolved has no WHY" gap the fries fix above already
+      // closes, mirrored: name the real item that DOES exist, by name and by
+      // its real category, instead of a which-one list of items nobody
+      // asked for.
+      const categoryFilterDiscardDeclineForAdd = categoryFilterDiscardDecline(add.item_span ?? "", lexicon, menuById);
+      if (categoryFilterDiscardDeclineForAdd) {
+        declines.push(categoryFilterDiscardDeclineForAdd);
         continue;
       }
       // 00-AX: NAME the span. The customer's own words are right here in
