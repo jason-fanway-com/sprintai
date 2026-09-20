@@ -2394,3 +2394,145 @@ Deno.test("resolveItem (acceptance-level proof): 'large pepperoni pizza' still r
   const result = resolveItem("large pepperoni pizza", fullLexicon);
   assertEquals(result, { kind: "resolved", menu_item_id: expectedId });
 });
+
+// ---- Quesadilla fix: family-widening hazard detection + category-noun single-claimant widen
+// (2026-09-19 PO dispatch — customer #20, "chicken quesadilla", lost in 3 of 4 fifty-runs.
+// Root cause (a): hasFamilyWideningHazard detects that "chicken" ties 11 ways at runtime via
+// widenIntoSizedFamily even when it has 1 literal-string owner; invariant 4 now flags the gap;
+// deriveCategoryQualifiedFallbackTerms adds "chicken quesadilla".
+// Root cause (b): deriveCategoryNounSingleClaimantWidenTerms widens the sole "quesadilla"
+// claim from Veggie Quesadilla to all 5 quesadilla siblings.)
+
+function buildQuesadillaFixture() {
+  // 5 orderable Quesadilla items, no size_label. Only veggieQ's display name contains
+  // "Quesadilla", so only it derives "quesadilla" as a surface form before the new passes.
+  const chickenQ = item({ display_name: "Chicken", category: "Quesadillas" });
+  const steakQ = item({ display_name: "Steak", category: "Quesadillas" });
+  const veggieQ = item({ display_name: "Veggie Quesadilla", category: "Quesadillas" });
+  const chickenFajitaQ = item({ display_name: "Chicken Fajita", category: "Quesadillas" });
+  const southwestQ = item({ display_name: "Southwest Chicken", category: "Quesadillas" });
+  // Sized Chicken Pizza items (no product_key, size-specific names for unique stated terms).
+  // "Chicken Pizza Small" → Rule 1 term "chicken pizza small" → surface form strip of "pizza"
+  // and "small" (FAMILY_SIZE_WORD_TOKEN) → familyCoreWords = ["chicken"] — this is the exact
+  // family-widening hazard for chickenQ's own "chicken" term.
+  const chickenPizzaSm = item({ display_name: "Chicken Pizza Small", category: "Pizza", size_label: 'Small (10")' });
+  const chickenPizzaLg = item({ display_name: "Chicken Pizza Large", category: "Pizza", size_label: 'Large (16")' });
+  const cheesePizzaSm = item({ display_name: "Cheese Pizza Small", category: "Pizza", size_label: 'Small (10")' });
+  const cheesePizzaLg = item({ display_name: "Cheese Pizza Large", category: "Pizza", size_label: 'Large (16")' });
+
+  const allItems = [chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ,
+    chickenPizzaSm, chickenPizzaLg, cheesePizzaSm, cheesePizzaLg];
+  const result = compileMenu(allItems, [], "t", false);
+  const lexicon: LexiconTerm[] = result.items.flatMap(c => c.lexicon_terms);
+  const compiledMap = new Map(result.items.map(c => [c.item_id, c]));
+  return { chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ,
+    chickenPizzaSm, chickenPizzaLg, cheesePizzaSm, cheesePizzaLg,
+    result, lexicon, compiledMap, allItems };
+}
+
+// Acceptance point 1: "chicken quesadilla" resolves uniquely to the Chicken item.
+Deno.test("quesadilla fix (AP 1): resolveItem('chicken quesadilla') resolves uniquely to the Chicken quesadilla item", () => {
+  const { chickenQ, lexicon } = buildQuesadillaFixture();
+  assertEquals(resolveItem("chicken quesadilla", lexicon), { kind: "resolved", menu_item_id: chickenQ.id });
+});
+
+// Acceptance point 2: "quesadilla" is ambiguous across all 5 items, not silently resolved to Veggie.
+Deno.test("quesadilla fix (AP 2): resolveItem('quesadilla') is ambiguous across exactly 5 quesadilla items", () => {
+  const { chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ, lexicon } = buildQuesadillaFixture();
+  const r = resolveItem("quesadilla", lexicon);
+  assert(r.kind === "ambiguous", `expected ambiguous, got ${JSON.stringify(r)}`);
+  assertEquals(r.candidates.length, 5, `expected 5 candidates, got: ${JSON.stringify(r.candidates)}`);
+  const qIds = new Set([chickenQ.id, steakQ.id, veggieQ.id, chickenFajitaQ.id, southwestQ.id]);
+  for (const id of r.candidates) assert(qIds.has(id), `unexpected candidate id ${id}`);
+});
+
+// Acceptance point 4 (before fix): invariant 4 correctly flags the Chicken item when the new
+// passes are NOT run — "chicken" has exactly 1 literal owner (chickenQ), but hasFamilyWideningHazard
+// is true (the sized Chicken Pizza items' terms reduce to ["chicken"] after stripping "pizza"
+// and size words), so the new invariant 4 logic correctly reports a gap even though the old
+// literal-string-only check would have falsely reported PASS.
+Deno.test("quesadilla fix (AP 4 before): without the fallback pass, invariant 4 correctly flags Chicken item as lacking a genuinely unique term", () => {
+  const chickenQ = item({ display_name: "Chicken", category: "Quesadillas" });
+  const veggieQ = item({ display_name: "Veggie Quesadilla", category: "Quesadillas" });
+  const steakQ = item({ display_name: "Steak", category: "Quesadillas" });
+  const chickenFajitaQ = item({ display_name: "Chicken Fajita", category: "Quesadillas" });
+  const southwestQ = item({ display_name: "Southwest Chicken", category: "Quesadillas" });
+  const chickenPizzaSm = item({ display_name: "Chicken Pizza Small", category: "Pizza", size_label: 'Small (10")' });
+  const chickenPizzaLg = item({ display_name: "Chicken Pizza Large", category: "Pizza", size_label: 'Large (16")' });
+  const allItems = [chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ, chickenPizzaSm, chickenPizzaLg];
+
+  // Manually build the compiled state without the new passes (simulating pre-fix behavior):
+  // compileItem per item, then derive surface forms, but no category-noun widen pass and
+  // no category-qualified fallback pass.
+  const preFixItems = allItems.map(i => compileItem(i, [], "t"));
+  const surfaceForms = deriveLexiconSurfaceForms(preFixItems);
+  const byItem = new Map<string, LexiconTerm[]>();
+  for (const t of surfaceForms) {
+    const list = byItem.get(t.target_id) ?? [];
+    list.push(t);
+    byItem.set(t.target_id, list);
+  }
+  for (const c of preFixItems) {
+    const extra = byItem.get(c.item_id);
+    if (extra) c.lexicon_terms = [...c.lexicon_terms, ...extra];
+  }
+  const preFixMap = new Map(preFixItems.map(c => [c.item_id, c]));
+
+  const inv4 = computeMenuInvariants(allItems, preFixMap, false).find(i => i.invariant === 4)!;
+  assert(!inv4.pass, `invariant 4 SHOULD FAIL before the fallback pass (Chicken has no genuinely unique term), but passed`);
+  assert(inv4.violations.includes(chickenQ.id),
+    `chickenQ must be a violation; got: ${JSON.stringify(inv4.violations)}`);
+});
+
+// Acceptance point 4 (after fix): invariant 4 passes after full compileMenu.
+Deno.test("quesadilla fix (AP 4 after): invariant 4 passes for all items after the new passes run", () => {
+  const { result } = buildQuesadillaFixture();
+  const inv4 = result.invariants.find(i => i.invariant === 4)!;
+  assert(inv4.pass, `invariant 4 should PASS after fix; violations: ${JSON.stringify(inv4.violations)}`);
+});
+
+// Acceptance point 5a: Chicken item gains "chicken quesadilla" from deriveCategoryQualifiedFallbackTerms.
+Deno.test("quesadilla fix (AP 5a): Chicken item gains 'chicken quesadilla' fallback term", () => {
+  const { chickenQ, compiledMap } = buildQuesadillaFixture();
+  const terms = new Set(compiledMap.get(chickenQ.id)!.lexicon_terms
+    .filter(t => t.target_type === "item").map(t => t.term));
+  assert(terms.has("chicken quesadilla"),
+    `chickenQ must have 'chicken quesadilla'; got: ${[...terms].sort()}`);
+});
+
+// Acceptance point 5b: all 4 non-Veggie quesadillas gain "quesadilla" from the single-claimant widen pass.
+Deno.test("quesadilla fix (AP 5b): the 4 non-Veggie quesadilla items gain 'quesadilla' from deriveCategoryNounSingleClaimantWidenTerms", () => {
+  const { steakQ, chickenFajitaQ, southwestQ, chickenQ, compiledMap } = buildQuesadillaFixture();
+  for (const [name, id] of [["chickenQ", chickenQ.id], ["steakQ", steakQ.id],
+    ["chickenFajitaQ", chickenFajitaQ.id], ["southwestQ", southwestQ.id]] as const) {
+    const terms = new Set(compiledMap.get(id)!.lexicon_terms
+      .filter(t => t.target_type === "item").map(t => t.term));
+    assert(terms.has("quesadilla"),
+      `${name} must have 'quesadilla' from the single-claimant widen pass; got: ${[...terms].sort()}`);
+  }
+});
+
+// Acceptance point 6 regression: multi-claimant pizza category-noun ties are not touched.
+// "pizza small" has 2 claimants (cheesePizzaSm + chickenPizzaSm) — the single-claimant widen
+// pass correctly leaves it alone (not a single-claimant case), and the fallback pass does not
+// add degenerate cross-category terms to quesadilla items.
+Deno.test("quesadilla fix (AP 6 regression): multi-claimant 'pizza small' remains ambiguous — existing pizza ties not collapsed", () => {
+  const { cheesePizzaSm, chickenPizzaSm, lexicon } = buildQuesadillaFixture();
+  const r = resolveItem("pizza small", lexicon);
+  assert(r.kind === "ambiguous", `expected ambiguous for 'pizza small', got ${JSON.stringify(r)}`);
+  assert(r.candidates.includes(cheesePizzaSm.id), "cheesePizzaSm must be a 'pizza small' candidate");
+  assert(r.candidates.includes(chickenPizzaSm.id), "chickenPizzaSm must be a 'pizza small' candidate");
+});
+
+Deno.test("quesadilla fix (AP 6 regression): no quesadilla item gains a pizza-category term — no cross-category contamination from the new passes", () => {
+  const { chickenQ, steakQ, veggieQ, chickenFajitaQ, southwestQ, compiledMap } = buildQuesadillaFixture();
+  for (const [name, id] of [["chickenQ", chickenQ.id], ["steakQ", steakQ.id],
+    ["veggieQ", veggieQ.id], ["chickenFajitaQ", chickenFajitaQ.id],
+    ["southwestQ", southwestQ.id]] as const) {
+    const pizzaTerms = compiledMap.get(id)!.lexicon_terms
+      .filter(t => t.target_type === "item" && t.term.includes("pizza"))
+      .map(t => t.term);
+    assertEquals(pizzaTerms, [],
+      `${name} must not gain any pizza-category terms from the new passes; got: ${pizzaTerms}`);
+  }
+});
