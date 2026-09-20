@@ -76,7 +76,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   if (CLOSURE.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
   if (!open && NO.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
 
-  if (open?.kind === "line_ref" || (open?.kind === "line_ambiguous" && open.facet === "list")) {
+  if (open?.kind === "line_ref" || open?.kind === "line_ambiguous") {
     const d = DIGIT_RE.exec(n);
     if (d) return [{ kind: "answer_option", value_span: d[1] }];
   }

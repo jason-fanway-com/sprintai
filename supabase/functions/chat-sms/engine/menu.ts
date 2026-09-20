@@ -3,7 +3,7 @@
 // lexicon). Facets are derived from item names here until the compiler emits
 // them as columns; that regex runs over MENU NAMES, never customer text.
 
-import { normalize, words } from "./normalize.ts";
+import { normalize, singular, words } from "./normalize.ts";
 
 export interface MenuChoice { id: string; name: string; delta_cents: number; words: string[] }
 export interface MenuGroup {
@@ -37,7 +37,7 @@ export interface LexiconEntry {
   target_type: "item" | "choice" | "category" | string;
   target_id: string;
 }
-export interface IndexedTerm { words: string[]; target_id: string; target_type: string }
+export interface IndexedTerm { words: string[]; wordsSing: string[]; target_id: string; target_type: string }
 
 export interface Menu {
   version: string;
@@ -160,9 +160,9 @@ export function buildMenu(input: {
     if (e.target_type === "item") {
       const it = items.get(e.target_id);
       if (!it || !it.orderable) continue;
-      itemTerms.push({ words: w, target_id: e.target_id, target_type: "item" });
+      itemTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "item" });
     } else if (e.target_type === "category") {
-      categoryTerms.push({ words: w, target_id: e.target_id, target_type: "category" });
+      categoryTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "category" });
     }
   }
   itemTerms.sort((a, b) => b.words.length - a.words.length);
@@ -181,7 +181,7 @@ export function buildMenu(input: {
     const extra: string[] = [`${b.count} ${plural}`, `${b.count} ${unit}`];
     if (b.count === 12) extra.push("dozen", "a dozen", `dozen ${plural}`, `a dozen ${plural}`, `one dozen ${plural}`, "one dozen");
     if (b.count === 6) extra.push("half dozen", "half a dozen", `half dozen ${plural}`, `half a dozen ${plural}`, `six ${plural}`);
-    for (const t of extra) { const w = words(t); if (w.length) itemTerms.push({ words: w, target_id: r.id, target_type: "item" }); }
+    for (const t of extra) { const w = words(t); if (w.length) itemTerms.push({ words: w, wordsSing: w.map(singular), target_id: r.id, target_type: "item" }); }
   }
   itemTerms.sort((a, b) => b.words.length - a.words.length);
 

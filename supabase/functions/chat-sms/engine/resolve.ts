@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, sameWords, singular, splitList, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWords, singular, splitList, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -17,11 +17,12 @@ export type SpanResolution =
 export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const sw = words(span);
   if (sw.length === 0) return { kind: "none" };
+  const swSing = sw.map(singular);
   let bestLen = 0;
   const ids = new Set<string>();
   for (const t of menu.itemTerms) {
     if (bestLen && t.words.length < bestLen) break;
-    if (findWordRun(sw, t.words) < 0) continue;
+    if (findWordRun(sw, t.words) < 0 && findWordRun(swSing, t.wordsSing) < 0) continue;
     if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); }
     ids.add(t.target_id);
   }
@@ -77,8 +78,8 @@ export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" |
 export type ChoiceMatch = { kind: "one"; choice_id: string } | { kind: "many"; choice_ids: string[] } | { kind: "none" };
 
 export function matchChoice(span: string, group: MenuGroup, within?: string[]): ChoiceMatch {
-  const cwords = contentWords(span);
-  const sw = (cwords.length ? cwords : words(span)).map(singular);
+  const ow = optionWords(span);
+  const sw = (ow.length ? ow : words(span)).map(singular);
   if (sw.length === 0) return { kind: "none" };
   const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
@@ -86,7 +87,13 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
   if (exact.length === 1) return { kind: "one", choice_id: exact[0].id };
   const subset = pool.filter((c) => isWordSubset(sw, c.words));
   if (subset.length === 1) return { kind: "one", choice_id: subset[0].id };
-  if (subset.length > 1) return { kind: "many", choice_ids: subset.map((c) => c.id) };
+  if (subset.length > 1) {
+    // "Bacon (Half pizza)" vs "Bacon (Whole pizza)": a topping named without "half" goes on the whole pizza
+    const whole = subset.filter((c) => c.words.includes("whole"));
+    const others = subset.filter((c) => !c.words.includes("whole") && !c.words.includes("half"));
+    if (whole.length === 1 && others.length === 0 && !sw.includes("half")) return { kind: "one", choice_id: whole[0].id };
+    return { kind: "many", choice_ids: subset.map((c) => c.id) };
+  }
   // the span may contain the choice ("with extra cheese please")
   const contained = pool.filter((c) => findWordRun(sw, c.words) >= 0);
   if (contained.length === 1) return { kind: "one", choice_id: contained[0].id };
@@ -221,8 +228,8 @@ export function bindLine(line: Line, menu: Menu): void {
     // narrow with every held span that narrows; keep the rest for options
     const rest: string[] = [];
     for (const h of line.held) {
-      if (h.startsWith("-")) { rest.push(h); continue; }
-      const n = isDigits(h) && line.status.kind === "ambiguous" && line.status.facet === "list"
+      if (h.startsWith("-") || cands.length === 1) { rest.push(h); continue; }
+      const n = isDigits(h) && line.status.kind === "ambiguous"
         ? (cands[parseInt(h, 10) - 1] ? [cands[parseInt(h, 10) - 1]] : [])
         : narrow(cands, h, menu);
       if (n.length >= 1 && n.length < cands.length) cands = n;

@@ -521,3 +521,36 @@ Deno.test("an order with nothing priced never reaches the readback; 'that's it' 
   assert(!o.form.items_done);
   assertStringIncludes(o.reply, "What can I get for you?");
 });
+
+Deno.test("toppings: 'bacon' goes on the whole pizza; 'half anchovies' picks the half variant", () => {
+  const m = buildMenu({ version: "t", items: [...RAW_ITEMS, { id: "cbrM", name: "Chicken Bacon Ranch - Medium (14\")", display_name: "Medium Chicken Bacon Ranch Pizza", category: "Pizza", price_cents: 1999, bot_state: "orderable",
+    ask_plan: { base_price_cents: 1999, steps: [{ group_id: "cbrTop", slot_key: "toppings", kind: "modifier", ask_mode: "on_request", prompt_template: "toppings.ask",
+      choices: [{ id: "ancH", display: "Anchovies (Half pizza)", price_delta_cents: 250 }, { id: "ancW", display: "Anchovies (Whole pizza)", price_delta_cents: 250 }, { id: "bacH", display: "Bacon (Half pizza)", price_delta_cents: 250 }, { id: "bacW", display: "Bacon (Whole pizza)", price_delta_cents: 250 }] }] } }],
+    lexicon: [...RAW_LEXICON, { term: "chicken bacon ranch pizza", target_type: "item", target_id: "cbrM" }, { term: "chicken bacon ranch", target_type: "item", target_id: "cbrM" }], shop: SHOP });
+  let f = newForm("vitos", "test-v1");
+  f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  let o = turn({ form: f, menu: m, message: "a medium chicken bacon ranch pizza with half anchovies and bacon", moves: [{ kind: "add_line", item_span: "chicken bacon ranch pizza", qty: 1, option_spans: ["medium", "half anchovies", "bacon"] }] });
+  assertEquals(o.form.lines[0].modifiers.sort(), ["ancH", "bacW"]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("plurals resolve: 'house salads' finds House Salad; a digit answers any list", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "2 house salads with ranch", [{ kind: "add_line", item_span: "house salads", qty: 2, option_spans: ["ranch"] }]);
+  assertEquals(o.form.lines[0].item_id, IDS.houseSalad);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  o = say(o.form, "cheese", [{ kind: "add_line", item_span: "cheese", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.open?.kind, "line_ambiguous");
+  o = say(o.form, "2");
+  assertEquals(o.form.lines[1].item_id !== null, true);
+});
+
+Deno.test("a note-only answer does not count as progress; the ladder still escalates", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  for (let i = 0; i < 3; i++) o = say(o.form, "purple", [{ kind: "answer_option", value_span: "purple" }]);
+  assertEquals(o.form.lines.length, 0);
+  assertStringIncludes(o.reply, "leave");
+});

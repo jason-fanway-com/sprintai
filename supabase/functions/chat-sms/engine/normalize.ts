@@ -89,3 +89,6 @@ export function impliedCount(text: string): number | null {
   }
   return null;
 }
+
+/** Words of an option phrase: stopwords removed, size and placement words kept ("half anchovies on it" -> half anchovies). */
+export function optionWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w)); }

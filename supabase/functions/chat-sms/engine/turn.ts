@@ -124,7 +124,8 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 6. progress and the next question
   if (form.fulfillment === null && !menu.shop.delivery_enabled) { form.fulfillment = "pickup"; ledger.push({ turn: t, event: "fulfillment_default_pickup" }); }
-  const progress = res.ledger.some(isProgress);
+  const stripNotes = (f: OrderForm) => JSON.stringify({ ...f, lines: f.lines.map((l) => ({ ...l, notes: [], held: [] })), open: null, asked: null, turn_no: 0 });
+  const progress = res.ledger.some(isProgress) && stripNotes(form) !== stripNotes(input.form);
   let q: OpenQuestion | null = next(form, menu, res.refAsk);
   let key = questionKey(q);
   let count = key !== null && key === form.asked.key && !progress ? form.asked.count + 1 : 0;

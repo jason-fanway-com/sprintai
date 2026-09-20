@@ -28,13 +28,15 @@ def answer_for(reply):
     if "did you also want" in r: return "yes"
     if "what size" in r:
         m = re.search(r"\? ([A-Za-z]+),? ", reply.split("What size")[1]); return m.group(1).lower() if m else "large"
-    if "which" in r or "what kind" in r or "how would you like" in r or "options:" in r:
-        # first option offered after the question mark, else a generic answer
-        tail = reply.split("?")[-2] if "?" in reply else reply
-        m = re.findall(r"(?:\?|:|Options:)\s*([A-Z][A-Za-z' ]+?)(?:,| or |\?|\.)", reply)
-        if m: return m[0].strip().lower()
-        m2 = re.findall(r"\n1\) (.+)", reply)
-        if m2: return "1"
+    if re.search(r"\n1\) ", reply): return "1"
+    if "which" in r or "what kind" in r or "how would you like" in r or "options:" in r or " or " in r:
+        # take the last question's option list ("A, B, or C?") and answer with the first option
+        qs = [q for q in re.split(r"\?", reply) if " or " in q]
+        if qs:
+            opts = re.split(r",\s*|\s+or\s+", qs[-1].split(":")[-1])
+            first = re.sub(r"\(.*?\)", "", opts[0]).strip().strip(".").lower()
+            first = re.sub(r"^(options|for example)\s*", "", first).strip()
+            if first: return first
         return "large"
     if "anything else" in r or "what can i get" in r or "what would you like" in r: return "thats it"
     if "how many of each" in r: return "all plain"
