@@ -4074,6 +4074,54 @@ function spanIsWholeChoiceOfAnyAdd(
   return false;
 }
 
+// 2026-09-20 PO dispatch (restated choice value, V1's own sibling one turn
+// later — real live money bug, v569 50-run, real conv 090a3864 #17): V1
+// (slotAnswerConsumedText/spanIsWholeChoiceOfAnyAdd, both just above) closed
+// this SAME defect for a slot open THIS turn or a choice resolved by one of
+// THIS turn's own fresh adds. Neither one has any notion of a choice that
+// was resolved on a PRIOR turn and is already sitting, settled, on an
+// EXISTING cart line — the exact "Anything else?" (open === null) shape:
+// "That's Ranch dressing for both. Thanks!", said the turn right after V1's
+// own fix correctly applied Ranch to both units, ties "ranch" ambiguous
+// among the shop's 5 real Chicken-Bacon-Ranch items same as ever, and with
+// no slot open and no fresh add of its own to check against, nothing here
+// stopped it from opening a brand-new "which one?" question for a choice
+// the customer had already made. PO's own rule: a restated choice value,
+// already set on a cart line, is an acknowledgement, never an item search.
+// Scoped identically to spanIsWholeChoiceOfAnyAdd — the span must be, in
+// full, one already-SELECTED choice's own name (never a superset like
+// "ranch flatbread", which still correctly falls through to a real
+// disambiguation two paragraphs below in decide()'s own regression test) —
+// and, unlike that function, only the choice ids actually present in the
+// line's own ask_plan_selections are ever checked, never every choice the
+// step merely offers: naming a choice the line does NOT currently hold
+// (e.g. "bleu cheese" on a Ranch-resolved line) is a genuine correction
+// attempt, not this defect, and must fall through unchanged.
+function spanIsAlreadyResolvedChoiceOnCart(
+  span: string,
+  cart: TurnEngineCartLine[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): boolean {
+  const trimmed = span.trim();
+  if (!trimmed) return false;
+  for (const line of cart) {
+    const selections = line.ask_plan_selections;
+    if (!selections) continue;
+    const menuItem = menuById.get(line.menu_item_id);
+    if (!menuItem?.ask_plan) continue;
+    for (const step of menuItem.ask_plan.steps) {
+      if (step.kind !== "modifier" && step.kind !== "slot") continue;
+      const selected = selections[step.group_id];
+      if (selected === undefined) continue;
+      const selectedIds = new Set(Array.isArray(selected) ? selected : [selected]);
+      const selectedChoices = step.choices.filter(c => selectedIds.has(c.id));
+      if (selectedChoices.length === 0) continue;
+      if (matchChoiceAsWholeSpan(selectedChoices, trimmed, step.prompt_template.split(".")[0])) return true;
+    }
+  }
+  return false;
+}
+
 // Freeze-queue item W2 follow-up (2026-09-19 night, PO dispatch, live conv
 // 6de8bd13, real Vito's #4): "Italian hoagie with shrimp and blackened
 // salmon on wheat bread" -- PROPOSE split this into TWO separate `adds`,
@@ -5436,10 +5484,16 @@ export function decide(
       // too late to stop it. Dropped silently, same "words stay in
       // customerMessage, nothing pushed to any bucket" contract as a
       // guard-dropped span above.
+      // 2026-09-20 PO dispatch (restated choice value, V1's own sibling —
+      // real conv 090a3864 #17): see spanIsAlreadyResolvedChoiceOnCart's own
+      // header just above — the same bleed, one turn later, from a choice
+      // already settled on an EXISTING cart line (no slot open, no fresh add
+      // of its own this turn) rather than one of the two sources above.
       const isSlotAnswerBleed =
         (!!slotAnswerConsumedText &&
           (add.item_span ?? "").trim().toLowerCase() === slotAnswerConsumedText.trim().toLowerCase()) ||
-        spanIsWholeChoiceOfAnyAdd((add.item_span ?? "").trim(), resolvedAdds, menuById);
+        spanIsWholeChoiceOfAnyAdd((add.item_span ?? "").trim(), resolvedAdds, menuById) ||
+        spanIsAlreadyResolvedChoiceOnCart((add.item_span ?? "").trim(), nextCart, menuById);
       if (!isReplacementDuplicate && !isSlotAnswerBleed) {
         // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
         // header above): a size stated right next to THIS item's own name
