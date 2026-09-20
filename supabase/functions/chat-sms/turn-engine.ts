@@ -4706,10 +4706,26 @@ export function recoverAssertedChoiceFromText(
 // being discarded.
 const EXPLICIT_MULTI_ADDON_RE = /\badded\b/i;
 
+// PO dispatch 2026-09-20 (real captured PROPOSE output, error_log rows for
+// conv cv-hoagie-v571-* / cv-hoagie2-v571-* / fec9ae0b-...): the model does
+// NOT reliably put add-on words in item_span at all -- both captured hoagie
+// proposals resolved item_span to the bare item name ("Italian hoagie",
+// "Tuna Hoagie") with `choices: []`, so neither this function's own plural
+// tie-guard input nor decomposeSpanIntoChoicesOfMenuItem's item_span input
+// ever see the add-on text; every prior fix (fc1be11d, b94efabb, 331a6d15)
+// only ever fires when PROPOSE happens to keep the add-on words inside
+// item_span, which real live traffic does not do for this common shape.
+// `noCompetingItems` lets a caller that has ALREADY established there is no
+// other item anywhere in this same turn (the ONLY case the plural tie-guard
+// below exists to protect against -- see its own EXPLICIT_MULTI_ADDON_RE
+// header, "sausage and onions") skip that guard: with no second item for a
+// leftover plain word to plausibly belong to instead, two real, named
+// Add-ons choices in one breath can only ever mean "add both."
 export function recoverAssertedChoicesFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
   itemName?: string,
+  noCompetingItems = false,
 ): string[] {
   const text = (scopedText ?? "").trim();
   if (!text || choices.length === 0) return [];
@@ -4721,7 +4737,7 @@ export function recoverAssertedChoicesFromText(
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
   const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition);
   const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition);
-  const allPlainHitsLand = plainHits.length === 1 || (explicitMultiAddon && plainHits.length > 1);
+  const allPlainHitsLand = plainHits.length === 1 || noCompetingItems || (explicitMultiAddon && plainHits.length > 1);
   return [...placementHits, ...(allPlainHitsLand ? plainHits : [])];
 }
 
@@ -5808,6 +5824,20 @@ export function decide(
     if (!existing || add.quantity > existing.quantity) addGroups.set(key, add);
   }
 
+  // PO dispatch 2026-09-20 (real captured PROPOSE output): true only when
+  // this add is the ONE item-shaped thing anywhere in this turn -- no other
+  // resolved add, no other pending which-one question. When true, there is
+  // no OTHER item any leftover word in the raw message could plausibly name
+  // instead, so it is safe for the 00-BF modifier floor below to widen its
+  // scan to the FULL raw customerMessage (not just the one phrase
+  // resolveClaimedPhraseIndex happens to attribute to this item's own
+  // item_span -- a bare word-run match, confirmed to pick the WRONG phrase
+  // for "Chicken Bacon Ranch pizza, medium" against "...pizza, medium, with
+  // half anchovies?", see recoverAssertedChoicesFromText's own call site
+  // below) and to skip the plural-tie ambiguity guard that exists only to
+  // protect against a second, competing item.
+  const soleAddThisTurn = addGroups.size === 1 && ambiguousSpansFiltered.length === 0;
+
   // 00-BD: if the customer is restating an order they already placed, an add
   // that duplicates a line already in the cart is not a new order. Checked
   // against the cart as it stood BEFORE this turn's adds, so two genuinely
@@ -5868,10 +5898,31 @@ export function decide(
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
       const ownSpan = (add.item_span ?? "").trim();
       const otherSpansThisMessage = allOwnSpansThisMessage.filter(s => s !== ownSpan);
-      const scoped = stripOtherItemSpansFromModifierText(
-        scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
-        otherSpansThisMessage,
-      );
+      // PO dispatch 2026-09-20 (real captured PROPOSE output, error_log rows
+      // fec9ae0b-d331.../cv-hoagie-v571-*): item_span reliably does NOT carry
+      // the add-on words on real live traffic (the model strips it down to
+      // the bare item name), and the phrase-scoped text just below can pick
+      // the WRONG phrase even when a comma splits the message -- confirmed
+      // against the real captured "Can I get a Chicken Bacon Ranch pizza,
+      // medium, with half anchovies on it?": resolveClaimedPhraseIndex's own
+      // word-run match against item_span "Chicken Bacon Ranch pizza, medium"
+      // uniquely (and wrongly) matches the bare "medium" comma-phrase alone,
+      // scoping the floor down to just that word and erasing "half
+      // anchovies" before recoverPlacementHits ever sees it -- same failure
+      // family as bc35b4cd/ba1d45f4, different call site. soleAddThisTurn
+      // (declared above addGroups' own loop) means no OTHER item anywhere in
+      // this turn could plausibly be what a leftover word names instead, so
+      // the FULL raw message is safe to scan directly instead of trusting
+      // phrase-boundary attribution at all.
+      const scoped = soleAddThisTurn
+        ? stripOtherItemSpansFromModifierText(
+            scopedModifierText([], null, menuItem.name, customerMessage),
+            otherSpansThisMessage,
+          )
+        : stripOtherItemSpansFromModifierText(
+            scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
+            otherSpansThisMessage,
+          );
       // PO dispatch 2026-09-20 (real conv 6de8bd13, real Vito's data): "an
       // Italian hoagie with shrimp and blackened salmon on wheat bread" --
       // PROPOSE kept the add-ons in the SAME item_span as the host item
@@ -5918,7 +5969,12 @@ export function decide(
           // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
           // placed toppings in one clause ("half pepperoni half sausage") both
           // land, instead of the singular floor's own tie-guard dropping both.
-          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name)) {
+          // soleAddThisTurn (see above) also lifts the guard for two PLAIN
+          // (non-placement) choices named together with no "added" word --
+          // real captured shape, "Italian hoagie with shrimp and blackened
+          // salmon" -- since with no other item in the turn, both can only
+          // ever mean "add both," never a modifier-plus-second-item tie.
+          for (const recovered of recoverAssertedChoicesFromText(scoped, step.choices, menuItem.name, soleAddThisTurn)) {
             effectiveChoices = [...effectiveChoices, { group_id: step.group_id, choice_id: recovered }];
           }
         }
