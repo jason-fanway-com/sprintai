@@ -57,8 +57,7 @@ export function sameWord(a: string, b: string): boolean {
   return false;
 }
 
-/** findWordRun, tolerating plural drift between the model's span and the customer's words. */
-export function findWordRunLoose(hay: string[], needle: string[], from = 0): number { return findWordRun(hay, needle, from, sameWord); }
+
 
 export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
 export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz"]);
@@ -106,5 +105,8 @@ export function validTalk(raw: string): string | null {
   const text = raw.replace(/\s+/g, " ").trim();
   if (!text || text.length > 240) return null;
   if (/\$|\d{1,3}\.\d\d|\b(added|removed|updated|changed|charged|free|discount|refund)\b/i.test(text)) return null;
+  if (talkClaimsTime(text)) return null;
   return text;
 }
+/** "15-20 minutes", "about an hour": prep and delivery times are not ours to promise. */
+export function talkClaimsTime(raw: string): boolean { return /\b(\d+|an?|half an?)\s*(-|to|–)?\s*\d*\s*(min|mins|minutes?|hours?|hrs?)\b/i.test(raw); }

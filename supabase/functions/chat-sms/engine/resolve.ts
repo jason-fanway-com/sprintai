@@ -53,12 +53,7 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
 }
 
 /** A customer word names a menu word when equal, or when it is a stem of at least four letters ("parm"). */
-function wordMatches(w: string, pool: Set<string>): boolean {
-  if (pool.has(w)) return true;
-  if (w.length < 4) return false;
-  for (const p of pool) if (p.startsWith(w)) return true;
-  return false;
-}
+function wordMatches(w: string, pool: Set<string>): boolean { return pool.has(w) || (w.length >= 4 && [...pool].some((p) => p.startsWith(w))); }
 
 /** Filter candidates by a customer span: word subset of the display name, or its size facet. */
 export function narrow(candidateIds: string[], span: string, menu: Menu): string[] {

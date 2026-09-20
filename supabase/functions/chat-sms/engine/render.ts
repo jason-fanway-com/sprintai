@@ -3,7 +3,7 @@ import type { DeclineCode, Fulfillment, OpenQuestion, OrderForm } from "./form.t
 import type { Menu, MenuItem } from "./menu.ts";
 import { dollars, type PricedLine, type Totals } from "./price.ts";
 import { GROUP_PROMPTS, groupPrompt, orList, sortSizes, T, title, type Voice } from "./templates.ts";
-import { contentWords, singular, words } from "./normalize.ts";
+import { contentWords, singular, words, sameWord } from "./normalize.ts";
 
 export type Ack =
   | { kind: "line_added"; line: PricedLine }
@@ -93,8 +93,8 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
         const noun = spanShared.length ? spanShared.join(" ") : (sharedTail ?? spanNoun);
         const label = (k: string) => {
           const parts = k.split(" ");
-          if (parts.length > 1 && (parts[parts.length - 1] === noun || parts[parts.length - 1] === noun + "s")) return parts.slice(0, -1).join(" ");
-          if (k === noun || k === noun + "s") { const cat = byKind.get(k)?.category; return cat ? `${k} (${cat})` : k; }
+          if (parts.length > 1 && sameWord(parts[parts.length - 1], noun)) return parts.slice(0, -1).join(" ");
+          if (sameWord(k, noun)) { const cat = byKind.get(k)?.category; return cat ? `${k} (${cat})` : k; }
           return k;
         };
         const kinds = [...new Set(kindsRaw.map(label))];

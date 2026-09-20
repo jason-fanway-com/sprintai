@@ -7,3 +7,12 @@ Deno.test("toMoves: talk is kept only when it makes no money or action claims", 
   assertEquals(toMoves({ moves: [{ kind: "talk", value: "I removed the fries for you" }] }), []);
   assertEquals(toMoves({ moves: [{ kind: "talk", value: "That will be $12.50" }] }), []);
 });
+
+Deno.test("toMoves: a prep-time claim becomes the honest no-ETA line", () => {
+  const out = toMoves({ moves: [{ kind: "talk", value: "Typically 15-20 minutes for a large pizza. I'll get you an exact time once your order is confirmed." }] });
+  assertEquals(out.length, 1);
+  assertEquals(out[0].kind, "talk");
+  assertEquals((out[0] as { text: string }).text.includes("can't see prep or delivery times"), true);
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "About an hour for delivery tonight." }] })[0].kind, "talk");
+  assertEquals((toMoves({ moves: [{ kind: "talk", value: "About an hour for delivery tonight." }] })[0] as { text: string }).text.includes("hour"), false);
+});

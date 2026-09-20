@@ -4,7 +4,8 @@
 import Anthropic from "npm:@anthropic-ai/sdk";
 import type { Move, OpenQuestion } from "./form.ts";
 import { parseTip } from "./vocab.ts";
-import { validTalk } from "./normalize.ts";
+import { talkClaimsTime, validTalk } from "./normalize.ts";
+import { T } from "./templates.ts";
 
 export interface InterpretContext {
   shop_name: string;
@@ -41,7 +42,7 @@ Move kinds:
 - answer_yes / answer_no: a bare yes or no to a yes/no question.
 - ask_menu: a question about the menu ("what sizes", "do you have", "how much is"). about_span = the item words, or null. A request phrased as a question ("can I get a large pepperoni?") is add_line, not ask_menu.
 - control: cancel, start_over, human (wants a person), greeting (just hello), show_cart (what's in my order), unclear (nothing above applies).
-- talk: the customer is talking rather than ordering: a question about something we said, a complaint, a thank-you, a joke, small talk. Put a short, honest, friendly reply in the value field (one or two sentences, plain words). Never mention what anything costs, never say you added, removed or changed anything (the order system reports that itself), never promise things about the food. If they ask what an earlier line of ours meant, explain it simply. You may return talk together with order moves when a message does both.
+- talk: the customer is talking rather than ordering: a question about something we said, a complaint, a thank-you, a joke, small talk. Put a short, honest, friendly reply in the value field (one or two sentences, plain words). Never mention what anything costs, never say you added, removed or changed anything (the order system reports that itself), never promise things about the food. You do not know prep or delivery times, opening hours, or whether the shop is open: say you can't see that from here and that we text when the order is ready. If they ask what an earlier line of ours meant, explain it simply. You may return talk together with order moves when a message does both.
 
 A message may need several moves: "delivery to 12 Main St, 2 large pepperoni and knots" = answer fulfillment delivery; answer address "12 Main St"; add_line "pepperoni" qty 2 option_spans ["large"]; add_line "knots".
 If the open question is about an item and the message only answers it ("medium", "the large one", "ranch please"), return one answer_option.
@@ -155,7 +156,7 @@ export function toMoves(raw: unknown, message = ""): Move[] {
       case "answer_no": out.push({ kind: "answer_no" }); break;
       case "ask_menu": out.push({ kind: "ask_menu", about_span: r.about_span && r.about_span.trim() ? r.about_span.trim() : null }); break;
       case "talk": {
-        const text = validTalk(r.value ?? "");
+        const text = validTalk(r.value ?? "") ?? (talkClaimsTime(r.value ?? "") ? T.noEta() : null);
         if (text) out.push({ kind: "talk", text });
         break;
       }

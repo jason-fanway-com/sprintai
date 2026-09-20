@@ -128,14 +128,25 @@ export function turn(input: TurnInput): TurnOutput {
     moves.push(m);
   }
 
+  const targetOf = (ref: Move & { kind: "change_line" } extends { ref: infer R } ? R : never) => "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id)
+    : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : form0.lines.length === 1 ? form0.lines[0] : undefined;
+  // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same
+  // batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
+  for (let i = moves.length - 1; i >= 0; i--) {
+    const m = moves[i];
+    if (m.kind !== "change_line" || m.qty != null || m.add_option_spans?.length || m.remove_option_spans?.length) continue;
+    const target = targetOf(m.ref);
+    if (target && moves.some((x) => x.kind === "add_line")) {
+      moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } });
+      ledger.push({ turn: t, event: "empty_change_beside_add_is_swap", data: { line_id: target.line_id } });
+    } else moves.splice(i, 1);
+  }
+
   // 2a. "make the coke a diet": an option word that names a different item is a swap, not a note
   for (let i = 0; i < moves.length; i++) {
     const m = moves[i];
     if (m.kind !== "change_line" || !m.add_option_spans?.length) continue;
-    const ref = m.ref;
-    const target = "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id)
-      : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu))
-      : form0.lines.length === 1 ? form0.lines[0] : undefined;
+    const target = targetOf(m.ref);
     if (!target?.item_id) continue;
     const cur = menu.items.get(target.item_id);
     for (const o of m.add_option_spans) {

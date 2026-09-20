@@ -11,6 +11,7 @@ Deno.test("facets from live-shaped names", () => {
   assertEquals(facetsFromName('Pepperoni Pizza - Large (16")'), { kind: "pepperoni pizza", size: "large" });
   assertEquals(facetsFromName('Cheese - Small (10")'), { kind: "cheese", size: "small" });
   assertEquals(facetsFromName("Cheese Burger"), { kind: "cheese burger", size: null });
+  assertEquals(facetsFromName("Wings Bone-In - 10 Pieces"), { kind: "wings bone-in", size: null });
 });
 
 Deno.test("longest match: cheeseburger is the $8.49 item, not the bacon one", () => {

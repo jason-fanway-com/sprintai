@@ -717,11 +717,33 @@ Deno.test("plural drift and a stem: '2 chicken parm sandwiches one on white one 
   assertStringIncludes(o.reply, "What kind of fries"); // the fixture has six kinds of fries
 });
 
+Deno.test("'actually pepperoni not cheese' as an empty change_line beside an add is a replacement", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a large cheese pizza and garlic knots", [
+    { kind: "add_line", item_span: "large cheese pizza", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] },
+  ]);
+  o = say(o.form, "actually pepperoni not cheese", [
+    { kind: "change_line", ref: { line_id: 1 }, qty: null, add_option_spans: [], remove_option_spans: [] },
+    { kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.lines.map((l) => l.item_id).filter((x) => x === IDS.cheesePizzaL), []);
+  assertEquals(o.form.lines.length, 2);
+  o = say(o.form, "large", [{ kind: "answer_option", value_span: "large" }]);
+  assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.knots, IDS.pepPizzaL].sort());
+  // an empty change_line on its own changes nothing
+  const before = o.form.lines.length;
+  o = say(o.form, "the knots", [{ kind: "change_line", ref: { span: "knots" }, add_option_spans: [], remove_option_spans: [] }]);
+  assertEquals(o.form.lines.length, before);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   let o = say(f, "20 wings buffalo", [{ kind: "add_line", item_span: "wings", qty: 20, option_spans: ["buffalo"] }]);
   assertEquals(o.form.open?.kind, "line_ambiguous");
+  assertStringIncludes(o.reply, "What kind of wings? We have Wings Bone-In, Wings Boneless.");
   o = say(o.form, "boneless", [{ kind: "answer_option", value_span: "boneless" }]);
   assertEquals(o.form.lines[0].item_id, "wbo");
   assertEquals(o.form.lines[0].qty, 2);

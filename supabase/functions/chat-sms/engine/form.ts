@@ -146,6 +146,11 @@ export type DeclineCode =
   | "address_out_of_zone"
   | "tip_out_of_range";
 
+/** A fresh, unresolved line with the next id; `extra` overrides fields (answers, notes, status). */
+function newLine(form: OrderForm, span: string, qty: number, held: string[], extra: Partial<Line> = {}): Line {
+  return { line_id: form.next_line_id++, span, item_id: null, qty: Math.max(1, qty), choices: {}, modifiers: [], held, notes: [], slot_candidates: {}, status: { kind: "unresolved" }, ...extra };
+}
+
 export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: Line, span: string) => boolean): ApplyResult {
   const form: OrderForm = structuredClone(input);
   const ledger: LedgerEntry[] = [];
@@ -216,18 +221,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
       case "add_line": {
         const wasPlainOpen = form.status === "open";
         reopenIfConfirmed();
-        const line: Line = {
-          line_id: form.next_line_id++,
-          span: m.item_span,
-          item_id: null,
-          qty: Math.max(1, Math.floor(m.qty || 1)),
-          choices: {},
-          modifiers: [],
-          held: [...(m.option_spans ?? [])],
-          notes: m.note ? [m.note] : [],
-          slot_candidates: {},
-          status: { kind: "unresolved" },
-        };
+        const line = newLine(form, m.item_span, Math.floor(m.qty || 1), [...(m.option_spans ?? [])], { notes: m.note ? [m.note] : [] });
         form.lines.push(line);
         touched.add(line.line_id);
         if (wasPlainOpen && form.items_done) form.items_done = false;
@@ -317,17 +311,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         if (idx < 0 || m.parts.length === 0) break;
         const src = form.lines[idx];
         const cands = src.status.kind === "ambiguous" ? src.status.candidates : null;
-        const newLines: Line[] = m.parts.map((p) => ({
-          line_id: form.next_line_id++,
-          span: src.span,
-          item_id: null,
-          qty: Math.max(1, p.qty),
-          choices: {}, modifiers: [],
-          held: [...src.held.filter((h) => !h.startsWith("-"))],
-          answers: [p.span],
-          notes: [], slot_candidates: {},
-          status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" },
-        }));
+        const newLines = m.parts.map((p) => newLine(form, src.span, p.qty, src.held.filter((h) => !h.startsWith("-")),
+          { answers: [p.span], status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" } }));
         form.lines.splice(idx, 1, ...newLines);
         for (const l of newLines) touched.add(l.line_id);
         ledger.push({ turn: t, event: "split_line", data: { from: src.line_id, parts: m.parts, into: newLines.map((l) => l.line_id) } });

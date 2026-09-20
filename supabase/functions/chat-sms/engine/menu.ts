@@ -95,6 +95,7 @@ const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra larg
 
 const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|sheet|regular)\b\s*(?:\d+\s*(?:''|"|”)?\s*)?(.+)$/i;
 
+const NAME_PIECES_RE = /^(.*?)\s*[-–(]\s*\d+\s*(?:pieces?|pcs?|ct|count)\b.*$/i;
 const PIECES_RE = /\((\d+)\)|\b(\d+)\s*(?:pieces?|pcs?|ct|count|wings)\b/i;
 export function pieceCountFromName(name: string): number | null {
   const m = PIECES_RE.exec(name);
@@ -114,6 +115,8 @@ export function facetsFromName(name: string, sizeLabel?: string | null): Facets 
     const size = words(lead[1])[0] ?? null;
     return { kind: normalize(lead[2]) || null, size };
   }
+  const pieces = NAME_PIECES_RE.exec(name);
+  if (pieces) return { kind: normalize(pieces[1]) || null, size: null };
   const label = sizeLabel ? words(sizeLabel)[0] : null;
   if (label && SIZE_WORDS.has(label)) {
     const kindWords = words(name).filter((w) => w !== label);
