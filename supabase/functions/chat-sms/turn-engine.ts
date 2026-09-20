@@ -159,8 +159,8 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
-import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
+import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
 // (DialogueState.returningCustomerOffer's own shape, freeze-queue item 7)
@@ -1696,26 +1696,28 @@ function messageNamesItemOutsideCandidates(
 // aae67b80/322e19ca genuine-correction shape (always exactly one
 // alternative) completely unaffected — see the "genuine correction is
 // UNAFFECTED" regression test.
-// Restored after the merge with fix/whole-term-match-and-rejections-20260919:
-// that branch removed this function believing nothing still called it, but
-// messageNamesMultipleItemsOutsideCandidates below (merged in from main,
-// cb37bda9) still does. A typo-correction pass, not a general fuzzy search —
-// same tight, narrow tolerance as itemSpanNamedInMessage's own ADDENDUM B
-// fix (5+ letter words only, fuzzyWordMatch's graduated distance).
-const fuzzyCorrectAgainstLexicon = (text: string, lexicon: LexiconTerm[]): string => {
-  const lexiconWords = new Set<string>();
-  for (const entry of lexicon) {
-    for (const w of entry.term.toLowerCase().split(/[^a-z0-9]+/)) if (w.length >= 5) lexiconWords.add(w);
-  }
-  if (lexiconWords.size === 0) return text;
-  return text.replace(/[a-zA-Z]+/g, word => {
-    const bare = word.toLowerCase();
-    if (bare.length < 5 || lexiconWords.has(bare)) return word;
-    for (const lw of lexiconWords) if (fuzzyWordMatch(bare, lw)) return lw;
-    return word;
-  });
-};
-
+// 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+// money bug, reopens cb37bda9 a second time): this used to run each clause
+// through a typo-correction pass (fuzzyCorrectAgainstLexicon) before
+// resolving it — restored by the merge with fix/whole-term-match-and-
+// rejections-20260919 believing it was still required, but it is the EXACT
+// SAME false-positive class that same branch's own shrimp-stick-rejection
+// test already root-caused and removed from messageNamesItemOutsideCandidates:
+// a real, complete, unrelated word ("stick" in "just stick w/ the greek
+// salad" — the customer declining, not naming food) gets rewritten to a
+// same-shop active term it merely prefixes ("sticks", Mozzarella Sticks),
+// via fuzzyWordMatch's own >=4-char prefix rule. Corrupting the clause BEFORE
+// resolveItem ever sees it turned a clean, unique "greek" hit into a false
+// tie against Mozzarella Sticks (ambiguous, not resolved) — which silently
+// cost this function one of the two outside items it needs to recognize a
+// decline, live: T2 ("...just stick w/ the greek salad, 2 med pepperoni
+// pizzas.") only ever found ONE resolved outside item, never reached the
+// >=2 threshold, and fell into the category-reject-add path that charged for
+// a $22.95 stromboli nobody ordered. resolveItem is called directly on the
+// RAW clause text below — its own internal fuzzy fallback (Round 2, item 1c)
+// only ever engages when NO exact match exists anywhere in the clause, so a
+// clause that already contains one real, exact item word (as "greek" is
+// here) never reaches it, and never needs a pre-correction pass at all.
 function messageNamesMultipleItemsOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
@@ -1728,8 +1730,7 @@ function messageNamesMultipleItemsOutsideCandidates(
   const resolvedOutsideIds = new Set<string>();
   for (const clause of clauses) {
     const { text } = extractLeadingClauseCount(clause);
-    const corrected = fuzzyCorrectAgainstLexicon(text, lexicon);
-    const result = resolveItem(corrected, lexicon);
+    const result = resolveItem(text, lexicon);
     if (result.kind === "resolved" && !candidateIds.has(result.menu_item_id)) {
       resolvedOutsideIds.add(result.menu_item_id);
     }
@@ -2942,8 +2943,14 @@ const singularizeSpanToken = (word: string): string => {
 const AVAILABILITY_QUESTION_MARKER_RE =
   /\b(?:do you have|does\s+\S+(?:\s+\S+){0,3}\s+have|is there|are there|what about|you (?:have|got) any|have any|got any)\b/i;
 
+// SIZE_WORD_ALIASES (resolve-item.ts): the same "med" -> "medium" expansion
+// resolveItem's own tokenizer applies, reused here so a model item_span
+// abbreviation lines up with the customer's own fully-spelled word (or vice
+// versa) instead of failing this guard on a spelling difference alone — see
+// the conv22 money-bug dispatch on itemSpanNamedInMessage below.
 const tokenizeSpanText = (t: string): string[] =>
-  t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).map(singularizeSpanToken);
+  t.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean)
+    .map(singularizeSpanToken).map(w => SIZE_WORD_ALIASES[w] ?? w);
 
 // Sentence-ending punctuation splits first (a literal "?" closes the
 // question clause and starts fresh for whatever follows), then the
@@ -3020,6 +3027,26 @@ function itemSpanNamedInMessage(span: string, customerMessage: string | undefine
     // would otherwise pass the fuzzy fallback below.
     if (questionOnly.has(t)) return false;
     if (messageTokenSet.has(t)) return true;
+    // 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+    // money bug): a format/size word (GUARD19_GENERIC_WORDS — the exact
+    // vocabulary GUARD 19 already treats as carrying no identity signal of
+    // its own, see that file's own header) is never what makes a span real
+    // or hallucinated — the OTHER words in the span (the actual dish name)
+    // still have to clear this guard normally. Real live repro: PROPOSE
+    // paraphrased "2 medium pepperonis" (the customer's own words) as item_
+    // span "2 med pepperoni pizzas" — "pizzas" names the same dish the
+    // customer already did via "pepperonis" alone (this shop's bare
+    // "pepperoni" term ties pizza sizes against a Stromboli Roll of the same
+    // name; "pizza" is PROPOSE's own correct disambiguation, not new,
+    // unverified information), and nothing in the customer's message that
+    // turn contained the word "pizza" at all to support it literally or via
+    // the 5+-letter fuzzy fallback below. The guard silently dropped the
+    // whole add — the customer's 2 pepperoni pizzas simply vanished, no
+    // decline shown. Exempting only the generic word, never the dish-naming
+    // ones ("pepperoni" still has to appear, and does), keeps this guard's
+    // actual job — refusing a span naming a DISH the customer didn't say —
+    // completely intact.
+    if (GUARD19_GENERIC_WORDS.has(t)) return true;
     if (t.length < 5) return false;
     return messageTokens.some(mt => mt.length >= 5 && !questionOnly.has(mt) && fuzzyWordMatch(t, mt));
   });
@@ -3634,6 +3661,27 @@ export function recoverAssertedChoiceFromText(
 // plain (non-placement) choices keep the exact original single-recovery
 // behavior via recoverAssertedChoiceFromText itself, appended to the same
 // result set.
+//
+// Freeze-queue item W2 (2026-09-19 PO dispatch, live conv 01609954 #20,
+// money bug): "a Chicken quesadilla with Black Diamond Steak and Chicken
+// added" landed the plain $12.49 quesadilla with BOTH named, real, priced
+// Add-ons choices silently dropped — no question, no trace. This is the
+// wart-c tie-guard above hitting its OWN limit on a fresh-add turn: two
+// PLAIN (non-placement) choices named together tie at plainHits.length===2
+// and get thrown away, exactly the "sausage and onions" shape that guard
+// exists to protect — except here the customer's own trailing word "added"
+// (real text: "...and Chicken added") removes the ambiguity the guard was
+// built for. "sausage and onions" leaves it genuinely unclear whether the
+// customer is naming two modifiers or a modifier plus an unrelated second
+// item; "X and Y added" is a customer explicitly saying BOTH are being
+// added to the item just named — the same class of single-word disambiguator
+// as EXPLICIT_ADDITION_RE's "extra" above, just for the plural-tie case
+// instead of the name-collision case. When present, every plain choice the
+// text actually names (not a guess — each one's own tokens still have to
+// occur in the text, same as always) is recovered instead of the whole set
+// being discarded.
+const EXPLICIT_MULTI_ADDON_RE = /\badded\b/i;
+
 export function recoverAssertedChoicesFromText(
   scopedText: string,
   choices: Array<{ id: string; display: string }>,
@@ -3645,10 +3693,12 @@ export function recoverAssertedChoicesFromText(
   const textTokens = modifierFloorTokens(text);
   const itemNameTokens = modifierFloorTokens(itemName ?? "");
   const explicitAddition = EXPLICIT_ADDITION_RE.test(text);
+  const explicitMultiAddon = EXPLICIT_MULTI_ADDON_RE.test(text);
   const { placementGroups, plainChoices } = groupChoicesByPlacement(choices);
   const placementHits = recoverPlacementHits(placementGroups, textTokens, itemNameTokens, explicitAddition);
   const plainHits = recoverPlainHits(plainChoices, textTokens, itemNameTokens, explicitAddition);
-  return [...placementHits, ...(plainHits.length === 1 ? plainHits : [])];
+  const allPlainHitsLand = plainHits.length === 1 || (explicitMultiAddon && plainHits.length > 1);
+  return [...placementHits, ...(allPlainHitsLand ? plainHits : [])];
 }
 
 // 00-BE: the last gate before money, and it was rejecting the word "yes".
@@ -3966,6 +4016,43 @@ function rawMessageSizeWordForSpan(
   return extractGlobalSizeWord(phrases[phraseIdx]);
 }
 
+// PO dispatch 2026-09-19 (M1 rule 2, reopened — conv d95306c8 #26 follow-up):
+// rawMessageSizeWordForSpan above fixed WHICH size word gets displayed once a
+// tie already opened a disambiguation question, but never used that word to
+// try closing the tie first. resolveItem's own tiebreak (resolve-item.ts)
+// narrows candidates only by the shop's LEXICON size_label — real, but null
+// for some items in live Vito's data (Sausage Pizza, mirrored by this file's
+// own M1 test fixture), so "Sausage Pizza - Small" ties its 3 sizes even
+// though the customer's own words state the size right next to the name.
+// filterCandidatesBySizeWord (pending-disambiguation.ts) already solves this
+// a different way — it derives each candidate's size from its own MENU ITEM
+// NAME text (candidateSizeValue/extractSizeAndKind), independent of the
+// lexicon size_label gap — but until now it only ever ran on the SECOND
+// turn, narrowing an already-open disambiguation's candidates once the
+// customer answered a "what size?" facet question. This applies the
+// identical name-derived narrowing to a FRESH tie, using the exact same
+// scoped size word rawMessageSizeWordForSpan recovers, so a stated size
+// closes the tie before any question opens — never merely corrects the
+// question's wording after the fact. Returns the single surviving
+// menu_item_id, or null when the size word doesn't narrow to exactly one
+// candidate (genuinely still ambiguous — never guessed).
+function narrowAmbiguousCandidatesBySpanSize(
+  candidateIds: string[],
+  spanText: string,
+  customerMessage: string | undefined,
+  menu: TurnEngineMenuItem[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): string | null {
+  const sizeWord = extractGlobalSizeWord(spanText) ?? rawMessageSizeWordForSpan(customerMessage, spanText, menu);
+  if (!sizeWord) return null;
+  const candidates: PendingCandidate[] = candidateIds
+    .map(id => menuById.get(id))
+    .filter((m): m is TurnEngineMenuItem => !!m)
+    .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
+  const narrowed = filterCandidatesBySizeWord(candidates, sizeWord);
+  return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4212,7 +4299,22 @@ export function decide(
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
       if (!isReplacementDuplicate) {
-        ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        // M1 rule 2 (reopened, see narrowAmbiguousCandidatesBySpanSize's own
+        // header above): a size stated right next to THIS item's own name
+        // closes the tie here, before a "which one?" question ever opens —
+        // never merely corrects the question's wording after the fact.
+        const narrowedId = narrowAmbiguousCandidatesBySpanSize(
+          resolution.candidates,
+          (add.item_span ?? "").trim(),
+          customerMessage,
+          menu,
+          menuById,
+        );
+        if (narrowedId) {
+          resolvedAdds.push({ menu_item_id: narrowedId, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
+        } else {
+          ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
+        }
       }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in

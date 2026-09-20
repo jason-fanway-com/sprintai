@@ -94,13 +94,47 @@ function categoryNoun(category: string): string {
   return singularizeWord(words[words.length - 1].toLowerCase());
 }
 
-// Fixed vocabulary, per spec — never inferred from the lexicon (no SIZE
-// lexicon terms exist yet; compile-menu.ts's own header says folded
-// product/size terms are P1, not built). "14-inch"/"14\""/"14" all reduce to
-// the bare word "14" post-normalize (normalize() strips the hyphen and the
-// quote the same way it strips any other punctuation).
+// Fixed vocabulary, per spec — never inferred from the lexicon. "14-inch"/
+// "14\""/"14" all reduce to the bare word "14" post-normalize (normalize()
+// strips the hyphen and the quote the same way it strips any other
+// punctuation).
 const SIZE_WORD_TOKENS = new Set(["small", "medium", "large", "personal"]);
 const SIZE_DIGIT_TOKENS = new Set(["10", "14", "16"]);
+
+// 2026-09-19 PO dispatch (compiler priority item 2, size-qualified bare
+// name): compile-menu.ts's itemLexiconTerms Rule 2b now emits a size digit
+// PLUS the literal word "inch" as part of an item's own term text ("14
+// inch calzone", via canonicalizeSizeTokens' existing "<digits> inch"
+// convention) — the first time any lexicon term has ever carried that word.
+// Neither coreContentWords nor coreContentWordsForEntry below stripped it,
+// so widenIntoSizedFamily's own core-word comparison reduced "14 inch
+// calzone" to ["inch","calzone"] instead of ["calzone"] — "inch" survived
+// as if it were real dish vocabulary, uniting the 14" and 16" items as
+// "the same dish, different size" siblings purely because they share a
+// unit word that names nothing, and collapsed an already-unique,
+// maximally-specific match ("just a 14-inch calzone") back into a false
+// 2-way tie. Live regression this dispatch's own fix would otherwise have
+// introduced (caught by this file's existing test suite, not live) — same
+// treatment as SIZE_WORD_TOKENS/SIZE_DIGIT_TOKENS: a unit word that only
+// ever rides along a real size signal, never a dish word on its own.
+const SIZE_UNIT_WORDS = new Set(["inch"]);
+
+// 2026-09-19 PO dispatch (conv22 live-runner gap, real $23.94-vs-$11.98
+// money bug, reopens cb37bda9): real customer/model text routinely
+// abbreviates a size word ("2 med pepperoni pizzas") but the compiled
+// lexicon only ever carries the SIZE_WORD_TOKENS' own spelled-out forms
+// ("medium pepperoni pizza(s)") — an abbreviated span word matches neither
+// that 3-word term (occursAsWholeWordRun is exact, no stemming) nor
+// SIZE_WORD_TOKENS itself, so it ties across every size sharing the bare
+// "pepperoni" term instead of resolving to the one the customer named.
+// Expanded once, here, inside toWords() — the single chokepoint both span
+// words AND every lexicon term's own words already flow through — so a span
+// abbreviation and a fully-spelled lexicon term compare equal without
+// touching either side's matching logic. Exported so turn-engine.ts's own
+// item-span-in-message guard (itemSpanNamedInMessage) can apply the exact
+// same expansion before comparing a model's item_span against the
+// customer's raw words, instead of maintaining a second, driftable copy.
+export const SIZE_WORD_ALIASES: Record<string, string> = { med: "medium", lg: "large", sm: "small" };
 
 function detectSizeToken(spanWords: string[]): string | null {
   for (const w of spanWords) {
@@ -147,7 +181,7 @@ const FILLER_WORDS = new Set(["a", "an", "the"]);
 // the real 4-way tie.
 function coreContentWords(words: string[]): string[] {
   return words
-    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w))
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !SIZE_UNIT_WORDS.has(w))
     .map(singularizeWord);
 }
 
@@ -170,7 +204,7 @@ function coreContentWordsForEntry(entry: LexiconTerm): string[] {
     }
   }
   return words
-    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !categoryNounWords.has(w))
+    .filter(w => !FILLER_WORDS.has(w) && !SIZE_WORD_TOKENS.has(w) && !SIZE_DIGIT_TOKENS.has(w) && !SIZE_UNIT_WORDS.has(w) && !categoryNounWords.has(w))
     .map(singularizeWord);
 }
 
@@ -237,7 +271,8 @@ function normalize(text: string): string {
 }
 
 function toWords(normalized: string): string[] {
-  return normalized.length > 0 ? normalized.split(" ") : [];
+  if (normalized.length === 0) return [];
+  return normalized.split(" ").map(w => SIZE_WORD_ALIASES[w] ?? w);
 }
 
 // Does `termWords` occur in `spanWords` as a contiguous, whole-word run?
@@ -360,6 +395,21 @@ function widenIntoSizedFamily(
 ): ResolveItemResult | null {
   const matchedWords = findMatchedTermWords(baseId, matchedLength, spanWords, lexicon);
   if (!matchedWords) return null;
+
+  // 2026-09-19 PO dispatch (compiler priority item 2, size-qualified bare
+  // name): this whole function exists to rescue a SIZE-BLIND base match
+  // ("meat lovers", no size word anywhere in the matched term itself) by
+  // checking whether the customer's span states a size elsewhere. It was
+  // never meant to run when the base match ALREADY carries its own size —
+  // compile-menu.ts's Rule 2b now emits terms like "14 inch calzone" that
+  // do exactly that, and coreContentWords' own stripping of the size
+  // digit/unit words (needed for the size-blind case) would otherwise throw
+  // that specificity away and go hunting for "same dish, different size"
+  // siblings that were never actually in question — collapsing an already-
+  // maximally-specific match back into a false tie with those siblings.
+  // A base match that already names its own size needs no widening at all.
+  if (matchedWords.some(w => SIZE_WORD_TOKENS.has(w) || SIZE_DIGIT_TOKENS.has(w))) return null;
+
   const wantedCore = coreContentWords(matchedWords);
   if (wantedCore.length === 0) return null;
 
