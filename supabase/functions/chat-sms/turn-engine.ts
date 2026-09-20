@@ -5496,6 +5496,15 @@ interface ReplacementIntent {
   // replacement's own Y wording from ever being misread as removal language
   // for a line the customer never named.
   matchedText: string;
+  // 2026-09-20 PO dispatch (Z1, quantity-split replacement, real conv
+  // a89f7a07, live money bug): true when xPhrase itself says "one of" --
+  // "one of the Roma pizzas" on a 2x line -- rather than naming the whole
+  // line ("the Roma pizza"/"that"). The execution block below uses this to
+  // decide whether X's line loses exactly ONE unit (leaving the rest
+  // exactly as already ordered) or is replaced in full the way every other
+  // xPhrase already is -- a customer naming "the Roma pizza" on a 2x line
+  // still means the WHOLE line, unchanged from today.
+  xIsPartialUnit: boolean;
 }
 
 function parseReplacementIntent(message: string): ReplacementIntent | null {
@@ -5507,8 +5516,14 @@ function parseReplacementIntent(message: string): ReplacementIntent | null {
     new RegExp(String.raw`\bswap(?:\s+out)?\s+(?:the\s+|my\s+|our\s+|a\s+|an\s+)?(.+?)\s+for\s+(?:a\s+|an\s+|the\s+)?(.+?)${STOP}`, "i"),
     // "change my Grilled Cheese to Chicken Fingers" / "...to X instead"
     new RegExp(String.raw`\bchange\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+to\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+instead\b)?${STOP}`, "i"),
-    // "switch that to a Cheesesteak instead" / "switch X to Y"
-    new RegExp(String.raw`\bswitch\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+to\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+instead\b)?${STOP}`, "i"),
+    // "switch that to a Cheesesteak instead" / "switch X to Y" / "switch one
+    // of the Roma pizzas for a large Hawaiian instead" -- "for" added
+    // 2026-09-20 (Z1, real conv a89f7a07): "switch" combined with "for"
+    // (rather than "to") matched NEITHER this pattern (required "to") NOR
+    // the swap pattern above (required the word "swap"), so it fell through
+    // untouched to PROPOSE's own remove/add for the pair -- exactly the
+    // unreliable path this whole mechanism exists to bypass.
+    new RegExp(String.raw`\bswitch\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+(?:to|for)\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:\s+instead\b)?${STOP}`, "i"),
     // "replace X with Y"
     new RegExp(String.raw`\breplace\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+with\s+(?:a\s+|an\s+|the\s+)?(.+?)${STOP}`, "i"),
   ];
@@ -5518,13 +5533,13 @@ function parseReplacementIntent(message: string): ReplacementIntent | null {
     const xPhrase = mm[1]?.trim();
     const yPhrase = mm[2]?.trim();
     if (!xPhrase || !yPhrase) continue;
-    return { xPhrase, yPhrase, matchedText: mm[0] };
+    return { xPhrase, yPhrase, matchedText: mm[0], xIsPartialUnit: /^one\s+of\b/i.test(xPhrase) };
   }
   // "make it Y instead" / "make that Y instead" -- X is never named, only
   // ever a pronoun, so there is no capture group for it.
   const makeIt = m.match(/\bmake\s+(?:it|that|this)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+instead\b/i);
   const yPhrase = makeIt?.[1]?.trim();
-  if (yPhrase && makeIt) return { xPhrase: null, yPhrase, matchedText: makeIt[0] };
+  if (yPhrase && makeIt) return { xPhrase: null, yPhrase, matchedText: makeIt[0], xIsPartialUnit: false };
   return null;
 }
 
@@ -5862,14 +5877,39 @@ export function decide(
           // all ("change my Grilled Cheese to Chicken Fingers") does this
           // fall back to preserving X's original quantity, unchanged from
           // before this fix.
-          const quantity = spanLeadingCount(replacementIntent.yPhrase) ?? targetLine.quantity;
-          removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
-          const lengthBeforeAdd = nextCart.length;
-          const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
-          if (result.ok && result.cartChanged) {
-            qualifyingAddMenuItemId = newMenuItem.id;
-            if (newLineKey && nextCart.length === lengthBeforeAdd + 1) {
-              nextCart[nextCart.length - 1].line_key = newLineKey();
+          const explicitYQuantity = spanLeadingCount(replacementIntent.yPhrase);
+          // 2026-09-20 PO dispatch (Z1, quantity-split replacement, real
+          // conv a89f7a07, live money bug): "switch ONE OF the Roma pizzas
+          // for a large Hawaiian" on a 2x Roma line always ran the SAME
+          // full-line path as "switch the Roma pizza" -- remove the WHOLE
+          // line (both units), re-add Y at targetLine's old quantity (2) --
+          // so a customer asking to keep one Roma and swap the other got
+          // 2x Hawaiian and 0x Roma instead of 1x Roma + 1x Hawaiian. Only
+          // engages when the line genuinely has more than one unit to split
+          // FROM -- "one of" on a 1x line (nothing else on the line to
+          // leave behind) falls through to the same whole-line path as
+          // always, unchanged.
+          if (replacementIntent.xIsPartialUnit && targetLine.quantity > 1) {
+            targetLine.quantity -= 1;
+            const quantity = explicitYQuantity ?? 1;
+            const lengthBeforeAdd = nextCart.length;
+            const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
+            if (result.ok && result.cartChanged) {
+              qualifyingAddMenuItemId = newMenuItem.id;
+              if (newLineKey && nextCart.length === lengthBeforeAdd + 1) {
+                nextCart[nextCart.length - 1].line_key = newLineKey();
+              }
+            }
+          } else {
+            const quantity = explicitYQuantity ?? targetLine.quantity;
+            removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
+            const lengthBeforeAdd = nextCart.length;
+            const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
+            if (result.ok && result.cartChanged) {
+              qualifyingAddMenuItemId = newMenuItem.id;
+              if (newLineKey && nextCart.length === lengthBeforeAdd + 1) {
+                nextCart[nextCart.length - 1].line_key = newLineKey();
+              }
             }
           }
           replacementHandledLineKey = targetLine.line_key;
