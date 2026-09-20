@@ -224,3 +224,47 @@ incident rule; that is a review job, not a monitoring job.
 3. **Staffing** per §6.
 4. **Tip placement.** Design puts it after the cart; your list had it after the address.
    Data setting either way; pick one.
+
+---
+
+## 8. Status log
+
+### 2026-09-20, end of day one
+
+**Built and deployed.** Engine at `supabase/functions/chat-sms/engine/` (pure core ~1,600 lines,
+adapters ~500), 49 tests including the machine-enforced rules of §5.0, runner test against a
+database fake, bundle support (dozen bagels as count-split picks over a category), single-choice
+and compiler-default slots applied rather than asked. Routing flag `shops.clean_engine_enabled`.
+Migration 147 applied. Sales tax at 6% on all three shops. Production model: DeepSeek v4 flash
+through OpenRouter (`ENGINE_PROVIDER` / `ENGINE_MODEL` secrets).
+
+**Interpreter eval, 326 labeled cases** (`tests/eval/moves.jsonl`, results in `~/po-scratch/eval` on the Air):
+
+| Model | Perfect | Item recall | Invented | Option recall | p50 |
+|---|---|---|---|---|---|
+| deepseek/deepseek-v4-flash | 285/326 | 98.0% | 1.7% | 95% | 2.1 s |
+| deepseek/deepseek-v4.1-flash | 284/326 | 94.6% | 1.1% | 89% | 0.2 s, but 5–10% of calls return no tool call |
+| qwen/qwen3-235b-a22b-2507 | 270/326 | 99.7% | 4.3% | 89% | 1.2 s |
+| google/gemini-2.5-flash-lite | 221/326 | 83.7% | 1.7% | 78% | 0.7 s |
+| z-ai/glm-4.7-flash | 194/326 | 59% | 0.9% | 52% | 0.2 s |
+| openai/gpt-5-nano | stopped | too slow (thinking model) | | | |
+
+Decision: DeepSeek v4 flash stays. Cost is the tiebreak among passers and nothing cheaper passes.
+
+**Live acceptance, Vito's, deploy 79bbb234:** 19 of 20 (canary 5/5, delivery with address, tip,
+tax and payment link 4/5, narrowing 5/5, corrections 5/5). Turn p50 2.1 s, p95 6.3 s. The one
+miss was the model returning the delivery answer and no items; the cross-read asked about the
+items, but one at a time and without the count. Fixed the same hour: one model retry when items
+were named but none returned, and a single batched question carrying the counts.
+
+**Findings worth keeping.**
+- The project's `ANTHROPIC_API_KEY` secret is the OpenRouter key (identical digest). Any
+  "anthropic" provider path 401s in production. Route through OpenRouter.
+- The lexicon query returns exactly 1,000 rows unpaged; the runner pages it.
+- Not Just Bagels "Bagel With …" items carry no bagel-type slot, so "everything bagel with
+  cream cheese" cannot be priced as one line. Menu data fix, not engine.
+- The auto-mode permission classifier blocks deploys and any edit to permission rules
+  regardless of allow rules; bypass mode is the working setting for this build.
+
+**Next.** Three-shop acceptance run after the 57c8e943 deploy; then delete the old engines
+(§4 discard list) and re-run the counts.
