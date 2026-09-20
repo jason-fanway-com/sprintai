@@ -501,3 +501,23 @@ Deno.test("'that's it' while a slot is open is remembered: once answered, straig
   assertEquals(o.form.status, "confirming");
   assertStringIncludes(o.reply, "Reply YES");
 });
+
+Deno.test("option phrases with filler still match a choice: 'half anchovies on it'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "small margherita with bacon on it", [{ kind: "add_line", item_span: "margherita", qty: 1, option_spans: ["small", "bacon on it"] }]);
+  assertEquals(o.form.lines[0].modifiers, ["mgBacS"]);
+  assertEquals(o.form.lines[0].notes, []);
+});
+
+Deno.test("an order with nothing priced never reaches the readback; 'that's it' on an unknown item asks again", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "a unicorn steak", [{ kind: "add_line", item_span: "unicorn steak", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it");
+  assertEquals(o.form.lines.length, 0);
+  assertStringIncludes(o.reply, `I'll leave "unicorn steak" off for now.`);
+  o = say(o.form, "pickup");
+  assertEquals(o.form.open?.kind, "items");
+  assert(!o.form.items_done);
+  assertStringIncludes(o.reply, "What can I get for you?");
+});

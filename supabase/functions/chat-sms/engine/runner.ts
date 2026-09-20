@@ -200,6 +200,10 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
       reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
     } else {
       await logError(deps.supabase, { conversationId: input.conversationId, shopId: input.shop.id, tenantId: input.shop.tenant_id, phase: "chat-sms", stage: "render", customerMessage: input.message, error: new Error(`checkout failed: ${res.error}`) });
+      form.confirmed = false; form.status = "confirming"; form.open = { kind: "confirm" };
+      out.plan.declines.push({ code: "checkout_failed" });
+      out.plan.question = null;
+      reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
     }
   }
 

@@ -16,8 +16,7 @@ import {
   appendCheckoutLink,
   type CreateCheckoutSessionInput,
 } from "./checkout-session.ts";
-import { appendEngineCheckoutLinkIfReady, type EngineCheckoutDeps } from "./index.ts";
-import type { TurnEngineCartLine } from "./turn-engine.ts";
+import type { CartLine } from "./checkout-session.ts";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 
 // ── Fakes ────────────────────────────────────────────────────────────────
@@ -73,7 +72,7 @@ function makeFakeSupabase(initialCartRow: Record<string, unknown> = {}) {
   return { supabase, state };
 }
 
-function line(overrides: Partial<TurnEngineCartLine> = {}): TurnEngineCartLine {
+function line(overrides: Partial<CartLine> = {}): CartLine {
   return {
     menu_item_id: "item-x",
     name:         "Item",
@@ -147,109 +146,15 @@ Deno.test("createCheckoutSession: session total matches an independently-compute
 // ── Test 2: idempotency — a double-submit of the same cart creates ONE ────
 // session, never two.
 
-Deno.test("appendEngineCheckoutLinkIfReady: submitting the same cart twice creates exactly one Stripe session", async () => {
-  const { stripe, createCalls } = makeFakeStripe();
-  const { supabase } = makeFakeSupabase({ order_type: "pickup", delivery_fee_cents: 0, driver_tip_cents: 0, notes: null, stripe_checkout_session_id: null });
-
-  const deps: EngineCheckoutDeps = {
-    supabase,
-    resolveStripeKey: () => "sk_test_fake",
-    createStripeClient: () => stripe,
-  };
-
-  const cartLines: TurnEngineCartLine[] = [line({ menu_item_id: "item-cb", name: "Cheese Burger", price_cents: 849, quantity: 1 })];
-
-  const callParams = {
-    cartId:     "cart-dup-1",
-    shopName:   "Vito's",
-    testMode:   true,
-    priorPhase: "confirm" as const,
-    nextPhase:  "link_sent" as const,
-    cartLines,
-    reply:      "All good — confirm?",
-    isSms:      false,
-  };
-
-  const firstReply = await appendEngineCheckoutLinkIfReady(callParams, deps);
-  const secondReply = await appendEngineCheckoutLinkIfReady(callParams, deps);
-
-  assertEquals(createCalls.length, 1, "a second submit of the same cart must not create a second Stripe session");
-  assert(firstReply.includes("pay.getsprintai.com/o/"), "first call must surface the payment link");
-  // Second call finds the session already persisted on the cart row (the
-  // fake supabase's update() mutates its own in-memory cartRow, same as a
-  // real UPDATE would) and returns the reply unmodified rather than
-  // fabricating a second link.
-  assertEquals(secondReply, callParams.reply);
-});
 
 // ── Test 3: the engine path's reply contains the payment link when a ──────
 // session was successfully created.
 
-Deno.test("appendEngineCheckoutLinkIfReady: reply contains the payment link once a session is created", async () => {
-  const { stripe } = makeFakeStripe();
-  const { supabase } = makeFakeSupabase({ order_type: "pickup", delivery_fee_cents: 0, driver_tip_cents: 0, notes: null, stripe_checkout_session_id: null });
-  const deps: EngineCheckoutDeps = {
-    supabase,
-    resolveStripeKey: () => "sk_test_fake",
-    createStripeClient: () => stripe,
-  };
-  const cartLines: TurnEngineCartLine[] = [line({ menu_item_id: "item-cb", name: "Cheese Burger", price_cents: 849, quantity: 1 })];
-
-  const reply = await appendEngineCheckoutLinkIfReady(
-    {
-      cartId:     "cart-link-1",
-      shopName:   "Vito's",
-      testMode:   true,
-      priorPhase: "confirm",
-      nextPhase:  "link_sent",
-      cartLines,
-      reply:      "All good — confirm?",
-      isSms:      false,
-    },
-    deps,
-  );
-
-  assert(reply.includes("Pay here: https://pay.getsprintai.com/o/"), `reply must contain the payment link, got: ${reply}`);
-});
 
 // ── Supporting coverage: no session is (re-)created on turns that don't ───
 // newly reach link_sent, and a session is never created for an empty cart.
 
-Deno.test("appendEngineCheckoutLinkIfReady: no-op when the phase was already link_sent before this turn", async () => {
-  const { stripe, createCalls } = makeFakeStripe();
-  const { supabase } = makeFakeSupabase({ stripe_checkout_session_id: "sess_existing" });
-  const deps: EngineCheckoutDeps = { supabase, resolveStripeKey: () => "sk_test_fake", createStripeClient: () => stripe };
 
-  const reply = await appendEngineCheckoutLinkIfReady(
-    {
-      cartId: "cart-2", shopName: "Vito's", testMode: true,
-      priorPhase: "link_sent", nextPhase: "link_sent",
-      cartLines: [line()], reply: "Anything else?", isSms: false,
-    },
-    deps,
-  );
-
-  assertEquals(createCalls.length, 0);
-  assertEquals(reply, "Anything else?");
-});
-
-Deno.test("appendEngineCheckoutLinkIfReady: no-op when this turn didn't reach link_sent at all", async () => {
-  const { stripe, createCalls } = makeFakeStripe();
-  const { supabase } = makeFakeSupabase();
-  const deps: EngineCheckoutDeps = { supabase, resolveStripeKey: () => "sk_test_fake", createStripeClient: () => stripe };
-
-  const reply = await appendEngineCheckoutLinkIfReady(
-    {
-      cartId: "cart-3", shopName: "Vito's", testMode: true,
-      priorPhase: "confirm", nextPhase: "confirm",
-      cartLines: [line()], reply: "All good — confirm?", isSms: false,
-    },
-    deps,
-  );
-
-  assertEquals(createCalls.length, 0);
-  assertEquals(reply, "All good — confirm?");
-});
 
 Deno.test("createCheckoutSession: rejects an empty cart rather than creating a zero-item Stripe session", async () => {
   const { stripe, createCalls } = makeFakeStripe();
@@ -276,14 +181,14 @@ Deno.test("appendCheckoutLink: adds the link under the SMS budget, never doubles
 });
 
 // ── buildEngineCheckoutSessionInput: pure adapter, no bundle branch needed
-// (TurnEngineCartLine has no bundle variant) ───────────────────────────────
+// (CartLine has no bundle variant) ───────────────────────────────
 
 Deno.test("buildEngineCheckoutSessionInput: sums only real cart lines, ignores a line with no menu_item_id", () => {
-  const cartLines: TurnEngineCartLine[] = [
+  const cartLines: CartLine[] = [
     line({ menu_item_id: "a", name: "Cheese Burger", price_cents: 849, quantity: 1 }),
     line({ menu_item_id: "b", name: "Fries", price_cents: 349, quantity: 2, modifiers: ["Extra crispy"] }),
     // A synthetic non-real line (no menu_item_id) must never be priced.
-    { name: "placeholder", quantity: 1, price_cents: 99999, modifiers: [] } as unknown as TurnEngineCartLine,
+    { name: "placeholder", quantity: 1, price_cents: 99999, modifiers: [] } as unknown as CartLine,
   ];
   const built = buildEngineCheckoutSessionInput({
     cartId: "cart-4", shopName: "Vito's", testMode: true, cartLines,

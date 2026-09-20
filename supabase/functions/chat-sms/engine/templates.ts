@@ -73,7 +73,8 @@ export const T = {
   readbackHeader: (f: "pickup" | "delivery" | null, address: string | null) =>
     f === "delivery" && address ? `Here's your order for delivery to ${address}:` : `Here's your order for pickup:`,
   moneyLine: (parts: string[]) => parts.join(" · "),
-  handoff: (url: string | null) => (url ? `Pay here: ${url}` : `Your payment link is on its way.`),
+  handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
+  checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
   afterPay: () => `We'll text you when it's ready.`,
 
   lineUnresolved: (span: string, c: number) => [

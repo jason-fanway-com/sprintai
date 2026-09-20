@@ -136,3 +136,18 @@ Deno.test("runner: a model answer with no items on a message naming items gets o
   assertEquals(out.form.lines.length, 1);
   assertStringIncludes(out.reply, "Garlic Knots");
 });
+
+Deno.test("runner: a failed checkout reopens the confirm step instead of pretending a link is coming", async () => {
+  const db = new FakeDb();
+  const d = deps(db, () => [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  d.createCheckout = () => Promise.resolve({ ok: false as const, error: "boom" });
+  let cart: RunnerInput["cart"] = { id: "c1", engine_form: null, test_mode: true, stripe_checkout_session_id: null };
+  const base = { shop, conversationId: "conv", lastBotMessage: null as string | null, isFirstContact: false };
+  let out = await runEngineTurn({ ...base, cart, message: "pickup" }, d); cart = { ...cart, engine_form: out.form };
+  out = await runEngineTurn({ ...base, cart, message: "garlic knots" }, d); cart = { ...cart, engine_form: out.form };
+  out = await runEngineTurn({ ...base, cart, message: "thats it" }, d); cart = { ...cart, engine_form: out.form };
+  out = await runEngineTurn({ ...base, cart, message: "yes" }, d);
+  assertStringIncludes(out.reply, "Reply YES to try again");
+  assertEquals(out.form.status, "confirming");
+  assertEquals(out.form.confirmed, false);
+});

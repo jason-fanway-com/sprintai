@@ -36,7 +36,8 @@ export function next(form: OrderForm, menu: Menu, refAsk: { candidates: number[]
       return { kind: "fulfillment" };
     }
     if (step === "address" && delivery && (form.address === null || !form.address.validated || !form.address.zone_ok)) return { kind: "address" };
-    if (step === "items" && !form.items_done) return { kind: "items" };
+    const priced = form.lines.filter((l) => l.status.kind === "complete").length;
+    if (step === "items" && (!form.items_done || priced === 0)) return { kind: "items" };
     if (step === "tip" && delivery && form.tip === null) return { kind: "tip" };
     if (step === "confirm" && !form.confirmed) return { kind: "confirm" };
   }

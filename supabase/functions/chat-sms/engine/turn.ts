@@ -140,6 +140,7 @@ export function turn(input: TurnInput): TurnOutput {
     q = next(form, menu, null); key = questionKey(q); count = 0;
     form.open = q; form.asked = { key, count };
   }
+  if (q?.kind === "items" && form.items_done && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; }
   if (q?.kind === "confirm") form.status = "confirming";
   const handoff = q === null && form.confirmed && form.status === "awaiting_payment";
 
@@ -168,7 +169,8 @@ export function turn(input: TurnInput): TurnOutput {
   if (notes.length) acks.push({ kind: "noted", notes });
   for (const r of res.removed) {
     const it = r.item_id ? menu.items.get(r.item_id) : null;
-    acks.push({ kind: "line_removed", name: it?.display_name ?? r.span });
+    if (it) acks.push({ kind: "line_removed", name: it.display_name });
+    else declines.push({ code: "dropped_line", span: r.span });
   }
 
   let info: Info | null = null;

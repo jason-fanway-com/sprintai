@@ -77,7 +77,8 @@ export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" |
 export type ChoiceMatch = { kind: "one"; choice_id: string } | { kind: "many"; choice_ids: string[] } | { kind: "none" };
 
 export function matchChoice(span: string, group: MenuGroup, within?: string[]): ChoiceMatch {
-  const sw = words(span).map(singular);
+  const cwords = contentWords(span);
+  const sw = (cwords.length ? cwords : words(span)).map(singular);
   if (sw.length === 0) return { kind: "none" };
   const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));

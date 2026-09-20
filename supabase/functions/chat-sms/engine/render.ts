@@ -14,7 +14,7 @@ export type Ack =
   | { kind: "tip"; cents: number }
   | { kind: "noted"; notes: string[] };
 
-export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero"; span?: string };
+export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
 
 export type Info =
   | { kind: "cart"; totals: Totals }
@@ -97,7 +97,9 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       }
       if (facet === "size") {
         const sizes = sortSizes([...new Set(cands.map((c) => c.facets.size).filter((s): s is string => !!s))]);
-        return T.whatSize(title(cands[0].facets.kind ?? l.span), sizes);
+        const sizeWords = new Set(sizes);
+        const nameNoSize = cands[0].display_name.split(" ").filter((w) => !sizeWords.has(w.toLowerCase())).join(" ");
+        return T.whatSize(nameNoSize || title(cands[0].facets.kind ?? l.span), sizes);
       }
       const names = cands.slice(0, 8).map((c) => c.display_name);
       return T.whichOne(names) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
@@ -161,6 +163,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       case "address_to_pickup": parts.push(T.addressToPickup()); break;
       case "tip_zero": parts.push(T.tipZero()); break;
       case "tip_out_of_range": parts.push(T.tipOutOfRange()); break;
+      case "checkout_failed": parts.push(T.checkoutFailed()); break;
       case "not_delivery_shop": break;
     }
   }
