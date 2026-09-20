@@ -1462,6 +1462,25 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           };
         }
         break;
+      // M2 fix (2026-09-19, live conv d3539d12 #5): the answer to "which
+      // one?" was removal language against the cart, not a pick — same
+      // "cart already mutated in place by answer(), original disambiguation
+      // stays open exactly as it was" carry-forward as disambiguation_new_item_added
+      // immediately above, minus qualifyingAddMenuItemId (nothing was added).
+      case "disambiguation_removal_applied":
+        if (priorState.open?.kind === "disambiguation") {
+          turnEvents = {
+            ...turnEvents,
+            disambiguationCandidateIds: priorState.open.candidates,
+            disambiguationQuantity: priorState.open.quantity,
+            disambiguationSpanText: priorState.open.spanText,
+            disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
+            disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            heldModifierText: priorState.open.heldModifierText,
+            replacementSourceLineKey: priorState.open.replacementSourceLineKey,
+          };
+        }
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the
