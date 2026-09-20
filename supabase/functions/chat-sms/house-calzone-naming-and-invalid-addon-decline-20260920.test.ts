@@ -11,7 +11,7 @@
 // carries 50+ real items containing "chicken" — see turn-engine.ts's own
 // findFreshAddSiblingNameMismatch / findAnaphoricAddOnTargetWithNoModifiers
 // headers for the full analysis.
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { decide, type Proposal, type TurnEngineMenuItem } from "./turn-engine.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 
@@ -94,8 +94,26 @@ Deno.test("decide (X3 follow-up, gap 1): 'House - Personal calzone' resolves to 
   assertEquals(result.categoryMismatchPending, {
     menu_item_id: CALZONE_PERSONAL_ID,
     quantity: 1,
-    message: "We have both House and Calzone as a personal stromboli — added the Calzone one. Keep it, or take it off?",
+    message: "I can put the Personal Calzone on, or the House stromboli — which?",
   });
+});
+
+// 2026-09-20 PO dispatch (live repro v580, DB-verified): the naming-
+// collision question used to say "added the Calzone one" while the write
+// is actually HELD until the customer answers -- categoryMismatchPending's
+// own doc, "category_confirm" case in ask() -- so cart_json was still []
+// at this exact turn. The wording must never claim the add already
+// happened; it must describe a pending choice.
+Deno.test("decide (X3 follow-up, gap 1, wording matches state): the naming-collision question never claims the item is already added, since the write is held", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "House - Personal calzone", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], MENU, LEXICON, undefined, "House - Personal calzone");
+  assertEquals(result.cart.length, 0, "cart must genuinely be empty -- the write is held, not just hidden");
+  const message = result.categoryMismatchPending?.message ?? "";
+  assert(!/\badded\b/i.test(message), `pending question must not claim a completed add: ${message}`);
 });
 
 Deno.test("decide (X3 follow-up, gap 1 regression): a plain 'Calzone - Personal' order with no collision word adds normally, no question", () => {

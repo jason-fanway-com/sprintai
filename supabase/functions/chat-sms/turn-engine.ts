@@ -1765,11 +1765,19 @@ const buildFreshAddCategoryConfirmMessage = (displayName: string, category: stri
 
 // Wording for the FRESH-ADD sibling-name-collision question (X3 follow-up,
 // findFreshAddSiblingNameMismatch's own header) — reuses the identical
-// "held out, not yet added" framing and keep/skip answer contract as
-// buildFreshAddCategoryConfirmMessage just above (impliesCategoryConfirmYes
-// governs both), but names the SPECIFIC sibling the customer's own words
-// also matched, since "we only have X" (that function's wording) would be
-// false here — both items are real and on the menu.
+// "held out, not yet added" answer contract as buildFreshAddCategoryConfirm-
+// Message just above (impliesCategoryConfirmYes governs both: the write is
+// held until the customer answers, same as that function's case), but names
+// the SPECIFIC sibling the customer's own words also matched, since "we
+// only have X" (that function's wording) would be false here — both items
+// are real and on the menu.
+//
+// 2026-09-20 PO dispatch (live repro, DB-verified): this used to read
+// "added the {ownType} one" here, which is a lie about the current state —
+// categoryMismatchPending holds the write until the reply resolves it (see
+// the "category_confirm" case below), so at the moment this message is
+// sent cart_json is still empty. Reworded to describe the PENDING choice,
+// never a completed one, per the PO's own wording.
 const buildFreshAddSiblingConfirmMessage = (
   resolvedItem: TurnEngineMenuItem,
   sibling: TurnEngineMenuItem,
@@ -1778,7 +1786,8 @@ const buildFreshAddSiblingConfirmMessage = (
   const [siblingType, sizeHalf] = sibling.name.split(" - ");
   const size = (sizeHalf ?? "").trim().toLowerCase();
   const category = (resolvedItem.category ?? "").trim().toLowerCase();
-  return `We have both ${siblingType.trim()} and ${ownType.trim()} as a ${size} ${category} — added the ${ownType.trim()} one. Keep it, or take it off?`;
+  const sizeLabel = size ? `${size.charAt(0).toUpperCase()}${size.slice(1)} ` : "";
+  return `I can put the ${sizeLabel}${ownType.trim()} on, or the ${siblingType.trim()} ${category} — which?`;
 };
 
 // 2026-09-19 PO dispatch (freeze-queue item 4): the fresh-add
@@ -5797,6 +5806,21 @@ function findOffMenuChoiceAlternative(
 const ANAPHORIC_ADD_ON_RE = /\badd[- ]?ons?\b/i;
 const ANAPHORIC_ADD_ON_REFERENT_RE = /\b(?:for|to|on)\s+(?:that|it|this)\b/i;
 
+// 2026-09-20 PO dispatch (X3 follow-up round 2, live repro v580, real conv):
+// the demonstrative referent above ("for/to/on that/it/this") only covers a
+// customer who re-asserts a pointer word. A genuine follow-up turn just as
+// often drops the pointer entirely and asks about the add-on itself by
+// definite reference ("and the chicken add-on?") — nothing else in the
+// message could plausibly mean anything BUT "the add-on we were just
+// discussing," so this is checked as an OR alternative to the referent
+// regex above, not a replacement. Narrow on purpose, same discipline as the
+// referent regex: anchored start-to-end (^...$) so it only matches when the
+// add-on phrase is the ENTIRE message (plus an optional leading connector/
+// "the") — the instant anything else follows the add-on phrase ("...for my
+// second pizza?"), this stays unmatched and the message falls through to
+// the ordinary ambiguous-tie handling, same as before this dispatch.
+const ANAPHORIC_ADD_ON_BARE_FOLLOWUP_RE = /^(?:and\s+|what about\s+|and what about\s+)?(?:the\s+)?[a-z][\w\s'-]*\badd[- ]?ons?\b\s*\??\s*$/i;
+
 function findAnaphoricAddOnTargetWithNoModifiers(
   customerMessage: string | undefined,
   resolvedAddsThisTurn: ResolvedAdd[],
@@ -5804,7 +5828,8 @@ function findAnaphoricAddOnTargetWithNoModifiers(
   menuById: Map<string, TurnEngineMenuItem>,
 ): TurnEngineMenuItem | null {
   if (!customerMessage) return null;
-  if (!ANAPHORIC_ADD_ON_RE.test(customerMessage) || !ANAPHORIC_ADD_ON_REFERENT_RE.test(customerMessage)) return null;
+  if (!ANAPHORIC_ADD_ON_RE.test(customerMessage)) return null;
+  if (!ANAPHORIC_ADD_ON_REFERENT_RE.test(customerMessage) && !ANAPHORIC_ADD_ON_BARE_FOLLOWUP_RE.test(customerMessage)) return null;
   const targetId = resolvedAddsThisTurn[resolvedAddsThisTurn.length - 1]?.menu_item_id
     ?? [...cart].reverse().find(isRealCartLine)?.menu_item_id
     ?? null;
@@ -6481,11 +6506,33 @@ export function decide(
     // keep-or-skip question instead — only the first such add per turn;
     // see categoryMismatchPending's own declaration above.
     const freshAddDisplayName = menuItem.ask_plan.display_name ?? menuItem.name;
+    // 2026-09-20 PO dispatch (X3 follow-up round 2, live repro v580, real
+    // conv): both the category-mismatch check just below and the sibling-
+    // mismatch check further down `continue` before ever reaching the 00-BF
+    // modifier floor (a few hundred lines below, ff729ce4's own decline) --
+    // the ONE place that would otherwise say "doesn't take add-ons" for an
+    // add-on PROPOSE folded directly onto THIS add's own `choices` (as
+    // opposed to a separate ambiguous `add`, findAnaphoricAddOnTargetWithNo-
+    // Modifiers's own gap above). Confirmed via direct decide() probing: a
+    // fresh add that BOTH collides on naming (holds the item back pending
+    // keep-or-skip) AND carries its own add-on request silently loses the
+    // add-on with no decline at all, because the hold's `continue` skips
+    // past the floor before it ever runs. Scoped identically narrow to
+    // ff729ce4's own condition -- only when the resolved item has ZERO
+    // modifier groups, so there is no real choice-recovery machinery to
+    // duplicate here (an item with real modifier steps still gets the
+    // floor's fuller, choice-aware wording, unaffected by this check, since
+    // whether the RIGHT choice resolves depends on that recovery logic this
+    // has no business second-guessing).
+    const addOnDeclineForHeldAdd = ((add.choices ?? []).length > 0 && (menuItem.ask_plan.steps ?? []).length === 0)
+      ? { reason: `The ${freshAddDisplayName} doesn't take add-ons.` }
+      : null;
     if (
       !categoryMismatchPending &&
       findFreshAddCategoryMismatch(add.item_span ?? "", `${freshAddDisplayName} ${menuItem.name}`, menuItem.category, menu)
     ) {
       const displayName = freshAddDisplayName;
+      if (addOnDeclineForHeldAdd) declines.push(addOnDeclineForHeldAdd);
       categoryMismatchPending = {
         menu_item_id: menuItem.id,
         quantity: add.quantity,
@@ -6509,6 +6556,9 @@ export function decide(
       ? findFreshAddSiblingNameMismatch(add.item_span ?? "", menuItem, menu)
       : null;
     if (siblingMismatch) {
+      // See addOnDeclineForHeldAdd's own doc above the category-mismatch
+      // check -- identical gap, same fix, this hold's own `continue`.
+      if (addOnDeclineForHeldAdd) declines.push(addOnDeclineForHeldAdd);
       categoryMismatchPending = {
         menu_item_id: menuItem.id,
         quantity: add.quantity,
