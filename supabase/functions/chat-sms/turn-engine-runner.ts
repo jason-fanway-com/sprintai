@@ -1506,6 +1506,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         // AskTurnEvents.lineReplacedThisTurn's own doc.
         turnEvents = { ...turnEvents, lineReplacedThisTurn: true };
         break;
+      case "line_removed_at_confirm":
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): the line was
+        // already removed in place by answer() (turn-engine.ts's "confirm"
+        // case, mechanism 3). Same fresh-read-back handling as
+        // line_replaced/quantity_corrected — see
+        // AskTurnEvents.lineRemovedAtConfirmThisTurn's own doc.
+        turnEvents = { ...turnEvents, lineRemovedAtConfirmThisTurn: true };
+        break;
       case "replacement_unavailable":
         // 2026-09-18 PO dispatch (read-back corrections, mechanism 2): X
         // isn't its own menu item — nothing was touched. The explanation
@@ -1593,6 +1601,11 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
               deps.newLineKey ?? (() => crypto.randomUUID()),
               remainderMessage,
               remainderInactiveLexicon,
+              // Money bug fix (2026-09-19, live conv 0dcb02a7): this is by
+              // definition a remainder AFTER answer() already resolved the
+              // primary question this turn — see decide()'s own
+              // treatCartMatchAsRestatement doc.
+              true,
             );
             workingCart.splice(0, workingCart.length, ...remainderDecide.cart);
             declines = [...declines, ...remainderDecide.declines];
@@ -1914,6 +1927,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       deps.newLineKey ?? (() => crypto.randomUUID()),
       input.message,   // 00-BD: to tell a restatement from a new order
       inactiveLexicon,
+      // Money bug fix (2026-09-19, live conv 0dcb02a7): this PROPOSE call
+      // only ever runs here because ANSWER couldn't resolve `priorState.open`
+      // deterministically (00-BI's own header, just above) -- a genuinely
+      // fresh, unprompted message always arrives with priorState.open null.
+      // See decide()'s own treatCartMatchAsRestatement doc.
+      priorState.open !== null,
     );
     workingCart.splice(0, workingCart.length, ...decideResult.cart);
     declines = decideResult.declines;
