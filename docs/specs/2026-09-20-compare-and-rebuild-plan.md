@@ -288,3 +288,17 @@ words ("order") never raise an omission question, "and" is dropped from matching
 cheese" hits its term, and the legacy checkout-phase block in index.ts is off for clean-engine shops
 (it would have written cart_json around the form after a payment link). Deletion plan for the old
 engines recorded in `2026-09-20-deletion-plan.md`.
+
+**13:35, all three shops on the new engine.** Deploy 51a368cb, model Haiku 4.5 via OpenRouter.
+Acceptance, five runs per scenario, asserting the database: Vito's 20/20 (canary now includes an
+edit after the payment link, which expires the old Stripe session and issues a new one), Not Just
+Bagels 10/10 (dozen with per-flavor counts, plus a breakfast sandwich with its bagel/bread/roll
+choice), Zio's 10/10. Turn p50 about 2 s, p95 under 5 s. Fixes in the last hour, all structural:
+the second reader upgrades a short model span to the unique longer lexicon term it sits inside
+("bagel" + "plain cream cheese" → "bagel with plain cream cheese"); "that's it" during an item
+question is remembered rather than dropped; bundle flavors match without the unit word; the
+webhook's expiry handler only closes a cart whose session it still points at.
+
+Open items: Phase 4 deletion (§4 and `2026-09-20-deletion-plan.md`); NJB menu data (no bagel-type
+slot on "Bagel With …" items; "bacon egg cheese" term points at the turkey sandwich); crew freeze
+still in force on chat-sms.
