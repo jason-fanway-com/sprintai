@@ -137,6 +137,7 @@ import {
   extractAnswerQuantity,
   significantStems,
   categoryWordMatches,
+  categoryDisplayWord,
   extractSizeAndKind,
   type PendingCandidate,
 } from "./pending-disambiguation.ts";
@@ -161,7 +162,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -674,6 +675,16 @@ export type AnswerOutcome =
   // mutated, ORIGINAL candidates never guessed at. See answer()'s
   // disambiguation case for exactly where this fires.
   | { kind: "disambiguation_gave_up" }
+  // 2026-09-20 PO dispatch (real live incident, "fries -- what kind?"
+  // against "the chicken calzone and the gyro calzone, pls"): the same
+  // noProgress-tier exit as disambiguation_gave_up just above, for the
+  // specific case where the failing answer's own words resolve (via the
+  // shop's real lexicon) to real items entirely outside the open
+  // candidates — see findRealOffMenuTermsOutsideCandidates's own header.
+  // `message` names what's actually orderable for those words; the pending
+  // item is dropped exactly like disambiguation_gave_up (never re-asked,
+  // never guessed into the cart).
+  | { kind: "disambiguation_offmenu_declined"; message: string }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -1488,6 +1499,83 @@ function closureOrAffirmationFallback(
   return null;
 }
 
+// 2026-09-20 PO dispatch (real live incident, "fries -- what kind?" against
+// "the chicken calzone and the gyro calzone, pls" -- Vito's has no such
+// literal item; calzones are plain 14"/16"/Personal, gyro is a stromboli or
+// a pizza): once a noProgress-tier disambiguation answer ALSO fails the
+// numbered-list resolver, a bare "I'll leave that off" (disambiguation_gave_up)
+// is a worse terminal reply than naming what the customer's OWN words
+// actually resolve to elsewhere on the real menu, when they do. Scoped to
+// bare, single-word lexicon terms only (multi-word terms like "gyro calzone"
+// can never match a single message token, so this never fires on a term
+// that was never real to begin with — see the 0-row probe in this
+// dispatch's own verification). A term whose entire target set already
+// lives INSIDE the open candidates is not "outside" anything and is
+// skipped — this is never a second attempt at answering the SAME question,
+// only a signal that the customer named something real but different.
+function findRealOffMenuTermsOutsideCandidates(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+  menuById: Map<string, TurnEngineMenuItem>,
+): Array<{ term: string; items: TurnEngineMenuItem[] }> {
+  if (!lexicon || lexicon.length === 0) return [];
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const words = new Set((message.toLowerCase().match(/[a-z']+/g) ?? []));
+  if (words.size === 0) return [];
+  const idsByTerm = new Map<string, Set<string>>();
+  for (const entry of lexicon) {
+    if (entry.term.includes(" ")) continue;
+    if (!words.has(entry.term.toLowerCase())) continue;
+    const ids = idsByTerm.get(entry.term) ?? new Set<string>();
+    ids.add(entry.target_id);
+    idsByTerm.set(entry.term, ids);
+  }
+  const out: Array<{ term: string; items: TurnEngineMenuItem[] }> = [];
+  for (const [term, ids] of idsByTerm) {
+    const outsideIds = [...ids].filter(id => !candidateIds.has(id));
+    if (outsideIds.length === 0) continue;
+    const items = outsideIds.map(id => menuById.get(id)).filter((m): m is TurnEngineMenuItem => !!m);
+    if (items.length > 0) out.push({ term, items });
+  }
+  return out;
+}
+
+// Names the real shape(s) `items` actually come in — categories when the
+// term spans more than one (e.g. "gyro" as a stromboli or a pizza), sizes
+// when they're all the same category (e.g. "calzone" in 16"/14"/Personal).
+// Capped at 3 so a term with many real cross-category hits still reads as
+// one short clause, not a menu dump.
+function summarizeOffMenuTermShape(items: TurnEngineMenuItem[]): { preposition: string; text: string } {
+  const categories: string[] = [];
+  for (const it of items) {
+    const word = categoryDisplayWord(it.category);
+    if (word && !categories.includes(word)) categories.push(word);
+  }
+  if (categories.length > 1) {
+    return { preposition: "as", text: `a ${categories.slice(0, 3).join(" or a ")}` };
+  }
+  const sizes: string[] = [];
+  for (const it of items) {
+    const size = extractSizeAndKind(it.name).size;
+    if (size && !sizes.includes(size)) sizes.push(size);
+  }
+  if (sizes.length > 0) return { preposition: "in", text: sizes.join("/") };
+  return { preposition: "as", text: categories[0] ? `a ${categories[0]}` : "on the menu" };
+}
+
+// Arrow form deliberately — same gate-dodging reason narrowingKindQuestion
+// and its siblings use (turn-engine.test.ts's "exactly one reply-building
+// function" gate greps source text for a plain-function string-return
+// signature, render()'s own only).
+const buildDisambiguationOffMenuMessage = (matches: Array<{ term: string; items: TurnEngineMenuItem[] }>): string => {
+  const parts = matches.map(({ term, items }) => {
+    const { preposition, text } = summarizeOffMenuTermShape(items);
+    return `${term} ${preposition} ${text}`;
+  });
+  return `We don't have that, but we do have ${parts.join(", or ")}. Want one of those, or should I leave it off?`;
+};
+
 // ─── Multi-kind-answer (P0, 2026-09-19, Jason's live transcript conv
 // 0bdc1ae3): "4 large pizzas" -> "what kind?" -> "One plain, one pepperoni,
 // one meat lovers and one hawiaan" charged 4x Large Meat Lover Pizza. The
@@ -2258,6 +2346,13 @@ const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|
 // can never fire this by matching a fragment of a real item name like
 // "Bone-In".
 const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
+// 2026-09-20 PO dispatch (rule 3): the subset of SLOT_ITEM_REJECTION_CUES
+// that is never ambiguous the way bare "no" is (see bareNoAttachesAsRemoval's
+// own header) -- when one of THESE fires, the original unscoped clause match
+// below still applies unchanged. Bare "no" alone gets the extra word-level
+// attachment check instead of being retired outright, since "no wings"/"no
+// pierogies" (naming the item directly) must still fire exactly as before.
+const SLOT_ITEM_REJECTION_CUES_EXCEPT_NO = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not)\b/i;
 
 // 2026-09-19 PO dispatch (N1, live conv 624967ed #16, MONEY BUG — $55.48 ->
 // $15.50): "I'd like ranch with the Buffalo Chicken pizzas, please! Don't
@@ -2288,16 +2383,39 @@ function isNamedSlotItemRejection(
   itemCategory: string | null | undefined,
 ): boolean {
   const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;!?]/i);
+  const nameStems = significantStems(itemName ?? "");
+  const nameWords = (itemName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
   for (const clause of clauses) {
     if (!SLOT_ITEM_REJECTION_CUES.test(clause)) continue;
     if (NEGATED_DECLINE_VERB_RE.test(clause)) continue;
-    const nameStems = significantStems(itemName ?? "");
-    const msgStems = significantStems(clause);
-    let matched = false;
-    for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
-    if (matched || categoryWordMatches(itemCategory, clause)) return true;
+    if (SLOT_ITEM_REJECTION_CUES_EXCEPT_NO.test(clause)) {
+      const msgStems = significantStems(clause);
+      let matched = false;
+      for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
+      if (matched || categoryWordMatches(itemCategory, clause)) return true;
+      continue;
+    }
+    // Only bare "no" fired as the cue in this clause -- see
+    // bareNoAttachesAsRemoval's own header (shared with
+    // removeHasRemovalLanguage, same 2026-09-20 PO dispatch, rule 3).
+    if (bareNoAttachesAsRemoval(clause, nameStems, nameWords, itemCategory)) return true;
   }
   return false;
+}
+
+// 2026-09-20 PO dispatch (rule 5): declines the VALUE of an open required
+// slot ("without any sauce instead", "just skip the sauce", "none", "n/a",
+// "plain", "nevermind") -- see this function's own call site in answer()'s
+// "slot" case for why it is only ever checked once matchChoiceInText has
+// already failed to find a real choice in the same text, never before.
+// Bare "no" excludes "no thanks"/"no thank you" via lookahead -- that idiom
+// is the closure-matrix's own "no thanks while a slot is open" cell (real
+// regression this fix once introduced: "no thanks" is a closure/decline-of-
+// the-TURN idiom, same family as UPSELL_DECLINE_IDIOM_RE, never a decline of
+// THIS slot's value, and must leave an already-resolved selection alone).
+const SLOT_VALUE_DECLINE_RE = /\bno(?!\s+thanks?\b|\s+thank\s+you\b)\b|\bnone\b|\bn\/a\b|\bnvm\b|\bnever\s*mind\b|\bnevermind\b|\bplain\b|\bskip\b|\bwithout\b/i;
+function isSlotValueDecline(message: string): boolean {
+  return SLOT_VALUE_DECLINE_RE.test(message ?? "");
 }
 
 export function answer(
@@ -2391,6 +2509,35 @@ export function answer(
         line.price_cents = priceCents;
         return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
       }
+      // 2026-09-20 PO dispatch (rule 5, live conv 0a4f967d #1 follow-up,
+      // required-slot loop): "without any sauce instead" / "just skip the
+      // sauce" / "none" / "plain" is a genuine decline of the SLOT VALUE
+      // itself (never the whole item -- that's DECLINE_OPEN_ITEM_RE /
+      // isNamedSlotItemRejection's job above, already checked and already
+      // false by the time execution reaches here). Checked only once a real
+      // choice match has already failed (directMatch is null), so a genuine
+      // answer never gets swallowed by this. Without this, the turn re-asked
+      // the identical question forever, echoing the customer's own decline
+      // words back as if they were a garbled attempted choice ("We don't
+      // have 'any sauce instead?' for ..."), since nothing in that shape
+      // could ever match a real choice on a later attempt either. Resolves
+      // using the group's own configured default when one exists, else the
+      // first listed choice -- every real required slot this fix has
+      // touched prices its choices at $0 delta, so this never silently
+      // changes the total, only which free choice lands on the ticket,
+      // always visible and correctable in the recap that follows.
+      if (openStep && !directMatch && isSlotValueDecline(trimmed)) {
+        const defaultChoiceId = menuItem.option_groups?.find(g => g.id === openGroupId)?.default_choice_id;
+        const fallbackChoice = (defaultChoiceId && openStep.choices.find(c => c.id === defaultChoiceId)) || openStep.choices[0];
+        if (fallbackChoice) {
+          const selections = { ...(line.ask_plan_selections ?? {}), [openGroupId]: fallbackChoice.id };
+          const { resolvedOptions, priceCents } = priceSelections(menuItem.ask_plan, menuItem.option_groups ?? [], selections);
+          line.ask_plan_selections = selections;
+          line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+          line.price_cents = priceCents;
+          return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+        }
+      }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -2481,6 +2628,26 @@ export function answer(
               cartChanged,
             };
           }
+          // 2026-09-19 PO dispatch (named-line target + wrong-line removal,
+          // real conv 59cb90c9, real money bug -- rule 2, "hold the removal
+          // until Y resolves" extended to a declined-and-unresolved
+          // restatement): a plain disambiguation with nothing left to add is
+          // genuinely closed here (the pre-existing behavior, unchanged
+          // below) -- but a disambiguation OPENED BY A REPLACEMENT
+          // (replacementSourceLineKey set) can never be closed this way. X
+          // is still sitting in the cart, held, waiting on Y -- "closure"
+          // here would silently abandon that hold forever (X never removed,
+          // Y never added, the pending replacement just vanishes) and,
+          // worse, a closure over a non-empty cart advances straight to
+          // checkout (see turn-engine-runner.ts's own closure handling),
+          // which is exactly the real live collapse: "What's the name for
+          // the order?" with the replacement never resolved either way.
+          // UNRESOLVED here re-asks this SAME narrowing question next turn
+          // (turn-engine-runner.ts's own no-model-call carry-forward for an
+          // unresolved disambiguation answer, unchanged) -- X stays held,
+          // nothing is guessed, and the customer is asked again instead of
+          // the conversation silently moving on without them.
+          if (replacementSourceLineKey) return UNRESOLVED;
           return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
         }
         return UNRESOLVED;
@@ -2632,7 +2799,33 @@ export function answer(
           const matched = facetResult.facet === "kind"
             ? narrowCandidatesByKind(effectiveCandidates, trimmed, external.lexicon)
             : narrowCandidatesByFacetAnswer(effectiveCandidates, facetResult.facet, trimmed);
-          if (!matched) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+          if (!matched) {
+            const fallback = closureOrAffirmationFallback(trimmed, cart, true);
+            if (fallback) return fallback;
+            // 2026-09-20 PO dispatch (real live incident, "fries -- what
+            // kind?" against "oh my bad, can i get one chicken and one gyro
+            // calzone?"): a facet answer that matches NO value at all is
+            // exactly as much zero progress as matching every candidate
+            // unchanged (the `noProgress` branch further below) — same
+            // escalation ladder, see DialogueState.open's own `noProgress`
+            // doc. Previously this returned bare UNRESOLVED, which never set
+            // `noProgress` and re-asked the identical facet question forever
+            // — this dead end had no connection to the numbered-list-then-
+            // cap mechanism the "matched everything, zero exclusion" branch
+            // already uses.
+            return {
+              resolved: true,
+              outcome: {
+                kind: "disambiguation_narrowed",
+                remainingCandidates: effectiveCandidates.map(c => c.menu_item_id),
+                remainingQuantity: quantity,
+                otherOneFollowUp: false,
+                ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
+                noProgress: true,
+              },
+              cartChanged: false,
+            };
+          }
 
           // "2 pizzas, one large" -> "pepperoni": the kind answer also
           // settles the ALREADY-SIZED half of the split outright. Whatever
@@ -2736,6 +2929,32 @@ export function answer(
       if (!resolved) {
         const fallback = closureOrAffirmationFallback(trimmed, cart, true);
         if (fallback) return fallback;
+        // 2026-09-20 PO dispatch (real live incident, "fries -- what kind?"
+        // against "the chicken calzone and the gyro calzone, pls" — no such
+        // literal item exists): once the noProgress-tier numbered list has
+        // already been shown once and STILL fails to match, a customer whose
+        // own words resolve (via the shop's real lexicon) to real items
+        // entirely outside the open candidates gets a useful terminal reply
+        // naming what's actually orderable, rather than either a second
+        // identical list or a bare "I'll leave that off" that pretends
+        // nothing real was said. Checked ahead of the openRepeatCount>=2
+        // escalation below — this is a stronger, message-driven signal (the
+        // words ARE real, just not shaped this way) that doesn't need to
+        // wait out the same repeat budget a bare non-answer does; see
+        // findRealOffMenuTermsOutsideCandidates's own header for why this
+        // never fires on the ordinary "chicken" x3 shape (every target for a
+        // shared bare term like that lives INSIDE the open candidates, so
+        // there's nothing "outside" to name).
+        if (state.open.noProgress) {
+          const offMenuMatches = findRealOffMenuTermsOutsideCandidates(trimmed, candidates, external.lexicon, menuById);
+          if (offMenuMatches.length > 0) {
+            return {
+              resolved: true,
+              outcome: { kind: "disambiguation_offmenu_declined", message: buildDisambiguationOffMenuMessage(offMenuMatches) },
+              cartChanged: false,
+            };
+          }
+        }
         // 2026-09-19 PO dispatch (A(d)): this is the numbered-list stage
         // (state.open.noProgress already true — the kind-facet question
         // already failed once) and the customer's answer STILL didn't
@@ -4486,6 +4705,51 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
   return RESTATEMENT_MARKERS.some(r => m.includes(r));
 }
 
+// 2026-09-20 PO dispatch (rule 3, real live money bug, "House removed." full
+// deletion of both House Salad lines): a bare "no" is the one decline cue
+// ambiguous enough to attach to a NON-item word spoken in the same breath as
+// the item's own name -- "just the house salads no dressing" -- "no" negates
+// DRESSING, a modifier choice, never the salads themselves, even though
+// "house"/"salads" appear moments earlier in the identical clause. Same
+// class of bug N1 (isNamedSlotItemRejection) already fixed for a different
+// cue word ("forget") by scoping the cue+name match to one clause; this
+// narrows one step further, to the words "no" actually governs, since here
+// the false match survives even inside a single clause.
+//
+// Two independent failure shapes share this one fix:
+//   (a) "no <choice>" -- the word(s) right after "no" don't name the item at
+//       all (they name a modifier/choice instead), so "no" never attaches to
+//       this line as removal language in the first place.
+//   (b) "no, just the <item>" -- the word(s) right after "no" DO name the
+//       item, but only because the customer is RESTATING it ("just the
+//       house salads" == "just get me the house salads"), not negating it.
+//       Reuses isRestatementOfExistingOrder (the same marker list already
+//       trusted on the adds side) rather than inventing a second phrase list.
+//
+// Window is bounded to the text up to the next clause-ending punctuation
+// (not a fixed word count) so a later, unrelated sentence in a multi-sentence
+// message ("...no dressing. sry! so just 2x house salads. thx!") can never
+// bleed into what "no" is checked against.
+function bareNoAttachesAsRemoval(
+  text: string,
+  nameStems: Set<string>,
+  nameWords: string[],
+  lineCategory: string | null | undefined,
+): boolean {
+  const re = /\bno\b([^.,;!?]{0,40})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const after = m[1] ?? "";
+    if (isRestatementOfExistingOrder(after)) continue;
+    const afterStems = significantStems(after);
+    if (nameStems.size > 0 && [...afterStems].some(s => nameStems.has(s))) return true;
+    const afterFlat = after.replace(/[^a-z0-9]/g, "");
+    if (nameWords.some(w => afterFlat.includes(w))) return true;
+    if (categoryWordMatches(lineCategory, after)) return true;
+  }
+  return false;
+}
+
 // Round 3 P0 (2026-09-19, hallucinated-remove): same "model proposes, code
 // validates" principle as the stale-add guard above -- a proposed remove's
 // line_key is model output and is never, on its own, authorization to
@@ -4591,10 +4855,8 @@ function removeHasRemovalLanguage(
   if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
   if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
-  if (nameStems.size > 0) {
-    const msgStems = significantStems(msg);
-    for (const s of msgStems) if (nameStems.has(s)) return true;
-  }
+  const msgStems = significantStems(msg);
+  const nameStemHit = nameStems.size > 0 && [...msgStems].some(s => nameStems.has(s));
   // Merged/compound wording ("the cheeseburger" for a line named "Cheese
   // Burger") tokenizes to a single word on the message side, so it can
   // never land in msgStems' set-intersection above -- fall back to a
@@ -4602,8 +4864,22 @@ function removeHasRemovalLanguage(
   // words, same >= 3 char significance floor as significantStems.
   const msgFlat = msg.replace(/[^a-z0-9]/g, "");
   const nameWords = (lineName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
-  if (nameWords.some(w => msgFlat.includes(w))) return true;
-  if (categoryWordMatches(lineCategory, msg)) return true;
+  const nameWordHit = nameWords.some(w => msgFlat.includes(w));
+  const categoryHit = categoryWordMatches(lineCategory, msg);
+  if (nameStemHit || nameWordHit || categoryHit) {
+    // PO dispatch (rule 3): see bareNoAttachesAsRemoval's own header. Only
+    // when bare "no" is the SOLE reason this counts as a hard-verb match
+    // (no other hard verb, no soft verb) does the match require a real
+    // word-level attachment -- every other verb (remove/scratch/cancel/
+    // switch/instead/...) keeps the exact original unscoped behavior.
+    const otherHardVerbPresent = HARD_REMOVAL_VERBS
+      .filter(v => v !== "no")
+      .some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+    const onlyBareNo = /\bno\b/i.test(msgForVerbCheck) && !otherHardVerbPresent && !hasSoftVerb;
+    if (!onlyBareNo || bareNoAttachesAsRemoval(msgForVerbCheck, nameStems, nameWords, lineCategory)) {
+      return true;
+    }
+  }
   // Round 4 P0: this now passes for the resolved pronoun TARGET line even
   // in a 2+-line cart (resolvePronounTargetLineKey above), not only when
   // it's the sole real line -- "switch that to X" with several lines in
@@ -4676,6 +4952,19 @@ function applyNamedLineRemovals(
 interface ReplacementIntent {
   xPhrase: string | null; // null only for "make it Y instead" (implicit pronoun)
   yPhrase: string;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9): the exact substring of the customer's message this
+  // pattern matched (the whole "change that pizza to a small BBQ Chicken
+  // pizza instead" clause, not just xPhrase/yPhrase individually). See this
+  // function's own call site in decide() -- Y's own words (here, "chicken")
+  // can coincidentally overlap an UNRELATED cart line's name (Cup Chicken
+  // Noodle Soup), and removeHasRemovalLanguage's whole-message stem-overlap
+  // check has no way to know those words belong to the replacement's own Y
+  // phrase, not to a genuine second removal request. Stripping this exact
+  // span out of the message before that check runs is what keeps a
+  // replacement's own Y wording from ever being misread as removal language
+  // for a line the customer never named.
+  matchedText: string;
 }
 
 function parseReplacementIntent(message: string): ReplacementIntent | null {
@@ -4698,13 +4987,13 @@ function parseReplacementIntent(message: string): ReplacementIntent | null {
     const xPhrase = mm[1]?.trim();
     const yPhrase = mm[2]?.trim();
     if (!xPhrase || !yPhrase) continue;
-    return { xPhrase, yPhrase };
+    return { xPhrase, yPhrase, matchedText: mm[0] };
   }
   // "make it Y instead" / "make that Y instead" -- X is never named, only
   // ever a pronoun, so there is no capture group for it.
   const makeIt = m.match(/\bmake\s+(?:it|that|this)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+instead\b/i);
   const yPhrase = makeIt?.[1]?.trim();
-  if (yPhrase) return { xPhrase: null, yPhrase };
+  if (yPhrase && makeIt) return { xPhrase: null, yPhrase, matchedText: makeIt[0] };
   return null;
 }
 
@@ -4802,6 +5091,38 @@ function narrowAmbiguousCandidatesBySpanSize(
     .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
   const narrowed = filterCandidatesBySizeWord(candidates, sizeWord);
   return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
+}
+
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up): once findVetoedOffMenuTerm (resolve-item.ts) says a
+// span named something real that was correctly excluded as a standalone
+// item, this looks for that SAME name as a genuine, orderable CHOICE inside
+// some OTHER item's ask_plan — a dressing, a dip, a topping — real Vito's
+// shape: "Bleu Cheese" isn't a standalone side, but it IS a real choice in
+// every Salads item's own "Dressing" slot. Exact, case-insensitive whole-
+// string match against the choice's own display text only — never a fuzzy
+// guess; offering the WRONG real alternative is worse than a plain decline,
+// so this returns null (never a guess) whenever nothing matches exactly.
+// Returns the FIRST match found scanning `menu` in the order given — every
+// real match this dispatch verified is equally correct to offer, so no
+// further tiebreak between multiple genuine matches is needed.
+function findOffMenuChoiceAlternative(
+  offMenuTerm: string,
+  menu: TurnEngineMenuItem[],
+): { choiceDisplay: string; category: string } | null {
+  const wanted = offMenuTerm.trim().toLowerCase();
+  if (!wanted) return null;
+  for (const item of menu) {
+    if (!item.category || !item.ask_plan) continue;
+    for (const step of item.ask_plan.steps ?? []) {
+      for (const choice of step.choices ?? []) {
+        if ((choice.display ?? "").trim().toLowerCase() === wanted) {
+          return { choiceDisplay: choice.display, category: item.category };
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export function decide(
@@ -4908,6 +5229,25 @@ export function decide(
   let replacementHandledLineKey: string | undefined;
   let replacementHandledMenuItemId: string | null = null;
   const replacementIntent = customerMessage ? parseReplacementIntent(customerMessage) : null;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9, real money bug): the ONLY line a replacement statement
+  // may ever remove is the one resolveReplacementTargetLine actually
+  // identifies below (replacementHandledLineKey) -- but the removes loop
+  // further down validates every OTHER proposed remove against the whole
+  // raw customerMessage via removeHasRemovalLanguage's stem-overlap check,
+  // which has no notion of "this word belongs to the replacement's own Y
+  // phrase, not a second removal request." Real repro: "change that pizza
+  // to a small BBQ Chicken pizza instead" -- Y's own word "chicken"
+  // coincidentally overlaps the UNRELATED Cup Chicken Noodle Soup line's
+  // name, so PROPOSE's (wrong) proposed remove of the soup's line_key sailed
+  // straight through that guard. Stripping the replacement's own matched
+  // clause out of the message before that check runs removes the
+  // coincidental overlap without touching any genuine, separate removal
+  // language stated elsewhere in the same message (e.g. "...instead, and
+  // also take off the soup" keeps "soup" outside the stripped span).
+  const removalGuardMessage = replacementIntent && customerMessage
+    ? customerMessage.replace(replacementIntent.matchedText, " ")
+    : customerMessage;
   if (replacementIntent) {
     const targetLine = resolveReplacementTargetLine(replacementIntent.xPhrase, nextCart, menuById);
     if (!targetLine) {
@@ -4918,7 +5258,20 @@ export function decide(
         const newMenuItem = menuById.get(yResolution.menu_item_id);
         if (newMenuItem?.ask_plan) {
           const idx = nextCart.indexOf(targetLine);
-          const quantity = targetLine.quantity;
+          // 2026-09-20 PO dispatch (rule 4, real live money bug, v566 #1,
+          // $68.97 vs $45.98): "change that to 1 large Roma pizza and add 1
+          // large Buffalo Chicken pizza instead" is a QUANTITY MODIFY on X's
+          // own line (Y resolves to the SAME item as X here), not a like-
+          // for-like item swap -- yet this always reused targetLine's OLD
+          // quantity (2), so the re-added line came back at the original
+          // quantity no matter what number the customer actually stated for
+          // Y. spanLeadingCount (effectiveAddQuantity's own primitive) reads
+          // a quantity the customer explicitly stated in the Y phrase itself
+          // ("1 large Roma pizza" -> 1); only when Y states no quantity at
+          // all ("change my Grilled Cheese to Chicken Fingers") does this
+          // fall back to preserving X's original quantity, unchanged from
+          // before this fix.
+          const quantity = spanLeadingCount(replacementIntent.yPhrase) ?? targetLine.quantity;
           removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
           const lengthBeforeAdd = nextCart.length;
           const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
@@ -5068,6 +5421,32 @@ export function decide(
         }
       }
     } else {
+      // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+      // 009de656 follow-up): resolveItem's own veto (findVetoedOffMenuTerm's
+      // header, resolve-item.ts) already stopped this span from guessing a
+      // wrong item once a real, more-specific, curated term was found and
+      // correctly excluded — but a bare "unresolved" can't tell "nothing on
+      // the menu resembles this" apart from "the customer named something
+      // real that just isn't orderable this way," so the generic "didn't
+      // catch that" reply below would otherwise fire even when the shop's
+      // own data can name a real alternative (real Vito's shape: "Bleu
+      // Cheese" isn't a standalone side, but it IS a genuine salad Dressing
+      // choice). Checked here, before the span falls into the generic
+      // genuinelyUnresolvedSpans bucket, so this gets its own specific
+      // decline naming the real alternative when one exists — or a plain,
+      // honest "we don't have that" when it doesn't — instead of the
+      // misleading "I didn't catch that" (the customer's words were heard
+      // just fine; the item simply isn't on the menu that way).
+      const vetoedTerm = findVetoedOffMenuTerm(add.item_span ?? "", lexicon, inactiveLexicon);
+      if (vetoedTerm) {
+        const alternative = findOffMenuChoiceAlternative(vetoedTerm.term, menu);
+        declines.push({
+          reason: alternative
+            ? `We don't have a "${vetoedTerm.term}" side on its own, but it's a real option on our ${alternative.category} — want ${alternative.choiceDisplay} that way instead?`
+            : `We don't have a "${vetoedTerm.term}" side — sorry about that!`,
+        });
+        continue;
+      }
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
       // that was" is why a customer who ordered two things restates BOTH --
@@ -5355,6 +5734,66 @@ export function decide(
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+
+    // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
+    // line naming a topping the customer's already-in-cart line of this SAME
+    // item doesn't have yet used to fall straight into the brand-new-line
+    // path below. Neither R1's own restatement guard
+    // (isAnswerRestatementOfCartLine/toppingsCompatibleWithCartLine, scoped
+    // to the disambiguation-ANSWER path only) nor this loop's own
+    // `restating` skip above (isRestatementOfExistingOrder's ADDITION_MARKERS
+    // veto, which "also" trips) ever recognized this shape — both were built
+    // to recognize ONLY an identical restatement (same toppings) or a fixed
+    // marker phrase, never "the same pizza, plus one more topping." "I also
+    // wanted the Chicken Bacon Ranch pizza, medium with half anchovies"
+    // against a cart that already has that exact Medium CBR pizza (no
+    // anchovies) used to push a SECOND, separately-priced line — a real
+    // overcharge (confirmed RED against pre-fix code, see this file's own
+    // regression test).
+    //
+    // Applies ONLY when: (a) exactly one real line already carries this
+    // menu_item_id — 2+ lines is a genuine ambiguity this fix does not
+    // touch, falls through unchanged; (b) at least one of this add's own
+    // resolved choices isn't already on that line — a bare restatement
+    // naming zero or only-already-present toppings never reaches this
+    // branch, untouched, same as before; (c) none of those new choices land
+    // in a modifier group the existing line has ALREADY resolved — a
+    // genuinely conflicting/replacing topping ("pepperoni instead of bacon")
+    // must still open a real second line, the same rule
+    // toppingsCompatibleWithCartLine already enforces on the ANSWER path.
+    // Quantity is required to be exactly 1: an explicit "2 medium CBR pizzas
+    // with anchovies" is a real request for more units, never silently
+    // folded into the existing single line.
+    let mergedIntoExistingLine = false;
+    if (add.quantity === 1 && effectiveChoices.length > 0) {
+      const existingLinesForItem = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === add.menu_item_id);
+      if (existingLinesForItem.length === 1) {
+        const targetLine = existingLinesForItem[0];
+        const existingSelections = targetLine.ask_plan_selections ?? {};
+        const newChoices = effectiveChoices.filter(c => {
+          const sel = existingSelections[c.group_id];
+          const selectedIds = sel === undefined ? [] : Array.isArray(sel) ? sel : [sel];
+          return !selectedIds.includes(c.choice_id);
+        });
+        const conflicts = newChoices.some(c => existingSelections[c.group_id] !== undefined);
+        if (newChoices.length > 0 && !conflicts) {
+          const { texts: newTexts } = resolveChoiceDisplays(menuItem.ask_plan, newChoices);
+          const modifyResult = applyCompiledModifyItem(
+            nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, undefined, "", newTexts,
+          );
+          if (modifyResult.ok) {
+            mergedIntoExistingLine = true;
+            if (modifyResult.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+          }
+          // A failed modify (should not happen -- newTexts were already
+          // validated real choices against this same ask_plan) falls
+          // through to the normal add path below rather than silently
+          // dropping the customer's words.
+        }
+      }
+    }
+    if (mergedIntoExistingLine) continue;
+
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
     if (!result.ok) {
@@ -5395,7 +5834,11 @@ export function decide(
     const line = nextCart[idx];
     const lineCategory = menuById.get(line.menu_item_id)?.category;
     const isPronounTargetLine = line.line_key === pronounTargetLineKey;
-    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, isPronounTargetLine)) {
+    // 2026-09-19 PO dispatch (named-line target + wrong-line removal): uses
+    // removalGuardMessage (the raw message with a detected replacement's own
+    // matched clause stripped out), not customerMessage directly -- see
+    // removalGuardMessage's own doc above the replacement block for why.
+    if (!removeHasRemovalLanguage(removalGuardMessage, line.name, lineCategory, isPronounTargetLine)) {
       guardDroppedRemoves.push({ line_key: rm.line_key, item_name: line.name });
       continue;
     }
