@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWords, singular, splitList, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWords, singular, splitList, STOPWORDS, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -39,12 +39,25 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   // yields a question, never a pick.
   const content = contentWords(span);
   if (content.length > 0) {
-    const partial = new Set<string>();
-    for (const t of menu.itemTerms) if (isWordSubset(content, t.words)) partial.add(t.target_id);
+    // exact word subsets first; else stems ("chicken parm sandwich" against "chicken parmesan sandwich")
+    const exact = new Set<string>(), stems = new Set<string>(), contentSing = content.map(singular);
+    for (const t of menu.itemTerms) {
+      if (isWordSubset(content, t.words)) exact.add(t.target_id);
+      else if (contentSing.every((w) => wordMatches(w, new Set(t.wordsSing)))) stems.add(t.target_id);
+    }
+    const partial = exact.size > 0 ? exact : stems;
     if (partial.size === 1) return { kind: "item", id: [...partial][0] };
     if (partial.size > 1) return { kind: "ambiguous", ids: [...partial].sort() };
   }
   return { kind: "none" };
+}
+
+/** A customer word names a menu word when equal, or when it is a stem of at least four letters ("parm"). */
+function wordMatches(w: string, pool: Set<string>): boolean {
+  if (pool.has(w)) return true;
+  if (w.length < 4) return false;
+  for (const p of pool) if (p.startsWith(w)) return true;
+  return false;
 }
 
 /** Filter candidates by a customer span: word subset of the display name, or its size facet. */
@@ -59,12 +72,10 @@ export function narrow(candidateIds: string[], span: string, menu: Menu): string
   };
   const keep = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => pool(id).has(w)));
   if (keep.length > 0) return keep;
-  // a stem the customer typed ("hawaii" for hawaiian): allowed only when it names exactly one candidate
-  if (sw.length === 1 && sw[0].length >= 4) {
-    const pre = candidateIds.filter((id) => menu.items.has(id) && [...pool(id)].some((w) => w.startsWith(sw[0])));
-    if (pre.length === 1) return pre;
-  }
-  return [];
+  // stems the customer typed ("parm" for parmesan, "hawaii" for hawaiian): each word must equal
+  // or begin a candidate's word. Several candidates may survive; that is a narrowing, not a pick.
+  const stems = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => wordMatches(w, pool(id))));
+  return stems;
 }
 
 export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" | "list" {
@@ -126,20 +137,17 @@ function requiredGroupOpen(line: Line, item: MenuItem): MenuGroup | null {
   return null;
 }
 
+/** Cheese base + Pepperoni -> the Pepperoni Pizza row, only when that row can still carry every other pick; else the base keeps them all, priced. */
 function applyCanon(line: Line, menu: Menu): void {
-  let changed = true;
-  while (changed && line.item_id) {
-    changed = false;
-    for (const mod of [...line.modifiers]) {
-      const derived = menu.canon.get(`${line.item_id}|${mod}`);
-      if (derived && menu.items.has(derived)) {
-        line.item_id = derived;
-        line.modifiers = line.modifiers.filter((m) => m !== mod);
-        line.choices = {};
-        changed = true;
-        break;
-      }
-    }
+  const holds = (id: string, picked: string[]) => picked.every((c) => menu.items.get(id)!.groups.some((g) => g.choices.some((x) => x.id === c)));
+  while (line.item_id) {
+    const mod = line.modifiers.find((m) => {
+      const d = menu.canon.get(`${line.item_id}|${m}`);
+      return !!d && menu.items.has(d) && holds(d, [...line.modifiers.filter((x) => x !== m), ...Object.values(line.choices)]);
+    });
+    if (!mod) return;
+    line.item_id = menu.canon.get(`${line.item_id}|${mod}`)!;
+    line.modifiers = line.modifiers.filter((m) => m !== mod);
   }
 }
 
@@ -253,6 +261,9 @@ export function bindLine(line: Line, menu: Menu): void {
       if (n.length >= 1 && n.length < cands.length) cands = n;
     }
     line.answers = [];
+    // one option span naming several toppings ("half pepperoni half mushroom", "pepperoni and
+    // mushrooms") becomes one span per topping, each keeping its own placement word
+    if (cands.length > 1) line.held = line.held.flatMap((h) => h.startsWith("-") ? [h] : segmentTopics(h, cands, menu));
     // "half pepperoni half mushroom" over derived single-topping rows: two spans that narrow to
     // different rows describe toppings on the shared base pizza, not two kinds
     if (cands.length > 1) {
@@ -268,7 +279,8 @@ export function bindLine(line: Line, menu: Menu): void {
         const baseHits = new Map<string, number>();
         for (const x of topicProps) for (const b of new Set(x.n.filter((id) => pool.includes(id)).map(baseOf))) baseHits.set(b, (baseHits.get(b) ?? 0) + 1);
         const common = [...baseHits.entries()].filter(([b, n]) => n === topicProps.length && menu.items.has(b)).map(([b]) => b);
-        if (common.length === 1) {
+        // one base: resolved. Several (the same pizza in three sizes): the size question follows.
+        if (common.length >= 1) {
           cands = common;
           line.held = line.held.filter((h) => !sizeProps.some((x) => x.h === h)); // size is implied by the base row
         }
@@ -318,6 +330,27 @@ export function bindLine(line: Line, menu: Menu): void {
   const pendingModifierGroup = Object.keys(line.slot_candidates).find((gid) => item.groups.some((g) => g.id === gid));
   if (pendingModifierGroup) { line.status = { kind: "needs_slot", group_id: pendingModifierGroup }; return; }
   line.status = { kind: "complete" };
+}
+
+/** "half pepperoni half mushroom" / "pepperoni and mushrooms": when a held span as a whole narrows
+ *  nothing but its parts do, return one span per part, each carrying the placement word before it. */
+function segmentTopics(h: string, cands: string[], menu: Menu): string[] {
+  const ws = words(h);
+  const skip = (w: string) => STOPWORDS.has(w) || PLACEMENT.has(w);
+  const isPlacement = (w: string) => w === "half" || w === "whole";
+  const topic = ws.filter((w) => !skip(w));
+  if (topic.length < 2 || narrow(cands, topic.join(" "), menu).length > 0) return [h]; // one topping, maybe multi-word
+  const out: string[] = []; let placement = "";
+  for (let i = 0; i < ws.length; i++) {
+    if (isPlacement(ws[i])) { placement = ws[i]; continue; }
+    if (skip(ws[i])) continue;
+    for (let j = ws.length; j > i; j--) {
+      const slice = ws.slice(i, j); if (slice.some(isPlacement)) continue;
+      const run = slice.filter((x) => !skip(x)).join(" "), n = narrow(cands, run, menu);
+      if (n.length > 0 && n.length < cands.length) { out.push(placement ? `${placement} ${run}` : run); i = j - 1; break; }
+    }
+  }
+  return out.length >= 2 ? out : [h];
 }
 
 /** Does a customer span refer to this line? Used for "remove the knots", "make the pizza 2". */

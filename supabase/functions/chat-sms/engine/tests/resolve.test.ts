@@ -90,3 +90,10 @@ Deno.test("leading-size names narrow by size: neapolitan + medium/large", () => 
   assertEquals(l.item_id, "zpL");
   assertEquals(l.status.kind, "complete");
 });
+
+Deno.test("stems: 'parm' narrows to parmesan; resolveSpan finds the chicken parm sandwich", () => {
+  const l = line("chicken parm sandwich"); bindLine(l, menu);
+  assertEquals(l.item_id, "chparm");
+  assertEquals(narrow(["chparm", IDS.cheesesteak], "parm", menu), ["chparm"]);
+  assertEquals(narrow(["chparm", IDS.cheesesteak], "par", menu), []);
+});

@@ -24,28 +24,28 @@ export interface Totals {
   total_cents: number;
 }
 
-export function unitCents(line: Line, item: MenuItem): number {
-  let cents = item.base_cents;
+/** Every choice the line carries that its item's groups can price: slot picks first, then modifiers. */
+function picked(line: Line, item: MenuItem): Array<{ name: string; delta_cents: number; modifier: boolean }> {
+  const out: Array<{ name: string; delta_cents: number; modifier: boolean }> = [];
   for (const g of item.groups) {
     const chosen = line.choices[g.id];
-    if (chosen) { const c = g.choices.find((x) => x.id === chosen); if (c) cents += c.delta_cents; }
-    for (const modId of line.modifiers) { const c = g.choices.find((x) => x.id === modId); if (c) cents += c.delta_cents; }
+    if (chosen) { const c = g.choices.find((x) => x.id === chosen); if (c) out.push({ ...c, modifier: false }); }
+    for (const modId of line.modifiers) { const c = g.choices.find((x) => x.id === modId); if (c) out.push({ ...c, modifier: true }); }
   }
-  return cents;
+  return out;
+}
+
+export function unitCents(line: Line, item: MenuItem): number {
+  return picked(line, item).reduce((s, c) => s + c.delta_cents, item.base_cents);
 }
 
 export function priceLine(line: Line, menu: Menu): PricedLine | null {
   if (line.status.kind !== "complete" || !line.item_id) return null;
   const item = menu.items.get(line.item_id);
   if (!item) return null;
-  const unit = unitCents(line, item);
-  const choice_names: string[] = [];
-  const modifier_names: string[] = [];
-  for (const g of item.groups) {
-    const chosen = line.choices[g.id];
-    if (chosen) { const c = g.choices.find((x) => x.id === chosen); if (c) choice_names.push(c.name); }
-    for (const modId of line.modifiers) { const c = g.choices.find((x) => x.id === modId); if (c) modifier_names.push(c.name); }
-  }
+  const unit = unitCents(line, item), picks0 = picked(line, item);
+  const choice_names = picks0.filter((c) => !c.modifier).map((c) => c.name);
+  const modifier_names = picks0.filter((c) => c.modifier).map((c) => c.name);
   const picks: string[] = [];
   if (item.bundle && line.selections) for (const [cid, n] of Object.entries(line.selections)) { const c = item.bundle.choices.find((x) => x.id === cid); if (c) picks.push(`${n} ${c.name}`); }
   return { line_id: line.line_id, item, qty: line.qty, unit_cents: unit, total_cents: unit * line.qty, choice_names, modifier_names, picks, notes: line.notes };

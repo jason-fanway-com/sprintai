@@ -1,7 +1,7 @@
 // crossread.ts — the second reader. A deterministic lexicon scan of the customer
 // message, reconciled against the model's moves. Disagreement becomes a question,
 // never a silent add or a silent drop.
-import { contentWords, findWordRun, leadingCount, singular, words } from "./normalize.ts";
+import { contentWords, findWordRunLoose, leadingCount, sameWord, words } from "./normalize.ts";
 import type { Menu } from "./menu.ts";
 import type { Move } from "./form.ts";
 
@@ -60,11 +60,11 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
   const present = (s: string): boolean => {
     const sw = words(s);
     if (sw.length === 0) return true;
-    const at = findWordRun(mw, sw);
+    const at = findWordRunLoose(mw, sw);
     if (at >= 0) { for (let k = at; k < at + sw.length; k++) covered[k] = true; return true; }
-    // tolerate light reordering / plural drift: every word must still be in the message
-    const all = sw.every((x) => mw.includes(x) || mw.includes(x + "s") || mw.includes(singular(x)));
-    if (all) for (const x of sw) { const k = mw.indexOf(x); if (k >= 0) covered[k] = true; }
+    // tolerate light reordering: every word must still be in the message (plural drift allowed)
+    const all = sw.every((x) => mw.some((m) => sameWord(m, x)));
+    if (all) for (const x of sw) { const k = mw.findIndex((m) => sameWord(m, x)); if (k >= 0) covered[k] = true; }
     return all;
   };
   for (const m0 of moves) {

@@ -667,6 +667,56 @@ Deno.test("half and half: 'large pie half pepperoni half mushroom' is one large 
   assertEquals(o.form.lines[0].status.kind, "complete");
 });
 
+Deno.test("half and half as ONE option span: 'half pepperoni half mushroom' still binds the base pizza", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "large pie half pepperoni half mushroom", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: ["large", "half pepperoni half mushroom"] }]);
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.lines[0].item_id, IDS.cheesePizzaL);
+  assertEquals(o.form.lines[0].modifiers.sort(), [IDS.mushChoiceL + "H", IDS.pepChoiceL + "H"].sort());
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assert(!o.reply.includes("What kind"));
+});
+
+Deno.test("half and half without a size asks the size, not the kind", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a pie half pepperoni half mushroom", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: ["half pepperoni half mushroom"] }]);
+  assertStringIncludes(o.reply, "What size");
+  o = say(o.form, "large", [{ kind: "answer_option", value_span: "large" }]);
+  assertEquals(o.form.lines[0].item_id, IDS.cheesePizzaL);
+  assertEquals(o.form.lines[0].modifiers.sort(), [IDS.mushChoiceL + "H", IDS.pepChoiceL + "H"].sort());
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("'large pie with pepperoni and mushrooms' is the large cheese base with two whole toppings", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "large pie with pepperoni and mushrooms", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: ["large", "pepperoni and mushrooms"] }]);
+  assertEquals(o.form.lines.length, 1);
+  // canon form: Large Pepperoni Pizza + Mushroom; same price as the cheese base with two toppings
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assertEquals(totals(o.form, menu).subtotal_cents, 2400);
+  assertStringIncludes(o.reply, "Mushroom");
+  assertStringIncludes(o.reply, "Pepperoni");
+});
+
+Deno.test("plural drift and a stem: '2 chicken parm sandwiches one on white one on wheat' keeps both sandwiches", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "2 chicken parm sandwiches one on white one on wheat and a side of fries extra crispy", [
+    { kind: "add_line", item_span: "chicken parm sandwich", qty: 1, option_spans: ["white"] },
+    { kind: "add_line", item_span: "chicken parm sandwich", qty: 1, option_spans: ["wheat"] },
+    { kind: "add_line", item_span: "fries", qty: 1, option_spans: [], note: "extra crispy" },
+  ]);
+  assertEquals(o.form.lines.map((l) => l.item_id), ["chparm", "chparm", null]);
+  assertEquals(Object.values(o.form.lines[0].choices).flat(), ["brWhite"]);
+  assertEquals(Object.values(o.form.lines[1].choices).flat(), ["brWheat"]);
+  assert(!o.reply.includes("Did you also want"), o.reply);
+  assertStringIncludes(o.reply, "Chicken Parmesan");
+  assertStringIncludes(o.reply, "What kind of fries"); // the fixture has six kinds of fries
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

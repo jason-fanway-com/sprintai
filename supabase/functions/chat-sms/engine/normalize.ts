@@ -27,14 +27,10 @@ export function words(text: string): string[] {
 }
 
 /** Index at which `needle` occurs in `hay` as a contiguous whole-word run, else -1. */
-export function findWordRun(hay: string[], needle: string[], from = 0): number {
+export function findWordRun(hay: string[], needle: string[], from = 0, eq: (a: string, b: string) => boolean = (a, b) => a === b): number {
   if (needle.length === 0 || needle.length > hay.length) return -1;
   for (let i = from; i <= hay.length - needle.length; i++) {
-    let ok = true;
-    for (let j = 0; j < needle.length; j++) {
-      if (hay[i + j] !== needle[j]) { ok = false; break; }
-    }
-    if (ok) return i;
+    if (needle.every((w, j) => eq(hay[i + j], w))) return i;
   }
   return -1;
 }
@@ -51,6 +47,18 @@ export function sameWords(a: string[], b: string[]): boolean {
 
 export function isDigits(s: string): boolean { return /^\s*\d+\s*$/.test(s); }
 export function singular(w: string): string { return w.endsWith("s") ? w.slice(0, -1) : w; }
+
+/** The same word up to a plural ending: sandwich/sandwiches, pie/pies, fry/fries, wing/wings. */
+export function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  if (l === s + "s" || l === s + "es") return true;
+  if (s.endsWith("y") && l === s.slice(0, -1) + "ies") return true;
+  return false;
+}
+
+/** findWordRun, tolerating plural drift between the model's span and the customer's words. */
+export function findWordRunLoose(hay: string[], needle: string[], from = 0): number { return findWordRun(hay, needle, from, sameWord); }
 
 export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
 export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz"]);

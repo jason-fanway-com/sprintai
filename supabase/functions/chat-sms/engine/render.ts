@@ -78,6 +78,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const cands = l.status.candidates.map((id) => menu.items.get(id)!).filter(Boolean);
       const facet = count >= 2 ? "list" : q.facet;
       const asked = Math.max(count, l.asks ?? 0);
+      const listAll = () => T.whichOne(cands.slice(0, 8).map((c) => c.display_name)) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
       if (facet === "kind") {
         const byKind = new Map<string, MenuItem>();
         for (const c of cands) { const k = c.facets.kind ?? c.display_name; if (!byKind.has(k)) byKind.set(k, c); }
@@ -86,10 +87,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
         const sharedTail = lastWords.every((w) => w === lastWords[0]) && kindsRaw.every((k) => k.split(" ").length > 1) ? lastWords[0] : null;
         const spanNoun = contentWords(l.span).slice(-1)[0] ?? words(l.span).slice(-1)[0] ?? "one";
         const nounFits = sharedTail !== null || cands.every((c) => c.words.includes(spanNoun) || c.words.includes(spanNoun + "s") || c.words.includes(singular(spanNoun)));
-        if (!nounFits) {
-          const names = cands.slice(0, 8).map((c) => c.display_name);
-          return T.whichOne(names) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
-        }
+        if (!nounFits) return listAll();
         // prefer the customer's own words for the noun when every candidate carries them ("chicken pizza", not "chicken")
         const spanShared = contentWords(l.span).filter((w) => cands.every((c) => c.words.includes(w) || c.words.includes(singular(w)) || (c.facets.kind ?? "").split(" ").includes(w)));
         const noun = spanShared.length ? spanShared.join(" ") : (sharedTail ?? spanNoun);
@@ -108,8 +106,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
         const nameNoSize = cands[0].display_name.split(" ").filter((w) => !sizeWords.has(w.toLowerCase())).join(" ");
         return T.whatSize(nameNoSize || title(cands[0].facets.kind ?? l.span), sizes);
       }
-      const names = cands.slice(0, 8).map((c) => c.display_name);
-      return T.whichOne(names) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
+      return listAll();
     }
     case "line_slot": {
       const l = form.lines.find((x) => x.line_id === q.line_id);

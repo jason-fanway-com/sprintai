@@ -178,6 +178,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     return hits;
   };
 
+  /** apply a derived batch against the current form and fold its results into this one */
+  const nested = (batch: Move[], open: OrderForm["open"]) => {
+    const sub = apply({ ...form, open }, batch, lineSpanMatcher);
+    Object.assign(form, sub.form); sub.touched.forEach((x) => touched.add(x)); removed.push(...sub.removed); ledger.push(...sub.ledger);
+  };
   for (const m of moves) {
     switch (m.kind) {
       case "answer": {
@@ -271,22 +276,14 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
           if (pick !== undefined) {
             const pending = open.pending;
             if (pending.kind === "change_line" || pending.kind === "remove_line") {
-              const redo: Move = { ...pending, ref: { line_id: pick } } as Move;
-              const sub = apply({ ...form, open: null }, [redo], lineSpanMatcher);
-              Object.assign(form, sub.form);
-              sub.touched.forEach((x) => touched.add(x));
-              removed.push(...sub.removed);
-              ledger.push(...sub.ledger);
+              nested([{ ...pending, ref: { line_id: pick } } as Move], null);
             }
           } else {
             ledger.push({ turn: t, event: "answer_option_unmatched", data: { span: m.value_span } });
           }
         } else {
           // no line question open: treat as an add attempt of that span
-          const sub = apply({ ...form }, [{ kind: "add_line", item_span: m.value_span, qty: 1, option_spans: [] }], lineSpanMatcher);
-          Object.assign(form, sub.form);
-          sub.touched.forEach((x) => touched.add(x));
-          ledger.push(...sub.ledger);
+          nested([{ kind: "add_line", item_span: m.value_span, qty: 1, option_spans: [] }], form.open);
         }
         break;
       }
@@ -297,11 +294,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         if (open?.kind === "omission") {
           const asked = form.omissions.filter((o) => open.spans.includes(o.span));
           if (yes) {
-            const adds: Move[] = asked.map((o) => ({ kind: "add_line", item_span: o.span, qty: o.qty, option_spans: [] }));
-            const sub = apply({ ...form, open: null }, adds, lineSpanMatcher);
-            Object.assign(form, sub.form);
-            sub.touched.forEach((x) => touched.add(x));
-            ledger.push(...sub.ledger);
+            nested(asked.map((o) => ({ kind: "add_line", item_span: o.span, qty: o.qty, option_spans: [] })), null);
           }
           for (const o of form.omissions) if (open.spans.includes(o.span)) o.declined = true; // asked once, never again
           ledger.push({ turn: t, event: yes ? "omission_accepted" : "omission_declined", data: { spans: open.spans } });
