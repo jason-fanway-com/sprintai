@@ -7589,6 +7589,23 @@ const SLOT_CHOICE_LEADING_FILLER_RE =
   /^.*?\b(?:i(?:'ll)?\s+(?:already\s+)?(?:said|meant|want|need|take|do|go\s+with|have)|can\s+i\s+(?:get|have)(?:\s+that)?|got\s+it[.,!]?\s*)\b[.,!]?\s*/i;
 const SLOT_CHOICE_TRAILING_FILLER_RE = /[,]?\s*(?:thanks|thank\s+you|please)[.!]?\s*$/i;
 
+// PO dispatch (quantifier misread as a slot value, 2026-09-20, real live
+// conv, Vito's v580): "The ranch is good, no bleu cheese, just the ranch on
+// both" (sauce slot open, "Hot, Mild, or BBQ") extracted "both" via the
+// with/on branch below and echoed it back as an attempted (invalid) sauce
+// choice — "We don't have 'both' for Medium Buffalo Chicken Pizza." — even
+// though the customer was reaffirming ranch across both units, never
+// naming a sauce at all. A bare "both"/"each"/"all" (optionally "... of
+// them") is a QUANTIFIER — how many cart units a choice applies to — never
+// a candidate answer to the open question. Matched only when the entire
+// extracted fragment IS that word alone (never a substring inside a longer
+// real answer, so a genuine value that happens to contain "all", e.g.
+// "Buffalo", is untouched). Every return path below funnels through this
+// guard and yields "" instead of the quantifier text — the caller's own
+// `|| undefined` then treats it exactly like no candidate was found: no
+// echoed rejection, the slot stays open unresolved.
+const QUANTIFIER_ONLY_SLOT_TEXT_RE = /^(?:both|each|all)(?:\s+of\s+them)?$/i;
+
 export const extractSlotChoiceWords = (message: string): string => {
   const trimmed = message.trim().replace(/[?!.,]+$/, "");
   const words = trimmed.split(/\s+/).filter(Boolean);
@@ -7599,7 +7616,7 @@ export const extractSlotChoiceWords = (message: string): string => {
   }
   if (lastFor > 0) {
     const before = words.slice(0, lastFor).join(" ").trim();
-    if (before) return before;
+    if (before) return QUANTIFIER_ONLY_SLOT_TEXT_RE.test(before) ? "" : before;
   }
 
   let lastWithOn = -1;
@@ -7608,7 +7625,7 @@ export const extractSlotChoiceWords = (message: string): string => {
   }
   if (lastWithOn >= 0 && lastWithOn < words.length - 1) {
     const after = words.slice(lastWithOn + 1).join(" ").trim();
-    if (after) return after;
+    if (after) return QUANTIFIER_ONLY_SLOT_TEXT_RE.test(after) ? "" : after;
   }
 
   // A message can stack more than one filler clause ("Got it! I already
@@ -7622,7 +7639,8 @@ export const extractSlotChoiceWords = (message: string): string => {
   }
   const noFiller = noLeadingFiller.replace(SLOT_CHOICE_TRAILING_FILLER_RE, "").trim();
   const finalText = noFiller || noLeadingFiller || trimmed;
-  return finalText.split(/\s+/).filter(Boolean).slice(-3).join(" ");
+  const fallback = finalText.split(/\s+/).filter(Boolean).slice(-3).join(" ");
+  return QUANTIFIER_ONLY_SLOT_TEXT_RE.test(fallback) ? "" : fallback;
 };
 
 // PO amendment (2026-09-19, narrowing questions): the SAME size pre-filter
