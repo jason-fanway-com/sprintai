@@ -6232,7 +6232,39 @@ export function decide(
       // misleading "I didn't catch that" (the customer's words were heard
       // just fine; the item simply isn't on the menu that way).
       const vetoedTerm = findVetoedOffMenuTerm(add.item_span ?? "", lexicon, inactiveLexicon);
-      if (vetoedTerm) {
+      // 2026-09-20 PO dispatch (v575 rerun #41, real conv b71cbbdc, live
+      // $46.97-vs-$101.44 money bug): the veto above stops a guess at a
+      // WRONG standalone item once a real, more-specific, curated-but-
+      // excluded item term is found -- but that discipline was never meant
+      // to cover a DIFFERENT shape: the excluded term also names a genuine
+      // CHOICE (a salad Dressing, a topping) that belongs to some OTHER item
+      // the customer is ALSO ordering, this same message. Real Vito's data:
+      // "bleu cheese dressing" (its own separate `add`) is the shop's
+      // excluded, display-only "Bleu Cheese" Pizza item's own term, but it's
+      // ALSO a real, exact Dressing choice on the "House" salad the SAME
+      // message's own "house salads" add already resolved to. Declining it
+      // here is simply wrong -- and it's the same wrongness whether or not
+      // the alternative category findOffMenuChoiceAlternative happens to
+      // print ("Pizza" here, since that's the excluded item's own real
+      // category -- correct for THAT item, irrelevant to this one). The
+      // real, correct behavior already exists two call sites below (see
+      // spanIsWholeChoiceOfAnyAdd / spanFoldTargetForAmbiguousOrUnresolvedSpan's
+      // own post-loop use) for exactly this shape when resolveItem returns
+      // a plain "unresolved" with nothing to veto -- e.g. "shrimp"/"black
+      // diamond steak" in this SAME real message and proposal, which fold
+      // straight onto the House add with no decline at all. Checked here,
+      // before a decline is created, using THIS turn's own resolvedAdds so
+      // far -- if either check recognizes the span as a real choice/full
+      // decomposition of an item already resolved this message, skip the
+      // veto decline entirely and fall through to the exact same
+      // genuinelyUnresolvedSpans path a non-vetoed "unresolved" already
+      // takes below, so the post-loop fold (unchanged) attaches it there.
+      const vetoSpan = (add.item_span ?? "").trim();
+      const vetoedSpanIsChoiceOfSameMessageItem = vetoedTerm !== null && (
+        spanIsWholeChoiceOfAnyAdd(vetoSpan, resolvedAdds, menuById) ||
+        spanFoldTargetForAmbiguousOrUnresolvedSpan(vetoSpan, resolvedAdds, menuById) !== null
+      );
+      if (vetoedTerm && !vetoedSpanIsChoiceOfSameMessageItem) {
         const alternative = findOffMenuChoiceAlternative(vetoedTerm.term, menu);
         declines.push({
           reason: alternative
