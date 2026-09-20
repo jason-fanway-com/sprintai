@@ -50,6 +50,10 @@ const BLEU_CHEESE_DISPLAY_ONLY_ID = "6074cba8-b25b-4be4-80ec-a8ce9816f19f";
 const HOUSE_SALAD_ID = "a9f637bb-8264-44ef-b6c1-a5ffb4a83391";
 const HOUSE_DRESSING_GROUP = "1c9f5bb5-aca0-4e41-ae6f-9b9e151fd35a";
 const HOUSE_BLEU_CHEESE_CHOICE_ID = "1af6b431-0e2f-44f7-89fa-388bad8fb334";
+// Real Vito's Pepperoni pizza (large), used only by the multi-add/
+// restatement fixtures below -- 2026-09-20 PO dispatch, real conv f72f7387
+// #5 follow-up (see this file's own header addendum below).
+const PEPPERONI_LARGE = "c4aaf384-fb4d-47c0-b2f3-b28e499d9c39";
 
 const MENU: TurnEngineMenuItem[] = [
   {
@@ -74,6 +78,14 @@ const MENU: TurnEngineMenuItem[] = [
     ask_plan: {
       compiled_at: "", compiler_version: 1, display_name: "Cheese - Medium (14\")",
       base_price_cents: 1495, recap_template: "", ticket_template: "", steps: [],
+    },
+  },
+  {
+    id: PEPPERONI_LARGE, name: "Large Pepperoni Pizza", category: "Pizza", price_cents: 2100,
+    bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "Large Pepperoni Pizza",
+      base_price_cents: 2100, recap_template: "", ticket_template: "", steps: [],
     },
   },
   // Real Vito's "House" salad — its own ask_plan's first step is a required
@@ -105,6 +117,8 @@ const ACTIVE_ITEM_LEXICON = [
   { term: "cheese", target_id: CHEESE_LARGE, active: true },
   { term: "cheese", target_id: CHEESE_SMALL, active: true },
   { term: "cheese", target_id: CHEESE_MEDIUM, active: true },
+  { term: "pepperoni pizza", target_id: PEPPERONI_LARGE, active: true },
+  { term: "pepperoni", target_id: PEPPERONI_LARGE, active: true },
 ];
 // The real, excluded (bot_state "display_only") "bleu cheese" item-lexicon
 // row — production's loadExcludedItemLexicon own query (active=false).
@@ -244,4 +258,110 @@ Deno.test("runner (no regression): a genuinely different, real ambiguous case (n
     `no size stated -> must never silently pick a size: ${JSON.stringify(result.cart)}`);
   assert(!/we don't have a/i.test(result.reply), `this fix's new off-menu decline must not fire for a genuine, real tie: ${JSON.stringify(result.reply)}`);
   assert(/size|small|medium|large|10|14|16/i.test(result.reply), `must still ask which size, exactly as before this fix: ${JSON.stringify(result.reply)}`);
+});
+
+// 2026-09-20 PO dispatch (follow-up, real conv f72f7387 #5, live $16.50
+// charge): the fix above was verified only against "Bleu Cheese" as the
+// WHOLE message, alone. The real live fixture names it as ONE OF SEVERAL
+// items in the SAME multi-add proposal ("a large pepperoni pizza and 1
+// Bleu Cheese"), and the customer then RESTATES it alone on the next turn
+// after the first mention correctly declines. Root-caused (not merely
+// re-verified) via a fixed decide()-direct probe against real, live Vito's
+// data (~/po-scratch/probe-decide-with-inactive.ts -- the pre-existing
+// ~/po-scratch/probe-decide.ts never fetches or passes decide()'s
+// inactiveLexicon argument at all, defaulting it to `[]`; running that
+// UNFIXED probe against this exact multi-add fixture reproduces the "3
+// Cheese pizzas" bug on this exact branch, but it is the probe tool that is
+// missing the wiring, not turn-engine.ts -- production's
+// turn-engine-runner.ts already loads and threads inactiveLexicon through
+// every decide() call site, single-item or multi-item alike, unconditionally
+// (loadExcludedItemLexicon, called once per turn, never scoped to how many
+// adds the proposal carries or what else is in the message).
+//
+// Concretely: resolveItem's veto (findLongerInactiveTerm, resolve-item.ts)
+// fires once per add.item_span, independently, before ANY add's ambiguous/
+// resolved branch is reached (turn-engine.ts's per-add loop) -- so a second,
+// unrelated, cleanly-resolved add earlier or later in the SAME proposal
+// (the pepperoni pizza here) never gets a chance to leak a stray size word
+// into "Bleu Cheese"'s own resolution, because the veto already converted
+// that add to `unresolved` before narrowAmbiguousCandidatesBySpanSize (the
+// function whose own rawMessageSizeWordForSpan fallback scans the RAW
+// customer message for ANY size word, real live bug mechanism: "large"
+// from "a large pepperoni pizza..." narrowing an ambiguous "Bleu Cheese"
+// tie down to Large Cheese Pizza) ever runs at all -- that function is
+// gated strictly behind resolveItem returning "ambiguous", which the veto
+// preempts. The restatement turn re-enters this exact same per-add loop
+// fresh (a brand-new PROPOSE, decide()'s own restating-guard territory --
+// see 00-BD's own doc above decide()'s signature) precisely BECAUSE the
+// first turn's veto already stopped a disambiguation from ever opening for
+// "Bleu Cheese" -- there is no pending "which one?" question left open for
+// the restatement to answer instead, so it never reaches answer()'s
+// completely separate resolver family (messageNamesItemOutsideCandidates /
+// resolveKindClauseViaLexicon), which is the ONLY code path in this file
+// that does not receive inactiveLexicon (AnswerExternalInputs carries no
+// such field) -- confirmed by inspection this dispatch, not exercised by
+// either fixture below, since nothing is ever left open for it to answer.
+Deno.test("runner (PO dispatch, real conv f72f7387 #5, multi-add): 'a large pepperoni pizza and 1 Bleu Cheese' adds only the pizza, never the 3 Cheese pizzas", async () => {
+  const supabase = makeFakeSupabase();
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key", newLineKey: newLineKeyCounter(),
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: {
+        intent: "order",
+        adds: [
+          { item_span: "large pepperoni pizza", quantity: 1, choices: [] },
+          { item_span: "Bleu Cheese", quantity: 1, choices: [] },
+        ],
+        removes: [], modifies: [],
+      },
+    }),
+  };
+
+  const result = await runTurnEngineTurn(
+    baseInput({ message: "a large pepperoni pizza and 1 Bleu Cheese" }),
+    deps,
+  );
+
+  assertEquals(result.cart.filter(l => typeof l.menu_item_id === "string").length, 1,
+    `must add exactly the pepperoni pizza, nothing for Bleu Cheese: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, PEPPERONI_LARGE,
+    `the one cart line must be the pepperoni pizza, never a Cheese pizza: ${JSON.stringify(result.cart)}`);
+  assert(!/cheese - (large|small|medium)/i.test(result.reply), `must never offer the Cheese pizza list: ${JSON.stringify(result.reply)}`);
+  assert(!/which one would you like/i.test(result.reply), `must never open a disambiguation for Bleu Cheese: ${JSON.stringify(result.reply)}`);
+  assert(/bleu cheese/i.test(result.reply), `must name what the customer actually asked for: ${JSON.stringify(result.reply)}`);
+  assert(/pepperoni pizza added/i.test(result.reply), `the real item must still be confirmed added: ${JSON.stringify(result.reply)}`);
+
+  // Turn 2: restate the declined item alone, after the pizza already landed.
+  const deps2: RunTurnDeps = {
+    supabase, apiKey: "test-key", newLineKey: newLineKeyCounter(),
+    proposeTurnFn: (): Promise<ProposeResult> => Promise.resolve({
+      ok: true, attempts: 1,
+      proposal: {
+        intent: "order",
+        adds: [{ item_span: "1 Bleu Cheese", quantity: 1, choices: [] }],
+        removes: [], modifies: [],
+      },
+    }),
+  };
+  const turn2 = await runTurnEngineTurn(
+    baseInput({
+      message: "And I still want the 1 Bleu Cheese",
+      cart: result.cart,
+      dialogueState: result.dialogueState,
+      history: [
+        { role: "user", content: "a large pepperoni pizza and 1 Bleu Cheese" },
+        { role: "assistant", content: result.reply },
+      ],
+    }),
+    deps2,
+  );
+
+  assertEquals(turn2.cart.filter(l => typeof l.menu_item_id === "string").length, 1,
+    `restating must never add a second cart line: ${JSON.stringify(turn2.cart)}`);
+  assertEquals(turn2.cart[0].menu_item_id, PEPPERONI_LARGE,
+    `cart must still hold only the pepperoni pizza -- never a Cheese pizza -- after the restatement: ${JSON.stringify(turn2.cart)}`);
+  assert(!/large cheese pizza added/i.test(turn2.reply), `must never silently add a Cheese pizza on restatement: ${JSON.stringify(turn2.reply)}`);
+  assert(!/cheese - (large|small|medium)/i.test(turn2.reply), `must never offer the Cheese pizza list on restatement: ${JSON.stringify(turn2.reply)}`);
+  assert(/bleu cheese/i.test(turn2.reply), `restatement must still get the same honest off-menu decline: ${JSON.stringify(turn2.reply)}`);
 });
