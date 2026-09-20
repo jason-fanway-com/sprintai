@@ -2634,8 +2634,35 @@ function isNamedSlotItemRejection(
 // the-TURN idiom, same family as UPSELL_DECLINE_IDIOM_RE, never a decline of
 // THIS slot's value, and must leave an already-resolved selection alone).
 const SLOT_VALUE_DECLINE_RE = /\bno(?!\s+thanks?\b|\s+thank\s+you\b)\b|\bnone\b|\bn\/a\b|\bnvm\b|\bnever\s*mind\b|\bnevermind\b|\bplain\b|\bskip\b|\bwithout\b/i;
-function isSlotValueDecline(message: string): boolean {
-  return SLOT_VALUE_DECLINE_RE.test(message ?? "");
+// Z2 fix (2026-09-20, live money bug, real conv 55df9321): rule 5 above ran
+// its decline check against the WHOLE message, so a clause that names a
+// SIBLING group's own choice ("no bleu cheese", while "Bleu cheese or ranch"
+// is a different required slot on the same line, already answered "Ranch"
+// the turn before) still tripped the bare "no" cue for THIS slot ("Sauce":
+// Hot/Mild/BBQ) and silently wrote the group's arbitrary first-listed choice
+// ("Hot") -- a value the customer never said, for a question they never
+// actually answered (their words named zero Sauce choices at all). Reuses
+// isNamedSlotItemRejection's own clause-split + significantStems matching
+// (never a new ad hoc regex) so a decline cue is only trusted when the
+// clause it's IN isn't itself naming a choice that belongs to some other
+// group on this item's ask_plan -- exactly the same "which clause is this
+// cue actually about" scoping that function already does for item rejection.
+// foreignChoiceStemSets is every OTHER step's choice-display stems (never
+// the currently open step's own choices -- those are directMatch's job,
+// already checked and already failed by the time this runs).
+function isSlotValueDecline(message: string, foreignChoiceStemSets: Set<string>[] = []): boolean {
+  const clauses = (message ?? "").split(/\b(?:but|and|also|plus)\b|[,.;!?]/i);
+  for (const clause of clauses) {
+    if (!SLOT_VALUE_DECLINE_RE.test(clause)) continue;
+    const clauseStems = significantStems(clause);
+    const namesForeignChoice = foreignChoiceStemSets.some(stems => {
+      for (const s of stems) if (clauseStems.has(s)) return true;
+      return false;
+    });
+    if (namesForeignChoice) continue;
+    return true;
+  }
+  return false;
 }
 
 export function answer(
@@ -2806,7 +2833,15 @@ export function answer(
       // touched prices its choices at $0 delta, so this never silently
       // changes the total, only which free choice lands on the ticket,
       // always visible and correctable in the recap that follows.
-      if (openStep && !directMatch && isSlotValueDecline(trimmed)) {
+      // Z2 fix (see isSlotValueDecline's own doc): every OTHER slot/modifier
+      // step's choice-display stems on this item, so a "no <sibling
+      // choice>" clause (real conv 55df9321: "no bleu cheese" while Sauce,
+      // not Bleu-cheese-or-ranch, is the open group) is never read as
+      // declining THIS group's still-unanswered question.
+      const foreignChoiceStemSets = openStep
+        ? menuItem.ask_plan.steps.filter(s => s.group_id !== openGroupId).flatMap(s => s.choices.map(c => significantStems(c.display)))
+        : [];
+      if (openStep && !directMatch && isSlotValueDecline(trimmed, foreignChoiceStemSets)) {
         const defaultChoiceId = menuItem.option_groups?.find(g => g.id === openGroupId)?.default_choice_id;
         const fallbackChoice = (defaultChoiceId && openStep.choices.find(c => c.id === defaultChoiceId)) || openStep.choices[0];
         if (fallbackChoice) {
