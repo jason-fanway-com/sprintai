@@ -786,8 +786,20 @@ const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]
 // not simultaneously asking for something. The add-marker guard is the same
 // one the restatement fix uses: "no, that's all BUT ALSO add a coke" must not
 // close the order.
+// PO dispatch 2026-09-20 (rule B, live conv a37c43f8 #43, real Vito's data):
+// "Let's just get that done." and "I can't think of anything else right
+// now." are both real closure signals -- the customer trying to end the
+// order -- but neither phrase reads as "that's it/all/everything" or
+// "nothing else/more", the only shapes this regex recognized before. Live,
+// both rode along in the SAME message as a restatement ("...I already said!
+// Let's just get that done. I can't think of anything else right now.") and
+// got "Anything else?" again, exactly the 00-BG/00-BD failure mode this
+// regex exists to close. Added as two more alternatives, same anywhere-in-
+// message + CLOSURE_BLOCKED_BY_RE discipline as every existing tier — "let's
+// get that done, also add a coke" still falls through (CLOSURE_BLOCKED_BY_RE's
+// "add " catches it), never a blind widening.
 const CLOSURE_ANYWHERE_RE =
-  /\b(?:that'?s (?:it|all|everything)|thats (?:it|all|everything)|nothing (?:else|more)|no(?:thing)? more|i'?m (?:good|done|all set)|im (?:good|done)|we'?re good|all set|that(?: will|'?ll) be (?:it|all))\b/i;
+  /\b(?:that'?s (?:it|all|everything)|thats (?:it|all|everything)|nothing (?:else|more)|no(?:thing)? more|can'?t think of anything else|i'?m (?:good|done|all set)|im (?:good|done)|we'?re good|all set|that(?: will|'?ll) be (?:it|all)|let'?s (?:just )?get (?:that|this|it) done)\b/i;
 const CLOSURE_BLOCKED_BY_RE =
   /\b(?:also|another|one more|1 more|add |plus |as well|too\b|actually|instead|change|wait|but )\b/i;
 
@@ -4386,16 +4398,60 @@ function addIdentityKey(add: ResolvedAdd) {
 function resolveChoiceDisplays(
   askPlan: AskPlan,
   choices: Array<{ group_id: string; choice_id: string }>,
-): { texts: string[]; droppedCount: number } {
+): { texts: string[]; droppedCount: number; droppedGroupIds: string[] } {
   const texts: string[] = [];
   let droppedCount = 0;
+  const droppedGroupIds: string[] = [];
   for (const c of choices) {
     const step = askPlan.steps.find(s => s.group_id === c.group_id);
     const choice = step?.choices.find(ch => ch.id === c.choice_id);
     if (choice) texts.push(choice.display);
-    else droppedCount++;
+    else { droppedCount++; droppedGroupIds.push(c.group_id); }
   }
-  return { texts, droppedCount };
+  return { texts, droppedCount, droppedGroupIds };
+}
+
+// PO dispatch 2026-09-20 (rule C, live conv a37c43f8 #43, real Vito's data):
+// a dropped choice (resolveChoiceDisplays above) always produced "Some of
+// what was asked for on <item> isn't a real option — skipped." — true but
+// useless, since it never says WHICH thing didn't apply. Live repro: the
+// model's own PROPOSE call for "with mushrooms on it" returned a garbled
+// {group_id, choice_id} pair that matches NEITHER this item's real toppings
+// group NOR any real choice anywhere on the menu (confirmed against the
+// live error_log row: the "group_id" it sent is actually a DIFFERENT menu
+// item's own id, and the "choice_id" doesn't exist in option_choices at
+// all — a model hallucination, not a real "this topping isn't available"
+// menu fact; Mushrooms (Whole/Half pizza) IS a real, correctly priced
+// choice on this exact item, confirmed live two turns later once the model
+// got the ids right). Since the dropped ids carry no recoverable identity,
+// the only honest way to name "which thing" is the same floor the
+// modifier-recovery code above already trusts (recoverAssertedChoiceFromText
+// against this item's OWN real choices) — reused here ONLY to word the
+// decline, never to silently apply a choice the model didn't actually
+// assert. Never claims "isn't available" (that would be false for exactly
+// this repro); says only that it couldn't be applied. Falls back to the
+// dropped choice's own modifier-group name when the customer's words don't
+// resolve to a single real choice, and to a still-item-specific generic
+// line only when neither is available.
+function describeDroppedChoiceForDecline(
+  menuItem: TurnEngineMenuItem,
+  droppedGroupIds: string[],
+  customerMessage: string | undefined,
+) {
+  const displayName = menuItem.ask_plan?.display_name ?? menuItem.name;
+  const allChoices: Array<{ id: string; display: string }> = [];
+  for (const step of menuItem.ask_plan?.steps ?? []) {
+    if (step.kind !== "modifier") continue;
+    allChoices.push(...step.choices);
+  }
+  const candidateId = recoverAssertedChoiceFromText(customerMessage ?? "", allChoices, menuItem.name);
+  const candidateDisplay = candidateId ? allChoices.find(c => c.id === candidateId)?.display : undefined;
+  if (candidateDisplay) return `${candidateDisplay} couldn't be applied to ${displayName} — skipped.`;
+  const groupName = droppedGroupIds
+    .map(gid => menuItem.option_groups?.find(g => g.id === gid)?.name)
+    .find((n): n is string => !!n);
+  if (groupName) return `A ${groupName.toLowerCase()} choice asked for on ${displayName} wasn't recognized — skipped.`;
+  return `A requested option for ${displayName} wasn't recognized — skipped.`;
 }
 
 function applyRemoveChoiceIds(
@@ -4761,6 +4817,19 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
   const m = message.toLowerCase();
   if (ADDITION_MARKERS.some(a => m.includes(a))) return false;
   return RESTATEMENT_MARKERS.some(r => m.includes(r));
+}
+
+// Used ONLY by the `modifies` loop's restatement guard (decide(), rule A
+// above) to tell "the customer actually said this number" from "the model
+// invented this number" -- reuses the same digit-or-count-word vocabulary
+// CLAUSE_COUNT_WORDS already defines for clause-leading counts, just scanned
+// anywhere in the message rather than only at a clause's start, since a
+// genuine correction states its number in its own free-form spot ("I only
+// wanted ONE... not two").
+const QUANTITY_TOKEN_ANYWHERE_RE = /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi;
+function messageAssertsQuantityValue(message: string | undefined, value: number): boolean {
+  const tokens = (message ?? "").toLowerCase().match(QUANTITY_TOKEN_ANYWHERE_RE) ?? [];
+  return tokens.some(t => (/^\d+$/.test(t) ? parseInt(t, 10) : CLAUSE_COUNT_WORDS[t]) === value);
 }
 
 // 2026-09-20 PO dispatch (rule 3, real live money bug, "House removed." full
@@ -5870,8 +5939,8 @@ export function decide(
         }
       }
     }
-    const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
-    if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+    const { texts, droppedCount, droppedGroupIds } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
+    if (droppedCount > 0) declines.push({ reason: describeDroppedChoiceForDecline(menuItem, droppedGroupIds, customerMessage) });
 
     // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
     // line naming a topping the customer's already-in-cart line of this SAME
@@ -6017,9 +6086,39 @@ export function decide(
       applyRemoveChoiceIds(line, menuItem.ask_plan, menuItem.option_groups ?? [], mod.remove_choices);
     }
     if (mod.quantity !== undefined || (mod.choices && mod.choices.length > 0)) {
-      const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, mod.choices ?? []);
-      if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
-      applyCompiledModifyItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, mod.quantity, "", texts);
+      const { texts, droppedCount, droppedGroupIds } = resolveChoiceDisplays(menuItem.ask_plan, mod.choices ?? []);
+      if (droppedCount > 0) declines.push({ reason: describeDroppedChoiceForDecline(menuItem, droppedGroupIds, customerMessage) });
+      // PO dispatch 2026-09-20 (rule A, MONEY, live conv a37c43f8 #43, real
+      // Vito's data): unlike the `adds` loop above (its own `restating` skip
+      // at this function's top), this `modifies` loop applied PROPOSE's own
+      // `quantity` unconditionally -- the ONE path in this file with zero
+      // restatement protection. Live repro: three back-to-back restatements
+      // of the exact same already-in-cart line ("I already told you, just
+      // the Spicy Chapo - Small (10") with mushrooms for pickup!" -- no
+      // number anywhere in it) got a model-proposed `modifies: [{quantity:
+      // 2, ...}]` neither asked for nor implied, and the cart silently
+      // doubled -- a real overcharge the customer then had to notice and
+      // fight to undo ("I only wanted one... not two!"). Applies the SAME
+      // discipline as the `adds` restating guard: a restatement not carrying
+      // an explicit number for THIS line authorizes no quantity change at
+      // all -- the proposed quantity is simply dropped, keeping the line's
+      // current quantity, while any real choice mutation on the same modify
+      // (remove_choices above, resolved `texts` below) still lands
+      // untouched. An explicit customer-stated number ("I only wanted ONE...
+      // not two") is trusted exactly as before -- this guard only ever
+      // narrows a quantity change, never widens one, so failure direction
+      // stays "under-corrects, customer can ask again" rather than
+      // "silently charges more."
+      let effectiveQuantity = mod.quantity;
+      if (
+        effectiveQuantity !== undefined &&
+        effectiveQuantity !== line.quantity &&
+        isRestatementOfExistingOrder(customerMessage) &&
+        !messageAssertsQuantityValue(customerMessage, effectiveQuantity)
+      ) {
+        effectiveQuantity = undefined;
+      }
+      applyCompiledModifyItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), line.menu_item_id, effectiveQuantity, "", texts);
     }
   }
 
