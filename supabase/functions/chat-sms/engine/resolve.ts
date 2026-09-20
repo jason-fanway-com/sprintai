@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, isDigits, isWordSubset, leadingCount, sameWords, singular, splitList, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, sameWords, singular, splitList, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -195,6 +195,16 @@ export function bindLine(line: Line, menu: Menu): void {
       const r = resolveSpan(line.span, menu);
       if (r.kind === "none") { line.status = { kind: "unresolved" }; return; }
       cands = r.kind === "item" ? [r.id] : r.ids;
+    }
+    // several bundles ("half dozen" vs "one dozen"): the span's own count, or the picks' total, decides
+    if (cands.length > 1 && cands.every((id) => menu.items.get(id)?.bundle)) {
+      let n = impliedCount(line.span);
+      if (n === null) {
+        const picks = line.held.flatMap((h) => splitList(h)).map((p) => leadingCount(p).count ?? 0).reduce((a, b) => a + b, 0);
+        if (picks > 0) n = picks;
+      }
+      const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
+      if (hit) cands = [hit];
     }
     // narrow with every held span that narrows; keep the rest for options
     const rest: string[] = [];

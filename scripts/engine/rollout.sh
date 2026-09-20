@@ -7,7 +7,7 @@ K="$SPRINTAI_CHAT_SUPABASE_SERVICE_ROLE_KEY"; U="$SPRINTAI_CHAT_SUPABASE_URL"
 cd "$(dirname "$0")/../.."
 FLIP=""; SETS="vitos njb zio"; DEPLOY=1
 while [ $# -gt 0 ]; do case "$1" in --flip) FLIP="$2"; shift 2;; --sets) SETS="$2"; shift 2;; --no-deploy) DEPLOY=0; shift;; *) shift;; esac; done
-declare -A IDS=( [vitos]=e0000000-0000-0000-0000-000000000001 [njb]=b0000000-0000-0000-0000-000000000001 [zio]=2cba7b51-211c-4437-8910-1af4dcc03498 )
+shop_id() { case "$1" in vitos) echo e0000000-0000-0000-0000-000000000001;; njb) echo b0000000-0000-0000-0000-000000000001;; zio) echo 2cba7b51-211c-4437-8910-1af4dcc03498;; *) echo "unknown set $1" >&2; exit 1;; esac; }
 if [ "$DEPLOY" = 1 ]; then
   echo "=== $(date +%T) deploy $(git rev-parse --short HEAD) ==="
   touch ~/po-scratch/.po-deploy-token
@@ -23,6 +23,6 @@ if [ -n "$FLIP" ]; then
 fi
 for name in $SETS; do
   echo "=== $(date +%T) e2e $name ==="
-  python3 scripts/engine/e2e.py --shop "${IDS[$name]}" --runs 5 --scenario "$name" 2>&1 | grep -E "^\[|passed|!!"
+  python3 scripts/engine/e2e.py --shop "$(shop_id "$name")" --runs 5 --scenario "$name" --verbose 2>&1 | grep -E "^\[|passed|!!|    [CB]: "
 done
 echo "=== $(date +%T) ROLLOUT DONE ==="

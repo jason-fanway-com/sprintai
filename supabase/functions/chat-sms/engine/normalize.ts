@@ -79,3 +79,13 @@ export function leadingCount(text: string): { count: number | null; rest: string
 export function splitList(text: string): string[] {
   return text.split(/\s*(?:,|\band\b|\+|;|\bplus\b)\s*/i).map((x) => x.trim()).filter(Boolean);
 }
+
+/** The count a phrase implies for a bundle: "a dozen" 12, "half a dozen" 6, "12 bagels" 12; null when none. */
+export function impliedCount(text: string): number | null {
+  const w = words(text);
+  for (let i = 0; i < w.length; i++) {
+    if (w[i] === "dozen") return i > 0 && w[i - 1] === "half" ? 6 : 12;
+    if (isDigits(w[i])) return parseInt(w[i], 10);
+  }
+  return null;
+}

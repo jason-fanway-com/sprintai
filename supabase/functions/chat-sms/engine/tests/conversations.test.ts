@@ -443,3 +443,15 @@ Deno.test("a lexicon term made only of filler words never becomes an omission qu
   assertEquals(o.form.omissions, []);
   assertStringIncludes(o.reply, "Anything else?");
 });
+
+Deno.test("'a dozen bagels' picks the one-dozen bundle even when 'dozen bagels' is a term on both; picks that sum to 6 pick the half", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a dozen bagels", [{ kind: "add_line", item_span: "dozen bagels", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, "bg-dozen");
+  f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  o = say(f, "half a dozen bagels, 3 plain 3 sesame", [{ kind: "add_line", item_span: "half a dozen bagels", qty: 1, option_spans: ["3 plain", "3 sesame"] }]);
+  assertEquals(o.form.lines[0].item_id, "bg-half");
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
