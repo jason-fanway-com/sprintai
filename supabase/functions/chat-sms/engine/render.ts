@@ -3,7 +3,7 @@ import type { DeclineCode, Fulfillment, OpenQuestion, OrderForm } from "./form.t
 import type { Menu, MenuItem } from "./menu.ts";
 import { dollars, type PricedLine, type Totals } from "./price.ts";
 import { GROUP_PROMPTS, groupPrompt, orList, sortSizes, T, title, type Voice } from "./templates.ts";
-import { contentWords, words } from "./normalize.ts";
+import { contentWords, singular, words } from "./normalize.ts";
 
 export type Ack =
   | { kind: "line_added"; line: PricedLine }
@@ -79,7 +79,13 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
         const kindsRaw = [...byKind.keys()];
         const lastWords = kindsRaw.map((k) => k.split(" ").slice(-1)[0]);
         const sharedTail = lastWords.every((w) => w === lastWords[0]) && kindsRaw.every((k) => k.split(" ").length > 1) ? lastWords[0] : null;
-        const noun = sharedTail ?? (contentWords(l.span).slice(-1)[0] ?? words(l.span).slice(-1)[0] ?? "one");
+        const spanNoun = contentWords(l.span).slice(-1)[0] ?? words(l.span).slice(-1)[0] ?? "one";
+        const nounFits = sharedTail !== null || cands.every((c) => c.words.includes(spanNoun) || c.words.includes(spanNoun + "s") || c.words.includes(singular(spanNoun)));
+        if (!nounFits) {
+          const names = cands.slice(0, 8).map((c) => c.display_name);
+          return T.whichOne(names) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");
+        }
+        const noun = sharedTail ?? spanNoun;
         const label = (k: string) => {
           const parts = k.split(" ");
           if (parts.length > 1 && (parts[parts.length - 1] === noun || parts[parts.length - 1] === noun + "s")) return parts.slice(0, -1).join(" ");

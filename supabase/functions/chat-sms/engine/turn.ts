@@ -65,6 +65,18 @@ export function turn(input: TurnInput): TurnOutput {
         continue;
       }
     }
+    // "12 bagels" / "a dozen bagels" read as qty 12 of an ambiguous bagel: that is the dozen bundle
+    if (m.kind === "add_line" && m.qty >= 2) {
+      const r = resolveSpan(m.item_span, menu);
+      const candIds = r.kind === "ambiguous" ? r.ids : r.kind === "item" ? [r.id] : [];
+      const cats = new Set(candIds.map((id) => menu.items.get(id)?.category ?? ""));
+      const bundle = [...menu.items.values()].find((it) => it.bundle && it.bundle.count === m.qty && it.category && cats.has(it.category) && (candIds.includes(it.id) || it.bundle.choices.some((c) => candIds.includes(c.id))));
+      if (bundle) {
+        moves.push({ ...m, item_span: bundle.display_name, qty: 1 });
+        ledger.push({ turn: t, event: "qty_rewritten_to_bundle", data: { span: m.item_span, qty: m.qty, bundle: bundle.id } });
+        continue;
+      }
+    }
     // an "item" with no item words in it ("large", "please") is not an item; never open a line for it
     if (m.kind === "add_line" && contentWords(m.item_span).length === 0) {
       ledger.push({ turn: t, event: "ignored_non_item_span", data: { span: m.item_span } });

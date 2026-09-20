@@ -43,7 +43,7 @@ Move kinds:
 
 A message may need several moves: "delivery to 12 Main St, 2 large pepperoni and knots" = answer fulfillment delivery; answer address "12 Main St"; add_line "pepperoni" qty 2 option_spans ["large"]; add_line "knots".
 If the open question is about an item and the message only answers it ("medium", "the large one", "ranch please"), return one answer_option.
-Quantity words: "a", "an", "one" = 1; "a couple" = 2; "a few" = 3.
+Quantity words: "a", "an", "one" = 1; "a couple" = 2; "a few" = 3. "A dozen bagels" or "half a dozen" is ONE item whose item_span is "dozen bagels" / "half dozen bagels" with qty 1; the flavor counts ("6 plain, 6 everything") are its option_spans.
 Never invent an item the customer did not name. Never drop one they did.
 
 Examples (context -> customer -> moves):

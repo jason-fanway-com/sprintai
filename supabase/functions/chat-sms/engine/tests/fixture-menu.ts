@@ -101,6 +101,8 @@ export const RAW_LEXICON: LexiconEntry[] = [
   { term: "pizzas", target_type: "category", target_id: "Pizza" },
   { term: "salad", target_type: "category", target_id: "Salads" },
   { term: "salads", target_type: "category", target_id: "Salads" },
+  { term: "bagels", target_type: "category", target_id: "Bagels" },
+  { term: "bagel", target_type: "category", target_id: "Bagels" },
 ]);
 
 export const SHOP: ShopConfig = {

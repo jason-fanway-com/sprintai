@@ -6,6 +6,7 @@ import { newForm, type Move, type OrderForm } from "../form.ts";
 import { turn } from "../turn.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
+import { words } from "../normalize.ts";
 
 const menu = fixtureMenu();
 const addr = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: text, validated: true, zone_ok: true } } as Move);
@@ -414,4 +415,19 @@ Deno.test("model drops everything: one question covers all missed items with the
   const o2 = say(o.form, "yes");
   assertEquals(o2.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.pepPizzaL, 2], [IDS.knots, 1]]);
   assertStringIncludes(o2.reply, "What's the delivery address?");
+});
+
+Deno.test("a dozen bagels read as qty 12 of 'bagels' becomes the dozen bundle", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a dozen bagels", [{ kind: "add_line", item_span: "bagels", qty: 12, option_spans: [] }]);
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.lines[0].item_id, "bg-dozen");
+  assertEquals(o.form.lines[0].qty, 1);
+  assertStringIncludes(o.reply, "One Dozen Bagels: which bagels?");
+});
+
+Deno.test("'and' inside an item name does not break matching", () => {
+  assertEquals(words("bacon egg and cheese"), ["bacon", "egg", "cheese"]);
+  assertEquals(words("mac & cheese"), ["mac", "cheese"]);
 });

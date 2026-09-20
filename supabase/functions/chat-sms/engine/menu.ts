@@ -149,14 +149,6 @@ export function buildMenu(input: {
       bundle: null,
     });
   }
-  // bundles: choices are the orderable items of the named category, excluding other bundles
-  for (const r of input.items) {
-    const b = r.meta?.bundle;
-    if (!b || !b.count) continue;
-    const it = items.get(r.id)!;
-    const flavors = [...items.values()].filter((x) => x.orderable && x.id !== r.id && !x.name.toLowerCase().includes("dozen") && x.category && normalize(x.category) === normalize(b.category) && !(input.items.find((y) => y.id === x.id)?.meta?.bundle));
-    it.bundle = { count: b.count, unit: b.unit ?? "item", choices: flavors.map((f) => ({ id: f.id, name: f.display_name, delta_cents: 0, words: f.words })) };
-  }
 
   const itemTerms: IndexedTerm[] = [];
   const categoryTerms: IndexedTerm[] = [];
@@ -173,6 +165,23 @@ export function buildMenu(input: {
   }
   itemTerms.sort((a, b) => b.words.length - a.words.length);
   categoryTerms.sort((a, b) => b.words.length - a.words.length);
+
+  // bundles: choices are the orderable items of the named category, excluding other bundles
+  for (const r of input.items) {
+    const b = r.meta?.bundle;
+    if (!b || !b.count) continue;
+    const it = items.get(r.id)!;
+    const flavors = [...items.values()].filter((x) => x.orderable && x.id !== r.id && !x.name.toLowerCase().includes("dozen") && x.category && normalize(x.category) === normalize(b.category) && !(input.items.find((y) => y.id === x.id)?.meta?.bundle));
+    it.bundle = { count: b.count, unit: b.unit ?? "item", choices: flavors.map((f) => ({ id: f.id, name: f.display_name, delta_cents: 0, words: f.words })) };
+    // customers say "a dozen bagels", "half a dozen", "12 bagels": give the bundle those terms
+    const unit = normalize(b.unit ?? "item");
+    const plural = unit.endsWith("s") ? unit : unit + "s";
+    const extra: string[] = [`${b.count} ${plural}`, `${b.count} ${unit}`];
+    if (b.count === 12) extra.push("dozen", "a dozen", `dozen ${plural}`, `a dozen ${plural}`, `one dozen ${plural}`, "one dozen");
+    if (b.count === 6) extra.push("half dozen", "half a dozen", `half dozen ${plural}`, `half a dozen ${plural}`, `six ${plural}`);
+    for (const t of extra) { const w = words(t); if (w.length) itemTerms.push({ words: w, target_id: r.id, target_type: "item" }); }
+  }
+  itemTerms.sort((a, b) => b.words.length - a.words.length);
 
   const canon = new Map<string, string>();
   for (const it of items.values()) {

@@ -23,7 +23,7 @@ export function normalize(text: string): string {
 export function words(text: string): string[] {
   const n = normalize(text);
   if (!n) return [];
-  return n.split(" ").map((w) => ALIASES[w] ?? w.replace(/-/g, "")).filter((w) => w.length > 0);
+  return n.split(" ").map((w) => ALIASES[w] ?? w.replace(/-/g, "")).filter((w) => w.length > 0 && w !== "and" && w !== "n");
 }
 
 /** Index at which `needle` occurs in `hay` as a contiguous whole-word run, else -1. */
