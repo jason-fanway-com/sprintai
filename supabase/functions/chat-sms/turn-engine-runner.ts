@@ -1548,6 +1548,17 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           };
         }
         break;
+      // 2026-09-19 PO dispatch (A(d), numbered-list fallback has no exit):
+      // the disambiguation is dropped outright — deliberately NOT setting
+      // disambiguationCandidateIds (unlike every other disambiguation_*
+      // case above), so ask()'s priority-2 branch has nothing to re-open and
+      // moves on to whatever's next (another open question, or "Anything
+      // else?"). Cart untouched — see AnswerOutcome's own
+      // "disambiguation_gave_up" doc for why guessing a candidate here would
+      // be worse than asking again next time the customer names it.
+      case "disambiguation_gave_up":
+        answerText = "I'll leave that off.";
+        break;
       // 00-BJ: a closure over a NON-EMPTY cart is a commitment to close, and
       // must advance exactly as an explicit checkout phrase does. It did not.
       // "thats it" matched the explicit-checkout phrase and moved on to the

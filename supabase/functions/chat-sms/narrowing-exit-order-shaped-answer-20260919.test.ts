@@ -332,3 +332,164 @@ Deno.test("REGRESSION PROOF (real conv 01609954, chicken quesadilla, 11 candidat
 
   assertEquals(cart.length, 0, "nothing should ever be added while every reply fails to narrow the set");
 });
+
+// ── PO follow-up (2026-09-19): the PO drove the exact live 3-turn sequence
+// below through convo.sh against the CURRENTLY DEPLOYED bot (efb05153's
+// noProgress mechanism, not yet this dispatch's GAP (a) fix) and confirmed
+// the cart stays empty the whole conversation — the single-turn test above
+// proves the fix in isolation, but the PO is re-verifying against this exact
+// turn-for-turn transcript, so it's the headline acceptance test here too:
+// starting from a genuinely fresh conversation (not a hand-built
+// dialogueState), open the fries narrowing for real, then answer it twice
+// with two different order-shaped phrasings and confirm the cart ends up
+// with both calzones, never empty, and the fries narrowing never lingers. ──
+Deno.test("GAP (a) PO acceptance (exact live 3-turn transcript): 'a side of fries' opens narrowing, then two different order-shaped answers must not leave the cart empty", async () => {
+  const supabase = makeFakeSupabase();
+  const proposeByMessage: Record<string, ProposeResult> = {
+    "a side of fries": {
+      ok: true,
+      attempts: 1,
+      proposal: { intent: "order", adds: [{ item_span: "fries", quantity: 1, choices: [] }], removes: [], modifies: [] },
+    },
+    "oh my bad, can i get one chicken and one gyro calzone?": {
+      ok: true,
+      attempts: 1,
+      proposal: {
+        intent: "order",
+        adds: [
+          { item_span: "chicken", quantity: 1, choices: [] },
+          { item_span: "gyro calzone", quantity: 1, choices: [] },
+        ],
+        removes: [], modifies: [],
+      },
+    },
+    "the chicken calzone and the gyro calzone, pls": {
+      ok: true,
+      attempts: 1,
+      proposal: {
+        intent: "order",
+        adds: [
+          { item_span: "chicken calzone", quantity: 1, choices: [] },
+          { item_span: "gyro calzone", quantity: 1, choices: [] },
+        ],
+        removes: [], modifies: [],
+      },
+    },
+  };
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key", newLineKey: newLineKeyCounter(),
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      const fixture = proposeByMessage[input.message];
+      if (!fixture) throw new Error(`unexpected PROPOSE call for message: "${input.message}"`);
+      return Promise.resolve(fixture);
+    },
+  };
+
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState | null = null;
+  const replies: string[] = [];
+
+  for (
+    const message of [
+      "a side of fries",
+      "oh my bad, can i get one chicken and one gyro calzone?",
+      "the chicken calzone and the gyro calzone, pls",
+    ]
+  ) {
+    const r = await runTurnEngineTurn(
+      baseInput({ conversationId: "conv-6e2d56f9-live", message, cart, dialogueState }),
+      deps,
+    );
+    replies.push(r.reply);
+    cart = r.cart;
+    dialogueState = r.dialogueState;
+  }
+
+  // Only 2 fries candidates — below isNarrowingCandidateSet's >5 threshold —
+  // so render() asks the plain numbered list directly ("Which one would you
+  // like...") rather than the "Sure — what kind?" facet question a larger
+  // candidate set gets; either way, this must open a fries disambiguation.
+  assert(
+    /which one would you like/i.test(replies[0]) && /fries/i.test(replies[0]),
+    `turn 1 ("a side of fries") must open the fries narrowing: "${replies[0]}"`,
+  );
+
+  const chicken = cart.find(l => l.menu_item_id === CHICKEN_CALZONE);
+  const gyro = cart.find(l => l.menu_item_id === GYRO_CALZONE);
+  assert(chicken, `Chicken Calzone must be in the cart by the end of this transcript, cart stayed empty otherwise: ${JSON.stringify(cart)}`);
+  assert(gyro, `Gyro Calzone must be in the cart by the end of this transcript, cart stayed empty otherwise: ${JSON.stringify(cart)}`);
+  assert(
+    !cart.some(l => l.menu_item_id === FRIES_REGULAR || l.menu_item_id === FRIES_CHEESE),
+    `neither fries candidate was ever named after turn 1 was abandoned — neither must be added: ${JSON.stringify(cart)}`,
+  );
+  assert(
+    dialogueState?.open?.kind !== "disambiguation",
+    `the fries narrowing must not still be open at the end of this transcript: ${JSON.stringify(dialogueState?.open)}`,
+  );
+});
+
+// ── GAP (d) (2026-09-19 PO dispatch, live convo.sh run against the deployed
+// bot): the ORIGINAL facet question ("Sure — what kind?") caps after 1
+// non-reducing answer (noProgress) and falls back to the capped numbered
+// list — proven above by the REGRESSION PROOF test. But that numbered-list
+// fallback stage had no cap of its own: a customer who keeps failing to
+// narrow it from there got the identical list a THIRD time live. Root cause:
+// once noProgress is true, a failed answer just re-carries the exact same
+// `open` forward forever (turn-engine-runner.ts's UNRESOLVED branch) with no
+// terminal state — render()'s openRepeatCount>=2 wording swap
+// ("I couldn't match that...") looked like an exit but was just a second
+// re-ask with different words, itself repeatable forever. Fix:
+// disambiguation_gave_up (turn-engine.ts's answer(), AnswerOutcome's own
+// doc) drops the pending item outright the next time a noProgress-tier
+// answer fails to resolve anything once openRepeatCount is already capped —
+// no cart guess, no PROPOSE call, ask() just moves on to whatever's next. ──
+Deno.test("GAP (d): the noProgress numbered-list fallback has a real exit — never asked a third time, and the customer isn't stuck repeating 'I couldn't match that' forever either", async () => {
+  const supabase = makeQuesadillaSupabase();
+  let proposeCalls = 0;
+  const deps: RunTurnDeps = {
+    supabase, apiKey: "test-key", newLineKey: newLineKeyCounter(),
+    proposeTurnFn: (input): Promise<ProposeResult> => {
+      proposeCalls++;
+      if (proposeCalls > 1) throw new Error(`PROPOSE must only be called once (the opening add) — called again for: "${input.message}"`);
+      return Promise.resolve({
+        ok: true,
+        attempts: 1,
+        proposal: { intent: "order", adds: [{ item_span: "chicken quesadilla", quantity: 1, choices: [] }], removes: [], modifies: [] },
+      });
+    },
+  };
+
+  let cart: TurnEngineCartLine[] = [];
+  let dialogueState: DialogueState | null = null;
+  const replies: string[] = [];
+
+  // "a chicken quesadilla" opens the facet question; every "chicken" after
+  // that is a non-reducing answer, the exact live shape (11 candidates all
+  // contain the word "chicken", so it never narrows anything).
+  for (const message of ["a chicken quesadilla", "chicken", "chicken", "chicken", "chicken"]) {
+    const r = await runTurnEngineTurn(
+      {
+        conversationId: "conv-gap-d", shopId: "shop-repro-2", tenantId: "shop-repro-2", cartId: "cart-repro-2",
+        message, history: [], menu: QUESADILLA_MENU, cart, dialogueState,
+        shopContext: { deliveryEnabled: true, orderType: null, deliveryAddressKnown: false, driverTipCents: null, pickupName: null, deliveryFeeCents: null },
+      },
+      deps,
+    );
+    replies.push(r.reply);
+    cart = r.cart;
+    dialogueState = r.dialogueState;
+  }
+
+  const numberedListReplies = replies.filter(r => /\d+\)/.test(r));
+  assert(numberedListReplies.length <= 2, `the identical numbered list must never be shown a 3rd time: ${JSON.stringify(replies)}`);
+
+  const rewordedReplies = replies.filter(r => r.includes("I couldn't match that"));
+  assert(rewordedReplies.length <= 1, `the "I couldn't match that" re-ask must never repeat either — it must escalate to a real exit instead: ${JSON.stringify(replies)}`);
+
+  assert(
+    replies.some(r => r.includes("leave that off")),
+    `expected a real exit (dropping the pending item) to actually fire within 5 turns: ${JSON.stringify(replies)}`,
+  );
+  assertEquals(dialogueState?.open?.kind, "order_type", "once dropped, ASK must move on to the next real question, not silently reopen the same disambiguation");
+  assertEquals(cart.length, 0, "no quesadilla candidate was ever cleanly named — none should ever be guessed into the cart");
+});

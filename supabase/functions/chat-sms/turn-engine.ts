@@ -662,6 +662,18 @@ export type AnswerOutcome =
   // removing an unrelated cart line never answers what candidate the
   // customer actually wants for the still-unresolved item.
   | { kind: "disambiguation_removal_applied"; removed: boolean }
+  // 2026-09-19 PO dispatch (A(d), numbered-list fallback has no exit): the
+  // noProgress numbered list (above) already caps at openRepeatCount>=2 so
+  // it's never shown a third time — but swapping to "I couldn't match that"
+  // wording at that point still left the SAME disambiguation open, so a
+  // customer who keeps failing to narrow it just gets that reworded prompt
+  // forever, with no more escalation past it. This is the actual exit: the
+  // second time a noProgress-tier answer fails to resolve anything
+  // (state.openRepeatCount already >=2 when this fires), the pending item is
+  // dropped outright rather than re-asked a fourth time — cart never
+  // mutated, ORIGINAL candidates never guessed at. See answer()'s
+  // disambiguation case for exactly where this fires.
+  | { kind: "disambiguation_gave_up" }
   // Round 3, item 2c(ii) (2026-09-19, live repro): a question at confirm
   // whose answer lives in the shop's own data (delivery fee, whether a tip
   // can be added, hours) — answered by CODE, never sent to the model, same
@@ -2649,7 +2661,23 @@ export function answer(
       const resolved = explicitOptionIdx !== null
         ? candidates[explicitOptionIdx]
         : resolvePendingDisambiguation(trimmed, candidates);
-      if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
+      if (!resolved) {
+        const fallback = closureOrAffirmationFallback(trimmed, cart, true);
+        if (fallback) return fallback;
+        // 2026-09-19 PO dispatch (A(d)): this is the numbered-list stage
+        // (state.open.noProgress already true — the kind-facet question
+        // already failed once) and the customer's answer STILL didn't
+        // resolve anything. render()'s own openRepeatCount>=2 branch has
+        // already shown the capped list twice and is one turn away from
+        // showing the "I couldn't match that" wording a second time with no
+        // further escalation ever — see AnswerOutcome's own
+        // "disambiguation_gave_up" doc. Drop it here instead: never a third
+        // reworded re-ask of the same dead question.
+        if (state.open.noProgress && (state.openRepeatCount ?? 0) >= 2) {
+          return { resolved: true, outcome: { kind: "disambiguation_gave_up" }, cartChanged: false };
+        }
+        return UNRESOLVED;
+      }
       // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
       // this which-one question can restate a quantity that was never part
       // of the original ambiguous span ("pepperoni pizza" opened this
