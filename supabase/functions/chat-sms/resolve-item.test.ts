@@ -654,3 +654,42 @@ Deno.test("resolveItem (DEFECT 3, no regression): a genuine 'cheese pizza' order
   const sized = resolveItem("a large cheese pizza", REAL_VITOS_CHEESE_LEXICON, REAL_VITOS_EXCLUDED_LEXICON);
   assertEquals(sized, { kind: "resolved", menu_item_id: REAL_VITOS_CHEESE_LARGE_ID }, "a stated size still resolves cleanly — the veto only fires when a longer EXCLUDED term also matches");
 });
+
+// ============================================================
+// S3 fix (2026-09-19, live money bug, real conv 22347973, "sticks are
+// back"): `fuzzyMinTermWords` — a caller feeding raw/derived customer text
+// (no model-endorsed span) can require every fuzzy fallback candidate to be
+// a genuine multi-word term, never a single fuzzy guess standing entirely on
+// its own. "stick" (a real, complete, unrelated word from "...just stick
+// with those two items...") used to fuzzy-match the shop's real one-word
+// term "sticks" (Mozzarella Sticks) purely because "sticks" starts with
+// "stick" — the exact same false positive fuzzyCorrectAgainstLexicon was
+// deleted for once already tonight, reintroduced at a different call site.
+// ============================================================
+const S3_MOZZARELLA_STICKS_ID = "s3-resolve-item-mozzarella-sticks";
+const S3_PEPPERONI_PIZZA_ID = "s3-resolve-item-pepperoni-pizza";
+const S3_LEXICON: LexiconTerm[] = [
+  { term: "sticks", target_id: S3_MOZZARELLA_STICKS_ID },
+  { term: "mozzarella sticks", target_id: S3_MOZZARELLA_STICKS_ID },
+  { term: "pepperoni pizza", target_id: S3_PEPPERONI_PIZZA_ID },
+];
+
+Deno.test("resolveItem (S3, fuzzyMinTermWords default): 'stick' still fuzzy-matches the one-word term 'sticks' when no minimum is given — documents today's pre-existing, unchanged default behavior", () => {
+  const result = resolveItem("just stick with those two items for pickup", S3_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: S3_MOZZARELLA_STICKS_ID }, "unaffected callers keep exactly today's fuzzy tolerance");
+});
+
+Deno.test("resolveItem (S3 fix): 'stick' no longer fuzzy-matches 'sticks' once fuzzyMinTermWords is 2 — a single-word term has no corroborating word to anchor the guess", () => {
+  const result = resolveItem("just stick with those two items for pickup", S3_LEXICON, [], true, 2);
+  assertEquals(result, { kind: "unresolved" }, "a lone fuzzy-matched word with nothing else to corroborate it must never resolve");
+});
+
+Deno.test("resolveItem (S3 fix, no regression): a genuine plural of a MULTI-word term ('pepperoni pizzas' for term 'pepperoni pizza') still resolves at fuzzyMinTermWords: 2 — 'pepperoni' already matches exactly, only the trailing 's' is tolerated", () => {
+  const result = resolveItem("can I get 2 pepperoni pizzas", S3_LEXICON, [], true, 2);
+  assertEquals(result, { kind: "resolved", menu_item_id: S3_PEPPERONI_PIZZA_ID }, "a multi-word term with a real exact anchor must still recover the customer's real order");
+});
+
+Deno.test("resolveItem (S3 fix, no regression): standalone 'sticks' (not 'stick') still resolves EXACTLY, never touching the fuzzy path at all, regardless of fuzzyMinTermWords", () => {
+  const result = resolveItem("sticks", S3_LEXICON, [], true, 2);
+  assertEquals(result, { kind: "resolved", menu_item_id: S3_MOZZARELLA_STICKS_ID }, "the exact whole-word term match is untouched by the fuzzy-fallback restriction");
+});
