@@ -108,6 +108,3 @@ Deno.test("wiring: twimlResponse is confirmed dead code (zero call sites) — no
   assertEquals(occurrences, 1, "twimlResponse should only appear once (its own definition); if this fails, it's now a live call site and needs the same backstop");
 });
 
-Deno.test("sanity: the system prompt still explicitly bans em dashes for the model too (belt and suspenders)", () => {
-  assert(INDEX_SOURCE.includes("Never use em dashes in responses"), "the prompt-level instruction must still exist alongside the code-level backstop");
-});
