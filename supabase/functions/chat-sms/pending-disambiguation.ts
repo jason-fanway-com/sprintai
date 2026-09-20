@@ -217,10 +217,32 @@ export function isPendingDisambiguationDeclined(
 // must never be misread as abandonment; only the "just"/"only" framing
 // ("I just want X", not "I want X") signals the customer restating from
 // scratch rather than naming a candidate.
+//
+// LIVE BUG (2026-09-19, conv 009de656, item 4): the render() fallback that
+// re-asks a missed disambiguation literally tells the customer to "say
+// 'none of those'" as their way out — but "None of those." arrived
+// followed by the customer's actual restated order on the SAME line ("None
+// of those. 2x smothered fries...") and the old regex required the ENTIRE
+// trimmed message to be nothing but "none of those" (the trailing `$`
+// anchor), so it never matched and the identical list re-asked 8 times in a
+// row. "none of those"/"none of them" is now a PREFIX match — matched at
+// the start of the message, with optional trailing punctuation, then either
+// end-of-message or a word boundary before whatever the customer restated.
+// The restated text is not parsed here: this function only answers "did the
+// customer invoke the escape hatch," and turn-engine-runner.ts's existing
+// dropDisambiguationList handling already forwards the FULL input.message
+// (untouched) to PROPOSE once this returns true, exactly the same path a
+// bare "no"/"none" already takes — so the trailing order text is picked up
+// there, not here. Bare "no"/"none" (with nothing else) stays an EXACT
+// match, unchanged: a message starting with "no" that goes on to say
+// something else ("no I want pepperoni") is not obviously the escape hatch
+// and is out of scope for this fix.
+const NONE_OF_THOSE_PREFIX_RE = /^none(?:\s+of\s+(?:those|them))?[.,!]*(?:\s|$)/i;
 const DISAMBIGUATION_LIST_DROP_RE = /^(?:none(?:\s+of\s+(?:those|them))?|no)\.?!?$|\bi(?:'m| am)?\s+(?:just|only)\s+want\b/i;
 
 export function isDisambiguationListDropSignal(message: string): boolean {
-  return DISAMBIGUATION_LIST_DROP_RE.test((message ?? "").trim());
+  const trimmed = (message ?? "").trim();
+  return NONE_OF_THOSE_PREFIX_RE.test(trimmed) || DISAMBIGUATION_LIST_DROP_RE.test(trimmed);
 }
 
 // Dispatch 00-AT (conv 8b9636c9 live repro, and conv b65b60eb "Lobster
@@ -445,7 +467,7 @@ const RESTATEMENT_MARKERS = [
   "and also", "oh and",
 ];
 
-function extractAnswerClause(message: string): { clause: string; truncated: boolean } {
+export function extractAnswerClause(message: string): { clause: string; truncated: boolean } {
   const lower = message.toLowerCase();
   let cutIdx = message.length;
 
@@ -460,6 +482,31 @@ function extractAnswerClause(message: string): { clause: string; truncated: bool
   }
 
   return { clause: message.slice(0, cutIdx).trim(), truncated: cutIdx < message.length };
+}
+
+// DEFECT 2 (2026-09-19 live QA, conv 009de656, item 4): "I'll take 2x Large
+// (16\") Pepperoni pizzas for $21 each, please! So that's 2x Chicken
+// Alfredo..." resolved the right candidate (Large Pepperoni, via the
+// category+name-narrowing tier above) but the caller (turn-engine.ts's
+// "disambiguation" case) added it at `state.open.quantity` — whatever
+// quantity the disambiguation was ORIGINALLY opened with — never re-reading
+// the answer text itself, so the customer's own restated "2x" was silently
+// discarded ($21 charged instead of the $42 actually asked for). Scoped to
+// the SAME answer clause extractAnswerClause already isolates above (never
+// the whole restated order) so a LATER, unrelated item's own "2x" further
+// in the message ("2x Chicken Alfredo") can never be misread as this
+// candidate's count. "Nx" is deliberately the only shape recognized: a bare
+// leading digit ("2 Large...") is exactly the ordinal-position shape this
+// same resolver already claims elsewhere (picking option #2 from the list),
+// so treating it as a quantity here would collide with that; the "x" is
+// what marks it unambiguously as a count instead of a position.
+const ANSWER_QUANTITY_RE = /\b(\d+)\s*x\b/i;
+
+export function extractAnswerQuantity(clause: string): number | null {
+  const m = clause.match(ANSWER_QUANTITY_RE);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n > 0 ? n : null;
 }
 
 // The category+name-narrowing tier is terminal once it finds more than one
