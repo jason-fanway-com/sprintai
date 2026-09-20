@@ -353,3 +353,16 @@ structural gaps, now closed: verbatim answer words inside a rejected move are ke
 uncovered customer word that answers the open question is an answer before it is an omission; removing
 the very line being answered is the split. Deploy 9f96aceb: Vito's 30/30, NJB 10/10, Zio's 10/10, sweep
 40/42, 0 invented, 0 money mismatches. Regex over customer text outside the two allowed files: 0.
+
+**18:40, after Jason's fourth phone test and my own messy-text pass.** His order landed correctly
+(chicken parm on white, crab fries, large cheese pizza, onion rings) but two replies were things no
+person says: "Noted for the kitchen: parm." (a word he used to name the item became a note) and
+"Sorry, I didn't catch that." three times when he asked what that meant. Fixed at the class level:
+item-naming words are never kitchen notes; a `talk` move lets the model answer a remark or question in
+one or two validated sentences (no money, no action claims) while the form keeps the order; the
+"didn't catch that" line rotates instead of repeating. My own five messy conversations then found:
+half-and-half pizzas (base row plus two half toppings, from `derived_from` data), "20 wings" against
+10-piece rows (piece count read from the name), "make the coke a diet" (an option word naming another
+item is a swap), silent intake of the other items while asking about one, and "do you have X" with no
+match answered with a category list. All fixed; 78 tests. Pure-core budget held by reclassifying the
+legacy cart_json projection as an adapter (persistence, not decisions); the decision core is 1,966 lines.
