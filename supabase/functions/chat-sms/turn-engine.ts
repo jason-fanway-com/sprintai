@@ -714,6 +714,26 @@ export interface AnswerExternalInputs {
   confirmShopFacts?: { deliveryFeeCents: number | null; hoursLine: string | null };
 }
 
+// Live bug (2026-09-19, conv 8aa34668, v558 #40): "No, that's it for me.
+// Just the Calzone and Crazy Fries for pickup." — a closure immediately
+// followed by a restatement of items ALREADY in the cart — got "Anything
+// else?" three turns running. Both existing tiers below (BARE_CLOSURE_RE,
+// CLOSURE_ANYWHERE_RE) already match this message's TEXT correctly when
+// typed with a plain ASCII apostrophe; the live message never reached
+// either, because iOS autocorrects a typed straight `'` into a curly
+// U+2019 (’) before the SMS is sent, and `that'?s`/`don'?t`-style patterns
+// only ever anticipated the straight form or none at all. Runner-level
+// repro (curly apostrophe copied byte-for-byte from the live message)
+// confirmed: impliesClosure returned false, ANSWER fell through to
+// PROPOSE/decide(), and the deterministic closure path this whole function
+// exists for never engaged. Normalizing here — the one function this
+// dispatch is scoped to — rather than at answer()'s shared `trimmed`, keeps
+// the fix minimal; the same curly-apostrophe gap likely affects other
+// apostrophe-literal regexes in this file (TIP_DECLINE_ANYWHERE_RE,
+// CONFIRM_AFFIRMATIVE_RE/CONFIRM_NEGATION_RE, UPSELL_DECLINE_IDIOM_RE) and
+// is flagged, not silently fixed, for a follow-up dispatch.
+const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
+
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
 // 00-BG: the SAME defect as the name question and the confirm gate, a third
 // time. BARE_CLOSURE_RE is anchored to the whole message, so "nope" closes the
@@ -760,7 +780,7 @@ const CLOSURE_BLOCKED_BY_RE =
 // existing single-argument call and test is unaffected -- only answer()'s
 // two call sites below pass the real cart state.
 export function impliesClosure(message: string, cartHasItems = true): boolean {
-  const m = (message ?? "").trim();
+  const m = normalizeApostrophes((message ?? "").trim());
   if (!m) return false;
   if (BARE_CLOSURE_RE.test(m)) return true;
   if (!cartHasItems) return false;
