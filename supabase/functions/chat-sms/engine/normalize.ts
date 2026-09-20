@@ -50,11 +50,8 @@ export function singular(w: string): string { return w.endsWith("s") ? w.slice(0
 
 /** The same word up to a plural ending: sandwich/sandwiches, pie/pies, fry/fries, wing/wings. */
 export function sameWord(a: string, b: string): boolean {
-  if (a === b) return true;
   const [s, l] = a.length <= b.length ? [a, b] : [b, a];
-  if (l === s + "s" || l === s + "es") return true;
-  if (s.endsWith("y") && l === s.slice(0, -1) + "ies") return true;
-  return false;
+  return a === b || l === s + "s" || l === s + "es" || (s.endsWith("y") && l === s.slice(0, -1) + "ies");
 }
 
 

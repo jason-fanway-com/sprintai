@@ -143,6 +143,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
 
   // 1. moves: closed vocabulary, else the model
   let moves: Move[] | null = closedAnswer(form0, input.message, menu);
+  const closed = moves !== null;
   let modelMs: number | null = null;
   if (!moves) {
     const r = await (deps.interpretImpl ?? interpret)({
@@ -178,7 +179,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   }
 
   // 3. the turn
-  const out = turn({ form: form0, menu, message: input.message, moves, greet: input.isFirstContact && form0.turn_no === 0 });
+  const out = turn({ form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0 });
   const form = out.form;
   let reply = out.reply;
 

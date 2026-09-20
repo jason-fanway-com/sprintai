@@ -117,7 +117,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["pepperoni stromboli", "roll"], ["pepperoni", "roll"], ["pepperoni roll", "roll"],
   ["wings", "wbi"], ["wings", "wbo"], ["bone in wings", "wbi"], ["boneless wings", "wbo"], ["boneless", "wbo"], ["bone in", "wbi"],
   ["coke", "coke"], ["diet coke", "dcoke"], ["diet", "dcoke"],
-  ["plain bagel", "bg-plain"], ["everything bagel", "bg-every"], ["sesame bagel", "bg-sesame"],
+  ["plain bagel", "bg-plain"], ["everything bagel", "bg-every"], ["everything", "bg-every"], ["sesame bagel", "bg-sesame"],
   ["dozen bagels", "bg-dozen"], ["one dozen bagels", "bg-dozen"], ["a dozen bagels", "bg-dozen"], ["dozen", "bg-dozen"],
   ["half dozen bagels", "bg-half"], ["half dozen", "bg-half"], ["dozen bagels", "bg-half"],
 ].map(([term, id]) => ({ term, target_type: "item", target_id: id })).concat([

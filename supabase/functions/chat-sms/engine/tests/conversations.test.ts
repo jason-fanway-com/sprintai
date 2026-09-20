@@ -16,7 +16,7 @@ const addr = (text: string) => ({ kind: "answer", field: "address", value: { tex
 /** Drive one turn: closed vocabulary first, else the supplied "model" moves. */
 function say(form: OrderForm, message: string, modelMoves: Move[] = []) {
   const closed = closedAnswer(form, message, menu);
-  const out = turn({ form, menu, message, moves: closed ?? modelMoves });
+  const out = turn({ form, menu, message, moves: closed ?? modelMoves, closed: closed !== null });
   return out;
 }
 
@@ -736,6 +736,37 @@ Deno.test("'actually pepperoni not cheese' as an empty change_line beside an add
   const before = o.form.lines.length;
   o = say(o.form, "the knots", [{ kind: "change_line", ref: { span: "knots" }, add_option_spans: [], remove_option_spans: [] }]);
   assertEquals(o.form.lines.length, before);
+});
+
+Deno.test("an answer that fits another pending line goes to that line: 'boneless' while we ask about the garlic bread", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "20 wings buffalo, and garlic bread", [
+    { kind: "add_line", item_span: "wings", qty: 20, option_spans: ["buffalo"] },
+    { kind: "add_line", item_span: "garlic bread", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.open?.kind, "line_unresolved");
+  o = say(o.form, "boneless", [{ kind: "answer_option", value_span: "boneless" }]);
+  assertEquals(o.form.lines.find((l) => l.span === "wings")?.item_id, "wbo");
+  assertEquals(o.form.lines.find((l) => l.span === "garlic bread")?.status.kind, "unresolved"); // still asked about, not replaced
+  assertStringIncludes(o.reply, "garlic bread");
+  // the same word as a model add_line routes the same way
+  let p = say(f, "20 wings buffalo, and garlic bread", [
+    { kind: "add_line", item_span: "wings", qty: 20, option_spans: ["buffalo"] },
+    { kind: "add_line", item_span: "garlic bread", qty: 1, option_spans: [] },
+  ]);
+  p = say(p.form, "boneless", [{ kind: "add_line", item_span: "boneless", qty: 1, option_spans: [] }]);
+  assertEquals(p.form.lines.length, 2);
+  assertEquals(p.form.lines.find((l) => l.span === "wings")?.item_id, "wbo");
+});
+
+Deno.test("a closed answer is the whole message: 'thats everything' never asks about an 'everything' item", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats everything");
+  assert(!o.reply.includes("Did you also want"), o.reply);
+  assertEquals(o.form.items_done, true);
 });
 
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {

@@ -52,6 +52,8 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   return { kind: "none" };
 }
 
+/** Every word that names this item: its own words, name, kind facet and lexicon terms. */
+const ownWords = (item: MenuItem) => new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]);
 /** A customer word names a menu word when equal, or when it is a stem of at least four letters ("parm"). */
 function wordMatches(w: string, pool: Set<string>): boolean { return pool.has(w) || (w.length >= 4 && [...pool].some((p) => p.startsWith(w))); }
 
@@ -66,11 +68,8 @@ export function narrow(candidateIds: string[], span: string, menu: Menu): string
     return set;
   };
   const keep = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => pool(id).has(w)));
-  if (keep.length > 0) return keep;
-  // stems the customer typed ("parm" for parmesan, "hawaii" for hawaiian): each word must equal
-  // or begin a candidate's word. Several candidates may survive; that is a narrowing, not a pick.
-  const stems = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => wordMatches(w, pool(id))));
-  return stems;
+  // else stems ("parm" for parmesan, "hawaii" for hawaiian); several may survive: a narrowing, not a pick
+  return keep.length > 0 ? keep : candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => wordMatches(w, pool(id))));
 }
 
 export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" | "list" {
@@ -206,7 +205,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   // 3. a size word that is already the item's own size (derived rows carry size in the name)
   const sw = words(text);
   if (sw.length === 1 && item.facets.size === sw[0]) return true;
-  const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]);
+  const own = ownWords(item);
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
   if (mayNote) line.notes.push(text);
@@ -307,7 +306,7 @@ export function bindLine(line: Line, menu: Menu): void {
   // words in the item span that are not the item's own name ("chicken noodle cups", "house personal calzone")
   if (!line.span_consumed) {
     line.span_consumed = true;
-    const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menu.termWordsByItem.get(item.id) ?? [])]);
+    const own = ownWords(item);
     const leftover = words(line.span).filter((w) => !own.has(w) && !own.has(singular(w)) && !STOP_FOR_LEFTOVER.has(w));
     // words the customer used to NAME the item ("parm", "large") may pick options but are never kitchen notes
     if (leftover.length > 0) applyHeldSpan(line, item, leftover.join(" "), false);

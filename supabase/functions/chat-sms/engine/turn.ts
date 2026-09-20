@@ -18,6 +18,8 @@ export interface TurnInput {
   moves: Move[];
   greet?: boolean;
   checkoutUrl?: string | null;
+  /** the moves came from the closed vocabulary: the whole message was the answer, nothing in it is an item */
+  closed?: boolean;
 }
 export interface TurnOutput {
   form: OrderForm;
@@ -96,15 +98,21 @@ export function turn(input: TurnInput): TurnOutput {
     }
     rec.omissions.length = 0; rec.omissions.push(...keep);
   }
+  if (input.closed) rec.omissions.length = 0;
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
-    if (focus && m.kind === "add_line") {
-      const answers = spanAnswersLine(focus, m.item_span, menu) ||
-        (focus.status.kind === "unresolved" && resolveSpan(m.item_span, menu).kind !== "none");
-      if (answers) {
-        moves.push({ kind: "answer_option", value_span: m.item_span });
-        for (const o of m.option_spans ?? []) moves.push({ kind: "answer_option", value_span: o });
-        ledger.push({ turn: t, event: "add_reclassified_as_answer", data: { span: m.item_span } });
+    // an "item" that answers the line we asked about is an answer; one that answers ANOTHER pending
+    // line's question ("boneless" while we ask about the garlic bread) is routed to that line
+    const span = m.kind === "add_line" ? m.item_span : m.kind === "answer_option" ? m.value_span : null;
+    if (span && focus) {
+      const replacesUnresolved = m.kind === "add_line" && focus.status.kind === "unresolved" && resolveSpan(span, menu).kind !== "none";
+      const target = spanAnswersLine(focus, span, menu) ? focus
+        : form0.lines.find((l) => l.line_id !== focus.line_id && l.status.kind !== "complete" && spanAnswersLine(l, span, menu)) ?? (replacesUnresolved ? focus : undefined);
+      if (target && (m.kind === "add_line" || target !== focus)) {
+        const line_id = target === focus ? undefined : target.line_id;
+        moves.push({ kind: "answer_option", value_span: span, line_id });
+        if (m.kind === "add_line") for (const o of m.option_spans ?? []) moves.push({ kind: "answer_option", value_span: o, line_id });
+        ledger.push({ turn: t, event: target === focus ? "add_reclassified_as_answer" : "answer_routed_to_line", data: { span, line_id: target.line_id } });
         continue;
       }
     }
@@ -162,7 +170,7 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 2b. an ambiguous line of quantity N answered with several kinds ("one plain one pepperoni …")
   if (focus && focus.status.kind === "ambiguous" && focus.qty > 1) {
-    const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option");
+    const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id));
     const parts = answers.flatMap((a) => splitList(a.value_span)).flatMap((p) => {
       // "one plain one pepperoni" arrives as one string when the model does not split it
       const ws = words(p); const out: string[] = []; let cur: string[] = [];
