@@ -101,7 +101,7 @@
 //    regression — flagged for a later phase.
 
 import type { AskPlan } from "../_shared/compile-menu.ts";
-import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText } from "./phrase-split.ts";
+import { splitCustomerPhrases, resolveClaimedPhraseIndex, scopedModifierText, stripOtherItemSpansFromModifierText } from "./phrase-split.ts";
 import {
   applyCompiledAddItem,
   applyCompiledModifyItem,
@@ -3677,6 +3677,37 @@ function resolveReplacementTargetLine(
   return realLines.length > 0 ? realLines[realLines.length - 1] : null;
 }
 
+// PO dispatch 2026-09-19 (M1 rule 2, real live money bug, conv d95306c8
+// #26): the size-recovery fallback just below this call site's own header
+// comment (round-2 item 1's "4 large pizzas" fix) scans the WHOLE raw
+// customerMessage for a size word whenever the ambiguous item's own
+// item_span dropped it — correct for the single-item message it was built
+// for, but "a Gourmet White Fiesta - Large and a Sausage Pizza - Small"
+// (Sausage Pizza's own item_span landing as bare "Sausage Pizza", no size)
+// let that same whole-message scan return "Large" — the OTHER item's size,
+// stated first in the raw text — as the held size for Sausage Pizza's own
+// disambiguation. A message naming two items assumes only one is ever in
+// play the exact way rule 1's topping bleed did. Scopes the same way
+// scopedModifierText already does for the modifier floor: split the message
+// into phrases, find the ambiguous span's OWN phrase, and search only that
+// phrase for a size word. Falls back to the old unscoped whole-message scan
+// exactly when phrase-scoping itself has nothing better to offer (a single-
+// phrase message, or a claim that doesn't resolve to exactly one phrase) —
+// never worse than before this fix, same contract scopedModifierText's own
+// header states for itself.
+function rawMessageSizeWordForSpan(
+  customerMessage: string | undefined,
+  spanText: string,
+  menu: TurnEngineMenuItem[],
+): string | null {
+  if (!customerMessage) return null;
+  const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
+  if (phrases.length <= 1) return extractGlobalSizeWord(customerMessage);
+  const phraseIdx = resolveClaimedPhraseIndex(phrases, spanText);
+  if (phraseIdx === null) return extractGlobalSizeWord(customerMessage);
+  return extractGlobalSizeWord(phrases[phraseIdx]);
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4041,7 +4072,9 @@ export function decide(
     // one; only fall back to the model's span when the raw message has none
     // (a legitimately sizeless order like "a pepperoni pizza" answered later).
     const itemSpanSpanText = ambiguousSpansFiltered[0].spanText;
-    const rawMessageSizeWord = customerMessage ? extractGlobalSizeWord(customerMessage) : null;
+    // PO dispatch 2026-09-19 (M1 rule 2): scoped to this span's own phrase —
+    // see rawMessageSizeWordForSpan's own header, above decide().
+    const rawMessageSizeWord = rawMessageSizeWordForSpan(customerMessage, itemSpanSpanText, menu);
     disambiguationSpanText = (!extractGlobalSizeWord(itemSpanSpanText) && rawMessageSizeWord)
       ? `${rawMessageSizeWord} ${itemSpanSpanText}`.trim()
       : itemSpanSpanText;
@@ -4081,6 +4114,15 @@ export function decide(
   // is declared above (before the add-resolution loop) for the guard-drop
   // path; it's the same set used here.
   const restating = isRestatementOfExistingOrder(customerMessage);
+
+  // See stripOtherItemSpansFromModifierText's own header (M1 rule 1): every
+  // OTHER item's own span this same message, whether it already resolved to
+  // a real add or is still pending its own which-one question — computed
+  // once, outside the loop, since it's the same set for every add in it.
+  const allOwnSpansThisMessage = [
+    ...[...addGroups.values()].map(a => (a.item_span ?? "").trim()),
+    ...ambiguousSpansFiltered.map(a => a.spanText.trim()),
+  ].filter(Boolean);
 
   for (const add of addGroups.values()) {
     if (restating && menuItemIdsAlreadyInCart.has(add.menu_item_id)) {
@@ -4123,7 +4165,12 @@ export function decide(
     if (effectiveChoices.length === 0 && customerMessage) {
       const phrases = splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })));
       const phraseIdx = resolveClaimedPhraseIndex(phrases, add.item_span ?? "");
-      const scoped = scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage);
+      const ownSpan = (add.item_span ?? "").trim();
+      const otherSpansThisMessage = allOwnSpansThisMessage.filter(s => s !== ownSpan);
+      const scoped = stripOtherItemSpansFromModifierText(
+        scopedModifierText(phrases, phraseIdx, menuItem.name, customerMessage),
+        otherSpansThisMessage,
+      );
       for (const step of menuItem.ask_plan.steps) {
         if (step.kind !== "modifier") continue;          // slots are ASKED, never inferred
         // PO dispatch 2026-09-19 (wart c): plural recovery so two distinctly
