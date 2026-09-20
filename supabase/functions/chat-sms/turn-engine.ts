@@ -154,7 +154,7 @@ import {
   renderLedgerFooter,
   type ItemizedCartLine,
 } from "./itemizer.ts";
-import { firstParseableUpsellName, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
+import { allParseableUpsellNames, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
 import { buildConfirmReadback } from "./confirm-readback-20260918.ts";
 import {
   impliesUpsellAcceptance,
@@ -162,7 +162,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -755,7 +755,20 @@ export interface AnswerExternalInputs {
 // apostrophe-literal regexes in this file (TIP_DECLINE_ANYWHERE_RE,
 // CONFIRM_AFFIRMATIVE_RE/CONFIRM_NEGATION_RE, UPSELL_DECLINE_IDIOM_RE) and
 // is flagged, not silently fixed, for a follow-up dispatch.
-const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
+// 2026-09-19 follow-up dispatch: this stayed a single-call-site local const
+// through the initial fix (impliesClosure only) — grepping the file after
+// that landed found SEVEN other apostrophe-literal regexes exposed to the
+// exact same iOS-autocorrect defect, three of them the enforcement
+// mechanism behind the SAME night's own N1/S3 money fixes (see
+// turn-engine-runner.ts's runTurnEngineTurn, which now normalizes the
+// customer's message ONCE at the module's entry boundary instead of
+// patching each call site). Exported so that boundary fix can reuse this
+// exact function rather than reimplementing it. The call below is now a
+// redundant no-op for any message that already arrived through that
+// boundary — kept anyway as a defensive backstop for any future direct
+// caller of impliesClosure that bypasses the runner (e.g. a unit test or a
+// new call site added later without knowing about the boundary).
+export const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
 
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
 // 00-BG: the SAME defect as the name question and the confirm gate, a third
@@ -4803,6 +4816,38 @@ function narrowAmbiguousCandidatesBySpanSize(
   return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
 }
 
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up): once findVetoedOffMenuTerm (resolve-item.ts) says a
+// span named something real that was correctly excluded as a standalone
+// item, this looks for that SAME name as a genuine, orderable CHOICE inside
+// some OTHER item's ask_plan — a dressing, a dip, a topping — real Vito's
+// shape: "Bleu Cheese" isn't a standalone side, but it IS a real choice in
+// every Salads item's own "Dressing" slot. Exact, case-insensitive whole-
+// string match against the choice's own display text only — never a fuzzy
+// guess; offering the WRONG real alternative is worse than a plain decline,
+// so this returns null (never a guess) whenever nothing matches exactly.
+// Returns the FIRST match found scanning `menu` in the order given — every
+// real match this dispatch verified is equally correct to offer, so no
+// further tiebreak between multiple genuine matches is needed.
+function findOffMenuChoiceAlternative(
+  offMenuTerm: string,
+  menu: TurnEngineMenuItem[],
+): { choiceDisplay: string; category: string } | null {
+  const wanted = offMenuTerm.trim().toLowerCase();
+  if (!wanted) return null;
+  for (const item of menu) {
+    if (!item.category || !item.ask_plan) continue;
+    for (const step of item.ask_plan.steps ?? []) {
+      for (const choice of step.choices ?? []) {
+        if ((choice.display ?? "").trim().toLowerCase() === wanted) {
+          return { choiceDisplay: choice.display, category: item.category };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -5067,6 +5112,32 @@ export function decide(
         }
       }
     } else {
+      // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+      // 009de656 follow-up): resolveItem's own veto (findVetoedOffMenuTerm's
+      // header, resolve-item.ts) already stopped this span from guessing a
+      // wrong item once a real, more-specific, curated term was found and
+      // correctly excluded — but a bare "unresolved" can't tell "nothing on
+      // the menu resembles this" apart from "the customer named something
+      // real that just isn't orderable this way," so the generic "didn't
+      // catch that" reply below would otherwise fire even when the shop's
+      // own data can name a real alternative (real Vito's shape: "Bleu
+      // Cheese" isn't a standalone side, but it IS a genuine salad Dressing
+      // choice). Checked here, before the span falls into the generic
+      // genuinelyUnresolvedSpans bucket, so this gets its own specific
+      // decline naming the real alternative when one exists — or a plain,
+      // honest "we don't have that" when it doesn't — instead of the
+      // misleading "I didn't catch that" (the customer's words were heard
+      // just fine; the item simply isn't on the menu that way).
+      const vetoedTerm = findVetoedOffMenuTerm(add.item_span ?? "", lexicon, inactiveLexicon);
+      if (vetoedTerm) {
+        const alternative = findOffMenuChoiceAlternative(vetoedTerm.term, menu);
+        declines.push({
+          reason: alternative
+            ? `We don't have a "${vetoedTerm.term}" side on its own, but it's a real option on our ${alternative.category} — want ${alternative.choiceDisplay} that way instead?`
+            : `We don't have a "${vetoedTerm.term}" side — sorry about that!`,
+        });
+        continue;
+      }
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
       // that was" is why a customer who ordered two things restates BOTH --
@@ -5804,10 +5875,32 @@ export function ask(
   }
 
   // 6. upsell (only if a qualifying add happened this turn and not yet offered).
+  // R3 fix (2026-09-19, live conv a156dc34 #47): a Coke added as a real
+  // order line on an earlier turn was still offered right back to the
+  // customer later ("Want to add a Coke for $2.99?") after fries qualified
+  // for their own upsell — this loop used to stop at the FIRST parseable
+  // name in the added item's `upsell` field regardless of what's already in
+  // the cart. Every parseable candidate (allParseableUpsellNames, in the
+  // field's own listed order) is now tried in turn, skipping any whose
+  // resolved menu_item_id already has a real line in the cart, so a
+  // multi-candidate field ("Coke +2.99; Brownie +3.50") still offers the
+  // next real option instead of silently offering nothing. Genuinely
+  // nothing left to offer (every candidate already in the cart, or none
+  // parse) means no upsell fires this turn — never re-offering what the
+  // customer already ordered, same "missing beats wrong" discipline this
+  // module's other guards already apply.
   if (turnEvents.qualifyingAddMenuItemId && !priorState.upsell_offered && shopContext.upsellEnabled) {
     const addedItem = menuById.get(turnEvents.qualifyingAddMenuItemId);
-    const upsellName = addedItem?.upsell ? firstParseableUpsellName(addedItem.upsell) : null;
-    const upsellTarget = upsellName ? menu.find(m => m.name.toLowerCase() === upsellName.toLowerCase()) : undefined;
+    const upsellNames = addedItem?.upsell ? allParseableUpsellNames(addedItem.upsell) : [];
+    const cartMenuItemIds = new Set(cart.filter(isRealCartLine).map(l => l.menu_item_id));
+    let upsellTarget: TurnEngineMenuItem | undefined;
+    for (const upsellName of upsellNames) {
+      const candidate = menu.find(m => m.name.toLowerCase() === upsellName.toLowerCase());
+      if (candidate && !cartMenuItemIds.has(candidate.id)) {
+        upsellTarget = candidate;
+        break;
+      }
+    }
     if (upsellTarget) {
       return carry({ kind: "upsell", menu_item_id: upsellTarget.id }, "ordering", true);
     }
