@@ -55,22 +55,31 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
   const accepted: Move[] = [];
   const rejected: Reconciled["rejected"] = [];
 
-  for (const m of moves) {
-    let ok = true;
-    for (const s of spansOf(m)) {
-      const sw = words(s);
-      if (sw.length === 0) continue;
-      const at = findWordRun(mw, sw);
-      if (at < 0) {
-        // allow the span if every word of it appears somewhere (model may reorder or de-plural lightly)
-        const all = sw.every((x) => mw.includes(x) || mw.includes(x + "s") || mw.includes(singular(x)));
-        if (!all && (m.kind === "add_line" ? s === m.item_span : false)) { ok = false; rejected.push({ move: m, span: s }); break; }
-        if (all) for (const x of sw) { const k = mw.indexOf(x); if (k >= 0) covered[k] = true; }
-        continue;
-      }
-      for (let k = at; k < at + sw.length; k++) covered[k] = true;
+  const present = (s: string): boolean => {
+    const sw = words(s);
+    if (sw.length === 0) return true;
+    const at = findWordRun(mw, sw);
+    if (at >= 0) { for (let k = at; k < at + sw.length; k++) covered[k] = true; return true; }
+    // tolerate light reordering / plural drift: every word must still be in the message
+    const all = sw.every((x) => mw.includes(x) || mw.includes(x + "s") || mw.includes(singular(x)));
+    if (all) for (const x of sw) { const k = mw.indexOf(x); if (k >= 0) covered[k] = true; }
+    return all;
+  };
+  for (const m0 of moves) {
+    let m: Move = m0;
+    if (m.kind === "add_line") {
+      if (!present(m.item_span)) { rejected.push({ move: m, span: m.item_span }); continue; }
+      const kept = m.option_spans.filter(present);
+      if (kept.length !== m.option_spans.length) m = { ...m, option_spans: kept };
+    } else if (m.kind === "change_line") {
+      const add = (m.add_option_spans ?? []).filter(present);
+      const rem = (m.remove_option_spans ?? []).filter(present);
+      if ("span" in m.ref) present(m.ref.span);
+      m = { ...m, add_option_spans: add, remove_option_spans: rem };
+    } else {
+      for (const s of spansOf(m)) present(s);
     }
-    if (ok) accepted.push(m);
+    accepted.push(m);
   }
 
   const omissions: Reconciled["omissions"] = [];

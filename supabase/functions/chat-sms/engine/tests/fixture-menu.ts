@@ -68,6 +68,7 @@ export const RAW_ITEMS: RawMenuItem[] = [
       choices: [{ id: "gsRanch", display: "Ranch", price_delta_cents: 0 }, { id: "gsGreek", display: "Greek", price_delta_cents: 0 }] },
   ]),
   item(IDS.cheesesteak, "Cheesesteak", "Hoagies", 1049),
+  item("roll", "Pepperoni", "Stromboli Rolls", 999),
 ];
 
 export const RAW_LEXICON: LexiconEntry[] = [
@@ -86,6 +87,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
   ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak],
+  ["pepperoni stromboli", "roll"], ["pepperoni", "roll"], ["pepperoni roll", "roll"],
 ].map(([term, id]) => ({ term, target_type: "item", target_id: id })).concat([
   { term: "pizza", target_type: "category", target_id: "Pizza" },
   { term: "pizzas", target_type: "category", target_id: "Pizza" },

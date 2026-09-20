@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, isDigits, isWordSubset, sameWords, words } from "./normalize.ts";
+import { contentWords, findWordRun, isDigits, isWordSubset, sameWords, singular, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -54,6 +54,7 @@ export function narrow(candidateIds: string[], span: string, menu: Menu): string
     if (isWordSubset(sw, it.words)) return true;
     if (sw.length === 1 && it.facets.size === sw[0]) return true;
     if (it.facets.kind && isWordSubset(sw, words(it.facets.kind))) return true;
+    if (it.category && isWordSubset(sw, words(it.category).map(singular))) return true;
     return false;
   });
   return keep;

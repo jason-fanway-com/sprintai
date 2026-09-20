@@ -3,7 +3,7 @@ import type { DeclineCode, Fulfillment, OpenQuestion, OrderForm } from "./form.t
 import type { Menu, MenuItem } from "./menu.ts";
 import { dollars, type PricedLine, type Totals } from "./price.ts";
 import { GROUP_PROMPTS, groupPrompt, orList, sortSizes, T, title, type Voice } from "./templates.ts";
-import { words } from "./normalize.ts";
+import { contentWords, words } from "./normalize.ts";
 
 export type Ack =
   | { kind: "line_added"; line: PricedLine }
@@ -55,16 +55,6 @@ function moneyLine(t: Totals): string {
   return T.moneyLine(parts);
 }
 
-function commonNoun(items: MenuItem[], fallback: string): string {
-  if (items.length === 0) return fallback;
-  const sets = items.map((i) => new Set(i.words));
-  const first = items[0].words;
-  for (let k = first.length - 1; k >= 0; k--) {
-    const w = first[k];
-    if (sets.every((s) => s.has(w))) return w;
-  }
-  return fallback;
-}
 
 export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, menu: Menu): string {
   switch (q.kind) {
@@ -84,12 +74,19 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const cands = l.status.candidates.map((id) => menu.items.get(id)!).filter(Boolean);
       const facet = count >= 2 ? "list" : q.facet;
       if (facet === "kind") {
-        const noun = commonNoun(cands, words(l.span).slice(-1)[0] ?? "one");
-        const label = (c: MenuItem) => {
-          const k = (c.facets.kind ?? c.display_name).split(" ").filter((w) => w !== noun && w !== noun + "s").join(" ");
-          return k || (c.facets.kind ?? c.display_name);
+        const byKind = new Map<string, MenuItem>();
+        for (const c of cands) { const k = c.facets.kind ?? c.display_name; if (!byKind.has(k)) byKind.set(k, c); }
+        const kindsRaw = [...byKind.keys()];
+        const lastWords = kindsRaw.map((k) => k.split(" ").slice(-1)[0]);
+        const sharedTail = lastWords.every((w) => w === lastWords[0]) && kindsRaw.every((k) => k.split(" ").length > 1) ? lastWords[0] : null;
+        const noun = sharedTail ?? (contentWords(l.span).slice(-1)[0] ?? words(l.span).slice(-1)[0] ?? "one");
+        const label = (k: string) => {
+          const parts = k.split(" ");
+          if (parts.length > 1 && (parts[parts.length - 1] === noun || parts[parts.length - 1] === noun + "s")) return parts.slice(0, -1).join(" ");
+          if (k === noun || k === noun + "s") { const cat = byKind.get(k)?.category; return cat ? `${k} (${cat})` : k; }
+          return k;
         };
-        const kinds = [...new Set(cands.map(label))];
+        const kinds = [...new Set(kindsRaw.map(label))];
         return T.whatKind(noun, count, kinds.slice(0, 8));
       }
       if (facet === "size") {

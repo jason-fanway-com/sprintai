@@ -311,3 +311,46 @@ Deno.test("closure while an unknown item is pending drops it and moves on", () =
   assertEquals(o.form.lines.length, 1);
   assertEquals(o.form.status, "confirming");
 });
+
+Deno.test("bare pepperoni: which kind is asked with full names, then size", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "pepperoni", [{ kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "Which pepperoni? Pepperoni Pizza or Pepperoni (Stromboli Rolls)?");
+  o = say(o.form, "pizza");
+  assertStringIncludes(o.reply, "What size Pepperoni Pizza? Small, Medium, or Large?");
+});
+
+Deno.test("an option the customer never typed is stripped; the size is asked instead of assumed", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "large cheese pizza", [{ kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["large"] }]);
+  o = say(o.form, "actually pepperoni not cheese", [
+    { kind: "remove_line", ref: { span: "cheese" } },
+    { kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: ["large"] },
+  ]);
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.lines[0].item_id, null);
+  assertStringIncludes(o.reply, "Removed Large Cheese Pizza.");
+  assertStringIncludes(o.reply, "Which pepperoni?");
+});
+
+Deno.test("'make that 3' with a vague reference resolves to the only line", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "make that 3", [{ kind: "change_line", ref: { span: "that" }, qty: 3 }]);
+  assertEquals(o.form.lines[0].qty, 3);
+  o = say(o.form, "and a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  o = say(o.form, "make that 2", [{ kind: "change_line", ref: { span: "that" }, qty: 2 }]);
+  assertEquals(o.form.open?.kind, "line_ref");
+});
+
+Deno.test("answering a kind question with the category word works too", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "pepperoni", [{ kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }]);
+  o = say(o.form, "the stromboli", [{ kind: "answer_option", value_span: "stromboli" }]);
+  assertEquals(o.form.lines[0].item_id, "roll");
+  assertStringIncludes(o.reply, "Added 1 × Pepperoni  $9.99");
+});

@@ -1,6 +1,8 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
+import { contentWords } from "./normalize.ts";
+
 export type Fulfillment = "pickup" | "delivery";
 
 export interface Address {
@@ -155,6 +157,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
     const hits = live.filter((l) => lineSpanMatcher(l, ref.span)).map((l) => l.line_id);
+    if (hits.length === 0 && contentWords(ref.span).length === 0) return live.length === 1 ? [live[0].line_id] : live.map((l) => l.line_id);
     return hits;
   };
 
