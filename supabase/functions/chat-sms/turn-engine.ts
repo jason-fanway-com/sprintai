@@ -157,6 +157,13 @@ import {
 } from "./dialogue-signals.ts";
 import { resolveItem, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch } from "./guard19-fuzzy-item-match.ts";
+// Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
+// with zero dependency on this file, so importing its result TYPE here
+// (DialogueState.returningCustomerOffer's own shape, freeze-queue item 7)
+// creates no cycle and keeps this module's own "no Supabase client" rule
+// intact — only the shape is used, never the function calls themselves
+// (those stay in turn-engine-runner.ts, the I/O adapter).
+import type { DeliveryOffer } from "./delivery-memory-offer.ts";
 
 // ─── §3a: the state record — EXACT shape from the spec ─────────────────────
 
@@ -321,6 +328,33 @@ export interface DialogueState {
   // state persisted before this field existed still loads (missing = not yet
   // closed, the correct interpretation either way).
   checkoutClosed?: boolean;
+  // Freeze-queue item 7 (2026-09-19): the returning-customer greeting/offer
+  // turn-engine-runner.ts asks on a conversation's very first turn (delivery-
+  // memory-offer.ts + customer-profile.ts already built and tested this
+  // decision logic for the legacy path; this is the engine path's own
+  // memory of "we just asked, waiting on yes/no"). Deliberately a top-level
+  // field, NOT a variant of `open` above — `open` is consumed by exhaustive
+  // switches in ask()/render() that this feature has no business touching;
+  // the runner alone reads and clears this field, short-circuiting BEFORE
+  // ANSWER/DECIDE/ASK/RENDER ever run on the turn that answers it. `null`
+  // once cleared (customer declined, or the offer was accepted and applied)
+  // — never re-set later in the same conversation, so a "yes" two turns
+  // later (after the customer's message has already moved on) is correctly
+  // read as an ordinary confirmation, not a stale re-acceptance of this
+  // offer. Optional so state persisted before this field existed still
+  // loads (missing = no offer outstanding, the correct interpretation).
+  returningCustomerOffer?: {
+    // Null when the customer had no favorite_items regular (or it no longer
+    // resolves to a real menu item — see turn-engine-runner.ts's own
+    // findMenuItemByNamePhrase call) — a delivery-only offer still has a
+    // value worth remembering even with no regular item attached.
+    regularItem: { menu_item_id: string; name: string } | null;
+    // Null when there was no delivery/pickup-again offer worth asking about
+    // this turn (delivery-memory-offer.ts's own computeDeliveryOffer/
+    // isDeliveryOfferEligible contract — see that module's header for why a
+    // plain "pickup again?" is treated as optional and never reaches here).
+    deliveryOffer: DeliveryOffer;
+  } | null;
 }
 
 // ─── §3c: the proposal contract — EXACT shape from the spec ────────────────
@@ -395,6 +429,29 @@ function addNarrowedCandidateToCart(
   quantity: number,
 ): boolean {
   const menuItem = menuById.get(candidate.menu_item_id);
+  if (!menuItem?.ask_plan) return false;
+  const { texts } = resolveChoiceDisplays(menuItem.ask_plan, []);
+  const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
+  return result.cartChanged;
+}
+
+// Freeze-queue item 7 (2026-09-19): adds a SPECIFIC, already-known menu item
+// straight to the cart — same applyCompiledAddItem call addNarrowedCandidateToCart
+// above already makes, just keyed by a bare menu_item_id (the returning-
+// customer offer already resolved to exactly one item via
+// findMenuItemByNamePhrase before this is ever called, so there is no
+// PendingCandidate list to thread through). Any required option group the
+// item still needs (size, etc.) is left unresolved here on purpose — the
+// normal ask()/render() cycle that runs immediately afterward opens that
+// slot question exactly as it would for any other fresh add, so a regular
+// with required options is never silently defaulted.
+export function addResolvedItemToCart(
+  cart: TurnEngineCartLine[],
+  menu: TurnEngineMenuItem[],
+  menuItemId: string,
+  quantity: number,
+): boolean {
+  const menuItem = menu.find(m => m.id === menuItemId);
   if (!menuItem?.ask_plan) return false;
   const { texts } = resolveChoiceDisplays(menuItem.ask_plan, []);
   const result = applyCompiledAddItem(cart, toCompiledMenuItem(menuItem, menuItem.ask_plan), menuItem.id, quantity, "", undefined, undefined, texts);
@@ -1009,7 +1066,14 @@ function parseReplacementCorrection(message: string): ReplacementCorrectionCandi
 // replacement. Two or more matches, or none, returns null — a genuine
 // ambiguity or a genuinely nonexistent item are handled identically by the
 // caller (never guess, never silently keep the wrong thing).
-function findMenuItemByNamePhrase(
+// Exported for freeze-queue item 7 (turn-engine-runner.ts's returning-
+// customer greeting): resolves a customer_profiles.favorite_items entry's
+// recorded name back to today's real menu item, the same stem-subset
+// matcher this file already trusts for replacement-target lookups. Callers
+// outside this file pass "" for excludeMenuItemId (there is no line to
+// exclude — a favorite item is never itself already in the cart before this
+// runs).
+export function findMenuItemByNamePhrase(
   menu: TurnEngineMenuItem[],
   phrase: string,
   excludeMenuItemId: string,

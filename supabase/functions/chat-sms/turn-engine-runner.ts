@@ -90,6 +90,9 @@ import {
   orderShapedMessageQuantity,
   disambiguationDeclineNamesOutsideItem,
   readOrderTypeReply,
+  isConfirmAffirmative,
+  findMenuItemByNamePhrase,
+  addResolvedItemToCart,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -99,6 +102,14 @@ import {
   type Decline,
   type Proposal,
 } from "./turn-engine.ts";
+// Freeze-queue item 7 (2026-09-19): the returning-customer greeting/offer.
+// Both modules are pure decision cores already built and tested for the
+// legacy path (index.ts) — reused here unchanged, never reimplemented. See
+// this file's own maybeBuildReturningCustomerGreeting/
+// resolveReturningCustomerOfferAnswer below for the one place each is
+// called.
+import { lookupCustomerContext, regularEligibility } from "../_shared/customer-profile.ts";
+import { computeDeliveryOffer, isDeliveryOfferEligible, type DeliveryOffer } from "./delivery-memory-offer.ts";
 
 type ProposeTurnFn = typeof defaultProposeTurn;
 
@@ -770,8 +781,245 @@ const REMAINDER_ELIGIBLE_OUTCOME_KINDS = new Set([
   "confirm_no",
 ]);
 
+// ── Returning-customer greeting (freeze-queue item 7, 2026-09-19) ──────────
+// PO report: "Last week the bot recognised Jason by number, greeted him by
+// name, and offered 'the same as last time?' with the full order, delivery
+// and address. It no longer does." The legacy path (index.ts) has always had
+// this — delivery-memory-offer.ts and customer-profile.ts are the tested
+// decision cores it already calls — but the turn-engine path bypasses
+// index.ts entirely (this dispatch's own docs/specs/2026-09-14-turn-engine-
+// oversight.md §4 Phase 3 routing branch), so a shop on the engine path
+// (Vito's, turn_engine_enabled=true) never ran any of it. This is a
+// reconnection, not a new feature: every decision (who counts as a
+// "regular", when a delivery offer is still honest to make) is made by the
+// SAME two functions the legacy path already uses, unchanged.
+//
+// index.ts already computes all of this (customerRow, regularItem,
+// deliveryOffer) before its own turn-engine routing branch — but index.ts is
+// frozen for this dispatch, and its own object literal call into
+// runTurnEngineTurn (RunTurnInput) does not carry any of it through. Rather
+// than widen that frozen call site, this reads exactly what it needs (the
+// customer's phone off `conversations`, personalization/delivery flags off
+// `shops`, opt-out off `sms_opt_outs`) straight off deps.supabase using
+// input.conversationId/shopId/tenantId — already on hand, no new field
+// required from index.ts at all.
+
+interface ReturningCustomerGreeting {
+  reply: string;
+  // Non-null only when there is something worth remembering an answer to —
+  // a bare name-only greeting (no regular, no live delivery offer) has
+  // nothing to wait on, so the runner prepends it to this turn's own normal
+  // reply instead of swallowing the turn (see the call site below).
+  offerState: NonNullable<DialogueState["returningCustomerOffer"]> | null;
+}
+
+async function maybeBuildReturningCustomerGreeting(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+): Promise<ReturningCustomerGreeting | null> {
+  const { data: convRow } = await supabase
+    .from("conversations")
+    .select("customer_phone")
+    .eq("id", input.conversationId)
+    .maybeSingle();
+  const customerPhone = (convRow as { customer_phone?: string | null } | null)?.customer_phone;
+  if (!customerPhone) return null;
+
+  // Same gate as index.ts's own customer-CRM block (AC3/spec item 5): one
+  // flag for the whole feature, no separate on/off switch for the greeting
+  // vs. the delivery memory.
+  const { data: shopRow } = await supabase
+    .from("shops")
+    .select("customer_personalization_enabled, delivery_paused_until, delivery_radius_mi")
+    .eq("id", input.shopId)
+    .maybeSingle();
+  const shop = shopRow as {
+    customer_personalization_enabled?: boolean | null;
+    delivery_paused_until?: string | null;
+    delivery_radius_mi?: number | null;
+  } | null;
+  if (shop?.customer_personalization_enabled === false) return null;
+
+  // Same table/columns as index.ts's own isOptedOut — duplicated rather than
+  // imported since that function is local and unexported in a frozen file
+  // (see this file's header on the New-Files-Only discipline elsewhere).
+  const { data: optOutRow } = await supabase
+    .from("sms_opt_outs")
+    .select("id")
+    .eq("tenant_id", input.tenantId)
+    .eq("customer_phone", customerPhone)
+    .is("opted_back_at", null)
+    .maybeSingle();
+  if (optOutRow) return null;
+
+  const customerRow = await lookupCustomerContext(supabase, input.tenantId, customerPhone);
+  // AC4 parity (index.ts's own comment on customerContext): only greet by
+  // name on a genuinely returning customer with a stored name — never a
+  // first-ever contact, even if a profile row somehow exists with no name.
+  if (!customerRow?.name) return null;
+
+  const regularEligible = regularEligibility(customerRow.favorite_items ?? []);
+  const regularItem = regularEligible
+    ? (() => {
+        const menuItem = findMenuItemByNamePhrase(input.menu, regularEligible.name, "");
+        return menuItem ? { menu_item_id: menuItem.id, name: menuItem.ask_plan?.display_name ?? menuItem.name } : null;
+      })()
+    : null;
+
+  const deliveryOfferComputed = computeDeliveryOffer(
+    customerRow.last_order_type ?? null,
+    customerRow.last_delivery_address ?? null,
+    {
+      deliveryEnabled: input.shopContext.deliveryEnabled,
+      deliveryPausedNow: !!(shop?.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()),
+      deliveryRadiusMi: shop?.delivery_radius_mi ?? null,
+    },
+  );
+  // Conversation's first turn (this function only ever runs when
+  // input.dialogueState is null — see the call site) means order_type is
+  // always still unset and no offer has been made yet this cart, so
+  // isDeliveryOfferEligible's other two gates are trivially satisfied here;
+  // passed through anyway rather than skipped, so this stays honest if that
+  // ever stops being true.
+  const deliveryOfferEligible = isDeliveryOfferEligible(deliveryOfferComputed, input.shopContext.orderType, null);
+  // Mirrors index.ts's own "optional, low-stakes" treatment of a plain
+  // pickup-again offer (customerContextBlock's deliveryOfferClause, the
+  // final "pickup" branch) — only a DELIVERY offer, or an honest "delivery
+  // isn't available right now" downgrade, is worth a deterministic yes/no
+  // question here; a bare "pickup again?" is skipped exactly as the legacy
+  // prompt treats it as optional.
+  const offeredDeliveryOffer: DeliveryOffer =
+    deliveryOfferEligible && deliveryOfferComputed &&
+    (deliveryOfferComputed.type === "delivery" || (deliveryOfferComputed.type === "pickup" && !!deliveryOfferComputed.downgradeReason))
+      ? deliveryOfferComputed
+      : null;
+
+  const namePart = `Hey ${customerRow.name}, welcome back!`;
+  const combinedActive = !!regularItem && offeredDeliveryOffer?.type === "delivery";
+  const offerClause = combinedActive
+    ? ` Want your usual, the ${regularItem!.name}, delivered again to ${(offeredDeliveryOffer as { type: "delivery"; address: { formatted: string } }).address.formatted}?`
+    : regularItem
+      ? ` Want your usual, the ${regularItem.name}, or something else today?`
+      : offeredDeliveryOffer?.type === "delivery"
+        ? ` Delivery again to ${offeredDeliveryOffer.address.formatted}?`
+        : offeredDeliveryOffer?.type === "pickup" && offeredDeliveryOffer.downgradeReason
+          ? ` Your last order was delivery, but ${offeredDeliveryOffer.downgradeReason} — want this for pickup instead?`
+          : "";
+
+  const reply = `${namePart}${offerClause}`;
+  const offerState = (regularItem || offeredDeliveryOffer)
+    ? { regularItem, deliveryOffer: offeredDeliveryOffer }
+    : null;
+  return { reply, offerState };
+}
+
+async function persistReturningCustomerGreetingTurn(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+  reply: string,
+  offerState: NonNullable<DialogueState["returningCustomerOffer"]>,
+): Promise<RunTurnResult> {
+  const cart = input.cart.map(l => ({ ...l }));
+  const nextState: DialogueState = { ...INITIAL_DIALOGUE_STATE, returningCustomerOffer: offerState };
+  const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+  const driverTipCents = input.shopContext.driverTipCents ?? 0;
+  const saved = await persistTurn(supabase, input, cart, nextState, {}, reply, deliveryFeeCents, driverTipCents);
+  return { reply, cart, dialogueState: nextState, messageId: saved.id };
+}
+
+// The turn AFTER the greeting/offer above — the customer's answer to "want
+// your usual...?" / "delivery again to...?". Returns null (never touches the
+// DB) on anything that isn't a clear yes, so the caller can clear the
+// remembered offer and let this exact same message fall through to the
+// completely normal ANSWER/DECIDE/ASK/RENDER pipeline, satisfying AC5's "a
+// 'no' (or anything else) proceeds to a completely normal ... conversation,
+// unaffected" the same way a declined legacy offer just lets the LLM keep
+// going. Reuses ask()/render() — the SAME two steps every other turn ends
+// with — rather than hand-building a bespoke confirmation reply, so a
+// regular that still needs a required option (size, etc.) opens that slot
+// question exactly like any other fresh add.
+async function resolveReturningCustomerOfferAnswer(
+  supabase: SupabaseClient,
+  input: RunTurnInput,
+  offer: NonNullable<DialogueState["returningCustomerOffer"]>,
+): Promise<RunTurnResult | null> {
+  if (!isConfirmAffirmative(input.message)) return null;
+
+  const cartBefore = input.cart.map(l => ({ ...l }));
+  const workingCart: TurnEngineCartLine[] = input.cart.map(l => ({ ...l }));
+  if (offer.regularItem) {
+    addResolvedItemToCart(workingCart, input.menu, offer.regularItem.menu_item_id, 1);
+  }
+  const sideEffects: CartSideEffects = {};
+  if (offer.deliveryOffer?.type === "delivery") {
+    sideEffects.order_type = "delivery";
+    sideEffects.delivery_address = { formatted: offer.deliveryOffer.address.formatted };
+  } else if (offer.deliveryOffer?.type === "pickup") {
+    sideEffects.order_type = "pickup";
+  }
+
+  const effectiveShopContext: RunTurnShopContext = {
+    ...input.shopContext,
+    orderType: sideEffects.order_type ?? input.shopContext.orderType,
+    deliveryAddressKnown: sideEffects.delivery_address != null ? true : input.shopContext.deliveryAddressKnown,
+  };
+  const upsellEnabled = await loadUpsellEnabled(supabase, input.shopId);
+  const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
+  const turnEvents: AskTurnEvents = {
+    qualifyingAddMenuItemId: null,
+    disambiguationCandidateIds: null,
+    carriedDisambiguationCandidateIds: [],
+    disambiguationSettledThisTurn: false,
+    checkoutIntentThisTurn: false,
+    confirmYes: false,
+    confirmNo: false,
+  };
+  const nextState = ask(workingCart, { ...INITIAL_DIALOGUE_STATE, returningCustomerOffer: null }, turnEvents, shopContext, input.menu);
+  // ask() has no idea this field exists (deliberately — see
+  // DialogueState.returningCustomerOffer's own doc) and so never carries it
+  // forward on its own; set explicitly so the persisted row shows the offer
+  // was acted on, not merely omitted.
+  nextState.returningCustomerOffer = null;
+  const rendered = render(cartBefore, workingCart, nextState, [], input.menu, {
+    deliveryFeeCents: input.shopContext.deliveryFeeCents || undefined,
+    driverTipCents: sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? undefined,
+    priceIndexByMenuItemId: buildMenuPriceIndex(input.menu as unknown as MenuItemForPricing[]),
+  });
+
+  const deliveryFeeCents = input.shopContext.deliveryFeeCents ?? 0;
+  const driverTipCents = sideEffects.driver_tip_cents ?? input.shopContext.driverTipCents ?? 0;
+  const saved = await persistTurn(supabase, input, workingCart, nextState, sideEffects, rendered, deliveryFeeCents, driverTipCents);
+  return { reply: rendered, cart: workingCart, dialogueState: nextState, messageId: saved.id };
+}
+
 export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
-  const priorState = input.dialogueState ?? INITIAL_DIALOGUE_STATE;
+  // ── Returning-customer greeting (freeze-queue item 7) ───────────────────
+  // See maybeBuildReturningCustomerGreeting/resolveReturningCustomerOfferAnswer
+  // above for the full reasoning. `effectiveDialogueState` is what the rest
+  // of this function actually runs on — `input.dialogueState` itself is
+  // never read again past this block, so clearing returningCustomerOffer
+  // here (the decline path) is enough to make every line below behave as
+  // though the offer had never been made.
+  let greetingPrefix: string | null = null;
+  let effectiveDialogueState = input.dialogueState;
+  if (input.dialogueState == null) {
+    const greeting = await maybeBuildReturningCustomerGreeting(deps.supabase, input);
+    if (greeting) {
+      if (greeting.offerState) {
+        return await persistReturningCustomerGreetingTurn(deps.supabase, input, greeting.reply, greeting.offerState);
+      }
+      greetingPrefix = greeting.reply;
+    }
+  } else if (input.dialogueState.returningCustomerOffer) {
+    const offerTurn = await resolveReturningCustomerOfferAnswer(deps.supabase, input, input.dialogueState.returningCustomerOffer);
+    if (offerTurn) return offerTurn; // customer accepted -- fully handled and persisted above
+    // Declined, or not understood as an answer to the offer at all -- clear
+    // it and fall through to the completely normal pipeline on this exact
+    // message (AC5: "proceeds to a completely normal ... conversation").
+    effectiveDialogueState = { ...input.dialogueState, returningCustomerOffer: null };
+  }
+
+  const priorState = effectiveDialogueState ?? INITIAL_DIALOGUE_STATE;
   const cartBefore = input.cart.map(l => ({ ...l }));
   // answer() mutates its cart argument in place (turn-engine.ts's own
   // contract); decide() below never does (it returns a new array) — this
@@ -1675,6 +1923,12 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
   };
   const shopContext = buildAskShopContext(effectiveShopContext, upsellEnabled);
   const nextState = ask(workingCart, priorState, turnEvents, shopContext, input.menu);
+  // Freeze-queue item 7: ask() doesn't carry this field forward (it has no
+  // idea it exists — see DialogueState.returningCustomerOffer's own doc).
+  // priorState.returningCustomerOffer is `null` here only on the one turn
+  // that just cleared a declined offer (see the top of this function); every
+  // ordinary turn leaves it undefined, so this never fires otherwise.
+  if (priorState.returningCustomerOffer === null) nextState.returningCustomerOffer = null;
   // 2026-09-18 PO dispatch (echo regression follow-up): record what got
   // echoed THIS turn (if anything) so NEXT turn's anti-repeat check (above)
   // can tell a genuine second identical miss from a fresh one. Kept outside
@@ -1713,7 +1967,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     unmatchedSlotChoiceText,
     enumerateDisambiguationCandidates,
   });
-  const reply = answerText ? `${answerText}\n\n${rendered}` : rendered;
+  const baseReply = answerText ? `${answerText}\n\n${rendered}` : rendered;
+  // Freeze-queue item 7: a name-only greeting (no regular, no live delivery
+  // offer -- see maybeBuildReturningCustomerGreeting) never swallows the
+  // turn, so it rides along ahead of whatever this turn's own message
+  // normally produces, same "prepend, don't replace" discipline as
+  // answerText itself just above.
+  const reply = greetingPrefix ? `${greetingPrefix} ${baseReply}` : baseReply;
 
   // ── STEP 7: PERSIST ────────────────────────────────────────────────────────
   const saved = await persistTurn(deps.supabase, input, workingCart, nextState, sideEffects, reply, deliveryFeeCents, driverTipCents);
