@@ -161,7 +161,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -4676,6 +4676,38 @@ function narrowAmbiguousCandidatesBySpanSize(
   return narrowed.length === 1 ? narrowed[0].menu_item_id : null;
 }
 
+// 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+// 009de656 follow-up): once findVetoedOffMenuTerm (resolve-item.ts) says a
+// span named something real that was correctly excluded as a standalone
+// item, this looks for that SAME name as a genuine, orderable CHOICE inside
+// some OTHER item's ask_plan — a dressing, a dip, a topping — real Vito's
+// shape: "Bleu Cheese" isn't a standalone side, but it IS a real choice in
+// every Salads item's own "Dressing" slot. Exact, case-insensitive whole-
+// string match against the choice's own display text only — never a fuzzy
+// guess; offering the WRONG real alternative is worse than a plain decline,
+// so this returns null (never a guess) whenever nothing matches exactly.
+// Returns the FIRST match found scanning `menu` in the order given — every
+// real match this dispatch verified is equally correct to offer, so no
+// further tiebreak between multiple genuine matches is needed.
+function findOffMenuChoiceAlternative(
+  offMenuTerm: string,
+  menu: TurnEngineMenuItem[],
+): { choiceDisplay: string; category: string } | null {
+  const wanted = offMenuTerm.trim().toLowerCase();
+  if (!wanted) return null;
+  for (const item of menu) {
+    if (!item.category || !item.ask_plan) continue;
+    for (const step of item.ask_plan.steps ?? []) {
+      for (const choice of step.choices ?? []) {
+        if ((choice.display ?? "").trim().toLowerCase() === wanted) {
+          return { choiceDisplay: choice.display, category: item.category };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function decide(
   proposal: Proposal,
   cart: TurnEngineCartLine[],
@@ -4940,6 +4972,32 @@ export function decide(
         }
       }
     } else {
+      // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
+      // 009de656 follow-up): resolveItem's own veto (findVetoedOffMenuTerm's
+      // header, resolve-item.ts) already stopped this span from guessing a
+      // wrong item once a real, more-specific, curated term was found and
+      // correctly excluded — but a bare "unresolved" can't tell "nothing on
+      // the menu resembles this" apart from "the customer named something
+      // real that just isn't orderable this way," so the generic "didn't
+      // catch that" reply below would otherwise fire even when the shop's
+      // own data can name a real alternative (real Vito's shape: "Bleu
+      // Cheese" isn't a standalone side, but it IS a genuine salad Dressing
+      // choice). Checked here, before the span falls into the generic
+      // genuinelyUnresolvedSpans bucket, so this gets its own specific
+      // decline naming the real alternative when one exists — or a plain,
+      // honest "we don't have that" when it doesn't — instead of the
+      // misleading "I didn't catch that" (the customer's words were heard
+      // just fine; the item simply isn't on the menu that way).
+      const vetoedTerm = findVetoedOffMenuTerm(add.item_span ?? "", lexicon, inactiveLexicon);
+      if (vetoedTerm) {
+        const alternative = findOffMenuChoiceAlternative(vetoedTerm.term, menu);
+        declines.push({
+          reason: alternative
+            ? `We don't have a "${vetoedTerm.term}" side on its own, but it's a real option on our ${alternative.category} — want ${alternative.choiceDisplay} that way instead?`
+            : `We don't have a "${vetoedTerm.term}" side — sorry about that!`,
+        });
+        continue;
+      }
       // 00-AX: NAME the span. The customer's own words are right here in
       // add.item_span and were being thrown away. An anonymous "what item
       // that was" is why a customer who ordered two things restates BOTH --
@@ -5211,6 +5269,66 @@ export function decide(
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
     if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+
+    // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
+    // line naming a topping the customer's already-in-cart line of this SAME
+    // item doesn't have yet used to fall straight into the brand-new-line
+    // path below. Neither R1's own restatement guard
+    // (isAnswerRestatementOfCartLine/toppingsCompatibleWithCartLine, scoped
+    // to the disambiguation-ANSWER path only) nor this loop's own
+    // `restating` skip above (isRestatementOfExistingOrder's ADDITION_MARKERS
+    // veto, which "also" trips) ever recognized this shape — both were built
+    // to recognize ONLY an identical restatement (same toppings) or a fixed
+    // marker phrase, never "the same pizza, plus one more topping." "I also
+    // wanted the Chicken Bacon Ranch pizza, medium with half anchovies"
+    // against a cart that already has that exact Medium CBR pizza (no
+    // anchovies) used to push a SECOND, separately-priced line — a real
+    // overcharge (confirmed RED against pre-fix code, see this file's own
+    // regression test).
+    //
+    // Applies ONLY when: (a) exactly one real line already carries this
+    // menu_item_id — 2+ lines is a genuine ambiguity this fix does not
+    // touch, falls through unchanged; (b) at least one of this add's own
+    // resolved choices isn't already on that line — a bare restatement
+    // naming zero or only-already-present toppings never reaches this
+    // branch, untouched, same as before; (c) none of those new choices land
+    // in a modifier group the existing line has ALREADY resolved — a
+    // genuinely conflicting/replacing topping ("pepperoni instead of bacon")
+    // must still open a real second line, the same rule
+    // toppingsCompatibleWithCartLine already enforces on the ANSWER path.
+    // Quantity is required to be exactly 1: an explicit "2 medium CBR pizzas
+    // with anchovies" is a real request for more units, never silently
+    // folded into the existing single line.
+    let mergedIntoExistingLine = false;
+    if (add.quantity === 1 && effectiveChoices.length > 0) {
+      const existingLinesForItem = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === add.menu_item_id);
+      if (existingLinesForItem.length === 1) {
+        const targetLine = existingLinesForItem[0];
+        const existingSelections = targetLine.ask_plan_selections ?? {};
+        const newChoices = effectiveChoices.filter(c => {
+          const sel = existingSelections[c.group_id];
+          const selectedIds = sel === undefined ? [] : Array.isArray(sel) ? sel : [sel];
+          return !selectedIds.includes(c.choice_id);
+        });
+        const conflicts = newChoices.some(c => existingSelections[c.group_id] !== undefined);
+        if (newChoices.length > 0 && !conflicts) {
+          const { texts: newTexts } = resolveChoiceDisplays(menuItem.ask_plan, newChoices);
+          const modifyResult = applyCompiledModifyItem(
+            nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, undefined, "", newTexts,
+          );
+          if (modifyResult.ok) {
+            mergedIntoExistingLine = true;
+            if (modifyResult.cartChanged) qualifyingAddMenuItemId = add.menu_item_id;
+          }
+          // A failed modify (should not happen -- newTexts were already
+          // validated real choices against this same ask_plan) falls
+          // through to the normal add path below rather than silently
+          // dropping the customer's words.
+        }
+      }
+    }
+    if (mergedIntoExistingLine) continue;
+
     const lengthBeforeAdd = nextCart.length;
     const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, add.quantity, "", undefined, undefined, texts);
     if (!result.ok) {
