@@ -162,7 +162,7 @@ import {
   looksLikeCustomerName,
   extractCustomerName,
 } from "./dialogue-signals.ts";
-import { resolveItem, findVetoedOffMenuTerm, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
+import { resolveItem, findVetoedOffMenuTerm, findOffMenuCategoryMismatch, SIZE_WORD_ALIASES, type LexiconTerm } from "./resolve-item.ts";
 import { fuzzyWordMatch, GUARD19_GENERIC_WORDS } from "./guard19-fuzzy-item-match.ts";
 // Type-only — delivery-memory-offer.ts is a pure decision module (no I/O)
 // with zero dependency on this file, so importing its result TYPE here
@@ -6270,6 +6270,30 @@ export function decide(
           reason: alternative
             ? `We don't have a "${vetoedTerm.term}" side on its own, but it's a real option on our ${alternative.category} — want ${alternative.choiceDisplay} that way instead?`
             : `We don't have a "${vetoedTerm.term}" side — sorry about that!`,
+        });
+        continue;
+      }
+      // 2026-09-20 PO dispatch (off-menu category-mismatch, real conv
+      // 75b6e542, live $22.99 money bug): findOffMenuCategoryMismatch's own
+      // veto (resolve-item.ts, offMenuCategoryMismatchWord) already stopped
+      // resolveItem from guessing a wrong-category item once a real head
+      // noun the span used ("fries") turned out to name a dish family none
+      // of the tied candidates ("buffalo chicken", real across several
+      // Pizza/Flatbread/Wrap items) belong to — same "bare unresolved has no
+      // WHY" gap the bleu-cheese veto above already closes, same fix shape:
+      // name what was actually asked for, name the real head-noun word that
+      // doesn't apply, and offer the shop's own real items for that word
+      // instead of a misleading "didn't catch that."
+      const categoryMismatch = findOffMenuCategoryMismatch(add.item_span ?? "", lexicon);
+      if (categoryMismatch) {
+        const alternativeNames = categoryMismatch.alternativeMenuItemIds
+          .map(id => menuById.get(id))
+          .filter((m): m is TurnEngineMenuItem => !!m)
+          .map(m => m.ask_plan?.display_name ?? m.name);
+        declines.push({
+          reason: alternativeNames.length
+            ? `We don't have ${categoryMismatch.headNoun} like "${(add.item_span ?? "").trim()}" — real ${categoryMismatch.headNoun} options: ${alternativeNames.join(", ")}.`
+            : `We don't have that as ${categoryMismatch.headNoun} — sorry about that!`,
         });
         continue;
       }
