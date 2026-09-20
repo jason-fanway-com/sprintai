@@ -1104,6 +1104,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           disambiguationSpanText: undefined,
           disambiguationOtherOneFollowUp: outcome.otherOneFollowUp,
           disambiguationFacetNarrowed: true,
+          // 2026-09-19 PO dispatch (real live incident, "fifth shape"):
+          // mirrors outcome.noProgress — see AnswerOutcome's own doc.
+          disambiguationNoProgress: outcome.noProgress,
           // 2026-09-19 PO dispatch (replacement, ambiguous target hole):
           // Y's own narrowing wasn't fully settled by this facet answer —
           // still-held X rides forward onto the reopened, smaller
@@ -1174,6 +1177,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
             disambiguationSpanText: priorState.open.spanText,
             disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
             disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            disambiguationNoProgress: priorState.open.noProgress,
             heldModifierText: priorState.open.heldModifierText,
             replacementSourceLineKey: priorState.open.replacementSourceLineKey,
           };
@@ -1379,6 +1383,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         disambiguationSpanText: priorState.open.spanText,
         disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
         disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+        disambiguationNoProgress: priorState.open.noProgress,
         heldModifierText: priorState.open.heldModifierText,
         replacementSourceLineKey: priorState.open.replacementSourceLineKey,
       };

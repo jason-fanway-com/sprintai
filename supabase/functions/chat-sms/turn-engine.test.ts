@@ -3674,3 +3674,127 @@ Deno.test("decide (question-clause-not-an-add, fused-span recovery): recovery do
   assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
   assertEquals(result.cart[0].quantity, 2);
 });
+
+// ── 2026-09-19 PO dispatch (real live incident, customer #20, "chicken
+// quesadilla", lost in 3 of 4 fifty-runs — the "fifth shape": a clarifying
+// question with no exit). Live repro: Vito's "1 chicken quesadilla" opened
+// an 11-candidate "what kind?" disambiguation (Buffalo/Thai Sweet Chili
+// Chicken pizzas, a flatbread, a wrap, two salads/paninis, and the Chicken
+// quesadilla itself — every one of them sharing the bare word "chicken").
+// The customer answered "chicken" — narrowCandidatesByKind's own lexicon
+// path (resolveKindClauseViaLexicon -> resolveItem) excluded ZERO of the 11
+// (the word "chicken" is a real lexicon term/reduction shared by every one
+// of them), so answer() was about to re-open the identical
+// disambiguation_narrowed/facetNarrowed state render() would then re-ask as
+// the byte-identical "Sure — what kind?" question a second time, with no
+// way out. This fixture reproduces the shape directly (six real, distinct
+// menu items across different categories, each sharing a literal "chicken"
+// lexicon term) rather than depending on compile-menu.ts's own
+// widenIntoSizedFamily internals, which is a separate, already-fixed defect
+// (see compile-menu.ts's hasFamilyWideningHazard).
+const NP_BUFFALO_PIZZA_ID = "np-buffalo-chicken-pizza";
+const NP_THAI_PIZZA_ID = "np-thai-chicken-pizza";
+const NP_SALAD_ID = "np-grilled-chicken-salad";
+const NP_WRAP_ID = "np-chicken-wrap";
+const NP_PANINI_ID = "np-bbq-chicken-panini";
+const NP_QUESADILLA_ID = "np-chicken-quesadilla";
+const npItem = (id: string, name: string, category: string, price: number): TurnEngineMenuItem => ({
+  id, name, category, price_cents: price, bot_state: "orderable",
+  ask_plan: { compiled_at: "", compiler_version: 1, display_name: name, base_price_cents: price, recap_template: "", ticket_template: "", steps: [] },
+});
+const NO_PROGRESS_MENU: TurnEngineMenuItem[] = [
+  npItem(NP_BUFFALO_PIZZA_ID, "Buffalo Chicken Pizza", "Pizza", 1699),
+  npItem(NP_THAI_PIZZA_ID, "Thai Sweet Chili Chicken Pizza", "Pizza", 1799),
+  npItem(NP_SALAD_ID, "Grilled Chicken Salad", "Salads", 1299),
+  npItem(NP_WRAP_ID, "Chicken Wrap", "Wraps", 999),
+  npItem(NP_PANINI_ID, "BBQ Chicken Panini", "Homemade Paninis", 1099),
+  npItem(NP_QUESADILLA_ID, "Chicken", "Quesadillas", 1249),
+];
+const NO_PROGRESS_CANDIDATE_IDS = NO_PROGRESS_MENU.map(m => m.id);
+// Every candidate carries the literal term "chicken" — the exact shape the
+// PO's dispatch describes ("the answer is a word literally contained in
+// every remaining candidate"), reached here via the shop's own lexicon
+// (narrowCandidatesByKind's real, first-tried path) rather than via
+// compile-menu.ts's widenIntoSizedFamily.
+const NO_PROGRESS_LEXICON: LexiconTerm[] = NO_PROGRESS_MENU.map(m => ({ term: "chicken", target_id: m.id }));
+const NO_PROGRESS_OPEN_STATE: DialogueState = {
+  phase: "ordering",
+  open: { kind: "disambiguation", candidates: NO_PROGRESS_CANDIDATE_IDS, quantity: 1, spanText: "a chicken quesadilla" },
+  upsell_offered: false,
+  asked_message_id: null,
+};
+
+Deno.test("answer (no-progress narrowing, real live incident): a facet answer contained in EVERY candidate excludes none of them and is flagged noProgress, never silently re-looped as an ordinary facetNarrowed reopen", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(NO_PROGRESS_OPEN_STATE, cart, "chicken", NO_PROGRESS_MENU, { lexicon: NO_PROGRESS_LEXICON });
+  assert(result.resolved, "a facet answer against an open disambiguation always resolves the turn (it's a real ANSWER, even if narrowing made no progress)");
+  assert(result.resolved && result.outcome.kind === "disambiguation_narrowed", `expected disambiguation_narrowed, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  const outcome = result.resolved && result.outcome.kind === "disambiguation_narrowed" ? result.outcome : null;
+  assertEquals(outcome?.remainingCandidates.length, 6, "all six candidates remain — 'chicken' does not exclude a single one of them");
+  assertEquals(outcome?.noProgress, true, "zero candidates excluded must be flagged noProgress so the caller never re-asks the identical question");
+  assertEquals(cart.length, 0, "nothing is added while it's still genuinely ambiguous");
+});
+
+Deno.test("render (no-progress narrowing): the FIRST ask is the plain 'what kind?' question", () => {
+  const reply = render([], [], NO_PROGRESS_OPEN_STATE, [], NO_PROGRESS_MENU);
+  assertEquals(reply, "Sure — what kind?", `sanity check on the fixture's first-ask wording: ${reply}`);
+});
+
+Deno.test("render (no-progress narrowing, real live incident): once noProgress is set, the reply is a numbered list — NEVER the identical 'what kind?' text a second time", () => {
+  const firstAsk = render([], [], NO_PROGRESS_OPEN_STATE, [], NO_PROGRESS_MENU);
+
+  const noProgressState: DialogueState = {
+    ...NO_PROGRESS_OPEN_STATE,
+    open: { ...NO_PROGRESS_OPEN_STATE.open as Extract<DialogueState["open"], { kind: "disambiguation" }>, facetNarrowed: true, noProgress: true },
+  };
+  const secondAsk = render([], [], noProgressState, [], NO_PROGRESS_MENU);
+
+  assert(secondAsk !== firstAsk, `the second ask must never be byte-identical to the first: first="${firstAsk}" second="${secondAsk}"`);
+  assertStringIncludes(secondAsk, "Which one would you like", "falls back to the numbered which-one list, not a re-derived facet question");
+  for (let i = 1; i <= 6; i++) assertStringIncludes(secondAsk, `${i})`, `numbered list must enumerate all six candidates, missing #${i}: ${secondAsk}`);
+  assert(!secondAsk.includes("what kind"), `must never repeat the facet question's own wording: ${secondAsk}`);
+});
+
+Deno.test("answer (no-progress narrowing): once noProgress is set, a later facet-shaped answer is never retried against the facet path again — it routes straight to the numbered-list resolver", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const noProgressState: DialogueState = {
+    ...NO_PROGRESS_OPEN_STATE,
+    open: { ...NO_PROGRESS_OPEN_STATE.open as Extract<DialogueState["open"], { kind: "disambiguation" }>, facetNarrowed: true, noProgress: true },
+  };
+  // "chicken" again — if this re-entered the facet path it would tie all six
+  // exactly as before and loop forever. Routed to the numbered-list resolver
+  // instead, "chicken" matches no number and no candidate name uniquely, so
+  // it resolves as a failed answer attempt (never a silent re-loop).
+  const result = answer(noProgressState, cart, "chicken", NO_PROGRESS_MENU, { lexicon: NO_PROGRESS_LEXICON });
+  assert(!result.resolved, "an unresolvable numbered-list answer is UNRESOLVED, not a re-opened identical facet question");
+  assertEquals(cart.length, 0);
+});
+
+Deno.test("answer (no-progress narrowing): a valid numbered reply against the noProgress list DOES resolve — proving the fallback is a real exit, not a dead end", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const noProgressState: DialogueState = {
+    ...NO_PROGRESS_OPEN_STATE,
+    open: { ...NO_PROGRESS_OPEN_STATE.open as Extract<DialogueState["open"], { kind: "disambiguation" }>, facetNarrowed: true, noProgress: true },
+  };
+  const result = answer(noProgressState, cart, "6", NO_PROGRESS_MENU, { lexicon: NO_PROGRESS_LEXICON });
+  assert(result.resolved && result.outcome.kind === "disambiguation_resolved", `a plain numbered reply must resolve via the numbered-list path: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, NP_QUESADILLA_ID, "reply '6' must resolve to the 6th listed candidate (Chicken quesadilla)");
+  assertEquals(cart.length, 1);
+  assertEquals(cart[0].menu_item_id, NP_QUESADILLA_ID);
+});
+
+// Regression check (freeze-queue item, PO acceptance point 6): an ordinary
+// facet answer that DOES exclude at least one candidate must still narrow
+// normally — noProgress must never fire on a real, working narrowing step.
+Deno.test("answer (no-progress narrowing regression): a facet answer that DOES narrow the set is unaffected — noProgress stays unset", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const lexiconWithRealNarrowing: LexiconTerm[] = [
+    ...NO_PROGRESS_LEXICON,
+    // "wrap" resolves uniquely to the one candidate actually named "Wrap" —
+    // a real, working narrow, not a tie.
+    { term: "wrap", target_id: NP_WRAP_ID },
+  ];
+  const result = answer(NO_PROGRESS_OPEN_STATE, cart, "wrap", NO_PROGRESS_MENU, { lexicon: lexiconWithRealNarrowing });
+  assert(result.resolved && result.outcome.kind === "disambiguation_resolved", `a real, unique narrow must resolve outright: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, NP_WRAP_ID);
+});

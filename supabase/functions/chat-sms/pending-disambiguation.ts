@@ -658,6 +658,45 @@ export function renderAmbiguousItemQuestion(candidates: PendingCandidate[]): str
   return `Which one would you like — ${list}? Reply ${nums}.`;
 }
 
+// 2026-09-19 PO dispatch (real live incident: a fused question-clause
+// narrowing loop where the customer's own narrowing word — "chicken" — is
+// contained in every one of 11 remaining candidates, so
+// narrowCandidatesByFacetAnswer makes ZERO progress and the caller was about
+// to re-ask the exact same "Sure — what kind?" question a second time, with
+// no way out). When narrowing genuinely can't split a candidate set any
+// further, the fallback is a plain numbered list — same shape
+// renderAmbiguousItemQuestion already uses for a small, never-narrowed set —
+// except this set is, by construction, exactly the kind
+// isNarrowingCandidateSet flags as too big to safely enumerate raw (that's
+// why it needed narrowing in the first place). Reuses the SAME truncate-and-
+// append-"…and N more" pattern renderFacetOptionsList already uses for the
+// facet-values list, so a numbered list of 11+ candidates never reproduces
+// the original 3,378-char Telnyx/Twilio-rejected overflow this whole
+// narrowing feature exists to avoid.
+const AMBIGUOUS_LIST_SMS_CEILING = 480;
+
+export function renderCappedAmbiguousItemQuestion(candidates: PendingCandidate[]): string {
+  const nums = replyNumbers(candidates.length);
+  const prefix = "Which one would you like — ";
+  const suffix = `? Reply ${nums}.`;
+  const items = candidates.map((c, i) => `${i + 1}) ${candidateOptionText(c)}`);
+  const full = `${prefix}${items.join("  ")}${suffix}`;
+  if (full.length <= AMBIGUOUS_LIST_SMS_CEILING) return full;
+
+  const tailTemplate = (remaining: number) => `  …and ${remaining} more — text the number you want.`;
+  const kept: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const remaining = items.length - (i + 1);
+    const candidateText = `${prefix}${[...kept, items[i]].join("  ")}${remaining > 0 ? tailTemplate(remaining) : suffix}`;
+    if (candidateText.length > AMBIGUOUS_LIST_SMS_CEILING) break;
+    kept.push(items[i]);
+  }
+  const remaining = items.length - kept.length;
+  return remaining > 0
+    ? `${prefix}${kept.join("  ")}${tailTemplate(remaining)}`
+    : `${prefix}${kept.join("  ")}${suffix}`;
+}
+
 /**
  * The re-ask after a failed resolution attempt: an explicit numbered list,
  * never GUARD 7's original "X or Y" sentence, so an unresolved answer never

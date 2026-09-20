@@ -121,6 +121,7 @@ import {
   isPendingDisambiguationDeclined,
   isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
+  renderCappedAmbiguousItemQuestion,
   pickNarrowingFacet,
   isNarrowingCandidateSet,
   narrowCandidatesByFacetAnswer,
@@ -202,6 +203,20 @@ export interface DialogueState {
       spanText?: string;
       otherOneFollowUp?: boolean;
       facetNarrowed?: boolean;
+      // 2026-09-19 PO dispatch (real live incident, "fifth shape" — a
+      // clarifying question with no exit): true once a facet answer against
+      // this candidate set has already made ZERO narrowing progress (every
+      // candidate still contains the word the customer said). Once set,
+      // answer()'s disambiguation case stops trying facet narrowing
+      // entirely for this open question — it stays "stuck" on the same
+      // words no matter how many more times it's tried — and routes
+      // straight to the numbered-list resolver instead; render() shows the
+      // capped numbered list (renderCappedAmbiguousItemQuestion) rather
+      // than recomputing and re-asking the identical facet question.
+      // Persists across turns the same way facetNarrowed/otherOneFollowUp
+      // already do (mirrored forward by ask() below) so a customer who
+      // still can't answer never gets routed back into the facet loop.
+      noProgress?: boolean;
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): the
       // line_key of X, a same-breath replacement's ORIGINAL item, still
       // sitting untouched in the cart while THIS question narrows down Y.
@@ -450,6 +465,14 @@ export type AnswerOutcome =
     // one candidate) keeps X held for however many more turns the
     // narrowing takes.
     replacementSourceLineKey?: string;
+    // 2026-09-19 PO dispatch (real live incident — the "fifth shape": a
+    // clarifying question with no exit): true when the customer's own
+    // narrowing answer excluded ZERO candidates — every remaining candidate
+    // still contains the word they said (real repro: "chicken" against 11
+    // Buffalo/Thai/Grilled Chicken items, all still 11 after the answer).
+    // render() must never ask the identical facet question again once this
+    // is set — see DialogueState.open's own `noProgress` doc.
+    noProgress?: boolean;
   }
   // P0 (2026-09-19, multi-kind-answer, see resolveMultiKindClauses's own
   // header): a "what kind?" answer that was a LIST ("one plain, one
@@ -1871,8 +1894,17 @@ export function answer(
       // answer even if only 2-3 candidates are left — never falls back to
       // the numbered-list resolver just because the remainder happens to be
       // small. See DialogueState's own doc on `facetNarrowed`.
+      //
+      // 2026-09-19 PO dispatch: `!state.open.noProgress` — once a facet
+      // answer against THIS open question has already excluded zero
+      // candidates once, trying the facet path again just re-derives the
+      // identical question (the customer's word is stuck matching every
+      // candidate the same way it did last time). From here on this
+      // disambiguation is permanently routed to the numbered-list resolver
+      // below instead — see DialogueState.open's own `noProgress` doc.
       if (
         (state.open.otherOneFollowUp || state.open.facetNarrowed || isNarrowingCandidateSet(candidates)) &&
+        !state.open.noProgress &&
         !isDisambiguationOptionsRequest(trimmed)
       ) {
         const spanText = state.open.spanText ?? "";
@@ -2014,6 +2046,20 @@ export function answer(
               return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged: cartChanged || removed };
             }
           }
+          // 2026-09-19 PO dispatch (real live incident, customer #20 —
+          // "fifth shape", a clarifying question with no exit): `matched`
+          // excluded ZERO of `effectiveCandidates` — the customer's own word
+          // is contained in every remaining candidate the same way it was
+          // before this answer (real repro: "chicken" against 11 Buffalo/
+          // Thai/Grilled Chicken items, still 11 after). Re-asking the same
+          // facet question (narrowingKindQuestion/render()) would produce
+          // byte-identical text a second time with no way out. `secondFacet`
+          // above already tried the OTHER facet on this exact set and it
+          // didn't resolve to one either, so there is genuinely nothing left
+          // to narrow with — fall back to the numbered list permanently for
+          // this open question (see DialogueState.open's own `noProgress`
+          // doc and render()'s disambiguation case).
+          const noProgress = matched.length === effectiveCandidates.length;
           return {
             resolved: true,
             outcome: {
@@ -2022,6 +2068,7 @@ export function answer(
               remainingQuantity: quantity,
               otherOneFollowUp: false,
               ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
+              ...(noProgress ? { noProgress: true } : {}),
             },
             cartChanged: false,
           };
@@ -4039,6 +4086,10 @@ export interface AskTurnEvents {
   // fresh, never-narrowed disambiguation. See DialogueState's own doc on
   // `facetNarrowed` for the exact live bug this closes.
   disambiguationFacetNarrowed?: boolean;
+  // 2026-09-19 PO dispatch (real live incident, "fifth shape"): mirrored
+  // onto `open.noProgress` — see AnswerOutcome's "disambiguation_narrowed"
+  // and DialogueState.open's own doc on `noProgress` for the full mechanism.
+  disambiguationNoProgress?: boolean;
   // Round 2, item 1 (2026-09-19, live v511): set whenever this turn's
   // ANSWER opened or re-opened the SHARED "What size?" question over two or
   // more same-kind groups — see AnswerOutcome's own
@@ -4256,6 +4307,7 @@ export function ask(
     const spanText = isThisTurnPrimary ? turnEvents.disambiguationSpanText : undefined;
     const otherOneFollowUp = isThisTurnPrimary ? turnEvents.disambiguationOtherOneFollowUp : undefined;
     const facetNarrowed = isThisTurnPrimary ? turnEvents.disambiguationFacetNarrowed : undefined;
+    const noProgress = isThisTurnPrimary ? turnEvents.disambiguationNoProgress : undefined;
     const replacementSourceLineKey = isThisTurnPrimary ? turnEvents.replacementSourceLineKey : undefined;
     return carry(
       {
@@ -4266,6 +4318,7 @@ export function ask(
         ...(spanText !== undefined ? { spanText } : {}),
         ...(otherOneFollowUp !== undefined ? { otherOneFollowUp } : {}),
         ...(facetNarrowed !== undefined ? { facetNarrowed } : {}),
+        ...(noProgress !== undefined ? { noProgress } : {}),
         ...(replacementSourceLineKey !== undefined ? { replacementSourceLineKey } : {}),
       },
       "ordering",
@@ -4751,7 +4804,22 @@ export function render(
           // way answer()'s disambiguation case does — see DialogueState's
           // own doc on `facetNarrowed` for why a small (<=5) narrowed
           // remainder must still ask the next facet, never enumerate.
-          if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
+          // 2026-09-19 PO dispatch (real live incident, "fifth shape"): a
+          // facet answer already made ZERO progress against this exact
+          // candidate set — see AnswerOutcome's "disambiguation_narrowed"
+          // and DialogueState.open's own doc on `noProgress`. Checked BEFORE
+          // the otherOneFollowUp/facetNarrowed/isNarrowingCandidateSet
+          // branch below so it can never fall through to
+          // narrowingFacetForOpen/narrowingKindQuestion and recompute the
+          // identical "Sure — what kind?" text a second time — the capped,
+          // SMS-safe numbered list is the permanent fallback for this open
+          // question from here on, same repeat-count escalation as the
+          // plain fullList case just below.
+          if (state.open.noProgress) {
+            question = (state.openRepeatCount ?? 0) >= 2
+              ? "I couldn't match that. Reply with a number, or say \"none of those\"."
+              : renderCappedAmbiguousItemQuestion(candidates);
+          } else if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
             // Round 2 addendum item A, 2026-09-19 (live sim persona, Vito's
             // count-suffix collision): `openRepeatCount` (ask()'s own
             // carry(), computed generically for every open kind via
