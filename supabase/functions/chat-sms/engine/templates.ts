@@ -92,7 +92,7 @@ export const T = {
     const list = c >= 1 || choices.length <= 5 ? ` ${orList(choices)}?` : ` For example ${choices.slice(0, 3).join(", ")}. Reply OPTIONS to hear them all.`;
     return `${itemName}: ${groupPrompt}?${list}`;
   },
-  omission: (span: string) => `Did you also want ${span}? Reply YES or NO.`,
+  omission: (spans: string[]) => `Did you also want ${orList(spans).replace(" or ", " and ")}? Reply YES or NO.`,
   picks: (itemName: string, remaining: number, total: number, unit: string, flavors: string[], c: number) => {
     const list = flavors.length <= 12 || c >= 1 ? ` Options: ${flavors.join(", ")}.` : ` For example ${flavors.slice(0, 4).join(", ")}. Reply OPTIONS to hear them all.`;
     const lead = remaining === total ? `${itemName}: which ${unit}s?` : `${itemName}: ${total - remaining} of ${total} picked. Which ${remaining} more?`;

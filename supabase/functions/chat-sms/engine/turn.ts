@@ -93,7 +93,7 @@ export function turn(input: TurnInput): TurnOutput {
     );
     if (alreadyThere) continue;
     if (form.omissions.some((o) => o.span === om.span)) continue;
-    form.omissions.push({ span: om.span, declined: false });
+    form.omissions.push({ span: om.span, qty: om.qty, declined: false });
     ledger.push({ turn: t, event: "possible_omission", data: om });
   }
 

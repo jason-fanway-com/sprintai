@@ -63,7 +63,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
     case "items": return form.lines.length === 0 ? T.itemsEmpty(count) : T.itemsMore(count);
     case "tip": return T.tip(count);
     case "confirm": return T.confirmAsk(count);
-    case "omission": return T.omission(q.span);
+    case "omission": return T.omission(q.spans.map((sp) => { const o = form.omissions.find((x) => x.span === sp); return o && o.qty > 1 ? `${o.qty} ${sp}` : sp; }));
     case "line_unresolved": {
       const l = form.lines.find((x) => x.line_id === q.line_id);
       return T.lineUnresolved(l?.span ?? "that", count);

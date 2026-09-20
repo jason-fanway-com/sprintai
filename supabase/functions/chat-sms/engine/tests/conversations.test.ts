@@ -96,6 +96,7 @@ Deno.test("partial drop: model returns one of two items; the second becomes a qu
   ]);
   assertEquals(o.form.lines.length, 1);
   assert(o.form.omissions.some((x) => x.span === "garlic knots"), JSON.stringify(o.form.omissions));
+  assertEquals(o.form.omissions.length, 1);
   // the slot question outranks the omission; both get asked, one per turn
   assertEquals(o.form.open?.kind, "line_slot");
   const o2 = say(o.form, "medium");
@@ -400,4 +401,17 @@ Deno.test("bundle: flavors given in the same message bind immediately", () => {
   const o = say(f, "half dozen bagels, 3 plain 3 sesame", [{ kind: "add_line", item_span: "half dozen bagels", qty: 1, option_spans: ["3 plain", "3 sesame"] }]);
   assertEquals(o.form.lines[0].status.kind, "complete");
   assertEquals(o.form.lines[0].selections, { "bg-plain": 3, "bg-sesame": 3 });
+});
+
+Deno.test("model drops everything: one question covers all missed items with their counts; yes adds them all", () => {
+  let f = newForm("vitos", "test-v1");
+  const o = say(f, "delivery, 2 large pepperoni pizzas and an order of garlic knots", [
+    { kind: "answer", field: "fulfillment", value: "delivery" },
+  ]);
+  assertEquals(o.form.lines.length, 0);
+  assertStringIncludes(o.reply, "Did you also want 2 large pepperoni");
+  assertStringIncludes(o.reply, "and garlic knots? Reply YES or NO.");
+  const o2 = say(o.form, "yes");
+  assertEquals(o2.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.pepPizzaL, 2], [IDS.knots, 1]]);
+  assertStringIncludes(o2.reply, "What's the delivery address?");
 });

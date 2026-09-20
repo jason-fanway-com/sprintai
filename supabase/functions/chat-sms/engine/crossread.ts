@@ -1,7 +1,7 @@
 // crossread.ts — the second reader. A deterministic lexicon scan of the customer
 // message, reconciled against the model's moves. Disagreement becomes a question,
 // never a silent add or a silent drop.
-import { findWordRun, singular, words } from "./normalize.ts";
+import { findWordRun, leadingCount, singular, words } from "./normalize.ts";
 import type { Menu } from "./menu.ts";
 import type { Move } from "./form.ts";
 
@@ -46,7 +46,7 @@ export interface Reconciled {
   /** moves whose item_span is not in the message (invented) */
   rejected: Array<{ move: Move; span: string }>;
   /** lexicon hits no accepted move covers: candidates for "did you also want…?" */
-  omissions: Array<{ span: string; item_ids: string[] }>;
+  omissions: Array<{ span: string; item_ids: string[]; qty: number }>;
 }
 
 export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAskedSpans: Set<string>): Reconciled {
@@ -89,7 +89,13 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
     if (anyCovered) continue;
     const span = mw.slice(h.start, h.end).join(" ");
     if (alreadyAskedSpans.has(span)) continue;
-    omissions.push({ span, item_ids: h.item_ids });
+    // a count word right before the mention ("2 large pepperoni pizzas") travels with it
+    let qty = 1;
+    for (let k = h.start - 1; k >= Math.max(0, h.start - 2); k--) {
+      const lc = leadingCount(`${mw[k]} x`);
+      if (lc.count && lc.count > 0) { qty = lc.count; break; }
+    }
+    omissions.push({ span, item_ids: h.item_ids, qty });
   }
   return { accepted, rejected, omissions };
 }

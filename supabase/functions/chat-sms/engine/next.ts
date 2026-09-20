@@ -9,7 +9,7 @@ export function questionKey(q: OpenQuestion | null): string | null {
     case "line_ambiguous": return `line_ambiguous:${q.line_id}`;
     case "line_slot": return `line_slot:${q.line_id}:${q.group_id}`;
     case "line_picks": return `line_picks:${q.line_id}`;
-    case "omission": return `omission:${q.span}`;
+    case "omission": return `omission:${q.spans.join("|")}`;
     case "line_ref": return `line_ref`;
     default: return q.kind;
   }
@@ -27,8 +27,8 @@ export function next(form: OrderForm, menu: Menu, refAsk: { candidates: number[]
     if (l.status.kind === "needs_slot") return { kind: "line_slot", line_id: l.line_id, group_id: l.status.group_id };
     if (l.status.kind === "needs_picks") return { kind: "line_picks", line_id: l.line_id, remaining: l.status.remaining };
   }
-  const om = form.omissions.find((o) => !o.declined);
-  if (om) return { kind: "omission", span: om.span };
+  const pending = form.omissions.filter((o) => !o.declined);
+  if (pending.length) return { kind: "omission", spans: pending.map((o) => o.span) };
   const delivery = form.fulfillment === "delivery";
   for (const step of menu.shop.ask_order) {
     if (step === "fulfillment" && form.fulfillment === null) {
@@ -60,8 +60,8 @@ export function escalate(form: OrderForm, menu: Menu): string | null {
       return null;
     }
     case "omission": {
-      const om = form.omissions.find((o) => o.span === q.span); if (om) om.declined = true;
-      return `omission_dropped:${q.span}`;
+      for (const o of form.omissions) if (q.spans.includes(o.span)) o.declined = true;
+      return `omission_dropped:${q.spans.join(", ")}`;
     }
     case "address": {
       form.fulfillment = "pickup"; form.address = null; form.tip = null;

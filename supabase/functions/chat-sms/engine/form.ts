@@ -53,7 +53,7 @@ export type OpenQuestion =
   | { kind: "line_ambiguous"; line_id: number; facet: "kind" | "size" | "list" }
   | { kind: "line_slot"; line_id: number; group_id: string }
   | { kind: "line_picks"; line_id: number; remaining: number }
-  | { kind: "omission"; span: string }
+  | { kind: "omission"; spans: string[] }
   | { kind: "line_ref"; candidates: number[]; pending: Move };
 
 export type OrderStatus = "open" | "confirming" | "awaiting_payment" | "paid" | "abandoned";
@@ -73,7 +73,7 @@ export interface OrderForm {
   open: OpenQuestion | null;
   /** how many consecutive turns the same question has been open without progress */
   asked: { key: string | null; count: number };
-  omissions: Array<{ span: string; declined: boolean }>;
+  omissions: Array<{ span: string; qty: number; declined: boolean }>;
   turn_no: number;
   /** set by the runner when a checkout session exists for the confirmed form */
   checkout_session_id: string | null;
@@ -280,16 +280,16 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         const open = form.open;
         const yes = m.kind === "answer_yes";
         if (open?.kind === "omission") {
-          const om = form.omissions.find((o) => o.span === open.span);
+          const asked = form.omissions.filter((o) => open.spans.includes(o.span));
           if (yes) {
-            const sub = apply({ ...form }, [{ kind: "add_line", item_span: open.span, qty: 1, option_spans: [] }], lineSpanMatcher);
+            const adds: Move[] = asked.map((o) => ({ kind: "add_line", item_span: o.span, qty: o.qty, option_spans: [] }));
+            const sub = apply({ ...form, open: null }, adds, lineSpanMatcher);
             Object.assign(form, sub.form);
             sub.touched.forEach((x) => touched.add(x));
             ledger.push(...sub.ledger);
           }
-          if (om) om.declined = true; // asked once; never re-ask either way
-          form.omissions = form.omissions.filter((o) => o.span !== open.span || yes === false);
-          ledger.push({ turn: t, event: yes ? "omission_accepted" : "omission_declined", data: { span: open.span } });
+          for (const o of form.omissions) if (open.spans.includes(o.span)) o.declined = true; // asked once, never again
+          ledger.push({ turn: t, event: yes ? "omission_accepted" : "omission_declined", data: { spans: open.spans } });
         } else if (open?.kind === "confirm") {
           if (yes) { form.confirmed = true; form.status = "awaiting_payment"; }
           else { form.confirmed = false; form.status = "open"; }

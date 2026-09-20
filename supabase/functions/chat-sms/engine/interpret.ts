@@ -231,7 +231,7 @@ export function summarizeOpen(open: OpenQuestion | null, lines: Array<{ line_id:
     case "items": return lines.length ? "anything else to add" : "what they would like to order";
     case "tip": return "tip amount for the driver";
     case "confirm": return "confirm the order (yes) or change something";
-    case "omission": return `did they also want "${open.span}" (yes or no)`;
+    case "omission": return `did they also want ${open.spans.map((x) => `"${x}"`).join(" and ")} (yes or no)`;
     case "line_unresolved": return `we could not find "${nameOf(open.line_id)}" on the menu; what would they like instead`;
     case "line_ambiguous": { const c = choicesFor(open); return `which ${open.facet === "size" ? "size" : "kind"} for ${nameOf(open.line_id)}${c ? `: ${c.join(", ")}` : ""}`; }
     case "line_slot": { const c = choicesFor(open); return `a required choice for ${nameOf(open.line_id)}${c ? `: ${c.join(", ")}` : ""}`; }

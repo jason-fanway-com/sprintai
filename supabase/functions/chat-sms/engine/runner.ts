@@ -10,6 +10,7 @@ import { turn } from "./turn.ts";
 import { render } from "./render.ts";
 import { totals } from "./price.ts";
 import { toCartJson } from "./project.ts";
+import { scan } from "./crossread.ts";
 import type { Geocoder } from "./address.ts";
 import { logError } from "../../_shared/error-log.ts";
 
@@ -149,8 +150,20 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
       open: form0.open, open_summary: summarizeOpen(form0.open, lines, choicesFor(menu, form0)), lines,
     }, deps.model);
     modelMs = r.ms;
-    if (r.ok) moves = r.moves;
-    else {
+    if (r.ok) {
+      moves = r.moves;
+      // The model sometimes returns an answer and silently drops the items in the same message.
+      // The second reader knows items were named; give the model one more chance before we ask.
+      const itemMoves = (ms: Move[]) => ms.filter((m) => m.kind === "add_line" || m.kind === "change_line" || m.kind === "remove_line" || m.kind === "answer_option").length;
+      if (itemMoves(moves) === 0 && scan(input.message, menu).hits.length > 0 && !form0.open?.kind?.startsWith("line_")) {
+        const r2 = await (deps.interpretImpl ?? interpret)({
+          shop_name: input.shop.name, message: input.message, last_bot: input.lastBotMessage,
+          open: form0.open, open_summary: summarizeOpen(form0.open, lines, choicesFor(menu, form0)), lines,
+        }, deps.model);
+        modelMs += r2.ms;
+        if (r2.ok && itemMoves(r2.moves) > itemMoves(moves)) moves = r2.moves;
+      }
+    } else {
       await logError(deps.supabase, { conversationId: input.conversationId, shopId: input.shop.id, tenantId: input.shop.tenant_id, phase: "chat-sms", stage: "propose_call", customerMessage: input.message, error: new Error(`interpret failed: ${r.reason} ${r.detail}`), metadata: { model: deps.model.model, ms: r.ms } });
       moves = [{ kind: "control", what: "unclear" }];
     }

@@ -124,3 +124,15 @@ Deno.test("runner: a failed model call becomes an honest re-ask, never a crash",
   assert(db.writes.some((w) => w.table === "error_log"));
   assertStringIncludes(out.reply, "Pickup or delivery?");
 });
+
+Deno.test("runner: a model answer with no items on a message naming items gets one retry", async () => {
+  const db = new FakeDb();
+  let calls = 0;
+  const d = deps(db, () => []);
+  // deno-lint-ignore no-explicit-any
+  d.interpretImpl = ((_ctx: unknown) => { calls++; return Promise.resolve({ ok: true as const, raw: null, ms: 1, moves: calls === 1 ? [{ kind: "answer", field: "fulfillment", value: "delivery" } as Move] : [{ kind: "answer", field: "fulfillment", value: "delivery" } as Move, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] } as Move] }); }) as any;
+  const out = await runEngineTurn({ shop, conversationId: "c", cart: { id: "k", engine_form: null, test_mode: true, stripe_checkout_session_id: null }, message: "delivery and garlic knots", lastBotMessage: null, isFirstContact: false }, d);
+  assertEquals(calls, 2);
+  assertEquals(out.form.lines.length, 1);
+  assertStringIncludes(out.reply, "Garlic Knots");
+});
