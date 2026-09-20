@@ -56,3 +56,11 @@ export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "person
 export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz"]);
 /** The words of a span that could name an item: no stopwords, no size words. */
 export function contentWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w) && !SIZE_WORDS.has(w)); }
+
+const OPTION_LEAD = new Set(["with", "no", "extra", "add", "and"]);
+/** Comparable key for an option phrase: normalized words minus a leading connector. */
+export function optionKey(text: string): string {
+  const w = words(text);
+  while (w.length > 1 && OPTION_LEAD.has(w[0])) w.shift();
+  return w.join(" ");
+}

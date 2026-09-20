@@ -35,7 +35,7 @@ Move kinds:
 - add_line: one per distinct item the customer wants. item_span = their words for the item only (no quantity, no size). qty = the integer they said, else 1. option_spans = each descriptor they attached to that item (size, topping, sauce, cooked temperature, "no onions", "extra cheese"), one string each, verbatim.
 - change_line: they change an item already in the order. ref_span = their words for which line (or ref_last=true when there is one line or they say "that"). qty for a new quantity; add_option_spans / remove_option_spans for options.
 - remove_line: take an item off. "X not Y" = remove_line(Y) then add_line(X).
-- answer: field fulfillment (value "pickup" or "delivery"), address (value = the address text), tip (value = what they said, like "20" or "5 dollars" or "no tip"), items_done (they are finished adding items: "that's it", "no that's all"), confirmed (value "yes" or "no" when asked to confirm the order).
+- answer: field fulfillment (value "pickup" or "delivery"), address (value = the address text), tip (value = their exact words, keep any % or dollar sign or the word dollars), items_done (they are finished adding items: "that's it", "no that's all"), confirmed (value "yes" or "no" when asked to confirm the order).
 - answer_option: the message answers the open item question (a size, a kind, a cooked temperature, a dressing, a numbered choice). value_span = their words. Use this instead of add_line when the words answer that question.
 - answer_yes / answer_no: a bare yes or no to a yes/no question.
 - ask_menu: a question about the menu ("what sizes", "do you have", "how much is"). about_span = the item words, or null. A request phrased as a question ("can I get a large pepperoni?") is add_line, not ask_menu.
@@ -117,7 +117,7 @@ interface RawMove {
 }
 
 /** Strict conversion from the model's raw shape to typed moves. Anything malformed is dropped, never guessed. */
-export function toMoves(raw: unknown): Move[] {
+export function toMoves(raw: unknown, message = ""): Move[] {
   const out: Move[] = [];
   const arr = (raw as { moves?: unknown })?.moves;
   if (!Array.isArray(arr)) return out;
@@ -130,7 +130,7 @@ export function toMoves(raw: unknown): Move[] {
         const v = (r.value ?? "").trim();
         if (r.field === "fulfillment" && (v === "pickup" || v === "delivery")) out.push({ kind: "answer", field: "fulfillment", value: v });
         else if (r.field === "address" && v) out.push({ kind: "answer", field: "address", value: { text: v, formatted: null, validated: false, zone_ok: false } });
-        else if (r.field === "tip") { const t = parseTip(v); if (t) out.push({ kind: "answer", field: "tip", value: t }); }
+        else if (r.field === "tip") { const t = parseTip(message) ?? parseTip(v); if (t) out.push({ kind: "answer", field: "tip", value: t }); }
         else if (r.field === "items_done") out.push({ kind: "answer", field: "items_done", value: true });
         else if (r.field === "confirmed") { if (v === "yes") out.push({ kind: "answer", field: "confirmed", value: true }); else if (v === "no") out.push({ kind: "answer", field: "confirmed", value: false }); }
         break;
@@ -190,7 +190,7 @@ export async function interpret(ctx: InterpretContext, cfg: ModelConfig): Promis
       if (res.stop_reason === "refusal") return { ok: false, reason: "refusal", detail: "model refused", raw: res, ms };
       const input = extractToolInput(res.content as Array<{ type: string; name?: string; input?: unknown }>);
       if (!input) return { ok: false, reason: "schema", detail: "no submit_moves tool call", raw: res, ms };
-      return { ok: true, moves: toMoves(input), raw: input, ms, usage: res.usage };
+      return { ok: true, moves: toMoves(input, ctx.message), raw: input, ms, usage: res.usage };
     }
     // OpenRouter speaks the same Messages shape; used only for baseline comparisons.
     const controller = new AbortController();
@@ -211,7 +211,7 @@ export async function interpret(ctx: InterpretContext, cfg: ModelConfig): Promis
     try { data = JSON.parse(text); } catch { return { ok: false, reason: "schema", detail: "non-JSON body", raw: text, ms }; }
     const input = extractToolInput(data.content ?? []);
     if (!input) return { ok: false, reason: "schema", detail: "no submit_moves tool call", raw: data, ms };
-    return { ok: true, moves: toMoves(input), raw: input, ms, usage: data.usage };
+    return { ok: true, moves: toMoves(input, ctx.message), raw: input, ms, usage: data.usage };
   } catch (err) {
     const ms = Date.now() - t0;
     const e = err as { name?: string; status?: number; message?: string };

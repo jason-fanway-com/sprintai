@@ -1,6 +1,6 @@
 // score.ts — pure scoring of interpreter output against the answer key.
 import { normalizeMoveBatch, type Move } from "../../form.ts";
-import { words } from "../../normalize.ts";
+import { contentWords, words } from "../../normalize.ts";
 
 export interface EvalCase {
   id: string;
@@ -30,6 +30,7 @@ function spanMatch(a: string, b: string): boolean {
 }
 
 function fieldKey(m: Move): string | null {
+  if (m.kind === "answer" && m.field === "confirmed") return m.value ? "yes" : "no";
   if (m.kind === "answer") {
     if (m.field === "fulfillment") return `fulfillment=${m.value}`;
     if (m.field === "address") return `address=${words(m.value.text).join(" ")}`;
@@ -42,7 +43,7 @@ function fieldKey(m: Move): string | null {
   if (m.kind === "answer_option") return `option=${words(m.value_span).join(" ")}`;
   if (m.kind === "control") return `control=${m.what}`;
   if (m.kind === "ask_menu") return `ask_menu`;
-  if (m.kind === "remove_line") return `remove=${"span" in m.ref ? words(m.ref.span).join(" ") : "last"}`;
+  if (m.kind === "remove_line") return `remove=${"span" in m.ref ? contentWords(m.ref.span).join(" ") : "last"}`;
   if (m.kind === "change_line") return `change`;
   return null;
 }
@@ -64,8 +65,10 @@ export function scoreCase(c: EvalCase, actualRaw: Move[] | null, error?: string)
     for (const o of e.option_spans) if (a.option_spans.some((x) => spanMatch(x, o))) optFound++;
   }
   const invented = actAdds.length - used.size;
-  const expFields = c.expected.map(fieldKey).filter((x): x is string => !!x);
-  const actFields = new Set((actual ?? []).map(fieldKey).filter((x): x is string => !!x));
+  const lastName = c.context.lines?.length ? contentWords(c.context.lines[c.context.lines.length - 1].name).join(" ") : null;
+  const canon = (k: string) => (lastName && k.startsWith("remove=") && k !== "remove=last" && spanMatch(k.slice(7), lastName)) ? "remove=last" : k;
+  const expFields = c.expected.map(fieldKey).filter((x): x is string => !!x).map(canon);
+  const actFields = new Set((actual ?? []).map(fieldKey).filter((x): x is string => !!x).map(canon));
   const fieldsRight = expFields.filter((f) => actFields.has(f) || [...actFields].some((a) => a.startsWith(f.split("=")[0] + "=") && spanMatch(a.split("=")[1] ?? "", f.split("=")[1] ?? "") && f.startsWith("option="))).length;
   const expKinds = c.expected.map((m) => m.kind);
   const actKinds = (actual ?? []).map((m) => m.kind);

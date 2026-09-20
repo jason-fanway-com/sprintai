@@ -354,3 +354,25 @@ Deno.test("answering a kind question with the category word works too", () => {
   assertEquals(o.form.lines[0].item_id, "roll");
   assertStringIncludes(o.reply, "Added 1 × Pepperoni  $9.99");
 });
+
+Deno.test("leftover words in the item span act as options: 'house salad ranch' binds the dressing", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "house salad ranch", [{ kind: "add_line", item_span: "house salad ranch", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, IDS.houseSalad);
+  assertEquals(o.form.lines[0].choices[IDS.dressingGroup], IDS.ranch);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("an add that duplicates another add's option is folded, not a second line (gyro incident)", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a small margherita pizza with mushroom and bacon", [
+    { kind: "add_line", item_span: "margherita pizza", qty: 1, option_spans: ["small", "with mushroom", "bacon"] },
+    { kind: "add_line", item_span: "mushroom", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "bacon", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.lines.length, 1);
+  assertEquals(o.form.lines[0].item_id, IDS.margheritaS);
+  assertEquals(o.form.lines[0].modifiers.sort(), ["mgBacS", "mgMushS"]);
+});

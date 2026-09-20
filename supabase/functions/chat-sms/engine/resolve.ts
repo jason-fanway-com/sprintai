@@ -7,6 +7,8 @@ import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
 
 
+const STOP_FOR_LEFTOVER = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "pizza", "pizzas"]);
+
 export type SpanResolution =
   | { kind: "item"; id: string }
   | { kind: "ambiguous"; ids: string[] }
@@ -75,9 +77,10 @@ export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" |
 export type ChoiceMatch = { kind: "one"; choice_id: string } | { kind: "many"; choice_ids: string[] } | { kind: "none" };
 
 export function matchChoice(span: string, group: MenuGroup, within?: string[]): ChoiceMatch {
-  const sw = words(span);
+  const sw = words(span).map(singular);
   if (sw.length === 0) return { kind: "none" };
-  const pool = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
+  const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
+  const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
   const exact = pool.filter((c) => sameWords(c.words, sw));
   if (exact.length === 1) return { kind: "one", choice_id: exact[0].id };
   const subset = pool.filter((c) => isWordSubset(sw, c.words));
@@ -183,6 +186,13 @@ export function bindLine(line: Line, menu: Menu): void {
   }
   let item = menu.items.get(line.item_id)!;
   const held = line.held; line.held = [];
+  // words in the item span that are not the item's own name ("chicken noodle cups", "house personal calzone")
+  if (!line.span_consumed) {
+    line.span_consumed = true;
+    const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? "")]);
+    const leftover = words(line.span).filter((w) => !own.has(w) && !own.has(singular(w)) && !STOP_FOR_LEFTOVER.has(w));
+    if (leftover.length > 0) held.unshift(leftover.join(" "));
+  }
   for (const h of held) applyHeldSpan(line, item, h);
   applyCanon(line, menu);
   item = menu.items.get(line.item_id!)!;

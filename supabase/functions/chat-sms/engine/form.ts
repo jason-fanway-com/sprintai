@@ -1,7 +1,7 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
-import { contentWords } from "./normalize.ts";
+import { contentWords, optionKey } from "./normalize.ts";
 
 export type Fulfillment = "pickup" | "delivery";
 
@@ -35,6 +35,8 @@ export interface Line {
   notes: string[];
   /** when a slot answer matched several choices: group_id -> the matching choice ids */
   slot_candidates: Record<string, string[]>;
+  /** set once the span's leftover words have been applied as options */
+  span_consumed?: boolean;
   status: LineStatus;
 }
 
@@ -332,7 +334,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
 export function normalizeMoveBatch(moves: Move[], lineQuestionOpen: boolean): Move[] {
   const out: Move[] = [];
   let lastAdd: (Move & { kind: "add_line" }) | null = null;
+  // an "item" that another add in the same batch already lists as an option is that option, not a line
+  const optionWords = new Set<string>();
+  for (const m of moves) if (m.kind === "add_line") for (const o of m.option_spans) optionWords.add(optionKey(o));
   for (const m of moves) {
+    if (m.kind === "add_line" && moves.filter((x) => x.kind === "add_line").length > 1 && optionWords.has(optionKey(m.item_span))) continue;
     if (m.kind === "add_line") { const copy = { ...m, option_spans: [...m.option_spans] }; out.push(copy); lastAdd = copy; continue; }
     if (m.kind === "answer_option" && lastAdd && !lineQuestionOpen) { lastAdd.option_spans.push(m.value_span); continue; }
     if (m.kind === "change_line" && lastAdd && "last" in m.ref && (m.qty === undefined || m.qty === null) && (m.add_option_spans?.length || m.remove_option_spans?.length)) {
