@@ -3266,3 +3266,70 @@ Deno.test("runTurnEngineTurn (rule 2 regression): the order-shaped empty-adds ta
   assertEquals(result.cart.length, 1, "a genuinely fresh order-shaped message with no open question must still resolve, unaffected by this gate");
   assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
 });
+
+// PO dispatch (2026-09-20, live regression, "cheeseburger" cart-empty miss,
+// present on v584 AND v585/7e7ab0c1 -- not a window-25 regression): a
+// PLAIN item message -- no leading quantity, no category word, just the
+// item name -- is not order-shaped by orderShapedMessageQuantity's own
+// narrow definition (it requires a leading quantity directly followed by a
+// real category word, see the rule-2 tests just above), so a fully empty
+// proposal ({intent:"order", adds:[]}) for a message like "cheeseburger"
+// fell through both existing takeovers entirely and landed on ASK's plain
+// "What would you like to order?" with nothing on the cart -- most visibly
+// live on turn 2, right after a "Pickup or delivery today?" opener
+// (deepseek-v4-flash returns empty adds for this exact shape 5-15% of the
+// time). Deliberately covers BOTH shapes from the PO's acceptance spec: a
+// genuinely fresh conversation (open === null) and the turn-2 shape (open
+// still order_type from the immediately-preceding pickup/delivery
+// question) -- the bug was specifically that the SECOND shape did not
+// resolve even though the first one already did.
+const PLAIN_ITEM_FIRES_OPEN_STATES: Array<{ label: string; state: DialogueState | null }> = [
+  { label: "null (fresh conversation, no preceding question)", state: null },
+  { label: "order_type (immediately after 'Pickup or delivery today?')", state: { phase: "order_type", open: { kind: "order_type" }, upsell_offered: false, asked_message_id: null } },
+];
+
+for (const { label, state } of PLAIN_ITEM_FIRES_OPEN_STATES) {
+  Deno.test(`runTurnEngineTurn (plain-item empty-proposal takeover): a fully empty proposal ({intent:'order', adds:[]}) for the plain message "cheeseburger" still lands Cheese Burger $8.49, with open.kind === ${label}`, async () => {
+    const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+    const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+    const input = baseInput({
+      message: "cheeseburger",
+      cart: [],
+      dialogueState: state,
+    });
+
+    const result = await runTurnEngineTurn(input, deps);
+
+    assertEquals(result.cart.length, 1, `"cheeseburger" with a fully empty proposal must still resolve, not land empty (open.kind === ${label}): ${JSON.stringify(result.cart)}`);
+    assertEquals(result.cart[0].menu_item_id, "item-cheeseburger");
+    assertEquals(result.cart[0].price_cents, 849);
+    assert(!result.reply.toLowerCase().includes("what would you like to order"), `must not fall through to the generic ordering prompt with the item unresolved: ${result.reply}`);
+    assert(!result.reply.toLowerCase().includes("pickup or delivery"), `must not re-ask the pickup/delivery question this same turn while silently dropping the item: ${result.reply}`);
+  });
+}
+
+// Narrower guard check: name/address must stay blocked for this branch too
+// (a name or address reply is never legitimately a food order, and the
+// existing blanket adds-wipe for those two kinds would erase this branch's
+// synthesized add anyway) -- locks in openKindBlocksPlainItemTakeover's
+// scope now that it deliberately diverges from openKindBlocksOrderShapedTakeover
+// (which still blocks all four kinds, unchanged).
+const PLAIN_ITEM_STILL_BLOCKED_OPEN_STATES: Array<{ label: string; state: DialogueState }> = [
+  { label: "name", state: { phase: "name", open: { kind: "name" }, upsell_offered: false, asked_message_id: null } },
+  { label: "address", state: { phase: "address", open: { kind: "address" }, upsell_offered: false, asked_message_id: null } },
+];
+
+for (const { label, state } of PLAIN_ITEM_STILL_BLOCKED_OPEN_STATES) {
+  Deno.test(`runTurnEngineTurn (plain-item empty-proposal takeover): still never fires while open.kind === "${label}"`, async () => {
+    const { supabase } = makeFakeSupabase({ lexicon: [{ term: "cheeseburger", target_id: "item-cheeseburger" }] });
+    const deps: RunTurnDeps = { supabase, apiKey: "test-key", proposeTurnFn: emptyAddsProposeFn };
+    const input = baseInput({
+      message: "cheeseburger",
+      cart: [],
+      dialogueState: state,
+      shopContext: { deliveryEnabled: false, orderType: "pickup", deliveryAddressKnown: false, driverTipCents: null, pickupName: label === "name" ? null : "Jason", deliveryFeeCents: null },
+    });
+    const result = await runTurnEngineTurn(input, deps);
+    assertEquals(result.cart.length, 0, `"cheeseburger" while open.kind === "${label}" must never resolve as a fresh order: ${JSON.stringify(result.cart)}`);
+  });
+}

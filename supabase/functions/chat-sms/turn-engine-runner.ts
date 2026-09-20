@@ -2148,11 +2148,61 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
     const openKindBlocksOrderShapedTakeover = priorState.open?.kind === "name" ||
       priorState.open?.kind === "address" || priorState.open?.kind === "order_type" ||
       priorState.open?.kind === "confirm";
-    if (!openKindBlocksOrderShapedTakeover && (proposal.adds?.length ?? 0) === 0) {
-      const orderShapedQuantity = orderShapedMessageQuantity(input.message, input.menu);
-      if (orderShapedQuantity !== null) {
-        proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
-      }
+    const orderShapedQuantity = (proposal.adds?.length ?? 0) === 0
+      ? orderShapedMessageQuantity(input.message, input.menu)
+      : null;
+    if (!openKindBlocksOrderShapedTakeover && orderShapedQuantity !== null) {
+      proposal = { intent: "order", adds: [{ item_span: input.message, quantity: orderShapedQuantity, choices: [] }], removes: [], modifies: [] };
+    }
+    // PO dispatch (2026-09-20, live "cheeseburger" cart-empty miss, present
+    // on v584 AND v585/7e7ab0c1 -- not a window-25 regression): a bare
+    // single-item message ("cheeseburger", no leading quantity at all) is
+    // never covered by orderShapedMessageQuantity above -- that helper
+    // requires a leading quantity word directly followed by a real category
+    // word (see its own header) -- so PROPOSE coming back {intent:"order",
+    // adds:[]} for a plain item word fell all the way through to ASK's
+    // generic re-ask with nothing on the cart, most visibly on turn 2 right
+    // after a pickup/delivery question (deepseek-v4-flash returns empty
+    // adds for this shape 5-15% of the time; see turn-engine-runner.test.ts
+    // for the reproduction). Deliberately uses its OWN narrower guard
+    // (openKindBlocksPlainItemTakeover, name/address only) instead of
+    // openKindBlocksOrderShapedTakeover above: order_type and confirm are
+    // exactly the two kinds the Rule 1/2 narrowing just below (see its own
+    // comment, "NARROWED on merge") already established flow to decide() as
+    // ordinary proposals, precisely because a reply to either can genuinely
+    // be a fresh item instead of a literal answer to the open question. Only
+    // name/address are still blocked -- a name or address reply is never
+    // legitimately a food order, and the blanket adds-wipe a few lines below
+    // would erase this branch's synthesized add for those two anyway. Same
+    // fallback shape as the model-TIMEOUT carve-out above and the
+    // leading-quantity branch just above (raw message as item_span,
+    // quantity 1, through the SAME decide()/ask()/render() pipeline):
+    // resolves to a real cart line, ties to decide()'s own disambiguation
+    // question, or surfaces its existing 00-AX "didn't catch that" decline
+    // -- never a guess. Scoped to intent === "order" so a genuine question
+    // ("what's in the meat lovers?", correctly intent:"question" with real
+    // answer_text and no adds) is never hijacked into a failed item lookup;
+    // scoped to removes/modifies both empty so a real remove/modify
+    // proposal with no adds (hallucinated-remove-guard, soup-size-cup-bowl,
+    // etc.) is never overwritten by this branch. Also requires
+    // orderShapedQuantity === null (computed once, above) so this branch
+    // never re-litigates a message the leading-quantity rule already
+    // classified as order-shaped -- otherwise a message like "4 cheese
+    // burgers please" while order_type/confirm is open would resolve here
+    // via decide()'s longest-whole-word-run match even though the dedicated
+    // "runTurnEngineTurn (rule 2): ... never fires while open.kind" tests
+    // below require it stay blocked for exactly that message shape.
+    const openKindBlocksPlainItemTakeover = priorState.open?.kind === "name" ||
+      priorState.open?.kind === "address";
+    if (
+      !openKindBlocksPlainItemTakeover &&
+      proposal.intent === "order" &&
+      (proposal.adds?.length ?? 0) === 0 &&
+      (proposal.removes?.length ?? 0) === 0 &&
+      (proposal.modifies?.length ?? 0) === 0 &&
+      orderShapedQuantity === null
+    ) {
+      proposal = { intent: "order", adds: [{ item_span: input.message, quantity: 1, choices: [] }], removes: [], modifies: [] };
     }
     // 00-BI: ANSWER already ran and missed -- that is the only way execution
     // reaches here. If the model could read the message as one of the meanings
