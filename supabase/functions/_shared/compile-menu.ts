@@ -1188,6 +1188,55 @@ function familySameWordSet(a: string[], b: string[]): boolean {
   return sortedA.every((w, i) => w === sortedB[i]);
 }
 
+// Perf note (2026-09-19 PO dispatch — Vito's/Zio's WORKER_RESOURCE_LIMIT):
+// hasFamilyWideningHazard used to re-scan every OTHER item's own lexicon
+// terms from scratch on every single call — O(items × terms) per call, and
+// it's called once per candidate term for potentially every item, so the
+// whole pass was O(items² × terms²). At Vito's/Zio's scale that blew the
+// edge function's compute budget even though it passed fine on Not Just
+// Bagels' much smaller menu. Every "other item's reduced core words" only
+// depends on that item's own compiled terms, never on `itemId` or `term`,
+// so it's computed ONCE per compile into the index below and every
+// hasFamilyWideningHazard call becomes a single map lookup. Same inputs,
+// same collision semantics (still exact same-word-set equality via
+// familySameWordSet, still requires a sized sibling) — just computed once
+// instead of on every call.
+interface FamilyWideningIndex {
+  // reduced-core-word-set key -> every (active) item that has an own term
+  // reducing to that key, and whether that item is sized.
+  byReducedKey: Map<string, { itemId: string; sized: boolean }[]>;
+}
+
+function familyReducedKey(words: string[]): string {
+  return [...words].sort().join("");
+}
+
+function buildFamilyWideningIndex(
+  items: CompileItem[],
+  compiledMap: Map<string, CompiledItem>,
+): FamilyWideningIndex {
+  const categoryById = new Map(items.map(i => [i.id, i.category]));
+  const byReducedKey = new Map<string, { itemId: string; sized: boolean }[]>();
+  for (const other of items) {
+    if (!other.active) continue;
+    const c = compiledMap.get(other.id);
+    if (!c) continue;
+    const sized = other.size_label != null;
+    const seenKeys = new Set<string>();
+    for (const t of c.lexicon_terms) {
+      if (t.target_type !== "item") continue;
+      const reduced = familyCoreWordsMinusCategory(familyNormalizeWords(t.term), categoryById.get(other.id));
+      const key = familyReducedKey(reduced);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      const list = byReducedKey.get(key) ?? [];
+      list.push({ itemId: other.id, sized });
+      byReducedKey.set(key, list);
+    }
+  }
+  return { byReducedKey };
+}
+
 // Does `term` (one of `itemId`'s own item-target lexicon terms) have a
 // family-widening hazard — some OTHER active item whose own term, once ITS
 // OWN category noun is subtracted, reduces to the exact same core words,
@@ -1200,28 +1249,14 @@ function familySameWordSet(a: string[], b: string[]): boolean {
 function hasFamilyWideningHazard(
   itemId: string,
   term: string,
-  items: CompileItem[],
-  compiledMap: Map<string, CompiledItem>,
+  index: FamilyWideningIndex,
 ): boolean {
   const wantedCore = familyCoreWords(familyNormalizeWords(term));
   if (wantedCore.length === 0) return false;
 
-  const categoryById = new Map(items.map(i => [i.id, i.category]));
-  const sizeById = new Map(items.map(i => [i.id, i.size_label]));
-
-  let hasSizedSibling = false;
-  for (const other of items) {
-    if (other.id === itemId || !other.active) continue;
-    const c = compiledMap.get(other.id);
-    if (!c) continue;
-    const collides = c.lexicon_terms.some(t => {
-      if (t.target_type !== "item") return false;
-      const reduced = familyCoreWordsMinusCategory(familyNormalizeWords(t.term), categoryById.get(other.id));
-      return familySameWordSet(reduced, wantedCore);
-    });
-    if (collides && sizeById.get(other.id) != null) hasSizedSibling = true;
-  }
-  return hasSizedSibling;
+  const entries = index.byReducedKey.get(familyReducedKey(wantedCore));
+  if (!entries) return false;
+  return entries.some(e => e.itemId !== itemId && e.sized);
 }
 
 // The complete question invariant 4 and item 6 both need: does this item
@@ -1231,15 +1266,15 @@ function hasFamilyWideningHazard(
 function hasGenuinelyUniqueTerm(
   itemId: string,
   termOwners: Map<string, Set<string>>,
-  items: CompileItem[],
   compiledMap: Map<string, CompiledItem>,
+  index: FamilyWideningIndex,
 ): boolean {
   const c = compiledMap.get(itemId);
   if (!c) return false;
   return c.lexicon_terms.some(t => {
     if (t.target_type !== "item") return false;
     if (termOwners.get(t.term)?.size !== 1) return false;
-    return !hasFamilyWideningHazard(itemId, t.term, items, compiledMap);
+    return !hasFamilyWideningHazard(itemId, t.term, index);
   });
 }
 
@@ -1364,6 +1399,7 @@ function deriveCategoryQualifiedFallbackTerms(
 ): LexiconTerm[] {
   const categoryById = new Map(items.map(i => [i.id, i.category]));
   const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
+  const familyWideningIndex = buildFamilyWideningIndex(items, compiledMap);
 
   const termOwners = new Map<string, Set<string>>();
   for (const c of compiledItems) {
@@ -1379,7 +1415,7 @@ function deriveCategoryQualifiedFallbackTerms(
   const out: LexiconTerm[] = [];
   for (const c of compiledItems) {
     if (c.bot_state !== "orderable") continue;
-    if (hasGenuinelyUniqueTerm(c.item_id, termOwners, items, compiledMap)) continue;
+    if (hasGenuinelyUniqueTerm(c.item_id, termOwners, compiledMap, familyWideningIndex)) continue;
 
     const category = categoryById.get(c.item_id);
     if (!category) continue;
@@ -1395,7 +1431,7 @@ function deriveCategoryQualifiedFallbackTerms(
       // "chicken" has exactly one literal owner yet still ties 11 ways at
       // runtime — see hasFamilyWideningHazard's own header).
       const literalOwners = termOwners.get(t.term)?.size ?? 0;
-      if (literalOwners <= 1 && !hasFamilyWideningHazard(c.item_id, t.term, items, compiledMap)) continue;
+      if (literalOwners <= 1 && !hasFamilyWideningHazard(c.item_id, t.term, familyWideningIndex)) continue;
       const qualified = `${t.term} ${noun}`;
       if (existingTerms.has(qualified)) continue; // never shadow a real, distinct term
       // Stopword-or-short guard (00-PO-0919-term-in-addendum): this is a
@@ -1580,9 +1616,10 @@ export function computeMenuInvariants(
   // This invariant now asks the same, more complete question item 6's own
   // fallback pass asks, so a gap in one can never silently survive because
   // the other's narrower check reported PASS.
+  const invariant4FamilyWideningIndex = buildFamilyWideningIndex(activeItems, compiled);
   const noUniqueTerm = activeItems.filter(i => {
     if (!orderable(i.id)) return false;
-    return !hasGenuinelyUniqueTerm(i.id, termOwners, activeItems, compiled);
+    return !hasGenuinelyUniqueTerm(i.id, termOwners, compiled, invariant4FamilyWideningIndex);
   });
   results.push({
     invariant: 4,
