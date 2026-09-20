@@ -1273,8 +1273,16 @@ export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDep
   // to the pre-existing name-facet matcher runs exactly as it did before
   // this fix — the lexicon is a strictly-better first attempt, never a new
   // way for this turn to fail.
+  // 2026-09-20 PO dispatch (real live money bug, conv 9dd88fe6 #42): also
+  // loaded while a required SLOT is open — turn-engine.ts's "slot" case now
+  // resolves a same-breath item replacement ("switch that to X instead,
+  // Mild sauce") via resolveItem against this exact lexicon, the same way
+  // decide()'s own "no slot open" replacement mechanism already does. Same
+  // non-fatal-on-failure contract as the disambiguation load above:
+  // answerLexicon stays undefined, that branch simply never fires, and
+  // every pre-existing slot-answer path is completely unaffected.
   let answerLexicon: LexiconTerm[] | undefined;
-  if (priorState.open?.kind === "disambiguation") {
+  if (priorState.open?.kind === "disambiguation" || priorState.open?.kind === "slot") {
     const disambiguationLexiconResult = await loadItemLexicon(deps.supabase, input.shopId);
     if (disambiguationLexiconResult.ok) answerLexicon = disambiguationLexiconResult.rows;
     externalInputs = { lexicon: answerLexicon };

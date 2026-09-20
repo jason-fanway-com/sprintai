@@ -2684,6 +2684,66 @@ export function answer(
         removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
         return { resolved: true, outcome: { kind: "slot_item_declined" }, cartChanged: true };
       }
+      // 2026-09-20 PO dispatch (real live money bug, conv 9dd88fe6 #42):
+      // "let's switch that to the BBQ Chicken flatbread instead, but I want
+      // Mild sauce this time" -- said WHILE this line's own required slot
+      // (sauce) is still open -- left the ORIGINAL line in the cart (with
+      // Mild wrongly applied to IT, since applyCompiledModifyItem below
+      // matches "Mild" anywhere in the whole message with no notion that
+      // "switch...instead" changes which item that choice is even about) AND
+      // added a phantom SECOND line for the new item, because
+      // turn-engine-runner.ts's remainder-PROPOSE call (run afterward for
+      // whatever text a resolved slot answer didn't consume) only ever
+      // applies a remainder proposal's `adds` -- by design, for a genuinely
+      // ADDITIVE bonus item said in the same breath -- never its
+      // removes/modifies, so a same-breath ITEM SWAP came back through that
+      // path as an add with no matching remove.
+      // PO's rule: "an item change while a slot is open is a REPLACE of that
+      // line, with the stated choice applied to the new line." Reuses
+      // decide()'s own "no slot open" replacement mechanism verbatim
+      // (parseReplacementIntent + resolveReplacementTargetLine + resolveItem
+      // -- see parseReplacementIntent's own header) rather than inventing a
+      // second implementation -- checked BEFORE applyCompiledModifyItem so
+      // switch language is never mistaken for a literal slot value in the
+      // first place, closing this off at its root instead of patching the
+      // remainder side effect downstream. resolveReplacementTargetLine is
+      // given a cart of exactly this ONE line, so it only ever fires when
+      // the replacement's own target (a bare pronoun, or a name/category
+      // that matches THIS line) is THIS open slot's line -- a message
+      // naming some other real cart line is left alone entirely (no slot is
+      // open on that line; nothing here is scoped to guess about it).
+      // external.lexicon mirrors the disambiguation case's own lazy-load
+      // convention (turn-engine-runner.ts loads it only while a slot is
+      // open) -- undefined on any caller that hasn't threaded it through
+      // simply means this branch never fires, the pre-existing behavior.
+      const slotReplacement = parseReplacementIntent(trimmed);
+      if (
+        slotReplacement &&
+        resolveReplacementTargetLine(slotReplacement.xPhrase, [line], menuById) === line
+      ) {
+        const yResolution = external.lexicon
+          ? resolveItem(slotReplacement.yPhrase, external.lexicon)
+          : { kind: "unresolved" as const };
+        if (yResolution.kind === "resolved") {
+          const newMenuItem = menuById.get(yResolution.menu_item_id);
+          if (newMenuItem?.ask_plan) {
+            const quantity = line.quantity;
+            removeCartLine(cart as unknown as ReconcilerCartLine[], idx);
+            // The stated choice ("Mild sauce") is whatever text is LEFT once
+            // the matched "switch...instead" clause is stripped out -- fed
+            // straight to applyCompiledAddItem's own customerMessage param,
+            // the same reactive slot/modifier resolution a fresh add_item
+            // call already gets (ask-plan-engine.ts's resolveAndPriceSelections),
+            // so it lands on the NEW line, never the old one.
+            const remainderText = trimmed.replace(slotReplacement.matchedText, " ").trim();
+            applyCompiledAddItem(
+              cart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity,
+              remainderText, undefined, undefined, [],
+            );
+            return { resolved: true, outcome: { kind: "line_replaced" }, cartChanged: true };
+          }
+        }
+      }
       if (!menuItem?.ask_plan) return UNRESOLVED;
       // suppressUnitSplit: true — see ask-plan-engine.ts's own doc on that
       // param. This call is always a required slot's FIRST-EVER answer (ASK
