@@ -680,6 +680,130 @@ export function findOffMenuCategoryMismatch(
   return { headNoun: word, alternativeMenuItemIds: [...owners].sort() };
 }
 
+// Shared by resolveItem's own named-category narrowing (below) and
+// findCategoryFilterDiscardedRealItem (below): a candidate survives a named
+// category word either by an exact match on its own real category, or by
+// the existing "textually contains/is contained by" synonym rule (Data fix
+// (b) extension, 2026-09-19 — "a pepperoni stromboli" must keep the
+// Stromboli Rolls candidate even though its real category is "Stromboli
+// Rolls", not the bare "Stromboli" the span's word maps to). Extracted
+// verbatim from resolveItem's own inline filter so both call sites can never
+// silently drift apart on what "survives" means.
+function categorySurvivesNamedCategoryWord(category: string | null | undefined, namedCategories: ReadonlySet<string>): boolean {
+  if (category == null) return false;
+  if (namedCategories.has(category)) return true;
+  const categoryLower = category.toLowerCase();
+  for (const nc of namedCategories) {
+    const ncLower = nc.toLowerCase();
+    if (categoryLower.includes(ncLower) || ncLower.includes(categoryLower)) return true;
+  }
+  return false;
+}
+
+// 2026-09-20 PO dispatch (off-menu category-mismatch, REVERSE direction,
+// real PO probe "can I change that to a small BBQ Chicken pizza instead?").
+// offMenuCategoryMismatchWord/findOffMenuCategoryMismatch above catch a head
+// noun that names NO real item among the tied candidates at all ("fries" —
+// none of the tied Buffalo Chicken items are fries) and deliberately EXEMPT
+// any word that IS a recognized DB category noun ("pizza"), deferring to
+// resolveItem's own namedCategories filter just below for those. This is the
+// case that filter's own "never wipe a real tie to zero" discipline doesn't
+// cover: a genuine, real item DOES exist for the customer's own more
+// specific, distinguishing word — just filed under a DIFFERENT real
+// category than the one the customer also (correctly, for the OTHER
+// candidates) named.
+//
+// Real Vito's shape: "small BBQ Chicken pizza" — longestMatch's own tie-
+// break finds TWO DIFFERENT winning terms at the identical length 2: "bbq
+// chicken" (BBQ Chicken Flatbread's own, unique, correctly-spelled name)
+// and "chicken pizza" (a generic, derived 2-word term shared by BOTH Buffalo
+// Chicken Pizza and Thai Sweet Chili Chicken Pizza, matching only because
+// "chicken" and the trailing category word "pizza" happen to sit next to
+// each other in the span). resolveItem's namedCategories filter correctly
+// narrows the 3-way tie down to the two Pizza candidates ("pizza" really is
+// a live category dimension here) — but the candidate it discards, BBQ
+// Chicken Flatbread, is discarded for the RIGHT reason (it's not a pizza)
+// while its OWN distinguishing word, "bbq", is left completely unaccounted
+// for by either surviving candidate's own matched term ("chicken pizza" —
+// neither word is "bbq"). A customer who typed "bbq" was never asking about
+// Buffalo Chicken or Thai Sweet Chili at all; silently listing those two as
+// "which one?" is exactly as wrong as silently adding the wrong one would
+// be. Never fires on a genuine same-category size tie ("cheese pizza",
+// "buffalo chicken pizza" with no size) — those keep EVERY tied candidate
+// through the category filter (nothing discarded), so there is nothing here
+// to check.
+function categoryFilterDiscardedRealItemId(
+  spanWords: string[],
+  originalIds: ReadonlySet<string>,
+  survivingIds: readonly string[],
+  matchedLength: number,
+  itemNameEntries: LexiconTerm[],
+): string | null {
+  const survivingSet = new Set(survivingIds);
+  const survivorWords = new Set<string>();
+  for (const id of survivingIds) {
+    const words = findMatchedTermWords(id, matchedLength, spanWords, itemNameEntries);
+    if (words) for (const w of words) survivorWords.add(w);
+  }
+  for (const id of originalIds) {
+    if (survivingSet.has(id)) continue;
+    const words = findMatchedTermWords(id, matchedLength, spanWords, itemNameEntries);
+    if (words && words.some(w => !survivorWords.has(w))) return id;
+  }
+  return null;
+}
+
+// Caller-facing pair for categoryFilterDiscardedRealItemId, same shape as
+// findOffMenuCategoryMismatch just above: redoes resolveItem's own base-tie
+// and named-category computation far enough to learn WHICH real item was
+// wrongly discarded and WHICH category word discarded it, so turn-engine.ts
+// can decline by naming the real item and its real category (e.g. "we don't
+// have BBQ Chicken as a pizza — it's on our Flatbreads menu") instead of
+// silently opening a which-one question between two unrelated items.
+export function findCategoryFilterDiscardedRealItem(
+  span: string,
+  lexicon: LexiconTerm[],
+): { headNoun: string; realItemMenuId: string; realItemCategory: string } | null {
+  const spanWords = toWords(normalize(span));
+  if (spanWords.length === 0) return null;
+  const categoryNounIndex = buildCategoryNounIndex(lexicon);
+  const itemNameEntries = lexicon.filter(entry => {
+    const termWords = toWords(normalize(entry.term));
+    return termWords.length > 0 && !(termWords.length === 1 && categoryNounIndex.has(termWords[0]));
+  });
+  const base = longestMatch(spanWords, itemNameEntries);
+  if (base.targetIds.size < 2) return null;
+
+  const namedCategories = new Set<string>();
+  for (const [word, categories] of categoryNounIndex) {
+    if (spanWords.includes(word)) for (const c of categories) namedCategories.add(c);
+  }
+  if (namedCategories.size === 0) return null;
+
+  const targetInfo = new Map<string, { category?: string | null }>();
+  for (const entry of lexicon) {
+    if (!targetInfo.has(entry.target_id)) targetInfo.set(entry.target_id, { category: entry.category });
+  }
+  if (![...base.targetIds].some(id => targetInfo.get(id)?.category != null)) return null;
+
+  const survivingIds = [...base.targetIds].filter(id => categorySurvivesNamedCategoryWord(targetInfo.get(id)?.category, namedCategories));
+  if (survivingIds.length === 0 || survivingIds.length === base.targetIds.size) return null;
+
+  const discardedRealItemId = categoryFilterDiscardedRealItemId(spanWords, base.targetIds, survivingIds, base.length, itemNameEntries);
+  if (!discardedRealItemId) return null;
+
+  const survivorCategories = new Set(survivingIds.map(id => targetInfo.get(id)?.category).filter((c): c is string => c != null));
+  const headNoun = [...categoryNounIndex.entries()].find(
+    ([word, cats]) => spanWords.includes(word) && [...cats].some(c => survivorCategories.has(c)),
+  )?.[0] ?? [...namedCategories][0];
+
+  return {
+    headNoun,
+    realItemMenuId: discardedRealItemId,
+    realItemCategory: targetInfo.get(discardedRealItemId)?.category ?? "",
+  };
+}
+
 // 2026-09-19/20 PO dispatch (bleu-cheese off-menu decline, real conv
 // 009de656 follow-up, live: "can I add a side of Bleu Cheese" wrongly tied
 // 3 Cheese pizzas): the veto above correctly stops resolveItem from ever
@@ -891,32 +1015,38 @@ export function resolveItem(
   // unresolved. Never guess which one they meant; ASK still gets a real
   // list to offer.
   if (namedCategories.size > 0 && candidates.some(id => targetInfo.get(id)?.category != null)) {
-    const filteredByCategory = candidates.filter(id => {
-      const category = targetInfo.get(id)?.category;
-      if (category == null) return false;
-      if (namedCategories.has(category)) return true;
-      // Data fix (b) extension, 2026-09-19 (wart b, real live bug): the exact
-      // membership check above only ever recognizes a named category that IS
-      // one of the tied candidates' own category strings verbatim. Real
-      // Vito's shape: "a pepperoni stromboli" ties the real Pepperoni Pizza
-      // family against the Stromboli Rolls "Pepperoni" — categoryNoun's own
-      // "last word only" rule maps the span's word "stromboli" to the
-      // UNRELATED "Stromboli" platter category, never to "Stromboli Rolls",
-      // so the roll — the one candidate actually named — was wrongly
-      // filtered OUT instead of kept. Same "a word already inside a
-      // candidate's own category name is a synonym for it, not an outside
-      // qualifier" rule the unique-base branch below already applies,
-      // generalized to a genuine tie: a named category that textually
-      // contains (or is contained by) this candidate's REAL category is the
-      // same dish family by another name, so the candidate survives.
-      const categoryLower = category.toLowerCase();
-      for (const nc of namedCategories) {
-        const ncLower = nc.toLowerCase();
-        if (categoryLower.includes(ncLower) || ncLower.includes(categoryLower)) return true;
-      }
-      return false;
-    });
+    // Data fix (b) extension, 2026-09-19 (wart b, real live bug): the exact
+    // membership check alone only ever recognizes a named category that IS
+    // one of the tied candidates' own category strings verbatim. Real
+    // Vito's shape: "a pepperoni stromboli" ties the real Pepperoni Pizza
+    // family against the Stromboli Rolls "Pepperoni" — categoryNoun's own
+    // "last word only" rule maps the span's word "stromboli" to the
+    // UNRELATED "Stromboli" platter category, never to "Stromboli Rolls",
+    // so the roll — the one candidate actually named — was wrongly
+    // filtered OUT instead of kept. Same "a word already inside a
+    // candidate's own category name is a synonym for it, not an outside
+    // qualifier" rule the unique-base branch below already applies,
+    // generalized to a genuine tie: a named category that textually
+    // contains (or is contained by) this candidate's REAL category is the
+    // same dish family by another name, so the candidate survives. See
+    // categorySurvivesNamedCategoryWord's own header — shared with
+    // findCategoryFilterDiscardedRealItem so both can never drift apart.
+    const filteredByCategory = candidates.filter(id => categorySurvivesNamedCategoryWord(targetInfo.get(id)?.category, namedCategories));
     if (filteredByCategory.length > 0) {
+      // 2026-09-20 PO dispatch (off-menu category-mismatch, REVERSE
+      // direction, real PO probe "small BBQ Chicken pizza"): see
+      // categoryFilterDiscardedRealItemId's own header — this filter just
+      // correctly narrowed the tie by a real category word, but may have
+      // discarded a candidate whose OWN distinguishing word (e.g. "bbq") is
+      // left completely unaccounted for by every surviving candidate's own
+      // matched term. Checked only when something was actually discarded
+      // (filteredByCategory.length < candidates.length) — a same-category
+      // size tie ("cheese pizza") keeps every candidate here and never
+      // reaches this check.
+      if (filteredByCategory.length < candidates.length &&
+        categoryFilterDiscardedRealItemId(spanWords, base.targetIds, filteredByCategory, base.length, itemNameEntries)) {
+        return { kind: "unresolved" };
+      }
       candidates = filteredByCategory;
     } else if (base.targetIds.size === 1 && targetInfo.get(candidates[0])?.category != null) {
       const matchedWords = new Set(findMatchedTermWords(candidates[0], base.length, spanWords, lexicon) ?? []);
