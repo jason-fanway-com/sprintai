@@ -278,3 +278,13 @@ were named but none returned, and a single batched question carrying the counts.
 
 **Next.** Three-shop acceptance run after the 57c8e943 deploy; then delete the old engines
 (§4 discard list) and re-run the counts.
+
+**Afternoon, day one.** Model switched to Haiku 4.5 (Jason's call). Second rollout was mis-targeted:
+the rollout script used a bash associative array, which macOS bash 3.2 silently collapses to index 0,
+so every "shop" ran against Zio's. Its failures were an artifact; the script now uses a case
+statement and prints transcripts. Real fixes since the first three-shop run: dozen bundles are chosen
+by the count the customer implied ("a dozen", "half a dozen", "12"), lexicon terms made only of filler
+words ("order") never raise an omission question, "and" is dropped from matching so "bacon egg and
+cheese" hits its term, and the legacy checkout-phase block in index.ts is off for clean-engine shops
+(it would have written cart_json around the form after a payment link). Deletion plan for the old
+engines recorded in `2026-09-20-deletion-plan.md`.
