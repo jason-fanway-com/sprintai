@@ -389,6 +389,24 @@ Deno.test("resolveItem: 'small gyro pizza' resolves to exactly one (category + s
 });
 
 // ============================================================
+// 2026-09-19 PO dispatch (compiler priority item 2, real live incidents):
+// compile-menu.ts's new Rule 2b ("personal calzone"/"medium gyro" — see
+// that file's own test block) now feeds NARROWING_LEXICON a size digit
+// PLUS the word "inch" as literal term text for the 16"/14" family members
+// below. Both fixtures are the exact live customer messages, verbatim.
+// ============================================================
+
+Deno.test("resolveItem (real live incident, conv v546): 'Hi! I'd like to order a personal calzone and some crazy fries, please.' resolves the calzone span to Personal Calzone Stromboli", () => {
+  const result = resolveItem("Hi! I'd like to order a personal calzone and some crazy fries, please.", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Personal Calzone Stromboli") });
+});
+
+Deno.test("resolveItem (real live incident, conv ac4a1b65 #24): 'a Medium Gyro with half sausage and half mushrooms' resolves to Medium Gyro Pizza", () => {
+  const result = resolveItem("a Medium Gyro with half sausage and half mushrooms", NARROWING_LEXICON);
+  assertEquals(result, { kind: "resolved", menu_item_id: idOf("Medium Gyro Pizza") });
+});
+
+// ============================================================
 // 2026-09-18 PO follow-up dispatch: two edge cases found probing the live
 // Vito's lexicon once narrowing was actually wired into production.
 //

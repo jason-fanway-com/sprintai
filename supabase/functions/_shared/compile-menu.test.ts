@@ -501,6 +501,80 @@ Deno.test("lexicon rule 2 (2026-09-18 PO decision, item 1 — REGRESSION FIX): a
 });
 
 // ============================================================
+// Rule 2b (size-qualified bare name), 2026-09-19 PO dispatch, priority item
+// 2. Two real, live incidents: "Hi! I'd like to order a personal calzone
+// and some crazy fries, please." and "a Medium Gyro with half sausage and
+// half mushrooms" both came back "Sorry, I didn't catch that" — the
+// model's own proposed item_span was exactly "personal calzone"/"Medium
+// Gyro", and NEITHER string was ever a lexicon term under the OLD rule
+// set (Rule 1 gives the full category-qualified name, "Personal Calzone
+// Stromboli"/"Medium Gyro Pizza"; Rule 2 gives the bare name with the size
+// dropped entirely, "calzone"/"gyro"; trailingWordRuns only ever drops
+// LEADING words, never the trailing category noun). A real, in-process
+// audit against live Vito's/Zio's/Not Just Bagels data (po-inbox-result.md,
+// this commit) confirmed 104 shop-wide inactive provenance='stated' terms
+// this shape used to cover, silently and correctly retired by the
+// compiler's own stale-row retirement pass (dfb2615c) once whatever
+// produced them stopped firing — this is the replacement rule, general
+// (not calzone/gyro-specific), so a recompile regenerates them.
+// ============================================================
+
+Deno.test("lexicon rule 2b (2026-09-19 PO dispatch, real live incident, conv v546): a sized Stromboli item gets its size word + bare product name as a stated term — 'Personal Calzone Stromboli' -> 'personal calzone'", () => {
+  const personal = item({ display_name: "Personal Calzone Stromboli", category: "Stromboli", size_label: "Personal", product_key: "stromboli:calzone" });
+  const { items: compiled } = compileMenu([personal], [], "t", false);
+  const terms = compiled[0].lexicon_terms;
+  const hit = terms.find(t => t.term === "personal calzone");
+  assert(hit, `must emit "personal calzone": ${JSON.stringify(terms.map(t => t.term))}`);
+  assertEquals(hit!.target_type, "item");
+  assertEquals(hit!.target_id, personal.id);
+  assertEquals(hit!.provenance, "stated", "matches the historical live DB row's own provenance for this exact term");
+});
+
+Deno.test("lexicon rule 2b (2026-09-19 PO dispatch, real live incident, conv ac4a1b65 #24): a sized Pizza item gets its size word + bare product name as a stated term — 'Medium Gyro Pizza' -> 'medium gyro'", () => {
+  const medium = item({ display_name: "Medium Gyro Pizza", category: "Pizza", size_label: "Medium (14\")", product_key: "pizza:gyro" });
+  const { items: compiled } = compileMenu([medium], [], "t", false);
+  const terms = compiled[0].lexicon_terms;
+  const hit = terms.find(t => t.term === "medium gyro");
+  assert(hit, `must emit "medium gyro": ${JSON.stringify(terms.map(t => t.term))}`);
+  assertEquals(hit!.target_type, "item");
+  assertEquals(hit!.target_id, medium.id);
+  assertEquals(hit!.provenance, "stated");
+  assert(terms.some(t => t.term === "medium gyro pizza"), "Rule 1's own full name is untouched, still present alongside the new term");
+  assert(terms.some(t => t.term === "gyro"), "Rule 2's own bare name is untouched, still present alongside the new term");
+});
+
+Deno.test("lexicon rule 2b: never fires for an unsized item — no size_label, nothing to qualify with", () => {
+  const sandwich = item({ display_name: "Cheesesteak Sandwich", category: "Hot Sandwiches", product_key: "hot-sandwiches:cheesesteak" });
+  const { items: compiled } = compileMenu([sandwich], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assertEquals(terms.filter(t => t.startsWith("undefined")).length, 0, "size word must never be the literal string 'undefined'");
+  assert(terms.includes("cheesesteak"), "Rule 2's own bare name still fires");
+  assert(terms.includes("cheesesteak sandwich"), "Rule 1's own full name still fires");
+});
+
+Deno.test("lexicon rule 2b: never fires when Rule 2 itself has no bare name to offer (product_key base already equals the display_name — nothing qualified to strip)", () => {
+  const gyro = item({ display_name: "Gyro", category: "Sandwiches", size_label: "Small", product_key: "sandwiches:gyro" });
+  const { items: compiled } = compileMenu([gyro], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assertEquals(terms.filter(t => t === "gyro").length, 1, "Rule 2b must not double-emit 'gyro' when Rule 2 already has no bare alias to pair with the size word");
+  assertEquals(terms.filter(t => t === "small gyro").length, 0, `no Rule 2 bare name exists to pair with the size word: ${JSON.stringify(terms)}`);
+});
+
+Deno.test("lexicon rule 2b: a size_label with no recognized leading size WORD (a bare digit-inch label) falls back to canonicalizeSizeTokens' own '<digits> inch' convention, same as every other size-bearing term in this file", () => {
+  const sixteen = item({ display_name: "16\" Calzone Stromboli", category: "Stromboli", size_label: "16\"", product_key: "stromboli:calzone" });
+  const { items: compiled } = compileMenu([sixteen], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assert(terms.includes("16 inch calzone"), `must canonicalize the raw '16"' label the same way the rest of the file does: ${JSON.stringify(terms)}`);
+});
+
+Deno.test("lexicon rule 2b: cross-shop, real Zio's shape — a sized Calzone-family Stromboli item (product_key differs from the bare display form) gets the same size+bare-name term", () => {
+  const large = item({ display_name: "Large Pepperoni Calzone Stromboli", category: "Stromboli", size_label: "Large", product_key: "stromboli:pepperoni-calzone" });
+  const { items: compiled } = compileMenu([large], [], "t", false);
+  const terms = compiled[0].lexicon_terms.map(t => t.term);
+  assert(terms.includes("large pepperoni calzone"), `must emit the size-qualified bare name for a non-Vito's shop the same way: ${JSON.stringify(terms)}`);
+});
+
+// ============================================================
 // 2026-09-18 PO decision, item 2 (real Vito's "sauce"/"onions"/"fries"
 // collisions — the choice/group-vocabulary rule originally proposed for
 // this was rejected: it collided with the 2026-09-15 fix that keeps
