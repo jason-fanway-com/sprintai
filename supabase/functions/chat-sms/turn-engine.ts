@@ -118,10 +118,12 @@ import { identityKey, removeCartLine, type ReconcilerCartLine } from "./turn-rec
 import { isNegated } from "./reactive-modifier-match.ts";
 import {
   resolvePendingDisambiguation,
+  matchExplicitOptionPickAnywhere,
   isPendingDisambiguationDeclined,
   isDisambiguationAnswerRemovalRequest,
   isDisambiguationOptionsRequest,
   renderAmbiguousItemQuestion,
+  renderCappedAmbiguousItemQuestion,
   pickNarrowingFacet,
   isNarrowingCandidateSet,
   narrowCandidatesByFacetAnswer,
@@ -213,6 +215,20 @@ export interface DialogueState {
       spanText?: string;
       otherOneFollowUp?: boolean;
       facetNarrowed?: boolean;
+      // 2026-09-19 PO dispatch (real live incident, "fifth shape" — a
+      // clarifying question with no exit): true once a facet answer against
+      // this candidate set has already made ZERO narrowing progress (every
+      // candidate still contains the word the customer said). Once set,
+      // answer()'s disambiguation case stops trying facet narrowing
+      // entirely for this open question — it stays "stuck" on the same
+      // words no matter how many more times it's tried — and routes
+      // straight to the numbered-list resolver instead; render() shows the
+      // capped numbered list (renderCappedAmbiguousItemQuestion) rather
+      // than recomputing and re-asking the identical facet question.
+      // Persists across turns the same way facetNarrowed/otherOneFollowUp
+      // already do (mirrored forward by ask() below) so a customer who
+      // still can't answer never gets routed back into the facet loop.
+      noProgress?: boolean;
       // 2026-09-19 PO dispatch (replacement, ambiguous target hole): the
       // line_key of X, a same-breath replacement's ORIGINAL item, still
       // sitting untouched in the cart while THIS question narrows down Y.
@@ -519,6 +535,14 @@ export type AnswerOutcome =
     // one candidate) keeps X held for however many more turns the
     // narrowing takes.
     replacementSourceLineKey?: string;
+    // 2026-09-19 PO dispatch (real live incident — the "fifth shape": a
+    // clarifying question with no exit): true when the customer's own
+    // narrowing answer excluded ZERO candidates — every remaining candidate
+    // still contains the word they said (real repro: "chicken" against 11
+    // Buffalo/Thai/Grilled Chicken items, all still 11 after the answer).
+    // render() must never ask the identical facet question again once this
+    // is set — see DialogueState.open's own `noProgress` doc.
+    noProgress?: boolean;
   }
   // P0 (2026-09-19, multi-kind-answer, see resolveMultiKindClauses's own
   // header): a "what kind?" answer that was a LIST ("one plain, one
@@ -1653,7 +1677,7 @@ function messageNamesItemOutsideCandidates(
   message: string,
   candidates: PendingCandidate[],
   lexicon: LexiconTerm[] | undefined,
-): { menuItemId: string; quantity: number } | null {
+): { menuItemId: string; quantity: number; matchedText: string } | null {
   if (!lexicon || lexicon.length === 0) return null;
   const marker = message.match(OUTSIDE_ITEM_REMAINDER_MARKER_RE);
   const scoped = marker && marker.index !== undefined ? message.slice(0, marker.index) : message;
@@ -1663,7 +1687,37 @@ function messageNamesItemOutsideCandidates(
   const candidateIds = new Set(candidates.map(c => c.menu_item_id));
   if (candidateIds.has(result.menu_item_id)) return null;
   const explicitQuantity = extractAnswerQuantity(extractAnswerClause(scoped).clause);
-  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count };
+  // matchedText is `scoped` (the text this function actually resolved
+  // against), never the whole raw message — see
+  // isAnswerRestatementOfCartLine's own header for why the caller checks
+  // restatement markers against THIS text and not the full message.
+  return { menuItemId: result.menu_item_id, quantity: explicitQuantity ?? count, matchedText: scoped };
+}
+
+// Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd, money bug): the
+// PROPOSE/decide() path already refuses to re-add a line that's already in
+// the cart when the customer's own words carry a restatement marker (see
+// isRestatementOfExistingOrder's own header, and decide()'s `restating`
+// flag) — this exact same protection never existed on the ANSWER path
+// above, so "that's option 1 ... 2x Large Chicken Bacon Ranch ... 1 Medium
+// Sausage Pizza" (reciting the whole order mid-disambiguation-answer) and
+// "Just to recap: 1 Garlic Cheesesteak on wheat with blackened salmon..."
+// (reciting it while a fries disambiguation was open) both quietly re-added
+// a line that was already sitting in the cart, live, real overcharges.
+// Checked against `matchedText` (the exact clause messageNamesItemOutsideCandidates
+// resolved the outside item from), never the whole raw message: the whole
+// message can carry an ADDITION_MARKERS word (isRestatementOfExistingOrder's
+// own veto) purely because of unrelated trailing content the outside-item
+// resolver itself already scoped away (e.g. "...and a side of fries" —
+// OUTSIDE_ITEM_REMAINDER_MARKER_RE already cut the text there before ever
+// resolving "Garlic Cheesesteak"), which would wrongly suppress this check
+// on the one clause that's actually a clean restatement.
+function isAnswerRestatementOfCartLine(
+  cart: TurnEngineCartLine[],
+  outside: { menuItemId: string; matchedText: string },
+): boolean {
+  const alreadyInCart = cart.some(l => isRealCartLine(l) && l.menu_item_id === outside.menuItemId);
+  return alreadyInCart && isRestatementOfExistingOrder(outside.matchedText);
 }
 
 // Round 2 (2026-09-19, TOP item): exported so turn-engine-runner.ts can
@@ -2184,6 +2238,15 @@ export function answer(
 
       const quantity = state.open.quantity ?? 1;
 
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a): "option N"/"number N"/
+      // "option number N" ANYWHERE in the message is an unambiguous pick —
+      // see matchExplicitOptionPickAnywhere's own header. Checked before
+      // every other tier below (the outside-item gate and the facet path
+      // both score words that happen to overlap; an explicit "that's option
+      // 1" must win over both, no matter what else — a restated whole
+      // order, in the real live repro — surrounds it).
+      const explicitOptionIdx = matchExplicitOptionPickAnywhere(trimmed, candidates.length);
+
       // Round 2, item 3 (2026-09-19, live repro): before letting either
       // resolver below (the facet path or resolvePendingDisambiguation)
       // score whatever words in this message happen to overlap the open
@@ -2193,8 +2256,17 @@ export function answer(
       // facet alike: both resolvers below share the same failure mode (a
       // stray size/category word winning a tiebreak while the actual
       // answer — a different dish's name — is discarded as noise).
-      const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
-      if (outsideItem) {
+      const outsideItem = explicitOptionIdx === null
+        ? messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon)
+        : null;
+      // Round 4 P0 (2026-09-19, live conv 22b1a95a / 498f24dd): an "outside"
+      // item that's actually already a real line in the cart, named while
+      // the customer's own words carry a restatement marker, is the
+      // customer reciting their order back — not a new add. See
+      // isAnswerRestatementOfCartLine's own header; same family as
+      // decide()'s `restating` guard on the PROPOSE path, never applied
+      // here before this fix.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -2226,8 +2298,18 @@ export function answer(
       // answer even if only 2-3 candidates are left — never falls back to
       // the numbered-list resolver just because the remainder happens to be
       // small. See DialogueState's own doc on `facetNarrowed`.
+      //
+      // 2026-09-19 PO dispatch: `!state.open.noProgress` — once a facet
+      // answer against THIS open question has already excluded zero
+      // candidates once, trying the facet path again just re-derives the
+      // identical question (the customer's word is stuck matching every
+      // candidate the same way it did last time). From here on this
+      // disambiguation is permanently routed to the numbered-list resolver
+      // below instead — see DialogueState.open's own `noProgress` doc.
       if (
+        explicitOptionIdx === null &&
         (state.open.otherOneFollowUp || state.open.facetNarrowed || isNarrowingCandidateSet(candidates)) &&
+        !state.open.noProgress &&
         !isDisambiguationOptionsRequest(trimmed)
       ) {
         const spanText = state.open.spanText ?? "";
@@ -2369,6 +2451,20 @@ export function answer(
               return { resolved: true, outcome: { kind: "disambiguation_resolved", menuItemId: doubleMatched[0].menu_item_id }, cartChanged: cartChanged || removed };
             }
           }
+          // 2026-09-19 PO dispatch (real live incident, customer #20 —
+          // "fifth shape", a clarifying question with no exit): `matched`
+          // excluded ZERO of `effectiveCandidates` — the customer's own word
+          // is contained in every remaining candidate the same way it was
+          // before this answer (real repro: "chicken" against 11 Buffalo/
+          // Thai/Grilled Chicken items, still 11 after). Re-asking the same
+          // facet question (narrowingKindQuestion/render()) would produce
+          // byte-identical text a second time with no way out. `secondFacet`
+          // above already tried the OTHER facet on this exact set and it
+          // didn't resolve to one either, so there is genuinely nothing left
+          // to narrow with — fall back to the numbered list permanently for
+          // this open question (see DialogueState.open's own `noProgress`
+          // doc and render()'s disambiguation case).
+          const noProgress = matched.length === effectiveCandidates.length;
           return {
             resolved: true,
             outcome: {
@@ -2377,13 +2473,16 @@ export function answer(
               remainingQuantity: quantity,
               otherOneFollowUp: false,
               ...(replacementSourceLineKey ? { replacementSourceLineKey } : {}),
+              ...(noProgress ? { noProgress: true } : {}),
             },
             cartChanged: false,
           };
         }
       }
 
-      const resolved = resolvePendingDisambiguation(trimmed, candidates);
+      const resolved = explicitOptionIdx !== null
+        ? candidates[explicitOptionIdx]
+        : resolvePendingDisambiguation(trimmed, candidates);
       if (!resolved) return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
       // P0 fix (2026-09-19, TOP live money bug, conv 4c52298c): the ANSWER to
       // this which-one question can restate a quantity that was never part
@@ -2474,7 +2573,10 @@ export function answer(
       // group's own size facet gets a chance to score a stray word.
       const allGroupCandidates = groups.flatMap(g => g.candidates);
       const outsideItem = messageNamesItemOutsideCandidates(trimmed, allGroupCandidates, external.lexicon);
-      if (outsideItem) {
+      // Round 4 P0 (2026-09-19): same restatement guard as the sibling
+      // "disambiguation" case above — see isAnswerRestatementOfCartLine's
+      // own header.
+      if (outsideItem && !isAnswerRestatementOfCartLine(cart, outsideItem)) {
         const outsideMenuItem = menuById.get(outsideItem.menuItemId);
         if (outsideMenuItem?.ask_plan) {
           const outsideCandidate: PendingCandidate = {
@@ -3812,10 +3914,35 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
 // hallucinated one. "instead" is added bare (not just "instead of") for
 // the same reason -- "switch that to a Cheesesteak instead" never says
 // "instead of".
-const REMOVAL_VERBS = [
-  "no", "remove", "take off", "scratch", "cancel", "instead of", "not the", "without",
-  "switch", "swap", "change", "replace", "drop", "instead",
+const HARD_REMOVAL_VERBS = [
+  "no", "remove", "take off", "scratch", "cancel", "not the", "without", "drop",
 ];
+// Soft correction verbs equally describe a REPLACEMENT of the whole item
+// ("switch that to a Cheesesteak instead") or a same-item topping
+// correction ("keep the gyro meat for the small Margherita instead") -- see
+// KEEP_RETENTION_RE and its call site in removeHasRemovalLanguage below for
+// how those two are told apart.
+const SOFT_CORRECTION_VERBS = [
+  "instead of", "switch", "swap", "change", "replace", "instead",
+];
+const REMOVAL_VERBS = [...HARD_REMOVAL_VERBS, ...SOFT_CORRECTION_VERBS];
+
+// 2026-09-19 PO dispatch (S2, live conv 36eff7b9 #39, money bug -- topping
+// correction misread as a whole-line remove): "I changed my mind about the
+// bacon on the small one. Just keep the gyro meat for the small Margherita
+// instead!" carries the line's own name ("Margherita") in the SAME clause as
+// a soft-correction verb ("instead") -- the exact shape a genuine whole-item
+// replacement ("switch that to a Cheesesteak instead") also produces, so the
+// original single-verb-list heuristic couldn't tell them apart and deleted
+// the whole line instead of swapping its toppings. The difference is "keep":
+// a genuine replacement never asks to KEEP something on the very line it's
+// supposedly replacing -- "keep <X> ... instead" states what stays on this
+// item, which makes it a topping-level MODIFY, never a whole-line REMOVE.
+// Scoped to the SOFT verbs only -- an explicit HARD verb ("scratch the small
+// Margherita, keep the medium") still removes the named line exactly as
+// before; "keep" appearing elsewhere in the message is never a license to
+// ignore a customer who also, unambiguously, said "remove"/"scratch"/etc.
+const KEEP_RETENTION_RE = /\bkeep\b/i;
 
 // S3 fix (2026-09-19, live money bug, real conv 22347973, "sticks are
 // back"): a customer declining the just-offered upsell -- "No thanks, I'm
@@ -3856,9 +3983,16 @@ function removeHasRemovalLanguage(
 ): boolean {
   const msg = (message ?? "").toLowerCase().trim();
   if (!msg) return false;
+  // Upsell-decline idioms ("no thanks", "i'm good") are stripped before the
+  // verb check only -- every check below (name stems, category words,
+  // pronoun target) still sees the real, unstripped message, so a genuine
+  // removal verb named elsewhere in the same message ("no thanks, also
+  // remove the fries") is completely unaffected.
   const msgForVerbCheck = msg.replace(UPSELL_DECLINE_IDIOM_RE, " ");
-  const hasVerb = REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
-  if (!hasVerb) return false;
+  const hasHardVerb = HARD_REMOVAL_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+  const hasSoftVerb = SOFT_CORRECTION_VERBS.some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+  if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
+  if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
   if (nameStems.size > 0) {
     const msgStems = significantStems(msg);
@@ -4745,6 +4879,10 @@ export interface AskTurnEvents {
   // fresh, never-narrowed disambiguation. See DialogueState's own doc on
   // `facetNarrowed` for the exact live bug this closes.
   disambiguationFacetNarrowed?: boolean;
+  // 2026-09-19 PO dispatch (real live incident, "fifth shape"): mirrored
+  // onto `open.noProgress` — see AnswerOutcome's "disambiguation_narrowed"
+  // and DialogueState.open's own doc on `noProgress` for the full mechanism.
+  disambiguationNoProgress?: boolean;
   // Round 2, item 1 (2026-09-19, live v511): set whenever this turn's
   // ANSWER opened or re-opened the SHARED "What size?" question over two or
   // more same-kind groups — see AnswerOutcome's own
@@ -4967,6 +5105,7 @@ export function ask(
     const spanText = isThisTurnPrimary ? turnEvents.disambiguationSpanText : undefined;
     const otherOneFollowUp = isThisTurnPrimary ? turnEvents.disambiguationOtherOneFollowUp : undefined;
     const facetNarrowed = isThisTurnPrimary ? turnEvents.disambiguationFacetNarrowed : undefined;
+    const noProgress = isThisTurnPrimary ? turnEvents.disambiguationNoProgress : undefined;
     const replacementSourceLineKey = isThisTurnPrimary ? turnEvents.replacementSourceLineKey : undefined;
     return carry(
       {
@@ -4977,6 +5116,7 @@ export function ask(
         ...(spanText !== undefined ? { spanText } : {}),
         ...(otherOneFollowUp !== undefined ? { otherOneFollowUp } : {}),
         ...(facetNarrowed !== undefined ? { facetNarrowed } : {}),
+        ...(noProgress !== undefined ? { noProgress } : {}),
         ...(replacementSourceLineKey !== undefined ? { replacementSourceLineKey } : {}),
       },
       "ordering",
@@ -5462,7 +5602,22 @@ export function render(
           // way answer()'s disambiguation case does — see DialogueState's
           // own doc on `facetNarrowed` for why a small (<=5) narrowed
           // remainder must still ask the next facet, never enumerate.
-          if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
+          // 2026-09-19 PO dispatch (real live incident, "fifth shape"): a
+          // facet answer already made ZERO progress against this exact
+          // candidate set — see AnswerOutcome's "disambiguation_narrowed"
+          // and DialogueState.open's own doc on `noProgress`. Checked BEFORE
+          // the otherOneFollowUp/facetNarrowed/isNarrowingCandidateSet
+          // branch below so it can never fall through to
+          // narrowingFacetForOpen/narrowingKindQuestion and recompute the
+          // identical "Sure — what kind?" text a second time — the capped,
+          // SMS-safe numbered list is the permanent fallback for this open
+          // question from here on, same repeat-count escalation as the
+          // plain fullList case just below.
+          if (state.open.noProgress) {
+            question = (state.openRepeatCount ?? 0) >= 2
+              ? "I couldn't match that. Reply with a number, or say \"none of those\"."
+              : renderCappedAmbiguousItemQuestion(candidates);
+          } else if (!state.open.otherOneFollowUp && !state.open.facetNarrowed && !isNarrowingCandidateSet(candidates)) {
             // Round 2 addendum item A, 2026-09-19 (live sim persona, Vito's
             // count-suffix collision): `openRepeatCount` (ask()'s own
             // carry(), computed generically for every open kind via

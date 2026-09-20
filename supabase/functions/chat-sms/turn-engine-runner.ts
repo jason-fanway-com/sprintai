@@ -80,7 +80,7 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
-import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal, categoryDisplayWord } from "./pending-disambiguation.ts";
+import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal, categoryDisplayWord, resolveNamedCartRemoval, type PendingCandidate } from "./pending-disambiguation.ts";
 import {
   answer,
   decide,
@@ -782,15 +782,58 @@ const REMAINDER_MARKERS: RegExp[] = [
   /\boh and\b/i,
 ];
 
-function extractRemainderAfterAnswer(message: string): string | null {
+// 2026-09-19 PO dispatch (S1, live conv e456bf93 #16, money bug -- a slot
+// answer bleeding into item-resolution): a dressing slot open on a
+// quantity-2 salad line, answered "Can I get Ranch for both, please? Also,
+// is there a wait time for pickup?" -- the marker scan below used to find
+// "can i get" at the very START of the message (one of REMAINDER_MARKERS)
+// and take the ENTIRE message as the remainder, re-feeding "Ranch" -- text
+// already consumed to answer the open slot -- into a fresh PROPOSE call as
+// if it were a brand-new request. "Ranch" is *also* a real menu item's
+// lexicon term elsewhere on the menu, so that second PROPOSE call opened a
+// spurious "which one?" disambiguation the customer never asked for. Same
+// root cause, different word, hit again earlier tonight with "house
+// balsamic" (#22). The fix: once a slot answer resolves, find the resolved
+// choice's own display text (e.g. "Ranch") in the raw message and start the
+// marker scan strictly AFTER it -- a marker that is itself part of the
+// answer clause can never be mistaken for the start of a fresh request.
+function findSlotAnswerConsumedText(
+  priorOpen: DialogueState["open"],
+  cart: TurnEngineCartLine[],
+  menu: TurnEngineMenuItem[],
+): string | null {
+  if (!priorOpen || priorOpen.kind !== "slot") return null;
+  const line = cart.find(l => effectiveLineKeyFor(l) === priorOpen.line_key);
+  if (!line) return null;
+  const menuItem = menu.find(m => m.id === line.menu_item_id);
+  const sel = line.ask_plan_selections?.[priorOpen.group_id];
+  const choiceId = Array.isArray(sel) ? sel[sel.length - 1] : sel;
+  if (!choiceId) return null;
+  const step = menuItem?.ask_plan?.steps.find(s => s.group_id === priorOpen.group_id);
+  return step?.choices.find(c => c.id === choiceId)?.display ?? null;
+}
+
+function extractRemainderAfterAnswer(message: string, excludeBefore: string | null = null): string | null {
   const trimmed = (message ?? "").trim();
   if (!trimmed) return null;
-  let cutStart: number | null = null;
 
+  // See findSlotAnswerConsumedText's own doc above: a marker match that
+  // falls inside (or before the end of) the text that just answered the
+  // open slot is part of the answer clause itself, never the start of a
+  // genuinely new request.
+  let searchFrom = 0;
+  if (excludeBefore) {
+    const consumedIdx = trimmed.toLowerCase().indexOf(excludeBefore.toLowerCase());
+    if (consumedIdx >= 0) searchFrom = consumedIdx + excludeBefore.length;
+  }
+
+  const scope = trimmed.slice(searchFrom);
+  let cutStart: number | null = null;
   for (const marker of REMAINDER_MARKERS) {
-    const m = trimmed.match(marker);
-    if (m && m.index !== undefined && (cutStart === null || m.index < cutStart)) {
-      cutStart = m.index;
+    const m = scope.match(marker);
+    if (m && m.index !== undefined) {
+      const absoluteIndex = searchFrom + m.index;
+      if (cutStart === null || absoluteIndex < cutStart) cutStart = absoluteIndex;
     }
   }
 
@@ -1387,6 +1430,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           disambiguationSpanText: undefined,
           disambiguationOtherOneFollowUp: outcome.otherOneFollowUp,
           disambiguationFacetNarrowed: true,
+          // 2026-09-19 PO dispatch (real live incident, "fifth shape"):
+          // mirrors outcome.noProgress — see AnswerOutcome's own doc.
+          disambiguationNoProgress: outcome.noProgress,
           // 2026-09-19 PO dispatch (replacement, ambiguous target hole):
           // Y's own narrowing wasn't fully settled by this facet answer —
           // still-held X rides forward onto the reopened, smaller
@@ -1457,6 +1503,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
             disambiguationSpanText: priorState.open.spanText,
             disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
             disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            disambiguationNoProgress: priorState.open.noProgress,
             heldModifierText: priorState.open.heldModifierText,
             replacementSourceLineKey: priorState.open.replacementSourceLineKey,
           };
@@ -1559,7 +1606,14 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
     // sees it) -- a bonus item is additive, never a license to also mutate
     // or remove the line the primary answer just resolved.
     if (REMAINDER_ELIGIBLE_OUTCOME_KINDS.has(outcome.kind)) {
-      const remainderMessage = extractRemainderAfterAnswer(input.message);
+      // 00-BM (S1): only ever set for a resolved "slot" outcome -- see
+      // findSlotAnswerConsumedText's own doc. null for every other eligible
+      // outcome kind, which leaves extractRemainderAfterAnswer's behavior
+      // exactly as it was for those (unscoped from index 0).
+      const slotAnswerConsumedText = outcome.kind === "slot_resolved"
+        ? findSlotAnswerConsumedText(priorState.open, workingCart, input.menu)
+        : null;
+      const remainderMessage = extractRemainderAfterAnswer(input.message, slotAnswerConsumedText);
       if (remainderMessage) {
         // Reuse the lexicon already loaded above for answer()'s disambiguation
         // path when present — same shop, same turn, no reason to fetch it
@@ -1696,6 +1750,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         disambiguationSpanText: priorState.open.spanText,
         disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
         disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+        disambiguationNoProgress: priorState.open.noProgress,
         heldModifierText: priorState.open.heldModifierText,
         replacementSourceLineKey: priorState.open.replacementSourceLineKey,
       };
@@ -1725,7 +1780,39 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // row with the SAME quoted words: falls back to the plain enumerate
       // wording instead, and clears lastSlotEchoText so a LATER attempt
       // with genuinely different words can still echo fresh.
-      const candidateEcho = extractSlotChoiceWords(input.message) || undefined;
+      // WART fix (2026-09-19, PO dispatch, live refused-item sequence): a
+      // customer restating their order while a slot is open ("no stromboli,
+      // just the greek salad and 2 medium pepperonis" while "what dressing?"
+      // was open on a DIFFERENT line) is never a genuine attempted slot
+      // VALUE — quoting it back as one ("We don't have '2 medium
+      // pepperonis' for Greek.") reads as the bot having misheard a plain
+      // sentence. First attempt at this fix used isRestatementOfExistingOrder
+      // (decide()'s own PROPOSE-path restatement marker vocabulary,
+      // "just the"/"so that's"/etc.) directly — reverted: it also matched a
+      // genuine single attempted slot value phrased the ordinary way ("Just
+      // the regular buffalo sauce, please." — see this file's own
+      // 00-AU RED->GREEN test), wrongly swallowing a real "not on the list"
+      // echo that test explicitly requires. The precise signal is narrower:
+      // does the message actually NAME another real cart line (by name or
+      // category — same primitive named-remove's own resolveNamedCartRemoval
+      // uses) OTHER than the one whose slot is open? A slot's real choices
+      // are never the name of a different dish already in the cart, so a
+      // message that plainly names one is reciting the order, not attempting
+      // a value — while "just the regular buffalo sauce" names nothing else
+      // in the cart at all, so this never fires for it. This call site never
+      // mutates the cart either way (this branch is unconditionally a no-op
+      // turn), so suppressing the echo only changes what's SAID, never what
+      // happens.
+      const otherCartLineCandidates: PendingCandidate[] = workingCart
+        .filter(l => typeof l.menu_item_id === "string" && l.line_key !== (priorState.open as { line_key: string }).line_key)
+        .map(l => ({
+          menu_item_id: l.menu_item_id,
+          name: l.name,
+          category: input.menu.find(m => m.id === l.menu_item_id)?.category ?? null,
+          price_cents: l.price_cents,
+        }));
+      const namesAnotherCartLine = resolveNamedCartRemoval(input.message, otherCartLineCandidates).length > 0;
+      const candidateEcho = namesAnotherCartLine ? undefined : (extractSlotChoiceWords(input.message) || undefined);
       const repeatedEcho = priorState.open?.kind === "slot" &&
         priorState.lastSlotEchoText !== undefined &&
         priorState.lastSlotEchoText === candidateEcho;
