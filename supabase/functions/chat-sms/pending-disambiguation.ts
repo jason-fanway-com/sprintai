@@ -229,8 +229,26 @@ export function isPendingDisambiguationDeclined(
 // "switch"/"drop"/"instead" that are too easily part of a genuine answer to
 // a which-one question, e.g. "the second one instead of the first") — only
 // the shapes that can never plausibly be a candidate pick.
+//
+// WIDENED (2026-09-19 night, PO dispatch, real live repro conv 6de8bd13
+// #4): "I don't want either of those. Just the hoagie, cheeseburgers, and
+// cheesesteak." — widening isDisambiguationListDropSignal below to
+// recognize "don't want either/any of those" as abandoning the OPEN list
+// (see that function's own header) collided head-on with THIS check: "don't
+// want" alone already matched here, so answer()'s disambiguation case (this
+// function is checked FIRST there, before any decline/candidate tier —
+// see turn-engine.ts's own "disambiguation" case) treated it as a removal
+// request against some OTHER, already-in-cart line, found nothing to
+// remove (the cart was empty), and left the identical shrimp list open —
+// the exact live bug, just re-caused by the new phrase instead of fixed by
+// it. "don't want the salad" (M2's own real repro, "remove that small
+// Pepperoni pizza") genuinely names a SPECIFIC target elsewhere and must
+// keep matching here unchanged; "don't want either/any (of those/them)"
+// names no specific target at all — it can only be talking about the
+// CURRENTLY OPEN list itself — so that shape alone is excluded here and
+// left for isDisambiguationListDropSignal's own, more specific handling.
 const DISAMBIGUATION_ANSWER_REMOVAL_RE =
-  /\b(?:remove|removing|removed|take\s+(?:that|this|it|them)?\s*off|took\s+(?:that|this|it|them)?\s*off|don'?t\s+want|do\s+not\s+want)\b/i;
+  /\b(?:remove|removing|removed|take\s+(?:that|this|it|them)?\s*off|took\s+(?:that|this|it|them)?\s*off|don'?t\s+want(?!\s+(?:either|any)\b)|do\s+not\s+want(?!\s+(?:either|any)\b))\b/i;
 
 export function isDisambiguationAnswerRemovalRequest(message: string): boolean {
   return DISAMBIGUATION_ANSWER_REMOVAL_RE.test(message ?? "");
@@ -276,12 +294,28 @@ export function isDisambiguationAnswerRemovalRequest(message: string): boolean {
 // match, unchanged: a message starting with "no" that goes on to say
 // something else ("no I want pepperoni") is not obviously the escape hatch
 // and is out of scope for this fix.
-const NONE_OF_THOSE_PREFIX_RE = /^none(?:\s+of\s+(?:those|them))?[.,!]*(?:\s|$)/i;
+//
+// WIDENED (2026-09-19 night, PO dispatch, real repro conv 6de8bd13 #4): a
+// shrimp wrap/appetizer disambiguation stayed open through "I don't want
+// either of those. Just the hoagie, cheeseburgers, and cheesesteak." —
+// same disease as the "None of those. <restated order>" bug above, just a
+// phrasing the old prefix list didn't cover. Widened the SAME prefix
+// mechanism (not a new one) to also recognize "I don't want either of
+// those" / "don't want either" / "don't want any of those" / "neither" /
+// "no thanks" as escape hatches, exactly like "none of those" — a leading
+// clause, optional trailing punctuation, then either end-of-message or the
+// customer's restated order. "either"/"any" is REQUIRED after "don't want"
+// (not bare "don't want X") so a real decline-of-one-candidate answer like
+// "I don't want the shrimp wrap, give me the appetizer" — which names a
+// candidate the list should still try to resolve — is never mistaken for
+// abandoning the whole list.
+const LIST_DROP_PREFIX_RE =
+  /^(?:none(?:\s+of\s+(?:those|them))?|neither(?:\s+of\s+(?:those|them))?|no\s+thanks|(?:i\s+)?don'?t\s+want\s+(?:either|any)(?:\s+of\s+(?:those|them))?)[.,!]*(?:\s|$)/i;
 const DISAMBIGUATION_LIST_DROP_RE = /^(?:none(?:\s+of\s+(?:those|them))?|no)\.?!?$|\bi(?:'m| am)?\s+(?:just|only)\s+want\b/i;
 
 export function isDisambiguationListDropSignal(message: string): boolean {
   const trimmed = (message ?? "").trim();
-  return NONE_OF_THOSE_PREFIX_RE.test(trimmed) || DISAMBIGUATION_LIST_DROP_RE.test(trimmed);
+  return LIST_DROP_PREFIX_RE.test(trimmed) || DISAMBIGUATION_LIST_DROP_RE.test(trimmed);
 }
 
 // Dispatch 00-AT (conv 8b9636c9 live repro, and conv b65b60eb "Lobster

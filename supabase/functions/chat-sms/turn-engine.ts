@@ -2346,6 +2346,13 @@ const DECLINE_OPEN_ITEM_RE = /\b(?:take\s+(?:it|that|this)\s+off|remove\s+(?:it|
 // can never fire this by matching a fragment of a real item name like
 // "Bone-In".
 const SLOT_ITEM_REJECTION_CUES = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not|no)\b/i;
+// 2026-09-20 PO dispatch (rule 3): the subset of SLOT_ITEM_REJECTION_CUES
+// that is never ambiguous the way bare "no" is (see bareNoAttachesAsRemoval's
+// own header) -- when one of THESE fires, the original unscoped clause match
+// below still applies unchanged. Bare "no" alone gets the extra word-level
+// attachment check instead of being retired outright, since "no wings"/"no
+// pierogies" (naming the item directly) must still fire exactly as before.
+const SLOT_ITEM_REJECTION_CUES_EXCEPT_NO = /\b(?:forget|never\s*mind|cancel|didn'?t|don'?t|not)\b/i;
 
 // 2026-09-19 PO dispatch (N1, live conv 624967ed #16, MONEY BUG — $55.48 ->
 // $15.50): "I'd like ranch with the Buffalo Chicken pizzas, please! Don't
@@ -2376,16 +2383,39 @@ function isNamedSlotItemRejection(
   itemCategory: string | null | undefined,
 ): boolean {
   const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;!?]/i);
+  const nameStems = significantStems(itemName ?? "");
+  const nameWords = (itemName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
   for (const clause of clauses) {
     if (!SLOT_ITEM_REJECTION_CUES.test(clause)) continue;
     if (NEGATED_DECLINE_VERB_RE.test(clause)) continue;
-    const nameStems = significantStems(itemName ?? "");
-    const msgStems = significantStems(clause);
-    let matched = false;
-    for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
-    if (matched || categoryWordMatches(itemCategory, clause)) return true;
+    if (SLOT_ITEM_REJECTION_CUES_EXCEPT_NO.test(clause)) {
+      const msgStems = significantStems(clause);
+      let matched = false;
+      for (const s of nameStems) if (msgStems.has(s)) { matched = true; break; }
+      if (matched || categoryWordMatches(itemCategory, clause)) return true;
+      continue;
+    }
+    // Only bare "no" fired as the cue in this clause -- see
+    // bareNoAttachesAsRemoval's own header (shared with
+    // removeHasRemovalLanguage, same 2026-09-20 PO dispatch, rule 3).
+    if (bareNoAttachesAsRemoval(clause, nameStems, nameWords, itemCategory)) return true;
   }
   return false;
+}
+
+// 2026-09-20 PO dispatch (rule 5): declines the VALUE of an open required
+// slot ("without any sauce instead", "just skip the sauce", "none", "n/a",
+// "plain", "nevermind") -- see this function's own call site in answer()'s
+// "slot" case for why it is only ever checked once matchChoiceInText has
+// already failed to find a real choice in the same text, never before.
+// Bare "no" excludes "no thanks"/"no thank you" via lookahead -- that idiom
+// is the closure-matrix's own "no thanks while a slot is open" cell (real
+// regression this fix once introduced: "no thanks" is a closure/decline-of-
+// the-TURN idiom, same family as UPSELL_DECLINE_IDIOM_RE, never a decline of
+// THIS slot's value, and must leave an already-resolved selection alone).
+const SLOT_VALUE_DECLINE_RE = /\bno(?!\s+thanks?\b|\s+thank\s+you\b)\b|\bnone\b|\bn\/a\b|\bnvm\b|\bnever\s*mind\b|\bnevermind\b|\bplain\b|\bskip\b|\bwithout\b/i;
+function isSlotValueDecline(message: string): boolean {
+  return SLOT_VALUE_DECLINE_RE.test(message ?? "");
 }
 
 export function answer(
@@ -2479,6 +2509,35 @@ export function answer(
         line.price_cents = priceCents;
         return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
       }
+      // 2026-09-20 PO dispatch (rule 5, live conv 0a4f967d #1 follow-up,
+      // required-slot loop): "without any sauce instead" / "just skip the
+      // sauce" / "none" / "plain" is a genuine decline of the SLOT VALUE
+      // itself (never the whole item -- that's DECLINE_OPEN_ITEM_RE /
+      // isNamedSlotItemRejection's job above, already checked and already
+      // false by the time execution reaches here). Checked only once a real
+      // choice match has already failed (directMatch is null), so a genuine
+      // answer never gets swallowed by this. Without this, the turn re-asked
+      // the identical question forever, echoing the customer's own decline
+      // words back as if they were a garbled attempted choice ("We don't
+      // have 'any sauce instead?' for ..."), since nothing in that shape
+      // could ever match a real choice on a later attempt either. Resolves
+      // using the group's own configured default when one exists, else the
+      // first listed choice -- every real required slot this fix has
+      // touched prices its choices at $0 delta, so this never silently
+      // changes the total, only which free choice lands on the ticket,
+      // always visible and correctable in the recap that follows.
+      if (openStep && !directMatch && isSlotValueDecline(trimmed)) {
+        const defaultChoiceId = menuItem.option_groups?.find(g => g.id === openGroupId)?.default_choice_id;
+        const fallbackChoice = (defaultChoiceId && openStep.choices.find(c => c.id === defaultChoiceId)) || openStep.choices[0];
+        if (fallbackChoice) {
+          const selections = { ...(line.ask_plan_selections ?? {}), [openGroupId]: fallbackChoice.id };
+          const { resolvedOptions, priceCents } = priceSelections(menuItem.ask_plan, menuItem.option_groups ?? [], selections);
+          line.ask_plan_selections = selections;
+          line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+          line.price_cents = priceCents;
+          return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+        }
+      }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -2569,6 +2628,26 @@ export function answer(
               cartChanged,
             };
           }
+          // 2026-09-19 PO dispatch (named-line target + wrong-line removal,
+          // real conv 59cb90c9, real money bug -- rule 2, "hold the removal
+          // until Y resolves" extended to a declined-and-unresolved
+          // restatement): a plain disambiguation with nothing left to add is
+          // genuinely closed here (the pre-existing behavior, unchanged
+          // below) -- but a disambiguation OPENED BY A REPLACEMENT
+          // (replacementSourceLineKey set) can never be closed this way. X
+          // is still sitting in the cart, held, waiting on Y -- "closure"
+          // here would silently abandon that hold forever (X never removed,
+          // Y never added, the pending replacement just vanishes) and,
+          // worse, a closure over a non-empty cart advances straight to
+          // checkout (see turn-engine-runner.ts's own closure handling),
+          // which is exactly the real live collapse: "What's the name for
+          // the order?" with the replacement never resolved either way.
+          // UNRESOLVED here re-asks this SAME narrowing question next turn
+          // (turn-engine-runner.ts's own no-model-call carry-forward for an
+          // unresolved disambiguation answer, unchanged) -- X stays held,
+          // nothing is guessed, and the customer is asked again instead of
+          // the conversation silently moving on without them.
+          if (replacementSourceLineKey) return UNRESOLVED;
           return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
         }
         return UNRESOLVED;
@@ -3995,6 +4074,134 @@ function spanIsWholeChoiceOfAnyAdd(
   return false;
 }
 
+// Freeze-queue item W2 follow-up (2026-09-19 night, PO dispatch, live conv
+// 6de8bd13, real Vito's #4): "Italian hoagie with shrimp and blackened
+// salmon on wheat bread" -- PROPOSE split this into TWO separate `adds`,
+// one for "Italian hoagie" and a SECOND, independent one whose own
+// item_span was "shrimp and blackened salmon on wheat bread" (real
+// error_log capture, propose_success row 25af74fb). resolveItem ties that
+// second span across Vito's two real active "shrimp"-lexicon items
+// (Southwest Shrimp / Boom Boom Shrimp -- the exact wrap/appetizer
+// disambiguation the live report describes), so it never even reaches
+// decide()'s add-resolution loop as a modifier candidate -- it opens as its
+// own phantom ambiguous ITEM. spanIsWholeChoiceOfAnyAdd above already
+// exists to catch exactly this FAMILY of bug (a span that's really naming a
+// sibling add's own choice, not a separate item) but only when the span IS,
+// in full, ONE choice's own name -- a compound span naming SEVERAL choices
+// at once (Shrimp + Blackened Salmon, both real Add-ons on this exact
+// Italian Hoagie, confirmed live against the real menu_items row) never
+// equals any single choice's token set and fell straight through.
+//
+// This generalizes the SAME rule (dropAddsThatAreReallyModifiersOfAnother-
+// Add's own header: "a phrase that matches an option CHOICE of an item
+// named in the SAME message is a modifier, consumed there") from one choice
+// to several: repeatedly peels the LARGEST remaining real choice (any
+// modifier/slot step of ONE candidate sibling item, its own group noun
+// stripped exactly as matchChoiceAsWholeSpan already does for "wheat
+// bread" -> "Wheat") off the span's own token pool. The span is fully
+// accounted for only when every one of its tokens -- barring a small fixed
+// set of pure connectives ("and"/"with"/"on"/"in"/"a"/"an"/"the"/"&"/"+"/
+// "plus"/"also"/"of"/"for") -- is eventually claimed; a leftover token means
+// some part of the span names something that is NOT a real choice of that
+// item (a genuine second item, or a genuine hallucination), so nothing here
+// fires and the span is left exactly as before.
+//
+// Unlike spanIsWholeChoiceOfAnyAdd (which drops its match silently and
+// trusts the sibling's own 00-BF modifier floor, below, to re-find a SINGLE
+// choice on its own), the plural floor's own tie-guard (recoverAsserted-
+// ChoicesFromText's plainHits.length===1 contract, preserved deliberately
+// for the genuinely-ambiguous "sausage and onions" shape -- see that
+// function's own header) would otherwise still drop BOTH real add-ons here,
+// silently, a second time. A full decomposition with zero leftover is a
+// stronger, more specific proof of non-ambiguity than that per-choice
+// subset check can offer on its own, so the caller attaches the matched
+// MODIFIER choices directly onto the sibling add's own `choices` -- SLOT
+// choices (the bread step) are matched too, so their tokens don't count as
+// leftover, but deliberately never attached: 00-BF's own "slots are ASKED,
+// never inferred" rule (unchanged, see that call site) still applies, so
+// the bread question is still asked normally.
+const SPAN_DECOMPOSE_CONNECTIVE_WORDS = new Set([
+  "and", "with", "on", "in", "the", "a", "an", "plus", "also", "for", "of", "&",
+]);
+
+function decomposeSpanIntoChoicesOfMenuItem(
+  span: string,
+  menuItem: TurnEngineMenuItem,
+): Array<{ group_id: string; choice_id: string }> | null {
+  if (!menuItem.ask_plan) return null;
+  const remaining = new Set(
+    [...modifierFloorTokens(span)].filter(t => !SPAN_DECOMPOSE_CONNECTIVE_WORDS.has(t)),
+  );
+  if (remaining.size === 0) return null;
+  // `groupNounTokens`: kept separately from `tokens` (matchChoiceAsWholeSpan's
+  // own "wheat bread" -> "Wheat" trick, generalized) — the customer's own
+  // mention of the group's generic noun ("bread") must count as accounted
+  // for once a choice from THAT group is claimed, or it survives in
+  // `remaining` forever as a false leftover and the whole span wrongly
+  // fails to decompose even though every real choice was matched.
+  const candidates: Array<{ groupId: string; choiceId: string; tokens: Set<string>; groupNounTokens: Set<string>; kind: "modifier" | "slot" }> = [];
+  for (const step of menuItem.ask_plan.steps) {
+    if (step.kind !== "modifier" && step.kind !== "slot") continue;
+    const groupNounTokens = modifierFloorTokens(step.prompt_template.split(".")[0]);
+    for (const choice of step.choices) {
+      const tokens = new Set(
+        [...modifierFloorTokens(choice.display)].filter(t => !groupNounTokens.has(t)),
+      );
+      if (tokens.size > 0) candidates.push({ groupId: step.group_id, choiceId: choice.id, tokens, groupNounTokens, kind: step.kind });
+    }
+  }
+  if (candidates.length === 0) return null;
+  const picked: typeof candidates = [];
+  let progress = true;
+  while (progress && remaining.size > 0) {
+    progress = false;
+    const available = candidates.filter(c => !picked.includes(c) && [...c.tokens].every(t => remaining.has(t)));
+    if (available.length === 0) break;
+    const maxSize = Math.max(...available.map(c => c.tokens.size));
+    const top = available.filter(c => c.tokens.size === maxSize);
+    // Two DIFFERENT top-tier candidates that are disjoint (name no token in
+    // common) can both be claimed safely in the same pass -- neither steals
+    // the other's evidence. Two that overlap are a genuine, unresolved tie
+    // (two real choices competing for the same word) -- bail rather than
+    // guess, same "never guess" discipline as matchChoiceAsWholeSpan itself.
+    const disjoint = top.every((c, i) => top.every((o, j) => i === j || [...c.tokens].every(t => !o.tokens.has(t))));
+    if (!disjoint) return null;
+    for (const c of top) {
+      for (const t of c.tokens) remaining.delete(t);
+      for (const t of c.groupNounTokens) remaining.delete(t);
+      picked.push(c);
+    }
+    progress = true;
+  }
+  if (remaining.size > 0) return null; // a leftover token — not a full decomposition, leave the span alone
+  const modifierPicks = picked.filter(c => c.kind === "modifier");
+  if (modifierPicks.length === 0) return null; // span decomposed entirely into SLOT answers — nothing to attach, ask normally
+  return modifierPicks.map(c => ({ group_id: c.groupId, choice_id: c.choiceId }));
+}
+
+// Tries every candidate add in turn; a span that fully decomposes against
+// MORE than one of them is genuinely ambiguous (which item's add-ons did
+// the customer mean?) and is left alone, same "never guess" discipline as
+// everywhere else in this file.
+function spanFoldTargetForAmbiguousOrUnresolvedSpan(
+  span: string,
+  adds: ResolvedAdd[],
+  menuById: Map<string, TurnEngineMenuItem>,
+): { add: ResolvedAdd; pairs: Array<{ group_id: string; choice_id: string }> } | null {
+  const trimmed = span.trim();
+  if (!trimmed) return null;
+  let found: { add: ResolvedAdd; pairs: Array<{ group_id: string; choice_id: string }> } | null = null;
+  for (const add of adds) {
+    const menuItem = menuById.get(add.menu_item_id);
+    if (!menuItem) continue;
+    const pairs = decomposeSpanIntoChoicesOfMenuItem(trimmed, menuItem);
+    if (!pairs) continue;
+    if (found) return null;
+    found = { add, pairs };
+  }
+  return found;
+}
+
 export interface Decline {
   reason: string;
 }
@@ -4498,6 +4705,51 @@ export function isRestatementOfExistingOrder(message: string | undefined): boole
   return RESTATEMENT_MARKERS.some(r => m.includes(r));
 }
 
+// 2026-09-20 PO dispatch (rule 3, real live money bug, "House removed." full
+// deletion of both House Salad lines): a bare "no" is the one decline cue
+// ambiguous enough to attach to a NON-item word spoken in the same breath as
+// the item's own name -- "just the house salads no dressing" -- "no" negates
+// DRESSING, a modifier choice, never the salads themselves, even though
+// "house"/"salads" appear moments earlier in the identical clause. Same
+// class of bug N1 (isNamedSlotItemRejection) already fixed for a different
+// cue word ("forget") by scoping the cue+name match to one clause; this
+// narrows one step further, to the words "no" actually governs, since here
+// the false match survives even inside a single clause.
+//
+// Two independent failure shapes share this one fix:
+//   (a) "no <choice>" -- the word(s) right after "no" don't name the item at
+//       all (they name a modifier/choice instead), so "no" never attaches to
+//       this line as removal language in the first place.
+//   (b) "no, just the <item>" -- the word(s) right after "no" DO name the
+//       item, but only because the customer is RESTATING it ("just the
+//       house salads" == "just get me the house salads"), not negating it.
+//       Reuses isRestatementOfExistingOrder (the same marker list already
+//       trusted on the adds side) rather than inventing a second phrase list.
+//
+// Window is bounded to the text up to the next clause-ending punctuation
+// (not a fixed word count) so a later, unrelated sentence in a multi-sentence
+// message ("...no dressing. sry! so just 2x house salads. thx!") can never
+// bleed into what "no" is checked against.
+function bareNoAttachesAsRemoval(
+  text: string,
+  nameStems: Set<string>,
+  nameWords: string[],
+  lineCategory: string | null | undefined,
+): boolean {
+  const re = /\bno\b([^.,;!?]{0,40})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const after = m[1] ?? "";
+    if (isRestatementOfExistingOrder(after)) continue;
+    const afterStems = significantStems(after);
+    if (nameStems.size > 0 && [...afterStems].some(s => nameStems.has(s))) return true;
+    const afterFlat = after.replace(/[^a-z0-9]/g, "");
+    if (nameWords.some(w => afterFlat.includes(w))) return true;
+    if (categoryWordMatches(lineCategory, after)) return true;
+  }
+  return false;
+}
+
 // Round 3 P0 (2026-09-19, hallucinated-remove): same "model proposes, code
 // validates" principle as the stale-add guard above -- a proposed remove's
 // line_key is model output and is never, on its own, authorization to
@@ -4603,10 +4855,8 @@ function removeHasRemovalLanguage(
   if (!hasHardVerb && hasSoftVerb && KEEP_RETENTION_RE.test(msg)) return false;
   if (!hasHardVerb && !hasSoftVerb) return false;
   const nameStems = significantStems(lineName ?? "");
-  if (nameStems.size > 0) {
-    const msgStems = significantStems(msg);
-    for (const s of msgStems) if (nameStems.has(s)) return true;
-  }
+  const msgStems = significantStems(msg);
+  const nameStemHit = nameStems.size > 0 && [...msgStems].some(s => nameStems.has(s));
   // Merged/compound wording ("the cheeseburger" for a line named "Cheese
   // Burger") tokenizes to a single word on the message side, so it can
   // never land in msgStems' set-intersection above -- fall back to a
@@ -4614,8 +4864,22 @@ function removeHasRemovalLanguage(
   // words, same >= 3 char significance floor as significantStems.
   const msgFlat = msg.replace(/[^a-z0-9]/g, "");
   const nameWords = (lineName ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length >= 3);
-  if (nameWords.some(w => msgFlat.includes(w))) return true;
-  if (categoryWordMatches(lineCategory, msg)) return true;
+  const nameWordHit = nameWords.some(w => msgFlat.includes(w));
+  const categoryHit = categoryWordMatches(lineCategory, msg);
+  if (nameStemHit || nameWordHit || categoryHit) {
+    // PO dispatch (rule 3): see bareNoAttachesAsRemoval's own header. Only
+    // when bare "no" is the SOLE reason this counts as a hard-verb match
+    // (no other hard verb, no soft verb) does the match require a real
+    // word-level attachment -- every other verb (remove/scratch/cancel/
+    // switch/instead/...) keeps the exact original unscoped behavior.
+    const otherHardVerbPresent = HARD_REMOVAL_VERBS
+      .filter(v => v !== "no")
+      .some(v => new RegExp(`\\b${v}\\b`, "i").test(msgForVerbCheck));
+    const onlyBareNo = /\bno\b/i.test(msgForVerbCheck) && !otherHardVerbPresent && !hasSoftVerb;
+    if (!onlyBareNo || bareNoAttachesAsRemoval(msgForVerbCheck, nameStems, nameWords, lineCategory)) {
+      return true;
+    }
+  }
   // Round 4 P0: this now passes for the resolved pronoun TARGET line even
   // in a 2+-line cart (resolvePronounTargetLineKey above), not only when
   // it's the sole real line -- "switch that to X" with several lines in
@@ -4688,6 +4952,19 @@ function applyNamedLineRemovals(
 interface ReplacementIntent {
   xPhrase: string | null; // null only for "make it Y instead" (implicit pronoun)
   yPhrase: string;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9): the exact substring of the customer's message this
+  // pattern matched (the whole "change that pizza to a small BBQ Chicken
+  // pizza instead" clause, not just xPhrase/yPhrase individually). See this
+  // function's own call site in decide() -- Y's own words (here, "chicken")
+  // can coincidentally overlap an UNRELATED cart line's name (Cup Chicken
+  // Noodle Soup), and removeHasRemovalLanguage's whole-message stem-overlap
+  // check has no way to know those words belong to the replacement's own Y
+  // phrase, not to a genuine second removal request. Stripping this exact
+  // span out of the message before that check runs is what keeps a
+  // replacement's own Y wording from ever being misread as removal language
+  // for a line the customer never named.
+  matchedText: string;
 }
 
 function parseReplacementIntent(message: string): ReplacementIntent | null {
@@ -4710,13 +4987,13 @@ function parseReplacementIntent(message: string): ReplacementIntent | null {
     const xPhrase = mm[1]?.trim();
     const yPhrase = mm[2]?.trim();
     if (!xPhrase || !yPhrase) continue;
-    return { xPhrase, yPhrase };
+    return { xPhrase, yPhrase, matchedText: mm[0] };
   }
   // "make it Y instead" / "make that Y instead" -- X is never named, only
   // ever a pronoun, so there is no capture group for it.
   const makeIt = m.match(/\bmake\s+(?:it|that|this)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+instead\b/i);
   const yPhrase = makeIt?.[1]?.trim();
-  if (yPhrase) return { xPhrase: null, yPhrase };
+  if (yPhrase && makeIt) return { xPhrase: null, yPhrase, matchedText: makeIt[0] };
   return null;
 }
 
@@ -4963,6 +5240,25 @@ export function decide(
   let replacementHandledLineKey: string | undefined;
   let replacementHandledMenuItemId: string | null = null;
   const replacementIntent = customerMessage ? parseReplacementIntent(customerMessage) : null;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9, real money bug): the ONLY line a replacement statement
+  // may ever remove is the one resolveReplacementTargetLine actually
+  // identifies below (replacementHandledLineKey) -- but the removes loop
+  // further down validates every OTHER proposed remove against the whole
+  // raw customerMessage via removeHasRemovalLanguage's stem-overlap check,
+  // which has no notion of "this word belongs to the replacement's own Y
+  // phrase, not a second removal request." Real repro: "change that pizza
+  // to a small BBQ Chicken pizza instead" -- Y's own word "chicken"
+  // coincidentally overlaps the UNRELATED Cup Chicken Noodle Soup line's
+  // name, so PROPOSE's (wrong) proposed remove of the soup's line_key sailed
+  // straight through that guard. Stripping the replacement's own matched
+  // clause out of the message before that check runs removes the
+  // coincidental overlap without touching any genuine, separate removal
+  // language stated elsewhere in the same message (e.g. "...instead, and
+  // also take off the soup" keeps "soup" outside the stripped span).
+  const removalGuardMessage = replacementIntent && customerMessage
+    ? customerMessage.replace(replacementIntent.matchedText, " ")
+    : customerMessage;
   if (replacementIntent) {
     const targetLine = resolveReplacementTargetLine(replacementIntent.xPhrase, nextCart, menuById);
     if (!targetLine) {
@@ -4973,7 +5269,20 @@ export function decide(
         const newMenuItem = menuById.get(yResolution.menu_item_id);
         if (newMenuItem?.ask_plan) {
           const idx = nextCart.indexOf(targetLine);
-          const quantity = targetLine.quantity;
+          // 2026-09-20 PO dispatch (rule 4, real live money bug, v566 #1,
+          // $68.97 vs $45.98): "change that to 1 large Roma pizza and add 1
+          // large Buffalo Chicken pizza instead" is a QUANTITY MODIFY on X's
+          // own line (Y resolves to the SAME item as X here), not a like-
+          // for-like item swap -- yet this always reused targetLine's OLD
+          // quantity (2), so the re-added line came back at the original
+          // quantity no matter what number the customer actually stated for
+          // Y. spanLeadingCount (effectiveAddQuantity's own primitive) reads
+          // a quantity the customer explicitly stated in the Y phrase itself
+          // ("1 large Roma pizza" -> 1); only when Y states no quantity at
+          // all ("change my Grilled Cheese to Chicken Fingers") does this
+          // fall back to preserving X's original quantity, unchanged from
+          // before this fix.
+          const quantity = spanLeadingCount(replacementIntent.yPhrase) ?? targetLine.quantity;
           removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
           const lengthBeforeAdd = nextCart.length;
           const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
@@ -5284,13 +5593,29 @@ export function decide(
   // Round 2, items 1/2 (2026-09-19, live sim): before either bucket becomes
   // a decline or reopens a disambiguation, drop any span that's really just
   // naming a slot/modifier choice of one of THIS turn's own resolved adds —
-  // see spanIsWholeChoiceOfAnyAdd's own header.
-  const genuinelyUnresolvedSpansFiltered = genuinelyUnresolvedSpans.filter(
-    span => !spanIsWholeChoiceOfAnyAdd(span, correctedAdds, menuById),
-  );
-  const ambiguousSpansFiltered = ambiguousSpans.filter(
-    a => !spanIsWholeChoiceOfAnyAdd(a.spanText, correctedAdds, menuById),
-  );
+  // see spanIsWholeChoiceOfAnyAdd's own header. W2 follow-up (same night,
+  // live conv 6de8bd13): a span naming SEVERAL of a sibling add's own
+  // choices at once (never caught by spanIsWholeChoiceOfAnyAdd's single-
+  // choice check) is also dropped here — and, unlike a single-choice match,
+  // its matched MODIFIER choices are attached directly onto that sibling
+  // add's own `choices` (mutates the shared ResolvedAdd object, so every
+  // later stage — grouping, 00-BF, pricing — sees it) since the plural
+  // modifier floor's own tie-guard would otherwise still drop them a second
+  // time — see spanFoldTargetForAmbiguousOrUnresolvedSpan's own header.
+  const genuinelyUnresolvedSpansFiltered: string[] = [];
+  for (const span of genuinelyUnresolvedSpans) {
+    if (spanIsWholeChoiceOfAnyAdd(span, correctedAdds, menuById)) continue;
+    const folded = spanFoldTargetForAmbiguousOrUnresolvedSpan(span, correctedAdds, menuById);
+    if (folded) { folded.add.choices = [...folded.add.choices, ...folded.pairs]; continue; }
+    genuinelyUnresolvedSpansFiltered.push(span);
+  }
+  const ambiguousSpansFiltered: typeof ambiguousSpans = [];
+  for (const a of ambiguousSpans) {
+    if (spanIsWholeChoiceOfAnyAdd(a.spanText, correctedAdds, menuById)) continue;
+    const folded = spanFoldTargetForAmbiguousOrUnresolvedSpan(a.spanText, correctedAdds, menuById);
+    if (folded) { folded.add.choices = [...folded.add.choices, ...folded.pairs]; continue; }
+    ambiguousSpansFiltered.push(a);
+  }
 
   // ADDENDUM A: exactly the pre-existing 035a2bd3 wording, unchanged, for
   // the single-span case; two or more combine into ONE line rather than
@@ -5547,7 +5872,11 @@ export function decide(
     const line = nextCart[idx];
     const lineCategory = menuById.get(line.menu_item_id)?.category;
     const isPronounTargetLine = line.line_key === pronounTargetLineKey;
-    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, isPronounTargetLine)) {
+    // 2026-09-19 PO dispatch (named-line target + wrong-line removal): uses
+    // removalGuardMessage (the raw message with a detected replacement's own
+    // matched clause stripped out), not customerMessage directly -- see
+    // removalGuardMessage's own doc above the replacement block for why.
+    if (!removeHasRemovalLanguage(removalGuardMessage, line.name, lineCategory, isPronounTargetLine)) {
       guardDroppedRemoves.push({ line_key: rm.line_key, item_name: line.name });
       continue;
     }

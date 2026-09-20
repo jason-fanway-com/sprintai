@@ -736,6 +736,45 @@ Deno.test("isDisambiguationListDropSignal: a word that merely STARTS WITH 'none'
   assert(!isDisambiguationListDropSignal("nonexistent items aside, give me the large one"));
 });
 
+// PO dispatch 2026-09-19 night (real live repro, conv 6de8bd13 #4): a
+// shrimp wrap/appetizer disambiguation stayed open through "I don't want
+// either of those. Just the hoagie, cheeseburgers, and cheesesteak." — the
+// SAME shrimp list got shown again at least twice, the conversation never
+// reached payment. The pre-existing prefix mechanism above only recognized
+// "none of those"/"none of them"/bare "no"/"none" — this widens the SAME
+// mechanism's phrase list (no new mechanism) to also recognize "I don't
+// want either of those" / "don't want either" / "don't want any of those" /
+// "neither" / "no thanks" as escape hatches, exactly like "none of those":
+// a leading clause, optional trailing punctuation, then either
+// end-of-message or the customer's own restated order.
+Deno.test("isDisambiguationListDropSignal: the real live repro — 'I don't want either of those. Just the hoagie, cheeseburgers, and cheesesteak.' drops the list", () => {
+  assert(isDisambiguationListDropSignal("I don't want either of those. Just the hoagie, cheeseburgers, and cheesesteak."));
+});
+
+Deno.test("isDisambiguationListDropSignal: 'don't want either'/'don't want any of those'/'neither'/'no thanks' all drop the list, bare or with a restated order after", () => {
+  const restated = "Just the hoagie and cheeseburgers, please.";
+  const phrases = [
+    "don't want either",
+    "don't want any of those",
+    "I don't want either of those",
+    "I don't want any of those",
+    "neither",
+    "Neither of those",
+    "no thanks",
+    "No thanks!",
+  ];
+  for (const phrase of phrases) {
+    assert(isDisambiguationListDropSignal(phrase), `bare "${phrase}" must trip the drop signal`);
+    assert(isDisambiguationListDropSignal(`${phrase}. ${restated}`), `"${phrase}. ${restated}" must trip the drop signal — the escape hatch plus a restated order`);
+  }
+});
+
+Deno.test("isDisambiguationListDropSignal: naming ONE candidate by declining it is never mistaken for abandoning the whole list", () => {
+  assert(!isDisambiguationListDropSignal("I don't want the shrimp wrap, give me the appetizer"),
+    "'don't want X' naming a specific candidate must still let the list try to resolve it — only 'either'/'any' abandon the whole thing");
+  assert(!isDisambiguationListDropSignal("I don't want the wrap"));
+});
+
 Deno.test("facetDisplayValues: kind values keep original casing, deduped, no prices", () => {
   const values = facetDisplayValues(SEVEN_LARGE_PIZZAS, "kind");
   assertEquals(values, ["Pepperoni", "Cheese", "Sausage", "Buffalo Chicken", "Meat Lovers", "Veggie", "Hawaiian"]);
