@@ -344,3 +344,12 @@ during a question lists that question's choices. Both conversations are permanen
 (`fourkinds`, `fries`). Deploy 70868d52: Vito's 30/30, Not Just Bagels 10/10, Zio's 10/10, sweep 40/42
 (the two are bagels at a pizza shop). Regex count over customer text outside the two allowed files: 0.
 Pure core: 1,9xx of the 2,000-line budget; the next day's work should be simplification, not addition.
+
+**17:17, after Jason's third phone test (first complete real order: six lines, tip, payment, ticket #15).**
+Product rule from Jason: a kind question always lists its options ("What kind of fries? We have …").
+Listing the options changed how the model answered them (it began naming "pizza" as the item and the
+customer's kinds as options, sometimes with a remove of the generic line), which exposed three more
+structural gaps, now closed: verbatim answer words inside a rejected move are kept as answers; an
+uncovered customer word that answers the open question is an answer before it is an omission; removing
+the very line being answered is the split. Deploy 9f96aceb: Vito's 30/30, NJB 10/10, Zio's 10/10, sweep
+40/42, 0 invented, 0 money mismatches. Regex over customer text outside the two allowed files: 0.
