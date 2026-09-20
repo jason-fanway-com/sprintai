@@ -573,6 +573,15 @@ export type AnswerOutcome =
   // customer actually named). ask() reopens confirm with a fresh read-back,
   // same as quantity_corrected, since the cart changed.
   | { kind: "line_replaced" }
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): a bare removal ("no
+  // stromboli") while confirm is already open — no replacement target named,
+  // just "take this off" — resolved directly against the cart's real lines
+  // (see applyNamedLineRemovals's own header), checked ahead of
+  // impliesConfirmDecline below so "no" inside "no stromboli" is never read
+  // as declining the WHOLE order. ask() reopens confirm with a fresh
+  // read-back, same convention as quantity_corrected/line_replaced above,
+  // since the cart just changed.
+  | { kind: "line_removed_at_confirm" }
   // X doesn't exist as its own menu item ("there is no 16\" House pizza,
   // only the stromboli") — declined by name, nothing touched. `message` is
   // threaded through to the runner's existing answerText hook (the same
@@ -1547,6 +1556,58 @@ function messageNamesItemOutsideCandidates(
 // (isPendingDisambiguationDeclined, then messageNamesItemOutsideCandidates)
 // answer() itself runs, just callable from outside with raw candidate ids
 // instead of an already-open DialogueState.
+// Money bug fix (2026-09-19, live conv 0dcb02a7, real $83.83-vs-$50.39
+// overcharge): Round 2's messageNamesItemOutsideCandidates above only ever
+// resolves the message as ONE item — "I meant pizza, not stromboli" (a bare
+// category correction). "whoops, not a stromboli or house salad. just stick
+// w/ the greek salad, 2 med pepperoni pizzas." names TWO real, specific,
+// different dishes (Greek Salad, Pepperoni Pizza) while explicitly rejecting
+// BOTH offered categories by name — resolveItem never returns "resolved" for
+// the whole span at once (two distinct items in one span), so the
+// single-item check falsely reported "no outside item" and let
+// findDisambiguationCategoryRejectionCandidate's correction-add path fire,
+// adding a candidate NOBODY asked for (the live bot added a $22.95 16"
+// House Stromboli that never appears in the customer's own words at all).
+// A bare correction ("not stromboli, I meant pizza") only ever names ONE
+// alternative; a customer restating an entire order in their own words
+// names several. Splitting on the same everyday separators (comma, "and")
+// and resolving each clause independently via the identical resolveItem()
+// primitive, then requiring TWO OR MORE distinct real items outside the
+// candidates before treating this as "the customer is ordering something
+// else entirely" (never a single-alternative correction), keeps the
+// aae67b80/322e19ca genuine-correction shape (always exactly one
+// alternative) completely unaffected — see the "genuine correction is
+// UNAFFECTED" regression test.
+function messageNamesMultipleItemsOutsideCandidates(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+): boolean {
+  if (!lexicon || lexicon.length === 0) return false;
+  const candidateIds = new Set(candidates.map(c => c.menu_item_id));
+  const clauses = message.split(/[,.]|\band\b/i).map(s => s.trim()).filter(Boolean);
+  if (clauses.length < 2) return false;
+  const resolvedOutsideIds = new Set<string>();
+  for (const clause of clauses) {
+    const { text } = extractLeadingClauseCount(clause);
+    const corrected = fuzzyCorrectAgainstLexicon(text, lexicon);
+    const result = resolveItem(corrected, lexicon);
+    if (result.kind === "resolved" && !candidateIds.has(result.menu_item_id)) {
+      resolvedOutsideIds.add(result.menu_item_id);
+    }
+  }
+  return resolvedOutsideIds.size >= 2;
+}
+
+function messageDeclineNamesOutsideItems(
+  message: string,
+  candidates: PendingCandidate[],
+  lexicon: LexiconTerm[] | undefined,
+): boolean {
+  return messageNamesItemOutsideCandidates(message, candidates, lexicon) !== null
+    || messageNamesMultipleItemsOutsideCandidates(message, candidates, lexicon);
+}
+
 export function disambiguationDeclineNamesOutsideItem(
   message: string,
   candidateIds: string[],
@@ -1560,7 +1621,7 @@ export function disambiguationDeclineNamesOutsideItem(
     .map(m => ({ menu_item_id: m.id, name: m.name, category: m.category ?? null, price_cents: m.price_cents }));
   if (candidates.length === 0) return false;
   if (!isPendingDisambiguationDeclined(message, candidates)) return false;
-  return messageNamesItemOutsideCandidates(message, candidates, lexicon) !== null;
+  return messageDeclineNamesOutsideItems(message, candidates, lexicon);
 }
 
 // The answer to "what kind?" can itself be a LIST ("one plain, one
@@ -1865,8 +1926,15 @@ export function answer(
         // salmon" the way plain `closure` below would (closure is
         // deliberately excluded from every remainder mechanism this engine
         // has).
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): see
+        // messageNamesMultipleItemsOutsideCandidates's own header — a decline
+        // naming TWO OR MORE distinct real items outside the candidates
+        // ("just the greek salad, 2 med pepperoni pizzas") is exactly as much
+        // a decline-not-a-correction as the single-outside-item case just
+        // above it, and must take the identical UNRESOLVED/drop-and-reprocess
+        // path rather than falling into the correction-add branch below.
         const quantity = state.open.quantity ?? 1;
-        const outsideItem = messageNamesItemOutsideCandidates(trimmed, candidates, external.lexicon);
+        const outsideItem = messageDeclineNamesOutsideItems(trimmed, candidates, external.lexicon);
         if (!outsideItem) {
           const categoryRejectCandidate = findDisambiguationCategoryRejectionCandidate(
             trimmed, candidates, menu,
@@ -2222,7 +2290,15 @@ export function answer(
 
     case "order_type": {
       const orderType = readOrderTypeReply(trimmed);
-      if (orderType) return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: false };
+      if (orderType) {
+        // Money bug fix (2026-09-19, live conv 0dcb02a7): see
+        // applyNamedLineRemovals's own header — "no stromboli" said in the
+        // same breath as the order-type answer must actually remove the
+        // line, not be silently dropped because this turn never reaches
+        // PROPOSE/decide() at all.
+        const removedSomething = applyNamedLineRemovals(cart, trimmed, menu);
+        return { resolved: true, outcome: { kind: "order_type_resolved", orderType }, cartChanged: removedSomething };
+      }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
 
@@ -2372,6 +2448,16 @@ export function answer(
             };
           }
         }
+      }
+      // Money bug fix (2026-09-19, live conv 0dcb02a7): mechanism 3, same
+      // priority reasoning as mechanisms 1/2 above — "no stromboli" (a bare
+      // removal, no replacement target named) contains "no", which
+      // impliesConfirmDecline below would otherwise read as declining the
+      // WHOLE order. Checked ahead of it; see applyNamedLineRemovals's own
+      // header.
+      const removedAtConfirm = applyNamedLineRemovals(cart, trimmed, menu);
+      if (removedAtConfirm) {
+        return { resolved: true, outcome: { kind: "line_removed_at_confirm" }, cartChanged: true };
       }
       // Round 3, item 2c(i) (2026-09-19, live repro): a tip amount stated
       // AT CONFIRM ("$5 tip", "I want to tip the driver $5") must set
@@ -3435,6 +3521,54 @@ function removeHasRemovalLanguage(
   return false;
 }
 
+// Money bug fix (2026-09-19, live conv 0dcb02a7, real $83.83-vs-$50.39
+// overcharge): "wait, no stromboli, just the greek salad & 2 medium
+// pepperoni pizzas please. i'll do pickup." answered the open order_type
+// question ("pickup") but the removal language in the SAME breath ("no
+// stromboli") was silently dropped — order_type/confirm both resolve
+// deterministically in answer() below, and turn-engine-runner.ts's own
+// dispatch never calls PROPOSE (and therefore never runs decide()'s own
+// remove-guard, removeHasRemovalLanguage) once a deterministic answer
+// already resolved the turn. Reuses removeHasRemovalLanguage directly
+// against the cart's own real lines — the identical primitive decide()
+// already trusts for a model-proposed remove, just with no proposal to
+// gate here at all.
+function applyNamedLineRemovals(
+  cart: TurnEngineCartLine[],
+  message: string,
+  menu: TurnEngineMenuItem[],
+): boolean {
+  const menuById = new Map(menu.map(m => [m.id, m]));
+  const pronounTargetLineKey = resolvePronounTargetLineKey(cart);
+  // Clause-scoped (same boundary set as ask-plan-engine.ts's own sibling,
+  // isRemovalRequested): removeHasRemovalLanguage's own hasVerb/name-match
+  // checks are unscoped across the WHOLE message it's given, which is safe
+  // at its original call site (a per-line CONFIRMATION of a target line_key
+  // the model already proposed) but not safe here, where every real cart
+  // line is checked cold, from scratch. Real repro: "no stromboli, just the
+  // greek salad & 2 medium pepperoni pizzas please" contains a removal verb
+  // ("no") AND the Greek Salad line's own name ("greek salad") somewhere in
+  // the SAME message — an unscoped check wrongly matched and removed the
+  // salad the customer was actively keeping, right alongside the stromboli
+  // they actually wanted gone. Scoping each check to the clause that
+  // actually carries the removal verb keeps a kept item's name, mentioned
+  // in an unrelated later clause, from ever being read as a removal target.
+  const clauses = message.split(/\b(?:but|and|also|plus)\b|[,.;]/i);
+  let changed = false;
+  for (let i = cart.length - 1; i >= 0; i--) {
+    const line = cart[i];
+    if (!isRealCartLine(line)) continue;
+    const category = menuById.get(line.menu_item_id)?.category;
+    const isPronounTargetLine = line.line_key === pronounTargetLineKey;
+    const removed = clauses.some(clause => removeHasRemovalLanguage(clause, line.name, category, isPronounTargetLine));
+    if (removed) {
+      removeCartLine(cart as unknown as ReconcilerCartLine[], i);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Round 4 P0 (2026-09-19, replacement parsing): "swap out the pizza for
 // Buffalo Chicken", "change my Grilled Cheese to Chicken Fingers", "switch
 // that to a Cheesesteak instead" are a REMOVE and an ADD spoken in the same
@@ -3535,6 +3669,22 @@ export function decide(
   // stable keys existed.
   newLineKey?: () => string,
   customerMessage?: string,
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): 00-BD's own restatement
+  // check (isRestatementOfExistingOrder below) is a PHRASE heuristic tuned
+  // for a genuinely fresh, unprompted message — it needs "just the"/"that's
+  // it"/etc. to tell "another burger" (a real second order) from "the
+  // burger" (restating). That heuristic is right for a fresh PROPOSE turn,
+  // but wrong for a message reprocessed off the back of an ANSWER to an
+  // open question (a dropped disambiguation, a remainder after answer()
+  // resolved) — being mid-question is ALREADY strong evidence any item
+  // named again is a restatement, regardless of exact phrasing; the real
+  // conv 0dcb02a7 repro's own words ("just stick w/ the greek salad") never
+  // contain "just the" verbatim and would otherwise double an already-
+  // ordered Greek Salad to 2x. Set true ONLY by turn-engine-runner.ts call
+  // sites that are reprocessing an answer/remainder, never by a fresh,
+  // unprompted message — see this file's own regression test proving a
+  // genuine fresh PROPOSE turn is completely unaffected (defaults false).
+  treatCartMatchAsRestatement = false,
 ): DecideResult {
   const nextCart: TurnEngineCartLine[] = cart.map(l => ({ ...l }));
   const menuById = new Map(menu.map(m => [m.id, m]));
@@ -3905,7 +4055,7 @@ export function decide(
   // distinct adds in one message still both land. menuItemIdsAlreadyInCart
   // is declared above (before the add-resolution loop) for the guard-drop
   // path; it's the same set used here.
-  const restating = isRestatementOfExistingOrder(customerMessage);
+  const restating = isRestatementOfExistingOrder(customerMessage) || treatCartMatchAsRestatement;
 
   for (const add of addGroups.values()) {
     if (restating && menuItemIdsAlreadyInCart.has(add.menu_item_id)) {
@@ -4153,6 +4303,11 @@ export interface AskTurnEvents {
   // kept as a separate flag rather than folded into it so each
   // mechanism's own commit stays independently reviewable.
   lineReplacedThisTurn?: boolean;
+  // Money bug fix (2026-09-19, live conv 0dcb02a7): true when THIS turn's
+  // ANSWER resolved to line_removed_at_confirm (mechanism 3, a bare removal
+  // with no replacement named). Same reasoning and same ask()-branch
+  // handling as quantityCorrectedThisTurn/lineReplacedThisTurn above.
+  lineRemovedAtConfirmThisTurn?: boolean;
   // Round 3, item 2c(i) (2026-09-19): true when THIS turn's ANSWER resolved
   // a tip amount stated WHILE confirm was already open ("$5 tip" — see the
   // "confirm" case's tip-amount check above). Same fresh-read-back handling
@@ -4499,7 +4654,7 @@ export function ask(
   // Round 3, item 2c(i): a tip stated at confirm is the same "cart just
   // changed" situation — the total now includes a Tip line — same
   // fresh-cycle reset as the two mechanisms above.
-  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn) {
+  if (turnEvents.quantityCorrectedThisTurn || turnEvents.lineReplacedThisTurn || turnEvents.tipStatedAtConfirmThisTurn || turnEvents.lineRemovedAtConfirmThisTurn) {
     return {
       phase: "confirm", open: { kind: "confirm" }, upsell_offered: priorState.upsell_offered,
       asked_message_id: null, pendingAmbiguous, openRepeatCount: 0,
