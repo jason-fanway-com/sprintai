@@ -6163,7 +6163,14 @@ export function decide(
       }
     }
     const { texts, droppedCount } = resolveChoiceDisplays(menuItem.ask_plan, effectiveChoices);
-    if (droppedCount > 0) declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+    if (droppedCount > 0) {
+      const hasModifierSteps = (menuItem.ask_plan?.steps ?? []).some(s => s.kind === "modifier");
+      if (!hasModifierSteps) {
+        declines.push({ reason: `The ${menuItem.ask_plan?.display_name ?? menuItem.name} doesn't take add-ons.` });
+      } else {
+        declines.push({ reason: `Some of what was asked for on ${menuItem.name} isn't a real option — skipped.` });
+      }
+    }
 
     // 2026-09-19 PO dispatch (money bug, live conv 4191ab8e #14): a restated
     // line naming a topping the customer's already-in-cart line of this SAME
