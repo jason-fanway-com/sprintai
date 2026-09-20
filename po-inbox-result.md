@@ -70,7 +70,8 @@ INVESTIGATION:
     during a decline/rejection no longer drops to 1 on this path, mirroring the which-one path exactly as
     asked. Recommend a follow-up item if Jason wants full multi-item-list support on this specific gate.
 
-COMMIT: (pending — see below)
+COMMIT: 2412c833 fix(chat-sms): whole-word answer-turn item matching, "didn't" recognized as a decline,
+        "take it off" declines a slot/keep-or-drop, quantity honored on the new-item path
 TEST RESULT: ok | 1898 passed | 0 failed | 7 ignored (baseline 1890 tonight; 8 new tests, all in the new file
              shrimp-stick-rejection-20260919.test.ts)
 
