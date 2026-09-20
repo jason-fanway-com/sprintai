@@ -43,6 +43,24 @@ export function firstParseableUpsellName(upsellField: string): string | null {
   return null;
 }
 
+// R3 fix (2026-09-19, live conv a156dc34 #47): firstParseableUpsellName
+// above only ever returns the FIRST "Name +Price" entry — right for a
+// single-candidate field, but callers that must skip a candidate already
+// sitting in the customer's cart (turn-engine.ts's `ask()`, see its own
+// header on this dispatch) need every parseable entry, in the field's own
+// order, to fall through to the next one. Same "first listed, not
+// cheapest/priciest/all of them" PO ruling firstParseableUpsellName's own
+// header cites — this only changes how many entries a caller may look at
+// before giving up, never which one wins when more than one would work.
+export function allParseableUpsellNames(upsellField: string): string[] {
+  const names: string[] = [];
+  for (const raw of upsellField.split(";")) {
+    const m = raw.trim().match(NAME_PRICE_RE);
+    if (m) names.push(m[1].trim());
+  }
+  return names;
+}
+
 export interface UpsellOffer {
   name:       string; // real, currently-active menu item name (canonical casing)
   priceCents: number; // real, currently-active menu item price — never the raw upsell string's figure
