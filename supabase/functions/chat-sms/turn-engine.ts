@@ -2481,6 +2481,26 @@ export function answer(
               cartChanged,
             };
           }
+          // 2026-09-19 PO dispatch (named-line target + wrong-line removal,
+          // real conv 59cb90c9, real money bug -- rule 2, "hold the removal
+          // until Y resolves" extended to a declined-and-unresolved
+          // restatement): a plain disambiguation with nothing left to add is
+          // genuinely closed here (the pre-existing behavior, unchanged
+          // below) -- but a disambiguation OPENED BY A REPLACEMENT
+          // (replacementSourceLineKey set) can never be closed this way. X
+          // is still sitting in the cart, held, waiting on Y -- "closure"
+          // here would silently abandon that hold forever (X never removed,
+          // Y never added, the pending replacement just vanishes) and,
+          // worse, a closure over a non-empty cart advances straight to
+          // checkout (see turn-engine-runner.ts's own closure handling),
+          // which is exactly the real live collapse: "What's the name for
+          // the order?" with the replacement never resolved either way.
+          // UNRESOLVED here re-asks this SAME narrowing question next turn
+          // (turn-engine-runner.ts's own no-model-call carry-forward for an
+          // unresolved disambiguation answer, unchanged) -- X stays held,
+          // nothing is guessed, and the customer is asked again instead of
+          // the conversation silently moving on without them.
+          if (replacementSourceLineKey) return UNRESOLVED;
           return { resolved: true, outcome: { kind: "closure" }, cartChanged: false };
         }
         return UNRESOLVED;
@@ -4548,6 +4568,19 @@ function applyNamedLineRemovals(
 interface ReplacementIntent {
   xPhrase: string | null; // null only for "make it Y instead" (implicit pronoun)
   yPhrase: string;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9): the exact substring of the customer's message this
+  // pattern matched (the whole "change that pizza to a small BBQ Chicken
+  // pizza instead" clause, not just xPhrase/yPhrase individually). See this
+  // function's own call site in decide() -- Y's own words (here, "chicken")
+  // can coincidentally overlap an UNRELATED cart line's name (Cup Chicken
+  // Noodle Soup), and removeHasRemovalLanguage's whole-message stem-overlap
+  // check has no way to know those words belong to the replacement's own Y
+  // phrase, not to a genuine second removal request. Stripping this exact
+  // span out of the message before that check runs is what keeps a
+  // replacement's own Y wording from ever being misread as removal language
+  // for a line the customer never named.
+  matchedText: string;
 }
 
 function parseReplacementIntent(message: string): ReplacementIntent | null {
@@ -4570,13 +4603,13 @@ function parseReplacementIntent(message: string): ReplacementIntent | null {
     const xPhrase = mm[1]?.trim();
     const yPhrase = mm[2]?.trim();
     if (!xPhrase || !yPhrase) continue;
-    return { xPhrase, yPhrase };
+    return { xPhrase, yPhrase, matchedText: mm[0] };
   }
   // "make it Y instead" / "make that Y instead" -- X is never named, only
   // ever a pronoun, so there is no capture group for it.
   const makeIt = m.match(/\bmake\s+(?:it|that|this)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+instead\b/i);
   const yPhrase = makeIt?.[1]?.trim();
-  if (yPhrase) return { xPhrase: null, yPhrase };
+  if (yPhrase && makeIt) return { xPhrase: null, yPhrase, matchedText: makeIt[0] };
   return null;
 }
 
@@ -4780,6 +4813,25 @@ export function decide(
   let replacementHandledLineKey: string | undefined;
   let replacementHandledMenuItemId: string | null = null;
   const replacementIntent = customerMessage ? parseReplacementIntent(customerMessage) : null;
+  // 2026-09-19 PO dispatch (named-line target + wrong-line removal, real
+  // conv 59cb90c9, real money bug): the ONLY line a replacement statement
+  // may ever remove is the one resolveReplacementTargetLine actually
+  // identifies below (replacementHandledLineKey) -- but the removes loop
+  // further down validates every OTHER proposed remove against the whole
+  // raw customerMessage via removeHasRemovalLanguage's stem-overlap check,
+  // which has no notion of "this word belongs to the replacement's own Y
+  // phrase, not a second removal request." Real repro: "change that pizza
+  // to a small BBQ Chicken pizza instead" -- Y's own word "chicken"
+  // coincidentally overlaps the UNRELATED Cup Chicken Noodle Soup line's
+  // name, so PROPOSE's (wrong) proposed remove of the soup's line_key sailed
+  // straight through that guard. Stripping the replacement's own matched
+  // clause out of the message before that check runs removes the
+  // coincidental overlap without touching any genuine, separate removal
+  // language stated elsewhere in the same message (e.g. "...instead, and
+  // also take off the soup" keeps "soup" outside the stripped span).
+  const removalGuardMessage = replacementIntent && customerMessage
+    ? customerMessage.replace(replacementIntent.matchedText, " ")
+    : customerMessage;
   if (replacementIntent) {
     const targetLine = resolveReplacementTargetLine(replacementIntent.xPhrase, nextCart, menuById);
     if (!targetLine) {
@@ -5251,7 +5303,11 @@ export function decide(
     const line = nextCart[idx];
     const lineCategory = menuById.get(line.menu_item_id)?.category;
     const isPronounTargetLine = line.line_key === pronounTargetLineKey;
-    if (!removeHasRemovalLanguage(customerMessage, line.name, lineCategory, isPronounTargetLine)) {
+    // 2026-09-19 PO dispatch (named-line target + wrong-line removal): uses
+    // removalGuardMessage (the raw message with a detected replacement's own
+    // matched clause stripped out), not customerMessage directly -- see
+    // removalGuardMessage's own doc above the replacement block for why.
+    if (!removeHasRemovalLanguage(removalGuardMessage, line.name, lineCategory, isPronounTargetLine)) {
       guardDroppedRemoves.push({ line_key: rm.line_key, item_name: line.name });
       continue;
     }
