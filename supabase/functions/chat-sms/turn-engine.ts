@@ -732,7 +732,20 @@ export interface AnswerExternalInputs {
 // apostrophe-literal regexes in this file (TIP_DECLINE_ANYWHERE_RE,
 // CONFIRM_AFFIRMATIVE_RE/CONFIRM_NEGATION_RE, UPSELL_DECLINE_IDIOM_RE) and
 // is flagged, not silently fixed, for a follow-up dispatch.
-const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
+// 2026-09-19 follow-up dispatch: this stayed a single-call-site local const
+// through the initial fix (impliesClosure only) — grepping the file after
+// that landed found SEVEN other apostrophe-literal regexes exposed to the
+// exact same iOS-autocorrect defect, three of them the enforcement
+// mechanism behind the SAME night's own N1/S3 money fixes (see
+// turn-engine-runner.ts's runTurnEngineTurn, which now normalizes the
+// customer's message ONCE at the module's entry boundary instead of
+// patching each call site). Exported so that boundary fix can reuse this
+// exact function rather than reimplementing it. The call below is now a
+// redundant no-op for any message that already arrived through that
+// boundary — kept anyway as a defensive backstop for any future direct
+// caller of impliesClosure that bypasses the runner (e.g. a unit test or a
+// new call site added later without knowing about the boundary).
+export const normalizeApostrophes = (s: string): string => s.replace(/[‘’]/g, "'");
 
 const BARE_CLOSURE_RE = /^(?:no|nope|nah|none|nothing|that'?s all|thats all)[.!]?$/i;
 // 00-BG: the SAME defect as the name question and the confirm gate, a third
