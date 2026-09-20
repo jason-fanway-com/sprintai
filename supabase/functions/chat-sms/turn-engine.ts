@@ -5953,13 +5953,17 @@ export function decide(
     // genuinely conflicting/replacing topping ("pepperoni instead of bacon")
     // must still open a real second line, the same rule
     // toppingsCompatibleWithCartLine already enforces on the ANSWER path.
-    // Quantity is required to be exactly 1: an explicit "2 medium CBR pizzas
-    // with anchovies" is a real request for more units, never silently
-    // folded into the existing single line.
+    // Quantity is required to equal the count of already-existing lines for
+    // this item (1-for-1, or N-for-N when the customer names all N of their
+    // own separate lines at once, e.g. "that's Ranch for both" -- see the
+    // N>1 branch below). Any other quantity, e.g. an explicit "2 medium CBR
+    // pizzas with anchovies" against only one existing line, is a real
+    // request for more units and is never silently folded into what's
+    // already there.
     let mergedIntoExistingLine = false;
-    if (add.quantity === 1 && effectiveChoices.length > 0) {
+    if (effectiveChoices.length > 0) {
       const existingLinesForItem = nextCart.filter(l => isRealCartLine(l) && l.menu_item_id === add.menu_item_id);
-      if (existingLinesForItem.length === 1) {
+      if (add.quantity === 1 && existingLinesForItem.length === 1) {
         const targetLine = existingLinesForItem[0];
         const existingSelections = targetLine.ask_plan_selections ?? {};
         const newChoices = effectiveChoices.filter(c => {
@@ -5981,6 +5985,58 @@ export function decide(
           // validated real choices against this same ask_plan) falls
           // through to the normal add path below rather than silently
           // dropping the customer's words.
+        }
+      } else if (add.quantity === existingLinesForItem.length && existingLinesForItem.length > 1) {
+        // 2026-09-20 PO dispatch (live conv, "that's Ranch dressing for
+        // both" dropped): the exact same restatement-onto-an-existing-line
+        // merge above, but the customer named ALL N of their own
+        // already-separate lines of this item at once, not a single line
+        // (quantity guard above only ever fired for N=1). Eligibility is
+        // checked independently against EACH line's own existing
+        // selections -- two lines of the "same" item can carry slightly
+        // different prior choices, so what's new and what conflicts is
+        // never assumed to be identical across them. Only when every one
+        // of the N lines has something new to add AND none of them would
+        // have an existing selection replaced does this merge; otherwise it
+        // falls through unchanged to the normal add path below, same
+        // safety net as the N=1 case.
+        const perLine = existingLinesForItem.map(targetLine => {
+          const existingSelections = targetLine.ask_plan_selections ?? {};
+          const newChoices = effectiveChoices.filter(c => {
+            const sel = existingSelections[c.group_id];
+            const selectedIds = sel === undefined ? [] : Array.isArray(sel) ? sel : [sel];
+            return !selectedIds.includes(c.choice_id);
+          });
+          const conflicts = newChoices.some(c => existingSelections[c.group_id] !== undefined);
+          return { targetLine, newChoices, conflicts };
+        });
+        const allEligible = perLine.every(p => p.newChoices.length > 0 && !p.conflicts);
+        if (allEligible) {
+          let allOk = true;
+          let anyChanged = false;
+          for (const p of perLine) {
+            const { texts: newTexts } = resolveChoiceDisplays(menuItem.ask_plan, p.newChoices);
+            // Isolated to a one-line array: applyCompiledModifyItem targets
+            // its line via `cart.findIndex(menu_item_id match)`, which would
+            // always resolve to the FIRST of these N same-id lines if handed
+            // the shared nextCart directly -- every call would silently hit
+            // the same line instead of its own. `p.targetLine` is the exact
+            // object reference already sitting in nextCart (from the
+            // `.filter()` above), so mutating it through this one-line
+            // wrapper still mutates nextCart in place.
+            const modifyResult = applyCompiledModifyItem(
+              [p.targetLine], toCompiledMenuItem(menuItem, menuItem.ask_plan), add.menu_item_id, undefined, "", newTexts,
+            );
+            if (!modifyResult.ok) { allOk = false; break; }
+            if (modifyResult.cartChanged) anyChanged = true;
+          }
+          // Same "should not happen" invariant as the N=1 path: newTexts
+          // were already validated against this same ask_plan for every
+          // line before any call was made.
+          if (allOk) {
+            mergedIntoExistingLine = true;
+            if (anyChanged) qualifyingAddMenuItemId = add.menu_item_id;
+          }
         }
       }
     }
