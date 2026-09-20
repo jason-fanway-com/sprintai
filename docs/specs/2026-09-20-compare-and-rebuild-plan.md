@@ -240,16 +240,26 @@ through OpenRouter (`ENGINE_PROVIDER` / `ENGINE_MODEL` secrets).
 
 **Interpreter eval, 326 labeled cases** (`tests/eval/moves.jsonl`, results in `~/po-scratch/eval` on the Air):
 
-| Model | Perfect | Item recall | Invented | Option recall | p50 |
-|---|---|---|---|---|---|
-| deepseek/deepseek-v4-flash | 285/326 | 98.0% | 1.7% | 95% | 2.1 s |
-| deepseek/deepseek-v4.1-flash | 284/326 | 94.6% | 1.1% | 89% | 0.2 s, but 5–10% of calls return no tool call |
-| qwen/qwen3-235b-a22b-2507 | 270/326 | 99.7% | 4.3% | 89% | 1.2 s |
-| google/gemini-2.5-flash-lite | 221/326 | 83.7% | 1.7% | 78% | 0.7 s |
-| z-ai/glm-4.7-flash | 194/326 | 59% | 0.9% | 52% | 0.2 s |
-| openai/gpt-5-nano | stopped | too slow (thinking model) | | | |
+| Model | Perfect | Item recall | Invented | Option recall | p50 | Model cost per order* |
+|---|---|---|---|---|---|---|
+| anthropic/claude-haiku-4.5 | 300/326 | 99.7% | 0.6% | 97% | 0.8 s | ~$0.007 |
+| google/gemini-2.5-flash | 301/326 | 99.7% | 1.1% | 97% | 1.5 s | ~$0.002 |
+| deepseek/deepseek-v4-flash | 285/326 | 98.0% | 1.7% | 95% | 2.1 s | ~$0.0002 |
+| deepseek/deepseek-v4.1-flash | 284/326 | 94.6% | 1.1% | 89% | 0.2 s, but 5–10% of calls return no tool call | ~$0.001 |
+| qwen/qwen3-235b-a22b-2507 | 270/326 | 99.7% | 4.3% | 89% | 1.2 s | ~$0.0006 |
+| google/gemini-2.5-flash-lite | 221/326 | 83.7% | 1.7% | 78% | 0.7 s | ~$0.0007 |
+| z-ai/glm-4.7-flash | 194/326 | 59% | 0.9% | 52% | 0.2 s | ~$0.0005 |
+| openai/gpt-5-nano | stopped | too slow (thinking model) | | | | |
 
-Decision: DeepSeek v4 flash stays. Cost is the tiebreak among passers and nothing cheaper passes.
+\* Assumes 4 model calls per order at roughly 1,200 tokens in and 100 out each. The interpreter
+prompt is about 1,000 tokens with no menu in it, versus the 17,000-token prompt the old engine
+sent every turn, which is why model cost has stopped being a cost-of-goods question at any of
+these prices.
+
+Decision, pending Jason: DeepSeek v4 flash passes and is the cheapest passer, but Haiku 4.5 and
+Gemini 2.5 Flash make roughly a third as many mistakes, are faster, and still cost well under a
+cent per order under the new engine. Recommendation is Haiku 4.5 (fewest invented items); the
+live run below was on DeepSeek.
 
 **Live acceptance, Vito's, deploy 79bbb234:** 19 of 20 (canary 5/5, delivery with address, tip,
 tax and payment link 4/5, narrowing 5/5, corrections 5/5). Turn p50 2.1 s, p95 6.3 s. The one
