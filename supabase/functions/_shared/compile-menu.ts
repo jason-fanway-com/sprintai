@@ -1013,6 +1013,222 @@ export function deriveLexiconSurfaceForms(compiledItems: Array<{ item_id: string
 }
 
 // ============================================================
+// Family-widening hazard (2026-09-19 PO dispatch, real live incident:
+// customer #20, "chicken quesadilla", lost in 3 of 4 fifty-runs).
+//
+// ROOT CAUSE this closes: invariant 4 and item 6's own `hasUniqueTerm` check
+// (immediately below) both asked one question — "does some term string this
+// item carries have exactly one owner?" — and for Vito's item "Chicken"
+// (category "Quesadillas"), the answer was yes: its own bare term "chicken"
+// has exactly one literal-string owner (itself). Both checks passed, so item
+// 6's fallback never fired and invariant 4 never flagged it. But that is NOT
+// the question resolve-item.ts's own resolveItem actually answers at
+// runtime. Its widenIntoSizedFamily helper takes a uniquely-matched term
+// ("chicken"), strips filler/size words, and then treats ANY OTHER item
+// whose OWN term reduces to that same bare core — once THAT item's OWN
+// category noun is subtracted out — as a sibling in the "same dish family",
+// provided at least one sibling is sized. Real Vito's shape: "Buffalo
+// Chicken Pizza" derives the surface form "chicken pizza" (level 2,
+// trailing-word-run); subtract ITS OWN category noun ("pizza") and the
+// core is just "chicken" — identical to the quesadilla's own core. Ten
+// unrelated items (Buffalo/Thai Sweet Chili Chicken pizzas, a flatbread, a
+// wrap, two salads/paninis) all reduce to "chicken" the same way, several of
+// them sized (Small/Medium/Large), which is exactly what flips
+// widenIntoSizedFamily from a no-op into a real 11-way tie — live-confirmed:
+// resolveItem("chicken quesadilla") returns ambiguous with all 11, never the
+// Chicken quesadilla alone.
+//
+// So invariant 4's own uniqueness test was too narrow: literal-string
+// ownership is necessary but not sufficient for "resolveItem will actually
+// return this item alone." This closes the gap by having both invariant 4
+// and item 6 ask the SAME, more complete question — literal-string
+// ownership AND no family-widening hazard — using logic that deliberately
+// mirrors resolve-item.ts's own coreContentWords/coreContentWordsForEntry/
+// sameWordSet/widenIntoSizedFamily (duplicated rather than imported, same
+// discipline resolve-item.ts's own header already uses for compile-menu.ts's
+// categoryNoun/singularizeWord/pluralizeWord — this file and that one are
+// deliberately decoupled, each owns its copy).
+const FAMILY_FILLER_WORDS = new Set(["a", "an", "the"]);
+const FAMILY_SIZE_WORD_TOKENS = new Set(["small", "medium", "large", "personal"]);
+const FAMILY_SIZE_DIGIT_TOKENS = new Set(["10", "14", "16"]);
+
+function familyNormalizeWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+function familyCoreWords(words: string[]): string[] {
+  return words
+    .filter(w => !FAMILY_FILLER_WORDS.has(w) && !FAMILY_SIZE_WORD_TOKENS.has(w) && !FAMILY_SIZE_DIGIT_TOKENS.has(w))
+    .map(singularizeWord);
+}
+
+function familyCoreWordsMinusCategory(words: string[], category: string | null | undefined): string[] {
+  const categoryNounWords = new Set<string>();
+  if (category) {
+    const noun = categoryNoun(category);
+    if (noun) {
+      categoryNounWords.add(noun);
+      categoryNounWords.add(pluralizeWord(noun));
+    }
+  }
+  return words
+    .filter(w =>
+      !FAMILY_FILLER_WORDS.has(w) && !FAMILY_SIZE_WORD_TOKENS.has(w) && !FAMILY_SIZE_DIGIT_TOKENS.has(w) &&
+      !categoryNounWords.has(w)
+    )
+    .map(singularizeWord);
+}
+
+function familySameWordSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((w, i) => w === sortedB[i]);
+}
+
+// Does `term` (one of `itemId`'s own item-target lexicon terms) have a
+// family-widening hazard — some OTHER active item whose own term, once ITS
+// OWN category noun is subtracted, reduces to the exact same core words,
+// with at least one of those siblings sized (the precondition
+// widenIntoSizedFamily itself requires before it ever widens anything)?
+// Mirrors resolveItem's own asymmetry exactly: `term`'s own words are
+// filtered for filler/size only (never its own category noun stripped —
+// same as resolveItem never strips the base match's own category noun),
+// while every OTHER candidate has its own category noun stripped too.
+function hasFamilyWideningHazard(
+  itemId: string,
+  term: string,
+  items: CompileItem[],
+  compiledMap: Map<string, CompiledItem>,
+): boolean {
+  const wantedCore = familyCoreWords(familyNormalizeWords(term));
+  if (wantedCore.length === 0) return false;
+
+  const categoryById = new Map(items.map(i => [i.id, i.category]));
+  const sizeById = new Map(items.map(i => [i.id, i.size_label]));
+
+  let hasSizedSibling = false;
+  for (const other of items) {
+    if (other.id === itemId || !other.active) continue;
+    const c = compiledMap.get(other.id);
+    if (!c) continue;
+    const collides = c.lexicon_terms.some(t => {
+      if (t.target_type !== "item") return false;
+      const reduced = familyCoreWordsMinusCategory(familyNormalizeWords(t.term), categoryById.get(other.id));
+      return familySameWordSet(reduced, wantedCore);
+    });
+    if (collides && sizeById.get(other.id) != null) hasSizedSibling = true;
+  }
+  return hasSizedSibling;
+}
+
+// The complete question invariant 4 and item 6 both need: does this item
+// carry at least one item-target term that is both a literal-string-unique
+// owner (the pre-existing, necessary check) AND free of a family-widening
+// hazard (the piece that was missing)?
+function hasGenuinelyUniqueTerm(
+  itemId: string,
+  termOwners: Map<string, Set<string>>,
+  items: CompileItem[],
+  compiledMap: Map<string, CompiledItem>,
+): boolean {
+  const c = compiledMap.get(itemId);
+  if (!c) return false;
+  return c.lexicon_terms.some(t => {
+    if (t.target_type !== "item") return false;
+    if (termOwners.get(t.term)?.size !== 1) return false;
+    return !hasFamilyWideningHazard(itemId, t.term, items, compiledMap);
+  });
+}
+
+// ============================================================
+// Category-noun single-claimant widen (2026-09-19 PO dispatch, same live
+// incident as the family-widening hazard above): a level-1/2 DERIVED
+// candidate that happens to equal one of the shop's own category nouns
+// exactly (singular or plural) is categorically coarser than any one item —
+// Rule 3's own category-level term already exists for this exact word, and
+// resolve-item.ts's own itemNameEntries filter refuses to treat a bare
+// category-noun term as a specific item's claim for MATCHING purposes. But
+// gateSurfaceFormCandidates (level 1/2 above) has no equivalent exclusion
+// for DERIVATION — when only ONE item in a category happens to
+// independently derive the category's own noun, that lone item silently
+// becomes the category's sole owner of its own generic word.
+//
+// Real Vito's shape: normalize.ts auto-qualified ONLY the Veggie
+// quesadilla's display name to "Veggie Quesadilla" (disambiguating it from
+// an unrelated same-named item elsewhere on the menu) — none of the other
+// four real Quesadillas items' stated names contain the word "Quesadilla"
+// at all, so only Veggie's own trailing-word-run (level 2) ever produces
+// the bare word "quesadilla". resolve-item.ts's own fallback scan then
+// finds exactly one unfiltered match and silently resolves a customer's
+// bare "quesadilla" straight to Veggie — never asking, never considering
+// the other four. Live-confirmed: resolveItem("quesadilla") resolves,
+// not ambiguous, menu_item_id = Veggie Quesadillas.
+//
+// Elsewhere in the same shop this never happens because MULTIPLE items
+// independently derive the same category noun ("salad" from "Chicken
+// Caesar Salad", "Grilled Chicken Salad", etc.) — gateSurfaceFormCandidates'
+// own "N claimants -> N rows" rule already produces a real, correct
+// ambiguous tie with no fix needed, and this pass deliberately leaves any
+// category noun with 2+ existing claimants untouched (never weakens an
+// already-correct tie — 2026-09-19 PO dispatch, acceptance point 6). Only a
+// category noun with EXACTLY one accidental claimant — never a real tie to
+// begin with, always a silent wrong-answer — gets widened here, to every
+// OTHER active orderable item in that same category, turning the lone
+// accidental claim into the genuine tie it should have been.
+function deriveCategoryNounSingleClaimantWidenTerms(
+  items: CompileItem[],
+  compiledItems: CompiledItem[],
+): LexiconTerm[] {
+  const categoryById = new Map(items.map(i => [i.id, i.category]));
+  const activeOrderableByCategory = new Map<string, string[]>();
+  for (const i of items) {
+    if (!i.active || !i.category) continue;
+    const list = activeOrderableByCategory.get(i.category) ?? [];
+    list.push(i.id);
+    activeOrderableByCategory.set(i.category, list);
+  }
+
+  const termOwners = new Map<string, Set<string>>();
+  for (const c of compiledItems) {
+    for (const t of c.lexicon_terms) {
+      if (t.target_type !== "item") continue;
+      const owners = termOwners.get(t.term) ?? new Set<string>();
+      owners.add(t.target_id);
+      termOwners.set(t.term, owners);
+    }
+  }
+
+  const nounToCategory = new Map<string, string>();
+  for (const category of new Set(items.map(i => i.category).filter((c): c is string => !!c))) {
+    const noun = categoryNoun(category);
+    if (!noun) continue;
+    nounToCategory.set(noun, category);
+    nounToCategory.set(pluralizeWord(noun), category);
+  }
+
+  const out: LexiconTerm[] = [];
+  for (const [term, owners] of termOwners) {
+    if (owners.size !== 1) continue; // already a real tie, or genuinely unclaimed — leave alone
+    const category = nounToCategory.get(term);
+    if (!category) continue; // not a category-noun collision at all
+    const [soleOwnerId] = [...owners];
+    if (categoryById.get(soleOwnerId) !== category) continue; // sole owner isn't even in that category
+    const siblingIds = (activeOrderableByCategory.get(category) ?? []).filter(id => id !== soleOwnerId);
+    for (const id of siblingIds) {
+      out.push({ term, target_type: "item", target_id: id, provenance: "derived" });
+    }
+  }
+  return out;
+}
+
+// ============================================================
 // Category-qualified fallback term (freeze-queue item 6, part A, 2026-09-19
 // PO dispatch): an item whose stated name has NO term anywhere that
 // resolves uniquely to it — even after every pass above — gets one more
@@ -1045,6 +1261,7 @@ function deriveCategoryQualifiedFallbackTerms(
   compiledItems: CompiledItem[],
 ): LexiconTerm[] {
   const categoryById = new Map(items.map(i => [i.id, i.category]));
+  const compiledMap = new Map(compiledItems.map(c => [c.item_id, c]));
 
   const termOwners = new Map<string, Set<string>>();
   for (const c of compiledItems) {
@@ -1060,10 +1277,7 @@ function deriveCategoryQualifiedFallbackTerms(
   const out: LexiconTerm[] = [];
   for (const c of compiledItems) {
     if (c.bot_state !== "orderable") continue;
-    const hasUniqueTerm = c.lexicon_terms.some(
-      t => t.target_type === "item" && termOwners.get(t.term)?.size === 1,
-    );
-    if (hasUniqueTerm) continue;
+    if (hasGenuinelyUniqueTerm(c.item_id, termOwners, items, compiledMap)) continue;
 
     const category = categoryById.get(c.item_id);
     if (!category) continue;
@@ -1072,7 +1286,14 @@ function deriveCategoryQualifiedFallbackTerms(
 
     for (const t of c.lexicon_terms) {
       if (t.target_type !== "item" || t.provenance !== "stated") continue;
-      if ((termOwners.get(t.term)?.size ?? 0) <= 1) continue;
+      // 2026-09-19 PO dispatch: a term qualifies for the category-noun
+      // suffix when it is NOT already fine on its own — either it has 2+
+      // literal-string owners (the original condition) OR it has exactly
+      // one literal owner but a family-widening hazard (real Vito's shape:
+      // "chicken" has exactly one literal owner yet still ties 11 ways at
+      // runtime — see hasFamilyWideningHazard's own header).
+      const literalOwners = termOwners.get(t.term)?.size ?? 0;
+      if (literalOwners <= 1 && !hasFamilyWideningHazard(c.item_id, t.term, items, compiledMap)) continue;
       const qualified = `${t.term} ${noun}`;
       if (existingTerms.has(qualified)) continue; // never shadow a real, distinct term
       out.push({ term: qualified, target_type: "item", target_id: c.item_id, provenance: "derived" });
@@ -1241,14 +1462,22 @@ export function computeMenuInvariants(
       termOwners.set(t.term, owners);
     }
   }
+  // 2026-09-19 PO dispatch (real live incident, customer #20, "chicken
+  // quesadilla"): literal-string term ownership alone is NOT the same
+  // question resolve-item.ts's resolveItem actually answers at runtime — see
+  // hasGenuinelyUniqueTerm/hasFamilyWideningHazard's own header above for
+  // the full root cause. A term can have exactly one literal-string owner
+  // here yet still tie at runtime via resolveItem's widenIntoSizedFamily.
+  // This invariant now asks the same, more complete question item 6's own
+  // fallback pass asks, so a gap in one can never silently survive because
+  // the other's narrower check reported PASS.
   const noUniqueTerm = activeItems.filter(i => {
     if (!orderable(i.id)) return false;
-    const c = compiled.get(i.id)!;
-    return !c.lexicon_terms.some(t => t.target_type === "item" && termOwners.get(t.term)?.size === 1);
+    return !hasGenuinelyUniqueTerm(i.id, termOwners, activeItems, compiled);
   });
   results.push({
     invariant: 4,
-    description: "Every orderable item has ≥1 active lexicon term resolving uniquely to it",
+    description: "Every orderable item has ≥1 active lexicon term resolving uniquely to it (literal-string owner, with no resolve-item.ts family-widening hazard)",
     pass: noUniqueTerm.length === 0,
     violations: noUniqueTerm.map(i => i.id),
   });
@@ -2017,6 +2246,26 @@ export function compileMenu(
   if (surfaceForms.length > 0) {
     const byItem = new Map<string, LexiconTerm[]>();
     for (const t of surfaceForms) {
+      const list = byItem.get(t.target_id) ?? [];
+      list.push(t);
+      byItem.set(t.target_id, list);
+    }
+    for (const c of compiledItems) {
+      const extra = byItem.get(c.item_id);
+      if (extra) c.lexicon_terms = dedupeLexicon([...c.lexicon_terms, ...extra]);
+    }
+  }
+
+  // Category-noun single-claimant widen — computed after surface forms are
+  // merged in (needs the final level-1/2 derived term set to see which
+  // category nouns only have one accidental claimant), and before the
+  // category-qualified fallback pass so that pass's own literal-string
+  // ownership counts already reflect the widened tie (see
+  // deriveCategoryNounSingleClaimantWidenTerms' own header).
+  const categoryNounWidenTerms = deriveCategoryNounSingleClaimantWidenTerms(items, compiledItems);
+  if (categoryNounWidenTerms.length > 0) {
+    const byItem = new Map<string, LexiconTerm[]>();
+    for (const t of categoryNounWidenTerms) {
       const list = byItem.get(t.target_id) ?? [];
       list.push(t);
       byItem.set(t.target_id, list);

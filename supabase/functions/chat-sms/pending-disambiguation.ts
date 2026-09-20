@@ -406,6 +406,39 @@ const LEADING_ORDINAL_TWO_WORD_QUALIFIERS: Array<[string, string]> = [
 ];
 const LEADING_ORDINAL_FOLLOW_WORDS = new Set(["please", "thanks", "pls", "one"]);
 
+// Money bug fix (2026-09-19, live conv 22b1a95a): matchLeadingOrdinal above
+// only ever scans the first 6 words of the message — right for a bare "2
+// please" or "option 1)" sitting at the front, but a real customer answering
+// a which-one question mid-sentence, deep into a longer message ("I said I
+// want 1 Cheesesteak homemade panini, that's option 1. I already told you
+// the full order! ..."), puts "option 1" past that window entirely, so it
+// was never seen at all — the pick was silently ignored and the rest of the
+// (restated) message got misread as fresh adds instead (see turn-engine.ts's
+// "disambiguation" case for the other half of that same fix).
+// "option"/"number"/"option number" are UNAMBIGUOUS framing words — nothing
+// else in ordinary English pairs either word directly with a bare digit —
+// so unlike the bare-digit/ordinal-word tiers above, this one is safe to
+// scan the ENTIRE message for, no leading-word-count limit and no trailing-
+// filler requirement. Deliberately narrower than
+// LEADING_ORDINAL_EXPLICIT_QUALIFIERS (drops "no"/"#"): "no" alone is too
+// common a word to trust unanchored anywhere in a long message, and a bare
+// "#" glued to a digit is already covered by matchLeadingOrdinal's own
+// front-of-message scan since customers don't bury "#3" mid-sentence.
+const EXPLICIT_OPTION_PICK_ANYWHERE_RE = /\b(?:option(?:\s+number)?|number)\s+(\d+)\b/i;
+
+/**
+ * "option 1", "that's option 1", "number 2", "option number 3" — anywhere in
+ * the message, not just near the front. Returns a 0-based index, or null if
+ * no such framing appears (or the number named isn't a real position in
+ * this list).
+ */
+export function matchExplicitOptionPickAnywhere(message: string, count: number): number | null {
+  const m = message.match(EXPLICIT_OPTION_PICK_ANYWHERE_RE);
+  if (!m) return null;
+  const idx = parseInt(m[1], 10) - 1;
+  return idx >= 0 && idx < count ? idx : null;
+}
+
 function splitLeadingWord(word: string): { core: string; punct: string; hadHash: boolean } {
   const hadHash = word.startsWith("#");
   const withoutHash = hadHash ? word.slice(1) : word;
@@ -821,6 +854,45 @@ export function renderAmbiguousItemQuestion(candidates: PendingCandidate[]): str
     .join("  ");
   const nums = replyNumbers(candidates.length);
   return `Which one would you like — ${list}? Reply ${nums}.`;
+}
+
+// 2026-09-19 PO dispatch (real live incident: a fused question-clause
+// narrowing loop where the customer's own narrowing word — "chicken" — is
+// contained in every one of 11 remaining candidates, so
+// narrowCandidatesByFacetAnswer makes ZERO progress and the caller was about
+// to re-ask the exact same "Sure — what kind?" question a second time, with
+// no way out). When narrowing genuinely can't split a candidate set any
+// further, the fallback is a plain numbered list — same shape
+// renderAmbiguousItemQuestion already uses for a small, never-narrowed set —
+// except this set is, by construction, exactly the kind
+// isNarrowingCandidateSet flags as too big to safely enumerate raw (that's
+// why it needed narrowing in the first place). Reuses the SAME truncate-and-
+// append-"…and N more" pattern renderFacetOptionsList already uses for the
+// facet-values list, so a numbered list of 11+ candidates never reproduces
+// the original 3,378-char Telnyx/Twilio-rejected overflow this whole
+// narrowing feature exists to avoid.
+const AMBIGUOUS_LIST_SMS_CEILING = 480;
+
+export function renderCappedAmbiguousItemQuestion(candidates: PendingCandidate[]): string {
+  const nums = replyNumbers(candidates.length);
+  const prefix = "Which one would you like — ";
+  const suffix = `? Reply ${nums}.`;
+  const items = candidates.map((c, i) => `${i + 1}) ${candidateOptionText(c)}`);
+  const full = `${prefix}${items.join("  ")}${suffix}`;
+  if (full.length <= AMBIGUOUS_LIST_SMS_CEILING) return full;
+
+  const tailTemplate = (remaining: number) => `  …and ${remaining} more — text the number you want.`;
+  const kept: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const remaining = items.length - (i + 1);
+    const candidateText = `${prefix}${[...kept, items[i]].join("  ")}${remaining > 0 ? tailTemplate(remaining) : suffix}`;
+    if (candidateText.length > AMBIGUOUS_LIST_SMS_CEILING) break;
+    kept.push(items[i]);
+  }
+  const remaining = items.length - kept.length;
+  return remaining > 0
+    ? `${prefix}${kept.join("  ")}${tailTemplate(remaining)}`
+    : `${prefix}${kept.join("  ")}${suffix}`;
 }
 
 /**

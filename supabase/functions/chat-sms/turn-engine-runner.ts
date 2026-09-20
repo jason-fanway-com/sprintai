@@ -80,7 +80,7 @@ import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import type { LexiconTerm } from "./resolve-item.ts";
 import { proposeTurn as defaultProposeTurn, type ProposeResult } from "./propose.ts";
 import { logError, type ErrorLogStage } from "../_shared/error-log.ts";
-import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal, categoryDisplayWord } from "./pending-disambiguation.ts";
+import { isDisambiguationOptionsRequest, isDisambiguationListDropSignal, categoryDisplayWord, resolveNamedCartRemoval, type PendingCandidate } from "./pending-disambiguation.ts";
 import {
   answer,
   decide,
@@ -1430,6 +1430,9 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
           disambiguationSpanText: undefined,
           disambiguationOtherOneFollowUp: outcome.otherOneFollowUp,
           disambiguationFacetNarrowed: true,
+          // 2026-09-19 PO dispatch (real live incident, "fifth shape"):
+          // mirrors outcome.noProgress — see AnswerOutcome's own doc.
+          disambiguationNoProgress: outcome.noProgress,
           // 2026-09-19 PO dispatch (replacement, ambiguous target hole):
           // Y's own narrowing wasn't fully settled by this facet answer —
           // still-held X rides forward onto the reopened, smaller
@@ -1500,6 +1503,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
             disambiguationSpanText: priorState.open.spanText,
             disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
             disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+            disambiguationNoProgress: priorState.open.noProgress,
             heldModifierText: priorState.open.heldModifierText,
             replacementSourceLineKey: priorState.open.replacementSourceLineKey,
           };
@@ -1746,6 +1750,7 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         disambiguationSpanText: priorState.open.spanText,
         disambiguationOtherOneFollowUp: priorState.open.otherOneFollowUp,
         disambiguationFacetNarrowed: priorState.open.facetNarrowed,
+        disambiguationNoProgress: priorState.open.noProgress,
         heldModifierText: priorState.open.heldModifierText,
         replacementSourceLineKey: priorState.open.replacementSourceLineKey,
       };
@@ -1775,7 +1780,39 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
       // row with the SAME quoted words: falls back to the plain enumerate
       // wording instead, and clears lastSlotEchoText so a LATER attempt
       // with genuinely different words can still echo fresh.
-      const candidateEcho = extractSlotChoiceWords(input.message) || undefined;
+      // WART fix (2026-09-19, PO dispatch, live refused-item sequence): a
+      // customer restating their order while a slot is open ("no stromboli,
+      // just the greek salad and 2 medium pepperonis" while "what dressing?"
+      // was open on a DIFFERENT line) is never a genuine attempted slot
+      // VALUE — quoting it back as one ("We don't have '2 medium
+      // pepperonis' for Greek.") reads as the bot having misheard a plain
+      // sentence. First attempt at this fix used isRestatementOfExistingOrder
+      // (decide()'s own PROPOSE-path restatement marker vocabulary,
+      // "just the"/"so that's"/etc.) directly — reverted: it also matched a
+      // genuine single attempted slot value phrased the ordinary way ("Just
+      // the regular buffalo sauce, please." — see this file's own
+      // 00-AU RED->GREEN test), wrongly swallowing a real "not on the list"
+      // echo that test explicitly requires. The precise signal is narrower:
+      // does the message actually NAME another real cart line (by name or
+      // category — same primitive named-remove's own resolveNamedCartRemoval
+      // uses) OTHER than the one whose slot is open? A slot's real choices
+      // are never the name of a different dish already in the cart, so a
+      // message that plainly names one is reciting the order, not attempting
+      // a value — while "just the regular buffalo sauce" names nothing else
+      // in the cart at all, so this never fires for it. This call site never
+      // mutates the cart either way (this branch is unconditionally a no-op
+      // turn), so suppressing the echo only changes what's SAID, never what
+      // happens.
+      const otherCartLineCandidates: PendingCandidate[] = workingCart
+        .filter(l => typeof l.menu_item_id === "string" && l.line_key !== (priorState.open as { line_key: string }).line_key)
+        .map(l => ({
+          menu_item_id: l.menu_item_id,
+          name: l.name,
+          category: input.menu.find(m => m.id === l.menu_item_id)?.category ?? null,
+          price_cents: l.price_cents,
+        }));
+      const namesAnotherCartLine = resolveNamedCartRemoval(input.message, otherCartLineCandidates).length > 0;
+      const candidateEcho = namesAnotherCartLine ? undefined : (extractSlotChoiceWords(input.message) || undefined);
       const repeatedEcho = priorState.open?.kind === "slot" &&
         priorState.lastSlotEchoText !== undefined &&
         priorState.lastSlotEchoText === candidateEcho;
