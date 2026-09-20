@@ -47,6 +47,8 @@ export interface Menu {
   categoryTerms: IndexedTerm[];
   /** `${base_item_id}|${choice_id}` -> derived item id */
   canon: Map<string, string>;
+  /** every lexicon word that names an item, by item id (for "what's left over in the span") */
+  termWordsByItem: Map<string, Set<string>>;
   shop: ShopConfig;
 }
 
@@ -189,7 +191,9 @@ export function buildMenu(input: {
       canon.set(`${it.derived_from.base_item_id}|${it.derived_from.choice_ids[0]}`, it.id);
     }
   }
-  return { version: input.version, items, itemTerms, categoryTerms, canon, shop: input.shop };
+  const termWordsByItem = new Map<string, Set<string>>();
+  for (const t of itemTerms) { const set = termWordsByItem.get(t.target_id) ?? new Set<string>(); for (const w of t.words) set.add(w); termWordsByItem.set(t.target_id, set); }
+  return { version: input.version, items, itemTerms, categoryTerms, canon, termWordsByItem, shop: input.shop };
 }
 
 export function itemsInCategory(menu: Menu, category: string): MenuItem[] {

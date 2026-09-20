@@ -455,3 +455,27 @@ Deno.test("'a dozen bagels' picks the one-dozen bundle even when 'dozen bagels' 
   assertEquals(o.form.lines[0].item_id, "bg-half");
   assertEquals(o.form.lines[0].status.kind, "complete");
 });
+
+Deno.test("a one-word item term is never a kitchen note ('cheeseburger' vs 'Cheese Burger')", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].notes, []);
+  assert(!o.reply.includes("Noted"));
+});
+
+Deno.test("bundle picks match flavors without the unit word: 'everything' = Everything Bagel", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a dozen bagels, 6 plain and 6 everything", [{ kind: "add_line", item_span: "dozen bagels", qty: 1, option_spans: ["6 plain", "6 everything"] }]);
+  assertEquals(o.form.lines[0].selections, { "bg-plain": 6, "bg-every": 6 });
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
+Deno.test("'everything bagels' over the bagel category narrows by the span's own word", () => {
+  let f = newForm("njb", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "2 everything bagels", [{ kind: "add_line", item_span: "everything bagels", qty: 2, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, "bg-every");
+  assertEquals(o.form.lines[0].qty, 2);
+});

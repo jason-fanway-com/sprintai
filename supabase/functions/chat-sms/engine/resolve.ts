@@ -121,10 +121,14 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
+function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
+
 /** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
 function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
   const b = item.bundle!;
-  const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices, ask_mode: "ask", default_choice_id: null };
+  const unit = normalizeUnit(b.unit);
+  const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, ask_mode: "ask", default_choice_id: null,
+    choices: b.choices.map((c) => ({ ...c, words: c.words.filter((w) => w !== unit && w !== unit + "s") })) };
   const sel = (line.selections ??= {});
   const total = () => Object.values(sel).reduce((a, n) => a + n, 0);
   let consumed = false;
@@ -206,6 +210,13 @@ export function bindLine(line: Line, menu: Menu): void {
       const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
       if (hit) cands = [hit];
     }
+    // the span's own words narrow first ("everything bagels" over the bagel category)
+    if (cands.length > 1) {
+      for (const w of contentWords(line.span)) {
+        const n = narrow(cands, w, menu);
+        if (n.length >= 1 && n.length < cands.length) cands = n;
+      }
+    }
     // narrow with every held span that narrows; keep the rest for options
     const rest: string[] = [];
     for (const h of line.held) {
@@ -227,7 +238,7 @@ export function bindLine(line: Line, menu: Menu): void {
   // words in the item span that are not the item's own name ("chicken noodle cups", "house personal calzone")
   if (!line.span_consumed) {
     line.span_consumed = true;
-    const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? "")]);
+    const own = new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menu.termWordsByItem.get(item.id) ?? [])]);
     const leftover = words(line.span).filter((w) => !own.has(w) && !own.has(singular(w)) && !STOP_FOR_LEFTOVER.has(w));
     if (leftover.length > 0) held.unshift(leftover.join(" "));
   }
@@ -267,7 +278,8 @@ export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
 export function spanAnswersLine(line: Line, span: string, menu: Menu): boolean {
   if (line.status.kind === "needs_picks" && line.item_id) {
     const b = menu.items.get(line.item_id)!.bundle!;
-    const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, choices: b.choices, ask_mode: "ask", default_choice_id: null };
+    const unit = normalizeUnit(b.unit);
+    const group: MenuGroup = { id: "bundle", name: b.unit, kind: "slot", max_select: b.count, ask_mode: "ask", default_choice_id: null, choices: b.choices.map((c) => ({ ...c, words: c.words.filter((w) => w !== unit && w !== unit + "s") })) };
     return splitList(span).some((p) => matchChoice(leadingCount(p).rest, group).kind !== "none");
   }
   if (line.status.kind === "ambiguous") return narrow(line.status.candidates, span, menu).length < line.status.candidates.length && narrow(line.status.candidates, span, menu).length > 0;

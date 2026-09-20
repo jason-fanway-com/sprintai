@@ -547,10 +547,15 @@ async function handleOrderPaymentExpired(
   // texts again in an active session and their link is expired, the inbound
   // reply path handles it synchronously ("that link expired — want to
   // reorder?"). We never push here.
+  // Only the session the cart still points at may expire it. The clean engine
+  // expires a session itself when the customer edits after the link, then
+  // clears the pointer and keeps the same cart open — that expiry must not
+  // close the order out from under them.
   await supabase
     .from("order_carts")
     .update({ payment_status: "expired", phase: "expired" })
-    .eq("id", cartId);
+    .eq("id", cartId)
+    .eq("stripe_checkout_session_id", session.id);
 }
 
 // ─── Event Handlers ───────────────────────────────────────────────────────────

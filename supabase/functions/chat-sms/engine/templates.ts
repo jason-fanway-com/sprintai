@@ -128,8 +128,10 @@ export const GROUP_PROMPTS: Record<string, string> = {
   flavor: "which flavor",
   crust: "which crust",
 };
+const GENERIC_GROUP = new Set(["choiceof", "choice", "choices", "option", "options", "select", "selection", "pick", "type"]);
 export function groupPrompt(groupName: string): string {
   const k = groupName.toLowerCase().replace(/[^a-z]/g, "");
+  if (GENERIC_GROUP.has(k)) return "which would you like";
   for (const key of Object.keys(GROUP_PROMPTS)) if (k.includes(key)) return GROUP_PROMPTS[key];
   return `which ${groupName.toLowerCase()}`;
 }
