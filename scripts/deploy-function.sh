@@ -37,6 +37,17 @@ if [ -z "$FUNCTION_NAME" ]; then
   exit 1
 fi
 
+# PO-only deploy lock. The PO creates ~/po-scratch/.po-deploy-token herself,
+# by hand, right before each deploy she runs. Nothing else in this repo
+# should ever create or touch that file. A fresh token proves this deploy
+# was triggered by her, just now -- not by anyone or anything else replaying
+# an old approval.
+PO_DEPLOY_TOKEN="$HOME/po-scratch/.po-deploy-token"
+if [ ! -f "$PO_DEPLOY_TOKEN" ] || [ $(( $(date +%s) - $(stat -f %m "$PO_DEPLOY_TOKEN" 2>/dev/null || stat -c %Y "$PO_DEPLOY_TOKEN" 2>/dev/null || echo 0) )) -ge 600 ]; then
+  echo "deploy is PO-only: no fresh ~/po-scratch/.po-deploy-token" >&2
+  exit 1
+fi
+
 # Refuse while a sim run is in flight. A deploy that lands mid-run splits one
 # result across two builds, and run_meta.json attributes all of it to the
 # first -- a comparison that looks valid and is not (2026-09-18). The lock is
@@ -221,6 +232,10 @@ if ! verify_stamp "$DEPLOYED_ENTRYPOINT" "$HEAD_SHA_FULL"; then
   exit 1
 fi
 echo "Stamp confirmed: deployed artifact contains DEPLOY_SHA: ${HEAD_SHA_FULL}"
+
+# Burn the PO's token now that the deploy is confirmed live -- it can't be
+# reused to authorize a second deploy off the same approval.
+rm -f "$PO_DEPLOY_TOKEN"
 
 echo ""
 echo "VERDICT: ${FUNCTION_NAME} deployed, confirmed HEAD ${HEAD_SHA_FULL} live (${OLD_VERSION} -> ${NEW_VERSION})"
