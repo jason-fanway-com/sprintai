@@ -101,7 +101,7 @@ Deno.test("decide (X3 addon-decline follow-up, gap A): sibling-name collision AN
   assertEquals(result.categoryMismatchPending, {
     menu_item_id: CALZONE_PERSONAL_ID,
     quantity: 1,
-    message: "We have both House and Calzone as a personal stromboli — added the Calzone one. Keep it, or take it off?",
+    message: "I can put the Personal Calzone on, or the House stromboli — which?",
   });
 });
 
@@ -147,7 +147,7 @@ Deno.test("render (X3 addon-decline follow-up, gap A end-to-end): full decide+as
   const rendered = render([], result.cart, nextState, result.declines, MENU, {});
   assertEquals(
     rendered.startsWith(
-      "The Personal Calzone Stromboli doesn't take add-ons.\n\nWe have both House and Calzone as a personal stromboli — added the Calzone one. Keep it, or take it off?",
+      "The Personal Calzone Stromboli doesn't take add-ons.\n\nI can put the Personal Calzone on, or the House stromboli — which?",
     ),
     true,
     `both the decline and the naming question must be said together: ${rendered}`,

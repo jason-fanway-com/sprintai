@@ -1765,11 +1765,19 @@ const buildFreshAddCategoryConfirmMessage = (displayName: string, category: stri
 
 // Wording for the FRESH-ADD sibling-name-collision question (X3 follow-up,
 // findFreshAddSiblingNameMismatch's own header) — reuses the identical
-// "held out, not yet added" framing and keep/skip answer contract as
-// buildFreshAddCategoryConfirmMessage just above (impliesCategoryConfirmYes
-// governs both), but names the SPECIFIC sibling the customer's own words
-// also matched, since "we only have X" (that function's wording) would be
-// false here — both items are real and on the menu.
+// "held out, not yet added" answer contract as buildFreshAddCategoryConfirm-
+// Message just above (impliesCategoryConfirmYes governs both: the write is
+// held until the customer answers, same as that function's case), but names
+// the SPECIFIC sibling the customer's own words also matched, since "we
+// only have X" (that function's wording) would be false here — both items
+// are real and on the menu.
+//
+// 2026-09-20 PO dispatch (live repro, DB-verified): this used to read
+// "added the {ownType} one" here, which is a lie about the current state —
+// categoryMismatchPending holds the write until the reply resolves it (see
+// the "category_confirm" case below), so at the moment this message is
+// sent cart_json is still empty. Reworded to describe the PENDING choice,
+// never a completed one, per the PO's own wording.
 const buildFreshAddSiblingConfirmMessage = (
   resolvedItem: TurnEngineMenuItem,
   sibling: TurnEngineMenuItem,
@@ -1778,7 +1786,8 @@ const buildFreshAddSiblingConfirmMessage = (
   const [siblingType, sizeHalf] = sibling.name.split(" - ");
   const size = (sizeHalf ?? "").trim().toLowerCase();
   const category = (resolvedItem.category ?? "").trim().toLowerCase();
-  return `We have both ${siblingType.trim()} and ${ownType.trim()} as a ${size} ${category} — added the ${ownType.trim()} one. Keep it, or take it off?`;
+  const sizeLabel = size ? `${size.charAt(0).toUpperCase()}${size.slice(1)} ` : "";
+  return `I can put the ${sizeLabel}${ownType.trim()} on, or the ${siblingType.trim()} ${category} — which?`;
 };
 
 // 2026-09-19 PO dispatch (freeze-queue item 4): the fresh-add
