@@ -4111,3 +4111,336 @@ Deno.test("answer (DEFECT 2, no regression): a which-one answer with NO stated q
   assert(result.resolved && result.outcome.kind === "disambiguation_resolved");
   assertEquals(cart[0].quantity, 2, "no explicit quantity in the answer -> falls back to state.open.quantity, exactly as before this fix");
 });
+
+
+// ============================================================
+// TOP MONEY BUG (2026-09-19, real live conv 0dcb02a7, #22): a customer was
+// overcharged $83.83 for an order that should have been $50.39 — every
+// individual menu price is correct, the defect is EXTRA/WRONG LINES:
+//
+//   T1 "1 house" -> which-one list (16" House Stromboli / House salad /
+//      Personal / 14") — mirrors the real disambiguation candidate shape,
+//      "house" tying across the whole House family.
+//   T2 "whoops, not a stromboli or house salad. just stick w/ the greek
+//      salad, 2 med pepperoni pizzas." -> disambiguation_category_rejected
+//      fired, but instead of dropping the pending item, it ADDED 1x 16"
+//      House Stromboli ($22.95) to the cart nobody asked for. The real bot
+//      reply said both things in the same turn: "We only have House as a
+//      stromboli in 16"." AND "16" House Stromboli added."
+//   T3 "wait, no stromboli, just the greek salad & 2 medium pepperoni
+//      pizzas please. i'll do pickup." -> order_type resolved but the
+//      stromboli was STILL in the cart.
+//
+// Three defects, fixed together (all upstream of the same broken money):
+//  1. messageNamesMultipleItemsOutsideCandidates/messageDeclineNamesOutsideItems
+//     (turn-engine.ts, ~line 1550) — a decline naming TWO OR MORE distinct
+//     real items outside the disambiguation candidates is a decline, not a
+//     correction; the single-item check (Round 2, aae67b80) never covered a
+//     multi-item restated order.
+//  2. answer()'s "slot" case (turn-engine.ts, ~line 1775) already resolves
+//     a group/slot answer against its own real choice list before ANY
+//     fresh-item path ever runs — verified correct below, no source change
+//     needed; see this file's own dedicated test.
+//  3. decide()'s new treatCartMatchAsRestatement param (turn-engine.ts,
+//     ~line 3657) — the 09-18 restatement/already-in-cart rule
+//     (isRestatementOfExistingOrder, 00-BD) is a phrase heuristic tuned for
+//     a genuinely fresh, unprompted message; a message reprocessed off the
+//     back of an ANSWER to an open question needs the same already-in-cart
+//     protection regardless of exact phrasing (turn-engine-runner.ts now
+//     passes true at both of its "this is answer-path reprocessing" call
+//     sites).
+//  4. applyNamedLineRemovals (turn-engine.ts, ~line 3536) — "no stromboli"
+//     said in the same breath as an order_type/confirm answer was silently
+//     dropped, since neither path ever reaches PROPOSE/decide()'s own
+//     remove-guard once it resolves deterministically.
+// ============================================================
+
+const MB_HOUSE_STROMBOLI_16_ID = "mb-house-stromboli-16";
+const MB_HOUSE_PERSONAL_ID = "mb-house-personal";
+const MB_HOUSE_14_ID = "mb-house-14";
+const MB_HOUSE_SALAD_ID = "mb-house-salad";
+const MB_GREEK_SALAD_ID = "mb-greek-salad";
+const MB_PEPPERONI_PIZZA_ID = "mb-pepperoni-pizza-medium";
+
+function mbMenuItem(id: string, name: string, category: string, priceCents: number): TurnEngineMenuItem {
+  return {
+    id, name, category, price_cents: priceCents, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: name, base_price_cents: priceCents,
+      recap_template: "", ticket_template: "", steps: [],
+    },
+  };
+}
+
+const MB_MENU: TurnEngineMenuItem[] = [
+  mbMenuItem(MB_HOUSE_STROMBOLI_16_ID, "House - 16\"", "Stromboli", 2295),
+  mbMenuItem(MB_HOUSE_PERSONAL_ID, "House - Personal", "Stromboli", 999),
+  mbMenuItem(MB_HOUSE_14_ID, "House - 14\"", "Stromboli", 1895),
+  mbMenuItem(MB_HOUSE_SALAD_ID, "House Salads", "Salads", 899),
+  mbMenuItem(MB_GREEK_SALAD_ID, "Greek Salad", "Salads", 995),
+  mbMenuItem(MB_PEPPERONI_PIZZA_ID, "Pepperoni - Medium", "Pizza", 1499),
+];
+
+// Real repro shape: "house" ties across the whole House family (both
+// Stromboli sizes AND the House Salad) — exactly what made T1's
+// disambiguation list mix a salad in among stromboli sizes.
+const MB_LEXICON: LexiconTerm[] = [
+  { term: "house", target_id: MB_HOUSE_STROMBOLI_16_ID, category: "Stromboli", size_label: "16\"" },
+  { term: "house", target_id: MB_HOUSE_PERSONAL_ID, category: "Stromboli", size_label: "Personal" },
+  { term: "house", target_id: MB_HOUSE_14_ID, category: "Stromboli", size_label: "14\"" },
+  { term: "house", target_id: MB_HOUSE_SALAD_ID, category: "Salads" },
+  { term: "house salad", target_id: MB_HOUSE_SALAD_ID, category: "Salads" },
+  { term: "greek salad", target_id: MB_GREEK_SALAD_ID, category: "Salads" },
+  { term: "pepperoni", target_id: MB_PEPPERONI_PIZZA_ID, category: "Pizza" },
+  { term: "pepperoni pizza", target_id: MB_PEPPERONI_PIZZA_ID, category: "Pizza" },
+];
+
+const MB_T2_MESSAGE = "whoops, not a stromboli or house salad. just stick w/ the greek salad, 2 med pepperoni pizzas.";
+const MB_T3_MESSAGE = "wait, no stromboli, just the greek salad & 2 medium pepperoni pizzas please. i'll do pickup.";
+
+// Acceptance 1: the full T1/T2/T3 repro. A Greek Salad already sits in the
+// cart before T1 (the real conversation's earlier, unlisted turn that
+// placed it) — this is what makes T2's "stays 1x" assertion meaningful.
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 1): T1/T2/T3 — no stromboli line is ever added, Greek Salad stays 1x, 2 pepperoni pizzas register", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_GREEK_SALAD_ID, name: "Greek Salad", quantity: 1, price_cents: 995, modifiers: [], line_key: "mb-line-greek" },
+  ];
+
+  // T1: "1 house" -> decide() ties across the whole House family.
+  const t1Proposal: Proposal = { intent: "order", adds: [{ item_span: "house", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const d1 = decide(t1Proposal, cart, MB_MENU, MB_LEXICON, undefined, "1 house");
+  cart.splice(0, cart.length, ...d1.cart);
+  console.log("MONEY BUG cart BEFORE T2:", JSON.stringify(cart));
+  assertEquals(cart.length, 1, `T1 must not add anything to the cart yet — still ambiguous: ${JSON.stringify(cart)}`);
+  assertEquals(cart[0].menu_item_id, MB_GREEK_SALAD_ID, "the pre-existing Greek Salad line must be untouched by the ambiguous 'house' add");
+  const candidates = d1.disambiguationCandidateIds ?? [];
+  assertEquals(
+    [...candidates].sort(),
+    [MB_HOUSE_14_ID, MB_HOUSE_PERSONAL_ID, MB_HOUSE_SALAD_ID, MB_HOUSE_STROMBOLI_16_ID].sort(),
+    `T1 must tie across the whole House family (both stromboli sizes AND the salad): ${JSON.stringify(candidates)}`,
+  );
+
+  const state: DialogueState = {
+    phase: "ordering",
+    open: { kind: "disambiguation", candidates, quantity: d1.disambiguationQuantity ?? 1, spanText: d1.disambiguationSpanText },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+
+  // The runner's own pre-check (disambiguationDeclineNamesOutsideItem) must
+  // agree this is a decline-with-real-outside-items, so it drops the list
+  // and reprocesses the whole message via PROPOSE rather than falling into
+  // answer()'s own "slot"/"disambiguation" no-model-call guard.
+  assertEquals(
+    disambiguationDeclineNamesOutsideItem(MB_T2_MESSAGE, candidates, MB_MENU, MB_LEXICON),
+    true,
+    "the runner must recognize this decline names real items outside the candidates and drop the list",
+  );
+
+  // T2: the category-rejection-add bug's exact trigger — must NOT add the
+  // stromboli, must return UNRESOLVED so the runner reprocesses fresh.
+  const t2Result = answer(state, cart, MB_T2_MESSAGE, MB_MENU, { lexicon: MB_LEXICON });
+  assertEquals(t2Result, { resolved: false }, `T2 must be UNRESOLVED, never add a candidate: ${JSON.stringify(t2Result)}`);
+  assertEquals(cart.length, 1, `no stromboli line may ever appear after T2: ${JSON.stringify(cart)}`);
+  assertEquals(cart[0].menu_item_id, MB_GREEK_SALAD_ID);
+  assertEquals(cart[0].quantity, 1, "Greek Salad must still be 1x — T2 itself must not touch the cart at all");
+
+  // Simulates the runner's own drop-and-reprocess: a fresh PROPOSE call for
+  // the whole T2 message, its adds run through decide() with
+  // treatCartMatchAsRestatement=true (this IS the answer-path reprocess).
+  const t2ReprocessProposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "greek salad", quantity: 1, choices: [] },
+      { item_span: "2 med pepperoni pizzas", quantity: 2, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const d2 = decide(t2ReprocessProposal, cart, MB_MENU, MB_LEXICON, undefined, MB_T2_MESSAGE, [], true);
+  cart.splice(0, cart.length, ...d2.cart);
+  console.log("MONEY BUG cart AFTER T2:", JSON.stringify(cart));
+  assertEquals(cart.length, 2, `Greek Salad must stay ONE line (restated, not doubled) and pepperoni pizza must land as its own line: ${JSON.stringify(cart)}`);
+  const greekLine = cart.find(l => l.menu_item_id === MB_GREEK_SALAD_ID);
+  const pepperoniLine = cart.find(l => l.menu_item_id === MB_PEPPERONI_PIZZA_ID);
+  assert(greekLine, "Greek Salad line must survive");
+  assert(pepperoniLine, "Pepperoni Pizza line must be added");
+  assertEquals(greekLine!.quantity, 1, `Greek Salad must stay 1x, never double to 2x: ${JSON.stringify(cart)}`);
+  assertEquals(pepperoniLine!.quantity, 2, `2 medium pepperoni pizzas must register as quantity 2: ${JSON.stringify(cart)}`);
+  assert(!cart.some(l => l.menu_item_id === MB_HOUSE_STROMBOLI_16_ID || l.menu_item_id === MB_HOUSE_PERSONAL_ID || l.menu_item_id === MB_HOUSE_14_ID),
+    `no stromboli line may ever appear in the final cart: ${JSON.stringify(cart)}`);
+
+  // T3: "no stromboli ... i'll do pickup" — order_type resolves; since the
+  // stromboli was never added (fix #1), this is correctly a no-op removal.
+  const orderTypeState: DialogueState = {
+    phase: "order_type", open: { kind: "order_type" },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  const t3Result = answer(orderTypeState, cart, MB_T3_MESSAGE, MB_MENU);
+  console.log("MONEY BUG cart AFTER T3:", JSON.stringify(cart));
+  assertEquals(t3Result.resolved, true);
+  assert(t3Result.resolved && t3Result.outcome.kind === "order_type_resolved" && t3Result.outcome.orderType === "pickup",
+    `T3 must resolve order type to pickup: ${JSON.stringify(t3Result)}`);
+  assertEquals(cart.length, 2, `final cart must still be exactly Greek Salad + Pepperoni Pizza, no stromboli ever: ${JSON.stringify(cart)}`);
+  assertEquals(cart.find(l => l.menu_item_id === MB_GREEK_SALAD_ID)?.quantity, 1);
+  assertEquals(cart.find(l => l.menu_item_id === MB_PEPPERONI_PIZZA_ID)?.quantity, 2);
+});
+
+// Acceptance 2 (regression, unchanged): a category-mismatch ACCEPTANCE
+// ("yes"/"keep") still adds the item exactly as freeze-queue item 4 already
+// built — already covered end-to-end by the existing FRESHADD_CATEGORY_
+// CONFIRM_STATE_PERSONAL "yes"/"keep it" tests above (acceptance 2 and 4b),
+// which pass unchanged by this fix (full suite run, 0 failed).
+
+// Acceptance 3: "house balsamic" as an answer to an OPEN DRESSING SLOT
+// resolves as that real choice, and never falls through to fresh-item
+// resolution — verified directly against a menu that ALSO carries the
+// competing House-family tie (MB_LEXICON), so a fall-through would produce
+// exactly T1's own "which one?" disambiguation list if it ever happened.
+const MB_DRESSING_GROUP_ID = "mb-dressing-group";
+const MB_HOUSE_SALAD_WITH_DRESSING_ID = "mb-house-salad-dressing";
+const MB_DRESSING_MENU: TurnEngineMenuItem[] = [
+  ...MB_MENU,
+  {
+    id: MB_HOUSE_SALAD_WITH_DRESSING_ID, name: "House Salads", category: "Salads", price_cents: 899, bot_state: "orderable",
+    ask_plan: {
+      compiled_at: "", compiler_version: 1, display_name: "House Salads", base_price_cents: 899,
+      recap_template: "", ticket_template: "",
+      steps: [
+        {
+          group_id: MB_DRESSING_GROUP_ID, slot_key: "dressing", kind: "slot", ask_mode: "ask",
+          prompt_template: "dressing.ask",
+          choices: [
+            { id: "choice-ranch", display: "Ranch", price_delta_cents: 0 },
+            { id: "choice-house-balsamic", display: "House Balsamic", price_delta_cents: 0 },
+            { id: "choice-italian", display: "Italian", price_delta_cents: 0 },
+          ],
+        },
+      ],
+    },
+  },
+];
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 3): 'house balsamic' answering an open dressing slot resolves as that choice, never as a fresh 'house' item", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_HOUSE_SALAD_WITH_DRESSING_ID, name: "House Salads", quantity: 1, price_cents: 899, modifiers: [], line_key: "mb-dressing-line" },
+  ];
+  const state: DialogueState = {
+    phase: "ordering",
+    open: { kind: "slot", line_key: "mb-dressing-line", group_id: MB_DRESSING_GROUP_ID },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  const result = answer(state, cart, "house balsamic", MB_DRESSING_MENU, { lexicon: MB_LEXICON });
+  assertEquals(result, { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true });
+  assertEquals(cart[0].ask_plan_selections, { [MB_DRESSING_GROUP_ID]: "choice-house-balsamic" },
+    `must resolve as the House Balsamic dressing choice, never as a fresh item add: ${JSON.stringify(cart)}`);
+  assertEquals(cart.length, 1, "no second line (a fresh 'house' add) may ever appear");
+});
+
+// Acceptance 4a (regression, unchanged): a restated line already in the
+// cart on a genuine FRESH PROPOSE turn (priorState.open === null,
+// treatCartMatchAsRestatement defaults false) with a real restatement
+// marker phrase still skips the duplicate exactly as the existing 09-18
+// rule does today.
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 4a): fresh PROPOSE turn with a restatement marker still skips the duplicate — unchanged", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_GREEK_SALAD_ID, name: "Greek Salad", quantity: 1, price_cents: 995, modifiers: [], line_key: "l1" },
+  ];
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "greek salad", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, cart, MB_MENU, MB_LEXICON, undefined, "just the greek salad, that's it");
+  assertEquals(result.cart.length, 1, "still exactly one Greek Salad line");
+  assertEquals(result.cart[0].quantity, 1, "must stay 1x — the existing 09-18 rule, unaffected by this fix");
+});
+
+// Acceptance 4b (regression, unchanged): the SAME fresh PROPOSE turn, no
+// restatement marker at all and no treatCartMatchAsRestatement override —
+// a genuine second order for the same item still doubles, exactly as
+// today, proving this fix only ever widens protection on the answer path.
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 4b): fresh PROPOSE turn with NO restatement marker still doubles — unchanged", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_GREEK_SALAD_ID, name: "Greek Salad", quantity: 1, price_cents: 995, modifiers: [], line_key: "l1" },
+  ];
+  const proposal: Proposal = { intent: "order", adds: [{ item_span: "greek salad", quantity: 1, choices: [] }], removes: [], modifies: [] };
+  const result = decide(proposal, cart, MB_MENU, MB_LEXICON, undefined, "one more greek salad");
+  assertEquals(result.cart.length, 1);
+  assertEquals(result.cart[0].quantity, 2, "a genuine second order (no restatement marker) must still double — unaffected by this fix");
+});
+
+// Acceptance 5: "no stromboli" while order_type OR confirm is open removes
+// the stromboli line — real before/after test, standalone (independent of
+// the T1/T2/T3 chain above, where the fix already prevents the stromboli
+// from ever being added in the first place).
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 5a): 'no stromboli' while order_type is open removes the line and still resolves pickup", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_HOUSE_STROMBOLI_16_ID, name: "House - 16\"", quantity: 1, price_cents: 2295, modifiers: [], line_key: "l1" },
+  ];
+  const state: DialogueState = {
+    phase: "order_type", open: { kind: "order_type" },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  console.log("acceptance 5a cart BEFORE:", JSON.stringify(cart));
+  const result = answer(state, cart, "no stromboli, i'll do pickup", MB_MENU);
+  console.log("acceptance 5a cart AFTER:", JSON.stringify(cart));
+  assert(result.resolved && result.outcome.kind === "order_type_resolved" && result.outcome.orderType === "pickup",
+    `must still resolve order type: ${JSON.stringify(result)}`);
+  assertEquals(result.cartChanged, true);
+  assertEquals(cart.length, 0, "the stromboli line must be removed");
+});
+
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 5b): 'no stromboli' while confirm is open removes the line, never reads as declining the whole order", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_HOUSE_STROMBOLI_16_ID, name: "House - 16\"", quantity: 1, price_cents: 2295, modifiers: [], line_key: "l1" },
+  ];
+  const state: DialogueState = {
+    phase: "confirm", open: { kind: "confirm" },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  console.log("acceptance 5b cart BEFORE:", JSON.stringify(cart));
+  const result = answer(state, cart, "no stromboli", MB_MENU);
+  console.log("acceptance 5b cart AFTER:", JSON.stringify(cart));
+  assertEquals(result, { resolved: true, outcome: { kind: "line_removed_at_confirm" }, cartChanged: true });
+  assertEquals(cart.length, 0, "the stromboli line must be removed, never read as confirm_no (declining the whole order)");
+});
+
+Deno.test("MONEY BUG (conv 0dcb02a7, acceptance 5c, no false positive): 'no stromboli' while order_type is open never removes an unrelated kept line mentioned in the same message", () => {
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: MB_HOUSE_STROMBOLI_16_ID, name: "House - 16\"", quantity: 1, price_cents: 2295, modifiers: [], line_key: "l1" },
+    { menu_item_id: MB_GREEK_SALAD_ID, name: "Greek Salad", quantity: 1, price_cents: 995, modifiers: [], line_key: "l2" },
+  ];
+  const state: DialogueState = {
+    phase: "order_type", open: { kind: "order_type" },
+    upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+  };
+  const result = answer(state, cart, MB_T3_MESSAGE, MB_MENU);
+  assert(result.resolved && result.outcome.kind === "order_type_resolved");
+  assertEquals(cart.length, 1, `only the stromboli line may be removed — Greek Salad, positively named elsewhere in the same message, must survive: ${JSON.stringify(cart)}`);
+  assertEquals(cart[0].menu_item_id, MB_GREEK_SALAD_ID);
+});
+
+// OPTIONAL, NOTED BUT NOT DUPLICATED (2026-09-19): the same real conv
+// 0dcb02a7 also hit a schema_violation after the customer sent a literal
+// placeholder "[your name]" at the pickup-name step — guard correctly
+// denied a hallucinated remove, then two empty proposals, then "Sorry, I
+// ran into a problem." PO says this is the SAME CLASS as the separate
+// confirm-timeout fix another builder is already building in
+// fix/confirm-timeout-and-yesno-20260919 ("on model failure with an open
+// question, re-ask it, never apologize") — that mechanism lives in
+// index.ts (frozen for this dispatch) and isn't rebuilt here. What IS
+// verifiable from this worktree today: the deterministic "name" case
+// itself never crashes and never silently invents a name for an obvious
+// placeholder — it correctly falls through to UNRESOLVED, leaving the
+// "never apologize, re-ask" behavior to that other fix once it merges.
+// Marked ignore: true — un-ignore once fix/confirm-timeout-and-yesno-
+// 20260919 merges and re-ask wiring exists to assert against.
+Deno.test({
+  name: "MONEY BUG (conv 0dcb02a7, optional/pending): '[your name]' at the pickup-name step never resolves as a real name — full re-ask/never-apologize behavior pending fix/confirm-timeout-and-yesno-20260919",
+  ignore: true,
+  fn: () => {
+    const state: DialogueState = {
+      phase: "name", open: { kind: "name" },
+      upsell_offered: false, asked_message_id: null, openRepeatCount: 0,
+    };
+    const result = answer(state, [], "[your name]", MB_MENU);
+    assertEquals(result, { resolved: false }, "a literal placeholder must never be accepted as a real customer name");
+    // TODO once fix/confirm-timeout-and-yesno-20260919 merges: assert the
+    // runner re-asks the name question verbatim on this UNRESOLVED result,
+    // never surfacing "Sorry, I ran into a problem."
+  },
+});
