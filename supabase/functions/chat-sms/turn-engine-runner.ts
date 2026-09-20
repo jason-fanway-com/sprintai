@@ -94,6 +94,7 @@ import {
   isConfirmAffirmative,
   findMenuItemByNamePhrase,
   addResolvedItemToCart,
+  normalizeApostrophes,
   type AnswerExternalInputs,
   type DialogueState,
   type TurnEngineCartLine,
@@ -1071,7 +1072,34 @@ async function resolveReturningCustomerOfferAnswer(
   return { reply: rendered, cart: workingCart, dialogueState: nextState, messageId: saved.id };
 }
 
-export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
+export async function runTurnEngineTurn(rawInput: RunTurnInput, deps: RunTurnDeps): Promise<RunTurnResult> {
+  // 2026-09-19 follow-up dispatch (curly-apostrophe boundary): iOS
+  // autocorrects a typed straight `'` into a curly U+2019 (’) before the SMS
+  // sends. impliesClosure() (turn-engine.ts) was patched for this once,
+  // locally, at its own single call site — but every OTHER apostrophe-
+  // literal regex in turn-engine.ts (TIP_DECLINE_ANYWHERE_RE,
+  // SLOT_ITEM_REJECTION_CUES/NEGATED_DECLINE_VERB_RE, CONFIRM_AFFIRMATIVE_RE/
+  // CONFIRM_NEGATION_RE, UPSELL_DECLINE_IDIOM_RE — several of them the exact
+  // enforcement mechanism behind the SAME night's N1/S3 money fixes) stayed
+  // exposed to an identical curly apostrophe on live traffic, silently
+  // narrower than their straight-apostrophe test fixtures suggested.
+  // Normalizing here, ONCE, where the raw inbound message first enters this
+  // module (index.ts, frozen/legacy, hands it in as `RunTurnInput.message`)
+  // means no current or future apostrophe-literal regex anywhere downstream
+  // of this function can be silently defeated by a curly apostrophe again —
+  // the alternative (patching each regex's `'?` individually) is the exact
+  // N-ad-hoc-call-sites trap the compile-menu stopword fix earlier tonight
+  // had to be corrected out of for a different defect class.
+  //
+  // `rawInput` is deliberately never referenced again by name below this
+  // point except at the two sites that must preserve the customer's exact
+  // original words byte-for-byte: propose.ts's own error-log write (which
+  // logs whatever `message` this function hands it) and the guard-deny
+  // error-log write further down — both use `rawInput.message` explicitly.
+  // Every other line in this function reads `input.message`, which is this
+  // normalized copy — matching/parsing must never see the literal original,
+  // and nothing here has any other reason to.
+  const input: RunTurnInput = { ...rawInput, message: normalizeApostrophes(rawInput.message) };
   // ── Returning-customer greeting (freeze-queue item 7) ───────────────────
   // See maybeBuildReturningCustomerGreeting/resolveReturningCustomerOfferAnswer
   // above for the full reasoning. `effectiveDialogueState` is what the rest
@@ -1880,7 +1908,13 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         menu: input.menu,
         lexicon,
         history: input.history,
-        message: input.message,
+        // Literal preservation: propose.ts logs whatever `message` it's
+        // handed verbatim to error_log's customerMessage on any PROPOSE
+        // failure (its own header, "Every failure ... persists a row to
+        // error_log") — that trail must show the customer's exact original
+        // words, not the normalized copy every matching call site above
+        // uses. `rawInput`, not `input`.
+        message: rawInput.message,
         // 00-AY: the engine has had all of this on every turn and never passed
         // it on, so the model interpreted each message with no idea whether the
         // order was pickup or delivery, whether a name was already given, or
@@ -2125,7 +2159,10 @@ export async function runTurnEngineTurn(input: RunTurnInput, deps: RunTurnDeps):
         tenantId: input.tenantId,
         phase: "chat-sms",
         stage: "guard_deny",
-        customerMessage: input.message,
+        // Literal preservation, same reasoning as the PROPOSE call above:
+        // this is an observability record of the customer's exact words,
+        // not a matching call site. `rawInput`, not `input`.
+        customerMessage: rawInput.message,
         error: new Error("remove without removal language"),
         metadata: { line_key: dropped.line_key, item_name: dropped.item_name },
       });
