@@ -3579,3 +3579,98 @@ Deno.test("decide (question-clause-not-an-add, acceptance 3): a message with no 
   assertEquals(result.cart.length, 1, "pre-existing token-guard behavior must be completely unaffected by this fix");
   assertEquals(result.cart[0].menu_item_id, HAWAIIAN_PIZZA_ID);
 });
+
+// ============================================================
+// PO follow-up (2026-09-19, non-blocking wart on question-clause-not-an-add
+// above): the fix just above only ever tested PROPOSE splitting the message
+// into TWO adds (one for the real order, one for the phantom question span)
+// — decide() correctly refuses the phantom and keeps the real one. The live
+// gap this section covers is the OTHER shape the model produces for the
+// exact same message: FUSING the real order and the question into ONE add's
+// item_span ("gluten free pepperoni pizzas", quantity 2, for "can I get 2
+// Pepperoni pizzas? And do you have anything gluten free?"). The guard
+// above still correctly refuses that whole fused span — a question-clause
+// token anywhere in a span taints the whole span, exactly as designed, so
+// the $20.00 phantom charge stays refused — but that left the customer's
+// real two pepperoni pizzas with nothing to resolve against, since the
+// model never proposed a separate span for them: cart ends up completely
+// empty, bot just asks "Pickup or delivery today?" instead of the real
+// order landing or asking for size. Fix lives in
+// nonQuestionClauseText/spanHasQuestionClauseOnlyToken above, and the new
+// recovery block in decide()'s add loop that feeds the surviving
+// non-question clause text through resolveItem the same way the
+// pre-existing order-shaped-empty-adds re-run (turn-engine-runner.ts,
+// d3e8e97c) already does for its own trigger condition.
+// ============================================================
+
+// Acceptance 1: the fused span is refused (no phantom charge, same
+// guarantee as the original fix), AND the real two pepperoni pizzas the
+// customer actually ordered register and ask for size — never silently
+// dropped to an empty cart.
+Deno.test("decide (question-clause-not-an-add, fused-span recovery, acceptance 1): a fused real-order+question span is refused, and the real order is recovered and asks for size", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "gluten free pepperoni pizzas", quantity: 2, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, QC_REPRO_MESSAGE);
+
+  assert(
+    result.cart.every(l => l.menu_item_id !== QC_GLUTEN_FREE_PIZZA_ID),
+    `the $20.00 Gluten-Free Pizza must NEVER be added, even recovered: ${JSON.stringify(result.cart)}`,
+  );
+  assertEquals(result.cart.length, 1, `the real pepperoni-pizza order must be recovered, not lost: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
+  assertEquals(result.cart[0].quantity, 2, "the customer's real quantity of 2 must survive the recovery");
+  assertEquals(result.cart[0].pending_options, ["Size"], "no size was stated — the pizza must hold for the size question, not silently guess one");
+  assertEquals(result.declines, [], "a guard-dropped fused span is silent, not a decline — matches itemSpanNamedInMessage's own existing convention");
+  assertEquals(result.disambiguationCandidateIds, null, "the phantom gluten-free half must never surface as an ambiguous question either");
+
+  // End-to-end: ask()/render() actually produce the real size question, in
+  // the SAME turn, alongside the recovered add — never an empty reply,
+  // never "Pickup or delivery today?" standing in for a lost order.
+  const events: AskTurnEvents = { ...NO_TURN_EVENTS, qualifyingAddMenuItemId: result.qualifyingAddMenuItemId };
+  const state = ask(result.cart, INITIAL_STATE, events, SHOP_CONTEXT, QUESTION_CLAUSE_MENU);
+  const reply = render([], result.cart, state, result.declines, QUESTION_CLAUSE_MENU);
+  assert(reply.includes("Pepperoni Pizza"), `reply must confirm the recovered real add: ${reply}`);
+  assert(reply.includes("What size Pepperoni Pizza?"), `reply must ask the missing size question: ${reply}`);
+  assert(!/gluten/i.test(reply), `reply must never mention the phantom gluten-free item: ${reply}`);
+  assert(!/pickup or delivery/i.test(reply), `reply must never fall through to the generic order_type question with a real order lost: ${reply}`);
+});
+
+// Acceptance 3: when the ENTIRE add is genuinely just a question with no
+// real order alongside it, there is no non-question clause left to
+// recover from — nothing should be invented.
+Deno.test("decide (question-clause-not-an-add, fused-span recovery, acceptance 3): a lone question with no order at all recovers nothing", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "gluten free", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const message = "do you have anything gluten free?";
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, message);
+  assertEquals(result.cart.length, 0, `a lone question has no real order to recover — nothing should be invented: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.declines, [], "a guard-dropped hallucinated/question-only span is silent, not a decline");
+  assertEquals(result.disambiguationCandidateIds, null, "no phantom disambiguation either");
+});
+
+// Recovery must fire ONLY when every add this turn was guard-dropped: a
+// genuinely question-only SECOND add, alongside a real FIRST add that
+// already resolved on its own (the original fix's own two-add shape), must
+// stay silently dropped with no recovery attempted for it — the first add
+// already satisfied the customer's real order, so there is nothing to
+// recover and the phantom must not be resurrected some other way.
+Deno.test("decide (question-clause-not-an-add, fused-span recovery): recovery does not fire when a real add already resolved this turn", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [
+      { item_span: "Pepperoni pizzas", quantity: 2, choices: [] },
+      { item_span: "gluten free", quantity: 1, choices: [] },
+    ],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], QUESTION_CLAUSE_MENU, QUESTION_CLAUSE_LEXICON, undefined, QC_REPRO_MESSAGE);
+  assertEquals(result.cart.length, 1, `only the real pepperoni-pizza add may land, no recovered duplicate: ${JSON.stringify(result.cart)}`);
+  assertEquals(result.cart[0].menu_item_id, QC_PEPPERONI_PIZZA_ID);
+  assertEquals(result.cart[0].quantity, 2);
+});
