@@ -1449,7 +1449,7 @@ function applySingleUnitToppingSwap(
       });
     if (oldCandidates.length !== 1) continue;
     const oldChoice = oldCandidates[0];
-    const newCandidates = step.choices.filter(c => {
+    let newCandidates = step.choices.filter(c => {
       if (selectedIds.includes(c.id)) return false;
       const cStems = significantStems(c.display);
       return [...newStems].every(s => cStems.has(s));
@@ -1460,7 +1460,42 @@ function applySingleUnitToppingSwap(
         message: `We don't have ${newModifierPhrase} for the ${menuItem.ask_plan.display_name}.`,
       };
     }
-    if (newCandidates.length > 1) return null; // genuinely ambiguous -- never guess
+    // 2026-09-20 PO dispatch (money bug, real live conv 70bc7d0b, v575): every
+    // pizza topping on the real menu compiles as a Whole/Half PAIR ("Grilled
+    // Chicken (Whole pizza)" + "Grilled Chicken (Half pizza)"), so a bare
+    // newModifierPhrase ("grilled chicken", no placement word) stem-matches
+    // BOTH -- newCandidates.length was 2 here, "genuinely ambiguous", and the
+    // caller's own fallthrough used to run applyNamedLineRemovals on the raw
+    // message next, wiping the whole cart (see this file's "confirm" case,
+    // the toppingSwap block, for why that fallthrough is now closed off too).
+    // groupChoicesByPlacement / the "half" word convention below is the SAME
+    // rule the modifier-floor path (recoverPlacementHits) already trusts for
+    // this exact Whole/Half pairing elsewhere in this file: no "half"
+    // anywhere in the phrase means Whole. Only collapses when every
+    // surviving candidate shares the SAME core name (placementGroups.length
+    // === 1) -- two candidates naming genuinely different toppings stay
+    // ambiguous and decline by name below, never guessed at.
+    if (newCandidates.length > 1) {
+      const { placementGroups } = groupChoicesByPlacement(newCandidates);
+      if (placementGroups.length === 1) {
+        const hasHalfWord = /\bhalf\b/i.test(newModifierPhrase);
+        const chosenId = (hasHalfWord ? placementGroups[0].half : placementGroups[0].whole)?.id;
+        const narrowed = chosenId ? newCandidates.filter(c => c.id === chosenId) : [];
+        if (narrowed.length === 1) newCandidates = narrowed;
+      }
+    }
+    if (newCandidates.length > 1) {
+      // Still genuinely ambiguous (two or more DIFFERENT toppings match, or
+      // the Whole/Half collapse above couldn't narrow it) -- decline by name
+      // rather than guess. The call site never falls through to
+      // applyNamedLineRemovals for a message that already matched this
+      // specific "one of the X ... instead of the other Y" shape, so this is
+      // always a graceful "didn't understand," never a silent cart wipe.
+      return {
+        kind: "unavailable",
+        message: `Not sure which ${newModifierPhrase} you mean for the ${menuItem.ask_plan.display_name} -- can you say that again?`,
+      };
+    }
     const newChoice = newCandidates[0];
 
     const remainingIds = selectedIds.filter(id => id !== oldChoice.id).concat(newChoice.id);
@@ -3689,16 +3724,41 @@ export function answer(
       // applySingleUnitToppingSwap's own headers for the full mechanism.
       const toppingSwap = parseSingleUnitToppingSwap(trimmed);
       if (toppingSwap) {
+        // 2026-09-20 PO dispatch (real live money bug, v572 #36, fixed
+        // properly this time): a message that already matched the
+        // "one of the X ... instead of the other Y" shape is ALWAYS about
+        // a topping swap on one unit of a named line -- never a whole-order
+        // decline. Previously, EITHER of the two ways this can fail to
+        // resolve (no real cart line matches basePhrase+oldModifierPhrase
+        // at all -- target is null, below; or a real line was found but
+        // applySingleUnitToppingSwap itself couldn't resolve the swap, for
+        // ANY reason, not just the one Whole/Half shape reverted commit
+        // 75a29a9f patched) fell through to applyNamedLineRemovals below,
+        // which reads the bare word "pizza" in the message as removal
+        // language shared by every pizza line in the cart and wipes all of
+        // them. Both branches now decline by name here, touching nothing,
+        // instead of ever reaching mechanism 3 -- "missing beats wrong"
+        // applies to the decline path too, not just the swap resolution
+        // itself.
         const target = findMultiUnitLineForToppingSwap(cart, toppingSwap.basePhrase, toppingSwap.oldModifierPhrase);
-        if (target) {
-          const swapResult = applySingleUnitToppingSwap(cart, menuById, target, toppingSwap.newModifierPhrase, toppingSwap.oldModifierPhrase);
-          if (swapResult?.kind === "applied") {
-            return { resolved: true, outcome: { kind: "unit_modified_at_confirm" }, cartChanged: true };
-          }
-          if (swapResult?.kind === "unavailable") {
-            return { resolved: true, outcome: { kind: "unit_modification_unavailable", message: swapResult.message }, cartChanged: false };
-          }
+        if (!target) {
+          return {
+            resolved: true,
+            outcome: {
+              kind: "unit_modification_unavailable",
+              message: `Sorry, I don't see the ${toppingSwap.basePhrase} with ${toppingSwap.oldModifierPhrase} in your order -- can you say that again?`,
+            },
+            cartChanged: false,
+          };
         }
+        const swapResult = applySingleUnitToppingSwap(cart, menuById, target, toppingSwap.newModifierPhrase, toppingSwap.oldModifierPhrase);
+        if (swapResult?.kind === "applied") {
+          return { resolved: true, outcome: { kind: "unit_modified_at_confirm" }, cartChanged: true };
+        }
+        const message = swapResult?.kind === "unavailable"
+          ? swapResult.message
+          : `Sorry, I couldn't tell exactly what to change on the ${toppingSwap.basePhrase} -- can you say that again?`;
+        return { resolved: true, outcome: { kind: "unit_modification_unavailable", message }, cartChanged: false };
       }
       // Money bug fix (2026-09-19, live conv 0dcb02a7): mechanism 3, same
       // priority reasoning as mechanisms 1/2 above — "no stromboli" (a bare
