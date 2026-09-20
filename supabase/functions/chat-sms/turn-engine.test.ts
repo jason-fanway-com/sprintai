@@ -541,6 +541,11 @@ const MK_MEATLOVERS_ID = "mk-pizza-meatlovers";
 const MK_HAWAIIAN_ID = "mk-pizza-hawaiian";
 const MK_VEGGIE_ID = "mk-pizza-veggie";
 const MK_BBQCHICKEN_ID = "mk-pizza-bbqchicken";
+// Money bug (2026-09-19, Jason's own v541 live test, conv 89e3a7b6): the
+// real transcript's fourth pizza was "mushroom", not "hawaiian" — added as
+// its own candidate (rather than reusing "hawaiian") so the money-bug tests
+// below match the real transcript's wording exactly.
+const MK_MUSHROOM_ID = "mk-pizza-mushroom";
 const mkPizza = (id: string, name: string, price: number): TurnEngineMenuItem => ({
   id, name: `${name} - Large`, category: "Pizza", price_cents: price, bot_state: "orderable",
   ask_plan: { compiled_at: "", compiler_version: 1, display_name: `${name} - Large`, base_price_cents: price, recap_template: "", ticket_template: "", steps: [] },
@@ -552,6 +557,7 @@ const MULTI_KIND_PIZZA_MENU: TurnEngineMenuItem[] = [
   mkPizza(MK_HAWAIIAN_ID, "Hawaiian Pizza", 1799),
   mkPizza(MK_VEGGIE_ID, "Veggie Pizza", 1699),
   mkPizza(MK_BBQCHICKEN_ID, "BBQ Chicken Pizza", 1899),
+  mkPizza(MK_MUSHROOM_ID, "Mushroom Pizza", 1699),
 ];
 const MULTI_KIND_OPEN_STATE: DialogueState = {
   phase: "ordering",
@@ -657,6 +663,204 @@ Deno.test("answer (round 2 addendum): the single-clause 'kind?' answer also reso
   const result = answer(singleState, cart, "plain", MULTI_KIND_PIZZA_MENU, { lexicon: MULTI_KIND_LEXICON });
   assert(result.resolved && result.outcome.kind === "disambiguation_resolved", `expected disambiguation_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
   assertEquals(result.resolved && result.outcome.kind === "disambiguation_resolved" ? result.outcome.menuItemId : null, MK_CHEESE_ID);
+});
+
+// ── Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6) ────
+//
+// Jason tested the deployed bot himself. 2 of 3 runs paid ($91.47), the
+// third lost the whole order:
+//
+//   Customer: "4 large pizzas"
+//   PROPOSE's add: item_span "4 large pizzas", quantity 1 -- the "4" is
+//     sitting right there in the span, but PROPOSE's own quantity field
+//     said 1. Bot: "Sure -- what kind?" (pending count wrongly held at 1).
+//   Customer: "One plain, one pepperoni, one meat lovers and one mushroom"
+//     -- four real, resolvable pizza lines.
+//   Bot: "You said 1 -- I've got 4. What's the rest?" -- ALL FOUR PIZZAS
+//     DROPPED, cart left with French Fries only (added earlier, unrelated).
+//
+// Two rules close this, both in resolveMultiKindClauses'/decide()'s own
+// callers above:
+//   Rule 1 (effectiveAddQuantity, decide()'s add-resolution loop): a span
+//     that still carries its own leading count is trusted over PROPOSE's
+//     separately-reported quantity when the two disagree -- the exact same
+//     "message over model" principle already applied to size.
+//   Rule 2 (resolveMultiKindClauses's own count-mismatch gate): even if
+//     rule 1 somehow doesn't fire for some other phrasing, an answer with
+//     MORE resolvable lines than the (possibly wrong) pending count is
+//     strictly more specific, never less trustworthy -- taken in full,
+//     never discarded into "what's the rest?".
+// Reuses MULTI_KIND_PIZZA_MENU/MULTI_KIND_LEXICON from the multi-kind-
+// answer P0 block above (mushroom added there for this exact test).
+
+// A lexicon tie for the bare, unqualified "4 large pizzas" span itself --
+// deliberately carries NO `category` field on any entry (unlike a real
+// compiled shop lexicon) so this fixture only ever exercises resolve-item.ts's
+// plain word-tie path, never its category-narrowing machinery, which is
+// irrelevant to the quantity bug this test targets.
+const MONEY_BUG_TIE_LEXICON: LexiconTerm[] = [
+  ...MULTI_KIND_LEXICON,
+  { term: "pizzas", target_id: MK_CHEESE_ID },
+  { term: "pizzas", target_id: MK_PEPPERONI_ID },
+  { term: "pizzas", target_id: MK_MEATLOVERS_ID },
+  { term: "pizzas", target_id: MK_HAWAIIAN_ID },
+  { term: "pizzas", target_id: MK_VEGGIE_ID },
+  { term: "pizzas", target_id: MK_BBQCHICKEN_ID },
+  { term: "pizzas", target_id: MK_MUSHROOM_ID },
+];
+
+// ACCEPTANCE 1: "4 large pizzas" with PROPOSE reporting quantity=1 (the real
+// bug's exact shape) -- rule 1 must read the "4" out of the span itself and
+// carry it as the pending disambiguation quantity, never PROPOSE's wrong 1.
+Deno.test("decide (money bug, rule 1): a span's own leading count overrides PROPOSE's mismatched quantity field", () => {
+  const proposal: Proposal = {
+    intent: "order",
+    adds: [{ item_span: "4 large pizzas", quantity: 1, choices: [] }],
+    removes: [], modifies: [],
+  };
+  const result = decide(proposal, [], MULTI_KIND_PIZZA_MENU, MONEY_BUG_TIE_LEXICON, undefined, "4 large pizzas");
+  assert(result.disambiguationCandidateIds && result.disambiguationCandidateIds.length > 1, `"4 large pizzas" must open a real kind disambiguation: ${JSON.stringify(result)}`);
+  assertEquals(result.disambiguationQuantity, 4, "the span's own leading '4' must win over PROPOSE's reported quantity of 1");
+});
+
+// ACCEPTANCE 2: isolates rule 2 as a pure backstop -- pending count forced
+// to 1 exactly as if rule 1 did not exist (a different span phrasing that
+// rule 1's leading-count regex doesn't catch, e.g. from a spoken-language
+// count word this shop's compiler didn't recognize). The customer's answer
+// still names four real, resolvable pizzas -- rule 2 alone must take all
+// four, never "what's the rest?", never a re-greet.
+const MONEY_BUG_FORCED_QTY1_STATE: DialogueState = {
+  phase: "ordering",
+  open: {
+    kind: "disambiguation",
+    candidates: MULTI_KIND_PIZZA_MENU.map(m => m.id),
+    quantity: 1,
+    spanText: "4 large pizzas",
+  },
+  upsell_offered: false,
+  asked_message_id: null,
+};
+
+Deno.test("answer (money bug, rule 2 backstop): a wrongly-pending count of 1 still takes all four named pizzas, never 'what's the rest?', never re-drops the order", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(
+    MONEY_BUG_FORCED_QTY1_STATE,
+    cart,
+    "One plain, one pepperoni, one meat lovers and one mushroom",
+    MULTI_KIND_PIZZA_MENU,
+    { lexicon: MULTI_KIND_LEXICON },
+  );
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved", `expected disambiguation_multi_resolved, got: ${JSON.stringify(result.resolved ? result.outcome : null)}`);
+  assert(
+    result.resolved && result.outcome.kind === "disambiguation_multi_resolved" && !result.outcome.clarifyMessage,
+    `must never fall into "what's the rest?" when the answer names MORE lines than the (wrong) pending count: ${JSON.stringify(result.resolved ? result.outcome : null)}`,
+  );
+  assertEquals(cart.length, 4, "all four named pizzas must land, never dropped");
+  const ids = cart.map(l => l.menu_item_id).sort();
+  assertEquals(ids, [MK_CHEESE_ID, MK_MEATLOVERS_ID, MK_MUSHROOM_ID, MK_PEPPERONI_ID].sort(), "must be exactly the four named kinds");
+  for (const line of cart) assertEquals(line.quantity, 1, "each named pizza is its own line at quantity 1, never quantity 4 stacked on one line");
+});
+
+// ACCEPTANCE 3 (regression): a GENUINE partial answer -- pending count 4,
+// customer names only two lines -- must still ask "what's the rest?" and
+// add nothing yet. Rule 2 only widens the "more than pending" direction; a
+// SHORTER answer than the pending count is still a real partial answer.
+Deno.test("answer (money bug, rule 2 regression): a genuinely short answer (pending 4, names 2) still asks what's the rest, never silently accepted", () => {
+  const cart: TurnEngineCartLine[] = [];
+  const result = answer(MULTI_KIND_OPEN_STATE, cart, "One plain, one pepperoni", MULTI_KIND_PIZZA_MENU, { lexicon: MULTI_KIND_LEXICON });
+  assert(result.resolved && result.outcome.kind === "disambiguation_multi_resolved");
+  assert(
+    result.resolved && result.outcome.kind === "disambiguation_multi_resolved" && /4.*2|2.*4/.test(result.outcome.clarifyMessage ?? ""),
+    `a genuinely short answer must still ask for the rest, naming both numbers: ${JSON.stringify(result.resolved ? result.outcome : null)}`,
+  );
+  assertEquals(cart.length, 0, "nothing is added while a genuinely short answer is still outstanding");
+});
+
+// ACCEPTANCE 2 (full pipeline): same rule-2-backstop shape as above, but run
+// through the REAL runner (ANSWER -> ASK -> RENDER, no PROPOSE call needed)
+// with the cart already holding the unrelated French Fries line from
+// earlier in the conversation -- reproduces the live transcript's own
+// observation that the fresh-conversation "What would you like to order?"
+// greeting rode along on top of the dropped pizzas. With all four pizzas
+// correctly landing, the cart is never empty and that greeting must never
+// render.
+const MONEY_BUG_FRIES_ID = "money-bug-fries";
+const MONEY_BUG_MENU: TurnEngineMenuItem[] = [
+  ...MULTI_KIND_PIZZA_MENU,
+  {
+    id: MONEY_BUG_FRIES_ID, name: "French Fries", category: "Sides", price_cents: 499, bot_state: "orderable",
+    ask_plan: { compiled_at: "", compiler_version: 1, display_name: "French Fries", base_price_cents: 499, recap_template: "", ticket_template: "", steps: [] },
+  },
+];
+
+Deno.test("runTurnEngineTurn (money bug, full pipeline): four named pizzas land, cart is never treated as empty, no fresh-conversation re-greet", async () => {
+  const friesLine: TurnEngineCartLine = {
+    menu_item_id: MONEY_BUG_FRIES_ID, name: "French Fries", quantity: 1, price_cents: 499, modifiers: [], options: {}, ask_plan_selections: {},
+  };
+  const input: RunTurnInput = {
+    conversationId: "conv-89e3a7b6",
+    shopId: "shop-1",
+    tenantId: "tenant-1",
+    cartId: "cart-1",
+    message: "One plain, one pepperoni, one meat lovers and one mushroom",
+    history: [],
+    menu: MONEY_BUG_MENU,
+    cart: [friesLine],
+    dialogueState: {
+      phase: "ordering",
+      open: { kind: "disambiguation", candidates: MULTI_KIND_PIZZA_MENU.map(m => m.id), quantity: 1, spanText: "4 large pizzas" },
+      upsell_offered: false,
+      asked_message_id: null,
+    },
+    shopContext: {
+      deliveryEnabled: false,
+      orderType: "pickup",
+      deliveryAddressKnown: false,
+      driverTipCents: null,
+      pickupName: "Jason",
+      deliveryFeeCents: null,
+    },
+  };
+  const deps: RunTurnDeps = {
+    supabase: {
+      from: (table: string) => {
+        // deno-lint-ignore no-explicit-any
+        const b: any = {
+          select() { return b; },
+          eq() { return b; },
+          is() { return b; },
+          order() { return b; },
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          range: (from: number, to: number) =>
+            Promise.resolve({ data: table === "lexicon" ? MULTI_KIND_LEXICON.slice(from, to + 1) : [], error: null }),
+          in: () => Promise.resolve({ data: [], error: null }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+          insert: (_row: Record<string, unknown>) => ({
+            select: (_cols: unknown) => ({
+              single: () => Promise.resolve({ data: { id: table === "messages" ? "msg-1" : null }, error: null }),
+            }),
+            then: (resolve: (v: { error: null }) => void, reject?: (e: unknown) => void) =>
+              Promise.resolve({ error: null }).then(resolve, reject),
+          }),
+          then: (resolve: (v: unknown) => void) => Promise.resolve({ data: null, error: null }).then(resolve),
+        };
+        return b;
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any,
+    apiKey: "test-key",
+    proposeTurnFn: () => Promise.reject(new Error("must not be called -- ANSWER resolves this turn deterministically")),
+  };
+
+  const result = await runTurnEngineTurn(input, deps);
+
+  assert(!/what would you like to order/i.test(result.reply), `must never re-render the fresh-conversation greeting on top of a resolved order: ${JSON.stringify(result.reply)}`);
+  const ids = result.cart.filter(l => typeof l.menu_item_id === "string").map(l => l.menu_item_id).sort();
+  assertEquals(
+    ids,
+    [MONEY_BUG_FRIES_ID, MK_CHEESE_ID, MK_MEATLOVERS_ID, MK_MUSHROOM_ID, MK_PEPPERONI_ID].sort(),
+    `cart must hold the fries plus all four named pizzas, never dropped: ${JSON.stringify(result.cart)}`,
+  );
 });
 
 // ── Round 2, item 3 (2026-09-19, live repro): a "what size?" question open
@@ -1138,11 +1342,11 @@ Deno.test("answer: order_type resolves 'delivery' deterministically, no model ca
 
 Deno.test("answer: tip resolves a bare dollar figure", () => {
   const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
-  // P0 (2026-09-19): readTipReply now caps the tip at the cart's subtotal
-  // (rule 5b) — a non-empty cart here is required for that cap not to zero
-  // out a legitimate $5 tip. An empty cart with tip open isn't reachable in
-  // practice anyway: ask()'s own tip gate only ever opens "tip" once the
-  // cart has at least one real line.
+  // A non-empty cart here mirrors the only reachable production shape --
+  // ask()'s own tip gate only ever opens "tip" once the cart has at least
+  // one real line. (Money bug, 2026-09-19: this cart's subtotal used to
+  // matter because readTipReply clamped the tip down to it -- see the
+  // money-bug tip tests below for why that clamp is gone.)
   const cart: TurnEngineCartLine[] = [
     { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
   ];
@@ -1154,6 +1358,51 @@ Deno.test("answer: tip decline resolves to zero", () => {
   const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
   const result = answer(state, [], "no thanks", VITOS_MENU);
   assertEquals(result, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 0 }, cartChanged: false });
+});
+
+// ── Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6) ────
+// Same transcript as the multi-kind-answer money bug above -- in the same
+// conversation, "tip the driver $5" on the small ($4.99-subtotal) order
+// came back as a $4.99 tip. readTipReply used to clamp a stated tip down to
+// the cart's subtotal (rule 5b, "a tip can never exceed the order") -- that
+// premise is simply wrong for a delivery tip, which has nothing to do with
+// the food total, so the clamp is removed outright. Rule 5a (the
+// line-item-price guard, a DIFFERENT real reason a number gets rejected as
+// a tip) is untouched -- ACCEPTANCE 5 below proves it still fires.
+Deno.test("answer (money bug, tip clamp): a stated $5 tip on the real $4.99-subtotal shape is $5.00, never clamped down to the subtotal", () => {
+  const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: "money-bug-fries", name: "French Fries", quantity: 1, price_cents: 499, modifiers: [], options: {}, ask_plan_selections: {} },
+  ];
+  const before = answer(state, cart, "tip the driver $5", VITOS_MENU);
+  assertEquals(before, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 500 }, cartChanged: false }, "before this fix this returned tipCents: 499 -- clamped down to the $4.99 subtotal");
+});
+
+Deno.test("answer (money bug, tip clamp): a large stated tip on a large order is also never clamped -- the removed guard applied at every order size", () => {
+  const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+  const result = answer(state, cart, "tip the driver $50", VITOS_MENU);
+  assertEquals(result, { resolved: true, outcome: { kind: "tip_resolved", tipCents: 5000 }, cartChanged: false }, "a generous tip on a small order must be respected as stated, not just the $4.99-shape case");
+});
+
+// ACCEPTANCE 5: rule 5a (a number that's really a menu price stated
+// elsewhere in the same message, not a real tip) is a DIFFERENT guard from
+// the removed subtotal clamp and must be completely unaffected.
+Deno.test("answer (money bug, tip clamp): rule 5a's line-item-price guard is unaffected -- a number that's really a menu price in the same message is still rejected as a tip", () => {
+  const state: DialogueState = { phase: "tip", open: { kind: "tip" }, upsell_offered: false, asked_message_id: null };
+  const cart: TurnEngineCartLine[] = [
+    { menu_item_id: CHEESE_BURGER_ID, name: "Cheese Burger", quantity: 1, price_cents: 849, modifiers: [], options: { Temp: ["Medium"] }, ask_plan_selections: { [TEMP_GROUP_ID]: MEDIUM_CHOICE_ID } },
+  ];
+  // "$8.49" is the Cheese Burger's own line-item price, named alongside
+  // "tip" in the same message -- rule 5a must still reject this as a tip
+  // amount, exactly as before the clamp removal.
+  const result = answer(state, cart, "was the tip supposed to be $8.49 or is that the burger", VITOS_MENU);
+  assert(
+    !(result.resolved && result.outcome.kind === "tip_resolved" && result.outcome.tipCents === 849),
+    `rule 5a must still reject a number that's really a menu price: ${JSON.stringify(result)}`,
+  );
 });
 
 Deno.test("answer: name resolves a name-shaped bare reply", () => {

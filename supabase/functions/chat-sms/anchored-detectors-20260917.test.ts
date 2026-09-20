@@ -64,8 +64,18 @@ Deno.test("P0 tip: a decline wins over a dollar figure named in a different, unr
   );
 });
 
-Deno.test("P0 tip: capped at the subtotal", () => {
-  assertEquals(readTipReply("$500 tip", { subtotalCents: 849 }), { kind: "amount", cents: 849 });
+// Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6): this
+// used to assert the OLD, wrong behavior -- a stated tip clamped down to
+// the cart's subtotal ("$500 tip" on an $8.49 order came back as $8.49).
+// That premise is wrong: a delivery tip has nothing to do with the food
+// total, so a customer's stated whole-dollar amount is now respected as
+// stated, no matter how it compares to the subtotal. See turn-engine.ts's
+// readTipReply header for the removed clamp's own doc.
+Deno.test("P0 tip: a stated amount is never capped at the subtotal, no matter the order size", () => {
+  assertEquals(readTipReply("$500 tip", { subtotalCents: 849 }), { kind: "amount", cents: 50000 });
+  // The real live shape: "tip the driver $5" on the transcript's own
+  // $4.99-subtotal order must be $5.00, not clamped down to $4.99.
+  assertEquals(readTipReply("tip the driver $5", { subtotalCents: 499 }), { kind: "amount", cents: 500 });
 });
 
 Deno.test("P0 tip: a number is rejected as the tip when it also names a line-item price in the same message", () => {
