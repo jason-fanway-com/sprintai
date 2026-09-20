@@ -2315,6 +2315,21 @@ function isNamedSlotItemRejection(
   return false;
 }
 
+// 2026-09-20 PO dispatch (rule 5): declines the VALUE of an open required
+// slot ("without any sauce instead", "just skip the sauce", "none", "n/a",
+// "plain", "nevermind") -- see this function's own call site in answer()'s
+// "slot" case for why it is only ever checked once matchChoiceInText has
+// already failed to find a real choice in the same text, never before.
+// Bare "no" excludes "no thanks"/"no thank you" via lookahead -- that idiom
+// is the closure-matrix's own "no thanks while a slot is open" cell (real
+// regression this fix once introduced: "no thanks" is a closure/decline-of-
+// the-TURN idiom, same family as UPSELL_DECLINE_IDIOM_RE, never a decline of
+// THIS slot's value, and must leave an already-resolved selection alone).
+const SLOT_VALUE_DECLINE_RE = /\bno(?!\s+thanks?\b|\s+thank\s+you\b)\b|\bnone\b|\bn\/a\b|\bnvm\b|\bnever\s*mind\b|\bnevermind\b|\bplain\b|\bskip\b|\bwithout\b/i;
+function isSlotValueDecline(message: string): boolean {
+  return SLOT_VALUE_DECLINE_RE.test(message ?? "");
+}
+
 export function answer(
   state: DialogueState,
   cart: TurnEngineCartLine[],
@@ -2405,6 +2420,35 @@ export function answer(
         line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
         line.price_cents = priceCents;
         return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+      }
+      // 2026-09-20 PO dispatch (rule 5, live conv 0a4f967d #1 follow-up,
+      // required-slot loop): "without any sauce instead" / "just skip the
+      // sauce" / "none" / "plain" is a genuine decline of the SLOT VALUE
+      // itself (never the whole item -- that's DECLINE_OPEN_ITEM_RE /
+      // isNamedSlotItemRejection's job above, already checked and already
+      // false by the time execution reaches here). Checked only once a real
+      // choice match has already failed (directMatch is null), so a genuine
+      // answer never gets swallowed by this. Without this, the turn re-asked
+      // the identical question forever, echoing the customer's own decline
+      // words back as if they were a garbled attempted choice ("We don't
+      // have 'any sauce instead?' for ..."), since nothing in that shape
+      // could ever match a real choice on a later attempt either. Resolves
+      // using the group's own configured default when one exists, else the
+      // first listed choice -- every real required slot this fix has
+      // touched prices its choices at $0 delta, so this never silently
+      // changes the total, only which free choice lands on the ticket,
+      // always visible and correctable in the recap that follows.
+      if (openStep && !directMatch && isSlotValueDecline(trimmed)) {
+        const defaultChoiceId = menuItem.option_groups?.find(g => g.id === openGroupId)?.default_choice_id;
+        const fallbackChoice = (defaultChoiceId && openStep.choices.find(c => c.id === defaultChoiceId)) || openStep.choices[0];
+        if (fallbackChoice) {
+          const selections = { ...(line.ask_plan_selections ?? {}), [openGroupId]: fallbackChoice.id };
+          const { resolvedOptions, priceCents } = priceSelections(menuItem.ask_plan, menuItem.option_groups ?? [], selections);
+          line.ask_plan_selections = selections;
+          line.options = Object.keys(resolvedOptions).length > 0 ? resolvedOptions : undefined;
+          line.price_cents = priceCents;
+          return { resolved: true, outcome: { kind: "slot_resolved" }, cartChanged: true };
+        }
       }
       return closureOrAffirmationFallback(trimmed, cart, true) ?? UNRESOLVED;
     }
@@ -4946,7 +4990,20 @@ export function decide(
         const newMenuItem = menuById.get(yResolution.menu_item_id);
         if (newMenuItem?.ask_plan) {
           const idx = nextCart.indexOf(targetLine);
-          const quantity = targetLine.quantity;
+          // 2026-09-20 PO dispatch (rule 4, real live money bug, v566 #1,
+          // $68.97 vs $45.98): "change that to 1 large Roma pizza and add 1
+          // large Buffalo Chicken pizza instead" is a QUANTITY MODIFY on X's
+          // own line (Y resolves to the SAME item as X here), not a like-
+          // for-like item swap -- yet this always reused targetLine's OLD
+          // quantity (2), so the re-added line came back at the original
+          // quantity no matter what number the customer actually stated for
+          // Y. spanLeadingCount (effectiveAddQuantity's own primitive) reads
+          // a quantity the customer explicitly stated in the Y phrase itself
+          // ("1 large Roma pizza" -> 1); only when Y states no quantity at
+          // all ("change my Grilled Cheese to Chicken Fingers") does this
+          // fall back to preserving X's original quantity, unchanged from
+          // before this fix.
+          const quantity = spanLeadingCount(replacementIntent.yPhrase) ?? targetLine.quantity;
           removeCartLine(nextCart as unknown as ReconcilerCartLine[], idx);
           const lengthBeforeAdd = nextCart.length;
           const result = applyCompiledAddItem(nextCart, toCompiledMenuItem(newMenuItem, newMenuItem.ask_plan), newMenuItem.id, quantity, "", undefined, undefined, []);
