@@ -153,7 +153,7 @@ import {
   renderLedgerFooter,
   type ItemizedCartLine,
 } from "./itemizer.ts";
-import { firstParseableUpsellName, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
+import { allParseableUpsellNames, renderUpsellOfferSentence } from "./upsell-offer-20260914.ts";
 import { buildConfirmReadback } from "./confirm-readback-20260918.ts";
 import {
   impliesUpsellAcceptance,
@@ -3583,13 +3583,41 @@ function dropAddsThatAreReallyModifiersOfAnotherAdd(
 // dispatch: whichever add's span turns out to name a real topping CHOICE of
 // some OTHER add in the same turn is the one that merges away, regardless of
 // which one PROPOSE happened to list first.
+// PO dispatch 2026-09-19 (regression in this same guard's own fe102300
+// merge, live probe-decide): the plain `matched` lookup below only ever
+// reads the qualifier (whole vs. half) off the PHANTOM CANDIDATE's own
+// span/name ("pepperoni", "gyro meat") — never the customer's real message
+// — so it always defaulted to whole (matchPlacementCoreChoiceId's own
+// hasHalfWord test can only ever be true if the word "half" is literally
+// IN that span, which the model's resolved topping span usually doesn't
+// carry even when the customer said "half pepperoni"). Same blind spot
+// meant only the ONE span PROPOSE happened to name as its own separate add
+// got merged in — a second topping named in the SAME "with ..." phrase
+// ("gyro meat and bacon") that never became its own add anywhere was
+// simply invisible to this function and got dropped with no trace.
+// applyEveryToppingNamedInHostsOwnPhrase fixes both by re-deriving from the
+// host's own scoped customer text instead of the phantom's span — the same
+// scoping (splitCustomerPhrases/scopedModifierText/stripOtherItemSpansFrom-
+// ModifierText) and recovery (recoverAssertedChoicesFromText, whose own
+// recoverPlacementHits already reads "half" off real customer text, not a
+// resolved span) the 00-BF modifier floor below already trusts for this
+// exact half/whole and multi-topping decision — never a new data model.
+// Falls back to the single `matched` choice (the pre-existing behavior)
+// only when there's no customer text to scope against, so a caller that
+// never passes customerMessage (existing tests predating this fix) sees no
+// change at all.
 function mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(
   adds: ResolvedAdd[],
   menuById: Map<string, TurnEngineMenuItem>,
+  menu: TurnEngineMenuItem[],
+  customerMessage: string | undefined,
 ): ResolvedAdd[] {
   if (adds.length < 2) return adds;
   const working = adds.map(a => ({ ...a, choices: [...(a.choices ?? [])] }));
   const removeIdx = new Set<number>();
+  const phrases = customerMessage
+    ? splitCustomerPhrases(customerMessage, menu.map(m => ({ name: m.name })))
+    : [];
   for (let i = 0; i < working.length; i++) {
     const candidateMenuItem = menuById.get(working[i].menu_item_id);
     const candidateTexts = [
@@ -3611,15 +3639,63 @@ function mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(
         if (matched) break;
       }
       if (matched) {
-        const m = matched;
-        const already = working[j].choices.some(c => c.group_id === m.group_id && c.choice_id === m.choice_id);
-        if (!already) working[j].choices.push(m);
+        const otherSpansThisMessage = adds
+          .map((a, idx) => (idx === i || idx === j) ? "" : (a.item_span ?? "").trim())
+          .filter(Boolean);
+        const appliedFromText = applyEveryToppingNamedInHostsOwnPhrase(
+          working[j],
+          otherMenuItem,
+          phrases,
+          customerMessage,
+          otherSpansThisMessage,
+        );
+        if (!appliedFromText) {
+          const m = matched;
+          const already = working[j].choices.some(c => c.group_id === m.group_id && c.choice_id === m.choice_id);
+          if (!already) working[j].choices.push(m);
+        }
         removeIdx.add(i);
         break;
       }
     }
   }
   return working.filter((_, idx) => !removeIdx.has(idx));
+}
+
+// See mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd's own header just
+// above. Scopes customerMessage to the host item's own phrase exactly like
+// the 00-BF modifier floor does (same helpers, same order of operations),
+// then recovers EVERY topping choice that phrase names — with whatever
+// whole/half qualifier the phrase itself specifies — instead of the single
+// span the model happened to propose as its own separate add. Returns
+// false (never touches `host.choices`) when there's no text to scope,
+// so the caller's own pre-existing single-choice merge is the only thing
+// that ever runs in that case.
+function applyEveryToppingNamedInHostsOwnPhrase(
+  host: ResolvedAdd,
+  hostMenuItem: TurnEngineMenuItem,
+  phrases: string[],
+  customerMessage: string | undefined,
+  otherSpansThisMessage: string[],
+): boolean {
+  if (!customerMessage || !hostMenuItem.ask_plan) return false;
+  const hostSpan = (host.item_span ?? "").trim();
+  const phraseIdx = resolveClaimedPhraseIndex(phrases, hostSpan);
+  const scoped = stripOtherItemSpansFromModifierText(
+    scopedModifierText(phrases, phraseIdx, hostMenuItem.name, customerMessage),
+    otherSpansThisMessage,
+  );
+  if (!scoped.trim()) return false;
+  let appliedAny = false;
+  for (const step of hostMenuItem.ask_plan.steps) {
+    if (step.kind !== "modifier") continue;
+    for (const choiceId of recoverAssertedChoicesFromText(scoped, step.choices, hostMenuItem.name)) {
+      const already = host.choices.some(c => c.group_id === step.group_id && c.choice_id === choiceId);
+      if (!already) host.choices.push({ group_id: step.group_id, choice_id: choiceId });
+      appliedAny = true;
+    }
+  }
+  return appliedAny;
 }
 
 // Same whole/half selection rule as recoverPlacementHits below (the ABSENCE
@@ -5042,7 +5118,7 @@ export function decide(
   // Meat phantom item, conv s2-v557): closes the placement-suffix gap the
   // plain drop above can't — a topping choice named as its own resolved add
   // merges its choice directly onto the real host add instead of vanishing.
-  const placementMergedAdds = mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(modifierDroppedAdds, menuById);
+  const placementMergedAdds = mergeAddsThatAreNamedPlacementChoiceOfAnotherAdd(modifierDroppedAdds, menuById, menu, customerMessage);
   const { survivingAdds, heldModifierText } = holdAddsThatAreModifiersOfAnAmbiguousSibling(
     placementMergedAdds,
     disambiguationCandidateIds,
@@ -5601,10 +5677,32 @@ export function ask(
   }
 
   // 6. upsell (only if a qualifying add happened this turn and not yet offered).
+  // R3 fix (2026-09-19, live conv a156dc34 #47): a Coke added as a real
+  // order line on an earlier turn was still offered right back to the
+  // customer later ("Want to add a Coke for $2.99?") after fries qualified
+  // for their own upsell — this loop used to stop at the FIRST parseable
+  // name in the added item's `upsell` field regardless of what's already in
+  // the cart. Every parseable candidate (allParseableUpsellNames, in the
+  // field's own listed order) is now tried in turn, skipping any whose
+  // resolved menu_item_id already has a real line in the cart, so a
+  // multi-candidate field ("Coke +2.99; Brownie +3.50") still offers the
+  // next real option instead of silently offering nothing. Genuinely
+  // nothing left to offer (every candidate already in the cart, or none
+  // parse) means no upsell fires this turn — never re-offering what the
+  // customer already ordered, same "missing beats wrong" discipline this
+  // module's other guards already apply.
   if (turnEvents.qualifyingAddMenuItemId && !priorState.upsell_offered && shopContext.upsellEnabled) {
     const addedItem = menuById.get(turnEvents.qualifyingAddMenuItemId);
-    const upsellName = addedItem?.upsell ? firstParseableUpsellName(addedItem.upsell) : null;
-    const upsellTarget = upsellName ? menu.find(m => m.name.toLowerCase() === upsellName.toLowerCase()) : undefined;
+    const upsellNames = addedItem?.upsell ? allParseableUpsellNames(addedItem.upsell) : [];
+    const cartMenuItemIds = new Set(cart.filter(isRealCartLine).map(l => l.menu_item_id));
+    let upsellTarget: TurnEngineMenuItem | undefined;
+    for (const upsellName of upsellNames) {
+      const candidate = menu.find(m => m.name.toLowerCase() === upsellName.toLowerCase());
+      if (candidate && !cartMenuItemIds.has(candidate.id)) {
+        upsellTarget = candidate;
+        break;
+      }
+    }
     if (upsellTarget) {
       return carry({ kind: "upsell", menu_item_id: upsellTarget.id }, "ordering", true);
     }
