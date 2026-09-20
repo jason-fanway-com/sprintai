@@ -1,5 +1,6 @@
 // run-eval.ts — run the answer key through interpret() on one model and report.
-// usage: deno run -A run-eval.ts --provider anthropic --model claude-haiku-4-5 [--limit N] [--concurrency 4] [--out results.jsonl]
+// usage: deno run -A run-eval.ts --provider openrouter --model deepseek/deepseek-v4-flash [--limit N] [--concurrency 4] [--outdir DIR] [--out results.jsonl]
+// Results are written under --outdir (default: cwd), never next to this file: the sync script wipes untracked files there.
 // Keys: ANTHROPIC_API_KEY or OPENROUTER_API_KEY in env.
 import { interpret, summarizeOpen, type InterpretContext } from "../../interpret.ts";
 import type { OpenQuestion } from "../../form.ts";
@@ -54,8 +55,9 @@ await Promise.all(Array.from({ length: concurrency }, worker));
 
 const summary = summarize(results.map((r) => r.score), results.map((r) => r.ms));
 console.log(JSON.stringify({ provider, model, ...summary }, null, 2));
-const out = args.out ?? `results-${model.replace(/[^a-z0-9.-]/gi, "_")}.jsonl`;
-await Deno.writeTextFile(new URL(`./${out}`, import.meta.url), results.map((r) => JSON.stringify(r)).join("\n") + "\n");
+const outdir = args.outdir ?? Deno.cwd();
+const out = `${outdir}/${args.out ?? `results-${model.replace(/[^a-z0-9.-]/gi, "_")}.jsonl`}`;
+await Deno.writeTextFile(out, results.map((r) => JSON.stringify(r)).join("\n") + "\n");
 const failures = results.filter((r) => !r.score.ok);
 console.log(`\n${failures.length} imperfect cases written to ${out}; first 10:`);
 for (const f of failures.slice(0, 10)) console.log(`- [${f.id}] "${f.message}"\n    expected: ${JSON.stringify(f.expected)}\n    actual:   ${JSON.stringify(f.actual)}`);

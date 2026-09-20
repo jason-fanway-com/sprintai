@@ -259,3 +259,32 @@ Deno.test("pickup-only shop never asks pickup or delivery", () => {
   assertEquals(o.form.fulfillment, "pickup");
   assertEquals(o.form.open?.kind, "items");
 });
+
+Deno.test("batch normalization: option emitted as a separate answer_option or change_line folds into the add", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "cheeseburger, medium please", [
+    { kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] },
+    { kind: "answer_option", value_span: "medium" },
+  ]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assertEquals(o.form.lines[0].choices[IDS.tempGroup], IDS.tempMedium);
+  o = say(o.form, "and a margherita small, add bacon to that", [
+    { kind: "add_line", item_span: "margherita", qty: 1, option_spans: ["small"] },
+    { kind: "change_line", ref: { last: true }, qty: null, add_option_spans: ["bacon"], remove_option_spans: [] },
+  ]);
+  assertEquals(o.form.lines[1].item_id, IDS.margheritaS);
+  assertEquals(o.form.lines[1].modifiers, ["mgBacS"]);
+});
+
+Deno.test("closure while pickup/delivery is open marks items done and re-asks the open question", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "cheeseburger medium", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: ["medium"] }]);
+  assertEquals(o.form.open?.kind, "fulfillment");
+  o = say(o.form, "thats it");
+  assert(o.form.items_done);
+  assertEquals(o.form.open?.kind, "fulfillment");
+  o = say(o.form, "pickup");
+  assertEquals(o.form.status, "confirming");
+  assertStringIncludes(o.reply, "Reply YES");
+});

@@ -9,7 +9,11 @@ import { matchChoice, narrow } from "./resolve.ts";
 const set = (s: string) => new Set(s.split("|").map(normalize));
 
 export const YES = set("yes|yeah|yep|yup|y|ya|ok|okay|sure|correct|right|thats right|that is right|confirm|confirmed|place it|place the order|go ahead|sounds good|looks good|good|perfect|yes please|yes pls|do it|thats correct|that is correct|yes thats it|yes that's it");
-export const NO = set("no|nope|nah|n|no thanks|no thank you|none|nothing|nothing else|thats it|thats all|that is it|that is all|im good|i am good|all set|done|im done|thats everything|that will be all|thatll be all|that is everything|thats it thanks|no thats it|no thats all|nope thats it|no that's it|that's it|that's all|i'm good|i'm done|that'll be all|thats all thanks|no im good|no that is all");
+/** Words that only mean "no" and depend on the question. */
+export const PLAIN_NO = set("no|nope|nah|n|no thanks|no thank you|none|nothing");
+/** Words that mean "I'm done adding items" whatever was asked. */
+export const CLOSURE = set("nothing else|thats it|thats all|that is it|that is all|im good|i am good|all set|done|im done|thats everything|that will be all|thatll be all|that is everything|thats it thanks|no thats it|no thats all|nope thats it|no that's it|that's it|that's all|i'm good|i'm done|that'll be all|thats all thanks|no im good|no that is all|that should do it|thatll do it|that will do it|thats everything thanks|nothing more|no more");
+export const NO = new Set([...PLAIN_NO, ...CLOSURE]);
 export const PICKUP = set("pickup|pick up|pick-up|carry out|carryout|takeout|take out|ill pick it up|i will pick it up|ill pick up|to go|for pickup|pickup please|pick up please");
 export const DELIVERY = set("delivery|deliver|delivered|deliver it|for delivery|delivery please|deliver please");
 export const CANCEL = set("cancel|cancel order|cancel my order|cancel the order|start over|restart|new order|clear my cart|clear cart|reset");
@@ -67,6 +71,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   if (open?.kind === "items") {
     if (NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
   }
+  // "that's it" closes the item list whatever else is open (the open question is asked again after)
+  if (CLOSURE.has(n) && form.lines.length > 0 && open?.kind !== "line_slot" && open?.kind !== "line_ambiguous" && open?.kind !== "line_unresolved") return [{ kind: "answer", field: "items_done", value: true }];
   if (!open && NO.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
 
   if (open?.kind === "line_ref" || (open?.kind === "line_ambiguous" && open.facet === "list")) {

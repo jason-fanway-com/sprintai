@@ -317,3 +317,26 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
 
   return { form, ledger, touched: [...touched], removed, refAsk, declines, showCart, askMenu, control };
 }
+
+/**
+ * Shape-level normalization of one model batch, before any resolution:
+ * - an answer_option with no item question open, following an add in the same
+ *   batch, is that add's option ("bagel" + "wheat");
+ * - a change_line on the last line carrying only option spans, in a batch that
+ *   also adds a line, is an option on that add ("tuna hoagie ... add shrimp to that").
+ * Typed data in, typed data out; no text inspection.
+ */
+export function normalizeMoveBatch(moves: Move[], lineQuestionOpen: boolean): Move[] {
+  const out: Move[] = [];
+  let lastAdd: (Move & { kind: "add_line" }) | null = null;
+  for (const m of moves) {
+    if (m.kind === "add_line") { const copy = { ...m, option_spans: [...m.option_spans] }; out.push(copy); lastAdd = copy; continue; }
+    if (m.kind === "answer_option" && lastAdd && !lineQuestionOpen) { lastAdd.option_spans.push(m.value_span); continue; }
+    if (m.kind === "change_line" && lastAdd && "last" in m.ref && (m.qty === undefined || m.qty === null) && (m.add_option_spans?.length || m.remove_option_spans?.length)) {
+      lastAdd.option_spans.push(...(m.add_option_spans ?? []), ...(m.remove_option_spans ?? []).map((s) => `-${s}`));
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}

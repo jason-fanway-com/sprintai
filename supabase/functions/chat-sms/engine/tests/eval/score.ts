@@ -1,5 +1,5 @@
 // score.ts — pure scoring of interpreter output against the answer key.
-import type { Move } from "../../form.ts";
+import { normalizeMoveBatch, type Move } from "../../form.ts";
 import { words } from "../../normalize.ts";
 
 export interface EvalCase {
@@ -47,7 +47,9 @@ function fieldKey(m: Move): string | null {
   return null;
 }
 
-export function scoreCase(c: EvalCase, actual: Move[] | null, error?: string): CaseScore {
+export function scoreCase(c: EvalCase, actualRaw: Move[] | null, error?: string): CaseScore {
+  const lineQuestionOpen = !!(c.context.open && typeof c.context.open === "object" && "line_id" in (c.context.open as object));
+  const actual = actualRaw ? normalizeMoveBatch(actualRaw, lineQuestionOpen) : null;
   const expAdds = c.expected.filter((m): m is Move & { kind: "add_line" } => m.kind === "add_line");
   const actAdds = (actual ?? []).filter((m): m is Move & { kind: "add_line" } => m.kind === "add_line");
   const used = new Set<number>();

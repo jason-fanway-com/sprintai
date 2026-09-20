@@ -31,7 +31,7 @@ def say(shop, session, msg):
     return r.get("reply", ""), time.time() - t0
 
 def cart_for(shop, session):
-    convs = get(f"conversations?customer_phone=eq.web:{session}&select=id&order=created_at.desc&limit=1")
+    convs = get(f"conversations?customer_phone=eq.web:{session}&select=id&limit=1")
     if not convs: return None
     rows = get(f"order_carts?conversation_id=eq.{convs[0]['id']}&select=id,cart_json,engine_form,subtotal_cents,total_cents,tax_cents,delivery_fee_cents,driver_tip_cents,service_fee_cents,order_type,stripe_checkout_session_id,phase&order=created_at.desc&limit=1")
     return rows[0] if rows else None
@@ -46,6 +46,7 @@ def canary(addr):
     return [
         ("cheeseburger", lambda c, r: expect("cooked" in r.lower() or "Cheese Burger" in r, f"expected temp question, got: {r!r}")),
         ("medium", lambda c, r: expect(len(lines(c)) == 1 and lines(c)[0][1] == 1 and lines(c)[0][2] == 849, f"cart {lines(c)}")),
+        ("pickup", lambda c, r: expect(c["order_type"] == "pickup", f"order_type {c['order_type']}") + expect("Anything else" in r, f"expected anything else: {r!r}")),
         ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback, got: {r!r}") + expect(c["subtotal_cents"] == 849, f"subtotal {c['subtotal_cents']}")),
         ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session") + expect(c["total_cents"] == 849 + 99 + c["tax_cents"], f"total {c['total_cents']} vs 948+tax {c['tax_cents']}") + expect(len(lines(c)) == 1, f"extra lines {names(c)}")),
     ]

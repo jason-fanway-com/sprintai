@@ -1,6 +1,6 @@
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
-import { apply, type LedgerEntry, type Move, type OpenQuestion, type OrderForm } from "./form.ts";
+import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile } from "./crossread.ts";
 import { bindLine, lineMatchesSpan, resolveSpan, spanAnswersLine } from "./resolve.ts";
@@ -45,7 +45,8 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 1. cross-read: two readers of the same message
   const askedSpans = new Set(form0.omissions.map((o) => o.span));
-  const rec = reconcile(input.message, input.moves, menu, askedSpans);
+  const lineQuestionOpen = !!(form0.open && "line_id" in form0.open);
+  const rec = reconcile(input.message, normalizeMoveBatch(input.moves, lineQuestionOpen), menu, askedSpans);
   for (const r of rec.rejected) ledger.push({ turn: t, event: "rejected_span_not_in_message", data: r });
 
   // 2. a new-item move that really answers the open line question becomes an answer
@@ -145,7 +146,8 @@ export function turn(input: TurnInput): TurnOutput {
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
-  if (res.control?.what === "unclear" && !progress) info = { kind: "unclear" };
+  const askedSomethingNew = q !== null && questionKey(q) !== questionKey(input.form.open);
+  if (res.control?.what === "unclear" && !progress && !askedSomethingNew) info = { kind: "unclear" };
   if (moves.length === 0 && rec.rejected.length === 0 && !progress && count > 0) info = info ?? { kind: "unclear" };
 
   let question: Question | null = null;
