@@ -1,7 +1,7 @@
 // crossread.ts — the second reader. A deterministic lexicon scan of the customer
 // message, reconciled against the model's moves. Disagreement becomes a question,
 // never a silent add or a silent drop.
-import { findWordRun, leadingCount, singular, words } from "./normalize.ts";
+import { contentWords, findWordRun, leadingCount, singular, words } from "./normalize.ts";
 import type { Menu } from "./menu.ts";
 import type { Move } from "./form.ts";
 
@@ -17,6 +17,7 @@ export function scan(message: string, menu: Menu): { words: string[]; hits: Hit[
     for (const t of menu.itemTerms) {
       if (best && t.words.length < best.termWords.length) break; // sorted longest first
       if (t.words.length > w.length - i) continue;
+      if (contentWords(t.words.join(" ")).length === 0) continue; // "order", "side": not an item mention
       let ok = true;
       for (let j = 0; j < t.words.length; j++) if (w[i + j] !== t.words[j]) { ok = false; break; }
       if (!ok) continue;

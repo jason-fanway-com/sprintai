@@ -1,7 +1,9 @@
 // conversations.test.ts — scripted conversations through the pure turn().
 // Moves are hand-written (what a correct interpreter returns); no model here.
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { fixtureMenu, IDS } from "./fixture-menu.ts";
+import { fixtureMenu, IDS, RAW_ITEMS, RAW_LEXICON, SHOP } from "./fixture-menu.ts";
+import { buildMenu } from "../menu.ts";
+const await_import = () => ({ buildMenu });
 import { newForm, type Move, type OrderForm } from "../form.ts";
 import { turn } from "../turn.ts";
 import { closedAnswer } from "../vocab.ts";
@@ -430,4 +432,14 @@ Deno.test("a dozen bagels read as qty 12 of 'bagels' becomes the dozen bundle", 
 Deno.test("'and' inside an item name does not break matching", () => {
   assertEquals(words("bacon egg and cheese"), ["bacon", "egg", "cheese"]);
   assertEquals(words("mac & cheese"), ["mac", "cheese"]);
+});
+
+Deno.test("a lexicon term made only of filler words never becomes an omission question", () => {
+  const { buildMenu } = await_import();
+  const m = buildMenu({ version: "t", items: RAW_ITEMS, lexicon: [...RAW_LEXICON, { term: "order", target_type: "item", target_id: IDS.knots }], shop: SHOP });
+  let f = newForm("vitos", "test-v1");
+  f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  const o = turn({ form: f, menu: m, message: "an order of garlic knots", moves: [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }] });
+  assertEquals(o.form.omissions, []);
+  assertStringIncludes(o.reply, "Anything else?");
 });
