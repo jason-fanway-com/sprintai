@@ -909,6 +909,11 @@ export function readTipReply(
   // just the number.
   if (!isBareNumber && ctx.lineItemPricesCents?.includes(cents)) return null;
   // Rule 5b: capped at the subtotal -- a tip can never exceed the order.
+  // 2026-09-19: a builder briefly removed this rule after misreading a test
+  // artifact ($5 tip on a $4.99 SYNTHETIC test order) as a live bug -- the
+  // PO confirmed rule 5b is intentional and reinstated it before merge; the
+  // $4.99 shape only ever shows up on a test order small enough to hit the
+  // cap by construction, never in real order sizes.
   const cappedCents = ctx.subtotalCents != null ? Math.min(cents, ctx.subtotalCents) : cents;
   return { kind: "amount", cents: cappedCents };
 }
@@ -1413,6 +1418,39 @@ function extractLeadingClauseCount(clause: string): { count: number; text: strin
   return { count, text: rest || trimmed };
 }
 
+// Money bug (2026-09-19, live: Jason's own v541 test, conv 89e3a7b6): "4
+// large pizzas" resolved to an add whose item_span carried the customer's
+// leading "4" but whose quantity field came back 1 -- a mismatch between
+// what the span literally says and what the model's own quantity field
+// claims. Same principle already applied to size (disambiguationSpanText's
+// own fix above, extractGlobalSizeWord(customerMessage) over the model's
+// span) -- extended here to quantity: when the span itself STILL carries a
+// leading numeral/count-word (unlike extractLeadingClauseCount, this
+// returns null rather than defaulting to 1 when there's no leading count
+// at all, so a genuinely sizeless "a pepperoni pizza" or a span with no
+// count word never overrides a real model-reported quantity), that number
+// is trusted over the model's separately-reported quantity whenever the two
+// disagree. Never fires when the span has no leading count of its own --
+// the model's quantity is the only signal in that case, exactly as before.
+function spanLeadingCount(itemSpan: string | undefined): number | null {
+  const trimmed = (itemSpan ?? "").trim();
+  const m = trimmed.match(CLAUSE_LEADING_COUNT_RE);
+  if (!m) return null;
+  const raw = m[1].toLowerCase();
+  return /^\d+$/.test(raw) ? parseInt(raw, 10) : (CLAUSE_COUNT_WORDS[raw] ?? null);
+}
+
+// Cross-checks an add's model-reported quantity against its own item_span's
+// leading count -- see spanLeadingCount's own header for the live bug this
+// closes. Called once per add, right where the model's proposal first
+// becomes this turn's resolvedAdds/ambiguousSpans, so every downstream
+// consumer (the cart mutation path AND the disambiguation-quantity path)
+// gets the corrected number without having to know this check happened.
+function effectiveAddQuantity(itemSpan: string | undefined, modelQuantity: number): number {
+  const spanCount = spanLeadingCount(itemSpan);
+  return spanCount !== null && spanCount !== modelQuantity ? spanCount : modelQuantity;
+}
+
 // Arrow form deliberately, not a plain named-function declaration with a
 // string return type — this file's own gate test asserts exactly one
 // function signature of that shape exists (render(), the sole reply-
@@ -1673,8 +1711,19 @@ function resolveMultiKindClauses(
   // Rule 3: every clause's own count must sum to the originally-open
   // quantity -- a mismatch means the split itself is untrustworthy, so
   // nothing is added and the customer is asked, rather than guessing which
-  // clause to shortchange.
-  if (parsedSum !== totalQuantity) {
+  // clause to shortchange. Money bug (2026-09-19, live: Jason's own v541
+  // test, conv 89e3a7b6): this used to be a bare `!==`, so a genuinely
+  // COMPLETE answer that named MORE resolvable lines than a wrong pending
+  // count expected (pending count 1 from the quantity bug above, customer
+  // named 4 real pizzas) fell into this same "what's the rest?" branch and
+  // dropped all four lines -- a backstop against exactly the shape rule 1
+  // above exists to fix, for whatever phrasing rule 1 doesn't catch. An
+  // answer with MORE lines than the pending count is strictly MORE
+  // specific than whatever count was open, never less trustworthy, so it
+  // is taken in full below instead of discarded here. Only a SHORTER
+  // answer than the pending count (parsedSum < totalQuantity) is a genuine
+  // partial answer worth asking "what's the rest?" about.
+  if (parsedSum < totalQuantity) {
     return {
       resolvedAdds: [],
       singleAmbiguous: null,
@@ -3839,7 +3888,7 @@ export function decide(
       guardDroppedWasStale.push(resolution.kind === "resolved" && menuItemIdsAlreadyInCart.has(resolution.menu_item_id));
       guardDroppedWasQuestionTainted.push(spanHasQuestionClauseOnlyToken(add.item_span, customerMessage));
     } else if (resolution.kind === "resolved") {
-      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: add.quantity, choices: add.choices, item_span: add.item_span });
+      resolvedAdds.push({ menu_item_id: resolution.menu_item_id, quantity: effectiveAddQuantity(add.item_span, add.quantity), choices: add.choices, item_span: add.item_span });
     } else if (resolution.kind === "ambiguous") {
       // 2026-09-19 PO dispatch (ambiguous target hole): PROPOSE frequently
       // proposes its OWN add for the exact same span the replacement block
@@ -3858,7 +3907,7 @@ export function decide(
         resolution.candidates.length === replacementPendingCandidateIds.size &&
         resolution.candidates.every(id => replacementPendingCandidateIds!.has(id));
       if (!isReplacementDuplicate) {
-        ambiguousSpans.push({ candidates: resolution.candidates, quantity: add.quantity, spanText: (add.item_span ?? "").trim() });
+        ambiguousSpans.push({ candidates: resolution.candidates, quantity: effectiveAddQuantity(add.item_span, add.quantity), spanText: (add.item_span ?? "").trim() });
       }
     } else {
       // 00-AX: NAME the span. The customer's own words are right here in
