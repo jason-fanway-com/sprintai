@@ -75,6 +75,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
     { group_id: "breadG", slot_key: "bread", kind: "slot", ask_mode: "ask", prompt_template: "bread.ask",
       choices: [{ id: "brWhite", display: "White", price_delta_cents: 0 }, { id: "brRye", display: "Rye", price_delta_cents: 0 }, { id: "brWheat", display: "Wheat", price_delta_cents: 0 }] },
   ]),
+  item("chq", "Chicken", "Quesadillas", 1249),
+  item("chparmE", "Chicken Parmesan", "Entrees", 1795),
   item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [
     { group_id: "gsDress", slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
       choices: [{ id: "gsRanch", display: "Ranch", price_delta_cents: 0 }, { id: "gsGreek", display: "Greek", price_delta_cents: 0 }] },
@@ -113,6 +115,8 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
   ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak], ["sandwich", IDS.cheesesteak], ["sandwiches", IDS.cheesesteak],
+  ["chicken", "chq"], ["chicken quesadilla", "chq"], ["quesadilla", "chq"],
+  ["chicken parmesan", "chparmE"], ["chicken parmesan entree", "chparmE"],
   ["chicken parmesan", "chparm"], ["chicken parmesan sandwich", "chparm"], ["chicken parmesan sandwiches", "chparm"], ["parmesan sandwich", "chparm"], ["sandwich", "chparm"], ["sandwiches", "chparm"],
   ["pepperoni stromboli", "roll"], ["pepperoni", "roll"], ["pepperoni roll", "roll"],
   ["wings", "wbi"], ["wings", "wbo"], ["bone in wings", "wbi"], ["boneless wings", "wbo"], ["boneless", "wbo"], ["bone in", "wbi"],

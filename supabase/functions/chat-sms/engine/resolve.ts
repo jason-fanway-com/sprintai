@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWords, singular, splitList, STOPWORDS, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, splitList, STOPWORDS, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -14,42 +14,37 @@ export type SpanResolution =
   | { kind: "ambiguous"; ids: string[] }
   | { kind: "none" };
 
+const pick = (s: Set<string>): SpanResolution | null => s.size === 1 ? { kind: "item", id: [...s][0] } : s.size > 1 ? { kind: "ambiguous", ids: [...s].sort() } : null;
+/** Items whose term carries every content word of the span: exact word subsets first, else stems. */
+function coverAll(content: string[], menu: Menu): Set<string> {
+  const exact = new Set<string>(), stems = new Set<string>(), contentSing = content.map(singular);
+  for (const t of menu.itemTerms) {
+    if (isWordSubset(content, t.words)) exact.add(t.target_id);
+    else if (contentSing.every((w) => wordMatches(w, new Set(t.wordsSing)))) stems.add(t.target_id);
+  }
+  return exact.size > 0 ? exact : stems;
+}
 export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const sw = words(span);
   if (sw.length === 0) return { kind: "none" };
   const swSing = sw.map(singular);
-  let bestLen = 0;
-  const ids = new Set<string>();
+  let bestLen = 0, bestWords: string[] = []; const ids = new Set<string>();
   for (const t of menu.itemTerms) {
     if (bestLen && t.words.length < bestLen) break;
     if (findWordRun(sw, t.words) < 0 && findWordRun(swSing, t.wordsSing) < 0) continue;
-    if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); }
+    if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); bestWords = t.wordsSing; }
     ids.add(t.target_id);
   }
-  if (ids.size === 1) return { kind: "item", id: [...ids][0] };
-  if (ids.size > 1) return { kind: "ambiguous", ids: [...ids].sort() };
-  for (const t of menu.categoryTerms) {
-    if (findWordRun(sw, t.words) < 0) continue;
-    const members = itemsInCategory(menu, t.target_id).map((i) => i.id).sort();
-    if (members.length === 1) return { kind: "item", id: members[0] };
-    if (members.length > 1) return { kind: "ambiguous", ids: members };
-  }
-  // Partial: every content word of the span appears inside some item term
-  // ("cheese" -> every item with a "cheese …" term). Deterministic, and it
-  // yields a question, never a pick.
   const content = contentWords(span);
-  if (content.length > 0) {
-    // exact word subsets first; else stems ("chicken parm sandwich" against "chicken parmesan sandwich")
-    const exact = new Set<string>(), stems = new Set<string>(), contentSing = content.map(singular);
-    for (const t of menu.itemTerms) {
-      if (isWordSubset(content, t.words)) exact.add(t.target_id);
-      else if (contentSing.every((w) => wordMatches(w, new Set(t.wordsSing)))) stems.add(t.target_id);
-    }
-    const partial = exact.size > 0 ? exact : stems;
-    if (partial.size === 1) return { kind: "item", id: [...partial][0] };
-    if (partial.size > 1) return { kind: "ambiguous", ids: [...partial].sort() };
+  // "chicken parm" against the bare term "chicken": a run that leaves a content word of the span unmatched is
+  // not the item's identity. A term that carries every content word ("chicken parmesan sandwich") wins first.
+  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) { const r = pick(coverAll(content, menu)); if (r) return r; }
+  const run = pick(ids); if (run) return run;
+  for (const t of menu.categoryTerms) {
+    if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }
   }
-  return { kind: "none" };
+  // Partial: every content word of the span appears inside some item term. Deterministic; a question unless unique.
+  return (content.length > 0 ? pick(coverAll(content, menu)) : null) ?? { kind: "none" };
 }
 
 /** Every word that names this item: its own words, name, kind facet and lexicon terms. */

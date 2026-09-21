@@ -769,6 +769,23 @@ Deno.test("a closed answer is the whole message: 'thats everything' never asks a
   assertEquals(o.form.items_done, true);
 });
 
+Deno.test("phone test 5: 'Chicken parm' never becomes the $12.49 'Chicken' quesadilla that owns the bare word", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "Four large pizzas. Chicken parm. And some fries", [
+    { kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] },
+    { kind: "add_line", item_span: "Chicken parm", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "fries", qty: 1, option_spans: [] },
+  ]);
+  const parm = o.form.lines.find((l) => l.span === "Chicken parm")!;
+  assert(parm.item_id !== "chq", "bare 'chicken' term must not win");
+  assertEquals(parm.status.kind, "ambiguous"); // sandwich vs entree: a question, never a guess
+  assert(!o.reply.includes("Added 1 × Chicken "), o.reply);
+  // the bare word alone still finds the quesadilla
+  const q = say(f, "a chicken", [{ kind: "add_line", item_span: "chicken", qty: 1, option_spans: [] }]);
+  assertEquals(q.form.lines[0].item_id, "chq");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
