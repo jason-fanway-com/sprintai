@@ -1611,6 +1611,32 @@ have no simulation run against them yet in anything I could find.
 re-verified against Zio's or Not Just Bagels, only Vito's. The `import-menu-csv` mismatch
 and migration backlog were not re-examined.
 
+## Update — 2026-09-20: a second batch of chat-sms fixes merged to main overnight, but production stopped running any code from that lineage by evening
+
+Roughly 50 more real, live-reproduced conversation bugs closed and merged to `main` by 07:16
+today (five of them real money bugs — a customer's empty-cart cheeseburger reply, a $22.99
+wrong-item charge, a $46.97 shortfall from a wrongly-declined salad dressing, a $45.90
+double-charge from an unresolved "X not Y" swap, and a whole-cart wipe from a topping-swap
+edge case that was fixed, reverted, then re-fixed correctly the same day — see `docs/DAILY.md`
+2026-09-20 for the diffs). `deno check` is clean and the full suite passes (1,804 tests, 0
+failures) on the resulting `main` HEAD. **None of it is confirmed live.** I have no
+`convo.sh` transcript against a deployed build for any of these fixes.
+
+More importantly: **production is not running this lineage at all as of tonight.** The
+deployed `chat-sms` bundle's build marker is commit `e608ec1f`, stamped 20:35 — the tip of a
+separate branch, `engine/clean-sheet`, 47 commits, started at 11:30 today, that replaces the
+whole ordering engine with a new implementation (a new `engine/` directory: interpreter,
+runner, resolver, pricer) behind a new, not-yet-on-main flag, `clean_engine_enabled`. That
+branch was cut from a point after this morning's ~50 fixes, so the fixed code exists inside
+the deployed bundle — but `index.ts` checks `clean_engine_enabled` first, before the
+`turn_engine_enabled` path this morning's fixes live on, and skips straight past it for any
+shop where the new flag is on. I could not read the actual per-shop flag values from this
+machine (no database access here). So: **the honest state of "what's live" is that I don't
+know whether this morning's fixes affect any real shop's conversations right now** — not that
+they're confirmed off, just unconfirmed. Whoever picks this up next should check
+`clean_engine_enabled` and `turn_engine_enabled` per shop before assuming either lineage is
+what a customer is actually talking to.
+
 ## Quickstart for development
 
 ```bash

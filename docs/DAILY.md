@@ -3213,3 +3213,95 @@ Every fix above was tested and described as a general rule, but verified primari
 Vito's real data — I found no evidence any of today's fixes were re-run against Zio's or Not
 Just Bagels. The `import-menu-csv` deployed-code mismatch and the migration backlog flagged in
 earlier entries were not re-examined; nothing found today changes either finding.
+
+## 2026-09-20
+
+### Overnight (through 07:16): roughly 50 more conversation bugs closed on the code path Vito's, Zio's and NJB run when their per-shop `turn_engine_enabled` flag is on
+
+A direct continuation of last night's session — commits `f583da09` through `0090094f`, all merged
+to `main` by 07:16 through a single "window 26" branch, touching `turn-engine.ts`,
+`resolve-item.ts`, `pending-disambiguation.ts`, `phrase-split.ts` and `turn-engine-runner.ts`. I
+ran `deno check` and the full suite on the resulting `main` myself just now: type-check clean,
+1,804 tests pass, 0 fail. I have no live conversation transcript against a deployed build for any
+of it, so under this repo's own rule that "landed" needs a live transcript on the deployed build,
+none of tonight's work can be called landed — it's committed and unit-tested, nothing more, and
+(see below) it isn't even what's currently running.
+
+### Five real money bugs, verified by reading the diffs, not just the commit messages
+
+- A bare item reply ("cheeseburger") sometimes came back from the model as "yes, an order" with
+  no items attached at all; the bot then re-asked with an empty cart. Fixed by building a
+  quantity-1 line from the customer's own words whenever the model returns empty, as long as the
+  bot isn't specifically waiting on a name or address (`0090094f`).
+- "A side of buffalo chicken fries" priced out as a $22.99 pizza. The existing off-menu check only
+  fired when the wrong word matched a database category exactly, and "fries" has none, so nothing
+  caught it. Fixed by also checking whether a word belongs to a different real item's own name
+  (`f1a9e154`).
+- "Bleu cheese dressing," asked for as a real choice on a House Salad in the same message, was
+  declined as off-menu because the same words are also an excluded pizza-topping term — one traced
+  order was short $46.97 of the correct $101.44 as a result. Fixed by checking first whether the
+  words are a legitimate choice on something the customer just ordered, before the off-menu check
+  runs (`dbfb1fa4`).
+- "2 Chicken Parmesan, not Stromboli" should remove the Stromboli and add two Chicken Parmesan, but
+  five real menu items match "Chicken Parmesan"; the matching code treated that ambiguity the same
+  as no match, so nothing swapped and the customer would have paid for the Stromboli too (a $45.90
+  double-charge on the traced example). Fixed by giving an ambiguous replacement its own path that
+  asks "which one?" and only removes the old item once the customer answers (`61b8c034`).
+- Swapping a topping on a pizza, where the topping name ties both the whole-pizza and half-pizza
+  version of the same modifier (true of nearly every topping), could fall through to a generic
+  cleanup step that read leftover words like "pizza" or "sausage" as an instruction to remove
+  lines — wiping the whole cart. This shipped once (`b836d045`), got reverted the same day because
+  it only closed one of two paths into that fallthrough, then was re-landed fixed for real: any
+  topping-swap failure now declines by name instead of ever reaching the line-removal code
+  (`5f232843`, re-merged as `4eadef5e`).
+
+### The rest of the batch, grouped
+
+- **Off-menu detection**: generalizing the check above beyond one hardcoded case took three more
+  passes — it was firing on prepositions and on genuine ties, on a real choice already named in the
+  same message as its item, and in reverse (a BBQ Chicken *pizza* declined as if "BBQ Chicken"
+  meant the flatbread) (`5ffcdbbb`, `7611e426`, `4e0ad853`, `a6496732`).
+- **Slot answers and restatements**: a cluster of "the bot heard something other than what the
+  customer said" bugs — a quantity word dropped when a fresh item was restated, salad add-on
+  choices silently skipped, the quantifier "both" misread as an attempted flavor/sauce value, a
+  required slot filled with a value the customer never said, and "switch one of the X pizzas for Y"
+  losing the add instead of splitting the quantity (`e613ce0f`, `9c9e9b47`, `cbc3c89c`, `ca98acdb`,
+  `596b2a7b`).
+- **Wording only**: two rounds fixing what the bot actually says when it declines an invalid
+  add-on or holds a naming collision, so the reply stops implying an add happened when it didn't
+  (`326809b2`, `6dcd9732`).
+
+### A deploy-safety change that matters more than any single fix above
+
+`scripts/deploy-function.sh` now refuses to run unless `~/po-scratch/.po-deploy-token` — a file the
+PO creates by hand right before each deploy — exists and is under 10 minutes old; a confirmed
+deploy deletes the token so it can't be replayed (`aae7f62a`). The same rule (only the PO deploys,
+merges to main only in a PO-opened window) is now written into this repo's own root `CLAUDE.md`
+(`b1dd640b`). Both landed after a fix that merged and deployed itself turned out to still have the
+bug it was meant to fix, and broke a separate working flow at the same time.
+
+### The bigger fact: none of tonight's fixes are what's answering customers right now
+
+I downloaded the actual deployed `chat-sms` bundle and read its build marker: production is
+running commit `e608ec1f`, stamped 20:35 tonight — nine and a half hours after the last of the
+fixes above landed on `main`. That commit is not on `main`. It's the tip of a separate 47-commit
+branch, `engine/clean-sheet`, started at 11:30 today, that replaces the ordering engine with a
+whole new implementation (a new `engine/` directory — interpreter, runner, resolver, pricer, and
+more) behind a new flag, `clean_engine_enabled`, that isn't in this repo's migrations yet. That
+branch was built on top of a point after all of tonight's fixes, so the fixed code is present in
+the deployed source tree — but `index.ts` checks `clean_engine_enabled` first, and for any shop
+where it's on, the request never reaches the legacy path or the `turn_engine_enabled` path where
+tonight's fixes live. I could not check the actual flag values for Vito's, Zio's or NJB from this
+machine — that needs database access I don't have here — so whether tonight's fixes affect a real
+conversation for any given shop right now is genuinely unknown to me, not confirmed either way.
+One more wrinkle worth flagging: the comment in `index.ts` claiming `turn_engine_enabled` "defaults
+false, off for every shop today" is unchanged since the flag was introduced and contradicts an
+earlier handoff note that all three real shops were switched onto it on 09-18 — a code comment
+describing a runtime database value is not evidence of that value; don't trust it either way.
+
+### Not checked
+
+No live `convo.sh` transcript against a deployed build for any of tonight's fixes. No
+re-verification against Zio's or Not Just Bagels — the diffs were reasoned about against Vito's
+real menu data specifically. Current values of `turn_engine_enabled` / `clean_engine_enabled` per
+shop: unverified.

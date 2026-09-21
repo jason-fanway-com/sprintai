@@ -2931,3 +2931,27 @@ never receives anything. `chat-sms` now splits a long reply into ordered parts a
 threshold and logs the full response body on any non-2xx carrier reply (`502724e3`). If a
 customer reports "the bot went silent," check for a reply that would have been long before
 assuming a logic bug.
+
+## `chat-sms` can be running a branch that never touched `main` — check the deploy marker's ancestry, not just its hash — 2026-09-20
+
+Downloading the live bundle and reading its `DEPLOY_SHA` only tells you it isn't `main`'s
+HEAD; it doesn't tell you whether the deployed code is main plus one unmerged branch, or a
+long-lived parallel rewrite. Run `git merge-base --is-ancestor <deployed-sha> HEAD` and the
+reverse (`--is-ancestor HEAD <deployed-sha>`) and `git branch --all --contains <deployed-sha>`
+before concluding anything about what a given shop is actually running. Tonight, `main`'s
+HEAD turned out to be an ancestor of the deployed commit, but the deployed commit's own
+branch (`engine/clean-sheet`, 47 commits) had never been merged back to `main` — a whole
+second ordering engine, gated by a flag (`clean_engine_enabled`) not yet in `main`'s
+migrations, was live in production while `main` kept accumulating unrelated fixes to the old
+engine. Neither branch's authors were wrong about their own commit; "what's deployed" and
+"what's on main" had simply become two different questions.
+
+## A code comment describing a database flag's value is not evidence of that value — 2026-09-20
+
+`index.ts` has carried a comment saying `turn_engine_enabled` "defaults false ... off for
+every shop today" unchanged since migration 141 introduced the column. An earlier handoff
+entry (2026-09-18) says all three real shops were switched onto that flag days ago. Both
+can't be current at once, and neither is verifiable by reading the code — `shops.turn_engine_enabled`
+and `shops.clean_engine_enabled` are runtime data, not source. Query the table before
+reporting which engine a shop is on; a stale comment left over from before the flag was ever
+flipped will read exactly like an accurate one.
