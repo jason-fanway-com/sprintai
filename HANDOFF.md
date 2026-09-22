@@ -1637,6 +1637,31 @@ they're confirmed off, just unconfirmed. Whoever picks this up next should check
 `clean_engine_enabled` and `turn_engine_enabled` per shop before assuming either lineage is
 what a customer is actually talking to.
 
+## Update — 2026-09-22: Proof regressions now get caught automatically every 4 hours, not just when someone remembers to check
+
+Every entry above this one flags the same gap in different words: a batch of fixes ships,
+`deno test` is clean, and then nobody re-runs Proof against the real shops to confirm nothing
+broke — because that step is manual and easy to skip under pressure. `147_proof_scheduled_trigger.sql`
+closes that gap. A pg_cron job (`proof-scheduled-trigger`) now enqueues a real Proof run for
+every live, non-paused shop every 4 hours, using the exact same queue and drain loop
+`test-runner` has always used for onboarding/manual runs — nothing about how a run executes
+changed, only that runs now also happen on a clock. Cadence (4h, ~$7/day) was Jason's call
+today; it is hardcoded, not configurable in this build.
+
+These scheduled runs are tagged `trigger_type = 'scheduled-regression'` in `test_runs` so they're
+queryable apart from onboarding/manual runs, and a new `test_runs.notified_at` column lets a
+detector track which failing runs have already been triaged. **This repo only produces that
+data — it does not alert anyone.** The script that actually watches for a failing scheduled run
+and raises it for a human (`check-critical-proof-runs.sh`) lives in the ops workspace outside
+this repo, not here.
+
+**Not yet confirmed**: this doc sync has no database access, so it cannot say whether migration
+`147` has actually been pushed to the remote project (`supabase db push`) or whether the cron
+job has fired even once. Whoever picks this up next should check `cron.job_run_details` for
+`proof-scheduled-trigger` and look for a `test_runs` row with `trigger_type='scheduled-regression'`
+before assuming this is live — a committed migration is not the same as an applied one on this
+project (see the migrations-105–111 gap earlier in `RUNBOOK.md`).
+
 ## Quickstart for development
 
 ```bash

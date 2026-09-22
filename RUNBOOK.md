@@ -810,6 +810,33 @@ Practical effect: Proof can now run its full battery, including the new
 category-coverage cases, against Vito's Pizza itself (protected + real
 phone) via this harness — not just against a phone-less QA twin.
 
+### Post-launch: scheduled Proof regression sweeps (migration 147, 2026-09-22)
+
+Proof above is the pre-launch gate — it runs once, against a QA twin, before
+a shop is allowed to go live. It says nothing about a shop that has been live
+for weeks and has since had its menu edited, its flags changed, or the
+underlying chat-sms engine changed under it. The `proof-scheduled-trigger`
+pg_cron job (see Scheduled jobs table) closes that gap: every 4 hours it
+enqueues a real Proof run for every live shop, so a regression is caught
+automatically instead of only when someone remembers to run Proof by hand or
+a customer hits it first.
+
+These runs land in `test_runs` exactly like any other, tagged
+`trigger_type = 'scheduled-regression'` (mapped from `test_run_queue.reason =
+'scheduled'` in both `test-runner/index.ts` and `scripts/test-suite/worker.ts`
+— keep both mappers in sync if this vocabulary changes). A new nullable
+`test_runs.notified_at` column lets a downstream detector mark "already
+alerted on this one" without a second results table — `test_runs` stays the
+single source of truth for Proof results.
+
+This migration does not touch `test-runner` or its 60s drain loop at all —
+it only adds an enqueue step on top, reusing the same non-terminal-row guard
+used everywhere else in this codebase. **The failure-side triage (a script
+that polls for un-notified failing scheduled runs and raises a trigger for a
+human/agent to look at) lives outside this repo**, in the SprintAI ops
+workspace (`check-critical-proof-runs.sh` + `HEARTBEAT.md`) — this repo only
+produces the data, it does not alert on it.
+
 ### QA-twin creator
 
 `scripts/create-qa-twin.py` clones any shop as an unprotected, phone-less,
@@ -941,6 +968,7 @@ recipient is owner-only — but should be closed with the vault bearer
 | `issue-detector` | Every 10 min (pg_cron, 047/048) | Detect quality issues from evals + ticket delivery failures; write to issues table; set notified_at on source evals |
 | `issue-detector-escalation` | Every 2 min (pg_cron, 093, jobid 80) | Escalate paid+unacknowledged orders to `owner_mobile` by SMS after 7 min |
 | `test-runner` | Every 60s (pg_cron, 070) | Autonomous per-shop acceptance suite: drain `test_run_queue`, run Proof/CartOps battery, checkpoint per-case, incremental scoring |
+| `proof-scheduled-trigger` | Every 4h, top of hour (pg_cron SQL job, 147) | Enqueue one `test_run_queue` row (`reason='scheduled'`) per live (`is_paused=false`) shop, skipped if a non-terminal row already exists for that shop; `test-runner`'s existing 60s drain loop then runs it like any other row. Plain SQL in the cron body — no edge function, no bearer secret to break. Cadence fixed at 4h per Jason 2026-09-22 (~$7/day) |
 | `campaign-status-reader` | Hourly (pg_cron, 083, jobid 89) — **applied, running, live** (2026-09-10: `DAILY_RESET_SECRET` generated and set as both the function secret and the matching `vault.secrets` entry — self-mintable shared secret, not a third-party credential, no Jason dependency; manually triggered the job's own auth path and confirmed a real 200 `{"ok":true,"read":0,"advanced":0}`, not 401/500) | Poll Telnyx mapping status; advance campaign_assignment_status submitted→approved when both mappings ADDED |
 | `daily-reset` | Daily | Clear expired specials, delivery pauses; audit log |
 

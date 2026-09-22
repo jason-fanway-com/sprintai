@@ -703,6 +703,20 @@ about orders completing and staying accurate to what was said, not about billing
 was measured against the team's own sandbox shop; the same test has not yet been run
 against either of the two real, non-test restaurants on the platform.
 
+### Added 2026-09-22 — regression checks on live restaurants now run themselves, every 4 hours
+
+Until today, the automated test suite that certifies a restaurant's ordering flow (see "Proof"
+above) only ran once, before a shop went live, or whenever a person remembered to run it by
+hand after a code change. Every real shop's menu, hours, and settings keep changing after
+launch, and the ordering code itself keeps changing too — so a fix or a menu edit could quietly
+break something on a shop that had already passed its one-time test, and nobody would know
+until a customer hit it. Now a scheduled job re-runs the full test battery against every live
+restaurant automatically, every 4 hours, with no one having to remember to trigger it. Cost is
+roughly $7/day. This does not yet notify anyone when a run fails — that alerting step is a
+separate, already-built piece running outside this codebase — but the automatic checking itself
+removes a recurring point of human failure: relying on someone's memory to catch a regression
+on a restaurant that is already taking real customers' money.
+
 ---
 
 ## What's next (near-term roadmap)
