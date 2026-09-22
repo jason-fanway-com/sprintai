@@ -36,6 +36,7 @@ import { generateRootCauseFix } from "./fix.ts";
 // manual-investigation for any reason not yet mapped.
 function mapQueueReasonToTriggerType(reason: string | null): TriggerType {
   if (reason === "onboarding") return "onboarding";
+  if (reason === "scheduled") return "scheduled-regression";
   if (reason === "manual") return "manual-investigation";
   console.warn(`worker: unrecognized test_run_queue.reason "${reason}" — falling back to manual-investigation`);
   return "manual-investigation";

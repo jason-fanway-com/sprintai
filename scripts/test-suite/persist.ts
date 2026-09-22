@@ -63,12 +63,14 @@ export type TriggerType =
   | "fix-verification"    // targeted re-run to confirm one specific fix
   | "change-set-batch"    // full-suite pass at the end of a batch of changes
   | "onboarding"          // queue-triggered automatic run (new shop onboarding, cron)
+  | "scheduled-regression" // queue-triggered automatic 4-hour regression sweep across all live shops
   | "manual-investigation"; // ad-hoc run not tied to a specific fix or batch
 
 export const TRIGGER_TYPES: readonly TriggerType[] = [
   "fix-verification",
   "change-set-batch",
   "onboarding",
+  "scheduled-regression",
   "manual-investigation",
 ];
 

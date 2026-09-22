@@ -36,6 +36,7 @@ const CHAT_FUNCTION_URL = `https://${PROJECT_REF}.supabase.co/functions/v1/chat-
 // Mirrors scripts/test-suite/worker.ts's mapping (see that file for why).
 function mapQueueReasonToTriggerType(reason: string | null): TriggerType {
   if (reason === "onboarding") return "onboarding";
+  if (reason === "scheduled") return "scheduled-regression";
   if (reason === "manual") return "manual-investigation";
   console.warn(`test-runner: unrecognized test_run_queue.reason "${reason}" — falling back to manual-investigation`);
   return "manual-investigation";
