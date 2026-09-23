@@ -76,6 +76,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
       choices: [{ id: "brWhite", display: "White", price_delta_cents: 0 }, { id: "brRye", display: "Rye", price_delta_cents: 0 }, { id: "brWheat", display: "Wheat", price_delta_cents: 0 }] },
   ]),
   item("chq", "Chicken", "Quesadillas", 1249),
+  item("lbCup", "Cup Lobster Bisque Soup", "Soups", 499, { display_name: "Cup Lobster Bisque Soup" }),
+  item("lbBowl", "Bowl Lobster Bisque Soup", "Soups", 799, { display_name: "Bowl Lobster Bisque Soup" }),
   item("chparmE", "Chicken Parmesan", "Entrees", 1795),
   item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [
     { group_id: "gsDress", slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
@@ -116,6 +118,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["house salad", IDS.houseSalad], ["greek salad", IDS.greekSalad],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak], ["sandwich", IDS.cheesesteak], ["sandwiches", IDS.cheesesteak],
   ["chicken", "chq"], ["chicken quesadilla", "chq"], ["quesadilla", "chq"],
+  ["lobster bisque", "lbCup"], ["lobster bisque", "lbBowl"], ["lobster bisque soup", "lbCup"], ["lobster bisque soup", "lbBowl"],
   ["chicken parmesan", "chparmE"], ["chicken parmesan entree", "chparmE"],
   ["chicken parmesan", "chparm"], ["chicken parmesan sandwich", "chparm"], ["chicken parmesan sandwiches", "chparm"], ["parmesan sandwich", "chparm"], ["sandwich", "chparm"], ["sandwiches", "chparm"],
   ["pepperoni stromboli", "roll"], ["pepperoni", "roll"], ["pepperoni roll", "roll"],

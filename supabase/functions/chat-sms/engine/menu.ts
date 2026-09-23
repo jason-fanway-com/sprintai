@@ -93,7 +93,7 @@ export interface RawMenuItem {
 const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
 const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra large|personal|sheet|cup|bowl|regular)\b.*$/i;
 
-const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|sheet|regular)\b\s*(?:\d+\s*(?:''|"|”)?\s*)?(.+)$/i;
+const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|sheet|regular|cup|bowl|pint|quart)\b\s*(?:\d+\s*(?:''|"|”)?\s*)?(.+)$/i;
 
 const NAME_PIECES_RE = /^(.*?)\s*[-–(]\s*\d+\s*(?:pieces?|pcs?|ct|count)\b.*$/i;
 const PIECES_RE = /\((\d+)\)|\b(\d+)\s*(?:pieces?|pcs?|ct|count|wings)\b/i;

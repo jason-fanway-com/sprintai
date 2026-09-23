@@ -54,7 +54,7 @@ function wordMatches(w: string, pool: Set<string>): boolean { return pool.has(w)
 
 /** Filter candidates by a customer span: word subset of the display name, or its size facet. */
 export function narrow(candidateIds: string[], span: string, menu: Menu): string[] {
-  const sw = words(span).map(singular);
+  const sw = words(span).filter((w) => !STOPWORDS.has(w)).map(singular); // "medium size" narrows by "medium"
   if (sw.length === 0) return candidateIds;
   const pool = (id: string): Set<string> => {
     const it = menu.items.get(id)!;
@@ -236,9 +236,9 @@ export function bindLine(line: Line, menu: Menu): void {
       const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
       if (hit) cands = [hit];
     }
-    // the span's own words narrow first ("everything bagels" over the bagel category)
+    // the span's own words narrow first ("everything bagels" over the bagel category; "bowl of lobster bisque" by its size)
     if (cands.length > 1) {
-      for (const w of contentWords(line.span)) {
+      for (const w of words(line.span).filter((w) => !STOPWORDS.has(w))) {
         const n = narrow(cands, w, menu);
         if (n.length >= 1 && n.length < cands.length) cands = n;
       }

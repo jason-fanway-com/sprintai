@@ -237,7 +237,8 @@ Deno.test("focus conversion: the model returns add_line for a size word while a 
   o = say(o.form, "large please", [{ kind: "add_line", item_span: "large", qty: 1, option_spans: [] }]);
   assertEquals(o.form.lines.length, 1);
   assertEquals(o.form.lines[0].item_id, IDS.pepPizzaL);
-  assert(o.ledger.some((e) => e.event === "add_reclassified_as_answer"));
+  // "large please" is now a closed answer (filler words no longer block narrowing), so no model call was needed
+  assert(o.ledger.some((e) => e.event === "add_reclassified_as_answer" || e.event === "answer_option"));
 });
 
 Deno.test("invalid address three times offers pickup; a valid one is acknowledged", () => {
@@ -784,6 +785,23 @@ Deno.test("phone test 5: 'Chicken parm' never becomes the $12.49 'Chicken' quesa
   // the bare word alone still finds the quesadilla
   const q = say(f, "a chicken", [{ kind: "add_line", item_span: "chicken", qty: 1, option_spans: [] }]);
   assertEquals(q.form.lines[0].item_id, "chq");
+});
+
+Deno.test("Jev eval findings: a size word in the span resolves ('bowl of lobster bisque'); 'medium size' narrows by medium", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "can I get a bowl of lobster bisque", [{ kind: "add_line", item_span: "bowl of lobster bisque", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, "lbBowl");
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  o = say(f, "a cup of lobster bisque please", [{ kind: "add_line", item_span: "lobster bisque", qty: 1, option_spans: ["a cup"] }]);
+  assertEquals(o.form.lines[0].item_id, "lbCup");
+  o = say(f, "pepperoni pizza, medium size", [{ kind: "add_line", item_span: "pepperoni pizza", qty: 1, option_spans: ["medium size"] }]);
+  assertEquals(o.form.lines[0].item_id, IDS.pepPizzaM);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  // a bare 'lobster bisque' still asks the size, and names it as a size question
+  o = say(f, "lobster bisque", [{ kind: "add_line", item_span: "lobster bisque", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What size");
+  assertStringIncludes(o.reply, "Cup or Bowl");
 });
 
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
