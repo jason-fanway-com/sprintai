@@ -83,6 +83,7 @@ export interface OrderForm {
   turn_no: number;
   /** set by the runner when a checkout session exists for the confirmed form */
   checkout_session_id: string | null;
+  checkout_url?: string | null; // the pay link once created, so a later message re-sends it instead of a failure line
 }
 
 export function newForm(shop_id: string, menu_version: string | null): OrderForm {

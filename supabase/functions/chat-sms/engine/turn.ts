@@ -211,8 +211,7 @@ export function turn(input: TurnInput): TurnOutput {
   for (const l of form.lines) bindLine(l, menu);
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
 
-  // 5. omissions: the second reader saw an item the first did not act on. In a message that was only conversation
-  // (talk, a menu question), a lone uncounted word ("show up at my house") is not an order; a multi-word name or a counted mention is.
+  // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control");
   const strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
   const anyStrong = rec.omissions.some(strong);

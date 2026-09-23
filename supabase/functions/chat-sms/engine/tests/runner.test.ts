@@ -181,3 +181,20 @@ Deno.test("runner: the judge drops a pointless omission question; a failed judge
   assertStringIncludes(off.reply, "Did you also want garlic knots"); // switched off: no call, today's question
   } finally { JUDGE.enabled = was; }
 });
+
+Deno.test("runner: a message after the pay link re-sends the same link, never 'couldn't create your payment link'", async () => {
+  const db = new FakeDb(); const d = deps(db, () => [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  const base = { shop, conversationId: "conv-l", lastBotMessage: null as string | null, isFirstContact: true };
+  let cart: RunnerInput["cart"] = { id: "cart-l", engine_form: null, test_mode: true, stripe_checkout_session_id: null, notes: null };
+  let out = await runEngineTurn({ ...base, cart, message: "pickup" }, d);
+  out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "garlic knots", isFirstContact: false }, d);
+  out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "thats it", isFirstContact: false }, d);
+  out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "yes", isFirstContact: false }, d);
+  assertStringIncludes(out.reply, "Pay here: https://pay.example/o/abc");
+  assertEquals(out.form.checkout_url, "https://pay.example/o/abc");
+  cart = { ...cart, engine_form: out.form, stripe_checkout_session_id: "cs_test_1" };
+  d.interpretImpl = (() => Promise.resolve({ ok: true as const, moves: [{ kind: "talk", text: "Thanks, see you soon." }], raw: null, ms: 1 })) as any;
+  out = await runEngineTurn({ ...base, cart, message: "thanks, coming now", isFirstContact: false }, d);
+  assert(!out.reply.includes("couldn't create"), out.reply);
+  assertStringIncludes(out.reply, "Pay here: https://pay.example/o/abc");
+});

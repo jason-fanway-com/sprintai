@@ -182,7 +182,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   }
 
   // 3. the turn
-  const turnInput = { form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0 };
+  const turnInput = { form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0, checkoutUrl: form0.checkout_url ?? null };
   let out = turn(turnInput);
   // 3b. an uncovered mention the second reader wants to ask about goes to the judge first; the turn is
   // pure, so it is simply run again with the answers. A failed or slow judge means today's question.
@@ -211,7 +211,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
       orderType: form.fulfillment ?? "pickup", deliveryFeeCents: t.delivery_fee_cents, tipCents: t.tip_cents, taxCents: t.tax_cents, notes: input.cart.notes ?? null,
     });
     if (res.ok) {
-      form.checkout_session_id = res.sessionId;
+      form.checkout_session_id = res.sessionId; form.checkout_url = res.url;
       out.plan.question = { kind: "handoff", totals: t, url: res.url };
       reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
     } else {
