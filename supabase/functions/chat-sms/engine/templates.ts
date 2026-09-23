@@ -77,7 +77,8 @@ export const T = {
   moneyLine: (parts: string[]) => parts.join(" · "),
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
   checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
-  afterPay: () => `We'll text you when it's ready.`,
+  // the same wait the paid receipt promises (index.ts): pickup 10-15 min, delivery 30-45 min
+  afterPay: (delivery: boolean) => delivery ? `It'll be on its way about 30-45 minutes after you pay.` : `We'll have it ready about 10-15 minutes after you pay. We look forward to seeing you.`,
 
   lineUnresolved: (span: string, c: number) => [
     `I couldn't find "${span}" on the menu. What would you like instead?`,
@@ -108,15 +109,15 @@ export const T = {
   // info
   cartEmpty: () => `Your order is empty so far.`,
   cartHeader: () => `Your order so far:`,
-  itemInfo: (name: string, money: string, options: string[]) =>
-    `${name} is ${money}.${options.length ? ` Options: ${options.join("; ")}.` : ""}`,
+  itemInfo: (name: string, money: string, options: string[], description: string | null = null) =>
+    `${name}${description ? `: ${description}.` : ""} ${money}.${options.length ? ` Options: ${options.join("; ")}.` : ""}`,
   listInfo: (names: string[]) => `Options: ${names.slice(0, 12).join(", ")}${names.length > 12 ? `, and ${names.length - 12} more` : ""}.`,
   menuCategories: (cats: string[]) => `Categories: ${cats.join(", ")}. Name an item or a category.`,
   unknownInfo: () => `I can help you order. Name an item or ask about one.`,
   human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `Someone from the shop will follow up with you.`),
   cancelled: () => `Okay, I've cancelled that order. Text us anytime to start a new one.`,
   startedOver: () => `Okay, starting fresh.`,
-  noEta: () => `I can't see prep or delivery times from here. We'll text you when your order is ready.`,
+  noEta: () => `Pickup orders are usually ready in about 10-15 minutes, delivery in about 30-45.`,
   unclear: (c = 0) => [`Sorry, I didn't catch that.`, `I didn't follow that.`, `I can take your order here. Name an item, ask about the menu, or reply DONE when you're finished.`][Math.min(c, 2)],
   fallback: () => `Sorry, something went wrong on our end. Please text again in a moment.`,
 };

@@ -22,6 +22,7 @@ export interface MenuItem {
   id: string;
   name: string;
   display_name: string;
+  description: string | null;
   category: string | null;
   base_cents: number;
   groups: MenuGroup[];
@@ -79,6 +80,7 @@ export interface RawMenuItem {
   id: string;
   name: string;
   display_name?: string | null;
+  description?: string | null;
   category?: string | null;
   price_cents: number;
   bot_state?: string | null;
@@ -153,7 +155,7 @@ export function buildMenu(input: {
     items.set(r.id, {
       id: r.id,
       name: r.name,
-      display_name: display,
+      display_name: display, description: r.description?.trim() || null,
       category: r.category ?? null,
       base_cents: r.ask_plan?.base_price_cents ?? r.price_cents,
       groups,

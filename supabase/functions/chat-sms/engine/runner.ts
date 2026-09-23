@@ -84,7 +84,7 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
     .order("created_at", { ascending: false }).limit(1).maybeSingle();
   const menuId = (menuRow as { id: string } | null)?.id;
   const items = menuId ? await pageAll<RawMenuItem>((a, b) => supabase.from("menu_items")
-    .select("id, name, display_name, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
+    .select("id, name, display_name, description, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
     .eq("menu_id", menuId).eq("active", true).order("id", { ascending: true }).range(a, b)) : [];
   const ids = items.map((i) => i.id);
   const groups: Array<{ id: string; menu_item_id: string; name: string; max_select: number | null; default_choice_id: string | null }> = [];

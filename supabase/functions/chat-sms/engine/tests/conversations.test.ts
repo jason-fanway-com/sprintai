@@ -820,6 +820,35 @@ Deno.test("judge: an omission below the threshold is not asked; at or above it, 
   assertEquals(kept.form.omissions.map((o) => o.span), ["garlic knots"]);
 });
 
+Deno.test("phone test 6: 'what is crazy fries' answers with the menu description, not a price alone or an invention", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "wait, what is crazy fries?", [{ kind: "ask_menu", about_span: "crazy fries" }]);
+  assertStringIncludes(o.reply, "Crazy Fries: Chicken steak meat, onions, nacho cheese, mild sauce. $7.49.");
+});
+
+Deno.test("phone test 6: a generic word inside a remark is not an omission; the same word while ordering still is", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const remark = say(f, "You dont have to text me when it's ready, it will just show up at my house", [{ kind: "talk", text: "Got it, no text." }]);
+  assert(!remark.reply.includes("Did you also want"), remark.reply);
+  assertEquals(remark.form.omissions, []);
+  assert(remark.ledger.some((e) => e.event === "omission_ignored_in_remark"));
+  const ordering = say(f, "a large pepperoni pizza and a house", [{ kind: "add_line", item_span: "large pepperoni pizza", qty: 1, option_spans: [] }]);
+  assertStringIncludes(ordering.reply, "Did you also want house");
+  const knots = say(f, "oh and garlic knots", [{ kind: "talk", text: "Sure." }]);
+  assertStringIncludes(knots.reply, "Did you also want garlic knots"); // a multi-word item name is evidence even in a remark
+});
+
+Deno.test("phone test 6: the pay line promises a wait, not a text", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it"); o = say(o.form, "yes");
+  assert(!o.reply.includes("text you"), o.reply);
+  assertStringIncludes(o.reply, "10-15 minutes");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

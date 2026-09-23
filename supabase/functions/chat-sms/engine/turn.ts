@@ -1,6 +1,6 @@
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
-import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm } from "./form.ts";
+import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile, scan } from "./crossread.ts";
 import { bindLine, lineMatchesSpan, narrow, resolveSpan, spanAnswersLine } from "./resolve.ts";
@@ -145,8 +145,7 @@ export function turn(input: TurnInput): TurnOutput {
     moves.push(m);
   }
 
-  const targetOf = (ref: Move & { kind: "change_line" } extends { ref: infer R } ? R : never) => "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id)
-    : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : form0.lines.length === 1 ? form0.lines[0] : undefined;
+  const targetOf = (ref: LineRef) => "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id) : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : form0.lines.length === 1 ? form0.lines[0] : undefined;
   // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same
   // batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
   for (let i = moves.length - 1; i >= 0; i--) {
@@ -212,8 +211,13 @@ export function turn(input: TurnInput): TurnOutput {
   for (const l of form.lines) bindLine(l, menu);
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
 
-  // 5. omissions: the second reader saw an item the first did not act on
+  // 5. omissions: the second reader saw an item the first did not act on. In a message that was only conversation
+  // (talk, a menu question), a lone uncounted word ("show up at my house") is not an order; a multi-word name or a counted mention is.
+  const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control");
+  const strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
+  const anyStrong = rec.omissions.some(strong);
   for (const om of rec.omissions) {
+    if (remarkOnly && !anyStrong && !strong(om)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
     const alreadyThere = form.lines.some((l) =>
       (l.item_id && om.item_ids.includes(l.item_id)) ||
       (l.status.kind === "ambiguous" && l.status.candidates.some((c) => om.item_ids.includes(c))) ||

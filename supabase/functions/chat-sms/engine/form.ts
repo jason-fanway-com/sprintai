@@ -183,6 +183,14 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     return hits;
   };
 
+  /** the one line a change/remove refers to; records a decline or a which-one question and returns null otherwise */
+  const targetLine = (m: Move & { kind: "change_line" | "remove_line" }): Line | null => {
+    const ids = resolveRef(m.ref);
+    if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); return null; }
+    if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; return null; }
+    reopenIfConfirmed();
+    return form.lines.find((l) => l.line_id === ids[0])!;
+  };
   /** apply a derived batch against the current form and fold its results into this one */
   const nested = (batch: Move[], open: OrderForm["open"]) => {
     const sub = apply({ ...form, open }, batch, lineSpanMatcher);
@@ -229,11 +237,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         break;
       }
       case "change_line": {
-        const ids = resolveRef(m.ref);
-        if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); break; }
-        if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; break; }
-        reopenIfConfirmed();
-        const line = form.lines.find((l) => l.line_id === ids[0])!;
+        const line = targetLine(m); if (!line) break;
         if (m.qty !== undefined && m.qty !== null) line.qty = Math.max(1, Math.floor(m.qty));
         if (m.add_option_spans?.length) { line.held.push(...m.add_option_spans); if (line.status.kind === "complete") line.status = { kind: "needs_slot", group_id: "" }; }
         if (m.remove_option_spans?.length) { line.held.push(...m.remove_option_spans.map((s) => `-${s}`)); if (line.status.kind === "complete") line.status = { kind: "needs_slot", group_id: "" }; }
@@ -243,12 +247,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
       }
       case "remove_line": {
         if (form.lines.length === 0) { declines.push({ code: "nothing_to_remove" }); break; }
-        const ids = resolveRef(m.ref);
-        if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); break; }
-        if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; break; }
-        reopenIfConfirmed();
-        const idx = form.lines.findIndex((l) => l.line_id === ids[0]);
-        const [gone] = form.lines.splice(idx, 1);
+        const target = targetLine(m); if (!target) break;
+        const [gone] = form.lines.splice(form.lines.indexOf(target), 1);
         removed.push({ line_id: gone.line_id, item_id: gone.item_id, span: gone.span });
         ledger.push({ turn: t, event: "remove_line", data: { line_id: gone.line_id } });
         break;

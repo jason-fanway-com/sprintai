@@ -60,6 +60,7 @@ function moneyLine(t: Totals): string {
 }
 
 
+const lineAndItem = (form: OrderForm, menu: Menu, id: number) => { const l = form.lines.find((x) => x.line_id === id); return [l, l?.item_id ? menu.items.get(l.item_id) ?? null : null] as const; };
 export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, menu: Menu): string {
   switch (q.kind) {
     case "fulfillment": return T.fulfillment(count);
@@ -109,8 +110,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       return listAll();
     }
     case "line_slot": {
-      const l = form.lines.find((x) => x.line_id === q.line_id);
-      const item = l?.item_id ? menu.items.get(l.item_id) : null;
+      const [l, item] = lineAndItem(form, menu, q.line_id);
       const g = item?.groups.find((x) => x.id === q.group_id);
       if (!l || !item || !g) return T.unclear();
       const within = l.slot_candidates[g.id];
@@ -118,8 +118,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       return T.slot(item.display_name, groupPrompt(g.name), choices, count);
     }
     case "line_picks": {
-      const l = form.lines.find((x) => x.line_id === q.line_id);
-      const item = l?.item_id ? menu.items.get(l.item_id) : null;
+      const [l, item] = lineAndItem(form, menu, q.line_id);
       if (!l || !item?.bundle) return T.unclear();
       const unit = item.bundle.unit.toLowerCase();
       const strip = (n: string) => { const l = n.toLowerCase(); for (const suf of [` ${unit}s`, ` ${unit}`]) if (l.endsWith(suf)) return n.slice(0, n.length - suf.length); return n; };
@@ -127,11 +126,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       return T.picks(item.display_name, q.remaining, item.bundle.count, item.bundle.unit, flavors, count);
     }
     case "line_ref": {
-      const names = q.candidates.map((id) => {
-        const l = form.lines.find((x) => x.line_id === id);
-        const it = l?.item_id ? menu.items.get(l.item_id) : null;
-        return it ? `${l!.qty} × ${it.display_name}` : (l?.span ?? "?");
-      });
+      const names = q.candidates.map((id) => { const [l, it] = lineAndItem(form, menu, id); return it ? `${l!.qty} × ${it.display_name}` : (l?.span ?? "?"); });
       return T.lineRef(names);
     }
   }
@@ -182,7 +177,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       else parts.push([T.cartHeader(), ...receiptRows(i.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(i.totals)].join("\n"));
     } else if (i.kind === "item") {
       const opts = i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`);
-      parts.push(T.itemInfo(i.item.display_name, dollars(i.unit_cents), opts));
+      parts.push(T.itemInfo(i.item.display_name, dollars(i.unit_cents), opts, i.item.description));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names.slice(0, 10)));
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));
@@ -203,7 +198,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
         T.confirmAsk(q.count),
       ].join("\n"));
     } else if (q.kind === "handoff") {
-      parts.push(`${T.handoff(q.url)} ${T.afterPay()}`.trim());
+      parts.push(`${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim());
     }
   }
   return parts.join("\n\n").trim();
