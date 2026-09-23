@@ -4,6 +4,7 @@ import { assert, assertEquals, assertStringIncludes } from "https://deno.land/st
 import { runEngineTurn, type RunnerDeps, type RunnerInput } from "../runner.ts";
 import { IDS, RAW_ITEMS, RAW_LEXICON } from "./fixture-menu.ts";
 import type { Move } from "../form.ts";
+import { JUDGE } from "../turn.ts";
 
 type Row = Record<string, unknown>;
 class FakeDb {
@@ -154,6 +155,8 @@ Deno.test("runner: a failed checkout reopens the confirm step instead of pretend
 });
 
 Deno.test("runner: the judge drops a pointless omission question; a failed judge leaves today's question", async () => {
+  const was = JUDGE.enabled; JUDGE.enabled = true; // the switch is off in production; the seam still has to work
+  try {
   const onlyPizzas = (msg: string): Move[] => msg.includes("pepperoni") ? [{ kind: "add_line", item_span: "pepperoni pizza", qty: 2, option_spans: ["large"] }] : msg === "pickup" ? [] : [];
   const msg = "2 large pepperoni pizzas and an order of garlic knots";
   const run = async (judge: ((asks: Array<{ span: string }>) => Record<string, number> | null) | undefined) => {
@@ -173,4 +176,8 @@ Deno.test("runner: the judge drops a pointless omission question; a failed judge
   assertStringIncludes(failed.reply, "Did you also want garlic knots");
   const none = await run(undefined);
   assertStringIncludes(none.reply, "Did you also want garlic knots");
+  JUDGE.enabled = false;
+  const off = await run((asks) => Object.fromEntries(asks.map((a) => [a.span, 0.05])));
+  assertStringIncludes(off.reply, "Did you also want garlic knots"); // switched off: no call, today's question
+  } finally { JUDGE.enabled = was; }
 });

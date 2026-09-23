@@ -23,7 +23,7 @@ export interface TurnInput {
   /** typed answers from judge.ts; the core turns probabilities into decisions with JUDGE, nowhere else */
   judgments?: { omission_asked_p?: Record<string, number> };
 }
-export const JUDGE = { omission_ask_at: 0.5 }; // evidence: docs/specs/2026-09-23-jev-phase0-eval.md
+export const JUDGE = { enabled: false, omission_ask_at: 0.5 }; // off by Jason 2026-09-23: small gain, extra dependency; evidence in docs/specs/2026-09-23-jev-phase0-eval.md
 export interface TurnOutput {
   form: OrderForm;
   ledger: LedgerEntry[];

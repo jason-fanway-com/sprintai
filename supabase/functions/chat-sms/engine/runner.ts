@@ -7,7 +7,7 @@ import { newForm, type Move, type OrderForm } from "./form.ts";
 import { closedAnswer } from "./vocab.ts";
 import { interpret, summarizeOpen, type ModelConfig } from "./interpret.ts";
 import { judgeOmissions } from "./judge.ts";
-import { turn } from "./turn.ts";
+import { turn, JUDGE } from "./turn.ts";
 import { render } from "./render.ts";
 import { totals } from "./price.ts";
 import { toCartJson } from "./project.ts";
@@ -189,7 +189,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   let judgeMs: number | null = null;
   const asks = out.ledger.filter((e) => e.event === "possible_omission").map((e) => e.data as { span: string; item_ids?: string[] })
     .map((d) => ({ span: d.span, candidates: (d.item_ids ?? []).map((id) => menu.items.get(id)?.display_name ?? id).slice(0, 8) }));
-  if (asks.length > 0 && deps.model.provider === "openrouter") {
+  if (JUDGE.enabled && asks.length > 0 && deps.model.provider === "openrouter") {
     const j = await (deps.judgeImpl ?? judgeOmissions)({ message: input.message, last_bot: input.lastBotMessage, asks }, { apiKey: deps.model.apiKey, timeoutMs: 1500 });
     judgeMs = j.ms;
     if (j.ok) out = turn({ ...turnInput, judgments: { omission_asked_p: j.p } });
