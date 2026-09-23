@@ -2,11 +2,8 @@
 // Pure string hygiene plus a fixed alias table. No intent detection lives here.
 
 const ALIASES: Record<string, string> = {
-  lg: "large", lrg: "large", l: "large",
-  med: "medium", md: "medium", m: "medium",
-  sm: "small", s: "small",
-  xl: "xlarge", "x-large": "xlarge", "extra-large": "xlarge",
-  w: "with",
+  lg: "large", lrg: "large", l: "large", med: "medium", md: "medium", m: "medium", sm: "small", s: "small",
+  xl: "xlarge", "x-large": "xlarge", "extra-large": "xlarge", w: "with",
 };
 
 export function normalize(text: string): string {

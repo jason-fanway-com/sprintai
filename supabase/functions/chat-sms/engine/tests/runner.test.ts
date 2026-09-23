@@ -51,12 +51,13 @@ class FakeDb {
 
 const shop = { id: "vitos", tenant_id: "t1", name: "Vito's Pizza", delivery_enabled: true, delivery_fee_cents: 0, tax_rate_bps: 600, phone_number_e164: "+16105550100", latitude: 40.57, longitude: -75.57, delivery_radius_mi: 5 };
 
-function deps(db: FakeDb, fakeInterpret: (msg: string) => Move[]): RunnerDeps & { created: unknown[]; expired: string[] } {
+function deps(db: FakeDb, fakeInterpret: (msg: string) => Move[], fakeJudge?: (asks: Array<{ span: string }>) => Record<string, number> | null): RunnerDeps & { created: unknown[]; expired: string[] } {
   const created: unknown[] = []; const expired: string[] = [];
   return {
     // deno-lint-ignore no-explicit-any
     supabase: db as any,
-    model: { provider: "anthropic", model: "fake", apiKey: "x" },
+    model: { provider: fakeJudge ? "openrouter" : "anthropic", model: "fake", apiKey: "x" },
+    ...(fakeJudge ? { judgeImpl: ((ctx: { asks: Array<{ span: string }> }) => { const p = fakeJudge(ctx.asks); return Promise.resolve(p ? { ok: true as const, p, ms: 1, cost: 0 } : { ok: false as const, reason: "timeout" as const, detail: "fake", ms: 1500 }); }) as any } : {}),
     geocoder: (text: string) => Promise.resolve({ text, formatted: text + ", Allentown, PA", validated: true, zone_ok: true }),
     createCheckout: (req) => { created.push(req); return Promise.resolve({ ok: true as const, sessionId: "cs_test_1", url: "https://pay.example/o/abc" }); },
     expireCheckout: (id) => { expired.push(id); return Promise.resolve(); },
@@ -150,4 +151,26 @@ Deno.test("runner: a failed checkout reopens the confirm step instead of pretend
   assertStringIncludes(out.reply, "Reply YES to try again");
   assertEquals(out.form.status, "confirming");
   assertEquals(out.form.confirmed, false);
+});
+
+Deno.test("runner: the judge drops a pointless omission question; a failed judge leaves today's question", async () => {
+  const onlyPizzas = (msg: string): Move[] => msg.includes("pepperoni") ? [{ kind: "add_line", item_span: "pepperoni pizza", qty: 2, option_spans: ["large"] }] : msg === "pickup" ? [] : [];
+  const msg = "2 large pepperoni pizzas and an order of garlic knots";
+  const run = async (judge: ((asks: Array<{ span: string }>) => Record<string, number> | null) | undefined) => {
+    const db = new FakeDb(); const d = deps(db, onlyPizzas, judge);
+    const base = { shop, conversationId: "conv-j", lastBotMessage: null as string | null, isFirstContact: true };
+    const cart: RunnerInput["cart"] = { id: "cart-j", engine_form: null, test_mode: true, stripe_checkout_session_id: null, notes: null };
+    let out = await runEngineTurn({ ...base, cart, message: "pickup" }, d);
+    out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: msg, isFirstContact: false }, d);
+    return out;
+  };
+  const dropped = await run((asks) => Object.fromEntries(asks.map((a) => [a.span, 0.05])));
+  assert(!dropped.reply.includes("Did you also want"), dropped.reply);
+  assertEquals(dropped.form.omissions, []);
+  const kept = await run((asks) => Object.fromEntries(asks.map((a) => [a.span, 0.95])));
+  assertStringIncludes(kept.reply, "Did you also want garlic knots");
+  const failed = await run(() => null);
+  assertStringIncludes(failed.reply, "Did you also want garlic knots");
+  const none = await run(undefined);
+  assertStringIncludes(none.reply, "Did you also want garlic knots");
 });

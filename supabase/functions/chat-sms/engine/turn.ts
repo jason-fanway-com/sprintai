@@ -20,7 +20,10 @@ export interface TurnInput {
   checkoutUrl?: string | null;
   /** the moves came from the closed vocabulary: the whole message was the answer, nothing in it is an item */
   closed?: boolean;
+  /** typed answers from judge.ts; the core turns probabilities into decisions with JUDGE, nowhere else */
+  judgments?: { omission_asked_p?: Record<string, number> };
 }
+export const JUDGE = { omission_ask_at: 0.5 }; // evidence: docs/specs/2026-09-23-jev-phase0-eval.md
 export interface TurnOutput {
   form: OrderForm;
   ledger: LedgerEntry[];
@@ -99,6 +102,12 @@ export function turn(input: TurnInput): TurnOutput {
     rec.omissions.length = 0; rec.omissions.push(...keep);
   }
   if (input.closed) rec.omissions.length = 0;
+  // the judge read each uncovered mention: below the threshold the customer was not ordering it, so no question
+  const jp = input.judgments?.omission_asked_p;
+  if (jp) {
+    const keep = rec.omissions.filter((om) => { const v = jp[om.span]; if (v !== undefined && v < JUDGE.omission_ask_at) { ledger.push({ turn: t, event: "omission_dropped_by_judge", data: { span: om.span, p: v } }); return false; } return true; });
+    rec.omissions.length = 0; rec.omissions.push(...keep);
+  }
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
     // an "item" that answers the line we asked about is an answer; one that answers ANOTHER pending

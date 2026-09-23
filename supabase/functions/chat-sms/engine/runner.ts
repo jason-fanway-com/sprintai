@@ -6,6 +6,7 @@ import { buildMenu, type LexiconEntry, type Menu, type RawMenuItem, type ShopCon
 import { newForm, type Move, type OrderForm } from "./form.ts";
 import { closedAnswer } from "./vocab.ts";
 import { interpret, summarizeOpen, type ModelConfig } from "./interpret.ts";
+import { judgeOmissions } from "./judge.ts";
 import { turn } from "./turn.ts";
 import { render } from "./render.ts";
 import { totals } from "./price.ts";
@@ -54,8 +55,10 @@ export interface RunnerDeps {
   serviceFeeCents: number;
   /** test seam; defaults to the real model call */
   interpretImpl?: typeof interpret;
+  /** test seam; defaults to the real judge call (Jev via the same OpenRouter key) */
+  judgeImpl?: typeof judgeOmissions;
 }
-export interface RunnerOutput { reply: string; form: OrderForm; assistantMessageId: string | null; ms: { model: number | null; total: number } }
+export interface RunnerOutput { reply: string; form: OrderForm; assistantMessageId: string | null; ms: { model: number | null; judge?: number | null; total: number } }
 
 const PAGE = 1000;
 async function pageAll<T>(q: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
@@ -179,7 +182,19 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   }
 
   // 3. the turn
-  const out = turn({ form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0 });
+  const turnInput = { form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0 };
+  let out = turn(turnInput);
+  // 3b. an uncovered mention the second reader wants to ask about goes to the judge first; the turn is
+  // pure, so it is simply run again with the answers. A failed or slow judge means today's question.
+  let judgeMs: number | null = null;
+  const asks = out.ledger.filter((e) => e.event === "possible_omission").map((e) => e.data as { span: string; item_ids?: string[] })
+    .map((d) => ({ span: d.span, candidates: (d.item_ids ?? []).map((id) => menu.items.get(id)?.display_name ?? id).slice(0, 8) }));
+  if (asks.length > 0 && deps.model.provider === "openrouter") {
+    const j = await (deps.judgeImpl ?? judgeOmissions)({ message: input.message, last_bot: input.lastBotMessage, asks }, { apiKey: deps.model.apiKey, timeoutMs: 1500 });
+    judgeMs = j.ms;
+    if (j.ok) out = turn({ ...turnInput, judgments: { omission_asked_p: j.p } });
+    else console.warn("[engine] judge failed", j.reason, j.detail);
+  }
   const form = out.form;
   let reply = out.reply;
 
@@ -227,5 +242,5 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   }).select("id").single();
   await deps.supabase.from("engine_ledger").insert(out.ledger.map((e) => ({ cart_id: input.cart.id, turn_no: form.turn_no, event: e.event, data: e.data ?? null }))).then(() => {}, () => {});
 
-  return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, total: Date.now() - t0 } };
+  return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, judge: judgeMs, total: Date.now() - t0 } };
 }

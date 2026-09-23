@@ -804,6 +804,22 @@ Deno.test("Jev eval findings: a size word in the span resolves ('bowl of lobster
   assertStringIncludes(o.reply, "Cup or Bowl");
 });
 
+Deno.test("judge: an omission below the threshold is not asked; at or above it, or with no judge, it is", () => {
+  const m = buildMenu({ version: "t", items: RAW_ITEMS, lexicon: RAW_LEXICON, shop: SHOP });
+  let f = newForm("vitos", "t"); f = turn({ form: f, menu: m, message: "pickup", moves: closedAnswer(f, "pickup", m)! }).form;
+  const moves: Move[] = [{ kind: "add_line", item_span: "pepperoni pizza", qty: 2, option_spans: ["large"] }]; // the model dropped the knots
+  const msg = "2 large pepperoni pizzas and an order of garlic knots";
+  const plain = turn({ form: f, menu: m, message: msg, moves });
+  assert(plain.ledger.some((e) => e.event === "possible_omission"));
+  assertEquals(plain.form.omissions.map((o) => o.span), ["garlic knots"]);
+  const dropped = turn({ form: f, menu: m, message: msg, moves, judgments: { omission_asked_p: { "garlic knots": 0.1 } } });
+  assertEquals(dropped.form.omissions, []);
+  assert(dropped.ledger.some((e) => e.event === "omission_dropped_by_judge"));
+  assert(!dropped.reply.includes("Did you also want"));
+  const kept = turn({ form: f, menu: m, message: msg, moves, judgments: { omission_asked_p: { "garlic knots": 0.9 } } });
+  assertEquals(kept.form.omissions.map((o) => o.span), ["garlic knots"]);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
