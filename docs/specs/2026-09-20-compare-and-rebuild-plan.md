@@ -387,3 +387,15 @@ Known data facts, not engine defects: Vito's lexicon gives the bare word "cheese
 panini, roll, flatbread), so a bare "cheesesteak" gets a which-one question; Vito's wing flavors have no
 "buffalo" (it is "Hot"/"Mild"), so "buffalo" becomes a kitchen note and the flavor is asked; the single-word
 term "chicken" points at the chicken quesadilla. Those belong to the lexicon compiler.
+
+**2026-09-23 16:30, after Jason's sixth phone test (order #16: four large pizzas of four kinds in one line, bacon cheese fries, delivery, $5 tip, paid).**
+The order landed whole. Three replies were wrong and each was fixed at the class: "what is crazy fries?" got a price
+only and then an invented description (the menu's own description column was never loaded; it is now, and "what is /
+what's in / describe X" is a menu question, not talk); a remark after payment ("it will just show up at my house")
+drew "Did you also want house?" because the bare word is a lexicon term for four items (a conversation-only turn now
+needs a multi-word name or a counted mention before the second reader may ask); and "We'll text you when it's ready"
+became the same wait the paid receipt already promises (pickup 10-15 min, delivery 30-45), per Jason. Deploy 7851bdd3
+(v617). Also today: Jev evaluated offline and rejected for item identity, wired for omission adjudication, then switched
+off on Jason's call (`docs/specs/2026-09-23-jev-phase0-eval.md`); the acceptance run on the judge-off build shows the same
+Vito's slow tail (p95 5.8 s) as the judge-on build, so the afternoon slowness is the model service, not the engine.
+Open data items for the lexicon compiler: bare "house", "chicken", "cheesesteak", "order", "everything" as terms.
