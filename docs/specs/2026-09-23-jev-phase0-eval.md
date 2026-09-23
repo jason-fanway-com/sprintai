@@ -72,3 +72,11 @@ ledger. Labels will come from the phone tests and the messy pass; the eval scrip
 2. Item-identity picking is rejected on evidence; the two resolver gaps it exposed are fixed with
    fixture tests instead.
 3. Re-run this eval after each week of live traffic; the case sets grow from the ledger for free.
+
+## Outcome (2026-09-23, afternoon)
+Phase 1 shipped as chat-sms v615 (commit 00fbdb40): acceptance Vito's 35/35, NJB 10/10, Zio's 10/10,
+sweep 40/42, 0 invented, 0 money mismatches; live probes confirmed the "order of garlic knots" false
+question gone. Vito's p95 rose from ~4 s to 7.6 s on that run. Jason's call on reading the results:
+the gain is small and not worth another dependency. **The judge is switched off** (`JUDGE.enabled =
+false`, commit e2e05c46, v616). The adapter, the seam tests and this eval stay in the repo so it can be
+re-enabled on evidence, one judgment at a time, without rebuilding anything.
