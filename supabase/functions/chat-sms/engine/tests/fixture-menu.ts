@@ -114,6 +114,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["small cheese pizza", IDS.cheesePizzaS], ["medium cheese pizza", IDS.cheesePizzaM], ["large cheese pizza", IDS.cheesePizzaL],
   ["pepperoni pizza", IDS.pepPizzaS], ["pepperoni pizza", IDS.pepPizzaM], ["pepperoni pizza", IDS.pepPizzaL],
   ["pepperoni pizzas", IDS.pepPizzaS], ["pepperoni pizzas", IDS.pepPizzaM], ["pepperoni pizzas", IDS.pepPizzaL],
+  ["pie", IDS.pepPizzaS], ["pie", IDS.pepPizzaM], ["pie", IDS.pepPizzaL], ["pie", IDS.cheesePizzaS], ["pie", IDS.cheesePizzaM], ["pie", IDS.cheesePizzaL], // live shape: "pie" is an item term on some pizzas, not on Hawaiian
   ["pepperoni", IDS.pepPizzaS], ["pepperoni", IDS.pepPizzaM], ["pepperoni", IDS.pepPizzaL],
   ["small pepperoni pizza", IDS.pepPizzaS], ["medium pepperoni pizza", IDS.pepPizzaM], ["large pepperoni pizza", IDS.pepPizzaL],
   ["large pepperoni", IDS.pepPizzaL], ["medium pepperoni", IDS.pepPizzaM], ["small pepperoni", IDS.pepPizzaS],

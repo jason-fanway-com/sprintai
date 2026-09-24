@@ -100,5 +100,4 @@ export function validTalk(raw: string): string | null {
   if (/\b(can'?t|cannot|don'?t|unable to)\s+(see|access|view|check|find)\b|\bnot (on|in) (our|the) menu\b|\bwe (don'?t|do not) have\b|\border system\b/i.test(text)) return null; // no claims about what it can see or what the menu has
   return text;
 }
-/** "15-20 minutes", "about an hour": prep and delivery times are not ours to promise. */
-export function talkClaimsTime(raw: string): boolean { return /\b(\d+|an?|half an?)\s*(-|to|–)?\s*\d*\s*(min|mins|minutes?|hours?|hrs?)\b/i.test(raw); }
+export function talkClaimsTime(raw: string): boolean { return /\b(\d+|an?|half an?)\s*(-|to|–)?\s*\d*\s*(min|mins|minutes?|hours?|hrs?)\b/i.test(raw); } // "15-20 minutes", "about an hour": times are not ours to promise

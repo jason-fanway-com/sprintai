@@ -1,7 +1,7 @@
 // vocab.ts — closed-vocabulary answers that never need a model. A match is the
 // WHOLE normalized message equal to an entry (or an anchored number). No
 // substring matching, no intent guessing. Anything else goes to interpret.ts.
-import { normalize } from "./normalize.ts";
+import { normalize, optionWords, words } from "./normalize.ts";
 import type { Move, OrderForm, Tip } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { matchChoice, narrow } from "./resolve.ts";
@@ -78,7 +78,10 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
     const line = form.lines.find((l) => l.line_id === open.line_id);
     if (line && open.kind === "line_slot" && line.item_id) {
       const g = menu.items.get(line.item_id)?.groups.find((x) => x.id === open.group_id);
-      if (g && matchChoice(n, g, line.slot_candidates[g.id]).kind === "one") return [{ kind: "answer_option", value_span: message.trim() }];
+      // closed means the WHOLE message is the option (plus the group's own noun): "hot sauce" yes; "hot sauce. actually scratch the soup" goes to the model
+      const m = g ? matchChoice(n, g, line.slot_candidates[g.id]) : null;
+      const chosen = m?.kind === "one" ? g!.choices.find((c) => c.id === m.choice_id) : undefined;
+      if (chosen && optionWords(n).every((w) => chosen.words.includes(w) || words(g!.name).includes(w))) return [{ kind: "answer_option", value_span: message.trim() }];
       const within = line.slot_candidates[g?.id ?? ""], pick = g && digit ? (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices)[parseInt(digit, 10) - 1] : undefined;
       if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }

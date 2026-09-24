@@ -24,7 +24,9 @@ function coverAll(content: string[], menu: Menu): Set<string> {
 export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const sw = words(span);
   if (sw.length === 0) return { kind: "none" };
-  const swSing = sw.map(singular);
+  const swSing = sw.map(singular), content = contentWords(span);
+  // the whole span IS a category word ("pie", "pizza"): the category, not whichever items the compiler tagged with it
+  for (const t of menu.categoryTerms) if (sameWords(t.wordsSing, content.map(singular))) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }
   let bestLen = 0, bestWords: string[] = []; const ids = new Set<string>();
   for (const t of menu.itemTerms) {
     if (bestLen && t.words.length < bestLen) break;
@@ -32,23 +34,20 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
     if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); bestWords = t.wordsSing; }
     ids.add(t.target_id);
   }
-  const content = contentWords(span);
   // "chicken parm" against the bare term "chicken": a run that leaves a content word of the span unmatched is
   // not the item's identity. A term that carries every content word ("chicken parmesan sandwich") wins first.
   const category = () => { for (const t of menu.categoryTerms) if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; } return null; };
   // "chicken wings" against the bare item term "chicken" and the category "wings": the category the customer named wins
   if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) {
-    const cat = category(); const catIds = cat?.kind === "item" ? [cat.id] : cat?.kind === "ambiguous" ? cat.ids : null;
-    const inCat = catIds !== null && [...ids].every((id) => catIds.includes(id));
-    const r = pick(coverAll(content, menu)) ?? (inCat ? null : cat); if (r) return r; // "hawaiian pie": Hawaiian is already a pizza, keep it
+    const cat = category(), catIds = cat?.kind === "item" ? [cat.id] : cat?.kind === "ambiguous" ? cat.ids : null;
+    const r = pick(coverAll(content, menu)) ?? (catIds && [...ids].every((id) => catIds.includes(id)) ? null : cat); if (r) return r; // "hawaiian pie": Hawaiian is already a pizza, keep it
   }
   const run = pick(ids) ?? category(); if (run) return run;
   // Partial: every content word of the span appears inside some item term. Deterministic; a question unless unique.
   return (content.length > 0 ? pick(coverAll(content, menu)) : null) ?? { kind: "none" };
 }
 
-/** Every word that names this item: its own words, name, kind facet and lexicon terms. */
-const ownWords = (item: MenuItem) => new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]);
+const ownWords = (item: MenuItem) => new Set([...item.words, ...words(item.name), ...words(item.facets.kind ?? ""), ...(menuTermWords.get(item.id) ?? [])]); // every word that names this item: its own words, name, kind facet and lexicon terms
 /** A customer word names a menu word when equal, or when it is a stem of at least four letters ("parm"). */
 function wordMatches(w: string, pool: Set<string>): boolean { return pool.has(w) || (w.length >= 4 && [...pool].some((p) => p.startsWith(w))); }
 
@@ -91,8 +90,7 @@ export function pickFacet(candidateIds: string[], menu: Menu): "kind" | "size" |
 export type ChoiceMatch = { kind: "one"; choice_id: string } | { kind: "many"; choice_ids: string[] } | { kind: "none" };
 
 export function matchChoice(span: string, group: MenuGroup, within?: string[]): ChoiceMatch {
-  const ow = optionWords(span);
-  const sw = (ow.length ? ow : words(span)).map(singular);
+  const ow = optionWords(span), sw = (ow.length ? ow : words(span)).map(singular);
   if (sw.length === 0) return { kind: "none" };
   const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
@@ -248,10 +246,13 @@ export function bindLine(line: Line, menu: Menu): void {
     // the span's own words narrow first: keep the candidates matching the MOST of them ("everything bagels", "bowl of lobster
     // bisque"). Narrowing word by word would let "chicken wings" stop at the Chicken quesadilla; scoring keeps it a tie, so we ask.
     if (cands.length > 1) {
-      const ws = words(line.span).filter((w) => !STOPWORDS.has(w));
-      const score = (id: string) => ws.filter((w) => narrow([id], w, menu).length === 1).length;
+      const ws = words(line.span).filter((w) => !STOPWORDS.has(w) && !menu.categoryTerms.some((t) => t.words.length === 1 && t.words[0] === w)); // the category noun itself narrows nothing
+      const matches = ws.map((w) => cands.filter((id) => narrow([id], w, menu).length === 1));
+      // within one category a word that names few items ("hawaiian") outweighs one that names many ("pie")
+      const oneCategory = new Set(cands.map((id) => menu.items.get(id)?.category ?? "")).size === 1;
+      const score = (id: string) => matches.reduce((t, m) => t + (m.includes(id) ? (oneCategory ? 1 / m.length : 1) : 0), 0);
       const best = Math.max(...cands.map(score));
-      if (best > 0) cands = cands.filter((id) => score(id) === best);
+      if (best > 0) cands = cands.filter((id) => Math.abs(score(id) - best) < 1e-9);
     }
     // answers to "which kind?" narrow and are then spent; one that narrows nothing is dropped, never noted
     for (const a of line.answers ?? []) {
@@ -336,8 +337,7 @@ export function bindLine(line: Line, menu: Menu): void {
  *  nothing but its parts do, return one span per part, each carrying the placement word before it. */
 function segmentTopics(h: string, cands: string[], menu: Menu): string[] {
   const ws = words(h);
-  const skip = (w: string) => STOPWORDS.has(w) || PLACEMENT.has(w);
-  const isPlacement = (w: string) => w === "half" || w === "whole";
+  const skip = (w: string) => STOPWORDS.has(w) || PLACEMENT.has(w), isPlacement = (w: string) => w === "half" || w === "whole";
   const topic = ws.filter((w) => !skip(w));
   if (topic.length < 2 || narrow(cands, topic.join(" "), menu).length > 0) return [h]; // one topping, maybe multi-word
   const out: string[] = []; let placement = "";

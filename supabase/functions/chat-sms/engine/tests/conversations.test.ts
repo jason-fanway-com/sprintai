@@ -948,6 +948,18 @@ Deno.test("tester pass 2: two identical lines never ask 'which one do you mean';
   assert(!p.reply.includes("Did you also want"), p.reply);
 });
 
+Deno.test("tester pass 2: a slot answer with more in the message is not a closed answer; the removal in it reaches the model", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a cheeseburger and garlic knots", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.open?.kind, "line_slot");
+  assertEquals(closedAnswer(o.form, "medium well", menu)?.[0]?.kind, "answer_option"); // the whole message is the option
+  assertEquals(closedAnswer(o.form, "medium well. actually scratch the knots", menu), null); // more in it: the model must read it
+  o = say(o.form, "medium well. actually scratch the knots", [{ kind: "answer_option", value_span: "medium well" }, { kind: "remove_line", ref: { span: "knots" } }]);
+  assertEquals(o.form.lines.map((l) => l.item_id), [IDS.cheeseburger]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
