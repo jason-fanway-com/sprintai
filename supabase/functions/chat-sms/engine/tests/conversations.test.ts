@@ -1285,3 +1285,24 @@ Deno.test("tester pass 8: counted breads for three hoagies split the line, one p
   assert(!r.reply.includes("Pizza"), r.reply);
 });
 
+Deno.test("tester pass 9: 'turkey sandwich' is one mention; one-of-each never leaves its own phrase as a line; restating the cart is not an omission; 'what dressings u got' lists the slot", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "turkey sandwich", [{ kind: "add_line", item_span: "turkey sandwich", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].status.kind, "ambiguous", o.reply);
+  o = say(o.form, "turkey sandwich", [{ kind: "answer_option", value_span: "turkey" }]);
+  assertEquals(o.form.lines.map((l) => l.item_id), ["tky"], o.reply);
+  let p = say(f, "some fries", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }]);
+  p = say(p.form, "one of each except sweet potato", [{ kind: "answer_option", value_span: "one of each except sweet potato" }]);
+  assert(p.form.lines.every((l) => l.item_id), p.reply);
+  assert(!p.reply.includes("couldn't find") && !p.reply.includes("leave"), p.reply);
+  let q = say(f, "a cheesesteak and cheese fries", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "cheese fries", qty: 1, option_spans: [] }]);
+  q = say(q.form, "nah just the cheesesteak and cheese fries. thats it", [{ kind: "answer", field: "items_done", value: true }]);
+  assert(!q.reply.includes("Did you also want"), q.reply);
+  let r = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  r = say(r.form, "what dressings u got?", [{ kind: "ask_menu", about_span: "dressings" }]);
+  assertStringIncludes(r.reply, "Ranch");
+  assertStringIncludes(r.reply, "Italian");
+  assert(!r.reply.includes("couldn't find"), r.reply);
+});
+

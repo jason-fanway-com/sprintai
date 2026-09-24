@@ -108,18 +108,19 @@ export function turn(input: TurnInput): TurnOutput {
       : m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? tokens(m.value_span).filter((p) => one(p.span)) : [];
     let parts = batch.flatMap(partsOf);
     // "one of each (except sweet potato)": every kind, minus the ones the message names
-    if (EACH.some((e) => findWordRun(mw, words(e)) >= 0)) {
+    const each = EACH.some((e) => findWordRun(mw, words(e)) >= 0);
+    if (each) {
       const label = (id: string) => menu.items.get(id)?.facets.kind ?? menu.items.get(id)?.display_name ?? id;
       const kinds = [...new Set(cands.map(label))], shared = words(kinds[0]).filter((w) => kinds.every((k) => words(k).includes(w)));
       parts = kinds.filter((k) => !words(k).filter((w) => !shared.includes(w)).every((w) => mw.includes(w))).map((k) => ({ span: k, qty: 1 }));
-    } else for (const o of rec.omissions) if (one(o.span) && !parts.some((p) => narrow(cands, p.span, menu)[0] === narrow(cands, o.span, menu)[0])) parts.push({ span: o.span, qty: o.qty }); // a kind the model left out ("one plain, ...")
+    } else for (const o of rec.omissions) if (one(o.span) && !parts.some((p) => narrow(cands, p.span, menu)[0] === narrow(cands, o.span, menu)[0] || findWordRun(mw, [...words(p.span), ...words(o.span)]) >= 0 || findWordRun(mw, [...words(o.span), ...words(p.span)]) >= 0)) parts.push({ span: o.span, qty: o.qty }); // a kind the model left out ("one plain, ..."); "turkey sandwich" is one mention, not turkey plus a sandwich
     const pos = (span: string) => { const i = mw.indexOf(words(span).find((w) => !STOPWORDS.has(w)) ?? ""); return i < 0 ? 999 : i; }; // lines in the order the customer said them
     parts = parts.reduce<typeof parts>((acc, p) => { const same = acc.find((q) => narrow(cands, q.span, menu)[0] === narrow(cands, p.span, menu)[0]); if (same) same.qty += p.qty; else acc.push({ ...p }); return acc; }, []); // "cheesesteak sandwich for both of em": one answer said twice is one answer, not two lines
     parts.sort((x, y) => pos(x.span) - pos(y.span));
     if (parts.length >= 2 || (parts.length === 1 && focus.qty > 1 && parts[0].qty === focus.qty)) {
       const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
       // the parts replace the model's own adds, changes and removal of that line; an answer for it that named no kind becomes an add, so it is asked about, never lost
-      const keep = rec.accepted.filter((m) => partsOf(m).length === 0 && !aboutFocus(m)).map((m) => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? { kind: "add_line" as const, item_span: m.value_span, qty: 1, option_spans: [] } : m);
+      const keep = rec.accepted.filter((m) => partsOf(m).length === 0 && !aboutFocus(m) && !(each && m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id))).map((m) => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? { kind: "add_line" as const, item_span: m.value_span, qty: 1, option_spans: [] } : m);
       rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus.line_id, parts });
       ledger.push({ turn: t, event: "kind_adds_are_a_split", data: { line_id: focus.line_id, parts } });
       splitFocus = true; const om = rec.omissions.filter((o) => !one(o.span)); rec.omissions.length = 0; rec.omissions.push(...om); // the kinds were spoken for
@@ -241,9 +242,11 @@ export function turn(input: TurnInput): TurnOutput {
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control"), strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
   const refSpans = moves.flatMap((m) => (m.kind === "remove_line" || m.kind === "change_line") && "span" in m.ref ? [words(m.ref.span)] : []);
+  const cartWords = form.lines.flatMap((l) => l.item_id ? menu.items.get(l.item_id)!.words : []);
   for (const om of rec.omissions) {
     if (refSpans.some((r) => isWordSubset(words(om.span), r) || isWordSubset(r, words(om.span)))) continue; // "scratch the soup": removed, not forgotten
     if (remarkOnly && !rec.omissions.some(strong)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
+    if (contentWords(om.span).every((w) => cartWords.some((cw) => sameWord(cw, w)))) { ledger.push({ turn: t, event: "omission_restates_cart", data: { span: om.span } }); continue; } // "just the chicken and pizza": the lines already there
     const alreadyThere = form.lines.some((l) =>
       (l.item_id && om.item_ids.includes(l.item_id)) ||
       (l.status.kind === "ambiguous" && l.status.candidates.some((c) => om.item_ids.includes(c))) ||
@@ -321,7 +324,8 @@ export function turn(input: TurnInput): TurnOutput {
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };
   // "what do you have?" during a kind question: the re-asked question lists the choices itself
-  if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : res.askMenu === null && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
+  const aboutFocus = (about: string) => { const r = resolveSpan(about, menu), fid = focus?.item_id; return r.kind === "none" || (!!fid && (r.kind === "item" ? r.id === fid : r.ids.includes(fid))); }; // "what flavors u got?", "what wings do you have?" while we ask the wings' flavor: the flavors
+  if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : (res.askMenu === null || (input.form.open?.kind === "line_slot" && aboutFocus(res.askMenu))) && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
