@@ -19,8 +19,7 @@ export function next(form: OrderForm, menu: Menu, refAsk: { candidates: number[]
     if (l.status.kind === "needs_slot") return { kind: "line_slot", line_id: l.line_id, group_id: l.status.group_id };
     if (l.status.kind === "needs_picks") return { kind: "line_picks", line_id: l.line_id, remaining: l.status.remaining };
   }
-  const pending = form.omissions.filter((o) => !o.declined);
-  if (pending.length) return { kind: "omission", spans: pending.map((o) => o.span) };
+  if (form.omissions.some((o) => !o.declined)) return { kind: "omission", spans: form.omissions.filter((o) => !o.declined).map((o) => o.span) };
   const delivery = form.fulfillment === "delivery";
   for (const step of menu.shop.ask_order) {
     if (step === "fulfillment" && form.fulfillment === null && menu.shop.delivery_enabled) return { kind: "fulfillment" };

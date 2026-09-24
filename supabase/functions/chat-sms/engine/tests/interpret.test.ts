@@ -29,3 +29,8 @@ Deno.test("toMoves: talk never claims it cannot see the order or what the menu h
   assertEquals(toMoves({ moves: [{ kind: "talk", value: "The order system will show your total. Anything else I can help with?" }] }), []);
   assertEquals(toMoves({ moves: [{ kind: "talk", value: "I don't think we have a house balsamic salad. You're picking between grilled chicken or buffalo grilled chicken." }] }), []);
 });
+
+Deno.test("toMoves: talk never promises an action", () => {
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "Sorry for the confusion! You're right - let me add those 7 orders of fries to your order." }] }), []);
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "Sorry about that." }] }).length, 1);
+});

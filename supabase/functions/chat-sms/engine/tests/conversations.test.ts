@@ -1034,6 +1034,24 @@ Deno.test("phone test 7: 'one of each' is a closed answer to a kind question", (
   assertEquals(new Set(o.form.lines.map((l) => l.item_id).filter(Boolean)).size, 6);
 });
 
+Deno.test("phone test 8: the kinds named as full items plus one answered kind are a split; 'one of each except X' inside a sentence too", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "cheeseburger and some fries", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }]);
+  o = say(o.form, "medium", [{ kind: "answer_option", value_span: "medium" }]);
+  assertStringIncludes(o.reply, "What kind of fries");
+  const a = say(o.form, "those all sound good. give me one of each except the pizza fries", [
+    ...["french fries", "cheese fries", "bacon cheese fries", "buffalo chicken fries"].map((n) => ({ kind: "add_line", item_span: n, qty: 1, option_spans: [] }) as Move),
+    { kind: "answer_option", value_span: "Crazy" }, { kind: "remove_line", ref: { line_id: 2 } },
+  ]);
+  const fries = a.form.lines.filter((l) => l.line_id !== 1);
+  assertEquals(new Set(fries.map((l) => l.item_id)).size, 5, a.reply);
+  assert(!fries.some((l) => l.item_id === "pzf"));
+  // the same words with a useless model answer: the phrase alone carries it
+  const b = say(o.form, "I already told you one of each, except pizza fries", [{ kind: "change_line", ref: { line_id: 2 }, qty: 7 }]);
+  assertEquals(new Set(b.form.lines.filter((l) => l.line_id !== 1).map((l) => l.item_id)).size, 5, b.reply);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

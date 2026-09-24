@@ -94,6 +94,6 @@ export function validTalk(raw: string): string | null {
   if (!text || text.length > 240) return null;
   if (/\$|\d{1,3}\.\d\d|\b(added|removed|updated|changed|charged|free|discount|refund)\b/i.test(text)) return null;
   // no promises to contact, no claims about what it can see or what the menu has
-  return talkClaimsTime(text) || /\b(text|call|notify|message|ping|let you know|send you a)\b.*\b(you|when|once)\b/i.test(text) || /\b(can'?t|cannot|don'?t|unable to)\s+(see|access|view|check|find)\b|\bnot (on|in) (our|the) menu\b|\b(we|i) (don'?t|do not|dont) (think we |believe we )?have\b|\border system\b/i.test(text) ? null : text;
+  return talkClaimsTime(text) || /\b(let me|i'?ll|i will|going to|gonna|we'?ll)\s+(add|remove|change|update|swap|put|fix|take)\b/i.test(text) || /\b(text|call|notify|message|ping|let you know|send you a)\b.*\b(you|when|once)\b/i.test(text) || /\b(can'?t|cannot|don'?t|unable to)\s+(see|access|view|check|find)\b|\bnot (on|in) (our|the) menu\b|\b(we|i) (don'?t|do not|dont) (think we |believe we )?have\b|\border system\b/i.test(text) ? null : text;
 }
 export function talkClaimsTime(raw: string): boolean { return /\b(\d+|an?|half an?)\s*(-|to|–)?\s*\d*\s*(min|mins|minutes?|hours?|hrs?)\b/i.test(raw); } // "15-20 minutes", "about an hour": times are not ours to promise

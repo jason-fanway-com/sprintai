@@ -113,8 +113,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const [l, item] = lineAndItem(form, menu, q.line_id);
       const g = item?.groups.find((x) => x.id === q.group_id);
       if (!l || !item || !g) return T.unclear();
-      const within = l.slot_candidates[g.id];
-      const choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name);
+      const within = l.slot_candidates[g.id], choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name);
       return T.slot(item.display_name, groupPrompt(g.name), choices, count);
     }
     case "line_picks": {

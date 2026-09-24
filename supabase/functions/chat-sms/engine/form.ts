@@ -147,8 +147,7 @@ export type DeclineCode =
   | "address_out_of_zone"
   | "tip_out_of_range";
 
-/** A fresh, unresolved line with the next id; `extra` overrides fields (answers, notes, status). */
-function newLine(form: OrderForm, span: string, qty: number, held: string[], extra: Partial<Line> = {}): Line {
+function newLine(form: OrderForm, span: string, qty: number, held: string[], extra: Partial<Line> = {}): Line { // a fresh, unresolved line with the next id; `extra` overrides fields (answers, notes, status)
   return { line_id: form.next_line_id++, span, item_id: null, qty: Math.max(1, qty), choices: {}, modifiers: [], held, notes: [], slot_candidates: {}, status: { kind: "unresolved" }, ...extra };
 }
 

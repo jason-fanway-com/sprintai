@@ -232,11 +232,8 @@ export function bindLine(line: Line, menu: Menu): void {
     }
     // several bundles ("half dozen" vs "one dozen"): the span's own count, or the picks' total, decides
     if (cands.length > 1 && cands.every((id) => menu.items.get(id)?.bundle)) {
-      let n = impliedCount(line.span);
-      if (n === null) {
-        const picks = line.held.flatMap((h) => splitList(h)).map((p) => leadingCount(p).count ?? 0).reduce((a, b) => a + b, 0);
-        if (picks > 0) n = picks;
-      }
+      const picks = line.held.flatMap((h) => splitList(h)).map((p) => leadingCount(p).count ?? 0).reduce((a, b) => a + b, 0);
+      const n = impliedCount(line.span) ?? (picks > 0 ? picks : null);
       const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
       if (hit) cands = [hit];
     }

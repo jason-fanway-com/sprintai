@@ -21,7 +21,7 @@ export const CART = set("whats my total|what is my total|total so far|how much s
 export const MENU = set("menu|the menu|options|what are the options|what are my options|what do you have|whats on the menu|what's on the menu|show me the menu|see the menu");
 export const HUMAN = set("human|agent|person|call me|talk to a person|speak to someone|real person|operator|representative");
 export const SKIP = set("skip|never mind|nevermind|forget it|forget that|leave it off|drop it|remove it|take it off|no|none|nothing");
-export const EACH = set("one of each|one of each kind|one of every kind|one of everything|one each|all of them|all of the above|every kind|one of each please");
+export const EACH = ["one of each", "one of every kind", "one of everything", "all of them", "all of the above", "every kind"];
 const PRICE_WORDS = new Set(["price", "prices", "cost", "costs", "much", "expensive", "cheap", "dollars", "charge", "pricing"]);
 export function asksPrice(message: string): boolean { return normalize(message).split(" ").some((w) => PRICE_WORDS.has(w)); } // "how much is X" may carry a price; "what is X" does not
 export const HELLO = set("hi|hello|hey|yo|hi there|hello there|good morning|good afternoon|good evening|hey there|sup|howdy|hola");
@@ -89,7 +89,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }
     if (line && open.kind === "line_ambiguous" && line.status.kind === "ambiguous") {
-      if (EACH.has(n)) { // one line per kind, each to be sized or completed in turn
+      if (EACH.includes(n) || EACH.includes(n.replace(/ (kind|please)$/, ""))) { // one line per kind, each to be sized or completed in turn
         const kinds = [...new Set(line.status.candidates.map((id) => menu.items.get(id)?.facets.kind ?? menu.items.get(id)?.display_name ?? id))];
         return [{ kind: "split_line", line_id: line.line_id, parts: kinds.map((k) => ({ span: k, qty: 1 })) }];
       }

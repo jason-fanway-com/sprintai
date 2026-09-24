@@ -1,4 +1,4 @@
-import { asksPrice } from "./vocab.ts";
+import { asksPrice, EACH } from "./vocab.ts";
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
@@ -72,8 +72,7 @@ export function turn(input: TurnInput): TurnOutput {
     ledger.push({ turn: t, event: "span_upgraded", data: { from: m.item_span, to: h.termWords.join(" ") } });
     return { ...m, item_span: h.termWords.join(" "), option_spans: options };
   };
-  const open = form0.open;
-  const focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined;
+  const open = form0.open, focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined; let splitFocus = false;
   // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
   // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
   if (focus) for (const r of rec.rejected) {
@@ -84,16 +83,26 @@ export function turn(input: TurnInput): TurnOutput {
   }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
-    const isPart = (m: Move): m is Move & { kind: "add_line" } => m.kind === "add_line" && m.option_spans.length > 0 && lineMatchesSpan(focus, m.item_span, menu) && m.option_spans.every((o) => focus.status.kind === "ambiguous" && narrow(focus.status.candidates, o, menu).length === 1);
-    const parts = batch.filter(isPart).map((m) => ({ span: m.option_spans.join(" "), qty: Math.max(1, m.qty) })); // the batch, not rec: the cross-read strips option words it cannot see
+    const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1;
+    // each add or answer that names exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", or the answer "Bacon Cheese")
+    const isPart = (m: Move) => (m.kind === "add_line" && one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu)))) || (m.kind === "answer_option" && one(m.value_span));
+    let parts = batch.filter(isPart).map((m) => m.kind === "add_line" ? { span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) } : { span: (m as Move & { kind: "answer_option" }).value_span, qty: 1 });
+    // "one of each (except sweet potato)": every kind, minus the ones the message names
+    if (EACH.some((e) => findWordRun(mw, words(e)) >= 0)) {
+      const label = (id: string) => menu.items.get(id)?.facets.kind ?? menu.items.get(id)?.display_name ?? id;
+      const kinds = [...new Set(cands.map(label))], shared = words(kinds[0]).filter((w) => kinds.every((k) => words(k).includes(w)));
+      parts = kinds.filter((k) => !words(k).filter((w) => !shared.includes(w)).every((w) => mw.includes(w))).map((k) => ({ span: k, qty: 1 }));
+    }
     if (parts.length >= 2) {
-      const keep = rec.accepted.filter((m) => !(m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) && !(m.kind === "remove_line" && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu))));
+      const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
+      const keep = rec.accepted.filter((m) => !isPart(m) && !aboutFocus(m)); // the parts replace the model's own adds, changes and removal of that line
       rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus.line_id, parts });
       ledger.push({ turn: t, event: "kind_adds_are_a_split", data: { line_id: focus.line_id, parts } });
+      splitFocus = true; const om = rec.omissions.filter((o) => !one(o.span)); rec.omissions.length = 0; rec.omissions.push(...om); // the kinds were spoken for
     }
   }
   // uncovered customer words that answer the open line question are answers, not omissions
-  if (focus) {
+  if (focus && !splitFocus) {
     const keep: typeof rec.omissions = [];
     for (const om of rec.omissions) {
       if (spanAnswersLine(focus, om.span, menu) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
@@ -178,7 +187,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
 
   // 2b. an ambiguous line of quantity N answered with several kinds ("one plain one pepperoni …")
-  if (focus && focus.status.kind === "ambiguous" && focus.qty > 1) {
+  if (focus && focus.status.kind === "ambiguous" && focus.qty > 1 && !splitFocus) {
     const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id));
     const parts = answers.flatMap((a) => splitList(a.value_span)).flatMap((p) => {
       // "one plain one pepperoni" arrives as one string when the model does not split it
@@ -213,8 +222,7 @@ export function turn(input: TurnInput): TurnOutput {
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
 
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
-  const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control");
-  const strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
+  const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control"), strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
   const refSpans = moves.flatMap((m) => (m.kind === "remove_line" || m.kind === "change_line") && "span" in m.ref ? [words(m.ref.span)] : []);
   for (const om of rec.omissions) {
     if (refSpans.some((r) => isWordSubset(words(om.span), r) || isWordSubset(r, words(om.span)))) continue; // "scratch the soup": removed, not forgotten
