@@ -969,6 +969,37 @@ Deno.test("tester pass 2: 'grilled chicken salad please' picks Grilled Chicken S
   assertEquals(o.form.lines[0].item_id, "gcs");
 });
 
+Deno.test("tester pass 3: 'meatball sub' is not Nonas Meatballs; 'pepperoni pie' still finds the pepperoni pizzas", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a meatball sub", [{ kind: "add_line", item_span: "meatball sub", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, null);
+  assertStringIncludes(o.reply, `couldn't find "meatball sub"`);
+  const p = say(f, "a pepperoni pie", [{ kind: "add_line", item_span: "pepperoni pie", qty: 1, option_spans: [] }]);
+  assertStringIncludes(p.reply, "What size Pepperoni Pizza");
+});
+
+Deno.test("tester pass 3: 'medium well on the burger' never asks 'did you also want burger'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a bacon cheeseburger", [{ kind: "add_line", item_span: "bacon cheeseburger", qty: 1, option_spans: [] }]);
+  o = say(o.form, "medium well on the burger please", [{ kind: "answer_option", value_span: "medium well" }]);
+  assertEquals(o.form.lines[0].status.kind, "complete");
+  assert(!o.reply.includes("Did you also want"), o.reply);
+});
+
+Deno.test("tester pass 3: a customer correcting the ZIP wins over the geocoder's ZIP", () => {
+  const geo = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: "3300 Hamilton Blvd, Allentown, PA 18104, USA", validated: true, zone_ok: true } } as Move);
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "delivery");
+  o = say(o.form, "3300 Hamilton Blvd, Allentown, PA 18103", [geo("3300 Hamilton Blvd, Allentown, PA 18103")]);
+  assertStringIncludes(o.reply, "18104"); // the geocoder's answer stands the first time
+  o = say(o.form, "wait that zip code is wrong. should be 18103 not 18104", [geo("wait that zip code is wrong. should be 18103 not 18104")]);
+  assertEquals(o.form.address?.formatted, "3300 Hamilton Blvd, Allentown, PA 18103, USA");
+  assertStringIncludes(o.reply, "18103");
+  assert(!o.reply.includes("18104"), o.reply);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

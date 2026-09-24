@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, SIZE_WORDS, splitList, STOPWORDS, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, SIZE_WORDS, splitList, STOPWORDS, words, normalize } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -27,20 +27,21 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const swSing = sw.map(singular), content = contentWords(span);
   // the whole span IS a category word ("pie", "pizza"): the category, not whichever items the compiler tagged with it
   for (const t of menu.categoryTerms) if (sameWords(t.wordsSing, content.map(singular))) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }
-  let bestLen = 0, bestWords: string[] = []; const ids = new Set<string>();
+  let bestLen = 0; const ids = new Set<string>(), bestWords = new Set<string>();
   for (const t of menu.itemTerms) {
     if (bestLen && t.words.length < bestLen) break;
     if (findWordRun(sw, t.words) < 0 && findWordRun(swSing, t.wordsSing) < 0) continue;
-    if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); bestWords = t.wordsSing; }
-    ids.add(t.target_id);
+    if (t.words.length > bestLen) { bestLen = t.words.length; ids.clear(); bestWords.clear(); }
+    ids.add(t.target_id); t.wordsSing.forEach((w) => bestWords.add(w));
   }
   // "chicken parm" against the bare term "chicken": a run that leaves a content word of the span unmatched is
   // not the item's identity. A term that carries every content word ("chicken parmesan sandwich") wins first.
   const category = () => { for (const t of menu.categoryTerms) if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; } return null; };
   // "chicken wings" against the bare item term "chicken" and the category "wings": the category the customer named wins
-  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) {
+  if (ids.size > 0 && content.some((w) => ![...bestWords].some((b) => sameWord(b, singular(w))))) {
     const cat = category(), catIds = cat?.kind === "item" ? [cat.id] : cat?.kind === "ambiguous" ? cat.ids : null;
     const r = pick(coverAll(content, menu)) ?? (catIds && [...ids].every((id) => catIds.includes(id)) ? null : cat); if (r) return r; // "hawaiian pie": Hawaiian is already a pizza, keep it
+    if (!catIds) return { kind: "none" }; // "meatball sub" with only 'meatball' matched: a word the menu cannot place is not an identity
   }
   const run = pick(ids) ?? category(); if (run) return run;
   // Partial: every content word of the span appears inside some item term. Deterministic; a question unless unique.
@@ -246,8 +247,9 @@ export function bindLine(line: Line, menu: Menu): void {
     // the span's own words narrow first: keep the candidates matching the MOST of them ("everything bagels", "bowl of lobster
     // bisque"). Narrowing word by word would let "chicken wings" stop at the Chicken quesadilla; scoring keeps it a tie, so we ask.
     if (cands.length > 1) {
-      const ws = words(line.span).filter((w) => !STOPWORDS.has(w) && !menu.categoryTerms.some((t) => t.words.length === 1 && t.words[0] === w)); // the category noun itself narrows nothing
-      const matches = ws.map((w) => cands.filter((id) => narrow([id], w, menu).length === 1));
+      const ws = words(line.span).filter((w) => !STOPWORDS.has(w));
+      const catOf = (w: string) => menu.categoryTerms.find((t) => t.words.length === 1 && t.words[0] === w)?.target_id; // a category word ("pie") counts for every pizza, not only the tagged rows
+      const matches = ws.map((w) => { const c = catOf(w); return c ? cands.filter((id) => normalize(menu.items.get(id)?.category ?? "") === normalize(c)) : cands.filter((id) => narrow([id], w, menu).length === 1); });
       // within one category a word that names few items ("hawaiian") outweighs one that names many ("pie")
       const oneCategory = new Set(cands.map((id) => menu.items.get(id)?.category ?? "")).size === 1;
       const score = (id: string) => matches.reduce((t, m) => t + (m.includes(id) ? (oneCategory ? 1 / m.length : 1) : 0), 0);
@@ -358,7 +360,7 @@ export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
   const sw = words(span);
   if (sw.length === 0) return false;
   const item = line.item_id ? menu.items.get(line.item_id) : null;
-  if (item && isWordSubset(sw, item.words)) return true;
+  if (item && sw.every((w) => item.words.some((iw) => iw === w || (w.length >= 4 && iw.endsWith(w))))) return true; // "burger" ~ "cheeseburger"
   if (item && item.facets.kind && isWordSubset(sw, words(item.facets.kind))) return true;
   const lw = words(line.span);
   if (isWordSubset(sw, lw) || isWordSubset(lw, sw)) return true;

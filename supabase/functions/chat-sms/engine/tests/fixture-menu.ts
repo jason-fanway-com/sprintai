@@ -76,6 +76,7 @@ export const RAW_ITEMS: RawMenuItem[] = [
       choices: [{ id: "brWhite", display: "White", price_delta_cents: 0 }, { id: "brRye", display: "Rye", price_delta_cents: 0 }, { id: "brWheat", display: "Wheat", price_delta_cents: 0 }] },
   ]),
   item("chq", "Chicken", "Quesadillas", 1249),
+  item("nonas", "Nonas Meatballs (3)", "Appetizers", 950),
   item("gyroS", "Gyro (Beef or Chicken)", "Hot Sandwiches", 1099, { display_name: "Gyro Sandwich" }, [
     { group_id: "gyroA", slot_key: "choice", kind: "slot", ask_mode: "ask", prompt_template: "choice.ask", choices: [{ id: "gA-beef", display: "Beef", price_delta_cents: 0 }, { id: "gA-chk", display: "Chicken", price_delta_cents: 0 }] },
     { group_id: "gyroB", slot_key: "beef_or_chicken", kind: "slot", ask_mode: "ask", prompt_template: "beef_or_chicken.ask", choices: [{ id: "gB-chk", display: "Chicken", price_delta_cents: 0 }, { id: "gB-beef", display: "Beef", price_delta_cents: 0 }] },
@@ -130,6 +131,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["grilled chicken salad", "gcs"], ["grilled chicken", "gcs"], ["buffalo grilled chicken salad", "bgcs"], ["buffalo grilled chicken", "bgcs"],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak], ["sandwich", IDS.cheesesteak], ["sandwiches", IDS.cheesesteak],
   ["chicken", "chq"], ["chicken quesadilla", "chq"], ["quesadilla", "chq"],
+  ["meatball", "nonas"], ["meatballs", "nonas"], ["nonas meatballs", "nonas"],
   ["gyro sandwich", "gyroS"], ["gyro", "gyroS"],
   ["burger", "bbb"], ["burgers", "bbb"], ["big boy burger", "bbb"], ["burger", "swb"], ["burgers", "swb"], ["swiss burger", "swb"],
   ["lobster bisque", "lbCup"], ["lobster bisque", "lbBowl"], ["lobster bisque soup", "lbCup"], ["lobster bisque soup", "lbBowl"], ["soup", "lbCup"], ["soup", "lbBowl"],

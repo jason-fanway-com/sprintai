@@ -1,7 +1,7 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
-import { contentWords, optionKey, validTalk, isWordSubset, words } from "./normalize.ts";
+import { contentWords, optionKey, validTalk, isWordSubset, words, isDigits } from "./normalize.ts";
 
 export type Fulfillment = "pickup" | "delivery";
 
@@ -182,20 +182,17 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     const hitLines = live.filter((l) => lineSpanMatcher(l, ref.span));
     const hits = hitLines.map((l) => l.line_id);
     if (hits.length === 0 && contentWords(ref.span).length === 0) return live.length === 1 ? [live[0].line_id] : live.map((l) => l.line_id);
-    const sig = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes]);
-    return hitLines.length > 1 && hitLines.every((l) => sig(l) === sig(hitLines[0])) ? [hits[0]] : hits; // two identical lines: no "which one"
+    return hitLines.length > 1 && hitLines.every((l) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes]) === JSON.stringify([hitLines[0].item_id, hitLines[0].choices, hitLines[0].modifiers, hitLines[0].notes])) ? [hits[0]] : hits; // identical lines: no "which one"
   };
 
-  /** the one line a change/remove refers to; records a decline or a which-one question and returns null otherwise */
-  const targetLine = (m: Move & { kind: "change_line" | "remove_line" }): Line | null => {
+  const targetLine = (m: Move & { kind: "change_line" | "remove_line" }): Line | null => { // the one line a change/remove refers to; records a decline or a which-one question and returns null otherwise
     const ids = resolveRef(m.ref);
     if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); return null; }
     if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; return null; }
     reopenIfConfirmed();
     return form.lines.find((l) => l.line_id === ids[0])!;
   };
-  /** apply a derived batch against the current form and fold its results into this one */
-  const nested = (batch: Move[], open: OrderForm["open"]) => {
+  const nested = (batch: Move[], open: OrderForm["open"]) => { // apply a derived batch against the current form and fold its results into this one
     const sub = apply({ ...form, open }, batch, lineSpanMatcher);
     Object.assign(form, sub.form); sub.touched.forEach((x) => touched.add(x)); removed.push(...sub.removed); ledger.push(...sub.ledger);
   };
@@ -207,12 +204,15 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
           if (m.value === "pickup") { form.address = null; form.tip = form.tip ?? null; }
           ledger.push({ turn: t, event: "answer", data: { field: "fulfillment", value: m.value } });
         } else if (m.field === "address") {
-          const ok = m.value.validated && m.value.zone_ok;
-          if (!m.value.validated) declines.push({ code: "address_not_found", span: m.value.text });
-          else if (!m.value.zone_ok) declines.push({ code: "address_out_of_zone", span: m.value.text });
-          form.address = { ...m.value };
+          const zipOf = (x?: string | null) => words(x ?? "").find((w) => w.length === 5 && isDigits(w));
+          let value = m.value; const had = form.address?.formatted, said = zipOf(value.text), hadZip = zipOf(had);
+          if (said && hadZip && said !== hadZip && value.validated && value.formatted === had) { value = { ...value, formatted: had!.replace(hadZip, said) }; ledger.push({ turn: t, event: "address_zip_corrected_by_customer", data: { from: hadZip, to: said } }); } // "its 18103 not 18104": their ZIP, our street
+          const ok = value.validated && value.zone_ok;
+          if (!value.validated) declines.push({ code: "address_not_found", span: value.text });
+          else if (!value.zone_ok) declines.push({ code: "address_out_of_zone", span: value.text });
+          form.address = { ...value };
           if (ok && form.fulfillment === null) form.fulfillment = "delivery";
-          ledger.push({ turn: t, event: "answer", data: { field: "address", value: m.value, accepted: ok } });
+          ledger.push({ turn: t, event: "answer", data: { field: "address", value: value, accepted: ok } });
         } else if (m.field === "tip") {
           const v = m.value;
           const bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));
