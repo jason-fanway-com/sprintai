@@ -1121,6 +1121,25 @@ Deno.test("tester pass 5: an answer to a waiting line's slot lands there while a
   assertEquals(o.form.lines[1].choices[IDS.dressingGroup], IDS.ranch, o.reply);
   assert(!o.reply.includes("Did you want"), o.reply); // the engine asks the questions
   assertStringIncludes(o.reply, "What kind of fries?");
+  // two required slots and a paid "Chicken" add-on: bare answers fill the slots in turn, the add-on is never assumed
+  let p = say(f, "soup and a chicken cheesesteak salad", [{ kind: "add_line", item_span: "soup", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "chicken cheesesteak salad", qty: 1, option_spans: [] }]);
+  assert(p.form.lines[0].status.kind !== "complete", p.reply); // the soup's size is the open question; "ranch" and "chicken" answer nothing about it
+  p = say(p.form, "ranch");
+  assertStringIncludes(p.reply, "Ranch for the Cheesesteak / Chicken Cheesesteak Salad.");
+  p = say(p.form, "chicken");
+  assertStringIncludes(p.reply, "Added 1 × Cheesesteak / Chicken Cheesesteak Salad (Ranch, Chicken)");
+  assertEquals(p.form.lines[1].modifiers.length, 0);
+  assert(p.form.lines[0].status.kind !== "complete", p.reply);
+});
+
+Deno.test("tester pass 5: a removal naming one line outright never asks which-one against a line it merely overlaps", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "fries and cheese fries", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "cheese fries", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines.length, 2, o.reply);
+  o = say(o.form, "scratch the cheese fries", [{ kind: "remove_line", ref: { span: "cheese fries" } }]);
+  assert(!o.reply.includes("Which one do you mean"), o.reply);
+  assertEquals(o.form.lines.map((l) => l.item_id), [null], o.reply); // the pending "fries" line stays, still to be narrowed
 });
 
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {

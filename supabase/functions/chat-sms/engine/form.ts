@@ -151,7 +151,8 @@ function newLine(form: OrderForm, span: string, qty: number, held: string[], ext
   return { line_id: form.next_line_id++, span, item_id: null, qty: Math.max(1, qty), choices: {}, modifiers: [], held, notes: [], slot_candidates: {}, status: { kind: "unresolved" }, ...extra };
 }
 
-export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: Line, span: string) => boolean): ApplyResult {
+export type LineMatcher = ((line: Line, span: string) => boolean) & { named?: (line: Line, span: string) => boolean };
+export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatcher): ApplyResult {
   const form: OrderForm = structuredClone(input);
   const ledger: LedgerEntry[] = [];
   const touched = new Set<number>();
@@ -178,7 +179,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
     if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
-    const hitLines = live.filter((l) => lineSpanMatcher(l, ref.span));
+    const overlap = live.filter((l) => lineSpanMatcher(l, ref.span)), named = overlap.filter((l) => lineSpanMatcher.named?.(l, ref.span));
+    const hitLines = named.length > 0 ? named : overlap; // "cheesesteak salad" names the salad line; it only overlaps the pending "cheesesteak" line
     const hits = hitLines.map((l) => l.line_id);
     if (hits.length === 0 && contentWords(ref.span).length === 0) return live.length === 1 ? [live[0].line_id] : live.map((l) => l.line_id);
     return hitLines.length > 1 && hitLines.every((l) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes]) === JSON.stringify([hitLines[0].item_id, hitLines[0].choices, hitLines[0].modifiers, hitLines[0].notes])) ? [hits[0]] : hits; // identical lines: no "which one"

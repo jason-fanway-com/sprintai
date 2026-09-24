@@ -2,27 +2,9 @@
 import type { Line, OrderForm } from "./form.ts";
 import type { Menu, MenuItem } from "./menu.ts";
 
-export interface PricedLine {
-  line_id: number;
-  item: MenuItem;
-  qty: number;
-  unit_cents: number;
-  total_cents: number;
-  choice_names: string[];
-  modifier_names: string[];
-  picks: string[];
-  notes: string[];
-}
+export interface PricedLine { line_id: number; item: MenuItem; qty: number; unit_cents: number; total_cents: number; choice_names: string[]; modifier_names: string[]; picks: string[]; notes: string[] }
 
-export interface Totals {
-  lines: PricedLine[];
-  subtotal_cents: number;
-  delivery_fee_cents: number;
-  service_fee_cents: number;
-  tax_cents: number;
-  tip_cents: number;
-  total_cents: number;
-}
+export interface Totals { lines: PricedLine[]; subtotal_cents: number; delivery_fee_cents: number; service_fee_cents: number; tax_cents: number; tip_cents: number; total_cents: number }
 
 /** Every choice the line carries that its item's groups can price: slot picks first, then modifiers. */
 function picked(line: Line, item: MenuItem): Array<{ name: string; delta_cents: number; modifier: boolean }> {

@@ -13,6 +13,7 @@ export type Ack =
   | { kind: "address"; text: string }
   | { kind: "tip"; cents: number }
   | { kind: "noted"; notes: string[] }
+  | { kind: "line_progress"; name: string; picks: string[] }
   | { kind: "pending"; items: Array<{ qty: number; span: string }> };
 
 export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
@@ -151,6 +152,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   if (removed.length) parts.push(T.ackRemoved(removed.map((a) => a.name)));
   for (const a of plan.acks) {
     if (a.kind === "noted") parts.push(T.ackNoted(a.notes));
+    if (a.kind === "line_progress") parts.push(T.ackProgress(a.picks, a.name));
     if (a.kind === "pending") parts.push(T.ackPending(a.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
   }
 

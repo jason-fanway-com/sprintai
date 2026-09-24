@@ -1,10 +1,10 @@
 import { asksPrice, EACH } from "./vocab.ts";
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
-import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
+import { apply, normalizeMoveBatch, type LedgerEntry, type Line, type LineMatcher, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile, scan } from "./crossread.ts";
-import { bindLine, lineMatchesSpan, narrow, resolveSpan, spanAnswersLine } from "./resolve.ts";
+import { bindLine, lineMatchesSpan, narrow, resolveSpan, spanAnswersLine, lineNamedBySpan } from "./resolve.ts";
 import { escalate, next, questionKey } from "./next.ts";
 import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
@@ -204,7 +204,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
 
   // 3. apply
-  const matcher = (line: import("./form.ts").Line, span: string) => lineMatchesSpan(line, span, menu);
+  const matcher: LineMatcher = Object.assign((line: Line, span: string) => lineMatchesSpan(line, span, menu), { named: (line: Line, span: string) => lineNamedBySpan(line, span, menu) });
   const res = apply(form0, moves, matcher);
   const form = res.form;
   ledger.push(...res.ledger);
@@ -280,6 +280,10 @@ export function turn(input: TurnInput): TurnOutput {
     const priced = priceLine(l, menu);
     const wasComplete = before.get(id) ? (JSON.parse(before.get(id)!) as { status: { kind: string } }).status.kind === "complete" : false;
     if (priced) acks.push({ kind: newIds.has(id) || !wasComplete ? "line_added" : "line_changed", line: priced });
+    else if (!newIds.has(id) && id !== focusId && l.item_id && before.get(id)) { // "ranch" landed on the salad while we were asking about the fries: say so
+      const was = (JSON.parse(before.get(id)!) as Line).choices, it = menu.items.get(l.item_id)!, picks = it.groups.flatMap((g) => g.choices.filter((c) => c.id === l.choices[g.id] && was[g.id] !== c.id).map((c) => c.name));
+      if (picks.length) acks.push({ kind: "line_progress", name: it.display_name, picks });
+    }
     const prevNotes = before.get(id) ? (JSON.parse(before.get(id)!) as { notes: string[] }).notes.length : 0;
     if (l.notes.length > prevNotes) notes.push(...l.notes.slice(prevNotes));
   }

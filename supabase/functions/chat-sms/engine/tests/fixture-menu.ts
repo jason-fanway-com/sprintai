@@ -87,7 +87,14 @@ export const RAW_ITEMS: RawMenuItem[] = [
   item("lbBowl", "Bowl Lobster Bisque Soup", "Soups", 799, { display_name: "Bowl Lobster Bisque Soup" }),
   item("chparmE", "Chicken Parmesan", "Entrees", 1795),
   item("gcs", "Grilled Chicken", "Salads", 1295, { display_name: "Grilled Chicken Salad" }),
-  item("cssal", "Cheesesteak / Chicken Cheesesteak", "Salads", 1295, { display_name: "Cheesesteak / Chicken Cheesesteak Salad" }),
+  item("cssal", "Cheesesteak / Chicken Cheesesteak", "Salads", 1295, { display_name: "Cheesesteak / Chicken Cheesesteak Salad" }, [
+    { group_id: IDS.dressingGroup, slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
+      choices: [{ id: IDS.ranch, display: "Ranch", price_delta_cents: 0 }, { id: IDS.italian, display: "Italian", price_delta_cents: 0 }, { id: IDS.bleu, display: "Bleu Cheese", price_delta_cents: 0 }] },
+    { group_id: "protG", slot_key: "steak_or_chicken", kind: "slot", ask_mode: "ask", prompt_template: "steak_or_chicken.ask",
+      choices: [{ id: "prChicken", display: "Chicken", price_delta_cents: 0 }, { id: "prSteak", display: "Steak", price_delta_cents: 0 }] },
+    { group_id: "cssAdd", slot_key: "add_ons", kind: "modifier", ask_mode: "on_request", prompt_template: "addons.ask",
+      choices: [{ id: "cssAddChicken", display: "Chicken", price_delta_cents: 400 }] },
+  ]),
   item("louk", "Your Way Loukoumades - Additional Topping/Sauce/Filling", "Desserts", 150, { display_name: "Small Your Way Loukoumades - Additional Topping/Sauce/Filling" }),
   item("bgcs", "Buffalo Grilled Chicken", "Salads", 1395, { display_name: "Buffalo Grilled Chicken Salad" }),
   item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [

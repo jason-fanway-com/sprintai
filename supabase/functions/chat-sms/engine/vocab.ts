@@ -59,15 +59,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   if (DELIVERY.has(n)) return [{ kind: "answer", field: "fulfillment", value: "delivery" }];
   if (open?.kind === "fulfillment" && (n === "1" || n === "2")) return [{ kind: "answer", field: "fulfillment", value: n === "1" ? "pickup" : "delivery" }];
 
-  if (open?.kind === "tip") {
-    const tip = parseTip(message);
-    if (tip) return [{ kind: "answer", field: "tip", value: tip }];
-  }
-
-  if (open?.kind === "confirm" || open?.kind === "omission") {
-    if (YES.has(n)) return [{ kind: "answer_yes" }];
-    if (NO.has(n)) return [{ kind: "answer_no" }];
-  }
+  if (open?.kind === "tip") { const tip = parseTip(message); if (tip) return [{ kind: "answer", field: "tip", value: tip }]; }
+  if (open?.kind === "confirm" || open?.kind === "omission") { if (YES.has(n)) return [{ kind: "answer_yes" }]; if (NO.has(n)) return [{ kind: "answer_no" }]; }
   if (open?.kind === "items" && NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
   // "that's it" closes the item list whatever else is open (the open question is asked again after)
   if (CLOSURE.has(n) && open?.kind === "line_unresolved") return [{ kind: "remove_line", ref: { line_id: open.line_id } }, { kind: "answer", field: "items_done", value: true }];
@@ -97,8 +90,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       if (narrowed.length > 0 && narrowed.length < line.status.candidates.length) return [{ kind: "answer_option", value_span: message.trim() }];
     }
   }
-  // "ranch" while we are asking about another line: the whole message names an option of exactly one waiting line's unfilled slot
+  // "ranch" while we are asking about another line: the whole message names an option of exactly one waiting line's unfilled required slot (never a paid add-on)
   const waiting = form.lines.filter((l) => l.item_id && l.status.kind === "needs_slot" && !(open && "line_id" in open && open.line_id === l.line_id));
-  const fits = waiting.filter((l) => menu.items.get(l.item_id!)!.groups.some((g) => !l.choices[g.id] && matchChoice(n, g, l.slot_candidates[g.id]).kind === "one"));
+  const fits = waiting.filter((l) => menu.items.get(l.item_id!)!.groups.some((g) => g.kind === "slot" && !l.choices[g.id] && matchChoice(n, g, l.slot_candidates[g.id]).kind === "one"));
   return fits.length === 1 ? [{ kind: "answer_option", value_span: message.trim(), line_id: fits[0].line_id }] : null;
 }

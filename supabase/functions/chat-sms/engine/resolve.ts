@@ -356,11 +356,13 @@ function segmentTopics(h: string, cands: string[], menu: Menu): string[] {
 }
 
 /** Does a customer span refer to this line? Used for "remove the knots", "make the pizza 2". */
+/** The span names the line's item outright: every word is one of the item's words ("burger" ~ "cheeseburger"). */
+export function lineNamedBySpan(line: Line, span: string, menu: Menu): boolean { const item = line.item_id ? menu.items.get(line.item_id) : null, sw = words(span); return !!item && sw.length > 0 && sw.every((w) => item.words.some((iw) => iw === w || (w.length >= 4 && iw.endsWith(w)))); }
 export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
   const sw = words(span);
   if (sw.length === 0) return false;
   const item = line.item_id ? menu.items.get(line.item_id) : null;
-  if (item && sw.every((w) => item.words.some((iw) => iw === w || (w.length >= 4 && iw.endsWith(w))))) return true; // "burger" ~ "cheeseburger"
+  if (lineNamedBySpan(line, span, menu)) return true;
   if (item && item.facets.kind && isWordSubset(sw, words(item.facets.kind))) return true;
   const lw = words(line.span);
   if (isWordSubset(sw, lw) || isWordSubset(lw, sw)) return true;
