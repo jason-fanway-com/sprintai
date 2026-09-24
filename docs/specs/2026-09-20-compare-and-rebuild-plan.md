@@ -513,3 +513,11 @@ you also want chicken pizza?" (an omission whose words are all words of lines al
 u got?" while asking the wings' flavor listed the two wing kinds (a menu question about the asked slot lists that slot's options).
 135 tests; core under 2,000. Pass cost: $0.32.
 
+**2026-09-24, tester pass 10 (v644), the confirmation run, and v645.** Seventeen of twenty landed (the three were the tester's
+turn budget after a late add); every price right; no invented lines, no "didn't follow", no "did you also want". One real class:
+"oil vinegar" for the Oil-Vinegar dressing went to the kitchen as a note three times until the customer typed the hyphen (the
+tokenizer had been gluing hyphenated words together; a hyphen is now a space, so Bone-In and Oil-Vinegar match the way people
+type them). Everything else in the pass read as a person would want it: swaps, late adds, a change of mind mid-answer, a menu
+question mid-order. 136 tests; core under 2,000. Pass cost: $0.30. Ten passes since the tester was built, about $2.00 of model
+spend in all. Ready for Jason's phone.
+
