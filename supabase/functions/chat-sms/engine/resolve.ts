@@ -121,7 +121,8 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
     if (whole.length === 1 && others.length === 0 && !sw.includes("half")) return { kind: "one", choice_id: whole[0].id };
     return { kind: "many", choice_ids: subset.map((c) => c.id) };
   }
-  const contained = pool.filter((c) => findWordRun(sw, c.words) >= 0); // the span may contain the choice ("with extra cheese please")
+  const contained0 = pool.filter((c) => findWordRun(sw, c.words) >= 0), longest = Math.max(0, ...contained0.map((c) => c.words.length)); // the span may contain the choice ("with extra cheese please")
+  const contained = contained0.filter((c) => c.words.length === longest); // "medium well" over "medium"
   return contained.length === 1 ? { kind: "one", choice_id: contained[0].id } : contained.length > 1 ? { kind: "many", choice_ids: contained.map((c) => c.id) } : { kind: "none" };
 }
 
@@ -150,7 +151,7 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
-const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]);
+const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]);
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
@@ -184,6 +185,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     for (const g of item.groups) { const m = matchChoice(text, g); if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; } }
     line.notes.push(`no ${text}`); return false;
   }
+  if (NO_TOPPING.has(words(text).join(" ")) && item.groups.some((g) => g.kind === "modifier")) return true; // "plain": nothing to add
   // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
   // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")
   const slots = item.groups.filter((g) => g.kind === "slot"), open = slots.filter((g) => !line.choices[g.id]), done = slots.filter((g) => line.choices[g.id]);

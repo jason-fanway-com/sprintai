@@ -63,8 +63,7 @@ export function turn(input: TurnInput): TurnOutput {
   const upgradeSpan = (m: Move & { kind: "add_line" }): Move & { kind: "add_line" } => {
     // "bagel" + ["plain cream cheese"] when the message contains the unique term
     // "bagel with plain cream cheese": the longer term names the item
-    const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o));
-    const fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
+    const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o)), fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
     const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits[0]; // "taco pizza"+["small"] -> the "small taco pizza" mention
     if (!h) return m;
     usedHits.add(h);
@@ -129,7 +128,16 @@ export function turn(input: TurnInput): TurnOutput {
   }
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
-      // an "item" answering the line we asked about is an answer; one answering ANOTHER pending line's question ("boneless" while we ask about the garlic bread) is routed there
+      // "3 thin sicilians. one pepperoni, one sausage, one plain": options each preceded by a count that adds up to the quantity are one line each
+    if (m.kind === "add_line" && m.qty >= 2 && m.option_spans.length >= 2) {
+      const counts = m.option_spans.map((o) => { const i = findWordRun(mw, words(o)); return i > 0 ? leadingCount(mw[i - 1] + " x").count : null; });
+      if (counts.every((c) => c !== null) && counts.reduce((a, c) => a + (c ?? 0), 0) === m.qty) {
+        for (const [i, o] of m.option_spans.entries()) moves.push({ ...m, qty: counts[i]!, option_spans: [o] });
+        ledger.push({ turn: t, event: "counted_options_split", data: { span: m.item_span, parts: m.option_spans.map((o, i) => ({ span: o, qty: counts[i] })) } });
+        continue;
+      }
+    }
+    // an "item" answering the line we asked about is an answer; one answering ANOTHER pending line's question ("boneless" while we ask about the garlic bread) is routed there
     const span = m.kind === "add_line" ? m.item_span : m.kind === "answer_option" ? m.value_span : null;
     if (span && focus) {
       const replacesUnresolved = m.kind === "add_line" && focus.status.kind === "unresolved" && resolveSpan(span, menu).kind !== "none";

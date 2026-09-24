@@ -41,8 +41,8 @@ export function priceLine(line: Line, menu: Menu): PricedLine | null {
   const item = menu.items.get(line.item_id);
   if (!item) return null;
   const unit = unitCents(line, item), picks0 = picked(line, item);
-  const choice_names = picks0.filter((c) => !c.modifier).map((c) => c.name);
-  const modifier_names = picks0.filter((c) => c.modifier).map((c) => c.name);
+  const choice_names = [...new Set(picks0.filter((c) => !c.modifier).map((c) => c.name))]; // a gyro's two identical slots read once
+  const modifier_names = [...new Set(picks0.filter((c) => c.modifier).map((c) => c.name))];
   const picks: string[] = [];
   if (item.bundle && line.selections) for (const [cid, n] of Object.entries(line.selections)) { const c = item.bundle.choices.find((x) => x.id === cid); if (c) picks.push(`${n} ${c.name}`); }
   return { line_id: line.line_id, item, qty: line.qty, unit_cents: unit, total_cents: unit * line.qty, choice_names, modifier_names, picks, notes: line.notes };

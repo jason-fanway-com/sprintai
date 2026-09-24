@@ -1076,6 +1076,20 @@ Deno.test("phone test 9: 'hawiaan' is the Hawaiian; a kind the model dropped ('p
   assertStringIncludes(q.reply, `couldn't find "zzzzqq"`); // no near word: still honest
 });
 
+Deno.test("tester pass 4: 'parm' is a stem, never a typo; '3 pizzas, one pepperoni, one mushroom, one plain' is three lines; a slot answer may name the item", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const a = say(f, "a chicken parm sandwich", [{ kind: "add_line", item_span: "chicken parm sandwich", qty: 1, option_spans: [] }]);
+  assertEquals(a.form.lines[0].item_id, "chparm", a.reply);
+  const b = say(f, "3 large cheese pizzas. one pepperoni, one mushroom, one plain", [{ kind: "add_line", item_span: "large cheese pizzas", qty: 3, option_spans: ["pepperoni", "mushroom", "plain"] }]);
+  assertEquals(b.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.pepPizzaL, 1], ["mushL", 1], [IDS.cheesePizzaL, 1]], b.reply);
+  assertEquals(b.form.lines[2].notes, []);
+  let c = say(f, "a cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  assertEquals(closedAnswer(c.form, "medium well for the cheese burger please", menu)?.[0]?.kind, "answer_option");
+  c = say(c.form, "medium well for the cheese burger please");
+  assertEquals(c.form.lines[0].status.kind, "complete");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

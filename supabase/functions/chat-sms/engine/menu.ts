@@ -107,17 +107,9 @@ export function pieceCountFromName(name: string): number | null {
 }
 
 export function facetsFromName(name: string, sizeLabel?: string | null): Facets {
-  const m = NAME_SIZE_RE.exec(name);
-  if (m) {
-    const size = words(m[2])[0] ?? null;
-    return { kind: normalize(m[1]) || null, size };
-  }
-  const lead = LEADING_SIZE_RE.exec(name);
-  if (lead) {
-    const size = words(lead[1])[0] ?? null;
-    return { kind: normalize(lead[2]) || null, size };
-  }
-  const pieces = NAME_PIECES_RE.exec(name);
+  const m = NAME_SIZE_RE.exec(name), lead = LEADING_SIZE_RE.exec(name), pieces = NAME_PIECES_RE.exec(name);
+  if (m) return { kind: normalize(m[1]) || null, size: words(m[2])[0] ?? null };
+  if (lead) return { kind: normalize(lead[2]) || null, size: words(lead[1])[0] ?? null };
   if (pieces) return { kind: normalize(pieces[1]) || null, size: null };
   const label = sizeLabel ? words(sizeLabel)[0] : null;
   if (label && SIZE_WORDS.has(label)) {

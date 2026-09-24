@@ -84,7 +84,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       // closed means the WHOLE message is the option (plus the group's own noun): "hot sauce" yes; "hot sauce. actually scratch the soup" goes to the model
       const m = g ? matchChoice(n, g, line.slot_candidates[g.id]) : null;
       const chosen = m?.kind === "one" ? g!.choices.find((c) => c.id === m.choice_id) : undefined;
-      if (chosen && optionWords(n).every((w) => chosen.words.includes(w) || words(g!.name).includes(w))) return [{ kind: "answer_option", value_span: message.trim() }];
+      if (chosen && optionWords(n).every((w) => chosen.words.includes(w) || menu.items.get(line.item_id!)!.words.includes(w) || words(g?.name ?? "").includes(w))) return [{ kind: "answer_option", value_span: message.trim() }]; // "linguine for the pasta with clam sauce"
       const within = line.slot_candidates[g?.id ?? ""], pick = g && digit ? (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices)[parseInt(digit, 10) - 1] : undefined;
       if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }
