@@ -97,5 +97,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       if (narrowed.length > 0 && narrowed.length < line.status.candidates.length) return [{ kind: "answer_option", value_span: message.trim() }];
     }
   }
-  return null;
+  // "ranch" while we are asking about another line: the whole message names an option of exactly one waiting line's unfilled slot
+  const waiting = form.lines.filter((l) => l.item_id && l.status.kind === "needs_slot" && !(open && "line_id" in open && open.line_id === l.line_id));
+  const fits = waiting.filter((l) => menu.items.get(l.item_id!)!.groups.some((g) => !l.choices[g.id] && matchChoice(n, g, l.slot_candidates[g.id]).kind === "one"));
+  return fits.length === 1 ? [{ kind: "answer_option", value_span: message.trim(), line_id: fits[0].line_id }] : null;
 }

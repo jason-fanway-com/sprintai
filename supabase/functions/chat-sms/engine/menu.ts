@@ -3,7 +3,7 @@
 // lexicon). Facets are derived from item names here until the compiler emits
 // them as columns; that regex runs over MENU NAMES, never customer text.
 
-import { normalize, singular, words } from "./normalize.ts";
+import { findWordRun, normalize, singular, words } from "./normalize.ts";
 
 export interface MenuChoice { id: string; name: string; delta_cents: number; words: string[] }
 export interface MenuGroup {
@@ -166,8 +166,8 @@ export function buildMenu(input: {
     const w = words(e.term);
     if (w.length === 0) continue;
     if (e.target_type === "item") {
-      const it = items.get(e.target_id);
-      if (!it || !it.orderable) continue;
+      const it = items.get(e.target_id), alts = it?.display_name.split(" / ").map((x) => words(x)) ?? [];
+      if (!it || !it.orderable || (alts.length > 1 && findWordRun(w, [...alts[0], alts[1][0]]) >= 0)) continue; // a compiled "cheesesteak chicken cheesesteak salad" is the slash name read as one run
       itemTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "item" });
     } else if (e.target_type === "category") {
       categoryTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "category" });

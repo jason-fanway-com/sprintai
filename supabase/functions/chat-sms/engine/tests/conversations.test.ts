@@ -1106,6 +1106,21 @@ Deno.test("tester pass 5: a bare 'cheesesteak' beside 'chicken cheesesteak salad
   assertEquals(d.form.lines[0].item_id, IDS.baconCheeseburger, d.reply);
   assert(!menu.itemTerms.some((t) => t.target_id === "louk" && t.words.length < 3), "Topping/Sauce/Filling is one phrase, never the terms 'sauce' and 'filling'");
   assert(menu.itemTerms.some((t) => t.target_id === "cssal" && t.words.join(" ") === "cheesesteak salad"));
+  assert(!menu.itemTerms.some((t) => t.target_id === "cssal" && t.words.join(" ").startsWith("cheesesteak chicken")), "the compiler's slash-name-as-one-run rows are dropped at load");
+  // a squashed lexicon row ("frenchfries") never joins "french fries" into one word: only words an item NAME writes as one do
+  const g = say(f, "french fries", [{ kind: "add_line", item_span: "french fries", qty: 1, option_spans: [] }]);
+  assertEquals(g.form.lines[0].item_id, IDS.fries, g.reply);
+});
+
+Deno.test("tester pass 5: an answer to a waiting line's slot lands there while another line's question is open; model questions are not talk", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "some fries and a house salad", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of fries?");
+  o = say(o.form, "ranch", [{ kind: "talk", text: "Did you want ranch on one of your items?" }]);
+  assertEquals(o.form.lines[1].choices[IDS.dressingGroup], IDS.ranch, o.reply);
+  assert(!o.reply.includes("Did you want"), o.reply); // the engine asks the questions
+  assertStringIncludes(o.reply, "What kind of fries?");
 });
 
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
