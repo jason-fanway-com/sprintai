@@ -116,6 +116,7 @@ def run_one(shop_key, shop_id, plan, verbose):
         "noted": replies.count("noted for the kitchen"),
         "couldnt_find": replies.count("couldn't find"),
         "slow_turns": sum(1 for _, _, dt in transcript if dt > 6),
+        "long": len(transcript) > len(plan["items"]) * 2 + 5, # pass 6: "landed 20/20" hid an eleven-turn fight; turns, not flags, show it
         "total_cents": cart.get("total_cents"),
     }
     return {"shop": shop_key, "session": session, "plan": plan, "transcript": transcript, "cart": [(l["name"], l["quantity"], l["price_cents"]) for l in lines], "flags": flags, "tester_tokens": (tin, tout)}
@@ -137,7 +138,7 @@ def main():
         print(f"[{i + 1}/{a.n}] {k} items={plan['items']} {plan['fulfillment']} quirks={plan['quirks']}")
         try: results.append(run_one(k, SHOPS[k], plan, a.verbose))
         except Exception as e: print("   !! error:", e); results.append({"shop": k, "plan": plan, "error": str(e), "transcript": [], "flags": {}, "cart": [], "tester_tokens": (0, 0)})
-        f = results[-1]["flags"]; print("   ", {x: f.get(x) for x in ("landed", "lines", "invented", "didnt_follow", "also_want", "which_one", "noted", "couldnt_find", "slow_turns")})
+        f = results[-1]["flags"]; print("   ", {x: f.get(x) for x in ("landed", "lines", "invented", "didnt_follow", "also_want", "which_one", "noted", "couldnt_find", "slow_turns", "long")})
     # transcript file for reading
     md = [f"# Jason-style pass {stamp} — {a.n} conversations, seed {a.seed}\n"]
     for i, r in enumerate(results, 1):
@@ -158,7 +159,7 @@ def main():
             if isinstance(v, bool): agg[k2] += int(v)
             elif isinstance(v, int): agg[k2] += v
             elif isinstance(v, list): agg[k2] += len(v)
-    print(f"\n== {len(results)} conversations, {turns} engine turns; landed {agg['landed']}; invented lines {agg['invented']}; 'didn't follow' {agg['didnt_follow']}; 'did you also want' {agg['also_want']}; which-one {agg['which_one']}; kitchen notes {agg['noted']}; couldn't find {agg['couldnt_find']}; slow turns {agg['slow_turns']}")
+    print(f"\n== {len(results)} conversations, {turns} engine turns; landed {agg['landed']}; invented lines {agg['invented']}; 'didn't follow' {agg['didnt_follow']}; 'did you also want' {agg['also_want']}; which-one {agg['which_one']}; kitchen notes {agg['noted']}; couldn't find {agg['couldnt_find']}; slow turns {agg['slow_turns']}; long conversations {agg['long']}")
     print(f"== tester model tokens in/out {tin}/{tout} ≈ ${tin / 1e6 * 1.0 + tout / 1e6 * 5.0:.3f}; engine turns ≈ ${turns * 0.0015:.2f}")
     print(f"== transcript: {path}")
 
