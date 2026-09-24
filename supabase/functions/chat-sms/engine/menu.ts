@@ -181,6 +181,9 @@ export function buildMenu(input: {
       categoryTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "category" });
     }
   }
+  // an item's own display name is always a term, so a lexicon gap never makes it unorderable (NJB's Chicken Salad Sandwich had none)
+  const have = new Set(itemTerms.map((t) => `${t.target_id}|${t.words.join(" ")}`));
+  for (const it of items.values()) if (it.orderable && it.words.length > 0 && !have.has(`${it.id}|${it.words.join(" ")}`)) itemTerms.push({ words: it.words, wordsSing: it.words.map(singular), target_id: it.id, target_type: "item" });
   itemTerms.sort((a, b) => b.words.length - a.words.length);
   categoryTerms.sort((a, b) => b.words.length - a.words.length);
 

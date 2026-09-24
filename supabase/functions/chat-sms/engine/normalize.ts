@@ -33,10 +33,7 @@ export function findWordRun(hay: string[], needle: string[], from = 0, eq: (a: s
 }
 
 /** True when every word of `sub` appears somewhere in `sup`. */
-export function isWordSubset(sub: string[], sup: string[]): boolean {
-  const set = new Set(sup);
-  return sub.length > 0 && sub.every((w) => set.has(w));
-}
+export function isWordSubset(sub: string[], sup: string[]): boolean { const set = new Set(sup); return sub.length > 0 && sub.every((w) => set.has(w)); }
 
 export function sameWords(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((w, i) => w === b[i]);
@@ -54,7 +51,7 @@ export function sameWord(a: string, b: string): boolean {
 
 
 export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "pint", "quart", "half", "whole", "regular"]);
-export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized"]);
+export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized", "inch", "inches"]);
 /** The words of a span that could name an item: no stopwords, no size words. */
 export function contentWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w) && !SIZE_WORDS.has(w)); }
 
@@ -100,6 +97,7 @@ export function validTalk(raw: string): string | null {
   if (!text || text.length > 240) return null;
   if (/\$|\d{1,3}\.\d\d|\b(added|removed|updated|changed|charged|free|discount|refund)\b/i.test(text)) return null;
   if (talkClaimsTime(text) || /\b(text|call|notify|message|ping|let you know|send you a)\b.*\b(you|when|once)\b/i.test(text)) return null; // no promises to contact
+  if (/\b(can'?t|cannot|don'?t|unable to)\s+(see|access|view|check|find)\b|\bnot (on|in) (our|the) menu\b|\bwe (don'?t|do not) have\b/i.test(text)) return null; // no claims about what it can see or what the menu has
   return text;
 }
 /** "15-20 minutes", "about an hour": prep and delivery times are not ours to promise. */

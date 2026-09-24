@@ -6,6 +6,7 @@ import { buildMenu } from "../menu.ts";
 const await_import = () => ({ buildMenu });
 import { newForm, type Move, type OrderForm } from "../form.ts";
 import { turn } from "../turn.ts";
+import { narrow } from "../resolve.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
 import { words } from "../normalize.ts";
@@ -388,7 +389,7 @@ Deno.test("bundle: a dozen bagels asks for flavors, takes counts across turns, p
   let o = say(f, "a dozen bagels", [{ kind: "add_line", item_span: "dozen bagels", qty: 1, option_spans: [] }]);
   assertEquals(o.form.open?.kind, "line_picks");
   assertStringIncludes(o.reply, "One Dozen Bagels: which bagels?");
-  assertStringIncludes(o.reply, "Plain, Everything, Sesame");
+  assertStringIncludes(o.reply, "Plain, Everything, Egg Everything, Whole Wheat Everything, Sesame");
   o = say(o.form, "6 plain and 4 everything", [{ kind: "answer_option", value_span: "6 plain and 4 everything" }]);
   assertEquals(o.form.open?.kind, "line_picks");
   assertStringIncludes(o.reply, "10 of 12 picked. Which 2 more?");
@@ -879,6 +880,33 @@ Deno.test("tester pass 1: answering a kind question with an item the list missed
   o = say(o.form, "bacon cheeseburger", [{ kind: "answer_option", value_span: "bacon cheeseburger" }]);
   assertEquals(o.form.lines[0].item_id, IDS.baconCheeseburger);
   assert(!o.reply.includes("couldn't find") && !o.reply.includes("didn't follow"), o.reply);
+});
+
+Deno.test("tester pass 1: an answer that IS a candidate's name wins over names that contain it (no calzone / everything-bagel loop)", () => {
+  const m = fixtureMenu();
+  // Everything Bagel vs Egg Everything vs Whole Wheat Everything share the word; the exact name wins
+  assertEquals(narrow(["bg-every", "bg-egg-every", "bg-ww-every"], "everything", m), ["bg-every"]);
+  assertEquals(narrow(["bg-every", "bg-egg-every", "bg-ww-every"], "egg everything", m), ["bg-egg-every"]);
+  assertEquals(narrow(["bg-every", "bg-egg-every", "bg-ww-every"], "bagel", m).length, 3); // a word they all share narrows nothing
+});
+
+Deno.test("tester pass 1: 'no wraps' is a decline, not an omission; 'yes' never double-adds what the message already added", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a cheeseburger, and no fries for me thanks", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.omissions, []);
+  let p = say(f, "2 large pepperoni pizzas and an order of garlic knots", [{ kind: "add_line", item_span: "pepperoni pizza", qty: 2, option_spans: ["large"] }]);
+  assertStringIncludes(p.reply, "Did you also want garlic knots");
+  p = say(p.form, "yes the garlic knots", [{ kind: "answer_yes" }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  assertEquals(p.form.lines.filter((l) => l.item_id === IDS.knots).length, 1);
+});
+
+Deno.test("tester pass 1: '12 inch' restating the item's own size is never a kitchen note", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a medium 14 inch pepperoni pizza", [{ kind: "add_line", item_span: "pepperoni pizza", qty: 1, option_spans: ["medium 14 inch"] }]);
+  assertEquals(o.form.lines[0].item_id, IDS.pepPizzaM);
+  assertEquals(o.form.lines[0].notes, []);
 });
 
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {

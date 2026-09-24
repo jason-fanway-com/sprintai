@@ -1,7 +1,7 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
-import { contentWords, optionKey, validTalk } from "./normalize.ts";
+import { contentWords, optionKey, validTalk, isWordSubset, words } from "./normalize.ts";
 
 export type Fulfillment = "pickup" | "delivery";
 
@@ -287,8 +287,10 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
         const yes = m.kind === "answer_yes";
         if (open?.kind === "omission") {
           const asked = form.omissions.filter((o) => open.spans.includes(o.span));
-          if (yes) {
-            nested(asked.map((o) => ({ kind: "add_line", item_span: o.span, qty: o.qty, option_spans: [] })), null);
+          if (yes) { // skip anything this same message already added ("yes the tuna salad sandwich" + add_line tuna salad sandwich)
+            const addedHere = (span: string) => moves.some((x) => x.kind === "add_line" && (isWordSubset(words(span), words(x.item_span)) || isWordSubset(words(x.item_span), words(span))));
+            const fresh = asked.filter((o) => !addedHere(o.span));
+            nested(fresh.map((o) => ({ kind: "add_line", item_span: o.span, qty: o.qty, option_spans: [] })), null);
           }
           for (const o of form.omissions) if (open.spans.includes(o.span)) o.declined = true; // asked once, never again
           ledger.push({ turn: t, event: yes ? "omission_accepted" : "omission_declined", data: { spans: open.spans } });

@@ -9,7 +9,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -57,15 +57,15 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 2. a new-item move that really answers the open line question becomes an answer
   const moves: Move[] = [];
-  const hits = scan(input.message, menu).hits;
+  const hits = scan(input.message, menu).hits; const mw = words(input.message);
   const upgradeSpan = (m: Move & { kind: "add_line" }): Move & { kind: "add_line" } => {
     // "bagel" + ["plain cream cheese"] when the message contains the unique term
     // "bagel with plain cream cheese": the longer term names the item
     const sw = words(m.item_span);
     const h = hits.find((x) => x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
     if (!h) return m;
-    const covered = new Set(h.termWords);
-    const options = m.option_spans.filter((o) => !words(o).every((w) => covered.has(w)));
+    // an option is part of the longer name only if the customer did not ALSO say it elsewhere ("chicken bacon ranch ... and bacon")
+    const options = m.option_spans.filter((o) => findWordRun(mw, words(o), h.end) >= 0 || (h.start > 0 && findWordRun(mw.slice(0, h.start), words(o)) >= 0) || !words(o).every((w) => h.termWords.includes(w)));
     ledger.push({ turn: t, event: "span_upgraded", data: { from: m.item_span, to: h.termWords.join(" ") } });
     return { ...m, item_span: h.termWords.join(" "), option_spans: options };
   };
@@ -73,7 +73,6 @@ export function turn(input: TurnInput): TurnOutput {
   const focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined;
   // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
   // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
-  const mw = words(input.message);
   if (focus) for (const r of rec.rejected) {
     if (r.move.kind !== "add_line") continue;
     const itemVerbatim = words(r.move.item_span).filter((w) => mw.includes(w)).join(" ");
@@ -204,9 +203,8 @@ export function turn(input: TurnInput): TurnOutput {
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control");
   const strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
-  const anyStrong = rec.omissions.some(strong);
   for (const om of rec.omissions) {
-    if (remarkOnly && !anyStrong && !strong(om)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
+    if (remarkOnly && !rec.omissions.some(strong)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
     const alreadyThere = form.lines.some((l) =>
       (l.item_id && om.item_ids.includes(l.item_id)) ||
       (l.status.kind === "ambiguous" && l.status.candidates.some((c) => om.item_ids.includes(c))) ||

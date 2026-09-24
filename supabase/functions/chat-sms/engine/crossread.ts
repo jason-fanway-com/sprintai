@@ -6,6 +6,7 @@ import type { Menu } from "./menu.ts";
 import type { Move } from "./form.ts";
 
 export interface Hit { start: number; end: number; termWords: string[]; item_ids: string[] }
+const NEGATION = new Set(["no", "not", "without", "hold", "skip", "minus", "nah", "nope"]);
 
 /** Greedy longest-match, non-overlapping, item terms only. */
 export function scan(message: string, menu: Menu): { words: string[]; hits: Hit[] } {
@@ -91,6 +92,7 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
     if (anyCovered) continue;
     const span = mw.slice(h.start, h.end).join(" ");
     if (alreadyAskedSpans.has(span)) continue;
+    if (h.start > 0 && NEGATION.has(mw[h.start - 1])) continue; // "no wraps", "without onions": declined, not forgotten
     // a count word right before the mention ("2 large pepperoni pizzas") travels with it
     let qty = 1;
     for (let k = h.start - 1; k >= Math.max(0, h.start - 2); k--) {

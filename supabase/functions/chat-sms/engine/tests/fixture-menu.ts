@@ -96,6 +96,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
   item("coke", "Coke", "Beverages", 299), item("dcoke", "Diet Coke", "Beverages", 299),
   item("bg-plain", "Plain Bagel", "Bagels", 150),
   item("bg-every", "Everything Bagel", "Bagels", 150),
+  item("bg-egg-every", "Egg Everything Bagel", "Bagels", 150),
+  item("bg-ww-every", "Whole Wheat Everything Bagel", "Bagels", 150),
   item("bg-sesame", "Sesame Bagel", "Bagels", 150),
   item("bg-dozen", "One Dozen Bagels", "Bagels", 1500, { meta: { bundle: { count: 12, category: "Bagels", unit: "bagel" } } }),
   item("bg-half", "Half Dozen Bagels", "Bagels", 750, { meta: { bundle: { count: 6, category: "Bagels", unit: "bagel" } } }),
@@ -133,6 +135,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["wings", "wbi"], ["wings", "wbo"], ["bone in wings", "wbi"], ["boneless wings", "wbo"], ["boneless", "wbo"], ["bone in", "wbi"],
   ["coke", "coke"], ["diet coke", "dcoke"], ["diet", "dcoke"],
   ["plain bagel", "bg-plain"], ["everything bagel", "bg-every"], ["everything", "bg-every"], ["sesame bagel", "bg-sesame"],
+  ["egg everything bagel", "bg-egg-every"], ["everything", "bg-egg-every"], ["whole wheat everything bagel", "bg-ww-every"], ["everything", "bg-ww-every"],
   ["dozen bagels", "bg-dozen"], ["one dozen bagels", "bg-dozen"], ["a dozen bagels", "bg-dozen"], ["dozen", "bg-dozen"],
   ["half dozen bagels", "bg-half"], ["half dozen", "bg-half"], ["dozen bagels", "bg-half"],
 ].map(([term, id]) => ({ term, target_type: "item", target_id: id })).concat([

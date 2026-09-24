@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, splitList, STOPWORDS, words } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, SIZE_WORDS, splitList, STOPWORDS, words } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -62,6 +62,15 @@ export function narrow(candidateIds: string[], span: string, menu: Menu): string
     return set;
   };
   const keep = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => pool(id).has(w)));
+  // "ricotta mozzarella" among Ricotta Mozzarella / Ham Ricotta Mozzarella / Spinach Ricotta Mozzarella: the
+  // candidate whose own name (minus size words) IS the answer wins over those that merely contain it
+  if (keep.length > 1 && sw.some((w) => !words(menu.items.get(keep[0])?.category ?? "").map(singular).includes(w))) { // says more than the category noun
+    const nameWords = (id: string) => { const it = menu.items.get(id)!; return words(it.facets.kind ?? it.display_name).filter((w) => !SIZE_WORDS.has(w)).map(singular); };
+    const common = nameWords(keep[0]).filter((w) => keep.every((id) => nameWords(id).includes(w)));
+    const strip = (ws: string[]) => [...new Set(ws.filter((w) => !common.includes(w)))].sort();
+    const exact = keep.filter((id) => sameWords(strip(nameWords(id)), strip(sw)));
+    if (exact.length === 1) return exact;
+  }
   // else stems ("parm" for parmesan, "hawaii" for hawaiian); several may survive: a narrowing, not a pick
   return keep.length > 0 ? keep : candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => wordMatches(w, pool(id))));
 }
@@ -107,11 +116,8 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
     if (whole.length === 1 && others.length === 0 && !sw.includes("half")) return { kind: "one", choice_id: whole[0].id };
     return { kind: "many", choice_ids: subset.map((c) => c.id) };
   }
-  // the span may contain the choice ("with extra cheese please")
-  const contained = pool.filter((c) => findWordRun(sw, c.words) >= 0);
-  if (contained.length === 1) return { kind: "one", choice_id: contained[0].id };
-  if (contained.length > 1) return { kind: "many", choice_ids: contained.map((c) => c.id) };
-  return { kind: "none" };
+  const contained = pool.filter((c) => findWordRun(sw, c.words) >= 0); // the span may contain the choice ("with extra cheese please")
+  return contained.length === 1 ? { kind: "one", choice_id: contained[0].id } : contained.length > 1 ? { kind: "many", choice_ids: contained.map((c) => c.id) } : { kind: "none" };
 }
 
 function requiredGroupOpen(line: Line, item: MenuItem): MenuGroup | null {
@@ -183,18 +189,15 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   }
   // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
   // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")
-  const slots = item.groups.filter((g) => g.kind === "slot");
+  const slots = item.groups.filter((g) => g.kind === "slot"), open = slots.filter((g) => !line.choices[g.id]), done = slots.filter((g) => line.choices[g.id]);
   let filled = false;
-  for (const g of slots.filter((g) => !line.choices[g.id])) {
+  for (const g of open) {
     const m = matchChoice(text, g, line.slot_candidates[g.id]);
     if (m.kind === "one") { line.choices[g.id] = m.choice_id; delete line.slot_candidates[g.id]; filled = true; }
     else if (m.kind === "many" && !filled) { line.slot_candidates[g.id] = m.choice_ids; return true; }
   }
   if (filled) return true;
-  for (const g of slots.filter((g) => line.choices[g.id])) {
-    const m = matchChoice(text, g);
-    if (m.kind === "one") { line.choices[g.id] = m.choice_id; return true; }
-  }
+  for (const g of done) { const m = matchChoice(text, g); if (m.kind === "one") { line.choices[g.id] = m.choice_id; return true; } }
   // 2. a modifier
   for (const g of item.groups) {
     if (g.kind !== "modifier") continue;

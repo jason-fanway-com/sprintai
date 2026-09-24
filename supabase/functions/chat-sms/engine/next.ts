@@ -4,15 +4,8 @@ import type { Menu } from "./menu.ts";
 
 export function questionKey(q: OpenQuestion | null): string | null {
   if (!q) return null;
-  switch (q.kind) {
-    case "line_unresolved": return `line_unresolved:${q.line_id}`;
-    case "line_ambiguous": return `line_ambiguous:${q.line_id}`;
-    case "line_slot": return `line_slot:${q.line_id}:${q.group_id}`;
-    case "line_picks": return `line_picks:${q.line_id}`;
-    case "omission": return `omission:${q.spans.join("|")}`;
-    case "line_ref": return `line_ref`;
-    default: return q.kind;
-  }
+  if ("line_id" in q) return `${q.kind}:${q.line_id}${"group_id" in q ? `:${q.group_id}` : ""}`;
+  return q.kind === "omission" ? `omission:${q.spans.join("|")}` : q.kind;
 }
 
 /** The next open question, by fixed priority. Pure. */
