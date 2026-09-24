@@ -1052,6 +1052,21 @@ Deno.test("phone test 8: the kinds named as full items plus one answered kind ar
   assertEquals(new Set(b.form.lines.filter((l) => l.line_id !== 1).map((l) => l.item_id)).size, 5, b.reply);
 });
 
+Deno.test("phone test 9: 'hawiaan' is the Hawaiian; a kind the model dropped ('plain') still joins the split", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "4 large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  o = say(o.form, "One plain, one pepperoni, one meat lover and one hawiaan", [
+    { kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "meat lover", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "hawiaan", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.cheesePizzaL, IDS.pepPizzaL, "hawL", "mlL"].sort(), o.reply);
+  assert(!o.reply.includes("couldn't find"), o.reply);
+  const p = say(f, "a peperoni pizza", [{ kind: "add_line", item_span: "peperoni pizza", qty: 1, option_spans: [] }]);
+  assertStringIncludes(p.reply, "What size Pepperoni Pizza");
+  const q = say(f, "a zzzzqq", [{ kind: "add_line", item_span: "zzzzqq", qty: 1, option_spans: [] }]);
+  assertStringIncludes(q.reply, `couldn't find "zzzzqq"`); // no near word: still honest
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

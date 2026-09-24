@@ -264,18 +264,10 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
           if (line.status.kind === "ambiguous" || line.status.kind === "unresolved") (line.answers ??= []).push(m.value_span); else line.held.push(m.value_span);
           touched.add(line.line_id);
           ledger.push({ turn: t, event: "answer_option", data: { line_id: line.line_id, span: m.value_span, routed: m.line_id !== undefined } });
-        } else if (open && open.kind === "line_ref") {
-          // a numbered pick for "which one?"
-          const n = parseInt(m.value_span, 10);
-          const pick = Number.isFinite(n) ? open.candidates[n - 1] : undefined;
-          if (pick !== undefined) {
-            const pending = open.pending;
-            if (pending.kind === "change_line" || pending.kind === "remove_line") {
-              nested([{ ...pending, ref: { line_id: pick } } as Move], null);
-            }
-          } else {
-            ledger.push({ turn: t, event: "answer_option_unmatched", data: { span: m.value_span } });
-          }
+        } else if (open && open.kind === "line_ref") { // a numbered pick for "which one do you mean?"
+          const pick = open.candidates[parseInt(m.value_span, 10) - 1];
+          if (pick !== undefined && (open.pending.kind === "change_line" || open.pending.kind === "remove_line")) nested([{ ...open.pending, ref: { line_id: pick } } as Move], null);
+          else if (pick === undefined) ledger.push({ turn: t, event: "answer_option_unmatched", data: { span: m.value_span } });
         } else {
           // no line question open: treat as an add attempt of that span
           nested([{ kind: "add_line", item_span: m.value_span, qty: 1, option_spans: [] }], form.open);

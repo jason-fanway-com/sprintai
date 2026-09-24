@@ -1,7 +1,7 @@
 // resolve.ts — words to menu rows. Longest match over the compiled lexicon,
 // 0 / 1 / many, and "many" narrows by facet against the stored candidate set.
 // Never a tiebreak, never cheapest, never a default the customer did not say.
-import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, SIZE_WORDS, splitList, STOPWORDS, words, normalize } from "./normalize.ts";
+import { contentWords, findWordRun, impliedCount, isDigits, isWordSubset, leadingCount, optionWords, sameWord, sameWords, singular, SIZE_WORDS, splitList, STOPWORDS, words, normalize, closestWord } from "./normalize.ts";
 import type { Menu, MenuGroup, MenuItem } from "./menu.ts";
 import { itemsInCategory } from "./menu.ts";
 import type { Line } from "./form.ts";
@@ -24,6 +24,9 @@ function coverAll(content: string[], menu: Menu): Set<string> {
 export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const sw = words(span);
   if (sw.length === 0) return { kind: "none" };
+  // "hawiaan", "peperoni": a word the menu does not know, one edit from one it does, is that word (before anything else reads the span)
+  const fixed = sw.map((w) => menu.vocab.has(w) || STOPWORDS.has(w) || SIZE_WORDS.has(w) ? w : closestWord(w, menu.vocab) ?? w);
+  if (fixed.some((w, i) => w !== sw[i])) return resolveSpan(fixed.join(" "), menu);
   const swSing = sw.map(singular), content = contentWords(span);
   // the whole span IS a category word ("pie", "pizza"): the category, not whichever items the compiler tagged with it
   for (const t of menu.categoryTerms) if (sameWords(t.wordsSing, content.map(singular))) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }
@@ -176,12 +179,8 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   const removing = span.startsWith("-");
   const text = removing ? span.slice(1) : span;
   if (removing) {
-    for (const g of item.groups) {
-      const m = matchChoice(text, g);
-      if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; }
-    }
-    line.notes.push(`no ${text}`);
-    return false;
+    for (const g of item.groups) { const m = matchChoice(text, g); if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; } }
+    line.notes.push(`no ${text}`); return false;
   }
   // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
   // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")

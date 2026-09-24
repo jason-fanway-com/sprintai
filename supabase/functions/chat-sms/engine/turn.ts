@@ -10,7 +10,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, STOPWORDS } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -54,6 +54,7 @@ export function turn(input: TurnInput): TurnOutput {
   const askedSpans = new Set(form0.omissions.map((o) => o.span));
   const lineQuestionOpen = !!(form0.open && "line_id" in form0.open);
   const batch = normalizeMoveBatch(input.moves, lineQuestionOpen), rec = reconcile(input.message, batch, menu, askedSpans);
+  ledger.push({ turn: t, event: "model_moves", data: { moves: batch } }); // what the model said, before any of our reading of it
   for (const r of rec.rejected) ledger.push({ turn: t, event: "rejected_span_not_in_message", data: r });
 
   // 2. a new-item move that really answers the open line question becomes an answer
@@ -84,18 +85,24 @@ export function turn(input: TurnInput): TurnOutput {
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
     const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1;
-    // each add or answer that names exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", or the answer "Bacon Cheese")
-    const isPart = (m: Move) => (m.kind === "add_line" && one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu)))) || (m.kind === "answer_option" && one(m.value_span));
-    let parts = batch.filter(isPart).map((m) => m.kind === "add_line" ? { span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) } : { span: (m as Move & { kind: "answer_option" }).value_span, qty: 1 });
+    // "one plain one pepperoni" arrives as one string when the model does not split it: cut at the count words
+    const tokens = (text: string) => splitList(text).flatMap((p) => { const out: string[][] = [[]]; for (const w of words(p)) { if (out[out.length - 1].length && leadingCount(w + " x").count !== null) out.push([]); out[out.length - 1].push(w); } return out.filter((x) => x.length).map((x) => x.join(" ")); })
+      .map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; });
+    // each add or answer naming exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", the answer "Bacon Cheese", "one plain one pepperoni")
+    const partsOf = (m: Move) => m.kind === "add_line" ? (one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu))) ? [{ span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) }] : [])
+      : m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? tokens(m.value_span).filter((p) => one(p.span)) : [];
+    let parts = batch.flatMap(partsOf);
     // "one of each (except sweet potato)": every kind, minus the ones the message names
     if (EACH.some((e) => findWordRun(mw, words(e)) >= 0)) {
       const label = (id: string) => menu.items.get(id)?.facets.kind ?? menu.items.get(id)?.display_name ?? id;
       const kinds = [...new Set(cands.map(label))], shared = words(kinds[0]).filter((w) => kinds.every((k) => words(k).includes(w)));
       parts = kinds.filter((k) => !words(k).filter((w) => !shared.includes(w)).every((w) => mw.includes(w))).map((k) => ({ span: k, qty: 1 }));
-    }
-    if (parts.length >= 2) {
+    } else for (const o of rec.omissions) if (one(o.span) && !parts.some((p) => narrow(cands, p.span, menu)[0] === narrow(cands, o.span, menu)[0])) parts.push({ span: o.span, qty: o.qty }); // a kind the model left out ("one plain, ...")
+    const pos = (span: string) => { const i = mw.indexOf(words(span).find((w) => !STOPWORDS.has(w)) ?? ""); return i < 0 ? 999 : i; }; // lines in the order the customer said them
+    parts.sort((x, y) => pos(x.span) - pos(y.span));
+    if (parts.length >= 2 || (parts.length === 1 && focus.qty > 1 && parts[0].qty === focus.qty)) {
       const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
-      const keep = rec.accepted.filter((m) => !isPart(m) && !aboutFocus(m)); // the parts replace the model's own adds, changes and removal of that line
+      const keep = rec.accepted.filter((m) => partsOf(m).length === 0 && !aboutFocus(m)); // the parts replace the model's own adds, changes and removal of that line
       rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus.line_id, parts });
       ledger.push({ turn: t, event: "kind_adds_are_a_split", data: { line_id: focus.line_id, parts } });
       splitFocus = true; const om = rec.omissions.filter((o) => !one(o.span)); rec.omissions.length = 0; rec.omissions.push(...om); // the kinds were spoken for
@@ -186,30 +193,6 @@ export function turn(input: TurnInput): TurnOutput {
     }
   }
 
-  // 2b. an ambiguous line of quantity N answered with several kinds ("one plain one pepperoni …")
-  if (focus && focus.status.kind === "ambiguous" && focus.qty > 1 && !splitFocus) {
-    const answers = moves.filter((m): m is Move & { kind: "answer_option" } => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id));
-    const parts = answers.flatMap((a) => splitList(a.value_span)).flatMap((p) => {
-      // "one plain one pepperoni" arrives as one string when the model does not split it
-      const ws = words(p); const out: string[] = []; let cur: string[] = [];
-      for (const w of ws) { if (cur.length && leadingCount(w + " x").count !== null) { out.push(cur.join(" ")); cur = []; } cur.push(w); }
-      if (cur.length) out.push(cur.join(" "));
-      return out;
-    }).map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; })
-      .filter((p) => p.span && narrow(focus.status.kind === "ambiguous" ? focus.status.candidates : [], p.span, menu).length > 0);
-    // lines in the order the customer said them
-    const mwords = words(input.message);
-    const pos = (span: string) => { const i = mwords.indexOf(words(span)[0] ?? ""); return i < 0 ? 999 : i; };
-    parts.sort((a, b) => pos(a.span) - pos(b.span));
-    if (parts.length >= 2) {
-      // the model sometimes expresses the split as "remove the pizzas line, add four": the removal
-      // of the very line being answered is that same intent, not a second instruction
-      const kept = moves.filter((m) => m.kind !== "answer_option" && !(m.kind === "remove_line" && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref ? lineMatchesSpan(focus, m.ref.span, menu) : form0.lines.length === 1)));
-      moves.length = 0; moves.push(...kept, { kind: "split_line", line_id: focus.line_id, parts });
-      ledger.push({ turn: t, event: "quantity_split_by_kind", data: { line_id: focus.line_id, parts } });
-    }
-  }
-
   // 3. apply
   const matcher = (line: import("./form.ts").Line, span: string) => lineMatchesSpan(line, span, menu);
   const res = apply(form0, moves, matcher);
@@ -295,11 +278,7 @@ export function turn(input: TurnInput): TurnOutput {
   const pending = form.lines.filter((l) => newIds.has(l.line_id) && l.status.kind !== "complete" && l.line_id !== focusId);
   const agg = new Map<string, number>(); for (const l of pending) { const k = l.item_id ? menu.items.get(l.item_id)!.display_name : l.span; agg.set(k, (agg.get(k) ?? 0) + l.qty); } // resolved lines by name; "fries and fries" -> "3 fries"
   if (pending.length) acks.push({ kind: "pending", items: [...agg].map(([span, qty]) => ({ qty, span })) });
-  for (const r of res.removed) {
-    const it = r.item_id ? menu.items.get(r.item_id) : null;
-    if (it) acks.push({ kind: "line_removed", name: it.display_name });
-    else declines.push({ code: "dropped_line", span: r.span });
-  }
+  for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else declines.push({ code: "dropped_line", span: r.span }); }
 
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };
