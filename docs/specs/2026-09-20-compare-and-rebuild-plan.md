@@ -439,3 +439,12 @@ and in narrowing ("hawiaan" → Hawaiian). Prices left acknowledgements (Jason: 
 summary or a question). Talk filter: no promised actions, no "not finding it". The model's raw moves now sit in the ledger
 (model_moves) so the next diagnosis needs no guessing. Deploys v627–v631; 123 tests; core under 2,000. The tester gained the
 three shapes as quirks so future passes find this class before Jason does.
+
+**2026-09-24 night, tester pass 4 (v631) and fixes (v632).** The pass with the new quirks found: the new typo corrector had
+rewritten "parm" (a stem) into another word, sending "chicken parm sandwich" to the wrong list (a stem of a menu word is never a
+typo; 5+ letters; two edits only from 7); "3 thin sicilians. one pepperoni, one sausage, one plain" was three pepperoni pizzas
+(options each preceded by a count that adds up to the quantity are one line each; "plain" on a toppings item means none);
+"linguine for the pasta with clam sauce" waited on a slow model then failed (a slot answer may carry the item's own words; the
+longest contained option wins); a gyro's duplicate slots printed "(Chicken, House Balsamic, Chicken)" (read once); talk said "see
+your total at checkout" (no talk about totals or checkout). Turn latency that night was the model service (many 10–30 s turns),
+not the engine. 124 tests; core under 2,000.
