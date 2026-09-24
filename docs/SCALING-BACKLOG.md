@@ -55,4 +55,32 @@ small and this agent can be simple. Measure before scoping.
 
 ---
 
-## 2. (next item goes here)
+## 2. Lexicon compiler hygiene (Fable, 2026-09-24) — crew, not engine
+
+Live Vito's lexicon rows the engine now has to defend against at load time. Each is a compiler
+output shape, so fix the compiler and recompile (on the PO's GO), then delete the load-time guards.
+
+1. **Squashed one-word rows.** `buffalochicken`, `buffalochicken-large16inch`, `cheesesteak/chickencheesesteaksalad`,
+   `cheesesteakchickencheesesteak`. Nobody types these; they put fake words into the vocabulary
+   (the engine's compound-join briefly turned "buffalo chicken cheesesteak" into the pizza because
+   "buffalochicken" was a "known word"). Stop emitting them.
+2. **Slash display names compiled as one run.** `cheesesteak chicken cheesesteak salad` for
+   "Cheesesteak / Chicken Cheesesteak Salad". The slash means alternatives: emit `cheesesteak salad`
+   and `chicken cheesesteak salad` (the engine does this from the display name at load; the
+   compiler should too, and stop emitting the run).
+3. **Size-suffixed duplicates.** `buffalo chicken - large 16 inch`, `buffalo chicken larges`,
+   `buffalo chicken - medium 14 inches`. The size is a facet the engine already reads from the
+   name; these rows only bloat the scan and the egress.
+4. **Bare generic terms on specific items.** `chicken` → the quesadilla; `sandwich` → one
+   cheesesteak. A word that names a category must be a category term or nothing.
+5. **Items with no term at all** (NJB "Chicken Salad Sandwich" had none before the engine began
+   adding the display name itself). Every orderable item must carry at least its display name.
+
+Acceptance: `deno run -A scripts/engine/probe.ts --shop <id> "<span>"` on the Air shows the same
+resolutions for `cheesesteak`, `buffalo chicken cheesesteak`, `chicken cheesesteak salad`,
+`bacon cheese burger` before and after the recompile, and `menu.vocab` contains no word that is
+two menu words glued together.
+
+---
+
+## 3. (next item goes here)
