@@ -3,7 +3,7 @@
 **This file contains only things that change rarely.** No counts, no versions, no status —
 those go stale and lie. Query live state instead (§5).
 
-Last rule change: 2026-09-15.
+Last rule change: 2026-09-20.
 
 ---
 
@@ -244,6 +244,86 @@ code that cannot fire.
 ("2 Regular Slices with sausage" lost the sausage 4 of 4) and moved nothing beyond the noise.
 A fix that adds a path which can CHARGE a customer needs more than correctness to justify it.
 
+## 4c-ter. What 2026-09-18 taught
+
+**Ambiguity is data the compiler must emit, and narrowing is the resolver's job.** A bare name shared
+across categories ("cheesesteak" x4) had no term at all, so the resolver fell to a shorter match and
+silently picked a different dish. The fix is a rule, never a name: every item that shares a bare
+name claims it; a sized family claims its base key whatever the suffix; the resolver narrows by any
+category or size word in the phrase, only ever reduces a tie, and never empties one into "didn't
+catch". Loosening that to "exact name wins" (the Bruschetta protection) is a guess that is right for
+one dish and wrong for the pizza — the same shape as the $2.50 cheeseburger.
+
+**A "which one?" list is only as good as its answer parser.** Making more things ask exposed that
+the parser accepted only a bare digit. Real answers are "3 please, the hot sandwich", "option 1) the
+…", "I'd like the hot sandwich" — and they restate the whole order afterwards, so the ANSWER CLAUSE
+is read first.
+
+**The judge itself is a boundary.** It compared the customer's menu-style names to the cart's
+rendered names by string similarity and inflated "dropped items" from ~10 to 31 in 100. When two
+sides of a comparison are produced by different code, find the shared identifier (menu_item_id)
+before trusting the metric. Falsify each property's matcher with a known-bad AND a known-good case.
+
+**Code validates what the model proposes; it does not trust it.** The model's `item_span` must
+appear in the customer's words (token match, not substring — spans get reordered). An add-on named
+with its item is consumed as a modifier and never also lands as a line. A correction later in the
+same message supersedes the earlier add. The customer's own recap text is not a fresh order.
+
+**Read-back before checkout is the cheapest guard against the dropped-item class**, because it puts
+the customer on the check. It surfaced that the correction path was weak the same hour it landed.
+
+**Deploy stamps must be truthful.** `deploy-function.sh` refuses while a sim run is in flight and
+refuses a bundle with uncommitted files (the file list from `deno info`); the sim gate compares those
+same bundle files, not directories, so a docs or test commit does not force a redeploy.
+
+## 4c-quater. What 2026-09-19 taught
+
+**A choice word inside an item's name is not a choice.** The 09-18 add-on rule ("black diamond steak"
+named with a house salad is the salad's add-on, never a quesadilla line) matched a choice's stems as a
+SUBSET of the add's span. So "chicken cheesesteak sandwich" ordered with any salad was thrown away as the
+salad's Grilled Chicken add-on, silently, 3 of 3 live, and the word was never applied either. The seam
+rule is whole-span stem equality: a span that resolved to a real item and is longer than the choice IS
+the item. The same hole reappeared the same morning as "a medium chicken bacon ranch pizza" ->
+"Bacon on half or whole?" plus a $4.50 phantom. Whenever code compares a customer span to a modifier
+choice, ask which direction the subset runs.
+
+**A new clarifying question needs an exit before it ships.** A "did you want the House - 16", or is
+'House pizza' something else?" question that re-fires on every answer containing the word "pizza"
+turned a forgivable extra question into an infinite loop. The pattern that works is the Chicken
+Parmesan reply: name what we DO have, offer keep-or-drop, ask once.
+
+**A feature that runs and produces nothing is the fourth shape of "built but not working".** The
+derived-row builder (materialised "<Topping> Pizza" rows, decided 09-07, built 09-09) ran on every compile
+and produced 24 rows for Zio's and ZERO for Vito's, the demo shop, for ten days. No error, no warning, no
+count anywhere a person would read. Every pepperoni failure Jason hit on 09-19 was that zero. Any pass that
+derives data must report its per-shop count, and a plausible zero must be a loud warning. Ask, for every
+compiler pass: which shop got zero from it, and why.
+
+**The fifth shape: rows that exist and pointers nothing can follow.** Once the derived-row builder was
+unblocked for Vito's (09-19 midday) it wrote 15 correct rows with real ids — and lexicon terms whose
+target was the compiler's own synthetic key, which the engine drops on sight (a 09-18 "filter non-UUID
+target_ids" commit had hidden the crash instead of asking why a non-UUID was there). Zio's 24 derived
+rows had been dead the same way since 09-09. When a pass writes data in two tables, assert the join:
+every pointer resolves, in that shop, or the compile fails. A crash you filter away is a defect you chose
+not to see.
+
+**An unstamped deploy is an unknown build, and the gate that catches it is the download, not the version
+number.** 09-19 15:00: a crew builder process the lead believed had died ran `supabase functions deploy`
+directly, one minute after a stamped PO deploy. Version went 526 -> 527; the artifact had no DEPLOY_SHA;
+twenty minutes of live measurements ran on code nobody could name. `require-current-deploy.sh` refused with
+an EMPTY deployed sha — read that as "someone deployed around the script", not as a CLI hiccup. The crew is
+now hard-blocked from `supabase functions deploy` in new sessions; the script is the only door.
+
+**Measure, then keep.** The pepperoni fix was correct for its own phrase (4 of 5 live) and cost 3-4 paid
+orders in 50 through side rules its author had not run against the real menu. The 50-run caught it in
+eight minutes; the revert and redeploy took twenty. A fix that adds asking behaviour is not kept on the
+strength of its own repro.
+
+**A crew "verified against live data" still ran a fixture that could not fail.** The narrowing commit's
+test menu had seven large pizzas of different kinds, so every kind word was unique; the real menu has
+every kind in three sizes and the first commit could not accept a plain "cheese". Ask what the fixture
+cannot represent.
+
 ## 4d. The critical path
 
 Cut by Jason 2026-09-06 to exactly two things, still current:
@@ -383,6 +463,36 @@ embedded runner that cannot authenticate.
 - **Never re-import Not Just Bagels' menu** without Jason watching
 
 - **Ambiguity is narrowed, never listed (Jason, 2026-09-15).** When a term matches many items, ask like a human: "What kind?" then "What size?", resolving each answer against the remaining candidates. Enumerate the options only when the customer asks what they are. Spec: `docs/specs/2026-09-15-narrowing-questions.md`
+
+
+### 4c-quinquies. What 2026-09-20 00:xx taught: a recompile is a deploy
+The lexicon is live behaviour. A recompile on a changed compiler changed what every customer could order (active terms
+3388 -> 5216; "mushroom" stopped resolving; Jason's own four-pizza order lost two pizzas) with no code deploy at all.
+Rules: (1) compile-menu changes get the same cycle as chat-sms — probe the compiler's output offline against real menu
+data, deploy, then ONE recompile on my GO, then measure (Jason's flow + the 50) before anything else moves; (2) the six
+name probes (a bare topping name, "<size> <topping> pizza", a bare family name, an item's exact menu name, a stopword,
+"chicken quesadilla") run on the live lexicon after every recompile; (3) rolling back is deploying the previous
+compile-menu commit from a worktree and recompiling — the lexicon itself is not versioned, so the compiler is the
+rollback point. (4) A runner-level fix is verified LIVE with convo.sh; the offline probes do not reach the runner, and
+twice tonight I called a working fix "not done" (and the crew called two broken ones "verified") on offline evidence.
+
+
+### 4c-sexies. What 2026-09-20 04:00 taught: the 50 is not the acceptance; Jason's flow is
+A merge the crew deployed themselves scored 49/50 on the seeded run and broke Jason's own eleven-message order two times
+out of three (the narrowing question vanished; the order closed with fries only). The 50 measures breadth; one exact flow
+run three times measures the thing the customer will do. Rules: (1) every deploy gets Jason's flow three times before the
+50 is even started; a single loss is a rollback, not a retry; (2) a build the crew deployed, stamped or not, is rolled back
+to the last build I measured before anything else happens — a valid stamp only proves the script ran, not that the build
+was measured; (3) a "LANDED" from the crew carries their own live transcript against the deployed build, and "already on
+main" is checked against git log before it is believed — three fixes tonight were reported landed and were not on main.
+
+
+### 4c-septies. Deploy lock (2026-09-20 04:40)
+`scripts/deploy-function.sh` refuses unless `~/po-scratch/.po-deploy-token` exists and is younger than 10 minutes, and burns the
+token on success. The deploy command is now, exactly:
+`touch ~/po-scratch/.po-deploy-token && cd /Users/joestrazza/sprintai-ordering && ./scripts/deploy-function.sh chat-sms`
+(same for compile-menu). From a worktree: create the token, then run the script inside the worktree. Nothing in the repo may
+create the token. A deploy that appears without my token is a breach and gets rolled back to the last measured build.
 
 ## 8. Durability ranking — settled through evidence
 
