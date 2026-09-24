@@ -480,3 +480,16 @@ became two Cheesesteak Sandwich lines (split parts naming the same item merge in
 list we had just shown said "I don't see 1" (a numeric ref picks from that list); "chicken fingers 5 piece with fries" could not be
 found ("piece" is filler). Deploy v636; 129 tests; core under 2,000; all pass-6 shapes replayed live and landed. Pass cost: $0.33.
 
+**2026-09-24, tester pass 7 (v636) and fixes (v637–v639).** Sixteen of twenty landed; two of the four "not landed" were the tester
+running out of turns after a late add re-showed the summary (correct engine behaviour), one was "2 liter coke" on a menu with
+only cans (honest "couldn't find"), and one was real: "3 chicken fingers" against the (3) and (5) rows asked "what kind?" and
+then looped four times, because the split mechanism read the "3" in "chicken fingers 3" as a count of three (piece-count rows
+now pick by the count; a whole answer that names one candidate is one answer). Two money defects hid inside "landed"
+conversations: "a medium and large jacks special pizza" billed two larges (the span-upgrade fell back to the "large jacks
+special pizza" mention for the add that said medium; a mention whose size contradicts the add's own size never upgrades it),
+and the customer's "make the large a medium" left the large in place with a kitchen note "no large" (a size word on a derived
+row now swaps to the sibling row of the same kind; when the model sends only remove:[large], the other size word in the
+message is the size wanted; a stale removal is silent). Twelve wing flavors for one flavor slot silently picked the longest
+name (several disjoint options now ask which; a list of a slot's options is a closed answer). 132 tests; core under 2,000;
+every shape replayed live. Pass cost: $0.29.
+
