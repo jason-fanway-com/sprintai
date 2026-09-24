@@ -1325,6 +1325,6 @@ Deno.test("tester pass 10: 'french fries extra crispy' answers the fries questio
   assertStringIncludes(o.reply, "What kind of fries?");
   o = say(o.form, "french fries extra crispy please", [{ kind: "answer_option", value_span: "french fries extra crispy" }]);
   assertEquals(o.form.lines[0].item_id, IDS.fries, o.reply);
-  assertStringIncludes(o.reply, "extra crispy");
+  assertEquals(o.form.lines[0].notes, ["extra crispy"], o.reply); // once, not once per time it was said
 });
 

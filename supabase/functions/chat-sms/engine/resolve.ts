@@ -219,7 +219,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   const own = ownWords(item);
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
-  if (mayNote) line.notes.push(text);
+  if (mayNote && !line.notes.includes(text)) line.notes.push(text); // said twice ("fries extra crispy" then "french fries extra crispy") is one note
   return false;
 }
 
