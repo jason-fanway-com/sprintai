@@ -187,7 +187,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   const text = removing ? span.slice(1) : span;
   if (removing) {
     for (const g of item.groups) { const m = matchChoice(text, g); if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; } }
-    if (SIZE_ONLY.has(text) && item.facets.size && item.facets.size !== text) return true; // "not large" once the row is already the medium: nothing left to do
+    const rw = words(text); if (rw.length === 1 && SIZE_ONLY.has(rw[0]) && item.facets.size && item.facets.size !== rw[0]) return true; // "not Large" once the row is already the medium: nothing left to do
     line.notes.push(`no ${text}`); return false;
   }
   if (NO_TOPPING.has(words(text).join(" ")) && item.groups.some((g) => g.kind === "modifier")) return true; // "plain": nothing to add

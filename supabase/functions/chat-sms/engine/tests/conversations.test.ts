@@ -1241,7 +1241,7 @@ Deno.test("tester pass 7 live: a size change sent as 'remove large' alone takes 
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   let o = say(f, "large cheese pizza", [{ kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["large"] }]);
-  o = say(o.form, "wait make the large cheese pizza a medium", [{ kind: "change_line", ref: { span: "large cheese pizza" }, add_option_spans: [], remove_option_spans: ["large"] }]);
+  o = say(o.form, "wait make the large cheese pizza a medium", [{ kind: "change_line", ref: { span: "large cheese pizza" }, add_option_spans: [], remove_option_spans: ["Large"] }]); // the model capitalises what it copies
   assertEquals(o.form.lines.map((l) => l.item_id), [IDS.cheesePizzaM], o.reply);
   assertEquals(o.form.lines[0].notes, [], o.reply);
   let p = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
