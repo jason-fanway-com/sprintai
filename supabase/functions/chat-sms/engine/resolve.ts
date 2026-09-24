@@ -126,7 +126,7 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
     return { kind: "many", choice_ids: subset.map((c) => c.id) };
   }
   const contained0 = pool.filter((c) => findWordRun(sw, c.words) >= 0), longest = Math.max(0, ...contained0.map((c) => c.words.length)); // the span may contain the choice ("with extra cheese please")
-  const contained = contained0.filter((c) => c.words.length === longest); // "medium well" over "medium"
+  const contained = contained0.filter((c) => c.words.length === longest || !contained0.some((o) => o.words.length > c.words.length && findWordRun(o.words, c.words) >= 0)); // "medium well" over "medium"; twelve flavors stay twelve
   return contained.length === 1 ? { kind: "one", choice_id: contained[0].id } : contained.length > 1 ? { kind: "many", choice_ids: contained.map((c) => c.id) } : { kind: "none" };
 }
 
@@ -159,7 +159,7 @@ const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), 
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
-let menuTermWords: Map<string, Set<string>> = new Map();
+let menuTermWords: Map<string, Set<string>> = new Map(), menuRef: Menu;
 
 /** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
 function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
@@ -211,6 +211,10 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   // 3. a size word that is already the item's own size (derived rows carry size in the name)
   const sw = words(text);
   if (sw.length === 1 && item.facets.size === sw[0]) return true;
+  if (sw.length === 1 && SIZE_ONLY.has(sw[0]) && item.facets.size && item.facets.kind) { // "make it a medium": the sibling row of the same kind
+    const sib = [...menuRef.items.values()].find((i) => i.orderable && i.category === item.category && i.facets.kind === item.facets.kind && i.facets.size === sw[0]);
+    if (sib) { line.item_id = sib.id; line.choices = {}; line.modifiers = []; return true; }
+  }
   const own = ownWords(item);
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
@@ -223,7 +227,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
  * Returns the item it ended on, if any.
  */
 export function bindLine(line: Line, menu: Menu): void {
-  menuTermWords = menu.termWordsByItem;
+  menuTermWords = menu.termWordsByItem; menuRef = menu;
   // An unresolved line whose customer gave a replacement span: swap the span.
   if (line.item_id === null && line.status.kind === "unresolved" && (line.answers?.length ?? 0) > 0) {
     const first = line.answers![0];
@@ -244,6 +248,7 @@ export function bindLine(line: Line, menu: Menu): void {
       const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
       if (hit) cands = [hit];
     }
+    if (cands.length > 1 && cands.every((id) => menu.items.get(id)?.piece_count)) { const hit = cands.filter((id) => line.qty % menu.items.get(id)!.piece_count! === 0); if (hit.length === 1) cands = hit; } // "3 chicken fingers" against the (3) and (5) rows
     // the span's own words narrow first: keep the candidates matching the MOST of them ("everything bagels", "bowl of lobster
     // bisque"). Narrowing word by word would let "chicken wings" stop at the Chicken quesadilla; scoring keeps it a tie, so we ask.
     if (cands.length > 1) {

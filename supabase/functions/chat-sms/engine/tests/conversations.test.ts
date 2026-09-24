@@ -1211,3 +1211,29 @@ Deno.test("tester pass 6: a whole item name the list missed is the line (talk-on
   assert(!o.reply.includes("Did you also want"), o.reply);
 });
 
+Deno.test("tester pass 7: '3 chicken fingers' picks the 3-piece row; 'chicken fingers 3' as an answer is one answer, not a count", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "3 chicken fingers", [{ kind: "add_line", item_span: "chicken fingers", qty: 3, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, "cf3", o.reply);
+  assertEquals(o.form.lines[0].qty, 1);
+  let p = say(f, "some chicken fingers", [{ kind: "add_line", item_span: "chicken fingers", qty: 1, option_spans: [] }]);
+  assertEquals(p.form.lines[0].status.kind, "ambiguous", p.reply);
+  p = say(p.form, "the chicken fingers 3", [{ kind: "answer_option", value_span: "the chicken fingers 3" }]);
+  assertEquals(p.form.lines.map((l) => [l.item_id, l.qty]), [["cf3", 1]], p.reply);
+});
+
+Deno.test("tester pass 7: 'a medium and large' are two sizes; a size change swaps the derived row; several options for one slot are asked", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a medium and large cheese pizza", [{ kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["medium"] }, { kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["large"] }]);
+  assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.cheesePizzaL, IDS.cheesePizzaM].sort(), o.reply);
+  o = say(o.form, "make the large a medium", [{ kind: "change_line", ref: { span: "large cheese pizza" }, add_option_spans: ["medium"], remove_option_spans: [] }]);
+  assertEquals(o.form.lines.map((l) => l.item_id), [IDS.cheesePizzaM, IDS.cheesePizzaM], o.reply);
+  assertEquals(o.form.lines.flatMap((l) => l.notes), []);
+  let p = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  p = say(p.form, "ranch, italian, bleu cheese", [{ kind: "answer_option", value_span: "ranch, italian, bleu cheese" }]);
+  assertEquals(p.form.lines[0].status.kind, "needs_slot", p.reply); // one dressing per salad: ask, never pick the longest name
+  assertStringIncludes(p.reply, "dressing");
+});
+

@@ -95,6 +95,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
     { group_id: "cssAdd", slot_key: "add_ons", kind: "modifier", ask_mode: "on_request", prompt_template: "addons.ask",
       choices: [{ id: "cssAddChicken", display: "Chicken", price_delta_cents: 400 }] },
   ]),
+  item("cf3", "Chicken Fingers (3)", "Appetizers", 799, {}),
+  item("cf5", "Chicken Fingers (5) With French Fries", "Appetizers", 1095, {}),
   item("louk", "Your Way Loukoumades - Additional Topping/Sauce/Filling", "Desserts", 150, { display_name: "Small Your Way Loukoumades - Additional Topping/Sauce/Filling" }),
   item("bgcs", "Buffalo Grilled Chicken", "Salads", 1395, { display_name: "Buffalo Grilled Chicken Salad" }),
   item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [
@@ -137,7 +139,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["plain", IDS.cheesePizzaS], ["plain", IDS.cheesePizzaM], ["plain", IDS.cheesePizzaL],
   ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
   ["house salad", IDS.houseSalad], ["house", IDS.houseSalad], ["greek salad", IDS.greekSalad],
-  ["grilled chicken salad", "gcs"], ["grilled chicken", "gcs"], ["chicken cheesesteak salad", "cssal"], ["cheesesteak salad", "cssal"], ["cheesesteak chicken cheesesteak salad", "cssal"], ["cheesesteak chicken cheesesteak", "cssal"], ["frenchfries", IDS.fries], ["buffalo grilled chicken salad", "bgcs"], ["buffalo grilled chicken", "bgcs"],
+  ["grilled chicken salad", "gcs"], ["grilled chicken", "gcs"], ["chicken cheesesteak salad", "cssal"], ["cheesesteak salad", "cssal"], ["cheesesteak chicken cheesesteak salad", "cssal"], ["cheesesteak chicken cheesesteak", "cssal"], ["frenchfries", IDS.fries], ["chicken fingers", "cf3"], ["chicken fingers", "cf5"], ["chicken fingers 3", "cf3"], ["chicken fingers 5 with french fries", "cf5"], ["buffalo grilled chicken salad", "bgcs"], ["buffalo grilled chicken", "bgcs"],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak], ["sandwich", IDS.cheesesteak], ["sandwiches", IDS.cheesesteak],
   ["chicken", "chq"], ["chicken quesadilla", "chq"], ["quesadilla", "chq"],
   ["meatball", "nonas"], ["meatballs", "nonas"], ["nonas meatballs", "nonas"],

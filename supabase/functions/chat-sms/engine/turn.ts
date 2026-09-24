@@ -10,7 +10,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -66,7 +66,7 @@ export function turn(input: TurnInput): TurnOutput {
     // "bagel" + ["plain cream cheese"] when the message contains the unique term
     // "bagel with plain cream cheese": the longer term names the item
     const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o)), fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
-    const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits[0]; // "taco pizza"+["small"] -> the "small taco pizza" mention
+    const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits.find((x) => !x.termWords.some((w) => SIZE_WORDS.has(w) && ow.some((o) => SIZE_WORDS.has(o) && o !== w))); // "taco pizza"+["small"] -> the "small taco pizza" mention; never "large jacks special" for the add that said medium
     const standsAlone = (from: number): boolean => { const i = findWordRun(mw, sw, from); return i >= 0 && ((h && (i + sw.length <= h.start || i >= h.end)) || standsAlone(i + 1)); };
     if (!h || standsAlone(0)) return m; // "a cheesesteak, chicken cheesesteak salad": the bare cheesesteak is its own item
     usedHits.add(h);
@@ -88,7 +88,7 @@ export function turn(input: TurnInput): TurnOutput {
   if (focus && focus.status.kind === "ambiguous") {
     const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1;
     // "one plain one pepperoni" arrives as one string when the model does not split it: cut at the count words
-    const tokens = (text: string) => splitList(text).flatMap((p) => { const out: string[][] = [[]]; for (const w of words(p)) { if (out[out.length - 1].length && leadingCount(w + " x").count !== null) out.push([]); out[out.length - 1].push(w); } return out.filter((x) => x.length).map((x) => x.join(" ")); })
+    const tokens = (text: string) => (({ count, rest }) => one(rest || text) ? [{ span: rest || text, qty: count ?? 1 }] : null)(leadingCount(text)) ?? splitList(text).flatMap((p) => { const out: string[][] = [[]]; for (const w of words(p)) { if (out[out.length - 1].length && leadingCount(w + " x").count !== null) out.push([]); out[out.length - 1].push(w); } return out.filter((x) => x.length).map((x) => x.join(" ")); })
       .map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; });
     // each add or answer naming exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", the answer "Bacon Cheese", "one plain one pepperoni")
     const partsOf = (m: Move) => m.kind === "add_line" ? (one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu))) ? [{ span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) }] : [])
