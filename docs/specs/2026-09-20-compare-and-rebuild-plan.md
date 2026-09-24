@@ -399,3 +399,17 @@ became the same wait the paid receipt already promises (pickup 10-15 min, delive
 off on Jason's call (`docs/specs/2026-09-23-jev-phase0-eval.md`); the acceptance run on the judge-off build shows the same
 Vito's slow tail (p95 5.8 s) as the judge-on build, so the afternoon slowness is the model service, not the engine.
 Open data items for the lexicon compiler: bare "house", "chicken", "cheesesteak", "order", "everything" as terms.
+
+**2026-09-24, Jason-style tester (`scripts/engine/jason.py`) — first passes.** Jason: "No LOOPS": every run is a fixed count,
+started by hand, cost printed (20 conversations ≈ $0.30 engine + tester). Pass 1 (20 conversations, three shops, v620) and a
+two-conversation shakedown found, and the engine fixed at the class: "chicken wings" answered with the Chicken quesadilla (a
+named category now beats a partial item hit; span words narrow by best score, not in order); the bot promising "we'll send
+you a text" (talk may not promise contact, nor claim it cannot see the order, nor say what the menu has); the Gyro Sandwich
+asking Beef-or-Chicken forever (its data has two identical slots; one answer now fills every open slot it fits); "bacon
+cheeseburger" rejected as an answer because the lexicon's bare "burger" term skips cheeseburgers (an answer that resolves to
+an item now takes it); Zio's calzone and NJB's everything-bagel loops (an answer that IS a candidate's name wins over names
+that contain it); NJB's Chicken Salad Sandwich and Tuna Melt having no lexicon terms at all (an item's display name is now
+always a term); "no wraps" asked back as an omission (a negated mention is a decline); "yes the tuna salad sandwich" adding
+it twice; "12 inch" restating the item's size becoming a kitchen note. Deploys v620–v622; 109 tests; core 1,999 lines.
+Data items for the compiler, still open: bare generic terms (house, chicken, cheesesteak, order, everything, burger
+coverage), duplicate slot groups (Gyro), items with no terms (NJB), 3,600 word rows for 236 items at Vito's.
