@@ -187,6 +187,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   const text = removing ? span.slice(1) : span;
   if (removing) {
     for (const g of item.groups) { const m = matchChoice(text, g); if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; } }
+    if (SIZE_ONLY.has(text) && item.facets.size && item.facets.size !== text) return true; // "not large" once the row is already the medium: nothing left to do
     line.notes.push(`no ${text}`); return false;
   }
   if (NO_TOPPING.has(words(text).join(" ")) && item.groups.some((g) => g.kind === "modifier")) return true; // "plain": nothing to add
@@ -326,7 +327,7 @@ export function bindLine(line: Line, menu: Menu): void {
     // words the customer used to NAME the item ("parm", "large") may pick options but are never kitchen notes
     if (leftover.length > 0) applyHeldSpan(line, item, leftover.join(" "), false);
   }
-  for (const h of held) applyHeldSpan(line, item, h);
+  for (const h of held) applyHeldSpan(line, menuRef.items.get(line.item_id!) ?? item, h); // a size swap mid-list: later spans read the new row
   applyCanon(line, menu);
   item = menu.items.get(line.item_id!)!;
   if (item.bundle) {

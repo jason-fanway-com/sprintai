@@ -133,7 +133,9 @@ export function turn(input: TurnInput): TurnOutput {
     rec.omissions.length = 0; rec.omissions.push(...keep);
   }
   for (const m0 of rec.accepted) {
-    const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
+    // "make the large a medium" sent as remove:[large] alone: the other size word in the message is the size wanted
+    const sizes = m0.kind === "change_line" && !m0.add_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) && m0.remove_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) ? [...new Set(mw.filter((w) => SIZE_WORDS.has(w) && !m0.remove_option_spans!.some((o) => words(o).includes(w))))] : [];
+    const m: Move = m0.kind === "add_line" ? upgradeSpan(m0) : m0.kind === "change_line" && sizes.length === 1 ? { ...m0, add_option_spans: [...(m0.add_option_spans ?? []), sizes[0]] } : m0;
       // "3 thin sicilians. one pepperoni, one sausage, one plain": options each preceded by a count that adds up to the quantity are one line each
     if (m.kind === "add_line" && m.qty >= 2 && m.option_spans.length >= 2) {
       const counts = m.option_spans.map((o) => { const i = findWordRun(mw, words(o)); return i > 0 ? leadingCount(mw[i - 1] + " x").count : null; });

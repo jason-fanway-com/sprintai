@@ -1,7 +1,7 @@
 // vocab.ts — closed-vocabulary answers that never need a model. A match is the
 // WHOLE normalized message equal to an entry (or an anchored number). No
 // substring matching, no intent guessing. Anything else goes to interpret.ts.
-import { normalize, optionWords, words } from "./normalize.ts";
+import { normalize, optionWords, words, splitList } from "./normalize.ts";
 import type { Move, OrderForm, Tip } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { matchChoice, narrow } from "./resolve.ts";
@@ -79,6 +79,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       const chosen = m?.kind === "one" ? g!.choices.find((c) => c.id === m.choice_id) : undefined;
       if (chosen && optionWords(n).every((w) => chosen.words.includes(w) || menu.items.get(line.item_id!)!.words.includes(w) || words(g?.name ?? "").includes(w))) return [{ kind: "answer_option", value_span: message.trim() }]; // "linguine for the pasta with clam sauce"
       const within = line.slot_candidates[g?.id ?? ""], pick = g && digit ? (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices)[parseInt(digit, 10) - 1] : undefined;
+      const list = splitList(message).map(normalize); if (g && list.length > 1 && list.every((x) => matchChoice(x, g, within).kind === "one")) return [{ kind: "answer_option", value_span: message.trim() }]; // "bbq, garlic hot, mango habanero": a list of this slot's options is an answer (the engine asks which one)
       if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }
     if (line && open.kind === "line_ambiguous" && line.status.kind === "ambiguous") {
