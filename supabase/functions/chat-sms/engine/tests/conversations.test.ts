@@ -849,6 +849,17 @@ Deno.test("phone test 6: the pay line promises a wait, not a text", () => {
   assertStringIncludes(o.reply, "10-15 minutes");
 });
 
+Deno.test("tester pass 1: 'chicken wings' is the wings category, never the 'Chicken' quesadilla", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const q = say(f, "do you guys have like chicken wings or anything", [{ kind: "ask_menu", about_span: "chicken wings" }]);
+  assert(!q.reply.includes("Quesadilla") && !q.reply.includes("Chicken:"), q.reply);
+  assertStringIncludes(q.reply, "Wings");
+  const o = say(f, "chicken wings", [{ kind: "add_line", item_span: "chicken wings", qty: 1, option_spans: [] }]);
+  assert(o.form.lines[0].item_id !== "chq");
+  assertEquals(o.form.lines[0].status.kind, "ambiguous");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

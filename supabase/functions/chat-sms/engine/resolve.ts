@@ -38,11 +38,10 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const content = contentWords(span);
   // "chicken parm" against the bare term "chicken": a run that leaves a content word of the span unmatched is
   // not the item's identity. A term that carries every content word ("chicken parmesan sandwich") wins first.
-  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) { const r = pick(coverAll(content, menu)); if (r) return r; }
-  const run = pick(ids); if (run) return run;
-  for (const t of menu.categoryTerms) {
-    if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }
-  }
+  const category = () => { for (const t of menu.categoryTerms) if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; } return null; };
+  // "chicken wings" against the bare item term "chicken" and the category "wings": the category the customer named wins
+  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) { const r = pick(coverAll(content, menu)) ?? category(); if (r) return r; }
+  const run = pick(ids) ?? category(); if (run) return run;
   // Partial: every content word of the span appears inside some item term. Deterministic; a question unless unique.
   return (content.length > 0 ? pick(coverAll(content, menu)) : null) ?? { kind: "none" };
 }
@@ -236,12 +235,13 @@ export function bindLine(line: Line, menu: Menu): void {
       const hit = cands.find((id) => menu.items.get(id)!.bundle!.count === n);
       if (hit) cands = [hit];
     }
-    // the span's own words narrow first ("everything bagels" over the bagel category; "bowl of lobster bisque" by its size)
+    // the span's own words narrow first: keep the candidates matching the MOST of them ("everything bagels", "bowl of lobster
+    // bisque"). Narrowing word by word would let "chicken wings" stop at the Chicken quesadilla; scoring keeps it a tie, so we ask.
     if (cands.length > 1) {
-      for (const w of words(line.span).filter((w) => !STOPWORDS.has(w))) {
-        const n = narrow(cands, w, menu);
-        if (n.length >= 1 && n.length < cands.length) cands = n;
-      }
+      const ws = words(line.span).filter((w) => !STOPWORDS.has(w));
+      const score = (id: string) => ws.filter((w) => narrow([id], w, menu).length === 1).length;
+      const best = Math.max(...cands.map(score));
+      if (best > 0) cands = cands.filter((id) => score(id) === best);
     }
     // answers to "which kind?" narrow and are then spent; one that narrows nothing is dropped, never noted
     for (const a of line.answers ?? []) {

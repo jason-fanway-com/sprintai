@@ -99,7 +99,7 @@ export function validTalk(raw: string): string | null {
   const text = raw.replace(/\s+/g, " ").trim();
   if (!text || text.length > 240) return null;
   if (/\$|\d{1,3}\.\d\d|\b(added|removed|updated|changed|charged|free|discount|refund)\b/i.test(text)) return null;
-  if (talkClaimsTime(text)) return null;
+  if (talkClaimsTime(text) || /\b(text|call|notify|message|ping|let you know|send you a)\b.*\b(you|when|once)\b/i.test(text)) return null; // no promises to contact
   return text;
 }
 /** "15-20 minutes", "about an hour": prep and delivery times are not ours to promise. */

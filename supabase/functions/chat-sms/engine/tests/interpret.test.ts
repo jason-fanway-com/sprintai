@@ -16,3 +16,9 @@ Deno.test("toMoves: a prep-time claim becomes the honest no-ETA line", () => {
   assertEquals(toMoves({ moves: [{ kind: "talk", value: "About an hour for delivery tonight." }] })[0].kind, "talk");
   assertEquals((toMoves({ moves: [{ kind: "talk", value: "About an hour for delivery tonight." }] })[0] as { text: string }).text.includes("hour"), false);
 });
+
+Deno.test("toMoves: talk never promises to text, call or notify", () => {
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "You're welcome! We'll send you a text when it's out for delivery." }] }), []);
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "We'll text you once it's ready." }] }), []);
+  assertEquals(toMoves({ moves: [{ kind: "talk", value: "You're welcome, see you soon!" }] }).length, 1);
+});
