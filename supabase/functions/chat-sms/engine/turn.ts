@@ -102,7 +102,8 @@ export function turn(input: TurnInput): TurnOutput {
     parts.sort((x, y) => pos(x.span) - pos(y.span));
     if (parts.length >= 2 || (parts.length === 1 && focus.qty > 1 && parts[0].qty === focus.qty)) {
       const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
-      const keep = rec.accepted.filter((m) => partsOf(m).length === 0 && !aboutFocus(m)); // the parts replace the model's own adds, changes and removal of that line
+      // the parts replace the model's own adds, changes and removal of that line; an answer for it that named no kind becomes an add, so it is asked about, never lost
+      const keep = rec.accepted.filter((m) => partsOf(m).length === 0 && !aboutFocus(m)).map((m) => m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? { kind: "add_line" as const, item_span: m.value_span, qty: 1, option_spans: [] } : m);
       rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus.line_id, parts });
       ledger.push({ turn: t, event: "kind_adds_are_a_split", data: { line_id: focus.line_id, parts } });
       splitFocus = true; const om = rec.omissions.filter((o) => !one(o.span)); rec.omissions.length = 0; rec.omissions.push(...om); // the kinds were spoken for

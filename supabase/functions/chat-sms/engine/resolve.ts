@@ -57,14 +57,16 @@ function wordMatches(w: string, pool: Set<string>): boolean { return pool.has(w)
 
 /** Filter candidates by a customer span: word subset of the display name, or its size facet. */
 export function narrow(candidateIds: string[], span: string, menu: Menu): string[] {
-  const sw = words(span).filter((w) => !STOPWORDS.has(w)).map(singular); // "medium size" narrows by "medium"
-  if (sw.length === 0) return candidateIds;
   const pool = (id: string): Set<string> => {
     const it = menu.items.get(id)!;
     const set = new Set<string>([...it.words, ...words(it.name), ...words(it.facets.kind ?? ""), ...(menu.termWordsByItem.get(id) ?? []), ...words(it.category ?? "")].map(singular));
     if (it.facets.size) set.add(it.facets.size);
     return set;
   };
+  const known = new Set(candidateIds.filter((id) => menu.items.has(id)).flatMap((id) => [...pool(id)]));
+  // "medium size" narrows by "medium"; "hawiaan" is read as "hawaiian" when that is the one candidate word within an edit or two
+  const sw = words(span).filter((w) => !STOPWORDS.has(w)).map(singular).map((w) => known.has(w) || menu.vocab.has(w) ? w : closestWord(w, known) ?? w);
+  if (sw.length === 0) return candidateIds;
   const keep = candidateIds.filter((id) => menu.items.has(id) && sw.every((w) => pool(id).has(w)));
   // "ricotta mozzarella" among Ricotta Mozzarella / Ham Ricotta Mozzarella / Spinach Ricotta Mozzarella: the
   // candidate whose own name (minus size words) IS the answer wins over those that merely contain it

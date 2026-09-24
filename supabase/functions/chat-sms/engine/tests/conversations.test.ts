@@ -1061,6 +1061,15 @@ Deno.test("phone test 9: 'hawiaan' is the Hawaiian; a kind the model dropped ('p
   ]);
   assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.cheesePizzaL, IDS.pepPizzaL, "hawL", "mlL"].sort(), o.reply);
   assert(!o.reply.includes("couldn't find"), o.reply);
+  // the model's own shape from the live ledger: answered kinds, one of them misspelt
+  let m2 = say(f, "4 large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  m2 = say(m2.form, "One plain, one pepperoni, one meat lover and one hawiaan", [
+    { kind: "answer_option", value_span: "plain" }, { kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }, { kind: "answer_option", value_span: "meat lover" }, { kind: "answer_option", value_span: "hawiaan" },
+  ]);
+  assertEquals(m2.form.lines.map((l) => l.item_id).sort(), [IDS.cheesePizzaL, IDS.pepPizzaL, "hawL", "mlL"].sort(), m2.reply);
+  let m3 = say(f, "4 large pizzas", [{ kind: "add_line", item_span: "pizzas", qty: 4, option_spans: ["large"] }]);
+  m3 = say(m3.form, "one plain, one pepperoni and one zzzzqq", [{ kind: "answer_option", value_span: "plain" }, { kind: "answer_option", value_span: "pepperoni" }, { kind: "answer_option", value_span: "zzzzqq" }]);
+  assertStringIncludes(m3.reply, `couldn't find "zzzzqq"`); // an unknown kind is asked about, never dropped
   const p = say(f, "a peperoni pizza", [{ kind: "add_line", item_span: "peperoni pizza", qty: 1, option_spans: [] }]);
   assertStringIncludes(p.reply, "What size Pepperoni Pizza");
   const q = say(f, "a zzzzqq", [{ kind: "add_line", item_span: "zzzzqq", qty: 1, option_spans: [] }]);
