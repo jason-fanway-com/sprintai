@@ -413,3 +413,16 @@ always a term); "no wraps" asked back as an omission (a negated mention is a dec
 it twice; "12 inch" restating the item's size becoming a kitchen note. Deploys v620–v622; 109 tests; core 1,999 lines.
 Data items for the compiler, still open: bare generic terms (house, chicken, cheesesteak, order, everything, burger
 coverage), duplicate slot groups (Gyro), items with no terms (NJB), 3,600 word rows for 236 items at Vito's.
+
+**2026-09-24 afternoon, Jason-style passes 2 and 3 (Vito's only, 20 conversations each, ~$0.35 a pass).** Every flagged
+conversation read and traced. Fixed at the class: two lines with the same name and different sizes in one message ("medium
+taco pizza … small taco pizza") both upgraded to the same mention (one mention now upgrades one line and prefers the mention
+carrying the line's size); "hawaiian pie" widened to every small pizza (at Vito's "pie" is an item term on 15 pizzas, not the
+Hawaiians — span words now weigh by specificity within a category, a category word counts for the whole category, a bare
+category word resolves to the category); a closed slot answer swallowed "hot sauce. actually scratch the soup" (closed now means
+the message is nothing but the option); "grilled chicken salad please" tied with the buffalo one (tie-break compares display
+names); identical lines asked "which one do you mean"; a removal re-asked as an omission; "what comes on the spicy chapo"
+listed three sizes (now description once plus size prices); a ZIP correction ignored three times (the customer's ZIP wins when
+the street is the same); "meatball sub" silently became Nonas Meatballs (a word the menu cannot place is not an identity);
+"burger" inside an answer about the cheeseburger asked "did you also want burger" (compound words). Deploys v623–v626; 118 tests;
+core 2,000 lines exactly. Still model-side and watched: talk that describes or denies menu items (filter tightened twice).
