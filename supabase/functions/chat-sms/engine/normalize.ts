@@ -43,10 +43,7 @@ export function isDigits(s: string): boolean { return /^\s*\d+\s*$/.test(s); }
 export function singular(w: string): string { return w.endsWith("s") ? w.slice(0, -1) : w; }
 
 /** The same word up to a plural ending: sandwich/sandwiches, pie/pies, fry/fries, wing/wings. */
-export function sameWord(a: string, b: string): boolean {
-  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
-  return a === b || l === s + "s" || l === s + "es" || (s.endsWith("y") && l === s.slice(0, -1) + "ies");
-}
+export function sameWord(a: string, b: string): boolean { const [s, l] = a.length <= b.length ? [a, b] : [b, a]; return a === b || l === s + "s" || l === s + "es" || (s.endsWith("y") && l === s.slice(0, -1) + "ies"); }
 
 
 

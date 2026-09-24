@@ -41,10 +41,7 @@ export function escalate(form: OrderForm, menu: Menu): string | null {
   const q = form.open;
   if (!q || form.asked.count < 3) return null;
   switch (q.kind) {
-    case "line_unresolved":
-    case "line_ambiguous":
-    case "line_picks":
-    case "line_slot": {
+    case "line_unresolved": case "line_ambiguous": case "line_picks": case "line_slot": {
       const idx = form.lines.findIndex((l) => l.line_id === q.line_id);
       if (idx >= 0) { const [gone] = form.lines.splice(idx, 1); return `dropped_line:${gone.span}`; }
       return null;

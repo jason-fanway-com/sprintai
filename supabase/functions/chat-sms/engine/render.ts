@@ -19,7 +19,7 @@ export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup"
 
 export type Info =
   | { kind: "cart"; totals: Totals }
-  | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }> }
+  | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean }
   | { kind: "list"; names: string[] }
   | { kind: "categories"; names: string[] }
   | { kind: "not_found"; about: string }
@@ -43,11 +43,11 @@ export interface ReplyPlan {
   question: Question | null;
 }
 
-function lineRow(l: PricedLine): string {
-  return T.ackLine(l.qty, l.item.display_name, dollars(l.total_cents), [...l.choice_names, ...l.modifier_names, ...l.picks]);
+function lineRow(l: PricedLine, withMoney = false): string { // a person names the item; the price waits for the summary or a question
+  return T.ackLine(l.qty, l.item.display_name, withMoney ? dollars(l.total_cents) : null, [...l.choice_names, ...l.modifier_names, ...l.picks]);
 }
 
-function receiptRows(t: Totals): string[] { return t.lines.map((l) => `${lineRow(l)}`); }
+function receiptRows(t: Totals): string[] { return t.lines.map((l) => lineRow(l, true)); }
 
 function moneyLine(t: Totals): string {
   const parts = [`Subtotal ${dollars(t.subtotal_cents)}`];
@@ -150,10 +150,10 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   if (added.length) parts.push(T.ackAdded(added.map((a) => lineRow(a.line))));
   if (changed.length) parts.push(T.ackUpdated(changed.map((a) => lineRow(a.line))));
   if (removed.length) parts.push(T.ackRemoved(removed.map((a) => a.name)));
-  const noted = plan.acks.find((a): a is Ack & { kind: "noted" } => a.kind === "noted");
-  if (noted) parts.push(T.ackNoted(noted.notes));
-  const pend = plan.acks.find((a): a is Ack & { kind: "pending" } => a.kind === "pending");
-  if (pend) parts.push(T.ackPending(pend.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
+  for (const a of plan.acks) {
+    if (a.kind === "noted") parts.push(T.ackNoted(a.notes));
+    if (a.kind === "pending") parts.push(T.ackPending(a.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
+  }
 
   for (const d of plan.declines) {
     switch (d.code) {
@@ -177,8 +177,10 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       else parts.push([T.cartHeader(), ...receiptRows(i.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(i.totals)].join("\n"));
     } else if (i.kind === "item") {
       const opts = i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`);
-      const money = i.sizes ? sortSizes(i.sizes.map((x) => x.name)).map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
-      parts.push(T.itemInfo(i.sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
+      const sizes = i.sizes ? sortSizes(i.sizes.map((x) => x.name)) : null;
+      const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
+      if (sizes && !i.price) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
+      parts.push(T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names.slice(0, 10)));
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));

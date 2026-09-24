@@ -39,7 +39,7 @@ Deno.test("worked conversation: delivery, three items, narrowing, tip, confirm",
   assertEquals(f.lines[0].qty, 2);
   assertEquals(f.lines[1].item_id, IDS.knots);
   assertStringIncludes(o.reply, "2 × Large Pepperoni Pizza");
-  assertStringIncludes(o.reply, "$42.00");
+  assertStringIncludes(o.reply, "2 × Large Pepperoni Pizza");
   assertStringIncludes(o.reply, "Anything else?");
   assertEquals(f.open?.kind, "items");
 
@@ -51,9 +51,9 @@ Deno.test("worked conversation: delivery, three items, narrowing, tip, confirm",
   assertEquals(f.lines[1].qty, 2);
   // "small cheese": partial match over cheese items, "small" narrows to the one sized small
   assertEquals(f.lines[2].item_id, IDS.cheesePizzaS, o.reply);
-  assertStringIncludes(o.reply, "Updated: 2 × Garlic Knots (6)  $11.98");
+  assertStringIncludes(o.reply, "Updated: 2 × Garlic Knots (6).");
   assertStringIncludes(o.reply, "Small Cheese Pizza");
-  assertStringIncludes(o.reply, "$10.99");
+  assertStringIncludes(o.reply, "Added 1 × Small Cheese Pizza.");
   assertEquals(f.open?.kind, "items");
 
   o = say(f, "thats it");
@@ -358,7 +358,8 @@ Deno.test("answering a kind question with the category word works too", () => {
   let o = say(f, "pepperoni", [{ kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }]);
   o = say(o.form, "the stromboli", [{ kind: "answer_option", value_span: "stromboli" }]);
   assertEquals(o.form.lines[0].item_id, "roll");
-  assertStringIncludes(o.reply, "Added 1 × Pepperoni  $9.99");
+  assertStringIncludes(o.reply, "Added 1 × Pepperoni");
+  assert(!o.reply.split("\n")[0].includes("$"), "no price in the acknowledgement");
 });
 
 Deno.test("leftover words in the item span act as options: 'house salad ranch' binds the dressing", () => {
@@ -396,7 +397,7 @@ Deno.test("bundle: a dozen bagels asks for flavors, takes counts across turns, p
   o = say(o.form, "sesame", [{ kind: "answer_option", value_span: "sesame" }]);
   assertEquals(o.form.lines[0].status.kind, "complete");
   assertEquals(o.form.lines[0].selections, { "bg-plain": 6, "bg-every": 4, "bg-sesame": 2 });
-  assertStringIncludes(o.reply, "1 × One Dozen Bagels (6 Plain Bagel, 4 Everything Bagel, 2 Sesame Bagel)  $15.00");
+  assertStringIncludes(o.reply, "1 × One Dozen Bagels (6 Plain Bagel, 4 Everything Bagel, 2 Sesame Bagel)");
   assertEquals(totals(o.form, menu).subtotal_cents, 1500);
 });
 
@@ -825,7 +826,10 @@ Deno.test("phone test 6: 'what is crazy fries' answers with the menu description
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   const o = say(f, "wait, what is crazy fries?", [{ kind: "ask_menu", about_span: "crazy fries" }]);
-  assertStringIncludes(o.reply, "Crazy Fries: Chicken steak meat, onions, nacho cheese, mild sauce. $7.49.");
+  assertStringIncludes(o.reply, "Crazy Fries: Chicken steak meat, onions, nacho cheese, mild sauce.");
+  assert(!o.reply.includes("$"), o.reply);
+  const p = say(f, "how much is crazy fries?", [{ kind: "ask_menu", about_span: "crazy fries" }]);
+  assertStringIncludes(p.reply, "Crazy Fries: Chicken steak meat, onions, nacho cheese, mild sauce. $7.49.");
 });
 
 Deno.test("phone test 6: a generic word inside a remark is not an omission; the same word while ordering still is", () => {
@@ -931,7 +935,9 @@ Deno.test("tester pass 2: 'what comes on the pepperoni' answers once with the de
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   const o = say(f, "what comes on the pepperoni pizza", [{ kind: "ask_menu", about_span: "pepperoni pizza" }]);
-  assertStringIncludes(o.reply, "Pepperoni Pizza: Our cheese pizza with pepperoni. Small $12.99, Medium $17.49, Large $21.00.");
+  assertStringIncludes(o.reply, "Pepperoni Pizza: Our cheese pizza with pepperoni. Sizes: Small, Medium, Large.");
+  const p = say(f, "how much is a pepperoni pizza", [{ kind: "ask_menu", about_span: "pepperoni pizza" }]);
+  assertStringIncludes(p.reply, "Pepperoni Pizza: Our cheese pizza with pepperoni. Small $12.99, Medium $17.49, Large $21.00.");
 });
 
 Deno.test("tester pass 2: two identical lines never ask 'which one do you mean'; removing a line never asks 'did you also want' it", () => {

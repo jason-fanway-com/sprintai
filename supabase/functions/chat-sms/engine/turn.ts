@@ -1,3 +1,4 @@
+import { asksPrice } from "./vocab.ts";
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
@@ -83,8 +84,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
-    const cands = focus.status.candidates;
-    const isPart = (m: Move): m is Move & { kind: "add_line" } => m.kind === "add_line" && m.option_spans.length > 0 && lineMatchesSpan(focus, m.item_span, menu) && m.option_spans.every((o) => narrow(cands, o, menu).length === 1);
+    const isPart = (m: Move): m is Move & { kind: "add_line" } => m.kind === "add_line" && m.option_spans.length > 0 && lineMatchesSpan(focus, m.item_span, menu) && m.option_spans.every((o) => focus.status.kind === "ambiguous" && narrow(focus.status.candidates, o, menu).length === 1);
     const parts = batch.filter(isPart).map((m) => ({ span: m.option_spans.join(" "), qty: Math.max(1, m.qty) })); // the batch, not rec: the cross-read strips option words it cannot see
     if (parts.length >= 2) {
       const keep = rec.accepted.filter((m) => !(m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) && !(m.kind === "remove_line" && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu))));
@@ -296,7 +296,7 @@ export function turn(input: TurnInput): TurnOutput {
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };
   // "what do you have?" during a kind question: the re-asked question lists the choices itself
-  if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : res.askMenu === null && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, form);
+  if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : res.askMenu === null && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
@@ -320,20 +320,20 @@ export function turn(input: TurnInput): TurnOutput {
   return { form, ledger, plan, reply, handoff, progress };
 }
 
-function menuInfo(about: string | null, menu: Menu, _form: OrderForm): Info {
+function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
   if (about) {
     const r = resolveSpan(about, menu);
     if (r.kind === "item") {
       const item = menu.items.get(r.id)!;
       const fake = { line_id: 0, span: about, item_id: item.id, qty: 1, choices: {}, modifiers: [], held: [], notes: [], slot_candidates: {}, status: { kind: "complete" as const } };
-      return { kind: "item", item, unit_cents: unitCents(fake, item) };
+      return { kind: "item", item, unit_cents: unitCents(fake, item), price };
     }
     if (r.kind === "ambiguous") {
       const its = r.ids.map((id) => menu.items.get(id)!);
       const kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
       if (kinds.size === 1 && its.every((i) => i.facets.size)) { // one pizza in three sizes: describe it once, list the sizes
         const first = its.find((i) => i.description) ?? its[0];
-        return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })) };
+        return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price };
       }
       return { kind: "list", names: its.map((i) => i.display_name) };
     }
@@ -349,10 +349,10 @@ function menuInfo(about: string | null, menu: Menu, _form: OrderForm): Info {
 function questionOptions(form: OrderForm, menu: Menu): Info {
   const open = form.open!;
   const l = "line_id" in open ? form.lines.find((x) => x.line_id === open.line_id) : undefined;
-  if (!l) return menuInfo(null, menu, form);
+  if (!l) return menuInfo(null, menu, false);
   if (l.status.kind === "ambiguous") return { kind: "list", names: l.status.candidates.map((id) => menu.items.get(id)?.display_name ?? id) };
   const item = l.item_id ? menu.items.get(l.item_id) : null;
   if (item && l.status.kind === "needs_slot") { const g = item.groups.find((x) => x.id === (l.status as { group_id: string }).group_id); if (g) return { kind: "list", names: g.choices.map((c) => c.name) }; }
   if (item?.bundle) return { kind: "list", names: item.bundle.choices.map((c) => c.name) };
-  return menuInfo(null, menu, form);
+  return menuInfo(null, menu, false);
 }

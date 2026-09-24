@@ -19,8 +19,8 @@ export const T = {
   greeting: (v: Voice) => `Hi, this is ${v.shop_name}.`,
 
   // acknowledgements
-  ackLine: (qty: number, name: string, money: string, extras: string[]) =>
-    `${qty} × ${name}${extras.length ? ` (${extras.join(", ")})` : ""}  ${money}`,
+  ackLine: (qty: number, name: string, money: string | null, extras: string[]) =>
+    `${qty} × ${name}${extras.length ? ` (${extras.join(", ")})` : ""}${money ? `  ${money}` : ""}`,
   ackAdded: (rows: string[]) => (rows.length === 1 ? `Added ${rows[0].trim()}.` : `Added:\n${rows.join("\n")}`),
   ackUpdated: (rows: string[]) => (rows.length === 1 ? `Updated: ${rows[0].trim()}.` : `Updated:\n${rows.join("\n")}`),
   ackRemoved: (names: string[]) => `Removed ${orList(names).replace(" or ", " and ")}.`,
@@ -109,8 +109,8 @@ export const T = {
   // info
   cartEmpty: () => `Your order is empty so far.`,
   cartHeader: () => `Your order so far:`,
-  itemInfo: (name: string, money: string, options: string[], description: string | null = null) =>
-    `${name}${description ? `: ${description}.` : ""} ${money}.${options.length ? ` Options: ${options.join("; ")}.` : ""}`,
+  itemInfo: (name: string, money: string | null, options: string[], description: string | null = null) =>
+    `${name}${description ? `: ${description}.` : ""}${money ? ` ${money}.` : description ? "" : "."}${options.length ? ` ${options.join("; ")}.` : ""}`.replace(/^([^.]*)\.\s+Sizes/, "$1. Sizes"),
   listInfo: (names: string[]) => `Options: ${names.slice(0, 12).join(", ")}${names.length > 12 ? `, and ${names.length - 12} more` : ""}.`,
   menuCategories: (cats: string[]) => `Categories: ${cats.join(", ")}. Name an item or a category.`,
   unknownInfo: () => `I can help you order. Name an item or ask about one.`,

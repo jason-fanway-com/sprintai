@@ -22,6 +22,8 @@ export const MENU = set("menu|the menu|options|what are the options|what are my 
 export const HUMAN = set("human|agent|person|call me|talk to a person|speak to someone|real person|operator|representative");
 export const SKIP = set("skip|never mind|nevermind|forget it|forget that|leave it off|drop it|remove it|take it off|no|none|nothing");
 export const EACH = set("one of each|one of each kind|one of every kind|one of everything|one each|all of them|all of the above|every kind|one of each please");
+const PRICE_WORDS = new Set(["price", "prices", "cost", "costs", "much", "expensive", "cheap", "dollars", "charge", "pricing"]);
+export function asksPrice(message: string): boolean { return normalize(message).split(" ").some((w) => PRICE_WORDS.has(w)); } // "how much is X" may carry a price; "what is X" does not
 export const HELLO = set("hi|hello|hey|yo|hi there|hello there|good morning|good afternoon|good evening|hey there|sup|howdy|hola");
 
 const TIP_RE = /^\$?\s*(\d{1,4}(?:\.\d{1,2})?)\s*(%|percent|pct|dollars?|bucks|dollar tip|tip)?$/;
