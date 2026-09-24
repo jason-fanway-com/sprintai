@@ -9,6 +9,7 @@ import { JUDGE } from "../turn.ts";
 type Row = Record<string, unknown>;
 class FakeDb {
   writes: Array<{ table: string; op: string; payload: unknown }> = [];
+  reads: Array<{ table: string; paged: boolean }> = [];
   tables: Record<string, Row[]> = {
     menus: [{ id: "m1" }],
     menu_items: RAW_ITEMS.map((r) => ({ ...r })),
@@ -38,6 +39,7 @@ class FakeDb {
         if (state.op === "select") {
           let rows = db.tables[table] ?? [];
           const r = state.payload as { a: number; b: number } | null;
+          db.reads.push({ table, paged: !!r });
           if (r) rows = rows.slice(r.a, r.b + 1);
           return Promise.resolve(res({ data: state.single ? (rows[0] ?? null) : rows, error: null }));
         }
@@ -197,4 +199,21 @@ Deno.test("runner: a message after the pay link re-sends the same link, never 'c
   out = await runEngineTurn({ ...base, cart, message: "thanks, coming now", isFirstContact: false }, d);
   assert(!out.reply.includes("couldn't create"), out.reply);
   assertStringIncludes(out.reply, "Pay here: https://pay.example/o/abc");
+});
+
+Deno.test("runner: the menu is downloaded once per version, not once per message", async () => {
+  const db = new FakeDb(); const d = deps(db, () => [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  const base = { shop: { ...shop, id: "vitos-egress" }, conversationId: "conv-e", lastBotMessage: null as string | null, isFirstContact: true };
+  const cart: RunnerInput["cart"] = { id: "cart-e", engine_form: null, test_mode: true, stripe_checkout_session_id: null, notes: null };
+  let out = await runEngineTurn({ ...base, cart, message: "pickup" }, d);
+  out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "garlic knots", isFirstContact: false }, d);
+  out = await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "thats it", isFirstContact: false }, d);
+  const full = db.reads.filter((r) => r.paged);
+  assertEquals(full.filter((r) => r.table === "menu_items").length, 1, "menu items downloaded once");
+  assertEquals(full.filter((r) => r.table === "lexicon").length, 1, "lexicon downloaded once");
+  assertEquals(db.reads.filter((r) => r.table === "lexicon" && !r.paged).length, 3, "one tiny version probe per message");
+  // a menu change (newer lexicon row) triggers exactly one more download
+  db.tables.lexicon.unshift({ term: "zzz", target_type: "item", target_id: IDS.knots, menu_id: "m1", created_at: "2099-01-01T00:00:00Z" });
+  await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "yes", isFirstContact: false }, d);
+  assertEquals(db.reads.filter((r) => r.paged && r.table === "lexicon").length, 2, "reloaded once after the change");
 });

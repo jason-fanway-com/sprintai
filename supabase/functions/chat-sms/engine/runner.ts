@@ -72,17 +72,28 @@ async function pageAll<T>(q: (from: number, to: number) => PromiseLike<{ data: T
   }
 }
 
-const menuCache = new Map<string, { at: number; menu: Menu }>();
-const MENU_TTL_MS = 60_000;
+// Egress discipline (2026-09-24, after the Supabase egress cap took the product down): a shop's menu is
+// ~1 MB to download and it does not change between messages. Each message costs three tiny probes
+// (~150 bytes: current menu id, newest item change, newest lexicon row); the full download happens only
+// when that version stamp changes or the in-memory copy is hours old. At 1,000 customers a day that is
+// megabytes, not gigabytes.
+const menuCache = new Map<string, { at: number; version: string; menu: Menu }>();
+const MENU_TTL_MS = 6 * 60 * 60 * 1000;
 
 export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, serviceFeeCents: number): Promise<Menu> {
-  const cached = menuCache.get(shop.id);
-  if (cached && Date.now() - cached.at < MENU_TTL_MS) return cached.menu;
   const { data: menuRow } = await supabase.from("menus").select("id")
     .eq("shop_id", shop.id)
     .or(`effective_until.is.null,effective_until.gte.${new Date().toISOString()}`)
     .order("created_at", { ascending: false }).limit(1).maybeSingle();
   const menuId = (menuRow as { id: string } | null)?.id;
+  const [{ data: newestItem }, { data: newestTerm }] = await Promise.all([
+    supabase.from("menu_items").select("updated_at").eq("menu_id", menuId ?? "").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("lexicon").select("created_at").eq("menu_id", menuId ?? "").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  const version = `${menuId ?? "none"}|${(newestItem as { updated_at?: string } | null)?.updated_at ?? ""}|${(newestTerm as { created_at?: string } | null)?.created_at ?? ""}`;
+  const cached = menuCache.get(shop.id);
+  if (cached && cached.version === version && Date.now() - cached.at < MENU_TTL_MS) return cached.menu;
+  console.log(`[engine] menu load shop=${shop.id.slice(0, 8)} reason=${!cached ? "cold" : cached.version !== version ? "changed" : "expired"}`);
   const items = menuId ? await pageAll<RawMenuItem>((a, b) => supabase.from("menu_items")
     .select("id, name, display_name, description, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
     .eq("menu_id", menuId).eq("active", true).order("id", { ascending: true }).range(a, b)) : [];
@@ -107,7 +118,7 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
     ask_order: ["fulfillment", "address", "items", "tip", "confirm"],
   };
   const menu = buildMenu({ version: `${menuId ?? "none"}:${latest}:${items.length}`, items, lexicon, shop: shopCfg });
-  menuCache.set(shop.id, { at: Date.now(), menu });
+  menuCache.set(shop.id, { at: Date.now(), version, menu });
   return menu;
 }
 
