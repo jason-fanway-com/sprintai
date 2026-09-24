@@ -504,3 +504,12 @@ pointed "white bread for both chicken parms" at the cheesesteak (the words name 
 $12.49 Chicken row; "buffalo flavor" is not a wing flavor at Vito's. 134 tests; core under 2,000; every shape replayed live.
 Pass cost: $0.36. Passes 5–8 together: about $1.30 of model spend for twenty-odd engine classes fixed.
 
+**2026-09-24, tester pass 9 (v642) and fixes (v643).** Seventeen of twenty landed; all three "not landed" were the tester's turn
+budget after a late add (correct behaviour: the summary is re-shown for a new YES). Every price was right. Four smaller classes:
+"turkey sandwich" answered with "turkey" added a BLT beside the Turkey (the cross-read's "sandwich" was treated as a second kind;
+an omission adjacent to an answered kind is the same mention); "one of each except no crab" split correctly and then said
+"I couldn't find 'one of each except no crab'" (the phrase itself never becomes an add); "just the chicken and pizza" asked "did
+you also want chicken pizza?" (an omission whose words are all words of lines already in the cart is a restatement); "what flavors
+u got?" while asking the wings' flavor listed the two wing kinds (a menu question about the asked slot lists that slot's options).
+135 tests; core under 2,000. Pass cost: $0.32.
+
