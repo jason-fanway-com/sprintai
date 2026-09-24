@@ -20,7 +20,7 @@ export function normalize(text: string): string {
 export function words(text: string): string[] {
   const n = normalize(text);
   if (!n) return [];
-  return n.split(" ").map((w) => ALIASES[w] ?? w.replace(/-/g, "")).filter((w) => w.length > 0 && w !== "and" && w !== "n");
+  return n.split(" ").flatMap((w) => (ALIASES[w] ?? w).split("-")).filter((w) => w.length > 0 && w !== "and" && w !== "n"); // "Oil-Vinegar" is the two words the customer types
 }
 
 /** Index at which `needle` occurs in `hay` as a contiguous whole-word run, else -1. */

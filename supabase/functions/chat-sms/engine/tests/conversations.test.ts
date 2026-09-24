@@ -1306,3 +1306,15 @@ Deno.test("tester pass 9: 'turkey sandwich' is one mention; one-of-each never le
   assert(!r.reply.includes("couldn't find"), r.reply);
 });
 
+Deno.test("tester pass 10: 'oil vinegar' is the Oil-Vinegar dressing (a hyphen is a space), with or without 'for the salad'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  o = say(o.form, "oil vinegar");
+  assertEquals(o.form.lines[0].choices[IDS.dressingGroup], "dOilV", o.reply);
+  let p = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  p = say(p.form, "oil vinegar for the salad", [{ kind: "answer_option", value_span: "oil vinegar" }]);
+  assertEquals(p.form.lines[0].choices[IDS.dressingGroup], "dOilV", p.reply);
+  assertEquals(p.form.lines[0].notes, []);
+});
+

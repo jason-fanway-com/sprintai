@@ -67,7 +67,7 @@ export const RAW_ITEMS: RawMenuItem[] = [
   item(IDS.margheritaL, "Margherita - Large (16\")", "Pizza", 1895, { display_name: "Large Margherita Pizza" }, [toppings("mgTopL", "mgPepL", "mgMushL", "mgBacL", 300)]),
   item(IDS.houseSalad, "House Salad", "Salads", 799, {}, [
     { group_id: IDS.dressingGroup, slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
-      choices: [{ id: IDS.ranch, display: "Ranch", price_delta_cents: 0 }, { id: IDS.italian, display: "Italian", price_delta_cents: 0 }, { id: IDS.bleu, display: "Bleu Cheese", price_delta_cents: 0 }] },
+      choices: [{ id: IDS.ranch, display: "Ranch", price_delta_cents: 0 }, { id: IDS.italian, display: "Italian", price_delta_cents: 0 }, { id: IDS.bleu, display: "Bleu Cheese", price_delta_cents: 0 }, { id: "dOilV", display: "Oil-Vinegar", price_delta_cents: 0 }] },
     { group_id: IDS.saladAddons, slot_key: "add_ons", kind: "modifier", ask_mode: "on_request", prompt_template: "addons.ask",
       choices: [{ id: IDS.grilledChicken, display: "Grilled Chicken", price_delta_cents: 400 }] },
   ]),
