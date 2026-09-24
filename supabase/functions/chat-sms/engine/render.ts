@@ -162,7 +162,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
       if (sizes && !i.price) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
       parts.push(T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
-    } else if (i.kind === "list") parts.push(T.listInfo(i.names.slice(0, 10)));
+    } else if (i.kind === "list") parts.push(T.listInfo(i.names)); // the template caps long lists and says how many more
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));
     else if (i.kind === "human") parts.push(T.human(voice));
