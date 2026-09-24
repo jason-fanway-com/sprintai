@@ -426,3 +426,16 @@ listed three sizes (now description once plus size prices); a ZIP correction ign
 the street is the same); "meatball sub" silently became Nonas Meatballs (a word the menu cannot place is not an identity);
 "burger" inside an answer about the cheeseburger asked "did you also want burger" (compound words). Deploys v623–v626; 118 tests;
 core 2,000 lines exactly. Still model-side and watched: talk that describes or denies menu items (filter tightened twice).
+
+**2026-09-24 evening, phone tests 7–9 (Jason) and the fixes.** All three broke on one class: answering "what kind of fries/pizzas?"
+with several kinds at once. The model expressed it three different ways across the three tests ("fries"+kind ×7; the kinds as full
+item names plus one answered kind; answered kinds with one misspelt), and each time the cross-read rejected what was not verbatim
+and the model's removal of the original line went through: six fries gone. Now one mechanism: when the asked-about line is
+ambiguous, every add or answer that names exactly one of its kinds (any shape, including "one plain one pepperoni" strings and the
+second reader's own mentions) is a part of a split; "one of each (except X)" anywhere in the message means every kind minus the
+named ones; a split consumes the line (no re-reads as answers or omissions); a leftover answer that named no kind becomes an ask.
+Typos: a word the menu does not know within one edit (two for 6+ letters) of exactly one menu word is that word, in the resolver
+and in narrowing ("hawiaan" → Hawaiian). Prices left acknowledgements (Jason: a person names the item; the price waits for the
+summary or a question). Talk filter: no promised actions, no "not finding it". The model's raw moves now sit in the ledger
+(model_moves) so the next diagnosis needs no guessing. Deploys v627–v631; 123 tests; core under 2,000. The tester gained the
+three shapes as quirks so future passes find this class before Jason does.
