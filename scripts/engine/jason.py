@@ -45,6 +45,10 @@ QUIRKS = [
     ("total_check", "at some point ask what your total is"),
     ("late_add", "after saying you are done, remember one more item"),
     ("remark_after_pay", "after the pay link, send a remark about the wait or the driver"),
+    ("typo", "misspell one of your item names the way a fast thumb would (drop or swap one letter), and do not correct it unless asked"),
+    ("kinds_list", "order several of one thing at once ('4 large pizzas', '3 subs') and when asked what kind, answer with 'one X, one Y, one Z' naming real kinds from the list you are shown"),
+    ("one_of_each", "order 'some' of one thing that comes in kinds, and when asked what kind say you'll take one of each except one kind you name from the list"),
+    ("complain", "if the shop ever says it could not find something you know is on the menu, push back in one short annoyed sentence"),
 ]
 
 def llm(messages, max_tokens=60):
@@ -63,7 +67,7 @@ def menu_names(shop_id):
 def make_plan(rng, names, shop_key):
     k = rng.choice([2, 2, 3, 3, 4])
     items = rng.sample(names, k)
-    quirks = rng.sample(QUIRKS, rng.choice([1, 2]))
+    quirks = rng.sample(QUIRKS, rng.choice([1, 2, 2]))
     delivery = rng.random() < 0.45 and shop_key != "njb"
     return {
         "items": [n for n, _ in items],
