@@ -1281,6 +1281,7 @@ Deno.test("tester pass 8: counted breads for three hoagies split the line, one p
   // the live model shape: "qty 2" on the line plus a second add it could not quote; the message decides
   let r = say(f, "3 chicken parm sandwiches", [{ kind: "add_line", item_span: "chicken parm sandwiches", qty: 3, option_spans: [] }]);
   r = say(r.form, "oh my bad. two white one rye", [{ kind: "change_line", ref: { span: "Chicken Parmesan Sandwich" }, qty: 2, add_option_spans: [], remove_option_spans: [] }, { kind: "add_line", item_span: "Chicken Parmesan Sandwich", qty: 1, option_spans: ["rye"] }]);
-  assertEquals(r.form.lines.map((l) => [l.qty, l.choices["breadG"]]), [[2, "brWhite"], [1, "brRye"]], r.reply);
+  assertEquals(r.form.lines.map((l) => [l.qty, l.choices["breadG"]]), [[2, "brWhite"], [1, "brRye"]], r.reply); // and no "White Pizza" line from the bread word
+  assert(!r.reply.includes("Pizza"), r.reply);
 });
 

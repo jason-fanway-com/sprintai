@@ -95,7 +95,8 @@ export function turn(input: TurnInput): TurnOutput {
     if (pieces.length >= 2 && all.length - pieces.length <= 1 && pieces.reduce((n, p) => n + p.qty, 0) === focus!.qty) {
       const aboutFocus = (m: Move) => (m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus!.line_id)) || ((m.kind === "change_line" || m.kind === "add_line") && lineMatchesSpan(focus!, m.kind === "add_line" ? m.item_span : "span" in m.ref ? m.ref.span : "", menu)) || (m.kind === "change_line" && "line_id" in m.ref && m.ref.line_id === focus!.line_id);
       const keep = rec.accepted.filter((m) => !aboutFocus(m)); rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus!.line_id, parts: pieces.map((p) => ({ span: focus!.span, qty: p.qty, held: [p.span] })) });
-      rec.rejected.length = 0; ledger.push({ turn: t, event: "counted_slot_answers_split", data: { parts: pieces } });
+      rec.rejected.length = 0; splitFocus = true; const om = rec.omissions.filter((o) => !pieces.some((p) => p.span === o.span)); rec.omissions.length = 0; rec.omissions.push(...om); // "white" here is a bread, not a White Pizza
+      ledger.push({ turn: t, event: "counted_slot_answers_split", data: { parts: pieces } });
     }
   }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
