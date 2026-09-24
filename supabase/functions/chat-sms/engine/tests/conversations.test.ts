@@ -1000,6 +1000,34 @@ Deno.test("tester pass 3: a customer correcting the ZIP wins over the geocoder's
   assert(!o.reply.includes("18104"), o.reply);
 });
 
+Deno.test("phone test 7: 'one of each except pizza fries' as seven adds of 'fries' is a split of the fries line, never a drop", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "six orders of fries and a cheeseburger", [{ kind: "add_line", item_span: "fries", qty: 6, option_spans: [] }, { kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of fries");
+  const kinds = ["french", "cheese", "bacon cheese", "buffalo chicken", "crazy"];
+  o = say(o.form, "ill have one of each except for pizza fries. i dont want that", [
+    ...kinds.map((k) => ({ kind: "add_line", item_span: "fries", qty: 1, option_spans: [k] }) as Move),
+    { kind: "remove_line", ref: { line_id: 1 } },
+  ]);
+  assert(!o.reply.includes("leave"), o.reply);
+  const friesLines = o.form.lines.filter((l) => l.line_id !== 2);
+  assertEquals(friesLines.length, 5);
+  assertEquals(friesLines.filter((l) => l.status.kind === "ambiguous").length, 0);
+  assertEquals(new Set(friesLines.map((l) => l.item_id)).size, 5);
+});
+
+Deno.test("phone test 7: 'one of each' is a closed answer to a kind question", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "six orders of fries", [{ kind: "add_line", item_span: "fries", qty: 6, option_spans: [] }]);
+  const closed = closedAnswer(o.form, "One of each", menu);
+  assertEquals(closed?.[0]?.kind, "split_line");
+  o = say(o.form, "One of each");
+  assertEquals(o.form.lines.filter((l) => l.status.kind === "ambiguous").length, 0);
+  assertEquals(new Set(o.form.lines.map((l) => l.item_id).filter(Boolean)).size, 6);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
@@ -1030,7 +1058,7 @@ Deno.test("lines taken alongside an unknown item are acknowledged, not silent", 
     { kind: "add_line", item_span: "garlic bread", qty: 1, option_spans: [] },
   ]);
   assertStringIncludes(o.reply, `I couldn't find "garlic bread"`);
-  assertStringIncludes(o.reply, "Got the 20 wings and house salad too.");
+  assertStringIncludes(o.reply, "Got the 20 wings and House Salad too."); // a resolved line is acknowledged by its menu name
 });
 
 Deno.test("a menu question about something we don't have gets a plain no", () => {

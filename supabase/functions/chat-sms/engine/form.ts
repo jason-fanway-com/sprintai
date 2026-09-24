@@ -300,12 +300,9 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
           if (yes) { form.confirmed = true; form.status = "awaiting_payment"; }
           else { form.confirmed = false; form.status = "open"; }
           ledger.push({ turn: t, event: "answer", data: { field: "confirmed", value: yes } });
-        } else if (open?.kind === "items") {
-          if (!yes) { form.items_done = true; ledger.push({ turn: t, event: "answer", data: { field: "items_done" } }); }
-        } else if (open?.kind === "tip" && !yes) {
-          form.tip = { kind: "cents", value: 0 };
-          ledger.push({ turn: t, event: "answer", data: { field: "tip", value: form.tip } });
-        } else {
+        } else if (open?.kind === "items" && !yes) { form.items_done = true; ledger.push({ turn: t, event: "answer", data: { field: "items_done" } }); }
+        else if (open?.kind === "tip" && !yes) { form.tip = { kind: "cents", value: 0 }; ledger.push({ turn: t, event: "answer", data: { field: "tip", value: form.tip } }); }
+        else if (open?.kind !== "items") {
           ledger.push({ turn: t, event: "yes_no_without_question", data: { yes } });
         }
         break;

@@ -163,13 +163,9 @@ function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
   for (const part of splitList(span)) {
     const { count, rest } = leadingCount(part);
     if (!rest) continue;
-    const m = matchChoice(rest, group);
-    if (m.kind !== "one") continue;
-    const remaining = Math.max(0, b.count - total());
-    const n = Math.min(count ?? remaining, remaining);
-    if (n <= 0) continue;
-    sel[m.choice_id] = (sel[m.choice_id] ?? 0) + n;
-    consumed = true;
+    const m = matchChoice(rest, group), remaining = Math.max(0, b.count - total()), n = Math.min(count ?? remaining, remaining);
+    if (m.kind !== "one" || n <= 0) continue;
+    sel[m.choice_id] = (sel[m.choice_id] ?? 0) + n; consumed = true;
   }
   return consumed;
 }

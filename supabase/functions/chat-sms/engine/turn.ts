@@ -52,7 +52,7 @@ export function turn(input: TurnInput): TurnOutput {
   // 1. cross-read: two readers of the same message
   const askedSpans = new Set(form0.omissions.map((o) => o.span));
   const lineQuestionOpen = !!(form0.open && "line_id" in form0.open);
-  const rec = reconcile(input.message, normalizeMoveBatch(input.moves, lineQuestionOpen), menu, askedSpans);
+  const batch = normalizeMoveBatch(input.moves, lineQuestionOpen), rec = reconcile(input.message, batch, menu, askedSpans);
   for (const r of rec.rejected) ledger.push({ turn: t, event: "rejected_span_not_in_message", data: r });
 
   // 2. a new-item move that really answers the open line question becomes an answer
@@ -81,6 +81,17 @@ export function turn(input: TurnInput): TurnOutput {
     const o = [itemVerbatim, ...r.move.option_spans].find((o) => words(o).length > 0 && words(o).every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu));
     if (o) { rec.accepted.push({ kind: "answer_option", value_span: o }); ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } }); }
   }
+  // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
+  if (focus && focus.status.kind === "ambiguous") {
+    const cands = focus.status.candidates;
+    const isPart = (m: Move): m is Move & { kind: "add_line" } => m.kind === "add_line" && m.option_spans.length > 0 && lineMatchesSpan(focus, m.item_span, menu) && m.option_spans.every((o) => narrow(cands, o, menu).length === 1);
+    const parts = batch.filter(isPart).map((m) => ({ span: m.option_spans.join(" "), qty: Math.max(1, m.qty) })); // the batch, not rec: the cross-read strips option words it cannot see
+    if (parts.length >= 2) {
+      const keep = rec.accepted.filter((m) => !(m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) && !(m.kind === "remove_line" && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu))));
+      rec.accepted.length = 0; rec.accepted.push(...keep, { kind: "split_line", line_id: focus.line_id, parts });
+      ledger.push({ turn: t, event: "kind_adds_are_a_split", data: { line_id: focus.line_id, parts } });
+    }
+  }
   // uncovered customer words that answer the open line question are answers, not omissions
   if (focus) {
     const keep: typeof rec.omissions = [];
@@ -101,8 +112,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
   for (const m0 of rec.accepted) {
     const m = m0.kind === "add_line" ? upgradeSpan(m0) : m0;
-    // an "item" that answers the line we asked about is an answer; one that answers ANOTHER pending
-    // line's question ("boneless" while we ask about the garlic bread) is routed to that line
+      // an "item" answering the line we asked about is an answer; one answering ANOTHER pending line's question ("boneless" while we ask about the garlic bread) is routed there
     const span = m.kind === "add_line" ? m.item_span : m.kind === "answer_option" ? m.value_span : null;
     if (span && focus) {
       const replacesUnresolved = m.kind === "add_line" && focus.status.kind === "unresolved" && resolveSpan(span, menu).kind !== "none";
@@ -275,7 +285,8 @@ export function turn(input: TurnInput): TurnOutput {
   if (notes.length) acks.push({ kind: "noted", notes });
   // lines taken this turn that still need a question: say so, so the customer knows they were heard
   const pending = form.lines.filter((l) => newIds.has(l.line_id) && l.status.kind !== "complete" && l.line_id !== focusId);
-  if (pending.length) acks.push({ kind: "pending", items: pending.map((l) => ({ qty: l.qty, span: l.span })) });
+  const agg = new Map<string, number>(); for (const l of pending) { const k = l.item_id ? menu.items.get(l.item_id)!.display_name : l.span; agg.set(k, (agg.get(k) ?? 0) + l.qty); } // resolved lines by name; "fries and fries" -> "3 fries"
+  if (pending.length) acks.push({ kind: "pending", items: [...agg].map(([span, qty]) => ({ qty, span })) });
   for (const r of res.removed) {
     const it = r.item_id ? menu.items.get(r.item_id) : null;
     if (it) acks.push({ kind: "line_removed", name: it.display_name });

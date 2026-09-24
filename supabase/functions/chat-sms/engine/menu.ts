@@ -100,9 +100,7 @@ const LEADING_SIZE_RE = /^(small|medium|large|x-?large|extra large|personal|shee
 const NAME_PIECES_RE = /^(.*?)\s*[-–(]\s*\d+\s*(?:pieces?|pcs?|ct|count)\b.*$/i;
 const PIECES_RE = /\((\d+)\)|\b(\d+)\s*(?:pieces?|pcs?|ct|count|wings)\b/i;
 export function pieceCountFromName(name: string): number | null {
-  const m = PIECES_RE.exec(name);
-  if (!m) return null;
-  const n = parseInt(m[1] ?? m[2], 10);
+  const m = PIECES_RE.exec(name), n = m ? parseInt(m[1] ?? m[2], 10) : NaN;
   return n >= 2 && n <= 100 ? n : null;
 }
 

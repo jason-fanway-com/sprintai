@@ -54,12 +54,9 @@ export function totals(form: OrderForm, menu: Menu): Totals {
   const delivery_fee_cents = form.fulfillment === "delivery" ? menu.shop.delivery_fee_cents : 0;
   const service_fee_cents = lines.length > 0 ? menu.shop.service_fee_cents : 0;
   const tax_cents = Math.round((subtotal_cents * menu.shop.tax_rate_bps) / 10000);
-  let tip_cents = 0;
-  if (form.tip) tip_cents = form.tip.kind === "percent" ? Math.round((subtotal_cents * form.tip.value) / 100) : form.tip.value;
+  const tip_cents = !form.tip ? 0 : form.tip.kind === "percent" ? Math.round((subtotal_cents * form.tip.value) / 100) : form.tip.value;
   const total_cents = subtotal_cents + delivery_fee_cents + service_fee_cents + tax_cents + tip_cents;
   return { lines, subtotal_cents, delivery_fee_cents, service_fee_cents, tax_cents, tip_cents, total_cents };
 }
 
-export function dollars(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
+export function dollars(cents: number): string { return `$${(cents / 100).toFixed(2)}`; }
